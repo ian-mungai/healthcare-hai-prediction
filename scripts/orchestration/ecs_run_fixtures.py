@@ -6,13 +6,13 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = "20261030T100000Z-abcdef01"
-SILVER_RUN = "20261030T100000Z-0badcafe"
-GOLD_RUN = "20261030T100000Z-90d0c0de"
-BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
-PROMOTE_RUN = "20261030T110000Z-9a9a9a9a"
-DRIFT_RUN = "20261030T120000Z-d71f70a1"
-SERVE_RUN = "20261030T120000Z-5e5e5e5e"
+RUN = "training_elastic_net_abcdef01"
+SILVER_RUN = "silver_0badcafe"
+GOLD_RUN = "gold_90d0c0de"
+BRONZE_RUN = "bronze_b0b0b0b0"
+PROMOTE_RUN = "promotion_9a9a9a9a"
+DRIFT_RUN = "drift_elastic_net_d71f70a1"
+SERVE_RUN = "serving_5e5e5e5e"
 DIGEST = "ab" * 32
 INVENTORY = "cd" * 32
 # Every DAG step launches on AWS, so the training parameters name the aws MLflow lane (lead decision, Nov 7 2026).

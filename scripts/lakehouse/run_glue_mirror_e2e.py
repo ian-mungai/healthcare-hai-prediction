@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
 PILOT = "bridge_county_neighbor"
 SECOND_TABLE = "dim_state"
-RUN_ID = "20261030T120000Z-0123abcd"
+RUN_ID = "silver_0123abcd"
 DIGEST = "a" * 64
 FIRST = f"s3://{BUCKET}/lakehouse/gold/{PILOT}/metadata/00001-aaaa.metadata.json"
 SECOND = f"s3://{BUCKET}/lakehouse/gold/{PILOT}/metadata/00002-bbbb.metadata.json"
@@ -420,7 +420,7 @@ def case_hook_deadline_starts_at_entry() -> Check:
 def case_check_compares_the_run() -> Check:
     glue = FakeGlue()
     source = later_failed_publish_source()
-    glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, "20261029T100000Z-0000aaaa")
+    glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, "silver_0000aaaa")
     older = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
     glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, RUN_ID)
     current = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)

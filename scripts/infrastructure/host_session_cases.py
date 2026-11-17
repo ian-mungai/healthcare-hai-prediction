@@ -945,7 +945,7 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
     }
 
 
-RUN_ID_FORM = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID_FORM = re.compile(r"features_[a-f0-9]{8}")
 
 
 def reload_runs(host: StandInHost) -> list[dict[str, Any]]:

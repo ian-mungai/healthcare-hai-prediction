@@ -75,7 +75,7 @@ locals {
   layer_driver = "cd /workspace/code && python -m scripts.lakehouse.layer_run %s --layer %s --run \"$RUN_ID\""
   # The task has no code before the first step. It downloads the staged archive, checks it against CODE_SHA256 and unpacks it; the pin phase checks it again.
   layer_fetch_python = trimspace(<<-EOT
-    import boto3, hashlib, os, re, tarfile; d = os.environ["DATA_BUCKET_NAME"]; r = os.environ["CODE_RUN_ID"]; assert re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", r), "CODE_RUN_ID is not a run ID"; p = "/workspace/code.tar.gz"; boto3.client("s3").download_file(d, "lakehouse/run_stage/" + r + "/inputs/code.tar.gz", p); assert hashlib.sha256(open(p, "rb").read()).hexdigest() == os.environ["CODE_SHA256"], "code.tar.gz differs from CODE_SHA256"; tarfile.open(p).extractall("/workspace/code", filter="data")
+    import boto3, hashlib, os, re, tarfile; d = os.environ["DATA_BUCKET_NAME"]; r = os.environ["CODE_RUN_ID"]; assert re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}|[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}", r), "CODE_RUN_ID is not a code run ID"; p = "/workspace/code.tar.gz"; boto3.client("s3").download_file(d, "lakehouse/run_stage/" + r + "/inputs/code.tar.gz", p); assert hashlib.sha256(open(p, "rb").read()).hexdigest() == os.environ["CODE_SHA256"], "code.tar.gz differs from CODE_SHA256"; tarfile.open(p).extractall("/workspace/code", filter="data")
   EOT
   )
   layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store" }

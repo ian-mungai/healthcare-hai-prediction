@@ -35,6 +35,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.infrastructure import openmetadata_host_ingest as host_ingest
 from scripts.lakehouse.dbt_catalog_artifacts import mirror_schemas
@@ -48,7 +49,7 @@ RECORD_BYTES = 2 * 1024**2
 CAPTURE_ROOTS = (RAW_ROOT,)  # the deployed capture root (infra/jobs/publisher.tf capture_root): the only place this writer looks for completion records
 SERVICE, DATABASE = "glue_mirror", "hai_lakehouse"
 SCHEMA = mirror_schemas()["bronze"]  # the Glue database of the bronze layer in config/lakehouse/athena_mirror.json
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 RECORD_KEY = "lakehouse/bronze_runs/{run}/check.json"
 TIMEOUT_SECONDS = 20.0
 BLOCK = re.compile(re.escape(START) + r".*?" + re.escape(END), re.S)
@@ -255,11 +256,34 @@ def write_blocks(api: str, token: str, blocks: Mapping[str, str], http: Http = h
     return result
 
 
+def recorded_order(s3: Any, bucket: str, runs: Sequence[str]) -> list[str]:
+    """The runs oldest first by the time their run record was stored, so the newest run writes last. A run ID carries no time (a tie goes by run ID).
+
+    A run with no record sorts first: its own write then fails by name, as it did before.
+    """
+    from datetime import UTC, datetime
+
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    stored = []
+    for run in sorted(set(runs)):
+        try:
+            moment = s3.head_object(Bucket=bucket, Key=RECORD_KEY.format(run=run))["LastModified"]
+        except ClientError as error:
+            if str(error.response.get("Error", {}).get("Code")) not in ("404", "NoSuchKey", "NotFound"):
+                raise WriteFailed(f"{RECORD_KEY.format(run=run)}: {type(error).__name__}") from None
+            moment = datetime.min.replace(tzinfo=UTC)
+        except BotoCoreError as error:
+            raise WriteFailed(f"{RECORD_KEY.format(run=run)}: {type(error).__name__}") from None
+        stored.append((moment, run))
+    return [run for _, run in sorted(stored)]
+
+
 def write_runs(api: str, token: str, s3: Any, bucket: str, runs: Sequence[str], http: Http = http_request) -> int:
     """Write the raw files of each bronze run onto its tables and say what happened on standard output and error. Returns 0, or 1 when a record or a table
     failed or a table is not in the catalog."""
     failed = False
-    for run in sorted(set(runs)):
+    for run in runs:
         try:
             result = write_blocks(api, token, run_blocks(s3, bucket, run), http)
         except WriteFailed as error:
@@ -298,7 +322,12 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, s3_client: Any =
         import boto3
 
         client = boto3.client("s3", region_name=environment.get("AWS_REGION"))
-    return write_runs(api, token, client, environment.get("DATA_BUCKET_NAME", ""), runs, http)
+    try:
+        ordered = recorded_order(client, environment.get("DATA_BUCKET_NAME", ""), runs)
+    except WriteFailed as error:
+        sys.stderr.write(f"openmetadata_raw_files: {error}\n")
+        return 1
+    return write_runs(api, token, client, environment.get("DATA_BUCKET_NAME", ""), ordered, http)
 
 
 if __name__ == "__main__":

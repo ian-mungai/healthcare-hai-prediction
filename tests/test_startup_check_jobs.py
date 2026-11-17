@@ -21,7 +21,8 @@ from tests.startup_check_support import MLFLOW_URI, POLARIS_HOST, SERVICE_HOSTS,
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = "20261111T000000Z-0a1b2c3d"
+RUN = "silver_0a1b2c3d"
+BRONZE_RUN = "bronze_0a1b2c3d"
 METADATA_HOST = "10.0.0.8"
 METADATA_URI = f"http://{METADATA_HOST}:8585/api"
 MLFLOW_HOST = "192.0.2.10"
@@ -48,7 +49,7 @@ def reach(module: object, name: str, monkeypatch: pytest.MonkeyPatch) -> None:
 def run_bronze_phase(phase: str) -> Callable[[pytest.MonkeyPatch, Path], int]:
     def call(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
         reach(bronze_run.task_capacity, "apply", monkeypatch)
-        return bronze_run.main([phase, "--run", RUN, "--work", str(work), "--bucket", "example-bucket", "--tables", "x", "--target", "qualify"])
+        return bronze_run.main([phase, "--run", BRONZE_RUN, "--work", str(work), "--bucket", "example-bucket", "--tables", "x", "--target", "qualify"])
 
     return call
 

@@ -32,7 +32,7 @@ from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
 from scripts.quality import lock_env
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
-RUN = "20261030T010203Z-0a1b2c3d"
+RUN = "bronze_0a1b2c3d"
 BUCKET = "hai-test-bucket"
 TABLES = [
     {"table": "alpha_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["alpha"]},

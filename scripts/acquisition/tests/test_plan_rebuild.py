@@ -12,7 +12,7 @@ from scripts.acquisition.transport import CaptureError
 from tests.support import check
 
 HOSTS = frozenset({"data.example.gov"})
-RUN = "20261201T000000Z-0a0a0a0a"
+RUN = "ingestion_0a0a0a0a"
 URL = "https://data.example.gov/files/measures_2026.csv"
 
 

@@ -24,15 +24,15 @@ from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_launch_cases import refuses
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = "20261109T000000Z-b45e0001"
+BASE = "features_b45e0001"
 RESEARCH = training_contract.research_run_id(BASE)
 TYPE = "HAI_1"
 RESEARCH_PARAMS = {"base_run": BASE, "population": "primary", "hai_types": ["HAI_1", "HAI_2"], "mlflow": "aws"}
 CHALLENGER = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
 FEATURES_RUNS = {
-    "m1": "20261109T010101Z-0a0a0a01",
-    "m2": "20261109T010102Z-0a0a0a02",
-    "m4": "20261109T010104Z-0a0a0a04",
+    "m1": "features_ols_0a0a0a01",
+    "m2": "features_elastic_net_0a0a0a02",
+    "m4": "features_gradient_boosting_0a0a0a04",
 }  # the runs the models trained on: not derived
 PHASES = {"research": "research", "canary_check": "canary", "promote": "promote", "owner_notice": "notify"}
 
@@ -352,7 +352,7 @@ def a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner() ->
 
 
 def a_canary_result_of_another_candidate_is_a_hold_and_a_failure() -> None:
-    for changes in ({"version": "5"}, {"model": "m4"}, {"hai_type": "HAI_2"}, {"research_run": training_contract.research_run_id("20261108T000000Z-b45e0002")}):
+    for changes in ({"version": "5"}, {"model": "m4"}, {"hai_type": "HAI_2"}, {"research_run": training_contract.research_run_id("features_b45e0002")}):
         recorder = Recorder({"HAI_1": CHALLENGER})
         recorder.objects[training_contract.record_key("canary", RESEARCH, "HAI_1")] = canary_record("HAI_1", "promote", changes=changes)
         failures = recorder.run()
@@ -602,7 +602,7 @@ def research_records_without_a_real_features_run_are_refused() -> None:
         require(len(failures) == 1 and not recorder.calls, f"{name}: failures {failures}, calls {recorder.calls}")
 
 
-OTHER_BASE = "20261108T000000Z-b45e0002"
+OTHER_BASE = "features_b45e0002"
 TRAIN_FORM = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "aws"}
 
 
@@ -863,7 +863,8 @@ def each_promotion_model_starts_the_research_on_its_base() -> None:
             require(requests == [], f"{model} started the research: {requests}")
             continue
         require(
-            requests == [{"trigger_run_id": f"training__{training_run}", "conf": {"run_id": RESEARCH, "mode": "real", **RESEARCH_PARAMS}}],
+            requests
+            == [{"trigger_run_id": training_contract.research_dag_run_id(training_run), "conf": {"run_id": RESEARCH, "mode": "real", **RESEARCH_PARAMS}}],
             f"{model} started another research: {requests}",
         )
     require(training_contract.research_requests("m2", training_run, "", "primary", ["HAI_1"], "aws") == [], "a run with no base started the research")

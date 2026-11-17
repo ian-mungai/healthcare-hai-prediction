@@ -227,7 +227,7 @@ def flow(box: Box, env: fixtures.Env, **window: Any) -> tuple[str, Any]:
 def other_run_records(layer: str, claim: bool = True) -> tuple[dict[str, Any], ...]:
     """The keys that another run (the queued ingestion job) writes under its own prefixes: its launch records and its staged inputs. Without its claim
     record, its keys name no claimed run."""
-    other = "20261111T210000Z-0badc0de"
+    other = "silver_0badc0de"
     names = (
         f"launch_records/{other}/ingestion/claim.json",
         f"launch_records/{other}/ingestion/01/intent.json",
@@ -288,7 +288,7 @@ def window_cases(work: Path) -> dict[str, bool]:
         checks[f"{layer}: another run's launch records written while this run waits do not count as this run's writes"] = (
             kind == "ok" and found["passed"] is True
         )
-        late = "20261112T090000Z-0a0a0a0a" if layer == "silver" else "20261112T100000Z-0b0b0b0b"
+        late = "silver_0a0a0a0a" if layer == "silver" else "silver_0b0b0b0b"
         for label, claim in (("with its claim record", True), ("without its claim record", False)):
             other = make(work, f"window_{layer}_late_{int(claim)}", layer, producer, run=late)
             box2 = sandbox(work, f"window_late_{int(claim)}_{layer}")

@@ -134,7 +134,7 @@ def completion_body(stored: dict[str, Any], unit: str, retrieved: str, names: li
         "collection": stored["collection"],
         "source_id": "CA",
         "mode": "direct",
-        "run_id": "20261110T000000Z-aaaaaaaa",
+        "run_id": "bronze_aaaaaaaa",
         "code_sha256": CODE,
         "bundle_sha256": BUNDLE,
         "retrieved_at_utc": retrieved,
@@ -296,7 +296,7 @@ def test_a_stale_unit_loads_its_last_capture_with_the_label(tmp_path: Path) -> N
     lake = Lake()
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, new, UNIT_A, MID)
-    stale_key = write_stale(lake, UNIT_A, "20261109T000000Z-bbbbbbbb", NEW, [pointer(new["objects"][0], MID, "raw/")], reason="robots_disallowed")
+    stale_key = write_stale(lake, UNIT_A, "bronze_bbbbbbbb", NEW, [pointer(new["objects"][0], MID, "raw/")], reason="robots_disallowed")
     inputs = discover(lake, tmp_path)
     check([item["key"] for item in inputs] == [new["objects"][0]["key"]], "the newer stale record loads the newest completion's objects")
     item = inputs[0]
@@ -309,8 +309,8 @@ def test_a_unit_with_only_a_stale_record_loads_its_last_capture_and_an_older_sta
     lake = Lake()
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
-    write_stale(lake, UNIT_A, "20261101T000000Z-cccccccc", OLD, [pointer(legacy["objects"][0], OLD, "")])
-    write_stale(lake, UNIT_B, "20261101T000000Z-dddddddd", OLD, [pointer(legacy["objects"][0], OLD, "")])
+    write_stale(lake, UNIT_A, "bronze_cccccccc", OLD, [pointer(legacy["objects"][0], OLD, "")])
+    write_stale(lake, UNIT_B, "bronze_dddddddd", OLD, [pointer(legacy["objects"][0], OLD, "")])
     write_completion(lake, new, UNIT_B, NEW)
     by_unit = {item["freshness"]: item["key"] for item in discover(lake, tmp_path)}
     check(by_unit == {"stale": legacy["objects"][0]["key"], "current": new["objects"][0]["key"]}, "one stale unit and one current unit")
@@ -320,7 +320,7 @@ def test_a_completion_exactly_as_new_as_the_stale_record_counts_as_stale(tmp_pat
     lake = Lake()
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, new, UNIT_A, NEW)
-    write_stale(lake, UNIT_A, "20261109T000000Z-eeeeeeee", NEW, [pointer(new["objects"][0], NEW, "raw/")])
+    write_stale(lake, UNIT_A, "bronze_eeeeeeee", NEW, [pointer(new["objects"][0], NEW, "raw/")])
     check([item["freshness"] for item in discover(lake, tmp_path)] == ["stale"], "current needs a strictly newer completion")
 
 
@@ -333,7 +333,7 @@ def test_a_missing_last_capture_fails_the_table_by_name(tmp_path: Path, case: st
         pointed["key"] = pointed["key"].replace("data.csv", "gone.csv")
     if case == "wrong_digest":
         pointed["sha256"] = digest(b"other bytes")
-    write_stale(lake, UNIT_A, "20261109T000000Z-ffffffff", NEW, [] if case == "empty" else [pointed], verified=case not in {"unverified", "empty"})
+    write_stale(lake, UNIT_A, "bronze_ffffffff", NEW, [] if case == "empty" else [pointed], verified=case not in {"unverified", "empty"})
     check(refused(lambda: discover(lake, tmp_path), "hospitals", UNIT_A, "last capture"), f"{case}: the error names the table, the unit and the last capture")
 
 
@@ -341,7 +341,7 @@ def test_a_unit_of_another_collection_without_a_last_capture_does_not_fail_this_
     lake = Lake()
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, new, UNIT_A, NEW)
-    write_stale(lake, UNIT_C, "20261109T000000Z-99999999", NEW, [], verified=False, collection=OTHER_COLLECTION)
+    write_stale(lake, UNIT_C, "bronze_99999999", NEW, [], verified=False, collection=OTHER_COLLECTION)
     check(len(discover(lake, tmp_path)) == 1, "only the selected tables' collections must have a loadable unit")
 
 
@@ -417,7 +417,7 @@ def test_a_record_that_names_an_object_in_the_test_folder_fails_visibly(tmp_path
         good,
         UNIT_A,
         OLD,
-        change=lambda body: body["data_objects"][0].update(key="ingestion_test/20261110T000000Z-aaaaaaaa/" + body["data_objects"][0]["key"]),
+        change=lambda body: body["data_objects"][0].update(key="ingestion_test/ingestion_aaaaaaaa/" + body["data_objects"][0]["key"]),
     )
     check(refused(lambda: discover(lake, tmp_path), key, "test folder"), "a record never makes bronze read the test folder")
 
@@ -427,7 +427,7 @@ def test_a_stale_pointer_to_another_version_of_the_object_counts_as_a_missing_la
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
     pointed = pointer(legacy["objects"][0], OLD, "")
     pointed["version_id"] = "v-another"
-    write_stale(lake, UNIT_A, "20261109T000000Z-13131313", NEW, [pointed])
+    write_stale(lake, UNIT_A, "bronze_13131313", NEW, [pointed])
     check(refused(lambda: discover(lake, tmp_path), "hospitals", UNIT_A, "last capture"), "the exact version must be listed by a manifest")
 
 
@@ -464,11 +464,11 @@ def test_an_unreadable_record_and_a_record_under_a_wrong_name_fail_visibly(tmp_p
 def test_a_forged_or_unreadable_stale_record_fails_visibly(tmp_path: Path) -> None:
     lake = Lake()
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
-    key = write_stale(lake, UNIT_A, "20261109T000000Z-12121212", NEW, [pointer(legacy["objects"][0], OLD, "")])
+    key = write_stale(lake, UNIT_A, "bronze_12121212", NEW, [pointer(legacy["objects"][0], OLD, "")])
     lake.put(key, lake.objects[next(identity for identity in lake.objects if identity[0] == key)].replace(UNIT_A.encode(), UNIT_B.encode()))
     check(refused(lambda: discover(lake, tmp_path), key), "a stale record whose unit differs from its key is refused")
     lake2 = Lake()
-    lake2.put(f"raw/ingestion_stale/{UNIT_A}/20261109T000000Z-34343434.json", b"{broken")
+    lake2.put(f"raw/ingestion_stale/{UNIT_A}/bronze_34343434.json", b"{broken")
     check(refused(lambda: discover(lake2, tmp_path), "ingestion_stale"), "an unreadable stale record is refused")
 
 
@@ -483,8 +483,8 @@ def test_two_completion_records_with_one_retrieval_time_are_ambiguous(tmp_path: 
 
 def test_the_test_folder_is_never_listed_or_read(tmp_path: Path) -> None:
     lake = Lake()
-    test_capture = capture(lake, root="ingestion_test/20261110T000000Z-aaaaaaaa/", snapshot="CA__test", files=[("data", "data.csv", ROWS_LEGACY)])
-    write_completion(lake, test_capture, UNIT_B, NEW, root="ingestion_test/20261110T000000Z-aaaaaaaa/")
+    test_capture = capture(lake, root="ingestion_test/ingestion_aaaaaaaa/", snapshot="CA__test", files=[("data", "data.csv", ROWS_LEGACY)])
+    write_completion(lake, test_capture, UNIT_B, NEW, root="ingestion_test/ingestion_aaaaaaaa/")
     good = capture(lake, root="raw/", snapshot="CA__good", files=[("data", "data.csv", ROWS_OLD)])
     write_completion(lake, good, UNIT_A, OLD)
     inputs = discover(lake, tmp_path)
@@ -504,7 +504,7 @@ def test_the_loader_report_lists_every_labelled_object_with_its_identity_and_ret
     write_completion(lake, new, UNIT_A, NEW)
     another = capture(lake, root="raw/", snapshot="CA__another", files=[("data", "data.csv", ROWS_OLD)])
     write_completion(lake, another, UNIT_C, MID)
-    stale_key = write_stale(lake, UNIT_B, "20261109T000000Z-56565656", NEW, [pointer(legacy["objects"][0], OLD, "")], reason="network")
+    stale_key = write_stale(lake, UNIT_B, "bronze_56565656", NEW, [pointer(legacy["objects"][0], OLD, "")], reason="network")
     report = bronze.freshness_report(discover(lake, tmp_path))
     check(report["current_objects"] == 2 and report["stale_objects"] == 1, "the run report counts both kinds")
     check(len(report["objects"]) == 3, "one row for each labelled object")
@@ -534,7 +534,7 @@ def test_a_pinned_inventory_replays_the_record_selection_exactly(tmp_path: Path)
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, new, UNIT_A, NEW)
-    write_stale(lake, UNIT_B, "20261109T000000Z-78787878", NEW, [pointer(legacy["objects"][0], OLD, "")])
+    write_stale(lake, UNIT_B, "bronze_78787878", NEW, [pointer(legacy["objects"][0], OLD, "")])
     inventory = bronze_pin.build_inventory(lake, BUCKET, config(tmp_path), ["hospitals"])
     later = capture(lake, root="raw/", snapshot="CA__later", files=[("data", "data.csv", ROWS_OLD)])
     write_completion(lake, later, UNIT_A, "2026-11-10T10:00:00Z")
@@ -553,7 +553,7 @@ def test_the_switch_off_keeps_the_root_listing_and_never_touches_a_record_folder
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
     new = capture(lake, root="raw/", snapshot="CA__new", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, new, UNIT_A, NEW)
-    write_stale(lake, UNIT_B, "20261109T000000Z-90909090", NEW, [])
+    write_stale(lake, UNIT_B, "bronze_90909090", NEW, [])
     inputs = discover(lake, tmp_path)
     check([item["key"] for item in inputs] == [legacy["objects"][0]["key"]], "the root capture loads exactly as before")
     check(all("freshness" not in item for item in inputs), "an input carries no freshness field while the switch is off")
@@ -571,7 +571,7 @@ def test_the_switch_off_keeps_the_root_listing_and_never_touches_a_record_folder
 def stale_with(change: Callable[[dict], None], *, key_run: str | None = None) -> tuple[Lake, str]:
     lake = Lake()
     legacy = capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY)])
-    key = write_stale(lake, UNIT_A, "20261109T000000Z-abababab", NEW, [pointer(legacy["objects"][0], OLD, "")], change=change, key_run=key_run)
+    key = write_stale(lake, UNIT_A, "bronze_abababab", NEW, [pointer(legacy["objects"][0], OLD, "")], change=change, key_run=key_run)
     return lake, key
 
 
@@ -607,7 +607,7 @@ STALE_MALFORMED = {
     "pointer_root_unknown": last_capture_item(read_root="other/"),
     "pointer_key_outside_its_root": last_capture_item(read_root="raw/"),
     "pointer_raw_key_under_the_empty_root": last_capture_item(key="raw/state/hospitals/datasets/x.csv"),
-    "pointer_into_the_test_folder": lambda body: body["last_capture"][0].update(read_root="raw/", key="raw/ingestion_test/20261110T000000Z-aaaaaaaa/x.csv"),
+    "pointer_into_the_test_folder": lambda body: body["last_capture"][0].update(read_root="raw/", key="raw/ingestion_test/ingestion_aaaaaaaa/x.csv"),
 }
 
 
@@ -629,7 +629,7 @@ def test_a_malformed_record_of_another_collection_does_not_stop_this_collections
     other = capture(lake, root="raw/", snapshot="CA__other", files=[("data", "data.csv", ROWS_OLD)], collection=OTHER_COLLECTION)
     write_completion(lake, mine, UNIT_A, NEW)
     write_completion(lake, other, UNIT_C, NEW, change=forge_extra_field)
-    write_stale(lake, UNIT_B, "20261109T000000Z-cdcdcdcd", NEW, [], collection=OTHER_COLLECTION, change=lambda body: body.update(extra=1))
+    write_stale(lake, UNIT_B, "bronze_cdcdcdcd", NEW, [], collection=OTHER_COLLECTION, change=lambda body: body.update(extra=1))
     check([item["key"] for item in discover(lake, tmp_path)] == [mine["objects"][0]["key"]], "records of other collections are not this run's concern")
 
 
@@ -637,7 +637,7 @@ def test_a_record_that_cannot_be_read_at_all_stops_the_run_because_its_collectio
     lake = Lake()
     mine = capture(lake, root="raw/", snapshot="CA__mine", files=[("data", "data.csv", ROWS_NEW)])
     write_completion(lake, mine, UNIT_A, NEW)
-    lake.put(f"raw/ingestion_stale/{UNIT_B}/20261109T000000Z-efefefef.json", b"[1, 2]")
+    lake.put(f"raw/ingestion_stale/{UNIT_B}/bronze_efefefef.json", b"[1, 2]")
     check(refused(lambda: discover(lake, tmp_path), "ingestion_stale", UNIT_B), "a record with no readable collection cannot be skipped")
 
 
@@ -723,7 +723,7 @@ def test_two_successive_changed_captures_retire_each_superseded_capture_and_keep
     check(publish(lake, tmp_path, three)[2] == three, "a rerun with the same records publishes the same generation")
 
 
-REVERTED = "20261113T000000Z-dddddddd"
+REVERTED = "bronze_dddddddd"
 LATER = "2026-11-10T10:00:00Z"
 
 
@@ -764,7 +764,7 @@ def test_a_changed_unit_with_an_unchanged_dictionary_keeps_loading_the_one_store
 def test_a_stale_record_naming_the_newest_completions_own_objects_loads_them_as_stale_without_resurrecting_a_retired_capture(tmp_path: Path) -> None:
     lake = Lake()
     first, second, rows = first_then_second(lake, tmp_path)
-    write_stale(lake, UNIT_A, "20261109T000000Z-b1b1b1b1", NEW, [pointer(item, MID, "raw/") for item in second["objects"]])
+    write_stale(lake, UNIT_A, "bronze_b1b1b1b1", NEW, [pointer(item, MID, "raw/") for item in second["objects"]])
     inputs, _, after = publish(lake, tmp_path, rows)
     check(loaded_keys(inputs) == {item["key"] for item in second["objects"]}, "the newest completion's objects are the live ones and load")
     check({item["freshness"] for item in inputs} == {"stale"}, "they carry the stale label")
@@ -774,7 +774,7 @@ def test_a_stale_record_naming_the_newest_completions_own_objects_loads_them_as_
 def test_a_stale_record_naming_a_superseded_capture_is_refused_by_name_before_any_metadata_build(tmp_path: Path) -> None:
     lake = Lake()
     first, _, rows = first_then_second(lake, tmp_path)
-    late = write_stale(lake, UNIT_A, "20261110T000000Z-c2c2c2c2", LATER, [pointer(item, OLD, "raw/") for item in first["objects"]])
+    late = write_stale(lake, UNIT_A, "bronze_c2c2c2c2", LATER, [pointer(item, OLD, "raw/") for item in first["objects"]])
     check(
         refused(lambda: discover(lake, tmp_path, BOTH), "stale pointer older than the newest completion", UNIT_A, late, first["objects"][0]["key"]),
         "the refusal names the unit, the stale record and the superseded objects",
@@ -786,7 +786,7 @@ def test_a_stale_record_naming_another_version_of_the_newest_completions_object_
     lake = Lake()
     _, second, _ = first_then_second(lake, tmp_path)
     other = {**pointer(second["objects"][0], MID, "raw/"), "version_id": "v-another"}
-    late = write_stale(lake, UNIT_A, "20261110T000000Z-a6a6a6a6", LATER, [other])
+    late = write_stale(lake, UNIT_A, "bronze_a6a6a6a6", LATER, [other])
     check(
         refused(lambda: discover(lake, tmp_path, BOTH), "stale pointer older than the newest completion", late),
         "an object version the completion does not name is refused",
@@ -796,7 +796,7 @@ def test_a_stale_record_naming_another_version_of_the_newest_completions_object_
 def test_an_older_stale_records_object_is_retired_once_a_newer_completion_exists(tmp_path: Path) -> None:
     lake = Lake()
     first = capture(lake, root="raw/", snapshot="CA__first", files=[("data", "data.csv", ROWS_LEGACY), ("dictionary", "notes.csv", NOTES)])
-    write_stale(lake, UNIT_A, "20261101T000000Z-b2b2b2b2", OLD, [pointer(item, OLD, "raw/") for item in first["objects"]])
+    write_stale(lake, UNIT_A, "bronze_b2b2b2b2", OLD, [pointer(item, OLD, "raw/") for item in first["objects"]])
     inputs_one, _, one = publish(lake, tmp_path, [])
     check(
         loaded_keys(inputs_one) == {item["key"] for item in first["objects"]} and {item["freshness"] for item in inputs_one} == {"stale"},
@@ -856,9 +856,9 @@ def test_each_reversion_run_binds_its_own_new_observations(tmp_path: Path) -> No
     first, second, rows = first_then_second(lake, tmp_path)
     ids = []
     for run, instant, stored in (
-        ("20261113T000000Z-aaaaaaaa", "2026-11-10T10:00:00Z", first),
-        ("20261114T000000Z-bbbbbbbb", "2026-11-11T10:00:00Z", second),
-        ("20261115T000000Z-cccccccc", "2026-11-12T10:00:00Z", first),
+        ("bronze_aaaaaaaa", "2026-11-10T10:00:00Z", first),
+        ("bronze_bbbbbbbb", "2026-11-11T10:00:00Z", second),
+        ("bronze_cccccccc", "2026-11-12T10:00:00Z", first),
     ):
         write_completion(lake, stored, UNIT_A, instant, run=run)
         inputs, _, rows = publish(lake, tmp_path, rows)
@@ -887,7 +887,7 @@ def test_the_newest_record_is_found_across_both_key_forms_by_retrieval_time(tmp_
     write_completion(lake, first, UNIT_A, OLD)
     write_completion(lake, second, UNIT_A, NEW, run=REVERTED)
     check([item["key"] for item in discover(lake, tmp_path)] == [second["objects"][0]["key"]], "a later reversion-form record outranks the plain one")
-    write_completion(lake, first, UNIT_A, LATER, run="20261114T000000Z-eeeeeeee")
+    write_completion(lake, first, UNIT_A, LATER, run="bronze_eeeeeeee")
     check([item["key"] for item in discover(lake, tmp_path)] == [first["objects"][0]["key"]], "a still later one outranks both")
 
 
@@ -897,7 +897,7 @@ def test_a_reversion_record_under_another_runs_name_is_refused_by_name(tmp_path:
     key = write_completion(lake, first, UNIT_A, NEW, run=REVERTED)
     version = next(version for name, version in lake.objects if name == key)
     body = lake.objects.pop((key, version))
-    wrong = key.replace(REVERTED, "20261113T000000Z-ffffffff")
+    wrong = key.replace(REVERTED, "bronze_ffffffff")
     lake.put(wrong, body)
     check(
         refused(lambda: discover(lake, tmp_path), wrong, "differs from the unit and payload its key names"),
@@ -983,7 +983,7 @@ def test_a_stale_pointer_to_the_newest_completion_that_is_a_reversion_loads_its_
     first, _, previous = first_then_second(lake, tmp_path)
     write_completion(lake, first, UNIT_A, NEW, run=REVERTED)
     current_inputs, _, live = publish(lake, tmp_path, previous)
-    write_stale(lake, UNIT_A, "20261114T000000Z-aaaaaaaa", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
+    write_stale(lake, UNIT_A, "bronze_aaaaaaaa", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
     inputs, _, after = publish(lake, tmp_path, live)
     check(
         loaded_keys(inputs) == {item["key"] for item in first["objects"]} and {item["freshness"] for item in inputs} == {"stale"},
@@ -1000,7 +1000,7 @@ def test_a_stale_pointer_to_a_plain_completion_naming_retired_objects_is_still_r
     lake = Lake()
     first, _, previous = first_then_second(lake, tmp_path)
     write_completion(lake, first, UNIT_A, NEW)
-    write_stale(lake, UNIT_A, "20261114T000000Z-bbbbbbbb", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
+    write_stale(lake, UNIT_A, "bronze_bbbbbbbb", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
     check(
         refused(lambda: publish(lake, tmp_path, previous), "an earlier generation retired"),
         "a plain completion cannot bring retired objects back through a stale pointer",

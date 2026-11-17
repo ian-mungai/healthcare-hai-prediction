@@ -233,7 +233,7 @@ run "ingestion_test_folder_expires_and_nothing_else_does" {
   assert {
     condition = alltrue([
       for key, expected in {
-        "ingestion_test/20261112T220000Z-abcd1234/raw/a.csv" = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
+        "ingestion_test/ingestion_abcd1234/raw/a.csv" = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
         "ingestion_test/"                                    = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
         "ingestion_test"                                     = ""
         "ingestion_tests/a.csv"                              = ""

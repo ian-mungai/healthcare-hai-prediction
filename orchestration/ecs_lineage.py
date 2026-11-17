@@ -80,6 +80,7 @@ from referencing import Registry, Resource
 
 from orchestration.ecs_launch import LaunchError, LaunchStore, S3LaunchStore, launch_record_prefix
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTE = "/api/v1/openlineage/lineage"
@@ -122,7 +123,7 @@ INPUTS_KEYS = {"schema", "layer", "run_id", "tables"}
 MODE = "real"
 EVIDENCE_BYTES = 2 * 1024**2
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}")
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 BRONZE_JOB = "bronze"  # the one job whose lineage comes from its run record (raw_lineage.bronze_run_events)
 PIN_TEMPLATES = ("pin_silver", "pin_gold")  # the only templates whose invocation names an input run (submission_request.schema.json)
 TERMINAL = {"succeeded": "COMPLETE", "cancelled": "ABORT"}  # every other outcome is FAIL

@@ -11,7 +11,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import model_drift_run_id
+from orchestration.training_contract import BASE_RUN, model_drift_run_id, model_run_pattern
 
 MODEL = "m4"
 TRIGGER_TIMEOUT = timedelta(minutes=5)
@@ -23,10 +23,10 @@ with DAG(
     max_active_runs=1,  # two runs of one set would share its family: the host pool no longer keeps them apart
     tags=["orchestration", "features"],
     params={
-        "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "run_id": Param(type="string", pattern=f"^{model_run_pattern('features', MODEL)}$"),
         "mode": Param("real", type="string", enum=["real"]),
         # The base run this set builds from: its features job must have passed, and the job refuses a run that is not the newest committed base run (no latest).
-        "base_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "base_snapshot_run": Param(type="string", pattern=f"^{BASE_RUN}$"),
     },
     user_defined_macros={"model_drift_run_id": model_drift_run_id},
     default_args={"retries": 0},
@@ -36,7 +36,7 @@ with DAG(
     gate >> TriggerDagRunOperator(
         task_id="trigger_drift",
         trigger_dag_id="drift_monitoring_dag",
-        trigger_run_id=f"features_m4_dag__drift__{drift_run}",
+        trigger_run_id=drift_run,
         conf={"run_id": drift_run, "mode": "{{ params.mode }}", "mlflow": "aws", "model": MODEL, "features_run": "{{ params.run_id }}"},
         wait_for_completion=False,
         skip_when_already_exists=True,

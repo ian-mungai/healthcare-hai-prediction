@@ -14,11 +14,11 @@ from orchestration import training_contract
 from scripts.training import auto_promotion
 from scripts.training.lane_b_cases import Cases, require
 
-RUN = "20261024T000000Z-1234abcd"
+RUN = "promote_clabsi_1234abcd"
 RESEARCH: dict[str, Any] = {
     "schema": 1,
     "hai_type": "HAI_1",
-    "base_run": "20261023T000000Z-5678abcd",
+    "base_run": "features_5678abcd",
     "runs": {"m2": RUN},
     "promotion": {
         "registered_model": "hai_model_HAI_1",
@@ -286,7 +286,7 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         research_path = output / f"research_{research_cases.HAI_TYPE}.json"
         record = json.loads(research_path.read_text())
         number = str(record["promotion"]["challenger"]["version"])
-        other_runs = {"m1": "20261025T000001Z-1234abcd", "m2": "20261025T000002Z-1234abcd", "m4": "20261025T000004Z-1234abcd"}
+        other_runs = {"m1": "promote_clabsi_1234abce", "m2": "promote_clabsi_1234abcf", "m4": "promote_clabsi_1234abc0"}
         other, other_fixtures = research_cases.finished_models(folder / "identity_b", models=("m1", "m4", "m2"), runs=other_runs)
 
         def canary_tags(store: Any) -> dict[str, dict[str, str]]:

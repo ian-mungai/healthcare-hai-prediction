@@ -199,7 +199,7 @@ def build(
         "--mode",
         mode,
         "--run",
-        "20261025T000000Z-a1b2c3d4",
+        "silver_a1b2c3d4",
         "--folder",
         str(output),
         "--project",
@@ -215,7 +215,7 @@ def build(
         payload = b"synthetic parquet stand-in"
         (extract / "dim_one/part-00000.parquet").write_bytes(payload)
         manifest = {
-            "run_id": "20261025T000000Z-a1b2c3d4",
+            "run_id": "silver_a1b2c3d4",
             "pins_sha256": "2" * 64,
             "snapshot_set": {"dim_one": 1},
             "files": {"dim_one/part-00000.parquet": hashlib.sha256(payload).hexdigest()},

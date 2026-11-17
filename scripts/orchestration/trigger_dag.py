@@ -47,7 +47,7 @@ not staged yet) writes no claim, so the run and job launch when the cause is gon
 (``--research-attempt`` for research). The command unpauses the DAG, clears the tasks that failed and the tasks that never ran because of them, and prints the
 run's state and the cleared task IDs. It refuses a run that is absent, queued, running or successful and a failed run with no failed task, and clears nothing
 then. It takes ``--dag drift_monitoring_dag``, which only a features DAG starts, and the Airflow run ID of a run that a DAG started
-(``features_m1_dag__drift__<run ID>``). The trigger starts the drift DAG by hand only with ``--drift-attempt N`` (2 to 99): the launch of a drift run is
+(``drift_ols_<hex>``). The trigger starts the drift DAG by hand only with ``--drift-attempt N`` (2 to 99): the launch of a drift run is
 terminal once it ended, so the drift check of a model run that failed starts again as a run of its own, with ``--model`` and the model run's ``--features-run``.
 The run ID derives from the features run and the attempt (``model_drift_run_id``), the conf carries the attempt, the run runs the code staged for its own run
 (``lakehouse/run_stage/<run ID>/inputs/code.tar.gz`` and ``code.sha256``) and the training run it may start runs the same code. Attempt 1, the default, is the
@@ -62,10 +62,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import secrets
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -76,16 +74,20 @@ from orchestration.training_contract import DAGS as TRAINING_DAGS
 from orchestration.training_contract import (
     HAI_TYPES,
     LAUNCH_LANES,
+    MODEL_NAMES,
     MODELS,
+    compose_run_id,
     drift_attempt_of,
     model_drift_run_id,
     model_features_run_id,
+    new_run_hex,
     parameters_for,
     research_attempt_of,
     research_run_id,
     serving_parameters_for,
     trained_run_id,
 )
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.infrastructure import secret_store
 from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, AirflowApiError
 
@@ -105,9 +107,9 @@ FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
 # The form defaults of ingestion_dag, which stand for an option that is left out when the pair is checked.
 PUBLISHER_DEFAULTS = {"run_kind": "bootstrap", "capture_root": "raw/"}
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
-# The Airflow run ID of a run that another DAG starts is the run ID behind the triggering DAG's name, as in features_m1_dag__drift__<run ID>.
-AIRFLOW_RUN_ID = re.compile(rf"(?:[a-z0-9_]+__)*{RUN_ID.pattern}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
+# The Airflow run ID of a run is its run ID (the research DAG's run that a training run triggers is research_<model>_<hex>, which is a run ID of the form too).
+AIRFLOW_RUN_ID = RUN_ID
 MAX_WAIT_SECONDS = 4 * 3600
 POLL_SECONDS = 2.0
 STATUS_CAUSE = re.compile(r"[A-Z]+ /\S*: (status [0-9]{3})(?:: .*)?", re.DOTALL)
@@ -120,9 +122,26 @@ class TriggerError(RuntimeError):
     """A refused request or a run that did not end well; the message names the run and the cause, never a secret."""
 
 
-def new_run_id() -> str:
-    """A run ID in the format the workflows accept: the UTC time and eight random hex digits."""
-    return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
+HAND_START_NAMES = {
+    "ingestion_dag": "ingestion",
+    "silver_transform_dag": "silver",
+    "gold_transform_dag": "gold",
+    "features_base_dag": "features",
+    "research_dag": "research",
+    "model_promotion_dag": "promotion",
+    SERVING_DAG: "serving",
+}
+
+
+def new_run_id(dag: str, model: str | None = None) -> str:
+    """The run ID of a run started by hand: the workflow's name and a fresh random hex (a training run adds its model's name)."""
+    if dag == "training_dag":
+        if model not in MODELS:
+            raise TriggerError(f"refused: a training run needs --model, one of {', '.join(MODELS)}")
+        return compose_run_id("training", new_run_hex(), 1, MODEL_NAMES[model])
+    if dag not in HAND_START_NAMES:
+        raise TriggerError(f"refused: {dag} has no run ID of its own to make")
+    return compose_run_id(HAND_START_NAMES[dag], new_run_hex())
 
 
 def run_conf(
@@ -218,7 +237,7 @@ def base_run_plan(
     if dag not in (*TRAINING_DAGS[:1], RESEARCH_DAG):
         raise TriggerError(f"refused: {dag} takes no base run, only training_dag and research_dag do")
     if not RUN_ID.fullmatch(base_run):
-        raise TriggerError(f"refused: --base-run must be a base publication run ID, not {base_run!r}")
+        raise TriggerError(f"refused: --base-run must be the run ID of a features base run (features_<hex>), not {base_run!r}")
     if dag == RESEARCH_DAG:
         try:
             derived, features, extra = research_run_id(base_run, 1 if research_attempt is None else research_attempt), features_run, {}
@@ -478,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         conf = run_conf(
             args.dag,
             args.mode,
-            new_run_id() if run_id is None else run_id,
+            new_run_id(args.dag, args.model) if run_id is None else run_id,
             args.silver_snapshot_run,
             training,
             args.gold_snapshot_run,

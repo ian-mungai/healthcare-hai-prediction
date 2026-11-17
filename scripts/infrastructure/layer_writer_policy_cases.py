@@ -182,7 +182,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
                 {"s3:prefix": (f"{PRODUCTION_PREFIX}{hai_type}/",)},
             )
         for key in (
-            "promote/20261024T000000Z-1234abcd/intent.json",
+            "promote/promote_clabsi_1234abcd/intent.json",
             "promote/models/hai_model_HAI_1/lease-0000000001.json",
             "promote/production",
             "promote/productions/x.json",

@@ -50,13 +50,14 @@ class SchemaChanged(ReadError):
 
 
 def committed_runs(catalog: reads.IcebergCatalog, namespace: str, feature_set: str, schema: Mapping[str, Any]) -> list[str]:
-    """The committed runs that publish the set's table, newest first (ties by the larger run ID); a retired run is no publication."""
+    """The committed runs that publish the set's table, newest first by the commit time the row records (a tie by the larger run ID, which is no time); a
+    run committed before the namespace's cutover is no publication."""
     table = schema["model_sets"][feature_set]["table"]
     rows = reads.load_table(catalog, namespace, reads.RUNS_TABLE).scan(selected_fields=("run_id", "committed_at", "snapshot_set")).to_arrow().to_pylist()
     found = []
     for row in rows:
         run = str(row.get("run_id"))
-        if table in reads.parse_snapshot_set(run, row.get("snapshot_set")) and not retired_publications.is_retired(namespace, run):
+        if table in reads.parse_snapshot_set(run, row.get("snapshot_set")) and not retired_publications.is_retired(namespace, row["committed_at"]):
             found.append((reads.as_utc(row["committed_at"]), run))
     return [run for _, run in sorted(found, reverse=True)]
 

@@ -53,9 +53,9 @@ PLANTED_SETTING = "FAKE_SETTING"
 ONLINE_STORE_AUTH_VARIABLE = "REDIS_" + "PASSWORD"
 ZONE_VARIABLE = "TZ"
 T0 = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
-RUN_A = "20261022T120000Z-0a1b2c3d"
-RUN_B = "20261022T130000Z-1a2b3c4d"
-RUN_C = "20261022T140000Z-2a3b4c5d"
+RUN_A = "features_0a1b2c3d"
+RUN_B = "features_1a2b3c4d"
+RUN_C = "features_2a3b4c5d"
 
 
 def _plus(hours: int) -> timezone:
@@ -217,7 +217,7 @@ def case_e17_select(c: Checker) -> None:
         "an ISO text commit time is read", reads.read_publication(stub_features(runs=[runs_row(RUN_A, T0.isoformat(), good)])[0], namespace).run_id == RUN_A
     )
     c.check("a named run is selected even when it is not the head", reads.read_publication(catalog, namespace, RUN_A).run_id == RUN_A)
-    c.refused("a named run that does not exist is refused", lambda: reads.read_publication(catalog, namespace, "20200101T000000Z-deadbeef"), "exactly one")
+    c.refused("a named run that does not exist is refused", lambda: reads.read_publication(catalog, namespace, "features_deadbeef"), "exactly one")
     publication = reads.read_publication(catalog, namespace, RUN_A)
     c.check("the publication carries its snapshot set and digest", dict(publication.snapshot_set) == good and len(publication.snapshot_set_sha256) == 64)
 
@@ -247,7 +247,7 @@ def case_e17_retired(c: Checker) -> None:
     """The publications recorded before the features cutover are no publication of the real namespace: the head skips them, a named one is refused by name,
     and the fixture namespace is untouched."""
     good = {"feature_matrix_a": 11, "int_hospital_spine": 12}
-    old_run, newer_run = "20261107T133742Z-14bad53c", "20261113T010000Z-1a2b3c4d"
+    old_run, newer_run = "features_14bad53c", "features_1a2b3c4e"
 
     def stub(namespace: str, runs: list[dict[str, Any]]) -> StubCatalog:
         catalog, _ = stub_features(runs=runs)
@@ -745,7 +745,7 @@ def set_catalog(
     catalog.tables["label_matrix_hai_outcomes"] = StubTable("label_matrix_hai_outcomes", 2001, labels)
     catalog.tables[reads.SPINE_TABLE] = StubTable(reads.SPINE_TABLE, 2000, {"spine_key": "string"})
     base_set = {reads.SPINE_TABLE: 2000, **({"label_matrix_hai_outcomes": 2001} if base_names_label else {})}
-    base_run, set_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001"
+    base_run, set_run = "features_elastic_net_0000b001", "features_0000a001"
     rows = [runs_row(base_run, T0, base_set), runs_row(set_run, T0 + timedelta(hours=1), {entry["table"]: 4001})]
     catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, {}, rows)
     return catalog, schema, base_run, set_run
@@ -807,7 +807,7 @@ def case_e32_set_hold(c: Checker) -> None:
     feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
     feature_sets: Any = importlib.import_module("scripts.features.feature_sets")
     schema, sha = reads.read_schema()
-    base_run, set_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001"
+    base_run, set_run = "features_elastic_net_0000b001", "features_0000a001"
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
 
     def materialize(feature_set: str, production: list[str | None], folder: Path) -> tuple[dict[str, Any], list[str]]:
@@ -897,7 +897,7 @@ def case_e32_release(c: Checker) -> None:
     feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
     schema, sha = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
-    base_run, held_run, newer_run = "20261109T010000Z-0000b001", "20261109T020000Z-0000a001", "20261109T050000Z-0000a002"
+    base_run, held_run, newer_run = "features_0000b001", "features_0000a001", "features_0000a002"
     with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
         holds = feast_sets.FolderHoldStore(Path(raw))
         calls: list[str] = []
@@ -956,7 +956,7 @@ def case_e32_release_command(c: Checker) -> None:
     feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
     schema, sha = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
-    run, base_run = "20261109T020000Z-0000a004", "20261109T010000Z-0000b001"
+    run, base_run = "features_0000a004", "features_0000b001"
     with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
         holds = feast_sets.FolderHoldStore(Path(raw))
         holds.write_new(

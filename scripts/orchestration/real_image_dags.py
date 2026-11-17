@@ -440,21 +440,22 @@ def trigger_forms() -> dict[str, dict[str, Any]]:
     import importlib
 
     c, training = rig_modules().cases, importlib.import_module("orchestration.training_contract")
-    run, other = c.SILVER_RUN, c.GOLD_RUN
+    silver, gold, base, bronze = c.SILVER_RUN, c.GOLD_RUN, c.FEATURES_RUN, c.BRONZE_RUN
+    models = ("m1", "m2", "m3", "m4", "m5", "m6")
     return {
         "ingestion_dag": {"run_id": c.PUBLISHER_RUN},
         "ingestion_retry_dag": {"original_run": c.PUBLISHER_RUN, "day": 1},
-        "silver_transform_dag": {"run_id": run},
-        "gold_transform_dag": {"run_id": other, "silver_snapshot_run": run},
-        "features_base_dag": {"run_id": other, "gold_snapshot_run": run},
-        **{f"features_{model}_dag": {"run_id": other, "base_snapshot_run": run} for model in ("m1", "m2", "m3", "m4", "m5", "m6")},
-        "drift_monitoring_dag": {"run_id": run, "model": "m1", "features_run": other},
-        "training_dag": {"run_id": run, "model": "m1"},
-        "model_promotion_dag": {"run_id": run, "hai_type": "HAI_1", "model_version": "3"},
+        "silver_transform_dag": {"run_id": silver},
+        "gold_transform_dag": {"run_id": gold, "silver_snapshot_run": silver},
+        "features_base_dag": {"run_id": base, "gold_snapshot_run": gold},
+        **{f"features_{model}_dag": {"run_id": training.model_features_run_id(base, model), "base_snapshot_run": base} for model in models},
+        "drift_monitoring_dag": {"run_id": c.DRIFT_RUN, "model": "m1", "features_run": c.SET_FEATURES_RUN},
+        "training_dag": {"run_id": training.compose_run_id("training", "0a1b2c3d", 1, "ols"), "model": "m1"},
+        "model_promotion_dag": {"run_id": c.PROMOTE_RUN, "hai_type": "HAI_1", "model_version": "3"},
         "research_dag": {"run_id": training.research_run_id(c.SERVE_BASE), "base_run": c.SERVE_BASE},
-        "serving_deploy_dag": {"run_id": run, "hai_type": "HAI_1", "deploy_mode": "stable"},
-        "metadata_ingest_dag": {"run_id": run, "features_run": other},
-        "bronze_chain_dag": {"run_id": run},
+        "serving_deploy_dag": {"run_id": c.SERVE_RUN, "hai_type": "HAI_1", "deploy_mode": "stable"},
+        "metadata_ingest_dag": {"run_id": training.compose_run_id("metadata", "0a1b2c3d"), "features_run": base},
+        "bronze_chain_dag": {"run_id": bronze},
     }
 
 
@@ -725,7 +726,9 @@ def research_conf(base_run: str, hai_types: Sequence[str]) -> dict[str, Any]:
 
 def research_trigger_run(training_run: str) -> str:
     """The DAG run ID of the research run that a training run starts, so that each model's trigger has a run of its own."""
-    return f"training__{training_run}"
+    from orchestration import training_contract
+
+    return training_contract.research_dag_run_id(training_run)
 
 
 def triggered_confs(dag_id: str, run_id: str) -> list[Any]:
@@ -796,12 +799,8 @@ def cases_catalog() -> dict[str, Scenario]:
 
     modules = rig_modules()
     c = modules.cases
-    preflight = importlib.import_module("orchestration.ecs_preflight")
     training = importlib.import_module("orchestration.training_contract")
-    derived = preflight.derived_run_id
-    silver = derived(c.BRONZE_RUN, "silver")
-    gold = derived(silver, "gold")
-    features = derived(gold, "features")
+    silver, gold, features = (training.chain_layer_run(layer, c.BRONZE_RUN) for layer in ("silver", "gold", "features"))
     features_m1 = training.model_features_run_id(features, "m1")  # the drift check and the training run of a model chain from the run of its own set
     drift = training.model_drift_run_id(features_m1)
     train = training.trained_run_id(features, "m1")

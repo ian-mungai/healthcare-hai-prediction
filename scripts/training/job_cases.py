@@ -115,7 +115,7 @@ def argument_cases(cases: Cases, folder: Path) -> None:
         require(failure_of(call(arguments_for("guard", root))[2]) == "snapshot_record", "an unreadable record was accepted")
 
     def mismatch() -> None:
-        root = prepare(folder / "record_run", run_id="20261024T000000Z-ffffffff")
+        root = prepare(folder / "record_run", run_id="training_elastic_net_ffffffff")
         code, _, error = call(arguments_for("guard", root))
         require(code == job.EXIT_FAILED and failure_of(error) == "run_mismatch" and listing(root / "out") == [], f"{code} {error}")
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration.ecs_preflight import derived_run_id
+from orchestration.training_contract import chain_layer_run
 from scripts.lakehouse import layer_run, session
 from scripts.lakehouse import run_layer_run_e2e as layer_e2e
 from scripts.lakehouse.run_layer_run_e2e import require
@@ -147,7 +147,7 @@ def walk(case: layer_e2e.Case) -> None:
         "the direct run did not claim its run ID",
     )
     rig = launches.Rig()
-    bronze, child = BRONZE_RUN, derived_run_id(BRONZE_RUN, "silver")
+    bronze, child = BRONZE_RUN, chain_layer_run("silver", BRONZE_RUN)
     rig.stage.objects[f"lakehouse/run_stage/{bronze}/inputs/code.sha256"] = case.digest.encode() + b"\n"
     with launches.world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
         require(current.step("chain_gate") == "succeeded", "the chain gate did not pass")

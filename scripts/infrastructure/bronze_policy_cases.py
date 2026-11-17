@@ -120,17 +120,17 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     for folder in ("ingestion_units", "ingestion_stale"):
         record = f"{BUCKET}/raw/{folder}/" + "ab" * 32 + "/" + "cd" * 32 + ".json"
         check("s3:GetObjectVersion", record, raw)
-        check("s3:GetObjectVersion", record.removesuffix(".json") + ".20261113T180000Z-ab12cd34.json", raw)
+        check("s3:GetObjectVersion", record.removesuffix(".json") + ".bronze_ab12cd34.json", raw)
         check("s3:ListBucketVersions", BUCKET, raw, prefix=f"raw/{folder}/")
         check("s3:GetObjectVersion", f"{BUCKET}/{folder}/" + "ab" * 32 + "/" + "cd" * 32 + ".json", False)
         check("s3:ListBucketVersions", BUCKET, False, prefix=f"{folder}/")
         for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
             check(action, record, False)
-    test_record = f"{BUCKET}/ingestion_test/20261110T000000Z-aaaaaaaa/ingestion_units/" + "ab" * 32 + "/" + "cd" * 32 + ".json"
+    test_record = f"{BUCKET}/ingestion_test/ingestion_aaaaaaaa/ingestion_units/" + "ab" * 32 + "/" + "cd" * 32 + ".json"
     check("s3:GetObjectVersion", test_record, False)
-    check("s3:ListBucketVersions", BUCKET, False, prefix="ingestion_test/20261110T000000Z-aaaaaaaa/ingestion_units/")
+    check("s3:ListBucketVersions", BUCKET, False, prefix="ingestion_test/ingestion_aaaaaaaa/ingestion_units/")
     check("s3:GetObjectVersion", test_record.replace(f"{BUCKET}/", f"{BUCKET}/raw/"), False)
-    check("s3:ListBucketVersions", BUCKET, False, prefix="raw/ingestion_test/20261110T000000Z-aaaaaaaa/")
+    check("s3:ListBucketVersions", BUCKET, False, prefix="raw/ingestion_test/ingestion_aaaaaaaa/")
     check("s3:GetObjectVersion", f"{BUCKET}/bronze_objects/other/" + "ab" * 32, False)
     check("s3:ListBucketVersions", BUCKET, False, prefix=f"{PAYLOADS}/")
     check("s3:GetObjectVersion", f"{BUCKET}/example/not_mapped/source.csv", False)

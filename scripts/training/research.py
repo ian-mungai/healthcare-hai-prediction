@@ -67,7 +67,9 @@ def frozen_runs(store: Any, experiment_id: str, run: str) -> dict[str, str] | No
 
 
 def parents_of(store: Any, experiment_id: str, hai_type: str, parameters: Mapping[str, Any], frozen: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Return the finished parent run of each needed model on the base run; of two runs of one model the later training run ID counts.
+    """Return the finished parent run of each needed model on the base run; of two runs of one model the one that started later counts.
+
+    Later is by the start time the tracking server recorded: a run ID has no time.
 
     A research run that already has a complete record keeps the runs that record names (``frozen``), so a retry after a later model run reproduces its record.
     """
@@ -80,7 +82,7 @@ def parents_of(store: Any, experiment_id: str, hai_type: str, parameters: Mappin
             continue
         if frozen is not None and tags.get("run_id") != frozen.get(model):
             continue
-        if model not in chosen or tags["run_id"] > chosen[model].data.tags["run_id"]:
+        if model not in chosen or (item.info.start_time, tags["run_id"]) > (chosen[model].info.start_time, chosen[model].data.tags["run_id"]):
             chosen[model] = item
     missing = [model for model in NEEDED if model not in chosen]
     if missing:

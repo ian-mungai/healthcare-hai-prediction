@@ -28,7 +28,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+# A code run ID: a commit time and eight digits of the commit (staged by CI), or a run ID <name>_<8 hex>[_<attempt>] (the run its code is staged under).
+RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}|[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}")
 SHA256 = re.compile(r"[a-f0-9]{64}")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 WORK = Path("/workspace")

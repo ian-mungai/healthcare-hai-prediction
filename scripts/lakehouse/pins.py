@@ -23,10 +23,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 SOURCES = Path("dbt/models/silver/staging/_bronze__sources.yml")
 RUNS = Path("data/analytics/dbt/runs")
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}")
 SOURCE_TABLE = re.compile(r"\s*- name:\s*(\S+)\s*")
 # Iceberg's refs metadata table; every name is checked against IDENTIFIER first.
@@ -146,7 +148,7 @@ def differences(pinned: dict[str, str], current: dict[str, str]) -> list[str]:
 def run_path(run_id: str) -> Path:
     """The run's pins file in its run directory."""
     if not RUN_ID.fullmatch(run_id):
-        raise PinError(f"run ID {run_id!r} is not of the form 20261011T090000Z-0a1b2c3d")
+        raise PinError(f"run ID {run_id!r} is not of the form <name>_<8 hex>[_<attempt>], for example silver_0a1b2c3d")
     return RUNS / run_id / "pins.json"
 
 

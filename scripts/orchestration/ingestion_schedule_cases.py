@@ -9,9 +9,9 @@ ECS. The failure modes, each with the case that covers it:
    (``schedule_is_production_only``).
 2. A scheduled run names its run from its logical date, runs the monthly kind and never the bootstrap kind, and the same logical date again launches
    nothing new (``scheduled_run_launches_the_monthly_kind_once_per_date``).
-3. The daily retry runs on days 2 to 8 in production only, runs the retry kind under the run id of its original run and day, and refuses a day outside the
-   seven or half a name before any cloud call (``retry_schedule_is_production_only``, ``a_scheduled_retry_runs_each_of_the_seven_days_once``,
-   ``a_retry_outside_the_seven_days_is_refused_before_any_cloud_call``, ``a_hand_triggered_retry_names_its_run_and_day_or_is_refused``).
+3. The daily retry runs on days 2 and 3 in production only, runs the retry kind under the run id of its original run and day, and refuses a day outside the
+   two or half a name before any cloud call (``retry_schedule_is_production_only``, ``a_scheduled_retry_runs_each_of_the_two_days_once``,
+   ``a_retry_outside_the_two_days_is_refused_before_any_cloud_call``, ``a_hand_triggered_retry_names_its_run_and_day_or_is_refused``).
 4. A scheduled run stages no code of its own, so it takes the code run that the current-code parameter names and is bound to it once: a run that has a
    binding keeps it when the parameter moves, an unreadable parameter waits and launches nothing, and a parameter that is not a run id is refused
    (``scheduled_run_takes_the_current_code_run_and_keeps_it``, ``current_code_run_that_is_unreadable_or_malformed_launches_nothing``). A deployment that
@@ -93,7 +93,7 @@ def scheduled(
 
 
 def schedule_is_production_only() -> None:
-    named = "20261110T120000Z-ab12cd34"
+    named = "ingestion_ab12cd34"
     for name, cron in {"prod": schedule.MONTHLY, "dev": None}.items():
         params = {"run_id": named, "mode": "real"}
         with scheduled(Rig(), {schedule.ENVIRONMENT_SETTING: name}, params, "manual") as (current, seen):
@@ -209,7 +209,7 @@ def hand_trigger_in_production_must_name_its_run() -> None:
         states = current.run_dag("ingestion_dag.py")
     require(states["preflight"] == "failed" and states["job"] == "upstream_failed", f"a hand trigger that names no run did not stop: {states}")
     require(rig.tasks_started() == 0 and not rig.records.objects and not rig.ecs.calls, "a hand trigger with no run reached the cloud")
-    named = "20261110T120000Z-ab12cd34"
+    named = "ingestion_ab12cd34"
     rig.stage_runs(named)
     with scheduled(rig, PRODUCTION, {"run_id": named, "mode": "real"}, "manual") as (current, _):
         states = current.run_dag("ingestion_dag.py")
@@ -237,7 +237,7 @@ def retry_rig() -> Rig:
 
 
 def retry_schedule_is_production_only() -> None:
-    for name, cron in {"prod": "0 0 2-8 * *", "dev": None}.items():
+    for name, cron in {"prod": "0 0 2-3 * *", "dev": None}.items():
         params = SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": 1}
         with scheduled(retry_rig(), {schedule.ENVIRONMENT_SETTING: name}, params, "manual", RETRY_DAG) as (current, seen):
             current.run_dag("ingestion_retry_dag.py")
@@ -247,10 +247,10 @@ def retry_schedule_is_production_only() -> None:
     require(seen[0]["schedule"] is None, "a deployment that names no environment got a retry schedule")
 
 
-def a_scheduled_retry_runs_each_of_the_seven_days_once() -> None:
+def a_scheduled_retry_runs_each_of_the_two_days_once() -> None:
     rig = retry_rig()
     runs = []
-    for day in range(1, 8):
+    for day in range(1, 3):
         date = datetime(2026, 12, 1 + day, tzinfo=UTC)
         with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, date) as (current, _):
             states = current.run_dag("ingestion_retry_dag.py")
@@ -265,19 +265,20 @@ def a_scheduled_retry_runs_each_of_the_seven_days_once() -> None:
         require(rig.environment(day - 1)["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"day {day} did not run the code of its original run")
         require(rig.preflight.code_runs.stored(environment["RUN_ID"]) == CURRENT_CODE, f"day {day} was not bound to the code of its original run")
         runs.append(environment["RUN_ID"])
-    require(len(set(runs)) == 7 and rig.tasks_started() == 7, f"seven distinct retry runs were expected: {runs}")
-    with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 4, tzinfo=UTC)) as (again, _):
+    require(len(set(runs)) == 2 and rig.tasks_started() == 2, f"two distinct retry runs were expected: {runs}")
+    with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 3, tzinfo=UTC)) as (again, _):
         again.run_dag("ingestion_retry_dag.py")
-    require(rig.tasks_started() == 7, "the same retry day again started a task")
+    require(rig.tasks_started() == 2, "the same retry day again started a task")
 
 
-def a_retry_outside_the_seven_days_is_refused_before_any_cloud_call() -> None:
+def a_retry_outside_the_two_days_is_refused_before_any_cloud_call() -> None:
     rig = retry_rig()
     for date in (
         datetime(2026, 12, 1, tzinfo=UTC),
+        datetime(2026, 12, 4, tzinfo=UTC),
         datetime(2026, 12, 9, tzinfo=UTC),
         datetime(2026, 12, 15, tzinfo=UTC),
-        datetime(2026, 12, 4, 6, tzinfo=UTC),
+        datetime(2026, 12, 3, 6, tzinfo=UTC),
     ):
         with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, date) as (current, _):
             states = current.run_dag("ingestion_retry_dag.py")
@@ -323,9 +324,9 @@ def a_missing_current_code_run_refuses_in_production_and_names_the_parameter() -
     run = schedule.scheduled_run_id(LOGICAL_DATE)
     for label, blind in (("a scheduled run", "scheduled"), ("a hand trigger", "manual")):
         rig = Rig()
-        rig.stage_runs(run, "20261110T120000Z-ab12cd34")  # code staged under the run's own id must not be a way around the refusal
+        rig.stage_runs(run, "ingestion_ab12cd34")  # code staged under the run's own id must not be a way around the refusal
         rig.preflight.current_code_run = ssm_current_code_run_reader(MissingParameter(), name, required=True)
-        params = {"mode": "real"} if blind == "scheduled" else {"run_id": "20261110T120000Z-ab12cd34", "mode": "real"}
+        params = {"mode": "real"} if blind == "scheduled" else {"run_id": "ingestion_ab12cd34", "mode": "real"}
         with scheduled(rig, PRODUCTION, params, blind) as (current, _):
             states = current.run_dag("ingestion_dag.py")
             error_text = str(current.results.get("preflight"))
@@ -362,8 +363,8 @@ CASES: dict[str, Callable[[], None]] = {
     "hand_trigger_in_production_must_name_its_run": hand_trigger_in_production_must_name_its_run,
     "development_form_still_requires_its_run": development_form_still_requires_its_run,
     "retry_schedule_is_production_only": retry_schedule_is_production_only,
-    "a_scheduled_retry_runs_each_of_the_seven_days_once": a_scheduled_retry_runs_each_of_the_seven_days_once,
-    "a_retry_outside_the_seven_days_is_refused_before_any_cloud_call": a_retry_outside_the_seven_days_is_refused_before_any_cloud_call,
+    "a_scheduled_retry_runs_each_of_the_two_days_once": a_scheduled_retry_runs_each_of_the_two_days_once,
+    "a_retry_outside_the_two_days_is_refused_before_any_cloud_call": a_retry_outside_the_two_days_is_refused_before_any_cloud_call,
     "a_hand_triggered_retry_names_its_run_and_day_or_is_refused": a_hand_triggered_retry_names_its_run_and_day_or_is_refused,
     "a_retry_of_a_run_with_its_own_code_uses_that_code": a_retry_of_a_run_with_its_own_code_uses_that_code,
 }

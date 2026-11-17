@@ -13,8 +13,8 @@ from datetime import timedelta
 from airflow.sdk import DAG, Param, task
 
 from orchestration.dag_runtime import pool_settings, run_step
+from orchestration.training_contract import BASE_RUN, run_id_pattern
 
-RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 # The longest the metadata step may run. The job deadline adds 900 seconds of grace.
 LIFETIME_CEILING_SECONDS = 14400
 STEP_LIMIT = timedelta(seconds=LIFETIME_CEILING_SECONDS + 1800)
@@ -27,9 +27,9 @@ with DAG(
     dagrun_timeout=STEP_LIMIT + timedelta(minutes=30),
     tags=["metadata"],
     params={
-        "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
+        "run_id": Param(type="string", pattern=f"^{run_id_pattern('metadata')}$"),
         # The features run whose chain the catalog ingests: the dbt copies of it and of the gold and silver runs it recorded. No default and no "latest".
-        "features_run": Param(type="string", pattern=f"^{RUN_ID}$"),
+        "features_run": Param(type="string", pattern=f"^{BASE_RUN}$"),
         "mode": Param("real", type="string", enum=["real"]),
     },
     default_args={"retries": 0},

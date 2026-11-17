@@ -25,8 +25,8 @@ from scripts.orchestration import trigger_dag
 from scripts.orchestration.airflow_api import AirflowApiError
 
 DAG = "gold_transform_dag"
-RUN = "20261110T120000Z-abcdef12"
-SILVER = "20261110T100000Z-12345678"
+RUN = "silver_abcdef12"
+SILVER = "silver_12345678"
 
 
 class StandIn:
@@ -177,7 +177,7 @@ def settle_cases() -> dict[str, bool]:
 
 
 DRIFT = "drift_monitoring_dag"
-DRIFT_RUN = "features_m1_dag__drift__20261115T220949Z-abcdef12"
+DRIFT_RUN = "drift_ols_abcdef12"
 DRIFT_TASKS = {"drift_run": "failed", "decide": "upstream_failed", "trigger_training": "upstream_failed"}
 
 
@@ -300,7 +300,7 @@ def trigger_cases() -> dict[str, bool]:
     }
 
 
-TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+TEST_ROOT = "ingestion_test/ingestion_0a1b2c3d/"
 
 
 def publisher_cases() -> dict[str, bool]:
@@ -384,8 +384,8 @@ def publisher_cases() -> dict[str, bool]:
     }
 
 
-BASE = "20261110T010000Z-0b5e0001"
-RESEARCH_RUN = "20261110T010000Z-5e5ea4c1"
+BASE = "features_0b5e0001"
+RESEARCH_RUN = "research_5e5ea4c1"
 HAI_TYPE = "HAI_1"
 
 
@@ -534,7 +534,7 @@ def base_run_cases() -> dict[str, bool]:
     }
 
 
-FEATURES_RUN = "20261109T010106Z-0a0a0a06"
+FEATURES_RUN = "features_fixed_effects_0a0a0a06"
 
 
 def drift_attempt_cases() -> dict[str, bool]:

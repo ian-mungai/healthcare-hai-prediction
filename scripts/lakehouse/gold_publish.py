@@ -34,7 +34,17 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from scripts.lakehouse import glue_mirror
-from scripts.lakehouse.gold_publish_record import IDENT_MAX, RESULT_NAME, RUN_ID, SHA256, PublishError, accept_consumer, read_record, sha256_bytes
+from scripts.lakehouse.gold_publish_record import (
+    IDENT_MAX,
+    RESULT_NAME,
+    RUN_ID,
+    RUN_ID_PATTERN,
+    SHA256,
+    PublishError,
+    accept_consumer,
+    read_record,
+    sha256_bytes,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = REPO_ROOT / "data_contracts/lakehouse/gold_contract.json"
@@ -43,7 +53,7 @@ CATALOG = "hai_lakehouse"
 MODES = ("publish_fixture", "real")
 STEPS = ("candidates", "reconcile", "backup", "commit")
 IDENT = re.compile(rf"[A-Za-z_][A-Za-z0-9_]{{0,{IDENT_MAX - 1}}}")
-BACKUP_NAME = re.compile(r"catalog_backup_[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}\.json")
+BACKUP_NAME = re.compile(rf"catalog_backup_{RUN_ID_PATTERN}\.json")
 SCHEMA = 1
 
 DEFAULT_PUBLISH_DIR = "/workspace/out/publish"

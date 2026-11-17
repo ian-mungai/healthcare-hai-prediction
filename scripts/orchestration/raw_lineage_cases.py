@@ -47,7 +47,7 @@ from scripts.orchestration.ecs_lineage_cases import (
 from scripts.orchestration.ecs_lineage_cases import context as gold_context
 
 BUCKET = "example-acquisition-bucket"
-SNAPSHOT = "20261101T090000Z-0a1b2c3d"
+SNAPSHOT = "silver_0a1b2c3d"
 PUBLISHER_URL = "https://data.example.invalid/api/views/abcd-1234/rows.csv"
 LANDING_URL = "https://data.example.invalid/dataset/abcd-1234"
 OBJECTS = [
@@ -139,7 +139,7 @@ def acquisition_events_are_valid() -> None:
 def acquisition_refusals() -> None:
     """A state whose receipt and reconciliation disagree, or that names an unverified object, is refused by name."""
     cases: list[tuple[Callable[[dict[str, Any], dict[str, Any]], None], str]] = [
-        (lambda body, record: record.update(snapshot_id="20261101T090000Z-ffffffff"), "another snapshot"),
+        (lambda body, record: record.update(snapshot_id="silver_ffffffff"), "another snapshot"),
         (lambda body, record: record["objects"][0]["object"].update(sha256="9" * 64), "differs from its receipt artifact"),
         (lambda body, record: record["objects"][0]["object"].update(verification="none"), "not verified"),
         (lambda body, record: record["objects"][0]["object"].pop("version_id"), "version"),
@@ -169,7 +169,7 @@ def acquisition_replay_is_stable() -> None:
     require([json.loads(line)["eventType"] for line in first] == ["START", "COMPLETE"], "the lines are the job's events in order")
 
 
-BRONZE_RUN = "20261104T100000Z-abcdef01"
+BRONZE_RUN = "bronze_abcdef01"
 RECORD_KEY = f"lakehouse/bronze_runs/{BRONZE_RUN}/check.json"
 
 
@@ -408,7 +408,7 @@ def bronze_record_refusals() -> None:
     wrong."""
     first = OBJECTS[0]
     cases: list[tuple[Any, str]] = [
-        (check_record(run_id="20261104T100000Z-ffffffff"), "another run"),
+        (check_record(run_id="silver_fffffff0"), "another run"),
         (check_record(target="qualify"), "real target"),
         (check_record(objects=[]), "no loaded object"),
         (check_record(objects=[{"table": "other_table", **first, "sha256": "1" * 64, "byte_count": 1}]), "not a requested table"),

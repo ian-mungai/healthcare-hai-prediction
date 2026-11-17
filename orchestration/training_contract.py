@@ -4,24 +4,178 @@ from __future__ import annotations
 
 import hashlib
 import re
+import secrets
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 DAGS = ("training_dag", "model_promotion_dag")
-RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
+
+# The run ID form is ``<name>_<8 hex>[_<attempt>]`` and has no date. One pipeline run has one hex, which starts at its ingestion run: every run of that
+# pipeline run carries it. A new attempt adds the suffix ``_2`` to ``_99`` and the suffix carries down to every run the attempt starts; research takes only its
+# own attempt. The m1 to m6 and HAI_1 to HAI_6 keys stay in DAG IDs, Feast sets, Redis keys, S3 layout and MLflow tags: only a run ID spells the short names.
+MODEL_NAMES = {"m1": "ols", "m2": "elastic_net", "m3": "mixed_effects", "m4": "gradient_boosting", "m5": "spatial", "m6": "fixed_effects"}
+INFECTION_NAMES = {"HAI_1": "clabsi", "HAI_2": "cauti", "HAI_3": "ssi_colon", "HAI_4": "ssi_hysterectomy", "HAI_5": "mrsa", "HAI_6": "cdiff"}
+MAX_ATTEMPT = 99
+RETRY_DAYS = 2
+CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
+# The names of a run ID without a qualifier, with a model name, with an infection name.
+PLAIN_NAMES = ("ingestion", "bronze", "silver", "gold", "features", "metadata", "research", "serving", "promotion")
+MODEL_QUALIFIED = ("features", "drift", "training", "research")
+HEX_DIGITS = "[a-f0-9]{8}"
+ATTEMPT_TAIL = "(?:_(?:[2-9]|[1-9][0-9]))?"
 
 
-def training_run_id(drift_run: str) -> str:
-    """The training run's ID, derived from the drift run's so that a retried decision names the same run. The broker derives the same ID to bind its code."""
-    return f"{drift_run[:16]}-{hashlib.sha256(f'training:{drift_run}'.encode()).hexdigest()[:8]}"
+def _alternatives(names: Any) -> str:
+    return "|".join(sorted((re.escape(name) for name in names), key=lambda name: (-len(name), name)))
 
 
-def model_training_run_id(drift_run: str, model: str) -> str:
-    """The run ID of one model's training run for a drift run: the same for a retry of that model, another for every other model."""
-    return f"{drift_run[:16]}-{hashlib.sha256(f'training:{model}:{drift_run}'.encode()).hexdigest()[:8]}"
+_MODELS = _alternatives(MODEL_NAMES.values())
+_INFECTIONS = _alternatives(INFECTION_NAMES.values())
+RETRY_RUN_ID = f"ingestion_retry_{HEX_DIGITS}{ATTEMPT_TAIL}_[1-{RETRY_DAYS}]"
+# Every run ID of the form, one alternative for each name in the names table of the design.
+RUN_ID = (
+    f"(?:(?:{_alternatives(PLAIN_NAMES)})_{HEX_DIGITS}{ATTEMPT_TAIL}"
+    f"|(?:{_alternatives(MODEL_QUALIFIED)})_(?:{_MODELS})_{HEX_DIGITS}{ATTEMPT_TAIL}"
+    f"|(?:{_alternatives(CHAIN_STEPS)})_(?:{_INFECTIONS})_{HEX_DIGITS}{ATTEMPT_TAIL}"
+    f"|{RETRY_RUN_ID})"
+)
+# The run ID of a code run is its own form (a commit time and eight digits of the commit, staged by CI) or, in development, the run ID the code is staged under.
+CODE_STAMP_RUN = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
+CODE_RUN = f"(?:{CODE_STAMP_RUN}|{RUN_ID})"
+# The shape of a code run ID that the standalone scripts of the images and the host check (they import nothing of the repository). It is a safe path component
+# that holds every code run ID and is wider than ``CODE_RUN`` in the names it takes.
+CODE_RUN_SHAPE = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}|[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}"
 
 
-MAX_DRIFT_ATTEMPT = 99
+def run_id_pattern(*names: str, qualified: bool = False) -> str:
+    """The pattern of the run IDs of ``names``: plain names, or with ``qualified`` the model-qualified or infection-qualified ones."""
+    if not qualified:
+        unknown = [name for name in names if name not in (*PLAIN_NAMES, "ingestion_retry")]
+        if unknown or not names:
+            raise ValueError(f"names without a qualifier are {', '.join(PLAIN_NAMES)} and ingestion_retry")
+        return "(?:" + "|".join(RETRY_RUN_ID if name == "ingestion_retry" else f"{re.escape(name)}_{HEX_DIGITS}{ATTEMPT_TAIL}" for name in names) + ")"
+    if not names or any(name not in (*MODEL_QUALIFIED, *CHAIN_STEPS) for name in names):
+        raise ValueError("qualified names are the model names of a run and the chain steps")
+    parts = [f"{re.escape(name)}_(?:{_INFECTIONS if name in CHAIN_STEPS else _MODELS})_{HEX_DIGITS}{ATTEMPT_TAIL}" for name in names]
+    return "(?:" + "|".join(parts) + ")"
+
+
+BASE_RUN = run_id_pattern("features")
+SET_RUN = run_id_pattern("features", qualified=True)
+DRIFT_RUN = run_id_pattern("drift", qualified=True)
+RESEARCH_RUN = run_id_pattern("research")
+
+
+def model_run_pattern(name: str, model: str) -> str:
+    """The pattern of the run IDs of ``name`` (features, drift, training or research) for one model, for example ``features_elastic_net_<hex>``."""
+    if name not in MODEL_QUALIFIED or model not in MODEL_NAMES:
+        raise ValueError(f"a model run name is one of {', '.join(MODEL_QUALIFIED)} and a model one of {', '.join(MODEL_NAMES)}")
+    return f"{name}_{re.escape(MODEL_NAMES[model])}_{HEX_DIGITS}{ATTEMPT_TAIL}"
+
+
+@dataclass(frozen=True)
+class RunIdParts:
+    """The parts of a run ID: its name, the model or infection name that qualifies it (or None), its hex, its attempt (1 when it has no suffix) and, for a
+    retry run, its retry day (otherwise 0)."""
+
+    name: str
+    qualifier: str | None
+    hex: str
+    attempt: int
+    day: int
+
+
+_PARTS = re.compile(
+    rf"(?P<name>ingestion_retry|{_alternatives((*PLAIN_NAMES, *MODEL_QUALIFIED, *CHAIN_STEPS))})"
+    rf"(?:_(?P<qualifier>{_MODELS}|{_INFECTIONS}))?_(?P<hex>{HEX_DIGITS})(?:_(?P<attempt>[0-9]{{1,2}}))?(?:_(?P<day>[0-9]))?"
+)
+
+
+def run_id_parts(run_id: str) -> RunIdParts:
+    """Read a run ID back into its parts. Anything that is not of the form raises ``ValueError``."""
+    if not isinstance(run_id, str) or not re.fullmatch(RUN_ID, run_id):
+        raise ValueError(f"{run_id!r} is not a run ID of the form <name>_<8 hex>[_<attempt>]")
+    found = _PARTS.fullmatch(run_id)
+    if found is None:
+        raise ValueError(f"{run_id!r} is not a run ID of the form <name>_<8 hex>[_<attempt>]")
+    name, qualifier, digits, first, second = found["name"], found["qualifier"], found["hex"], found["attempt"], found["day"]
+    if name == "ingestion_retry":
+        # A retry run ends in its day; an attempt, when it has one, comes before the day.
+        if second is None:
+            return RunIdParts(name, None, digits, 1, int(first))
+        return RunIdParts(name, None, digits, int(first), int(second))
+    return RunIdParts(name, qualifier, digits, 1 if first is None else int(first), 0)
+
+
+def new_run_hex() -> str:
+    """A fresh random hex for a run that starts a pipeline run or starts by hand in the middle of one."""
+    return secrets.token_hex(4)
+
+
+def scheduled_run_hex(logical_date: datetime) -> str:
+    """The hex of a scheduled ingestion run: the first eight hexadecimal digits of the SHA-256 digest of its UTC logical date, so a repeat is the same run."""
+    if logical_date.tzinfo is None:
+        raise ValueError("the logical date has no time zone")
+    return hashlib.sha256(logical_date.astimezone(UTC).isoformat().encode()).hexdigest()[:8]
+
+
+def attempt_of(attempt: Any) -> int:
+    """The attempt, a whole number from 1 to ``MAX_ATTEMPT``; anything else raises ``ValueError`` that names the attempt."""
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 1 <= attempt <= MAX_ATTEMPT:
+        raise ValueError(f"the attempt must be a whole number from 1 to {MAX_ATTEMPT}")
+    return attempt
+
+
+def compose_run_id(name: str, digits: str, attempt: int = 1, qualifier: str | None = None) -> str:
+    """The run ID of ``name`` with ``digits`` as hex, an attempt suffix from attempt 2 and, where the name takes one, the model or infection name."""
+    if not re.fullmatch(HEX_DIGITS, digits):
+        raise ValueError("the hex is eight lower-case hexadecimal digits")
+    suffix = "" if attempt_of(attempt) == 1 else f"_{attempt}"
+    if name in CHAIN_STEPS:
+        allowed: Any = INFECTION_NAMES.values()
+    elif name in MODEL_QUALIFIED and name not in ("features", "research"):
+        allowed = MODEL_NAMES.values()
+    elif name in ("features", "research"):
+        allowed = (None, *MODEL_NAMES.values())
+    elif name in PLAIN_NAMES:
+        allowed = (None,)
+    else:
+        raise ValueError(f"{name} is not a name of the run ID form")
+    if qualifier not in allowed:
+        raise ValueError(f"{name} does not take the qualifier {qualifier!r}")
+    middle = "" if qualifier is None else f"_{qualifier}"
+    return f"{name}{middle}_{digits}{suffix}"
+
+
+def _parent(run_id: str, *names: str) -> RunIdParts:
+    """The parts of a parent run ID, refused unless its name is one of ``names``."""
+    parts = run_id_parts(run_id)
+    if parts.name not in names:
+        raise ValueError(f"{run_id!r} is not a run ID of {', '.join(names)}")
+    return parts
+
+
+def chain_layer_run(layer: str, bronze_run: str) -> str:
+    """The run ID of ``layer`` (silver, gold, features or metadata) in the chain of ``bronze_run``: the bronze run's hex and attempt."""
+    if layer not in ("silver", "gold", "features", "metadata"):
+        raise ValueError(f"{layer} is not a layer of the bronze chain")
+    parts = _parent(bronze_run, "bronze")
+    return compose_run_id(layer, parts.hex, parts.attempt)
+
+
+def model_features_run_id(base_run: str, model: str) -> str:
+    """The run ID of one model set's features run for a base run (a ``features`` run): the base run's hex and attempt, and the model's name."""
+    if model not in MODEL_NAMES:
+        raise ValueError(f"model must be one of {', '.join(MODEL_NAMES)}")
+    parts = _parent(base_run, "features")
+    if parts.qualifier is not None:
+        raise ValueError(f"{base_run!r} is a model set's run, not a base run")
+    return compose_run_id("features", parts.hex, parts.attempt, MODEL_NAMES[model])
+
+
+MAX_DRIFT_ATTEMPT = MAX_ATTEMPT
 
 
 def drift_attempt_of(attempt: Any) -> int:
@@ -31,28 +185,35 @@ def drift_attempt_of(attempt: Any) -> int:
     return attempt
 
 
-def model_drift_run_id(features_run: str, attempt: int = 1) -> str:
-    """The run ID of the drift check of one model set's run: the same for a retry of that run. The chain gate binds it to the bronze run's staged code.
+def model_drift_run_id(features_run: str, attempt: int | None = None) -> str:
+    """The run ID of the drift check of one model set's run: the features run's hex, model and attempt, or the attempt the owner names.
 
-    The launch of a run is terminal once it ended, so a drift check that failed needs a run of its own. Attempt 1 is the run every model run has; the attempt
-    number of another run is the owner's explicit choice (``trigger_dag --drift-attempt``), and each attempt derives its own ID and so its own training run.
+    The launch of a run is terminal once it ended, so a drift check that failed needs a run of its own. A later attempt is the owner's explicit choice
+    (``trigger_dag --drift-attempt``): its suffix carries down to the training run the check may start.
     """
-    attempt = drift_attempt_of(attempt)
-    seed = f"drift:{features_run}" if attempt == 1 else f"drift:{attempt}:{features_run}"
-    return f"{features_run[:16]}-{hashlib.sha256(seed.encode()).hexdigest()[:8]}"
+    parts = _parent(features_run, "features")
+    if parts.qualifier is None:
+        raise ValueError(f"{features_run!r} is a base run, not a model set's run")
+    chosen = parts.attempt if attempt is None else drift_attempt_of(attempt)
+    return compose_run_id("drift", parts.hex, chosen, parts.qualifier)
 
 
-def model_features_run_id(base_run: str, model: str) -> str:
-    """The run ID of one model set's features run for a base run: the same for a retry of that model, another for every other model."""
-    return f"{base_run[:16]}-{hashlib.sha256(f'features:{model}:{base_run}'.encode()).hexdigest()[:8]}"
+def model_training_run_id(drift_run: str, model: str) -> str:
+    """The run ID of one model's training run for a drift run: the drift run's hex and attempt, and the model's name."""
+    if model not in MODEL_NAMES:
+        raise ValueError(f"model must be one of {', '.join(MODEL_NAMES)}")
+    parts = _parent(drift_run, "drift")
+    if parts.qualifier != MODEL_NAMES[model]:
+        raise ValueError(f"{drift_run!r} is a drift run of another model than {model}")
+    return compose_run_id("training", parts.hex, parts.attempt, MODEL_NAMES[model])
 
 
 def trained_run_id(base_run: str, model: str) -> str:
-    """The run ID of the training run of one model on a base run, as the features, drift and training DAGs chain it: the same for a retry of that run."""
+    """The run ID of the training run of one model on a base run, as the features, drift and training DAGs chain it."""
     return model_training_run_id(model_drift_run_id(model_features_run_id(base_run, model)), model)
 
 
-MAX_RESEARCH_ATTEMPT = 99
+MAX_RESEARCH_ATTEMPT = MAX_ATTEMPT
 
 
 def research_attempt_of(attempt: Any) -> int:
@@ -63,17 +224,26 @@ def research_attempt_of(attempt: Any) -> int:
 
 
 def research_run_id(base_run: str, attempt: int = 1) -> str:
-    """The run ID of the research run of a base run: the same for a retry, so a base is researched once.
+    """The run ID of the research job of a base run: the base run's hex and the research run's own attempt (not the base run's), so a base is researched once.
 
-    The launch of a run is terminal once it ended, so research that failed needs a run of its own. Attempt 1 is the run every base has; the attempt number
-    of another run is the owner's explicit choice (``--research-attempt``), and each attempt derives its own ID and so its own promotion chain.
+    The launch of a run is terminal once it ended, so research that failed needs a run of its own. Attempt 1 is the run every base has; a later attempt is the
+    owner's explicit choice (``--research-attempt``), and its suffix carries down to its promotion chain.
     """
-    attempt = research_attempt_of(attempt)
-    seed = f"research:{base_run}" if attempt == 1 else f"research:{attempt}:{base_run}"
-    return f"{base_run[:16]}-{hashlib.sha256(seed.encode()).hexdigest()[:8]}"
+    parts = _parent(base_run, "features")
+    if parts.qualifier is not None:
+        raise ValueError(f"{base_run!r} is a model set's run, not a base run")
+    return compose_run_id("research", parts.hex, research_attempt_of(attempt))
 
 
-CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
+def research_dag_run_id(training_run: str) -> str:
+    """The Airflow run ID of the research DAG run that a training run triggers: ``research_<triggering model>_<hex>``, one for each trigger.
+
+    The research job's own run ID is ``research_<hex>`` (``research_run_id``). The suffix of the training run does not carry here: research takes only its own.
+    """
+    parts = _parent(training_run, "training")
+    return compose_run_id("research", parts.hex, 1, parts.qualifier)
+
+
 # The records of one infection type that the research run and the steps after it store, under ``research/<research run>/<kind>_<type>.json`` in the data
 # bucket: the research record, the replay report of its canary, the canary check's result and the owner notice's receipt.
 RECORD_KINDS = ("research", "replay", "canary", "notice")
@@ -83,23 +253,24 @@ def record_key(kind: str, research_run: str, hai_type: str) -> str:
     """The data bucket key of one record of a type after a research run."""
     if kind not in RECORD_KINDS:
         raise ValueError(f"kind must be one of {', '.join(RECORD_KINDS)}")
-    if hai_type not in HAI_TYPES or not re.fullmatch(RUN_ID, research_run):
+    if hai_type not in INFECTION_NAMES or not re.fullmatch(run_id_pattern("research"), research_run):
         raise ValueError("a record names a research run ID and a supported HAI type")
     return f"research/{research_run}/{kind}_{hai_type}.json"
 
 
 def chain_run_id(research_run: str, hai_type: str, step: str) -> str:
-    """The run ID of one step of one infection type's promotion chain after a research run: the same for a retry, another for every other type and step.
+    """The run ID of one step of one infection type's promotion chain after a research run: ``<step>_<infection>_<hex>``, with the research run's attempt.
 
     The launch library records one launch for each job and run, so each launching step of the chain has a run of its own.
     """
     if step not in CHAIN_STEPS:
         raise ValueError(f"step must be one of {', '.join(CHAIN_STEPS)}")
-    if hai_type not in HAI_TYPES:
-        raise ValueError(f"type must be one of {', '.join(HAI_TYPES)}")
-    if not re.fullmatch(RUN_ID, research_run):
+    if hai_type not in INFECTION_NAMES:
+        raise ValueError(f"type must be one of {', '.join(INFECTION_NAMES)}")
+    parts = _parent(research_run, "research")
+    if parts.qualifier is not None:
         raise ValueError("run must be a research run ID")
-    return f"{research_run[:16]}-{hashlib.sha256(f'chain:{step}:{hai_type}:{research_run}'.encode()).hexdigest()[:8]}"
+    return compose_run_id(step, parts.hex, parts.attempt, INFECTION_NAMES[hai_type])
 
 
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
@@ -237,16 +408,16 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] =
             raise ValueError("training parameters must name the publication, population, HAI types, trigger, MLflow lane and model")
         if not isinstance(raw["model"], str) or raw["model"] not in MODELS:
             raise ValueError(f"model must be one of {', '.join(MODELS)}")
-        if raw["features_run"] != "latest" and not isinstance(raw["features_run"], str) or not re.fullmatch(f"latest|{RUN_ID}", str(raw["features_run"])):
-            raise ValueError("features_run must be latest or a publication run ID")
+        if raw["features_run"] != "latest" and not isinstance(raw["features_run"], str) or not re.fullmatch(f"latest|{SET_RUN}", str(raw["features_run"])):
+            raise ValueError("features_run must be latest or the run ID of a model set's features run")
         _population_and_types(raw)
-        if not isinstance(raw["trigger"], str) or not re.fullmatch(f"manual|drift:{RUN_ID}", raw["trigger"]):
+        if not isinstance(raw["trigger"], str) or not re.fullmatch(f"manual|drift:{DRIFT_RUN}", raw["trigger"]):
             raise ValueError("trigger must be manual or name a drift run")
     elif dag_id == "research_dag":
         if set(raw) - {"research_attempt"} != {"base_run", "population", "hai_types", "mlflow"}:
             raise ValueError("research parameters must name the base run, population, HAI types and MLflow lane, and may name a research attempt")
-        if not isinstance(raw["base_run"], str) or not re.fullmatch(RUN_ID, raw["base_run"]):
-            raise ValueError("base_run must be a base publication run ID")
+        if not isinstance(raw["base_run"], str) or not re.fullmatch(BASE_RUN, raw["base_run"]):
+            raise ValueError("base_run must be the run ID of a features base run")
         if "research_attempt" in raw:
             # Attempt 1 is the default and is left out, so a base has one spelling of its first research run.
             try:
@@ -309,7 +480,7 @@ def chain_parameters_for(step: str, raw: Mapping[str, Any], lanes: tuple[str, ..
         raise ValueError("chain parameters belong only to the canary check, the promotion and the owner notice")
     if set(raw) != CHAIN_PARAMETER_KEYS[step]:
         raise ValueError(f"{step} parameters must name {', '.join(sorted(CHAIN_PARAMETER_KEYS[step]))}")
-    if not isinstance(raw["research_run"], str) or not re.fullmatch(RUN_ID, raw["research_run"]):
+    if not isinstance(raw["research_run"], str) or not re.fullmatch(RESEARCH_RUN, raw["research_run"]):
         raise ValueError("research_run must be a research run ID")
     if raw["hai_type"] not in HAI_TYPES:
         raise ValueError("hai_type must be a supported HAI type")
@@ -333,8 +504,8 @@ def release_parameters_for(raw: Mapping[str, Any]) -> dict[str, str]:
         raise ValueError("hai_type must be a supported HAI type")
     if raw["model"] not in PROMOTION_MODELS:
         raise ValueError(f"model must be one of {', '.join(PROMOTION_MODELS)}")
-    if not isinstance(raw["features_run"], str) or not re.fullmatch(RUN_ID, raw["features_run"]):
-        raise ValueError("features_run must be the ID of a features run")
+    if not isinstance(raw["features_run"], str) or not re.fullmatch(SET_RUN, raw["features_run"]):
+        raise ValueError("features_run must be the ID of a model set's features run")
     return {name: str(raw[name]) for name in sorted(RELEASE_KEYS)}
 
 
@@ -342,15 +513,15 @@ def research_requests(model: str, training_run: str, base_run: str, population: 
     """The one request for ``research_dag`` that a finished training run of ``model`` makes, or none.
 
     Only m1, m2 and m4 are compared, and only a run that names its base run can say which base to research. The research run derives from the base run, so the
-    triggers of the three models name one run; each trigger has its own DAG run (``training__<training run>``), so the last model's trigger is not dropped as a
-    repeat of the first model's.
+    triggers of the three models name one research job run; each trigger has its own Airflow run (``research_dag_run_id``), so the last
+    model's trigger is not dropped as a repeat of the first model's.
     """
     if model not in PROMOTION_MODELS or not base_run:
         return []
     research = {"base_run": base_run, "population": population, "hai_types": list(hai_types), "mlflow": mlflow}
     return [
         {
-            "trigger_run_id": f"training__{training_run}",
+            "trigger_run_id": research_dag_run_id(training_run),
             "conf": {"run_id": research_run_id(base_run), "mode": "real", **parameters_for("research_dag", research, LAUNCH_LANES)},
         }
     ]

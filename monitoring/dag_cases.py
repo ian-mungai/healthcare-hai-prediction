@@ -27,12 +27,12 @@ from unittest import mock
 
 from monitoring import drift_gate
 from monitoring.aws_cases import MemoryS3
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, model_training_run_id, parameters_for
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, SET_RUN, model_training_run_id, parameters_for, run_id_pattern
 
 ROOT = Path(__file__).resolve().parents[1]
 DAG_FILE = ROOT / "dags/drift_monitoring_dag.py"
-DRIFT_RUN = "20261030T120000Z-0a1b2c3d"
-FEATURES_RUN = "20261030T110000Z-feed5eed"
+DRIFT_RUN = "drift_elastic_net_0a1b2c3d"
+FEATURES_RUN = "features_elastic_net_feed5eed"
 BUCKET = "bucket-for-tests"
 Problems = list[str]
 CONTEXT: dict[str, Any] = {}
@@ -242,9 +242,9 @@ def graph_is_declared(folder: Path) -> Problems:
         if trigger.get("fail_when_dag_is_paused") is not True:
             problems.append("a trigger of a paused training_dag would pass silently")
         params = dag.settings["params"]
-        if params["run_id"].settings.get("pattern") != f"^{RUN_ID}$" or params["mode"].settings.get("enum") != ["real"]:
+        if params["run_id"].settings.get("pattern") != f"^{run_id_pattern('drift', qualified=True)}$" or params["mode"].settings.get("enum") != ["real"]:
             problems.append("the run_id pattern differs from the training DAG's or the mode is not real only")
-        if params["features_run"].default is not None or params["features_run"].settings.get("pattern") != f"^{RUN_ID}$":
+        if params["features_run"].default is not None or params["features_run"].settings.get("pattern") != f"^{SET_RUN}$":
             problems.append("the features_run is not a required run ID: the drift check reads one published set, never the latest")
         return problems
 
@@ -264,7 +264,7 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
             "model": "m2",
         }
         problems = []
-        if request["trigger_run_id"] != f"drift__{DRIFT_RUN}":
+        if request["trigger_run_id"] != request["conf"]["run_id"]:
             problems.append(f"the trigger run id is {request['trigger_run_id']}")
         if request["conf"] != {"run_id": request["conf"]["run_id"], "mode": "real", **training}:
             problems.append(f"the training conf is not the run, the real mode and the training parameters: {request['conf']}")
@@ -440,7 +440,7 @@ def launch_step(folder: Path) -> Problems:
 
 
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
-    stale = [record("HAI_1", run="20261029T120000Z-ffffffff", triggered=True)]
+    stale = [record("HAI_1", run="drift_elastic_net_ffffffff", triggered=True)]
     return [
         ("dag_declares_the_graph", graph_is_declared),
         ("dag_one_drifted_type_starts_one_training_run", one_drifted_type_starts_one_training_run),
@@ -516,7 +516,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ),
         ("dag_refuses_a_record_of_another_run", refuses("another run", lambda: bucket_with(stale))),
         ("dag_refuses_a_run_without_its_marker", refuses("not complete", lambda: bucket_with([record("HAI_1")], marker=False))),
-        ("dag_refuses_a_marker_of_another_run", refuses("another run", lambda: bucket_with([record("HAI_1")], marker_run="20261029T120000Z-ffffffff"))),
+        ("dag_refuses_a_marker_of_another_run", refuses("another run", lambda: bucket_with([record("HAI_1")], marker_run="drift_elastic_net_ffffffff"))),
         ("dag_refuses_a_changed_record", refuses("changed", a_changed_record)),
         ("dag_refuses_an_unreadable_record", refuses("unreadable", lambda: bucket_with([record("HAI_1")], raw={"drift_HAI_2.json": b"{not json"}))),
         ("dag_refuses_a_skipped_record_that_triggers", refuses("inconsistent", lambda: bucket_with([record("HAI_1", status="skipped", triggered=True)]))),

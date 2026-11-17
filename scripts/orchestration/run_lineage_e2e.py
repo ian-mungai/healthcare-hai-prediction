@@ -22,7 +22,7 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = ROOT
 EVIDENCE: Path | None = None
-RUN = "20261017T010000Z-1234abcd"
+RUN = "silver_1234abcd"
 
 
 class Identity(TypedDict):

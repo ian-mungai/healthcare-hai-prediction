@@ -19,17 +19,17 @@ from tests.support import check
 
 ROUTE = {"publisher": "example", "collection": "collection"}
 BUCKET = "bucket"
-TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
+TEST_ROOT = "ingestion_test/ingestion_abcd1234/"
 BAD_ROOTS = (
     "ingestion_test/",
     "ingestion_test/x/",
-    "ingestion_test/20261112T220000Z-abcd1234",
-    "ingestion_test/20261112T220000Z-abcd1234/raw/",
+    "ingestion_test/ingestion_abcd1234",
+    "ingestion_test/ingestion_abcd1234/raw/",
     "ingestion_test/20261112T220000Z-ABCD1234/",
-    "ingestion_test/20261112T220000Z-abcd1234/\n",
-    "Ingestion_test/20261112T220000Z-abcd1234/",
-    "ingestion_tests/20261112T220000Z-abcd1234/",
-    "raw/ingestion_test/20261112T220000Z-abcd1234/",
+    "ingestion_test/ingestion_abcd1234/\n",
+    "Ingestion_test/ingestion_abcd1234/",
+    "ingestion_tests/ingestion_abcd1234/",
+    "raw/ingestion_test/ingestion_abcd1234/",
     "../raw/",
     "raw",
     "raw//",
@@ -117,7 +117,7 @@ def test_a_test_folder_capture_never_writes_outside_its_folder(monkeypatch: pyte
     path.write_bytes(b"a,b\n1,2\n")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     tail = f"example/collection/datasets/table/release_date=2026/{digest}/file.csv"
-    for outside in (tail, f"raw/{tail}", f"ingestion_test/20261112T220000Z-ffffffff/{tail}"):
+    for outside in (tail, f"raw/{tail}", f"ingestion_test/ingestion_ffffffff/{tail}"):
         with pytest.raises(CaptureError, match="outside"):
             s3_store.store_file(cast(AwsCli, Client()), path, outside)
     with pytest.raises(Stop):
@@ -135,7 +135,7 @@ def test_task_storage_reaches_only_the_selected_test_folder(monkeypatch: pytest.
     client = storage(TaskS3())
     path = tmp_path / "plain.csv"
     path.write_text("a")
-    for key in ("raw/a", "other/a", "ingestion_test/20261112T220000Z-ffffffff/a", f"{task_role.BLS_LEDGER_PREFIX}0000000001.json"):
+    for key in ("raw/a", "other/a", "ingestion_test/ingestion_ffffffff/a", f"{task_role.BLS_LEDGER_PREFIX}0000000001.json"):
         with pytest.raises(task_role.StorageError, match="outside_raw_root"):
             client.call("s3api", "head-object", ["--key", key])
     with pytest.raises(task_role.StorageError, match="create_once_required"):
@@ -151,11 +151,9 @@ def test_task_storage_on_raw_is_unchanged_by_the_test_folder_rule(monkeypatch: p
 
 @pytest.mark.parametrize("root", ["raw/", TEST_ROOT])
 def test_the_run_state_follows_the_selected_root_and_the_bls_ledger_never_moves(root: str) -> None:
-    environment = {"PUBLISHER_QUEUE_SHA256": "a" * 64, "RUN_ID": "20261112T220000Z-abcd1234", "HAI_CAPTURE_ROOT": root}
+    environment = {"PUBLISHER_QUEUE_SHA256": "a" * 64, "RUN_ID": "ingestion_abcd1234", "HAI_CAPTURE_ROOT": root}
     check(publisher_run.state_prefix(environment) == f"{root}run3_state/{'a' * 64}/", "the state prefix follows the root")
-    check(
-        publisher_run.run_record_key(environment) == f"{root}run3_runs/{'a' * 64}/publisher/20261112T220000Z-abcd1234.json", "the run record follows the root"
-    )
+    check(publisher_run.run_record_key(environment) == f"{root}run3_runs/{'a' * 64}/publisher/ingestion_abcd1234.json", "the run record follows the root")
     check(task_role.BLS_LEDGER_PREFIX == "raw/run3_ledger/bls/", "the BLS ledger stays at its one place for every root")
 
 
@@ -184,7 +182,7 @@ def test_a_restored_outcome_under_another_root_is_refused(monkeypatch: pytest.Mo
     run, _unit = file_run(monkeypatch, tmp_path, bucket, STORED)
     monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, TEST_ROOT)
     harness.execute(run)
-    for root in ("raw/", "ingestion_test/20261112T220000Z-ffffffff/"):
+    for root in ("raw/", "ingestion_test/ingestion_ffffffff/"):
         monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, root)
         with pytest.raises(RegistryError, match="outside"):
             harness.validate_restored(run)

@@ -41,8 +41,8 @@ from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs, SdkStub, 
 from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = "20261104T100000Z-abcdef01"
-OTHER_RUN = "20261104T110000Z-abcdef02"
+RUN = "gold_abcdef01"
+OTHER_RUN = "silver_abcdef02"
 BUCKET = "example-private-bucket"
 PREFIX = launch_record_prefix()
 SETTINGS = EcsSettings(
@@ -54,7 +54,7 @@ SETTINGS = EcsSettings(
     host_capacity_provider="stand-in_host",
 )
 NEED = Resources(cpu_units=3072, memory_mib=16384, scratch_bytes=100 * 2**30)
-BOUND = {"code_digest": "a" * 64, "request_hash": "b" * 64, "input_run": "20261103T100000Z-12345678"}
+BOUND = {"code_digest": "a" * 64, "request_hash": "b" * 64, "input_run": "silver_12345678"}
 ENVIRONMENT = {"gold": {"RUN_ID": RUN}, "verify": {"RUN_ID": RUN}}
 # The revision of each family's host definition that the preflight checked (registered as revision 1 by every rig).
 REVISIONS = {family: f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_{family}_host:1" for family in ("gold", "drift")}
@@ -1307,7 +1307,7 @@ def empty_description_is_never_an_outcome() -> None:
     require(launcher.conclude(launch).outcome == "timeout", "and then it is a timeout")
 
 
-THIRD_RUN = "20261104T120000Z-abcdef03"
+THIRD_RUN = "silver_abcdef03"
 
 
 def family_key(run: str, job: str = "gold") -> str:
@@ -1402,7 +1402,7 @@ def settle_refused_while_a_family_task_is_not_stopped() -> None:
     unresolved_gold(rig)
     rig.time.now += 700
     rig.ecs.hold = True
-    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT)
+    other = rig.adapter.start("gold", "gold_99999999:gold:1", ENVIRONMENT)
     error = refused_gate(rig)
     require(other in str(error) and "end" not in rig.events(1), f"the launch ended beside an unstopped task: {error}")
     refuses(FamilyBusy, lambda: rig.launcher().auto_settle(RUN, "gold"))
@@ -1790,7 +1790,7 @@ def family_busy_while_a_task_of_the_family_is_stopping() -> None:
     so only the cloud shows it."""
     rig = Rig()
     rig.ecs.stop_lag = 3
-    arn = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT)
+    arn = rig.adapter.start("gold", "gold_99999999:gold:1", ENVIRONMENT)
     rig.ecs.stop_task(cluster=CLUSTER, task=arn, reason="owner stop")
     require(rig.ecs.tasks[arn]["desiredStatus"] == "STOPPED" and rig.ecs.tasks[arn]["lastStatus"] != "STOPPED", "the stand-in task is not stopping")
     error = refuses(FamilyBusy, lambda: rig.launcher().run(spec()))

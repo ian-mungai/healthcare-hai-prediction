@@ -77,9 +77,10 @@ from orchestration.ecs_adapter import (
     classify,
     scrub,
 )
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 BOUND_FIELDS = ("code_digest", "request_hash", "input_run")
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 JOB = re.compile(r"[a-z][a-z0-9_]{1,40}")
 EVENTS = ("claim", "decision", "cancel", "intent", "started", "end")
 RUN_EVENTS = ("claim", "decision", "cancel")

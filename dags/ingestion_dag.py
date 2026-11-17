@@ -35,7 +35,7 @@ with DAG(
         "run_id": RUN_ID,
         "mode": Param("real", type="string", enum=["real"]),
         "run_kind": Param("bootstrap", type="string", enum=["bootstrap", "monthly"]),
-        "capture_root": Param("raw/", type="string", pattern=r"^(raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/)$(?![\s\S])"),
+        "capture_root": Param("raw/", type="string", pattern=rf"^(raw/|ingestion_test/{RUN_ID_PATTERN}/)$(?![\s\S])"),
     },
     default_args={"retries": 0},
 ) as dag:

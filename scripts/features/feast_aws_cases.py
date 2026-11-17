@@ -51,7 +51,7 @@ STORE_VALUE = "pw-from-store-7d2e41"
 ISSUED = "issued-token"
 LOCAL_YAML_SHA256 = "d534a5b5ae3c615401fb28efb11c7e7ce65d9181a7de2a1df73abeb09269704f"
 # A run of the real namespace must follow the retirement cutover (``retired_publications``); the fixture cases keep the October run IDs.
-RUN = "20261113T120000Z-0a1b2c3d"
+RUN = "features_0a1b2c3d"
 PORT_OF_NOTHING = "http://127.0.0.1:9/api/catalog"
 
 
@@ -1352,8 +1352,8 @@ def case_fa23(c: Checker) -> None:
 # (``open_catalog``), the redis and feast modules, the Feast store (``historical.default_store``), the Feast side of a set load (``SetHooks``) and the data
 # bucket that holds the Production records (``promote_receipt.s3_client``).
 
-SET_BASE_RUN = "20261109T010000Z-0000b001"
-SET_RUN = "20261109T020000Z-0000a001"
+SET_BASE_RUN = "features_0000b001"
+SET_RUN = "features_elastic_net_0000a001"
 SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
 FEATURE_BUCKET = "example-feature-bucket"
 # The fixed variables and the secrets that infra/jobs/layers.tf gives the feast container of the features job (layers.tftest.hcl checks the same list).

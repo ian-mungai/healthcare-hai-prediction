@@ -42,8 +42,8 @@ from scripts.features.feast_harness import Checker, fake_module, fake_redis_modu
 from scripts.features.publication_reads import ReadError
 
 PHRASE = "pw-sentinel-5c1d9e"  # the fake server's password, also planted in exception text to prove the wrapper hides it
-RUN_A = "20261022T120000Z-0a1b2c3d"
-RUN_B = "20261022T130000Z-1a2b3c4d"
+RUN_A = "features_0a1b2c3d"
+RUN_B = "features_1a2b3c4d"
 SCHEMA_HASH = "a" * 64
 OTHER_HASH = "b" * 64
 WORLD = {"feature_matrix_a": 11, "feature_matrix_b": 12}
@@ -1318,7 +1318,7 @@ def case_e35(c: Checker, make: Callable[[], Any]) -> None:
     feast_materialize: Any = importlib.import_module("scripts.features.feast_materialize")
     schema, sha = reads.read_schema()
     set_hash = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
-    run, base = "20261109T020000Z-0000a001", "20261109T010000Z-0000b001"
+    run, base = "features_0000a001", "features_0000b001"
     table = schema["model_sets"]["m1"]["table"]
     server = make()
     catalog = feast_cases.StubCatalog()
@@ -1407,7 +1407,7 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
     online_release: Any = importlib.import_module("scripts.features.online_release")
     schema, sha = reads.read_schema()
     set_hash = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
-    run, base = "20261109T020000Z-0000a001", "20261109T010000Z-0000b001"
+    run, base = "features_0000a001", "features_0000b001"
     table = schema["model_sets"]["m1"]["table"]
     layout = online.set_layout("m1")
     rows = [{"spine_key": key, "event_timestamp": T0 + timedelta(days=index)} for index, key in enumerate(KEYS)]
@@ -1498,7 +1498,7 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
         server.write_hash(online.CONTROL_DB, layout.marker_key, {"state": "loading"})
 
     def other_run(server: Any) -> None:
-        server.write_hash(online.CONTROL_DB, layout.marker_key, {"feature_run_id": "20261109T030000Z-0000a001"})
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"feature_run_id": "features_0000a002"})
 
     def other_digest(server: Any) -> None:
         server.write_hash(online.CONTROL_DB, layout.marker_key, {"snapshot_set_sha256": "f" * 64})

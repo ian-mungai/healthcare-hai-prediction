@@ -1269,7 +1269,7 @@ def base_pin_and_extract(h: Harness) -> Check:
     domain = features_input.base_tables()
     folder = h.root / "base_pin"
     folder.mkdir()
-    ctx = Context(spark, plan, "20261109T020000Z-0000a001", MODE, folder, "", create_namespace=True, needs_sealed=False)
+    ctx = Context(spark, plan, "gold_0000a001", MODE, folder, "", create_namespace=True, needs_sealed=False)
     publish.ensure_namespace(ctx)
     publish.ensure_runs_table(ctx)
     rows = {name: [(f"s{index}", float(index)) for index in range(3)] for name in domain}
@@ -1296,9 +1296,9 @@ def base_pin_and_extract(h: Harness) -> Check:
         spark.sql(publish.MERGE_RUN.format(table=ctx.fq(plan.runs_table), view=view))
 
     every = sorted(plan.tables)
-    base_run = "20261109T010000Z-0000b001"
+    base_run = "features_0000b001"
     commit(base_run, every, 1)
-    commit("20261109T030000Z-0000c001", ["feature_matrix_m1"], 3, base=base_run)
+    commit("gold_0000c001", ["feature_matrix_m1"], 3, base=base_run)
     pin_path = folder / features_input.BASE_PIN_NAME
     record = features_input.pin_base(ctx, pin_path, base_run)
     checks["the pin names the six domain matrices at the snapshots of the base run, read from the real catalog"] = record["snapshot_set"] == {
@@ -1311,10 +1311,10 @@ def base_pin_and_extract(h: Harness) -> Check:
         q(spark, ADVANCE_Q, table=ctx.fq(name))
         advanced[name] = int(q(spark, LAST_SNAPSHOT_Q, table=ctx.fq(name)).collect()[0][0])
     checks["every matrix has a newer snapshot than its pinned one"] = all(advanced[n] != snapshots[n] for n in domain)
-    commit("20261109T050000Z-0000b002", every, 5, advanced)
+    commit("gold_0000b002", every, 5, advanced)
     checks["a retry after a newer base run was committed returns the same pin"] = features_input.pin_base(ctx, pin_path, base_run) == record
     older = refusal_of(lambda: features_input.pin_base(ctx, folder / "second.json", base_run))
-    checks["an older base run is refused for a new pin and both runs are named"] = "20261109T050000Z-0000b002" in older and base_run in older
+    checks["an older base run is refused for a new pin and both runs are named"] = "gold_0000b002" in older and base_run in older
     pin_sha = publish.sha256_file(pin_path)
     first = features_input.extract(ctx, folder, pin_sha, base=True)
     manifest = publish.read_record(folder / features_input.BASE_INPUT_NAME / "manifest.json")[0]

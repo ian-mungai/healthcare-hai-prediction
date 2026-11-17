@@ -54,7 +54,8 @@ GUARD = {"analysis_plan_sha256": "7" * 64, "targets_sha256": "8" * 64, "training
 SAVED: dict[str, Any] = {}
 CHILDREN = {"m2_elastic_net", "rq1_joint", "rq3_mediation", "hac_validation"}
 HAI_TYPE = "HAI_1"
-BASE_RUN = "20261023T000000Z-5678abcd"
+BASE_RUN = "features_5678abcd"
+CHAMPION_PARENT_RUN = "training_elastic_net_aaaaaaaa"
 BUNDLE = f"bundles/bundle_{HAI_TYPE}"
 LABEL = "hai_1__sir__number"
 SQL_TYPES = {"varchar": "VARCHAR", "double": "DOUBLE", "bigint": "BIGINT", "boolean": "BOOLEAN", "date": "DATE"}
@@ -298,11 +299,11 @@ class Fixture:
                 "population": "primary",
                 "parameters_sha256": hashlib.sha256(canonical(self.parameters)).hexdigest(),
                 "code_digest": DIGEST,
-                "publication_run_id": "20261023T000000Z-1234abcd",
+                "publication_run_id": "features_elastic_net_1234abcd",
                 "features_namespace": "features_e2e",
                 "snapshot_set": {"feature_matrix_care_compare": 101, "feature_matrix_hospital_window": 102, "feature_matrix_hospital": 103},
                 "features_snapshot_set_sha256": "1" * 64,
-                "gold_run_id": "20261022T000000Z-1234abcd",
+                "gold_run_id": "gold_1234abcd",
                 "gold_snapshot_set_sha256": "2" * 64,
                 "feature_schema_sha256": "3" * 64,
                 "hai_outcome_controls_sha256": "4" * 64,
@@ -436,6 +437,7 @@ class FileTracking:
             "experiment": experiment_id,
             "name": run_name,
             "status": "RUNNING",
+            "start_time": len(self.runs),
             "deleted": False,
             "params": {},
             "metrics": {},
@@ -564,7 +566,7 @@ class FileTracking:
     def get_run(self, run_id: str) -> SimpleNamespace:
         run = self.runs[run_id]
         data = SimpleNamespace(params=dict(run["params"]), metrics={key: values[-1] for key, values in run["metrics"].items()}, tags=dict(run["tags"]))
-        return SimpleNamespace(info=SimpleNamespace(run_id=run_id, status=run["status"]), data=data)
+        return SimpleNamespace(info=SimpleNamespace(run_id=run_id, status=run["status"], start_time=run["start_time"]), data=data)
 
     def download_artifacts(self, run_id: str, path: str, dst_path: str | None = None) -> str:
         source = self.root / run_id / path
@@ -708,7 +710,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
 
     def wrong_run() -> None:
         fixture = Fixture(folder / "wrong_run")
-        fixture.rewrite_manifest(lambda manifest: manifest.update(run_id="20261024T000000Z-ffffffff"))
+        fixture.rewrite_manifest(lambda manifest: manifest.update(run_id="training_elastic_net_ffffffff"))
         code, _, error = run_action(fixture, "fit")
         require(code == job.EXIT_FAILED and failure_of(error) == "extract_manifest", f"{code} {error}")
 
@@ -1383,7 +1385,7 @@ def seed_champion(fixture: Fixture, *, newest_window: str = "2023", columns: tup
     store = fixture.tracking
     name = f"hai_model_{HAI_TYPE}"
     store.models[name] = {"tags": {}, "versions": [], "aliases": {}}
-    run = store.create_run("0", tags={"newest_window": newest_window, "run_id": "20250101T000000Z-aaaaaaaa", "step_key": "parent"}).info.run_id
+    run = store.create_run("0", tags={"newest_window": newest_window, "run_id": CHAMPION_PARENT_RUN, "step_key": "parent"}).info.run_id
     target = store.root / run / "bundle"
     target.mkdir(parents=True)
     (target / "feature_list.json").write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": list(columns)}) + "\n")
@@ -1539,7 +1541,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     def holdout_leak() -> None:
         fixture = promoted(folder / "leak", Predictor(LABEL, constant=3.0))
         for run in fixture.tracking.runs.values():
-            if run["tags"].get("newest_window") == "2023" and run["tags"].get("step_key") == "parent" and run["tags"]["run_id"].startswith("2025"):
+            if run["tags"].get("newest_window") == "2023" and run["tags"].get("step_key") == "parent" and run["tags"]["run_id"] == CHAMPION_PARENT_RUN:
                 run["tags"]["newest_window"] = "2024"
         code, _, error = run_promotion(fixture)
         require(code == job.EXIT_FAILED and failure_of(error) == "holdout_leak" and listing(fixture.out) == [], f"{code} {error}")

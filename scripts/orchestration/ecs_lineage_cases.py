@@ -45,7 +45,7 @@ FACET_SCHEMA = ROOT / "data_contracts" / "orchestration" / "launch_lineage_facet
 JOBS = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
 GOLD_RUN = RUN  # the run of the gold job the launch rig runs
 GOLD_INPUT = BOUND["input_run"]  # the silver run the rig's gold launch is bound to
-FEATURES_RUN = "20261104T120000Z-feed0001"
+FEATURES_RUN = "features_feed0001"
 CREDENTIAL = "synthetic-lineage-credential"
 START = "2026-11-04T10:00:00+00:00"
 END = "2026-11-04T10:30:00+00:00"
@@ -944,7 +944,7 @@ def model_set_families_carry_the_features_layer() -> None:
         require(ecs_lineage.lineage_layer(other) == other, f"{other} must be its own layer")
 
 
-MODEL_RUN = "20261104T130000Z-feed0002"
+MODEL_RUN = "features_elastic_net_feed0002"
 BASE_COMMITTED_AT = "2026-11-04T10:20:00+00:00"
 
 

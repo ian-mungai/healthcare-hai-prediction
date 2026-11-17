@@ -2790,7 +2790,7 @@ open(sys.argv[1], "w").write(json.dumps(result))
     }
 
 
-PINS_RUN = "20261012T120000Z-0a1b2c3d"
+PINS_RUN = "silver_0a1b2c3d"
 
 
 def catalog_script(env: Env, bootstrap_code: int = 0, others_run_forever: bool = True) -> None:
@@ -7485,7 +7485,7 @@ def pins_record(env: Env) -> dict[str, bool]:
             {
                 "template": "pin_read",
                 "launch_id": "p2",
-                "args": ["pin", "--run", "20261012T120000Z-ffffffff"],
+                "args": ["pin", "--run", "silver_ffffffff"],
                 "params": {"job": "pins"},
                 "checkout": str(ROOT),
             },

@@ -22,9 +22,9 @@ from scripts.lakehouse import gold_export
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_RUN = "20261109T010000Z-0000b001"
-RUNS = {"m1": "20261109T020000Z-0000a001", "m3": "20261109T030000Z-0000a003"}
-PLANTED = "20261109T040000Z-0000a099"
+BASE_RUN = "features_0000b001"
+RUNS = {"m1": "features_0000a001", "m3": "features_0000a003"}
+PLANTED = "features_0000a099"
 COPY_SQL = "copy (select * from main.\"{table}\") to '{path}' (format parquet)"
 # Spark writes a timestamp as INT96, which DuckDB reads as a timestamp without a time zone. This copy writes the same read-side type: each time-zone column
 # becomes a plain timestamp of the same UTC instant.

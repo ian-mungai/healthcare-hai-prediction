@@ -18,7 +18,7 @@ from scripts.training.auto_promotion_cases import replayed
 from scripts.training.job_action_cases import HAI_TYPE, require, standins
 
 TOPIC = f"arn:aws:sns:us-west-2:{'1' * 12}:example_project_alerts_dev"  # a synthetic all-ones account, built so no real-looking ID sits in the file
-CHAIN_RUN = "20261024T000011Z-1234abcd"
+CHAIN_RUN = "promote_clabsi_1234abcd"
 RESEARCH_RUN = research_cases.RESEARCH_RUN
 
 

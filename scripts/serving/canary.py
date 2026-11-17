@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from orchestration.training_contract import HAI_TYPES
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 VERSION = re.compile(r"[1-9][0-9]{0,18}")
 BUCKETS = 10_000

@@ -23,7 +23,7 @@ from scripts.acquisition.tests.test_task_keys import ACCOUNT, ROLE, TASK_IDENTIT
 from scripts.acquisition.tests.test_task_owners import BUCKET, opener
 from tests.support import check
 
-RUN_ID = "20261113T100000Z-0a1b2c3d"
+RUN_ID = "ingestion_0a1b2c3d"
 CODE_SHA = "c" * 64
 TRACKED_INPUT = "data/acquisition_planning/tracked_plan_input.json"
 SEED_FILES = {
@@ -142,12 +142,12 @@ def test_the_host_run_captures_from_the_tracked_bundle_and_a_second_run_sends_no
     check(first["code_sha256"] == CODE_SHA and first["recheck"] is False and first["root"] == "raw/", f"the run record names the code and the kind: {first}")
     check(first["bundle_sha256"] == json.loads((host.bundle / "inputs.lock.json").read_text())["bundle_sha256"], "the run record names the inputs bundle")
     check(len(first["units"]["completed"]) == 2, "both units completed")
-    host.run(monkeypatch, RUN_ID="20261113T110000Z-0a1b2c3e")
+    host.run(monkeypatch, RUN_ID="ingestion_0a1b2c3e")
     check(len(host.world.site.asked) == asked, "a second bootstrap run skips every unit with a completion record and sends no request")
 
 
 def test_a_run_under_a_test_folder_writes_only_there_and_a_second_run_sends_nothing(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    root = "ingestion_test/ingestion_0a1b2c3d/"
     monkeypatch.setenv("HAI_CAPTURE_ROOT", root)
     host.run(monkeypatch, HAI_CAPTURE_ROOT=root)
     keys = host.world.bucket.names()
@@ -155,12 +155,12 @@ def test_a_run_under_a_test_folder_writes_only_there_and_a_second_run_sends_noth
     first = json.loads(host.world.bucket.objects[record.run_record_key(root, RUN_ID)][1])
     check(first["root"] == root and len(first["units"]["completed"]) == 2, f"the run record sits under the test folder and names its root: {first['root']}")
     asked = len(host.world.site.asked)
-    host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="20261113T110000Z-0a1b2c3e")
+    host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="ingestion_0a1b2c3e")
     check(len(host.world.site.asked) == asked, "a second run under the same test folder skips every unit")
 
 
 def test_a_launch_root_that_differs_from_the_storage_path_root_is_refused_before_any_request(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    root = "ingestion_test/ingestion_0a1b2c3d/"
     with pytest.raises(Exception, match="differs from the capture root"):
         host.run(monkeypatch, HAI_CAPTURE_ROOT=root)
     check(not host.world.site.asked and not host.world.bucket.versions, "no request and no write happened")
@@ -169,14 +169,14 @@ def test_a_launch_root_that_differs_from_the_storage_path_root_is_refused_before
 def test_a_monthly_run_compares_every_unit_again(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.run(monkeypatch)
     asked = len(host.world.site.asked)
-    host.run(monkeypatch, RUN_ID="20261113T110000Z-0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
+    host.run(monkeypatch, RUN_ID="ingestion_0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
     check(len(host.world.site.asked) == asked + 2, "a monthly run requests each unit again")
-    second = json.loads(host.world.bucket.objects[record.run_record_key("raw/", "20261113T110000Z-0a1b2c3e")][1])
+    second = json.loads(host.world.bucket.objects[record.run_record_key("raw/", "ingestion_0a1b2c3e")][1])
     check(second["recheck"] is True and len(second["units"]["unchanged"]) == 2, f"it finds both payloads unchanged: {second['units']}")
 
 
-BOOTSTRAP_RUN = "20261101T000000Z-00000001"
-MONTHLY_RUN = "20261201T000000Z-0a0a0a0a"
+BOOTSTRAP_RUN = "ingestion_00000001"
+MONTHLY_RUN = "ingestion_0a0a0a0a"
 HTML = b"<html><body>Unavailable</body></html>"
 
 
@@ -278,7 +278,7 @@ def test_a_retry_whose_original_run_has_no_record_is_refused_before_any_request(
         ({"PUBLISHER_RETRY_DAY": "1.5"}, "retry day"),
         ({"PUBLISHER_RETRY_DAY": "1\n"}, "retry day"),
         ({"PUBLISHER_ORIGINAL_RUN": "latest"}, "original run"),
-        ({"RUN_ID": "20261113T110000Z-0a1b2c3e"}, "run ID of that day"),
+        ({"RUN_ID": "ingestion_0a1b2c3e"}, "run ID of that day"),
     ],
 )
 def test_a_retry_that_does_not_name_a_valid_original_run_and_day_is_refused_before_any_call(
@@ -387,10 +387,10 @@ def test_a_monthly_or_retry_run_on_a_root_with_no_bootstrap_record_is_refused_be
 
 def test_a_bootstrap_record_of_another_root_does_not_open_a_test_root(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.run(monkeypatch)
-    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    root = "ingestion_test/ingestion_0a1b2c3d/"
     asked = len(host.world.site.asked)
     with pytest.raises(publisher_run.PublisherError, match="no bootstrap run record"):
-        host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="20261113T110000Z-0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
+        host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="ingestion_0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
     check(len(host.world.site.asked) == asked, "a monthly run under a root with no bootstrap record asked for a unit")
 
 

@@ -6,7 +6,8 @@ import re
 RAW_ROOT = "raw/"
 READ_RAW_VARIABLE = "HAI_READ_RAW_ROOT"
 # A test capture lives in its own folder beside raw/, one per test run (owner decision D4). Bronze never reads it.
-TEST_ROOT = re.compile(r"ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/")
+INGESTION_RUN = r"ingestion_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
+TEST_ROOT = re.compile(rf"ingestion_test/{INGESTION_RUN}/")
 
 
 def is_test_root(root: str) -> bool:

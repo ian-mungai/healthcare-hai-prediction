@@ -64,7 +64,7 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "gold_publish"
 MODES = ("launcher", "contract", "writer_setup", "runner", "local_iceberg", "suite", "publish_offline")
-FULL_RUN = "20261014T040000Z-0000ab01"
+FULL_RUN = "gold_0000ab01"
 ROW_SENTINEL = "ROWVALUE-7f3a91"
 SUITE_SECONDS = 7000
 

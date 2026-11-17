@@ -37,12 +37,12 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 GIT_IGNORED = acceptance.ignored  # the real check, before the cases replace it with a rule about the scratch folder
 SILVER_RUN, OTHER_SILVER_RUN, GOLD_RUN, OTHER_GOLD_RUN, FEATURES_RUN, OTHER_FEATURES_RUN = (
-    "20261031T120000Z-abcdef12",
-    "20261031T130000Z-fedcba98",
-    "20261101T090000Z-0a1b2c3d",
-    "20261101T100000Z-3d2c1b0a",
-    "20261102T090000Z-1a2b3c4d",
-    "20261102T100000Z-4d3c2b1a",
+    "silver_abcdef12",
+    "silver_fedcba98",
+    "silver_0a1b2c3d",
+    "silver_3d2c1b0a",
+    "silver_1a2b3c4d",
+    "silver_4d3c2b1a",
 )
 ACCOUNT = "111111111111"
 INPUTS = 1500  # more than one page of 1000, so the page structure of the digest is exercised
@@ -569,7 +569,7 @@ def common_cases() -> list[Case]:
             overrides_with(lambda o: [c["environment"].append({"name": "LAYER_DRY_RUN", "value": "1"}) for c in o["containerOverrides"] if "environment" in c]),
             (NAMES["task"],),
         ),
-        ("a task started for another run", overrides_with(set_env("RUN_ID", "20261030T000000Z-00000000")), (NAMES["task"],)),
+        ("a task started for another run", overrides_with(set_env("RUN_ID", "silver_00000000")), (NAMES["task"],)),
         ("a task that fetched unapproved code", overrides_with(set_env("CODE_SHA256", "f" * 64)), (NAMES["task"],)),
         (
             "a task of another layer's definition",
@@ -595,7 +595,7 @@ def common_cases() -> list[Case]:
         ),
         (
             "a launch claim bound to another input run",
-            lambda e, o: edit(e.root / "launch/claim.json", lambda d: d["bound"].update(input_run="20261030T000000Z-00000000")),
+            lambda e, o: edit(e.root / "launch/claim.json", lambda d: d["bound"].update(input_run="silver_00000000")),
             (NAMES["launch"],),
         ),
         ("a launch claim of another run", lambda e, o: edit(e.root / "launch/claim.json", lambda d: d.update(run_id=o.spec.run)), (NAMES["launch"],)),
@@ -752,7 +752,7 @@ def features_cases() -> list[Case]:
     return [
         (
             "a features pin of another run",
-            lambda e, o: edit(e.evidence / pin, lambda d: d.update(run_id="20261030T000000Z-00000000")),
+            lambda e, o: edit(e.evidence / pin, lambda d: d.update(run_id="silver_00000000")),
             (NAMES["features_pin"],),
         ),
         ("a features pin with a fixture namespace", lambda e, o: edit(e.evidence / pin, lambda d: d.update(namespace="gold_e2e")), (NAMES["features_pin"],)),
@@ -859,7 +859,7 @@ def layer_cases(layer: str) -> list[Case]:
         ]
     gold_input = "silver_pins.json"
     return [
-        ("a gold pin of another run", lambda e, o: edit(e.evidence / gold_input, lambda d: d.update(run_id="20261030T000000Z-00000000")), (NAMES["pin"],)),
+        ("a gold pin of another run", lambda e, o: edit(e.evidence / gold_input, lambda d: d.update(run_id="silver_00000000")), (NAMES["pin"],)),
         ("a gold pin with a fixture namespace", lambda e, o: edit(e.evidence / gold_input, lambda d: d.update(namespace="silver_e2e")), (NAMES["pin"],)),
         (
             "a gold pin that names another silver run",
@@ -970,7 +970,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
 
 
 OTHER_RUN_JOB = "ingestion"
-OTHER_RUN_ID = "20261112T001500Z-c0ffee01"
+OTHER_RUN_ID = "silver_c0ffee01"
 OTHER_RUN_ATTRIBUTED = 10  # the Nov 11 shape: 4 staged inputs, 5 launch records with the claim and 1 family index key
 
 
@@ -1053,7 +1053,7 @@ def other_run_cases(work: Path) -> dict[str, bool]:
             and listed(document, "out_of_scope") == (1, [own])
             and listed(document, "other_runs_writes")[0] == OTHER_RUN_ATTRIBUTED
         )
-        other_claim = other_run_keys("20261112T002500Z-c0ffee02", "ingestion", claim=False)
+        other_claim = other_run_keys("silver_c0ffee02", "ingestion", claim=False)
         code, failed, document = run(layer, "claim of another run", [*keys, *other_claim])
         checks[f"{layer}: a claim attributes only its own run's keys"] = (
             code == 1
@@ -1109,7 +1109,7 @@ def passed_dependency_cases(work: Path) -> dict[str, bool]:
             *report_check_defects(),
             ("a failed summary", lambda d: d.update(passed=False)),
             ("another report layer", lambda d: d.update(layer="features")),
-            ("another report run", lambda d: d.update(run_id="20261030T000000Z-00000000")),
+            ("another report run", lambda d: d.update(run_id="silver_00000000")),
             *[(f"a wrong covered hash for {name}", lambda d, key=name: d["file_sha256"].update({key: "0" * 64})) for name in covered],
         ]
         for label, change in variants:

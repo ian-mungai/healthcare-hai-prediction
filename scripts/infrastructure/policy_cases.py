@@ -444,7 +444,7 @@ def single_copy_cases() -> Iterator[Case]:
     yield s3_case("no whole-bucket object write", "PutObject", "unlisted/x", False, False)
 
 
-PROMOTE_RUN = "20261024T000000Z-1234abcd"
+PROMOTE_RUN = "promote_clabsi_1234abcd"
 
 
 def promote_cases() -> Iterator[Case]:
@@ -473,7 +473,7 @@ def promote_cases() -> Iterator[Case]:
 TRAIN_TASK = "job_train_task"
 LAUNCH_TASK = "airflow_launch_task"
 UNBOUNDED_ROLES = (TRAIN_TASK, LAUNCH_TASK)
-RESEARCH_RUN = "20261109T000000Z-ea260ed0"
+RESEARCH_RUN = "research_ea260ed0"
 RESEARCH_KEYS = tuple(f"research/{RESEARCH_RUN}/{kind}_HAI_1.json" for kind in ("research", "replay", "canary", "notice"))
 RESEARCH_OTHER_KEYS = ("researched/x.json", "research", "other/research/x.json", "promote/x.json", "lakehouse/gold/x.parquet", "unlisted/x.json")
 RESEARCH_REFUSED_ACTIONS = ("DeleteObject", "DeleteObjectVersion", "GetObjectVersion", "PutObjectTagging", "PutObjectAcl", "AbortMultipartUpload")

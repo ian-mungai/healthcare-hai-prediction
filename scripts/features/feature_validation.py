@@ -37,6 +37,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import BASE_RUN
 from scripts.features import feature_schema
 from scripts.lakehouse import duckdb_bounds
 
@@ -157,8 +158,7 @@ INPUTS_SAME = "select count(*) from feature_build_inputs where build_key = 'curr
 INPUTS_CONTROL_DIGEST = "select count(*) from feature_build_inputs where regexp_full_match(hai_outcome_controls_sha256, '[a-f0-9]{64}')"
 SET_INPUTS = "feature_set_inputs"
 SET_INPUTS_ROW = (
-    "select count(*) from feature_set_inputs where build_key = 'current' and feature_set = ? and set_schema_sha256 = ? "
-    "and regexp_full_match(base_run_id, '[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}')"
+    "select count(*) from feature_set_inputs where build_key = 'current' and feature_set = ? and set_schema_sha256 = ? and regexp_full_match(base_run_id, ?)"
 )
 SET_INPUTS_ROWS = "select count(*) from feature_set_inputs"
 SET_ROWS_UNMATCHED = (
@@ -449,7 +449,7 @@ def validate_set(database: Path, schema_path: Path, feature_set: str) -> Record:
         checker.receipt()
         checker.merge_keys()
         rows = checker.scalar(SET_INPUTS_ROWS) if SET_INPUTS in checker.tables else 0
-        same = checker.scalar(SET_INPUTS_ROW, [feature_set, feature_schema.set_schema_sha256(feature_set, schema=schema)]) if rows else 0
+        same = checker.scalar(SET_INPUTS_ROW, [feature_set, feature_schema.set_schema_sha256(feature_set, schema=schema), BASE_RUN]) if rows else 0
         checker.expect("set_inputs", SET_INPUTS, rows == 1 and same == 1, rows=rows, matching=same)
         needed = {table, window, *entry["source_tables"]}
         for missing in sorted(needed - checker.tables):

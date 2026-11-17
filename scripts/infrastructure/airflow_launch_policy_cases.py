@@ -74,14 +74,14 @@ FAMILY_ROLES = {
 }
 ALL_FAMILIES = sorted(FAMILY_ROLES)
 RECORDS = f"arn:aws:s3:::{BUCKET}/{RECORD_PREFIX}"
-STAGE = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs"
+STAGE = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/silver_abcdef01/inputs"
 BRONZE_RUNS = f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs"
-BRONZE_RECORD = f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/check.json"
+BRONZE_RECORD = f"{BRONZE_RUNS}/bronze_b0b0b0b0/check.json"
 CODE_RUN = f"{STAGE}/code_run.json"
-CODE_RUN_PREFIX = "lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/code_run.json"
-DRIFT_RECORD = f"arn:aws:s3:::{BUCKET}/drift/20261030T100000Z-abcdef01/HAI_1.json"
+CODE_RUN_PREFIX = "lakehouse/run_stage/silver_abcdef01/inputs/code_run.json"
+DRIFT_RECORD = f"arn:aws:s3:::{BUCKET}/drift/drift_elastic_net_abcdef01/HAI_1.json"
 LAYER_RUNS = f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs"
-LAYER_RUN_RECORD = f"{LAYER_RUNS}/silver/20261030T100000Z-abcdef01/layer_run.json"
+LAYER_RUN_RECORD = f"{LAYER_RUNS}/silver/silver_abcdef01/layer_run.json"
 AUTOSCALING_GROUP = (
     f"arn:aws:autoscaling:{REGION}:{ACCOUNT}:autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{PROJECT}_host_{ENVIRONMENT}"
 )
@@ -269,7 +269,7 @@ def job_cases() -> list[Case]:
     add(
         "read the staged code archive of another run",
         "s3:GetObject",
-        f"{STAGE.replace('20261030T100000Z-abcdef01', '20261031T100000Z-01234567')}/code.tar.gz",
+        f"{STAGE.replace('silver_abcdef01', 'silver_01234567')}/code.tar.gz",
         True,
     )
     for key in ("code.tar.gz.bak", "code.tar", "other.tar.gz", "code.tar.gz/part", "x/code.tar.gz", "Code.tar.gz"):
@@ -288,8 +288,8 @@ def job_cases() -> list[Case]:
     # The automatic acceptance report (owner A, Nov 11 2026): reads the layer run records, lists the lakehouse versions and describes the host group.
     bucket = f"arn:aws:s3:::{BUCKET}"
     for name in ("layer_run.json", "pins.json", "silver_snapshot.json", "publish/commit.json", "publish/export/manifest.json"):
-        add(f"read the layer run record {name}", "s3:GetObject", f"{LAYER_RUNS}/silver/20261030T100000Z-abcdef01/{name}", True)
-    add("read the layer run record of a gold run", "s3:GetObject", f"{LAYER_RUNS}/gold/20261031T100000Z-01234567/publish/commit.json", True)
+        add(f"read the layer run record {name}", "s3:GetObject", f"{LAYER_RUNS}/silver/silver_abcdef01/{name}", True)
+    add("read the layer run record of a gold run", "s3:GetObject", f"{LAYER_RUNS}/gold/gold_01234567/publish/commit.json", True)
     add("write a layer run record", "s3:PutObject", LAYER_RUN_RECORD, False, ONCE)
     add("delete a layer run record", "s3:DeleteObject", LAYER_RUN_RECORD, False)
     add("read an earlier version of a layer run record", "s3:GetObjectVersion", LAYER_RUN_RECORD, False)
@@ -366,33 +366,33 @@ def record_cases() -> list[tuple[Any, ...]]:
 
     Only decision.json is replaced, and only with an If-Match version check.
     """
-    key = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
-    decision = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
+    key = f"{RECORDS}silver_abcdef01/train/0/intent.json"
+    decision = f"{RECORDS}silver_abcdef01/train/decision.json"
     bucket = f"arn:aws:s3:::{BUCKET}"
-    other = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/intent.json"
+    other = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/silver_abcdef01/inputs/intent.json"
     return [
         ("create a launch record", "s3:PutObject", key, True, ONCE),
         ("replace the decision record with a version check", "s3:PutObject", decision, True, VERSION_CHECKED),
         (
             "replace the decision record of another run with a version check",
             "s3:PutObject",
-            f"{RECORDS}20261031T100000Z-01234567/gold/decision.json",
+            f"{RECORDS}silver_01234567/gold/decision.json",
             True,
             VERSION_CHECKED,
         ),
         ("create the decision record", "s3:PutObject", decision, True, ONCE),
         ("replace the decision record with neither condition", "s3:PutObject", decision, False),
         ("replace the decision record with a version check on the wrong key", "s3:PutObject", decision, False, {"s3:if-none-match-version": ("x",)}),
-        ("replace the claim record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/claim.json", False, VERSION_CHECKED),
-        ("replace the cancel record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/cancel.json", False, VERSION_CHECKED),
+        ("replace the claim record with a version check", "s3:PutObject", f"{RECORDS}silver_abcdef01/train/claim.json", False, VERSION_CHECKED),
+        ("replace the cancel record with a version check", "s3:PutObject", f"{RECORDS}silver_abcdef01/train/cancel.json", False, VERSION_CHECKED),
         ("replace an attempt record with a version check", "s3:PutObject", key, False, VERSION_CHECKED),
-        ("replace a started record with a version check", "s3:PutObject", f"{RECORDS}20261030T100000Z-abcdef01/train/0/started.json", False, VERSION_CHECKED),
+        ("replace a started record with a version check", "s3:PutObject", f"{RECORDS}silver_abcdef01/train/0/started.json", False, VERSION_CHECKED),
         ("replace a record named like the decision with a version check", "s3:PutObject", f"{decision}.bak", False, VERSION_CHECKED),
         ("replace a record with the decision name in the key text with a version check", "s3:PutObject", f"{RECORDS}decision.json", False, VERSION_CHECKED),
         (
             "replace a decision record outside the prefix with a version check",
             "s3:PutObject",
-            f"{bucket}/lakehouse/run_stage/20261030T100000Z-abcdef01/decision.json",
+            f"{bucket}/lakehouse/run_stage/silver_abcdef01/decision.json",
             False,
             VERSION_CHECKED,
         ),
@@ -405,7 +405,7 @@ def record_cases() -> list[tuple[Any, ...]]:
         ),
         ("replace the decision record and set its access list", "s3:PutObjectAcl", decision, False, VERSION_CHECKED),
         ("delete the decision record", "s3:DeleteObject", decision, False, VERSION_CHECKED),
-        ("create a record of another run", "s3:PutObject", f"{RECORDS}20261031T100000Z-01234567/gold/1/started.json", True, ONCE),
+        ("create a record of another run", "s3:PutObject", f"{RECORDS}silver_01234567/gold/1/started.json", True, ONCE),
         ("replace a launch record", "s3:PutObject", key, False),
         ("replace a launch record with an empty precondition", "s3:PutObject", key, False, {"s3:if-none-match": ()}),
         ("write with another precondition value", "s3:PutObject", key, False, {"s3:if-none-match": ("etag-of-the-old-object",)}),
@@ -419,7 +419,7 @@ def record_cases() -> list[tuple[Any, ...]]:
         ("start a multipart write of a launch record", "s3:AbortMultipartUpload", key, False),
         ("change the access list of a launch record", "s3:PutObjectAcl", key, False, ONCE),
         ("read a launch record", "s3:GetObject", key, True),
-        ("read a record of another run", "s3:GetObject", f"{RECORDS}20261031T100000Z-01234567/gold/1/started.json", True),
+        ("read a record of another run", "s3:GetObject", f"{RECORDS}silver_01234567/gold/1/started.json", True),
         ("read an object outside the prefix", "s3:GetObject", other, False),
         ("read a gold table through the records policy", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet", False),
         ("read a sibling prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/launch_records_extra/intent.json", False),
@@ -427,7 +427,7 @@ def record_cases() -> list[tuple[Any, ...]]:
         ("read a version of a launch record", "s3:GetObjectVersion", key, False),
         ("list the record prefix", "s3:ListBucket", bucket, True, {"s3:prefix": (RECORD_PREFIX,)}),
         ("list the record prefix with a delimiter", "s3:ListBucket", bucket, True, {"s3:prefix": (RECORD_PREFIX,), "s3:delimiter": ("/",)}),
-        ("list below the record prefix", "s3:ListBucket", bucket, True, {"s3:prefix": (f"{RECORD_PREFIX}20261030T100000Z-abcdef01/train/",)}),
+        ("list below the record prefix", "s3:ListBucket", bucket, True, {"s3:prefix": (f"{RECORD_PREFIX}silver_abcdef01/train/",)}),
         ("list with no prefix", "s3:ListBucket", bucket, False),
         ("list with an empty prefix", "s3:ListBucket", bucket, False, {"s3:prefix": ("",)}),
         ("list with a delimiter and no prefix", "s3:ListBucket", bucket, False, {"s3:delimiter": ("/",)}),
@@ -472,7 +472,7 @@ def bronze_record_cases() -> list[tuple[Any, ...]]:
     """The run record of a bronze run, read as the job's evidence. It exists because bronze is named. Only the record name is readable."""
     return [
         ("read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, True),
-        ("read another file of a bronze run", "s3:GetObject", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", False),
+        ("read another file of a bronze run", "s3:GetObject", f"{BRONZE_RUNS}/bronze_b0b0b0b0/report.json", False),
         ("read a check record outside a run folder", "s3:GetObject", f"{BRONZE_RUNS}/check.json", False),
         ("read a check record under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/other_runs/silver/run/check.json", False),
         ("read a bronze run record in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/bronze_runs/run/check.json", False),
@@ -494,10 +494,10 @@ def code_run_cases() -> list[tuple[Any, ...]]:
         ("delete the code run binding", "s3:DeleteObject", CODE_RUN, False),
         ("read an earlier version of the code run binding", "s3:GetObjectVersion", CODE_RUN, False),
         ("create another staged input once", "s3:PutObject", f"{STAGE}/code.sha256", False, ONCE),
-        ("create a code run binding outside the inputs", "s3:PutObject", f"{bucket}/lakehouse/run_stage/20261030T100000Z-abcdef01/code_run.json", False, ONCE),
+        ("create a code run binding outside the inputs", "s3:PutObject", f"{bucket}/lakehouse/run_stage/silver_abcdef01/code_run.json", False, ONCE),
         ("read a code run binding in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code_run.json", False),
         ("list the code run binding of a run", "s3:ListBucket", bucket, True, {"s3:prefix": (CODE_RUN_PREFIX,)}),
-        ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/",)}),
+        ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/",)}),
         ("list the staged runs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
         (
             "list the versions of the code run binding (inside the lakehouse versions grant)",
@@ -517,7 +517,7 @@ def drift_record_cases() -> list[Case]:
     bucket = f"arn:aws:s3:::{BUCKET}"
     return [
         ("drift named: read a drift record", "s3:GetObject", DRIFT_RECORD, True, {}),
-        ("drift named: read the drift marker", "s3:GetObject", f"{bucket}/drift/20261030T100000Z-abcdef01/_complete.json", True, {}),
+        ("drift named: read the drift marker", "s3:GetObject", f"{bucket}/drift/drift_elastic_net_abcdef01/_complete.json", True, {}),
         ("drift named: write a drift record", "s3:PutObject", DRIFT_RECORD, False, ONCE),
         ("drift named: delete a drift record", "s3:DeleteObject", DRIFT_RECORD, False, {}),
         ("drift named: read an earlier version of a drift record", "s3:GetObjectVersion", DRIFT_RECORD, False, {}),
@@ -567,8 +567,8 @@ KMS_OTHER_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/99999999-8888-7777-6666-555
 STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
 OTHER_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}"
 LAKEHOUSE_FILE = f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet"
-RECORD = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
-DECISION = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
+RECORD = f"{RECORDS}silver_abcdef01/train/0/intent.json"
+DECISION = f"{RECORDS}silver_abcdef01/train/decision.json"
 NONE: frozenset[str] = frozenset()
 RESOURCES = (
     Resource("host definition of a named family", definition("train"), frozenset({"ecs:RunTask"}), NONE),
@@ -594,11 +594,11 @@ RESOURCES = (
     Resource("staged code run binding", CODE_RUN, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("drift record while drift is not named", DRIFT_RECORD, NONE, NONE),
     Resource("bronze run record", BRONZE_RECORD, GET, GET),
-    Resource("another file of a bronze run", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", NONE, NONE),
+    Resource("another file of a bronze run", f"{BRONZE_RUNS}/bronze_b0b0b0b0/report.json", NONE, NONE),
     Resource("launch record", RECORD, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
-    Resource("claim record of a run", f"{RECORDS}20261030T100000Z-abcdef01/train/claim.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("claim record of a run", f"{RECORDS}silver_abcdef01/train/claim.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("decision record of a run", DECISION, frozenset({"s3:GetObject", "s3:PutObject"}), GET, frozenset({"s3:PutObject"})),
-    Resource("record named like the decision", f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json.bak", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
+    Resource("record named like the decision", f"{RECORDS}silver_abcdef01/train/decision.json.bak", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("decision file directly under the prefix", f"{RECORDS}decision.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("lakehouse table file", LAKEHOUSE_FILE, NONE, NONE),
     Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}) | VERSIONS, NONE),

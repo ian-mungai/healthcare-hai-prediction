@@ -25,7 +25,7 @@ from tests.startup_check_support import (
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = "20261111T000000Z-0a1b2c3d"
+RUN = "silver_0a1b2c3d"
 DIGEST = "a" * 64
 
 

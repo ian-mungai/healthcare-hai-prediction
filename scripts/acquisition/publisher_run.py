@@ -20,7 +20,7 @@ import re
 import sys
 import tarfile
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -221,17 +221,18 @@ def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
         raise PublisherError("The staged queue differs from the digest the launch bound.")
 
 
-RUN_ID_FORM = re.compile(r"([0-9]{8}T[0-9]{6}Z)-[a-f0-9]{8}")
-RETRY_DAYS = 7
+RUN_ID_FORM = re.compile(r"ingestion_([a-f0-9]{8})(?:_([2-9]|[1-9][0-9]))?")
+RETRY_DAYS = 2
 
 
 def retry_run_id(original_run: str, day: int) -> str:
-    """The run ID of the retry of ``original_run`` on ``day``. The launch derives it by the same rule, and a test keeps both equal."""
+    """The run ID of the retry of ``original_run`` on ``day``: ``ingestion_retry_<hex>_<day>`` with the original's hex, and its attempt suffix before the day.
+    The launch derives it by the same rule, and a test keeps both equal."""
     found = RUN_ID_FORM.fullmatch(original_run)
     if found is None or isinstance(day, bool) or not 1 <= day <= RETRY_DAYS:
-        raise PublisherError("The retry names an original run that is not a run ID or a retry day outside one to seven.")
-    moment = datetime.strptime(found[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC) + timedelta(days=day)
-    return f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{hashlib.sha256(f'{original_run}/{day}'.encode()).hexdigest()[:8]}"
+        raise PublisherError(f"The retry names an original run that is not an ingestion run ID or a retry day outside one to {RETRY_DAYS}.")
+    attempt = "" if found[2] is None else f"_{found[2]}"
+    return f"ingestion_retry_{found[1]}{attempt}_{day}"
 
 
 RETRY_VARIABLES = ("PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY")
@@ -251,8 +252,8 @@ def check_retry(env: Mapping[str, str]) -> tuple[str, int] | None:
     original, day_text = named["PUBLISHER_ORIGINAL_RUN"], named["PUBLISHER_RETRY_DAY"]
     if not RUN_ID_FORM.fullmatch(original):
         raise PublisherError("The retry names an original run that is not a run ID.")
-    if not re.fullmatch(r"[1-7]", day_text):
-        raise PublisherError("The retry day is outside one to seven.")
+    if not re.fullmatch(f"[1-{RETRY_DAYS}]", day_text):
+        raise PublisherError(f"The retry day is outside one to {RETRY_DAYS}.")
     if env["RUN_ID"] != retry_run_id(original, int(day_text)):
         raise PublisherError("The retry does not run under the run ID of that day.")
     return original, int(day_text)
@@ -283,7 +284,7 @@ def bootstrap_key(root: str, run_id: str) -> str:
 
 def require_bootstrap(storage: Any, root: str) -> None:
     """A monthly or retry run starts only on a capture root where a bootstrap run passed: the root holds a ``bootstrap.json`` under one run folder."""
-    pattern = re.compile(re.escape(f"{root}ingestion_runs/") + r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/bootstrap\.json")
+    pattern = re.compile(re.escape(f"{root}ingestion_runs/") + RUN_ID_FORM.pattern + r"/bootstrap\.json")
     if not any(item["kind"] == "version" and pattern.fullmatch(item["key"]) for item in capture_mode.list_versions(storage, [f"{root}ingestion_runs/"])):
         raise PublisherError("The capture root has no bootstrap run record, so no monthly or retry run starts on it.")
 

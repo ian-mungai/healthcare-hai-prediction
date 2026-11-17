@@ -79,6 +79,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
+from orchestration.training_contract import CODE_RUN
 from scripts import resource_peaks
 from scripts.features import feature_sets
 from scripts.infrastructure import startup_check
@@ -1210,7 +1211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.phase not in PHASES[args.layer]:
         parser.error(f"{args.phase} is not a phase of {args.layer}")
     if not RUN_ID.fullmatch(args.run):
-        parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
+        parser.error("the run ID must look like silver_0a1b2c3d")
     selected = os.environ.get(PHASE_VARIABLE, "")
     if selected and (args.layer != "features" or selected not in (*PHASES["features"], RELEASE_PHASE, RELOAD_PHASE)):
         parser.error(f"{PHASE_VARIABLE} {selected!r} is not a phase of the features task: it applies to the features layer only")
@@ -1239,8 +1240,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             job = replace(job, dry_run=True)
         if args.phase in ("publish", "upload", "feast") and not args.bucket and args.mode == "real" and not dry:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
-        if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
-            raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")
+        if not args.code_run_id or not re.fullmatch(CODE_RUN, args.code_run_id):
+            raise StepError(
+                "CODE_RUN_ID is not set to a code run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)"
+            )
         startup(job, args.phase)
         task_capacity.apply(capacity_profile(args.layer, args.phase))
         with task_deadline(job):

@@ -59,10 +59,10 @@ from scripts.process import CompletedProcess, TimeoutExpired, run_command
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "e2e" / "feature_store"
 MODES = ("static", "build_local", "masks_local", "publish_offline")
-RUN = "20261023T000000Z-00000001"
-RUN_B = "20261023T000100Z-00000002"
-RUN_2 = "20261023T000200Z-00000003"
-GOLD_RUN = "20261014T040000Z-0000ab01"
+RUN = "features_00000001"
+RUN_B = "features_00000002"
+RUN_2 = "features_00000003"
+GOLD_RUN = "gold_0000ab01"
 # The values a case puts into an owner command list in place of its placeholders.
 OWNER_PLACEHOLDERS = {"<RUN_ID>": RUN, "<CODE_SHA256>": "ab" * 32, "<HOST_PRIVATE_IP>": "10.0.1.20", "<GOLD_RUN_ID>": GOLD_RUN}
 SUITE_FOLDER = "data_contracts/great_expectations/features"
@@ -172,15 +172,15 @@ def pin_cases(report: Report) -> None:
     every = {1000 + index for index in range(len(names))}
 
     def context(spark: FakeSpark, mode: str = "publish_fixture") -> gold_publish.Context:
-        return gold_publish.Context(spark, plan, "20261023T000000Z-00000001", mode, Path("/nonexistent"), "", needs_sealed=False)
+        return gold_publish.Context(spark, plan, "features_00000001", mode, Path("/nonexistent"), "", needs_sealed=False)
 
     with tempfile.TemporaryDirectory(prefix="pin_cases_") as folder:
         path = Path(folder) / features_input.PIN_NAME
         good = FakeSpark([gold_run_row(plan)], every)
         record = features_input.pin(context(good), path)
-        again = FakeSpark([gold_run_row(plan), gold_run_row(plan, run="20261015T040000Z-0000ab02")], every)
+        again = FakeSpark([gold_run_row(plan), gold_run_row(plan, run="features_0000ab02")], every)
         retried = features_input.pin(context(again), path)
-        features_input.check_gold_pin(record, "20261023T000000Z-00000001", "publish_fixture", set(names))
+        features_input.check_gold_pin(record, "features_00000001", "publish_fixture", set(names))
         report.case(
             "E02",
             "A1",
@@ -191,7 +191,7 @@ def pin_cases(report: Report) -> None:
             "E02",
             "A1",
             "a retry that asks for another gold run than the pin is refused",
-            refuses(lambda: features_input.pin(context(again), path, "20261015T040000Z-0000ab02"), "gold", "immutable"),
+            refuses(lambda: features_input.pin(context(again), path, "features_0000ab02"), "gold", "immutable"),
         )
 
         def pin_with(spark: FakeSpark, mode: str = "publish_fixture", source: str | None = None) -> Any:
@@ -225,7 +225,7 @@ def pin_cases(report: Report) -> None:
             "a run named with a bad ID is refused",
             refuses(lambda: pin_with(good, source="not-a-run"), "gold", "invalid"),
         )
-        newer_run = "20261015T040000Z-0000ab02"
+        newer_run = "features_0000ab02"
         two = FakeSpark([gold_run_row(plan), gold_run_row(plan, run=newer_run)], every)
 
         def chain_pin(source: str | None) -> Any:
@@ -249,20 +249,20 @@ def pin_cases(report: Report) -> None:
             ),
         )
         bad_records = {
-            "wrong run": {**record, "run_id": "20261023T000000Z-00000009"},
+            "wrong run": {**record, "run_id": "features_00000009"},
             "wrong namespace": {**record, "namespace": "silver_e2e"},
             "extra key": {**record, "extra": 1},
             "missing table": {**record, "snapshot_set": dict(list(record["snapshot_set"].items())[:-1])},
             "boolean snapshot": {**record, "snapshot_set": {**record["snapshot_set"], names[0]: True}},
         }
         refused = {
-            label: refuses(partial(features_input.check_gold_pin, document, "20261023T000000Z-00000001", "publish_fixture", set(names)), "gold pin")
+            label: refuses(partial(features_input.check_gold_pin, document, "features_00000001", "publish_fixture", set(names)), "gold pin")
             for label, document in bad_records.items()
         }
         report.case("E02", "A1", "a pin record of another shape, run, namespace or table set is refused", all(refused.values()), refused=refused)
 
 
-BASE_RUN, BASE_RUN_2, MODEL_RUN = "20261109T010000Z-0000b001", "20261109T030000Z-0000b002", "20261109T040000Z-0000c001"
+BASE_RUN, BASE_RUN_2, MODEL_RUN = "features_elastic_net_0000b001", "features_0000b002", "features_0000c001"
 
 
 def base_pin_cases(report: Report) -> None:
@@ -294,7 +294,7 @@ def base_pin_cases(report: Report) -> None:
             "the pin of the newest base run names exactly the six domain matrices and not the model row that came after it",
             record.get("source_run_id") == BASE_RUN_2 and sorted(record.get("snapshot_set", {})) == domain,
         )
-        later = FakeSpark([*rows, base("20261109T050000Z-0000b003")], every)
+        later = FakeSpark([*rows, base("features_0000b003")], every)
         report.case(
             "B02",
             "FS3",
@@ -334,7 +334,7 @@ def base_pin_cases(report: Report) -> None:
         )
         check = getattr(features_input, "check_base_pin", None)
         bad = {
-            "another run": {**record, "run_id": "20261109T060000Z-00000009"},
+            "another run": {**record, "run_id": "features_0000000a"},
             "the gold namespace": {**record, "namespace": "gold_e2e"},
             "an extra key": {**record, "extra": 1},
             "a missing table": {**record, "snapshot_set": dict(list(record.get("snapshot_set", {}).items())[:-1])},
@@ -384,7 +384,7 @@ def base_pin_cases(report: Report) -> None:
         extended = [{**row, "snapshot_set": {**row["snapshot_set"], "feature_matrix_m2": 8000}} if row["run_id"] == BASE_RUN_2 else row for row in ledger]
         outcomes = {
             "unchanged": not refuses(partial(check_row, ledger, record), "base run") and check_row(ledger, record) is None,
-            "a sibling row appended": check_row([*ledger, {**ledger[-1], "run_id": "20261109T070000Z-0000a007"}], record) is None,
+            "a sibling row appended": check_row([*ledger, {**ledger[-1], "run_id": "features_0000a007"}], record) is None,
             "a snapshot rewritten": refuses(partial(check_row, rewritten, record), "differs"),
             "a table added": refuses(partial(check_row, extended, record), "differs"),
             "the row gone": refuses(partial(check_row, [row for row in ledger if row["run_id"] != BASE_RUN_2], record), "holds 0 rows"),
@@ -1761,10 +1761,10 @@ def feature_set_cases(report: Report) -> None:
 
     base_run, model_run = (lambda run: row(run, base)), (lambda run: row(run, ["feature_matrix_m1"]))
     rows = [
-        base_run("20261109T010000Z-00000001"),
-        model_run("20261109T020000Z-00000002"),
-        base_run("20261109T030000Z-00000003"),
-        model_run("20261109T040000Z-00000004"),
+        base_run("features_00000004"),
+        model_run("features_elastic_net_00000002"),
+        base_run("features_00000005"),
+        model_run("features_elastic_net_00000004"),
     ]
     found = feature_sets.newest_base_row(rows, base)
     report.case(
@@ -1777,15 +1777,15 @@ def feature_set_cases(report: Report) -> None:
         "F07",
         "FS3",
         "model rows alone, or a base row short of one table, are no base run",
-        feature_sets.newest_base_row([model_run("20261109T020000Z-00000002"), row("20261109T030000Z-00000003", base[:-1])], base) is None,
+        feature_sets.newest_base_row([model_run("features_elastic_net_00000002"), row("features_00000005", base[:-1])], base) is None,
     )
     report.case(
         "F08",
         "FS3",
         "a run of the single path counts as a base run",
-        feature_sets.newest_base_row([row("20261109T010000Z-00000001", legacy)], base) is not None,
+        feature_sets.newest_base_row([row("features_00000004", legacy)], base) is not None,
     )
-    retired_run, fresh_run = row("20261107T133742Z-14bad53c", base), row("20261113T010000Z-00000005", base)
+    retired_run, fresh_run = row("features_14bad53c", base), row("features_00000006", base)
 
     def newest_in(namespace: str, rows: list[dict[str, Any]]) -> str | None:
         """The run ID of the newest base row of the namespace, None for no base run or for a call that fails."""

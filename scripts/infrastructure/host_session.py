@@ -29,10 +29,10 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from orchestration.training_contract import CODE_RUN, compose_run_id, new_run_hex
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
@@ -70,11 +70,11 @@ OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
 CODE_FETCH = "code_fetch"
 CODE_FETCH_SECONDS = 1200
-CODE_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+CODE_RUN_ID = re.compile(CODE_RUN)
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
 CODE_IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
-CODE_IDENTITY = re.compile(r"code_identify: identity run ([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}) code ([a-f0-9]{64})")
+CODE_IDENTITY = re.compile(rf"code_identify: identity run ({CODE_RUN}) code ([a-f0-9]{{64}})")
 CODE_IDENTITY_SECONDS = 180
 CODE_LOG_CONTAINER = "code_fetch"  # the container name is also the awslogs stream prefix of the code task
 LOG_COMPONENT = "airflow"  # the log group component of the code one-shot (infra/services/main.tf container_component)
@@ -887,7 +887,7 @@ class Session:
         if self.names.reload is None:
             raise HostSessionError("the jobs stack has no features host task")
         values = {
-            "RUN_ID": f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+            "RUN_ID": compose_run_id("features", new_run_hex()),
             "CODE_RUN_ID": code[0],
             "CODE_SHA256": code[1],
             "POLARIS_URI": f"http://{self.names.host_address}:{POLARIS_PORT}/api/catalog",

@@ -125,13 +125,13 @@ def case_d12(c: Checker) -> None:
             corrected = {**rows[0], column: 123.5}
             iceberg.delete(f"spine_key = '{key}'")
             iceberg.append(pa.Table.from_pylist([corrected], schema=iceberg.scan().to_arrow().schema))
-            fixture.publish("20261022T130000Z-1a2b3c4d", committed=datetime.now(UTC) + timedelta(seconds=5))
+            fixture.publish("features_1a2b3c4d", committed=datetime.now(UTC) + timedelta(seconds=5))
             materialize(fixture)
             store = historical.default_store(os.environ)
             reference = f"{table}:{column}"
             c.check("the corrected value is served after the reload", online_values(store, [reference], [key])[(key, reference)] == 123.5)
             marker = online.read_marker(online.connect(os.environ, online.CONTROL_DB))
-            c.check("the marker names the new publication", marker.get("feature_run_id") == "20261022T130000Z-1a2b3c4d")
+            c.check("the marker names the new publication", marker.get("feature_run_id") == "features_1a2b3c4d")
         finally:
             image.drop(fixture)
 

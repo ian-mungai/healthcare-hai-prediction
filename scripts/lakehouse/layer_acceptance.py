@@ -50,6 +50,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.lakehouse import pins, version_listing
 from scripts.process import run_command
 
@@ -74,7 +75,7 @@ WRITE_PREFIXES = {
 }
 PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
 FEATURES_RECORD, FEAST_APPLY, FEAST_LOAD = "features_snapshot.json", "feast_apply.json", "feast_materialize.json"
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 JOB_NAME = re.compile(r"[a-z][a-z0-9_]{1,40}")  # the job grammar of orchestration/ecs_launch.py
 SHA256 = re.compile(r"[a-f0-9]{64}")
 REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")

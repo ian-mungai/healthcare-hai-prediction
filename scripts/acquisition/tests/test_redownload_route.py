@@ -74,7 +74,7 @@ def test_the_capture_root_must_be_raw(tmp_path: Path) -> None:
     check(any("raw/" in item for item in problems(paths, root="")), "root layout blocks run 3")
 
 
-TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
+TEST_ROOT = "ingestion_test/ingestion_abcd1234/"
 
 
 def test_the_capture_root_may_be_one_test_folder_and_nothing_else(tmp_path: Path) -> None:

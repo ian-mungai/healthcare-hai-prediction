@@ -16,7 +16,9 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+
+RUN_ID = re.compile(RUN_ID_PATTERN)
 PIN_KEYS = {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"}
 PIN_KEY = "lakehouse/layer_runs/{layer}/{run}/{name}"
 PIN_BYTES = 2 * 1024**2

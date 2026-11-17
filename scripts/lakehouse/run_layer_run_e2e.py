@@ -33,6 +33,7 @@ from unittest import mock
 
 import duckdb
 
+from orchestration.training_contract import MODEL_NAMES
 from scripts.features import feature_sets, features_input, features_publish
 from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
@@ -40,14 +41,14 @@ from scripts.process import run_command
 
 DRY_PLAN_PREFIX = layer_run.PLAN_PREFIX
 REVISION = "0123456789abcdef0123456789abcdef01234567"
-SILVER_RUN = "20261030T010203Z-0a1b2c3d"
-GOLD_RUN = "20261030T020304Z-1b2c3d4e"
-FEATURES_RUN = "20261030T030405Z-2c3d4e5f"
+SILVER_RUN = "silver_0a1b2c3d"
+GOLD_RUN = "gold_1b2c3d4e"
+FEATURES_RUN = "features_2c3d4e5f"
 CODE_RUN = "20261029T230000Z-c0dec0de"  # the run whose staged code every layer task fetches: not the layer run's own ID
 CODE_RUN_EXPECTED = [CODE_RUN]  # the prefix the stand-in bucket serves; the walk cases set it to the run the launch names
 BUCKET = "hai-test-bucket"
-BASE_RUN = "20261030T031500Z-3d4e5f60"  # the committed base run that the six model sets read
-SET_RUNS = {f"m{number}": f"20261030T0401{number:02d}Z-4e5f607{number}" for number in range(1, 7)}  # one run of each model set, pinned together
+BASE_RUN = "features_3d4e5f60"  # the committed base run that the six model sets read
+SET_RUNS = {f"m{number}": f"features_{MODEL_NAMES[f'm{number}']}_4e5f607{number}" for number in range(1, 7)}  # one run of each model set, pinned together
 CHAIN = {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}
 INPUT_OF = {"silver": None, "gold": SILVER_RUN, "features": GOLD_RUN}
 CATALOG: list[Path] = []  # the throwaway catalog folder of the case being run
@@ -375,7 +376,7 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         if "pin_tables" in DEFECTS:
             pinned = pinned[1:]
         if "pin_source" in DEFECTS:
-            source = "20260101T000000Z-deadbeef"
+            source = "silver_deadbeef"
         record: dict[str, Any] = {"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}
         if job.model_set:
             record["base_row_sha256"] = feature_sets.base_row_digest(next(row for row in runs if row["run_id"] == source))
@@ -805,7 +806,7 @@ def case_gold_maintenance_needs_an_accepted_publish(case: Case) -> None:
 
 def case_features_pins_only_the_newest_gold_run(case: Case) -> None:
     require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
-    newer = "20261030T025000Z-9e9e9e9e"
+    newer = "silver_9e9e9e9e"
     (CATALOG[0] / "publish_runs.json").write_text(json.dumps([*model("publish_runs.json", []), {"layer": "gold", "run_id": newer}]))
     refuses(case, "features", ["pin"], "pin")
     require(GOLD_RUN in case.err and newer in case.err and "not the newest" in case.err, case.err)
@@ -1022,7 +1023,7 @@ def case_features_h3_other_source(case: Case) -> None:
     require(case.phase("features", "pin") != 0 and "names another gold run than INPUT_RUN_ID" in case.err, case.err)
 
 
-OTHER_PUBLICATION = "20261030T040000Z-5e6f7a8b"  # the run of another publication, which a stand-in Feast apply can be told to name
+OTHER_PUBLICATION = "silver_5e6f7a8b"  # the run of another publication, which a stand-in Feast apply can be told to name
 
 
 def apply_key() -> str:
@@ -1104,7 +1105,7 @@ def case_features_failed_feast_keeps_the_evidence(case: Case) -> None:
 
 
 def case_input_run_not_published(case: Case) -> None:
-    code = case.phase("gold", "pin", extra=["--input-run", "20260101T000000Z-deadbeef"])
+    code = case.phase("gold", "pin", extra=["--input-run", "silver_deadbeef"])
     require(code != 0, "the pin of a silver run that was never committed must fail")
 
 
@@ -1295,7 +1296,7 @@ def case_features_validation_reads_its_files_from_the_code_it_runs_from(case: Ca
     failed expectations), not stop on a missing file (exit 2)."""
     repository = Path(__file__).resolve().parents[2]
     code = case.root / "aws_work" / "code"
-    for relative in ("scripts", "data_contracts/features", "data_contracts/lakehouse"):
+    for relative in ("scripts", "orchestration", "data_contracts/features", "data_contracts/lakehouse"):
         shutil.copytree(repository / relative, code / relative, ignore=shutil.ignore_patterns("__pycache__"))
     database = case.root / "aws_work" / "staging.duckdb"
     duckdb.connect(str(database)).close()
@@ -1388,7 +1389,7 @@ def case_dry_run_from_the_environment(case: Case) -> None:
     require(len(writes()) == before, "LAYER_DRY_RUN=1 behaves as --dry-run")
 
 
-RELEASE_RUN = "20261030T050607Z-5f607182"  # the run of a release launch: its own ID, never the features run it releases
+RELEASE_RUN = "silver_5f607182"  # the run of a release launch: its own ID, never the features run it releases
 RELEASE_ENVIRONMENT = {"LAYER_PHASE": "release", "RELEASE_MODEL": "m2", "FEATURES_RUN": FEATURES_RUN}
 
 
@@ -1558,7 +1559,7 @@ CASES: dict[str, Callable[[Case], None]] = {
         rewrite_base_row(lambda row: row["snapshot_set"].__setitem__("feature_matrix_m2", 8000)), BASE_RUN, "differs from the one the base pin recorded"
     ),
     "a chosen base run row that left the ledger stops model set publish": changed_base_table(
-        rewrite_base_row(lambda row: row.__setitem__("run_id", "20261030T031501Z-3d4e5f61")), BASE_RUN, "holds 0 rows"
+        rewrite_base_row(lambda row: row.__setitem__("run_id", "silver_3d4e5f61")), BASE_RUN, "holds 0 rows"
     ),
     "a model set pin lists every table of the base run and no model set table": case_model_set_pin_lists_every_base_table_and_no_set_table,
     "a model set publish rerun after its own commit passes and commits nothing more": case_model_set_publish_rerun_commits_nothing_more,

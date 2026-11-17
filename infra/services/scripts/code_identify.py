@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 
 SELECTED = re.compile(r"repo_releases/([a-f0-9]{64})(\.r[0-9]+)?/code")
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+# A code run ID: a commit time and eight digits of the commit (staged by CI), or a run ID <name>_<8 hex>[_<attempt>] (the run its code is staged under).
+RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}|[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}")
 
 
 def run(host: Path) -> int:

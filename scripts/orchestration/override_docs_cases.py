@@ -16,12 +16,12 @@ from scripts.orchestration.ecs_adapter_cases import require
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = "20261030T100000Z-abcdef01"
+RUN = "silver_abcdef01"
 VALUES = {
     "RUN_ID": RUN,
     "CODE_RUN_ID": RUN,
-    "INPUT_RUN_ID": "20261030T090000Z-0badcafe",
-    "FEATURES_RUN": "20261030T120000Z-feed0001",
+    "INPUT_RUN_ID": "silver_0badcafe",
+    "FEATURES_RUN": "features_feed0001",
     "FEATURE_SET": "base",
     "CODE_SHA256": "ab" * 32,
     "POLARIS_URI": "http://10.0.0.5:8181/api/catalog",

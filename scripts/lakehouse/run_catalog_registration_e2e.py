@@ -26,7 +26,7 @@ from scripts.lakehouse import register_aws_catalog as reg
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = frozenset({("bronze", "source_table"), ("silver", "silver_table"), ("silver", "publish_runs"), ("gold", "gold_table"), ("gold", "publish_runs")})
-RUNS = {"silver": "20261024T010000Z-00000001", "gold": "20261024T020000Z-00000002"}
+RUNS = {"silver": "silver_00000001", "gold": "gold_00000002"}
 
 
 def encoded(value: object) -> bytes:

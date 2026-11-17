@@ -97,7 +97,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mapped_archives.py": "sha256:050660740ca0c4403977a67d1d63dd6d85e895bfe81e4772286cbd77020d93f9",
         "scripts/acquisition/mmd_api_contract.py": "sha256:8d062714a44634977089eaedec8e29212e99a71a07bd778044581b8dcd499b2b",
-        "scripts/acquisition/raw_root.py": "sha256:934b6770aaf9b31bddb995fa3bfa9122b74802d503cad8d1ce3ef665fc36a6b4",
+        "scripts/acquisition/raw_root.py": "sha256:66969173dfe0668998b08a0fd44db989cdbca83d2816923569bb1ff05ba21c37",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
         "scripts/acquisition/redownload_route.py": "sha256:f78341524a8f34181d600ce275ce3656165b773ca81f8635388a2ea294ffaa9c",
         "scripts/acquisition/restored_outcomes.py": "sha256:41b8e7dd7e9c2caae5eb7ae77b775085d3c1edac2c0f985cf74f1af7f8297fb9",
@@ -135,7 +135,7 @@
         "scripts/acquisition/hud_xlsx_contract.py": "sha256:aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c",
         "scripts/acquisition/mapped_archives.py": "sha256:050660740ca0c4403977a67d1d63dd6d85e895bfe81e4772286cbd77020d93f9",
         "scripts/acquisition/mmd_api_contract.py": "sha256:8d062714a44634977089eaedec8e29212e99a71a07bd778044581b8dcd499b2b",
-        "scripts/acquisition/raw_root.py": "sha256:934b6770aaf9b31bddb995fa3bfa9122b74802d503cad8d1ce3ef665fc36a6b4",
+        "scripts/acquisition/raw_root.py": "sha256:66969173dfe0668998b08a0fd44db989cdbca83d2816923569bb1ff05ba21c37",
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
         "scripts/acquisition/redownload_route.py": "sha256:f78341524a8f34181d600ce275ce3656165b773ca81f8635388a2ea294ffaa9c",
         "scripts/acquisition/restored_outcomes.py": "sha256:41b8e7dd7e9c2caae5eb7ae77b775085d3c1edac2c0f985cf74f1af7f8297fb9",
@@ -340,7 +340,7 @@
       "dependencies": {
         "orchestration/catalog_authority.py": "sha256:6c33ba18a9f83142966904d8e325d671ee00971a0d75b63fb91ed3d90ebd4808",
         "orchestration/catalog_transport.py": "sha256:33d043e4a3e526824b73108c290429958fc2fc016bde30ca82a7640fa2ce98f8",
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
@@ -351,9 +351,9 @@
         "scripts/lakehouse/host_ingress_cases.py": "sha256:5e7a48707a1be434f85f58a73afe223a774409f83ef9b8270c0c57a259ed7dfd",
         "scripts/lakehouse/mac_route_probe.py": "sha256:f8e3e7f6b63d8fa6ea4ffe039b71e1e2ba64794ae90e31f5dd704a7db7e4731f",
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
-        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:be3dbc19ed1ec3c3e91b79a0eac4e0ac6604dd7b67dff3903864aa119daa0616",
-        "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:a4485effc700ceff72176f6d7417a6a25b83ec525233d9c422f4e83cc58c45a4",
+        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:3a6e0b6569df1eb1221791414d47cb72eef6a8d7887650d1b49e1fc9d1de9f68",
+        "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:f2caeeffdf625d74bdd688444a2ef4267165e7bc66b13184f3e3c8bb83780cec",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:195789e1476a0ae981f11ed89dfda0f0a21a91c78b4fcf400ba17b74669fb325",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -366,10 +366,10 @@
       "occurrences": 1,
       "file_sha256": "273e11aee7e912d23e4206beb3ad57f155f64de922af71c9cad9cce64a7630d7",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
         "scripts/lakehouse/bronze.py": "sha256:0333d1bcc93117d3be06961aceacf53dcca8852eca98ca2c6f37f480e0842563",
-        "scripts/lakehouse/catalog.py": "sha256:4f33b026234e8d8e900de1ce86f0f47bee205e56de254fba2ca9d497f0fe95f6",
+        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -387,10 +387,10 @@
       "occurrences": 1,
       "file_sha256": "273e11aee7e912d23e4206beb3ad57f155f64de922af71c9cad9cce64a7630d7",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
         "scripts/lakehouse/bronze.py": "sha256:0333d1bcc93117d3be06961aceacf53dcca8852eca98ca2c6f37f480e0842563",
-        "scripts/lakehouse/catalog.py": "sha256:4f33b026234e8d8e900de1ce86f0f47bee205e56de254fba2ca9d497f0fe95f6",
+        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -408,10 +408,10 @@
       "occurrences": 1,
       "file_sha256": "273e11aee7e912d23e4206beb3ad57f155f64de922af71c9cad9cce64a7630d7",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
         "scripts/lakehouse/bronze.py": "sha256:0333d1bcc93117d3be06961aceacf53dcca8852eca98ca2c6f37f480e0842563",
-        "scripts/lakehouse/catalog.py": "sha256:4f33b026234e8d8e900de1ce86f0f47bee205e56de254fba2ca9d497f0fe95f6",
+        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -427,32 +427,32 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "a4485effc700ceff72176f6d7417a6a25b83ec525233d9c422f4e83cc58c45a4",
+      "file_sha256": "195789e1476a0ae981f11ed89dfda0f0a21a91c78b4fcf400ba17b74669fb325",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "orchestration/mlflow_service.py": "sha256:56c24c4f1bbb4c9679f6cede9e7648a910bd7e7223dbe14df3f6435aa8dee368",
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
-        "orchestration/training_contract.py": "sha256:7dc47728636801a39dffa3cc3dc3e02937726e8619dd8c69207bf122122534b3",
+        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:346993406097e06051381a300bf3fa73ba9654f0f1f0802a67028dd3e8b59029",
         "scripts/infrastructure/sts_stand_in.py": "sha256:2892a7d92971696bcf4d2c05580d8dfb38de1f92eac66c94d2606561cfb08914",
-        "scripts/lakehouse/catalog.py": "sha256:4f33b026234e8d8e900de1ce86f0f47bee205e56de254fba2ca9d497f0fe95f6",
+        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:b5eeba5e5ae835b219c5f866ebc990b8ceff4429dab31ae1eb8c5bbc8117e5ca",
         "scripts/lakehouse/fake_docker.py": "sha256:407ed4a3578abc30e504233a703473c3f77b7ddd8f84cddfbe84bb77052acb4e",
         "scripts/lakehouse/launcher_cleanup.py": "sha256:271cbf7f0a014802fb8d517775b145de61c0a19473c49e6cfde8be0add9bce68",
         "scripts/lakehouse/package_fixture.py": "sha256:8c59389957cc35b8187f70b5de53bd014e706755e3db21693d04b83b070fa223",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
-        "scripts/lakehouse/run_silver_e2e.py": "sha256:42b24cb4912f8b9b83e0a218822b93f67ac244ee4bb17732ed0a2b4d485ebbf4",
+        "scripts/lakehouse/run_silver_e2e.py": "sha256:e68daa9239ecc3d528f8be2efa175a355cce1c3e5f468392075cab4383ef7387",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/docker_calls.py": "sha256:1fd945eba023c5f1ceae05f3535127041aa19b33e8983341191bbd7fde5a2230",
-        "scripts/training/lane_b_cases.py": "sha256:78a42d07194b9f6d10abc516f44fbb9ab0e7fbc762add15d3e8ec400974c707d",
+        "scripts/training/lane_b_cases.py": "sha256:4e38af2f6a5cc68eda62c6a9f33bcaed6fc48e4d810afefb080a0776126e0850",
         "scripts/training/step_records.py": "sha256:ebf3160636fefcd3584ed3dc3a9d9eea39cef87e325e1e14e409bfa954544c4d"
       },
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
@@ -469,8 +469,8 @@
       "occurrences": 1,
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:0c327354a24df2bb9e1c5a7d2a5e28f7ecef05f2f72a09a7f16b349f43403a1e",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:a4485effc700ceff72176f6d7417a6a25b83ec525233d9c422f4e83cc58c45a4",
+        "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:195789e1476a0ae981f11ed89dfda0f0a21a91c78b4fcf400ba17b74669fb325",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -710,7 +710,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -740,7 +740,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -770,7 +770,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -800,7 +800,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -831,7 +831,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -861,7 +861,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -891,7 +891,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -921,7 +921,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -951,7 +951,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -981,7 +981,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1011,7 +1011,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1041,7 +1041,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1071,7 +1071,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1101,7 +1101,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1131,7 +1131,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1161,7 +1161,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1193,7 +1193,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1223,7 +1223,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1253,7 +1253,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1283,7 +1283,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1313,7 +1313,7 @@
         "scripts/lakehouse/dictionary.py": "sha256:01e2ccc0b510a4ad8a616c69c23308d5a4128d75d5e687e822049e175c0c8cd4",
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
-        "scripts/lakehouse/pins.py": "sha256:84b58cb5480f349c83e3921bebec1f91008ad453247de0853deb7930dafabcf5",
+        "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1401,8 +1401,9 @@
       "code_sha256": "6eabf6922d0dcfc0c6ab8a78c4a8b071ea00cebd9a4df97104af549b56640e4f",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "3aecd9fa62fdaae1ec9967e7ecb8397078fb0b130a9241407cbe6891dffa0dd5",
+      "file_sha256": "639fd1493b11343abdafa7fc1807652d439477548f1d62adf66d30a2c3492e8d",
       "dependencies": {
+        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
@@ -1611,9 +1612,9 @@
       "occurrences": 1,
       "file_sha256": "8b68fb9bd3a9b120917020c467561952b36acd00194b5d403535e3b055875f4e",
       "dependencies": {
-        "orchestration/ingestion_schedule.py": "sha256:5389d6543b521445459a1f135859b6af5ac728c5f3ad33e4918928cb8c69d8c0",
+        "orchestration/ingestion_schedule.py": "sha256:502baf8660dfcf99012efd08b8b7a283ec3755a1ca728b8680a6b5fabd00c0aa",
         "orchestration/interface.py": "sha256:1b42a78e7c86b6357f59ba7ec6ef83e733a0e3c4c2c91e92dbf217fc1f966892",
-        "orchestration/training_contract.py": "sha256:7dc47728636801a39dffa3cc3dc3e02937726e8619dd8c69207bf122122534b3"
+        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",
       "lines": [
@@ -1628,10 +1629,10 @@
       "occurrences": 1,
       "file_sha256": "2dbcc5a784fb7583f8bc168570c97c22d2f7b7b7a967e0d7c055b5eacfbff0c9",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:a77fbb123e1176a293ed8541883997ecb2cbf643875442b2d71f95926651b5dd",
+        "orchestration/ecs_preflight.py": "sha256:047fd925d686852108591ef53f8d7f98110492ca17480a4d570a9c0d912e9fd2",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:3aecd9fa62fdaae1ec9967e7ecb8397078fb0b130a9241407cbe6891dffa0dd5",
+        "scripts/infrastructure/host_session.py": "sha256:639fd1493b11343abdafa7fc1807652d439477548f1d62adf66d30a2c3492e8d",
         "scripts/infrastructure/render_jobs_config.py": "sha256:e13b51367f82ebab9ff4e6601b0a3088a48195ef84cad6d21ea9101da75e81cb",
         "scripts/infrastructure/render_project_config.py": "sha256:41d2fbf0d0b984dc12e0307d628a22afa1f3e61498b1164b1af3b43a82e2a593",
         "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b"

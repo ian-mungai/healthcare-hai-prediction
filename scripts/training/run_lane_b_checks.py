@@ -86,7 +86,7 @@ def run_checks(output: Path) -> int:
             case(f"graph_{dag}", not graph.validate_transform_graph(graph.reference_graph(dag), dag))
         raw = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local", "model": "m2"}
         params = training_contract.parameters_for("training_dag", raw)
-        first = SubmissionRequest("guard", "20261024T000000Z-1234abcd", "fixture", 1, "training_dag", "guard", "manual", training=params)
+        first = SubmissionRequest("guard", "training_elastic_net_1234abcd", "fixture", 1, "training_dag", "guard", "manual", training=params)
         second = SubmissionRequest(
             "guard", first.run_id, first.mode, 1, first.dag_id, first.task_id, first.dag_run_id, training={**params, "population": "sensitivity"}
         )
@@ -112,22 +112,21 @@ def run_checks(output: Path) -> int:
                 case(f"model_{name}_refused", "model" in str(error))
             else:
                 case(f"model_{name}_refused", False)
-        drift = "20261109T010000Z-1234abcd"
-        ids = {chosen: training_contract.model_training_run_id(drift, chosen) for chosen in training_contract.MODELS}
+        base = "features_b45e0001"
+        ids = {chosen: training_contract.trained_run_id(base, chosen) for chosen in training_contract.MODELS}
         case("model_run_ids_differ_per_model", len(set(ids.values())) == len(ids))
-        case("model_run_id_is_stable_for_a_retry", ids["m3"] == training_contract.model_training_run_id(drift, "m3"))
+        case("model_run_id_is_stable_for_a_retry", ids["m3"] == training_contract.trained_run_id(base, "m3"))
         case("model_run_id_has_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in ids.values()))
-        base = "20261109T000000Z-b45e0001"
         research = training_contract.research_run_id(base)
         case("research_run_id_has_the_run_form", re.fullmatch(training_contract.RUN_ID, research) is not None and research != base)
         case("research_run_id_is_stable_for_a_retry", research == training_contract.research_run_id(base))
-        case("research_run_id_differs_per_base", research != training_contract.research_run_id("20261109T000000Z-b45e0002"))
+        case("research_run_id_differs_per_base", research != training_contract.research_run_id("features_b45e0002"))
         attempts = {number: training_contract.research_run_id(base, number) for number in (1, 2, 3, 99)}
         case("research_attempt_one_is_the_default_run", attempts[1] == research)
         case("research_attempts_differ", len(set(attempts.values())) == len(attempts))
         case("research_attempt_ids_have_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in attempts.values()))
         case("research_attempt_id_is_stable_for_a_retry", attempts[2] == training_contract.research_run_id(base, 2))
-        case("research_attempt_id_differs_per_base", attempts[2] != training_contract.research_run_id("20261109T000000Z-b45e0002", 2))
+        case("research_attempt_id_differs_per_base", attempts[2] != training_contract.research_run_id("features_b45e0002", 2))
         refused_attempts: list[tuple[str, Any]] = [("zero", 0), ("above_the_limit", 100), ("a_flag", True), ("text", "2"), ("a_fraction", 2.0)]
         for name, bad in refused_attempts:
             try:

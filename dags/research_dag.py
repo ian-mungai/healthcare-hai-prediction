@@ -13,7 +13,7 @@ from __future__ import annotations
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_research_tasks
-from orchestration.training_contract import HAI_TYPES
+from orchestration.training_contract import BASE_RUN, HAI_TYPES, RESEARCH_RUN
 
 with DAG(
     dag_id="research_dag",
@@ -23,10 +23,10 @@ with DAG(
     tags=["training", "promotion"],
     params={
         # The research run ID, derived from the base run and the attempt (orchestration.training_contract.research_run_id); a hand start names its own.
-        "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "run_id": Param(type="string", pattern=f"^{RESEARCH_RUN}$"),
         "mode": Param("real", type="string", enum=["real"]),
         # The base run whose models research compares: no default, so a form trigger must name it.
-        "base_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "base_run": Param(type="string", pattern=f"^{BASE_RUN}$"),
         "population": Param("primary", type="string", enum=["primary", "sensitivity"]),
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),

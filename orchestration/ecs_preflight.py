@@ -29,13 +29,16 @@ from jsonschema import Draft202012Validator
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.ingestion_schedule import RETRY_DAYS, RETRY_KIND, retry_run_id
+from orchestration.ingestion_schedule import RUN_ID_PATTERN as INGESTION_RUN_PATTERN
 from orchestration.interface import SubmissionRequest
 from orchestration.promotion_chain import RecordRefused, challenger_named, stored_decision
+from orchestration.training_contract import CODE_RUN as CODE_RUN_PATTERN
 from orchestration.training_contract import (
     FEATURE_DAGS,
     LAUNCH_LANES,
     MODELS,
     PROMOTION_MODELS,
+    chain_layer_run,
     chain_parameters_for,
     drift_attempt_of,
     model_drift_run_id,
@@ -48,6 +51,7 @@ from orchestration.training_contract import (
     serving_parameters_for,
     trained_run_id,
 )
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
@@ -58,7 +62,8 @@ TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 BRONZE_REQUEST_BYTES = 4096
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 DIGEST = re.compile(r"[a-f0-9]{64}")
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
+CODE_RUN = re.compile(CODE_RUN_PATTERN)
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
 SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
 PUBLISHER_VARIABLES = ("PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT")
@@ -72,7 +77,7 @@ RETRY_REQUEST_KEYS = REQUEST_KEYS | {"original_run", "day"}
 # What a launch may never name: the staged inputs archive, the queue whose state a task restores, the resumed sources and the prior state of the earlier flow.
 RETIRED_KEYS = frozenset({"inputs_sha256", "queue_sha256", "resume_sources", "prior_state"})
 # The capture root is raw/ or one test folder of one run ID (owner decision D4). The task validates it again.
-CAPTURE_ROOT = re.compile(r"raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/")
+CAPTURE_ROOT = re.compile(rf"raw/|ingestion_test/{INGESTION_RUN_PATTERN}/")
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 # The job room that a family without reserve takes at task level: the services defaults job_cpu_units and host_job_cap_mib (a case compares them).
 JOB_ROOM_CPU_UNITS = 3072
@@ -164,9 +169,14 @@ def drift_model(request: SubmissionRequest) -> str:
     if model not in MODELS:
         raise LaunchRefused(f"the drift check names {model!r}, which is not one of {', '.join(MODELS)}")
     attempt = drift_attempt(request)
-    if request.input_run_id is None or request.run_id != model_drift_run_id(request.input_run_id, attempt):
+    named = attempt if "drift_attempt" in (request.training or {}) else None
+    try:
+        expected = None if request.input_run_id is None else model_drift_run_id(request.input_run_id, named)
+    except ValueError:
+        expected = None
+    if request.run_id != expected:
         raise LaunchRefused(
-            f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks and the drift attempt {attempt}"
+            f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks and the drift attempt {named or 'of that run'}"
         )
     return str(model)
 
@@ -294,11 +304,6 @@ def require_publisher_request(request: SubmissionRequest) -> dict[str, str]:
     if not RUN_ID.fullmatch(request.run_id):
         raise LaunchRefused("publisher_request_has_wrong_run_id")
     return publisher_values(request.publisher, request.run_id)
-
-
-def derived_run_id(parent_run: str, layer: str) -> str:
-    """The run ID of a chain layer: the parent's time stamp and eight hex digits of a hash. ``dags/bronze_chain_dag.py`` derives the same IDs."""
-    return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
 def serving_values(
@@ -485,7 +490,7 @@ class S3CodeRuns:
             code_run = document["code_run"] if isinstance(document, dict) and set(document) == {"code_run"} else None
         except ValueError:
             code_run = None
-        if not isinstance(code_run, str) or not RUN_ID.fullmatch(code_run):
+        if not isinstance(code_run, str) or not CODE_RUN.fullmatch(code_run):
             raise LaunchRefused(f"the code run binding of {run_id} is malformed")
         return code_run
 
@@ -682,7 +687,7 @@ class Preflight:
             research_code, bind = self.research_code_run(request)
         else:
             bind = False
-        later_drift = request.dag_id == DRIFT_DAG and drift_attempt(request) > 1
+        later_drift = request.dag_id == DRIFT_DAG and "drift_attempt" in (request.training or {})
         if later_drift:
             research_code = self.drift_code_run(request)
         if research_code is None and row.get("needs_publisher_run_request"):
@@ -764,16 +769,15 @@ class Preflight:
         value = self.read(self.current_code_run)
         if value is None:
             return request.run_id, True
-        if not RUN_ID.fullmatch(value):
-            raise LaunchRefused("the current code run parameter is not a staged run ID")
+        if not CODE_RUN.fullmatch(value):
+            raise LaunchRefused("the current code run parameter is not a staged code run")
         return value, True
 
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and for each model the runs of its chain from the base run (its set's features run, the
         drift check of that set and the training run the check may start), to the bronze run's staged code."""
-        run = bronze_run
         for layer in CHAIN_LAYERS:
-            run = derived_run_id(run, layer)
+            run = chain_layer_run(layer, bronze_run)
             self.code_runs.bind(run, bronze_run)
             if layer == "features":
                 for model in MODELS:

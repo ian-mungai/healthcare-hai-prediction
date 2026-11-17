@@ -30,7 +30,7 @@ import yaml
 folder, project, arguments, output = Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3]), json.loads(sys.argv[4])
 (folder / "profiles").mkdir(parents=True)
 (folder / "profiles/profiles.yml").write_text(yaml.safe_dump({"hai": {"target": "x", "outputs": {"x": output}}}))
-os.environ.update({"HAI_PROVENANCE_REQUIRED": "1", "HAI_BUILD_RUN_ID": "20261101T000000Z-abcdef12", "HAI_BUILD_DBT_TREE_SHA256": "a" * 64,
+os.environ.update({"HAI_PROVENANCE_REQUIRED": "1", "HAI_BUILD_RUN_ID": "silver_abcdef12", "HAI_BUILD_DBT_TREE_SHA256": "a" * 64,
     "HAI_BUILD_PINS_SHA256": "b" * 64, "HAI_BUILD_PINS_JSON": json.dumps({"t": 1}), "HAI_BUILD_GIT_REVISION": "c" * 40,
     "DBT_TARGET_PATH": str(folder / "target"), "DBT_LOG_PATH": str(folder / "logs"), "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"})
 from dbt.cli.main import dbtRunner

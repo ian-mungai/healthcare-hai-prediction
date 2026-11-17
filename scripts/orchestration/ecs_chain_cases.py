@@ -28,13 +28,15 @@ from unittest import mock
 
 import jinja2
 
-from orchestration.ecs_preflight import CHAIN_LAYERS, derived_run_id, load_tables
+from orchestration.ecs_preflight import CHAIN_LAYERS, load_tables
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import chain_layer_run
 from scripts.orchestration.ecs_adapter_cases import require
 
 ROOT = Path(__file__).resolve().parents[2]
-BRONZE = "20261030T090000Z-b0b0b0b0"
-OTHER_BRONZE = "20261031T090000Z-b1b1b1b1"
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+BRONZE = "bronze_b0b0b0b0"
+OTHER_BRONZE = "bronze_b1b1b1b1"
+RUN_ID = re.compile(RUN_ID_PATTERN)
 
 
 class Operator:
@@ -119,36 +121,41 @@ def derived_ids_are_valid_and_stable() -> None:
     loaded = load_dag()
     ids = [loaded["chain_run"](layer, BRONZE) for layer, _, _ in loaded["CHAIN"]]
     require(all(RUN_ID.fullmatch(run) for run in ids), f"a derived run ID has the wrong shape: {ids}")
-    require(all(run.startswith(BRONZE[:16]) for run in ids), "a derived run ID lost the bronze time stamp")
+    require(ids == ["silver_b0b0b0b0", "gold_b0b0b0b0", "features_b0b0b0b0"], f"a layer run ID is not its name and the bronze run's hex: {ids}")
     require(len(set(ids)) == 3 and BRONZE not in ids, "two layers share a run ID")
+    require(loaded["chain_run"]("silver", "bronze_b0b0b0b0_2") == "silver_b0b0b0b0_2", "the attempt suffix of the bronze run does not carry down")
+    for bad in ("20261030T090000Z-b0b0b0b0", "silver_b0b0b0b0", "bronze_b0b0b0b"):
+        try:
+            loaded["chain_run"]("silver", bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"{bad} was accepted as a bronze run")
     require(ids == [loaded["chain_run"](layer, BRONZE) for layer, _, _ in loaded["CHAIN"]], "the run IDs are not stable")
     require(not set(ids) & {loaded["chain_run"](layer, OTHER_BRONZE) for layer, _, _ in loaded["CHAIN"]}, "two bronze runs share a layer run ID")
-    require(loaded["chain_run"]("gold", BRONZE) == loaded["derived_run_id"](ids[0], "gold"), "gold does not derive from silver")
 
 
 def preflight_and_dag_derive_the_same_run_ids() -> None:
     loaded = load_dag()
     require(tuple(layer for layer, _, _ in loaded["CHAIN"]) == CHAIN_LAYERS, "the preflight and the DAG list different layers")
     for bronze in (BRONZE, OTHER_BRONZE):
-        run = bronze
         for layer in CHAIN_LAYERS:
-            run = derived_run_id(run, layer)
+            run = chain_layer_run(layer, bronze)
             require(run == loaded["chain_run"](layer, bronze), f"the preflight derives another {layer} run ID than the DAG")
 
 
 def chain_runs_in_order_after_the_gate() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
-    require(list(nodes) == ["chain_gate", "run_silver", "run_gold", "run_features", "start_metadata"], f"wrong tasks: {list(nodes)}")
-    order = ["chain_gate", "run_silver", "run_gold", "run_features"]
+    require(list(nodes) == ["chain_gate", "bronze_load", "run_silver", "run_gold", "run_features", "start_metadata"], f"wrong tasks: {list(nodes)}")
+    order = ["chain_gate", "bronze_load", "run_silver", "run_gold", "run_features"]
     for before, after in zip(order, order[1:], strict=False):
         require(nodes[after].upstream == [nodes[before]], f"{after} does not follow only {before}")
     require(loaded["dag"].settings["schedule"] is None and loaded["dag"].settings["catchup"] is False, "the chain has a calendar schedule")
     require(
-        [nodes[name].settings["trigger_dag_id"] for name in order[1:]] == ["silver_transform_dag", "gold_transform_dag", "features_base_dag"],
+        [nodes[name].settings["trigger_dag_id"] for name in order[2:]] == ["silver_transform_dag", "gold_transform_dag", "features_base_dag"],
         "wrong DAGs",
     )
-    for name in order[1:]:
+    for name in order[2:]:
         settings = nodes[name].settings
         require(
             settings["wait_for_completion"] is True and settings["allowed_states"] == ["success"] and "failed" in settings["failed_states"],
@@ -165,7 +172,10 @@ def triggers_send_derived_ids() -> None:
         return str(loaded["chain_run"](layer, BRONZE))
 
     rendered = {name: render(loaded, nodes[name]["trigger_run_id"], BRONZE) for name in ("run_silver", "run_gold", "run_features")}
-    require(rendered["run_gold"] == f"chain__gold_transform_dag__{run('gold')}", f"wrong DAG run ID for gold: {rendered['run_gold']}")
+    require(
+        rendered == {"run_silver": run("silver"), "run_gold": run("gold"), "run_features": run("features")},
+        f"a DAG run ID is not the layer's run ID: {rendered}",
+    )
     conf = {name: {key: render(loaded, value, BRONZE) for key, value in nodes[name]["conf"].items()} for name in rendered}
     require(conf["run_silver"] == {"run_id": run("silver"), "mode": "real"}, f"silver settings: {conf['run_silver']}")
     require(conf["run_gold"] == {"run_id": run("gold"), "mode": "real", "silver_snapshot_run": run("silver")}, f"gold settings: {conf['run_gold']}")
@@ -312,7 +322,7 @@ def metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token() -> No
     request = api.requests[0]
     require(request["path"] == "/api/v2/dags/metadata_ingest_dag/dagRuns", f"wrong trigger path: {request['path']}")
     require(
-        request["body"].get("dag_run_id") == f"chain__metadata_ingest_dag__{run}"
+        request["body"].get("dag_run_id") == run
         and request["body"].get("conf") == {"run_id": run, "features_run": str(load_dag()["chain_run"]("features", BRONZE)), "mode": "real"},
         f"wrong trigger body: {request['body']}",
     )

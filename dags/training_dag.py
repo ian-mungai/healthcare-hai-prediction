@@ -12,7 +12,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration.dag_runtime import build_tasks
-from orchestration.training_contract import HAI_TYPES, TRAINING_STEPS, research_requests
+from orchestration.training_contract import BASE_RUN, DRIFT_RUN, HAI_TYPES, SET_RUN, TRAINING_STEPS, research_requests, run_id_pattern
 
 with DAG(
     dag_id="training_dag",
@@ -21,17 +21,17 @@ with DAG(
     max_active_runs=1,
     tags=["training"],
     params={
-        "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "run_id": Param(type="string", pattern=f"^{run_id_pattern('training', qualified=True)}$"),
         "mode": Param("real", type="string", enum=["real"]),
-        "features_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
+        "features_run": Param("latest", type="string", pattern=f"^(latest|{SET_RUN})$"),
         "population": Param("primary", type="string", enum=["primary", "sensitivity"]),
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),
-        "trigger": Param("manual", type="string", pattern=r"^(manual|drift:[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
+        "trigger": Param("manual", type="string", pattern=f"^(manual|drift:{DRIFT_RUN})$"),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The one model this run fits; no default, so a form trigger must choose it (orchestration.training_contract.MODELS).
         "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
         # The base run of the model set this run trains on: research compares the models of one base run. Empty for a hand start, which starts no research.
-        "base_run": Param("", type="string", pattern=r"^(|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
+        "base_run": Param("", type="string", pattern=f"^(|{BASE_RUN})$"),
     },
     default_args={"retries": 0},
 ) as dag:

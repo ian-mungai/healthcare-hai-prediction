@@ -20,7 +20,7 @@ from scripts.lakehouse import run_launcher_e2e as base
 from scripts.lakehouse.run_launcher_e2e import Env, expect_error, hold_forever, refused
 from scripts.lakehouse.run_lock import Registry, transaction
 
-GOLD_RUN = "20261014T010203Z-0a1b2c3d"
+GOLD_RUN = "gold_0a1b2c3d"
 SEALED = b"sealed build fixture"
 L1B_COMPLETION: dict[str, Any] = {
     "bronze_pins_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
@@ -33,7 +33,7 @@ L1B_COMPLETION: dict[str, Any] = {
     "git_revision": "3333333333333333333333333333333333333333",
     "inode": 410491409,
     "invocation_id": "invocation-sample",
-    "run_id": "20261014T010203Z-0a1b2c3d",
+    "run_id": "gold_0a1b2c3d",
     "sealed_utc": "2026-10-14T08:42:04.740474+00:00",
     "sha256": "65fcbe2a7349449a8d4a629354424d6b6c986b192336af59cf79e41d6f7329cd",
     "size": 46,
@@ -331,36 +331,36 @@ def gold_publish_admission(env: Env) -> dict[str, bool]:
         client.call("finalize", {}, principal)
         client.call("release", {"record": str(base.record_file(env, run_id))}, principal, timeout=60)
 
-    fixture = env.acquire_run("20261014T010203Z-0000000a", "transform", "fixture", write_prefixes=["lakehouse/gold_e2e/"])
+    fixture = env.acquire_run("gold_0000000a", "transform", "fixture", write_prefixes=["lakehouse/gold_e2e/"])
     checks["a run in fixture mode is refused"] = refused(
         expect_error(lambda: submit(fixture, "gold_publish", "a", "commit_publish")), "refused", "mode publish_fixture or real"
     )
-    finish("20261014T010203Z-0000000a", fixture)
-    bare = publish_run(env, "20261014T010203Z-0000000b", "publish_fixture", [])
+    finish("gold_0000000a", fixture)
+    bare = publish_run(env, "gold_0000000b", "publish_fixture", [])
     checks["a publish run that declares no write prefix is refused"] = refused(
         expect_error(lambda: submit(bare, "gold_publish", "a", "commit_publish")), "refused", "no write prefix"
     )
-    finish("20261014T010203Z-0000000b", bare)
-    wrong = publish_run(env, "20261014T010203Z-0000000c", "publish_fixture", ["lakehouse/gold/"])
+    finish("gold_0000000b", bare)
+    wrong = publish_run(env, "gold_0000000c", "publish_fixture", ["lakehouse/gold/"])
     checks["a publish_fixture run that declares only the real gold prefix is refused"] = refused(
         expect_error(lambda: submit(wrong, "gold_publish", "a", "commit_publish")), "refused", "declares"
     )
-    finish("20261014T010203Z-0000000c", wrong)
+    finish("gold_0000000c", wrong)
     for run_id, label, declared in (
-        ("20261014T010203Z-0000000e", "the whole lakehouse", "lakehouse/"),
-        ("20261014T010203Z-0000000f", "only the text of the test prefix", "lakehouse/gold"),
+        ("gold_0000000e", "the whole lakehouse", "lakehouse/"),
+        ("gold_0000000f", "only the text of the test prefix", "lakehouse/gold"),
     ):
         outside = publish_run(env, run_id, "publish_fixture", [declared])
         checks[f"a publish_fixture run that declares {label} is refused"] = refused(
             expect_error(partial(submit, outside, "gold_publish", "a", "commit_publish")), "refused", f"declares {declared}"
         )
         finish(run_id, outside)
-    unsealed = publish_run(env, "20261014T010203Z-0000000d", "publish_fixture", ["lakehouse/gold_e2e/"], sealed=False)
+    unsealed = publish_run(env, "gold_0000000d", "publish_fixture", ["lakehouse/gold_e2e/"], sealed=False)
     checks["a sealed job on a run with no sealed build is refused"] = refused(
         expect_error(lambda: submit(unsealed, "gold_publish", "a", "commit_publish")), "refused", "not sealed"
     ) and refused(expect_error(lambda: submit(unsealed, "gold_export", "b")), "refused", "not sealed")
     checks["maintenance needs no sealed build"] = expect_error(lambda: submit(unsealed, "gold_publish", "m", "gold_maintenance")) is None
-    finish("20261014T010203Z-0000000d", unsealed)
+    finish("gold_0000000d", unsealed)
     good = publish_run(env, GOLD_RUN, "publish_fixture", ["lakehouse/gold_e2e/"], accepted=True)
     checks["an argument from the client is refused at submit"] = isinstance(
         expect_error(lambda: submit(good, "gold_publish", "x", "commit_publish", ["--mode", "real"])), launcher.ClientError
@@ -460,7 +460,7 @@ def gold_completion_format(env: Env) -> dict[str, bool]:
         ("an older generation", {"generation": 2}, "not the one of the live build"),
         ("another live attempt", {"build_attempt": "at-other"}, "not the one of the live build"),
         ("another build binding", {"build_binding": {"attempt": "at-other", "generation": 1}}, "not the one of the live build"),
-        ("another run's completion", {"completion": {**L1B_COMPLETION, "run_id": "20261014T010204Z-0a1b2c3d"}}, "not the one of the live build"),
+        ("another run's completion", {"completion": {**L1B_COMPLETION, "run_id": "gold_0a1b2c3e"}}, "not the one of the live build"),
     ]
     for label, changes, reason in invalid_runs:
         checks[f"{label} is refused by the provenance check"] = reason in launcher_run_error({**sealed_run(dict(L1B_COMPLETION)), **changes})
@@ -582,7 +582,7 @@ def gold_consumer_acceptance(env: Env) -> dict[str, bool]:
     checks["a rejected result is not accepted"] = bool(refusal) and "rejected" in refusal
     checks["a rejected result leaves no acceptance record"] = acceptance() is None
     checks["after the rejection: commit_publish is refused"] = "accepted" in submit("s1", "commit_publish")
-    for label, change in (("another run's identity", {"run_id": "20261014T010203Z-0000beef"}), ("a consumer that did not export", {"exported": False})):
+    for label, change in (("another run's identity", {"run_id": "gold_0000beef"}), ("a consumer that did not export", {"exported": False})):
         write_result(env, consumer_result(**change))
         checks[f"{label} is not accepted"] = bool(accept(export["id"])) and acceptance() is None
 
@@ -632,7 +632,7 @@ def gold_maintenance_fence(env: Env) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     principal = publish_run(env, GOLD_RUN, "publish_fixture", ["lakehouse/gold_e2e/"])
     folder = env.temp / "runs" / GOLD_RUN / "publish"
-    old_set = "20261001T000000Z-00000001"
+    old_set = "gold_00000001"
 
     def call(method: str, params: dict[str, Any]) -> str:
         return error_of(lambda: client.call(method, params, {"kind": "any"}))

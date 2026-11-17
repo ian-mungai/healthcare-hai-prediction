@@ -2397,7 +2397,7 @@ class Renderer:
                 if (
                     len(args) != 3
                     or args[1] != "--run"
-                    or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", args[2])
+                    or not re.fullmatch(training_contract.RUN_ID, args[2])
                     or inp.run_folder is None
                     or args[2] != inp.run_folder.name
                 ):
@@ -2668,7 +2668,7 @@ class Renderer:
             publish.mkdir(parents=True, exist_ok=True)
         else:
             run_id, sha = str(inp.params["run"]), str(inp.params["sealed_sha256"])
-            if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", run_id) or not SHA256_HEX.fullmatch(sha):
+            if not re.fullmatch(training_contract.RUN_ID, run_id) or not SHA256_HEX.fullmatch(sha):
                 raise LauncherError("gold_export needs a run ID and a lower-case hexadecimal SHA-256", "args")
             sealed = self.allowed(str(inp.params["sealed_host"]), "sealed_host")
             publish = self.allowed(str(inp.params["publish_host"]), "publish_host")
@@ -10530,7 +10530,7 @@ def dbt_command(client: LauncherClient, arguments: list[str]) -> int:
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
         return result.exit_code if result.exit_code is not None else ERROR_EXIT
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_id = training_contract.compose_run_id("silver", training_contract.new_run_hex())
     mode = "fixture" if client.config.registry.kind == "test" else "real"
     client.call("acquire", {"domain": "transform", "run_id": run_id, "mode": mode, "checkout": str(root)})
     principal = client.principal_run(run_id)

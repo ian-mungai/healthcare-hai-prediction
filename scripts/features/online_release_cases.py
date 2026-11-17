@@ -25,7 +25,7 @@ from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker
 from scripts.features.publication_reads import ReadError
 
-BASE_RUN, HELD_RUN = "20261110T010000Z-0000b001", "20261110T020000Z-0000a001"
+BASE_RUN, HELD_RUN = "features_0000b001", "features_0000a001"
 OLD_HASH = "0" * 64
 
 
@@ -82,7 +82,7 @@ def case_e33_held_release(c: Checker) -> None:
         c.refused("a promotion of one of two infection types still leaves the set held", release, "HAI_3")
         c.check("the partial promotion loaded nothing", online.loads == [] and online.serving == "first load")
         production["HAI_3"] = mine
-        c.refused("a release of a superseded run is refused after both promotions", lambda: release("20261110T090000Z-0000a002"), "superseded")
+        c.refused("a release of a superseded run is refused after both promotions", lambda: release("features_0000a002"), "superseded")
         first = release()
         c.check("the release after every promotion loads the held run once, with its base run", online.loads == [f"m2:{HELD_RUN}:{BASE_RUN}"])
         c.check(
@@ -100,7 +100,7 @@ def case_e33_not_held(c: Checker) -> None:
     online_release: Any = importlib.import_module("scripts.features.online_release")
     schema, sha = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
-    loaded_run, blank_run = "20261110T030000Z-0000a004", "20261110T040000Z-0000a004"
+    loaded_run, blank_run = "features_0000a004", "features_0000a005"
     with tempfile.TemporaryDirectory(prefix="online_release_cases_") as raw:
         holds = feast_sets.FolderHoldStore(Path(raw))
         online = Online()
@@ -123,8 +123,8 @@ def case_e33_not_held(c: Checker) -> None:
         c.refused("a run with neither a hold nor a load record is refused by name", lambda: release("m4", blank_run), "no online hold")
         holds.write_new("feast_materialize.json", blank_run, {"feature_set": "m4", "run_id": blank_run, "online": "hold"})
         c.refused("a run whose record says hold but has no hold file is refused", lambda: release("m4", blank_run), "no online hold")
-        loaded_receipt(holds, schema, sha, "m2", "20261110T050000Z-0000a002")
-        c.refused("a load record of another set is refused", lambda: release("m4", "20261110T050000Z-0000a002"), "no online hold")
+        loaded_receipt(holds, schema, sha, "m2", "features_0000a003")
+        c.refused("a load record of another set is refused", lambda: release("m4", "features_0000a003"), "no online hold")
         for offline in ("m3", "m5", "m6"):
             c.refused(f"{offline} is offline only and is refused", lambda offline=offline: release(offline, loaded_run), "not an online model set")
         c.refused("a name that is not a model set is refused", lambda: release("base", loaded_run), "not a model set")
@@ -203,7 +203,7 @@ def case_e33_not_held_checked(c: Checker) -> None:
     online_release: Any = importlib.import_module("scripts.features.online_release")
     schema, sha = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
-    newer = "20261110T090000Z-0000a005"
+    newer = "features_0000a006"
     online = Online()
     calls: dict[str, int] = {"newest": 0, "production": 0}
 
@@ -277,7 +277,7 @@ def case_e33_cached_release(c: Checker) -> None:
     online_release: Any = importlib.import_module("scripts.features.online_release")
     schema, sha = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
-    other_run = "20261110T090000Z-0000a002"
+    other_run = "features_0000a002"
     online = Online()
     held = {"schema": 1, "feature_set": "m1", "run_id": HELD_RUN, "base_run": BASE_RUN, "set_schema_sha256": mine, "production_set_schema_sha256": [OLD_HASH]}
     genuine = {
@@ -379,7 +379,7 @@ def case_e33_s3_store_lists_before_it_reads(c: Checker) -> None:
 
 
 RELOAD_RUNS = [f"20261111T0{hour}0000Z-0000a00{hour}" for hour in range(1, 7)]  # oldest first; the cases name them from the newest down
-LAUNCH_RUN = "20261112T010000Z-0000c001"
+LAUNCH_RUN = "features_0000c001"
 
 
 class Reloadable:

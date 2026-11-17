@@ -64,7 +64,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="second", value=2))
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="file_metadata", value=1))
     tables = ["file_metadata", "first", "second"]
-    path = root / "runs" / "20261011T090000Z-0a1b2c3d" / "pins.json"
+    path = root / "runs" / "silver_0a1b2c3d" / "pins.json"
     pinned = pins.current_snapshots(spark, CATALOG, NAMESPACE, tables)
     pins.write_once(path, pinned)
     written = pins.read_pins(path)
@@ -73,7 +73,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
         "verify passes while nothing moved": pins.differences(written, pins.current_snapshots(spark, CATALOG, NAMESPACE, tables)) == [],
         "a run is pinned once": refused(lambda: pins.write_once(path, pinned), "a run is pinned once"),
     }
-    results["a writer that loses the race keeps the first pin"] = rival_keeps_its_pin(root / "runs" / "20261011T090000Z-1a2b3c4d" / "pins.json")
+    results["a writer that loses the race keeps the first pin"] = rival_keeps_its_pin(root / "runs" / "silver_1a2b3c4d" / "pins.json")
     sql(INSERT_SQL.format(catalog=CATALOG, namespace=NAMESPACE, table="first", value=3))
     moved = pins.differences(written, pins.current_snapshots(spark, CATALOG, NAMESPACE, tables))
     results["verify names the table that moved"] = len(moved) == 1 and moved[0].startswith("first: ")

@@ -133,9 +133,9 @@ def test_a_run_id_that_cannot_join_a_key_is_refused(run_id: str) -> None:
 def test_a_listed_key_names_its_payload_and_its_run_in_either_form() -> None:
     item = body()
     plain = record.record_key(ROOT, item["unit_key"], item["payload_sha256"])
-    revert = record.record_key(ROOT, item["unit_key"], item["payload_sha256"], "20261113T180000Z-ab12cd34")
+    revert = record.record_key(ROOT, item["unit_key"], item["payload_sha256"], "ingestion_ab12cd34")
     check(record.key_payload(plain, ROOT, item["unit_key"]) == (item["payload_sha256"], None), "the plain key names no run")
-    check(record.key_payload(revert, ROOT, item["unit_key"]) == (item["payload_sha256"], "20261113T180000Z-ab12cd34"), "the run key names both")
+    check(record.key_payload(revert, ROOT, item["unit_key"]) == (item["payload_sha256"], "ingestion_ab12cd34"), "the run key names both")
     for bad in (f"{ROOT}ingestion_units/{'e' * 64}/{item['payload_sha256']}.json", f"{ROOT}ingestion_units/{item['unit_key']}/x.json", plain + ".bak"):
         check(record.key_payload(bad, ROOT, item["unit_key"]) is None, f"a key of no record form is no record: {bad}")
 

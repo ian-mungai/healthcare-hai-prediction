@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     for name in ("reference-matrix", "reference-manifest", "current-matrix", "current-manifest", "features"):
         parser.add_argument(f"--{name}", type=Path, required=True)
-    parser.add_argument("--run-id", required=True, help="the drift run id, for example 20261030T120000Z-0a1b2c3d")
+    parser.add_argument("--run-id", required=True, help="the drift run id, for example drift_elastic_net_0a1b2c3d")
     parser.add_argument("--out", type=Path, required=True, help="the folder that receives drift_<HAI type>.json")
     parser.add_argument("--config", type=Path, default=drift_config.CONFIG)
     arguments = parser.parse_args(argv)

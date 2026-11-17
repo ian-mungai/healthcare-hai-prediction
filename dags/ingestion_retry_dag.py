@@ -16,6 +16,7 @@ from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RETRY_DAY, SCHEDULED_RUN, retry_schedule_for
+from orchestration.training_contract import RETRY_DAYS
 
 SCHEDULE = retry_schedule_for(os.environ)
 # A scheduled DAG needs a default for every parameter, so the scheduled form carries ``scheduled`` and day 0, which only a scheduled run resolves from its
@@ -23,7 +24,7 @@ SCHEDULE = retry_schedule_for(os.environ)
 ORIGINAL_RUN = (
     Param(SCHEDULED_RUN, type="string", pattern=rf"^({SCHEDULED_RUN}|{RUN_ID_PATTERN})$") if SCHEDULE else Param(type="string", pattern=rf"^{RUN_ID_PATTERN}$")
 )
-DAY = Param(SCHEDULED_RETRY_DAY, type="integer", minimum=0, maximum=7) if SCHEDULE else Param(type="integer", minimum=1, maximum=7)
+DAY = Param(SCHEDULED_RETRY_DAY, type="integer", minimum=0, maximum=RETRY_DAYS) if SCHEDULE else Param(type="integer", minimum=1, maximum=RETRY_DAYS)
 
 with DAG(
     dag_id="ingestion_retry_dag",
@@ -35,7 +36,7 @@ with DAG(
         "original_run": ORIGINAL_RUN,
         "day": DAY,
         "mode": Param("real", type="string", enum=["real"]),
-        "capture_root": Param("raw/", type="string", pattern=r"^(raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/)$(?![\s\S])"),
+        "capture_root": Param("raw/", type="string", pattern=rf"^(raw/|ingestion_test/{RUN_ID_PATTERN}/)$(?![\s\S])"),
     },
     default_args={"retries": 0},
 ) as dag:

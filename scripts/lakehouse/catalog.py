@@ -38,11 +38,11 @@ import sys
 import time
 import urllib.parse
 import uuid
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from orchestration import launcher
+from orchestration.training_contract import compose_run_id, new_run_hex
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import principal_credentials, run_lock
 
@@ -290,7 +290,7 @@ def run_job(link: launcher.LauncherClient, kind: str, name: str, template: str, 
     if name == "pins":
         run_id = job_args[job_args.index("--run") + 1] if "--run" in job_args else ""
         return link.run_attempt(link.principal_run(run_id), template, launch, job_args, {"job": name})
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_id = compose_run_id("bronze", new_run_hex())
     link.call(
         "acquire",
         {

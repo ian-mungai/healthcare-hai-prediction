@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.features import retired_publications
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +54,7 @@ TOKEN_ATTEMPTS = 2
 S3_PROXY = "http://hai-egress:3128"
 S3_CONNECT_TIMEOUT = 5
 S3_REQUEST_TIMEOUT = 30
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(RUN_ID_PATTERN)
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
@@ -147,11 +148,10 @@ def parse_snapshot_set(run_id: str, raw: Any) -> dict[str, int]:
 def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None = None) -> Publication:
     """The head ``publish_runs`` row, or the row of the named run.
 
-    The head is the newest ``committed_at``, ties broken by the larger ``run_id``: the order of the gold head query in ``gold_publish.py``. A run that the
-    namespace retired (``retired_publications``) is no publication: the head skips it and a named one is refused by name.
+    The head is the newest ``committed_at``, ties broken by the larger ``run_id`` (a fixed tie-break, not a time): the order of the gold head query in
+    ``gold_publish.py``. A run that the namespace retired by its commit time (``retired_publications``) is no publication: the head skips it and a named one is
+    refused by name.
     """
-    if run_id is not None and retired_publications.is_retired(namespace, run_id):
-        raise ReadError(f"publish run {run_id} is retired: {namespace} ignores the runs before {retired_publications.cutover(namespace)}")
     table = load_table(catalog, namespace, RUNS_TABLE)
     fields = ("run_id", "committed_at", "snapshot_set", *(("base_run",) if "base_run" in iceberg_columns(table) else ()))
     rows = table.scan(selected_fields=fields).to_arrow().to_pylist()
@@ -167,10 +167,12 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
         except (TypeError, ValueError):
             raise ReadError(f"publish run {identity}: committed_at is not a time") from None
         parsed.append((committed, identity, row.get("snapshot_set"), row.get("base_run")))
-    live = [item for item in parsed if not retired_publications.is_retired(namespace, item[1])]
+    live = [item for item in parsed if not retired_publications.is_retired(namespace, item[0])]
+    if run_id is not None and any(item[1] == run_id for item in parsed) and not any(item[1] == run_id for item in live):
+        raise ReadError(f"publish run {run_id} is retired: {namespace} ignores the runs committed before {retired_publications.cutover(namespace)}")
     if not live:
         raise ReadError(
-            f"{namespace}.{RUNS_TABLE} has no committed publication: its {len(parsed)} rows are retired runs before {retired_publications.cutover(namespace)}"
+            f"{namespace}.{RUNS_TABLE} has no committed publication: its {len(parsed)} rows are runs committed before {retired_publications.cutover(namespace)}"
         )
     parsed = live
     if run_id is None:

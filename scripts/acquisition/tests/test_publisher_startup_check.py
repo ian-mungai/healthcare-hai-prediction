@@ -37,7 +37,7 @@ class Cloud:
 
 def environment(workspace: Path) -> dict[str, str]:
     return {
-        "RUN_ID": "20261113T100000Z-0a1b2c3d",
+        "RUN_ID": "ingestion_0a1b2c3d",
         "CODE_SHA256": "c" * 64,
         "PUBLISHER_RUN_KIND": "bootstrap",
         "HAI_CAPTURE_ROOT": "raw/",

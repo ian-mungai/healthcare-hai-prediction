@@ -5,7 +5,7 @@ from __future__ import annotations
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import HAI_TYPES
+from orchestration.training_contract import HAI_TYPES, run_id_pattern
 
 with DAG(
     dag_id="model_promotion_dag",
@@ -14,7 +14,7 @@ with DAG(
     max_active_runs=1,
     tags=["training", "promotion"],
     params={
-        "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "run_id": Param(type="string", pattern=f"^{run_id_pattern('promotion')}$"),
         "hai_type": Param(type="string", enum=list(HAI_TYPES)),
         "model_version": Param(type="string", pattern=r"^[1-9][0-9]{0,18}$"),
         "mode": Param("promote", type="string", enum=["promote", "rollback"]),

@@ -91,7 +91,11 @@ def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str
     With a ``namespace``, a row of a run that the namespace retired (``retired_publications``) never counts."""
     wanted = set(base_tables)
     return next(
-        (row for row in reversed(rows) if wanted <= set(row["snapshot_set"]) and not (namespace and retired_publications.is_retired(namespace, row["run_id"]))),
+        (
+            row
+            for row in reversed(rows)
+            if wanted <= set(row["snapshot_set"]) and not (namespace and retired_publications.is_retired(namespace, row["committed_at"]))
+        ),
         None,
     )
 

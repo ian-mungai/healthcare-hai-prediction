@@ -21,7 +21,7 @@ from orchestration.client import BrokerClient, BrokerUnavailable
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 
 LOG = logging.getLogger(__name__)
-RUN_ID_PATTERN = r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+RUN_ID_PATTERN = r"^[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2})?$"
 MODES = ("fixture",)
 POLL_SECONDS = 2.0
 STEP_TIMEOUT = timedelta(hours=26)

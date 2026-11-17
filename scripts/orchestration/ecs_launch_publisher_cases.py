@@ -19,8 +19,8 @@ from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec
 from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs
 from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket, RevisionEcs
 
-RUN = "20261110T100000Z-abcdef01"
-CODE = {"run_id": "20261110T090000Z-12345678", "sha256": "c" * 64}
+RUN = "ingestion_abcdef01"
+CODE = {"run_id": "ingestion_12345678", "sha256": "c" * 64}
 BUCKET = "example-private-bucket"
 PREFIX = launch_record_prefix()
 HOST_PROVIDER = "stand-in_host"
@@ -36,7 +36,7 @@ SETTINGS = EcsSettings(
 REVISION = f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_publisher_host:1"
 NEED = Resources(cpu_units=2048, memory_mib=8192, scratch_bytes=20 * 2**30)
 REQUEST = {"kind": "bootstrap", "capture_root": "raw/"}
-TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+TEST_ROOT = "ingestion_test/ingestion_0a1b2c3d/"
 
 
 class Rig:
@@ -128,13 +128,13 @@ def publisher_launch_names_each_run_kind_and_capture_root() -> None:
 
 def publisher_retry_request_names_its_original_run_and_day() -> None:
     rig = Rig()
-    original = "20261201T000000Z-0a1b2c3d"
-    retry = {"kind": "retry", "capture_root": "raw/", "original_run": original, "day": 3}
-    third = schedule.retry_run_id(original, 3)
+    original = "ingestion_0a1b2c3d"
+    retry = {"kind": "retry", "capture_root": "raw/", "original_run": original, "day": 2}
+    third = schedule.retry_run_id(original, 2)
     run = rig.spec(request=retry, run_id=third).environment["run"]
     require(run["PUBLISHER_RUN_KIND"] == "retry" and run["HAI_CAPTURE_ROOT"] == "raw/", f"the retry reached the task as {run}")
     require(
-        (run["PUBLISHER_ORIGINAL_RUN"], run["PUBLISHER_RETRY_DAY"]) == (original, "3"),
+        (run["PUBLISHER_ORIGINAL_RUN"], run["PUBLISHER_RETRY_DAY"]) == (original, "2"),
         f"the retry did not carry its original run and its day to the run container: {run}",
     )
     other = rig.spec(request=REQUEST).environment
@@ -144,11 +144,11 @@ def publisher_retry_request_names_its_original_run_and_day() -> None:
     )
     require("PUBLISHER_ORIGINAL_RUN" not in rig.spec(request=retry, run_id=third).environment["fetch"], "the fetch container got a retry variable")
     first = rig.spec(request=retry, run_id=third).bound["request_hash"]
-    require(first != rig.spec(request=retry | {"day": 4}, run_id=schedule.retry_run_id(original, 4)).bound["request_hash"], "another day has another digest")
+    require(first != rig.spec(request=retry | {"day": 1}, run_id=schedule.retry_run_id(original, 1)).bound["request_hash"], "another day has another digest")
     for label, changes in (
         ("a retry with no original run", {"original_run": None}),
         ("a retry with no day", {"day": None}),
-        ("a retry of a day outside one to seven", {"day": 8}),
+        ("a retry of a day outside one to two", {"day": 3}),
         ("a retry of a boolean day", {"day": True}),
         ("a retry of an original run that is not a run id", {"original_run": "latest"}),
     ):
@@ -158,7 +158,7 @@ def publisher_retry_request_names_its_original_run_and_day() -> None:
     error = refuses(LaunchRefused, partial(rig.spec, request=retry, run_id=RUN))
     require("publisher_retry_run_is_not_the_run_of_that_day" in str(error), f"a retry under another run id than its day's was not refused by name: {error}")
     for label, extra in (
-        ("a bootstrap with a retry day", {"kind": "bootstrap", "capture_root": "raw/", "original_run": original, "day": 3}),
+        ("a bootstrap with a retry day", {"kind": "bootstrap", "capture_root": "raw/", "original_run": original, "day": 2}),
         ("a monthly run with an original run", {"kind": "monthly", "capture_root": "raw/", "original_run": original}),
     ):
         error = refuses(LaunchRefused, partial(rig.spec, request=extra, run_id=RUN))

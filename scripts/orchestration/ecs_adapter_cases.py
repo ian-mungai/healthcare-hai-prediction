@@ -30,8 +30,8 @@ SETTINGS = EcsSettings(
     families=frozenset({"train"}),
     host_capacity_provider=FakeEcs().host_provider,
 )
-ENVIRONMENT = {"fetch": {"RUN_ID": "20261030T100000Z-abcdef01"}, "train": {"RUN_ID": "20261030T100000Z-abcdef01"}}
-KEY = "20261030T100000Z-abcdef01:train:1"
+ENVIRONMENT = {"fetch": {"RUN_ID": "silver_abcdef01"}, "train": {"RUN_ID": "silver_abcdef01"}}
+KEY = "silver_abcdef01:train:1"
 
 
 def build() -> tuple[EcsAdapter, FakeEcs, FakeLogs]:

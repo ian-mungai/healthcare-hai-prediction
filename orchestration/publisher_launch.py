@@ -17,6 +17,7 @@ from typing import Any
 
 from orchestration.ecs_launch import JobSpec, LaunchRefused, Resources
 from orchestration.ecs_preflight import RETRY_VARIABLES, RUN_ID, publisher_values
+from orchestration.training_contract import CODE_RUN as CODE_RUN_PATTERN
 
 JOB = "publisher"
 # The job's own deadline: one day, the publisher downloads every Run 3 source once.
@@ -24,7 +25,7 @@ DEADLINE_SECONDS = 86_400
 FETCH_CONTAINER = "fetch"
 RUN_CONTAINER = "run"
 DIGEST = re.compile(r"[a-f0-9]{64}")
-CODE_RUN = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+CODE_RUN = re.compile(CODE_RUN_PATTERN)
 
 
 def publisher_spec(request: Any, run_id: str, attempt: int, code: Mapping[str, str], need: Resources, now: float) -> JobSpec:

@@ -25,7 +25,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = CONTRACTS / "examples"
-RUN = "20261011T090000Z-0a1b2c3d"
+RUN = "silver_0a1b2c3d"
 # Each launch specification change the schema must refuse, with the template it mutates.
 SPEC_MUTATIONS: list[tuple[str, str, Callable[[dict[str, Any]], None]]] = [
     ("image by tag", "image", lambda spec: spec.update(image="hai-analytics:latest")),

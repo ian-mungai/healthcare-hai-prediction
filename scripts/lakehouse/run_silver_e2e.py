@@ -669,7 +669,7 @@ def earlier_evidence(reports: Path = REPORTS) -> dict[str, list[str]]:
 
 def evidence_cases(run: Run) -> dict[str, Any]:
     """Repeatable cases for the evidence rules: a stem per run that no other run's kit cleanup matches, and a missing or changed file is reported [857]."""
-    first, second = "20261012T000000Z-aaaaaaaa", "20261012T000001Z-bbbbbbbb"
+    first, second = "silver_aaaaaaaa", "silver_bbbbbbbb"
     stems_differ = kit_stem(first) != kit_stem(second)
     cross_match = fnmatch.fnmatchcase(f"{kit_stem(second)}--0123abcd", f"{kit_stem(first)}--*")
     self_match = fnmatch.fnmatchcase(f"{kit_stem(first)}--0123abcd", f"{kit_stem(first)}--*")

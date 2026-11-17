@@ -37,8 +37,8 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 BASE_REVISION = "75f348719b03054e62d887390b4c438ff62ef5ff"
 RUN_SECONDS = 120
-RUN = "20261022T120000Z-0a1b2c3d"
-GOLD_RUN = "20261021T110000Z-1a2b3c4d"
+RUN = "features_0a1b2c3d"
+GOLD_RUN = "gold_1a2b3c4d"
 FEATURES_DAG = "features_base_dag"
 BASE_DAG = FEATURES_DAG
 # The feature store DAG and the step DAG of the single features run are gone.
@@ -651,7 +651,7 @@ def case_launcher_gold(fixture: Fixture, scratch: Path) -> Checks:
     checks["silver_pin_job_refused"] = bool(
         launcher_error(lambda: server.m_pipeline_accept_gold_pin(ctx_of(state, "pipeline_accept_gold_pin", {"attempt_id": "at-pin-silver"})))
     )
-    producer(state, fixture, "at-pin-other", "pipeline_spark", {"job": "pin_gold", "source_run": "20261020T100000Z-00000000"}, {"sha256": digest})
+    producer(state, fixture, "at-pin-other", "pipeline_spark", {"job": "pin_gold", "source_run": "features_00000000"}, {"sha256": digest})
     checks["other_selection_refused"] = bool(
         launcher_error(lambda: server.m_pipeline_accept_gold_pin(ctx_of(state, "pipeline_accept_gold_pin", {"attempt_id": "at-pin-other"})))
     )
@@ -1218,9 +1218,9 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     checks["features_params"] = all(
         text in features_dag
         for text in (
-            '"run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
+            '"run_id": Param(type="string", pattern=f"^{BASE_RUN}$")',
             '"mode": Param("real", type="string", enum=["real"])',
-            '"gold_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
+            '"gold_snapshot_run": Param(type="string", pattern=f"^{run_id_pattern(\'gold\')}$")',
         )
     )
     runtime = (ROOT / "orchestration/dag_runtime.py").read_text()

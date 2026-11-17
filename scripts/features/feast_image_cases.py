@@ -32,8 +32,8 @@ from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker
 from scripts.process import run_command
 
-RUN_A = "20261022T120000Z-0a1b2c3d"
-RUN_B = "20261022T130000Z-1a2b3c4d"
+RUN_A = "features_0a1b2c3d"
+RUN_B = "features_1a2b3c4d"
 # Settings the container reads from its environment; the cases set them on the process, so the names go through constants.
 CATALOG_URI_VARIABLE = "FEAST_SQL_CATALOG_URI"
 WAREHOUSE_VARIABLE = "FEAST_SQL_WAREHOUSE"

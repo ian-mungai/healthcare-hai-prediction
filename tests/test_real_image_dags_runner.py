@@ -290,15 +290,15 @@ def test_the_drift_launch_is_checked_for_its_exact_model_and_run_inputs() -> Non
     check(drift.sent is not None and drift.after is not None, "the drift step checks neither its container inputs nor its code bindings")
     environment = {
         "baseline": {"FEATURE_SET": "m1"},
-        "current": {"INPUT_RUN_ID": "20261104T100000Z-feed5eed"},
-        "fetch": {"CODE_RUN_ID": "20261030T090000Z-b0b0b0b0"},
+        "current": {"INPUT_RUN_ID": "features_ols_feed5eed"},
+        "fetch": {"CODE_RUN_ID": "bronze_b0b0b0b0"},
     }
-    right = real_image_dags.drift_inputs_are("m1", "20261104T100000Z-feed5eed", "20261030T090000Z-b0b0b0b0")
+    right = real_image_dags.drift_inputs_are("m1", "features_ols_feed5eed", "bronze_b0b0b0b0")
     right(environment)
     for container, name, value in (
         ("baseline", "FEATURE_SET", "m2"),
         ("current", "INPUT_RUN_ID", "latest"),
-        ("current", "INPUT_RUN_ID", "20261104T110000Z-0f0f0f0f"),
+        ("current", "INPUT_RUN_ID", "features_ols_0f0f0f0f"),
         ("fetch", "CODE_RUN_ID", "20261104T100000Z-feed5eed"),
     ):
         changed = {**environment, container: {**environment[container], name: value}}
@@ -372,8 +372,8 @@ def test_each_wrong_bucket_plant_hits_only_the_store_its_scenario_names() -> Non
     (records,) = catalog["planted_wrong_bucket_for_the_launch_records_fails_closed"].steps
     (binding,) = catalog["planted_wrong_bucket_for_the_code_run_binding_fails_closed"].steps
     claim, bound = (
-        {"Key": f"{cases.PREFIX}/20261110T120000Z-ab12cd34/publisher/claim.json"},
-        {"Key": "lakehouse/run_stage/20261110T120000Z-ab12cd34/inputs/code_run.json"},
+        {"Key": f"{cases.PREFIX}/ingestion_ab12cd34/publisher/claim.json"},
+        {"Key": "lakehouse/run_stage/ingestion_ab12cd34/inputs/code_run.json"},
     )
     record_plant, binding_plant = records.plant, binding.plant
     if record_plant is None or binding_plant is None:

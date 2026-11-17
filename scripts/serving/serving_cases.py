@@ -40,10 +40,10 @@ ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
 KEY_A = "sk-test-0123456789-do-not-log"
 KEY_B = "sk-test-other-key"
-RUN_1 = "20261030T100000Z-aaaaaaa1"
-RUN_2 = "20261030T110000Z-aaaaaaa2"
-RUN_3 = "20261030T120000Z-aaaaaaa3"
-RESEARCH = "20261029T000000Z-bbbbbbb1"
+RUN_1 = "serving_aaaaaaa1"
+RUN_2 = "serving_aaaaaaa2"
+RUN_3 = "serving_aaaaaaa3"
+RESEARCH = "research_bbbbbbb1"
 PRODUCTION, CANDIDATE = "3", "4"
 # The wall clock the serving worlds start at (epoch seconds) and the canary lifetime the deploys of these cases ask for.
 NOW = 1_800_000_000
@@ -1080,7 +1080,7 @@ def case_deploy_expiry(c: Checker) -> None:
         run(folder=Path(folder))
         c.check(
             "another research canary is refused a lifetime of the candidate while the deployment of the first holds one that it cannot be shown to own",
-            rejected(lambda: run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="20261031T000000Z-bbbbbbb2")),
+            rejected(lambda: run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="research_bbbbbbb2")),
         )
         deploy.run(
             registry=Registry(),
@@ -1091,7 +1091,7 @@ def case_deploy_expiry(c: Checker) -> None:
             mode="stable",
             deployment_id=RUN_3,
         )
-        other = run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="20261031T000000Z-bbbbbbb2").deployment
+        other = run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="research_bbbbbbb2").deployment
         c.check(
             "another research canary has a lifetime of its own once the first is replaced",
             other.written_at == NOW + 5 * 3600 and other.expires_at == NOW + 5 * 3600 + TTL_HOURS * 3600 and other.sequence == 3,
@@ -1197,7 +1197,7 @@ def case_manual_run_cannot_renew(c: Checker) -> None:
     c.check("the second run is also served only before the first expiry", CANDIDATE in traffic_at(client, first_expiry - 1))
     c.check("no run moved the production alias", registry.alias_writes == 0)
     before = dict(client.objects)
-    passed, code, _ = submit(rig, client, registry, "20261030T130000Z-aaaaaaa4", first_expiry + 3600)
+    passed, code, _ = submit(rig, client, registry, "serving_aaaaaaa4", first_expiry + 3600)
     c.check("a manual run under another run id after the expiry opens no new window and writes nothing", code == 2 and client.objects == before)
     c.check("the expired canary still serves the stable version alone", traffic_at(client, first_expiry + 7200) == {PRODUCTION: 200})
 
@@ -1349,7 +1349,7 @@ def case_canary_upgrade_state(c: Checker) -> None:
 
 def case_canary_retry_identity(c: Checker) -> None:
     """A deploy-job retry names its research canary: the saved deployment must belong to that canary's binding and keep its times, or the retry is refused."""
-    other = "20261031T000000Z-bbbbbbb2"
+    other = "research_bbbbbbb2"
     request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary", "canary_ttl_hours": TTL_HOURS, "research_run": RESEARCH}
     stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable", "canary_ttl_hours": None, "research_run": None}
     client, registry = S3Client(), Registry()
@@ -1591,7 +1591,7 @@ def case_chain_rollout(c: Checker) -> None:
             and seen["live"] == promoted
             and seen["expired"] == promoted,
         )
-    other_research = training_contract.research_run_id("20261108T000000Z-b45e0002")
+    other_research = training_contract.research_run_id("features_b45e0002")
     newer = {**chain.CHALLENGER, "version": "5"}
     with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
         first = run_chain(w, recorder_for(chain.RESEARCH, chain.CHALLENGER), release_fails=True)

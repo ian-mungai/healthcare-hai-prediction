@@ -22,7 +22,9 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-RUN_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+
+RUN_ID = re.compile(rf"^{RUN_ID_PATTERN}$")
 # The transitions of one submission, as the contract E2E checks them (scripts/orchestration/run_contracts_e2e.py).
 NEXT_EVENTS: dict[str | None, set[str]] = {
     None: {"intent"},

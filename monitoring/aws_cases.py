@@ -257,7 +257,7 @@ def publish_refuses_a_record_of_another_run(folder: Path) -> Problems:
     work = prepared_workspace(folder, current_year=2021)
     run_check(work)
     path = work / "drift" / RUN / "records" / "drift_HAI_1.json"
-    path.write_text(path.read_text().replace(RUN, "20261029T120000Z-ffffffff"))
+    path.write_text(path.read_text().replace(RUN, "drift_elastic_net_ffffffff"))
     try:
         aws_run().publish_phase(s3, "bucket-for-tests", work, RUN)
     except CheckError as error:
@@ -388,7 +388,7 @@ def current_cli_reads_the_model_run_it_is_given(folder: Path) -> Problems:
     aws_run().baseline_phase(baseline.store, work, RUN, project=baseline.work.project)
     (folder / "feature").mkdir()
     current = reader_cases.Current(folder / "feature")
-    reader = NewestPublicationReader(current.reader, "20261111T120000Z-22222222")
+    reader = NewestPublicationReader(current.reader, "drift_elastic_net_22222222")
     current_window = importlib.import_module("monitoring.current_window")
     opened: list[str] = []
     built: list[str] = []

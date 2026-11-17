@@ -324,7 +324,7 @@ def case_the_layers_choose_the_profile_by_phase(root: Path) -> None:
 
 def started_job(folder: Path, seconds_ago: int) -> layer_run.Job:
     (folder / "task_started").write_text(f"{layer_run.time.time() - seconds_ago:.0f}\n")
-    return layer_run.Job("features", "20261109T000000Z-0a1b2c3d", "real", folder / "code")
+    return layer_run.Job("features", "features_0a1b2c3d", "real", folder / "code")
 
 
 def case_the_layer_passes_the_phase_deadline_to_the_build(root: Path) -> None:

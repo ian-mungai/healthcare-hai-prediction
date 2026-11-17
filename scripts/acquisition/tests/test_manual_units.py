@@ -41,7 +41,7 @@ OTHER_URL = "https://data.example.gov/files/book.xlsx"
 ROBOTS = {"www.huduser.gov": "https://www.huduser.gov/robots.txt", "wonder.cdc.gov": "https://wonder.cdc.gov/robots.txt"}
 START = datetime(2026, 11, 13, 2, 0, 0, tzinfo=UTC)
 COLLECTION = "example_publisher/example_collection"
-RUN_1 = "20261113T020000Z-aaaaaaaa"
+RUN_1 = "ingestion_aaaaaaaa"
 HUD_NAMES = ["ZIP-COUNTY_032010.xlsx", "ZIP-COUNTY_062010.xlsx", "ZIP-COUNTY_092010.xlsx"]
 
 
@@ -469,7 +469,7 @@ def test_a_wonder_export_that_passes_the_contract_is_captured_and_a_form_page_is
     check(only_stale(world, unit)["reason"] == "not_expected_format", "the query form page is not an export")
     world.clock.advance(hours=21)
     world.site.serve(WONDER_URL, Reply(200, wonder_export_text("D158", 2024, 2024)))
-    world.run([unit], "20261113T230000Z-bbbbbbbb")
+    world.run([unit], "ingestion_bbbbbbbb")
     check(len(world.sink.captured) == 1 and sorted(world.sink.captured[0][1]) == sorted([name, "county_year.csv"]), "the export was captured")
 
 
@@ -666,13 +666,13 @@ def test_a_second_run_of_the_same_failing_unit_adds_one_stale_record_and_no_data
     before = list(world.bucket.names())
     world.clock.advance(hours=2)
     sent = len(world.site.seen)
-    repeat = world.run([unit], "20261113T040000Z-bbbbbbbb")
+    repeat = world.run([unit], "ingestion_bbbbbbbb")
     check(len(world.site.seen) == sent and repeat.counts["skipped_recent_stale"] == 1, "a repeat run within 20 hours sends nothing")
     check(list(world.bucket.names()) == before, "and creates nothing")
     world.clock.advance(hours=19)
-    world.run([unit], "20261113T230000Z-cccccccc")
+    world.run([unit], "ingestion_cccccccc")
     added = sorted(set(world.bucket.names()) - set(before))
-    check(len(added) == 1 and "/ingestion_stale/" in added[0] and added[0].endswith("20261113T230000Z-cccccccc.json"), f"one new stale record: {added}")
+    check(len(added) == 1 and "/ingestion_stale/" in added[0] and added[0].endswith("ingestion_cccccccc.json"), f"one new stale record: {added}")
     check(data_objects(world) == [], "no data object")
 
 
@@ -939,7 +939,7 @@ def test_a_repeat_run_inside_the_retry_interval_keeps_the_stale_and_missing_list
     first = world.run([present, absent])
     before, sent = list(world.bucket.names()), len(world.site.seen)
     world.clock.advance(hours=2)
-    repeat = world.run([present, absent], "20261113T040000Z-bbbbbbbb")
+    repeat = world.run([present, absent], "ingestion_bbbbbbbb")
     check(len(world.site.seen) == sent and list(world.bucket.names()) == before, "the repeat sent nothing and wrote nothing")
     check(repeat.counts["skipped_recent_stale"] == 2 and repeat.counts["attempted"] == 0, f"counts {repeat.counts}")
     check(repeat.stale_units == first.stale_units != [] and repeat.missing_units == first.missing_units != [], f"lists {repeat.run_record()}")
@@ -1025,8 +1025,8 @@ def test_a_stored_record_of_another_identity_is_a_visible_failure_whether_it_is_
 
 def test_a_recent_stale_record_of_another_run_and_build_still_skips_the_unit(world: World) -> None:
     [unit] = hud_units(world, 1)
-    earlier = seed_stale_record(world, unit, run_id="20261112T210000Z-dddddddd", attempted_at_utc=RECENT_ATTEMPT, code_sha256="d" * 64, bundle_sha256="e" * 64)
-    report = world.run([unit], "20261113T030000Z-bbbbbbbb")
+    earlier = seed_stale_record(world, unit, run_id="ingestion_dddddddd", attempted_at_utc=RECENT_ATTEMPT, code_sha256="d" * 64, bundle_sha256="e" * 64)
+    report = world.run([unit], "ingestion_bbbbbbbb")
     check(report.counts["skipped_recent_stale"] == 1 and report.http_requests == 0 and world.bucket.writes() == [], f"counts {report.counts}")
     check(report.stale_units == [manual_units.summary(earlier)] and report.outcomes[0].record == earlier, f"lists {report.run_record()}")
 
@@ -1159,7 +1159,7 @@ def test_a_reversion_record_under_its_run_key_is_the_newest_completion_and_names
     [unit] = hud_units(world, 1)
     _, older = completion_for(world, unit, "a", OLDER)
     completion_for(world, unit, "b", "2026-10-10T00:00:00Z")
-    run = "20261012T000000Z-cccccccc"
+    run = "ingestion_cccccccc"
     again = completion_record.reverted(older, run_id=run, code_sha256="c" * 64, bundle_sha256="b" * 64, retrieved_at_utc=NEWER)
     world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), again["payload_sha256"], run), completion_record.encode(again))
     refused_run(world, unit)
@@ -1308,7 +1308,7 @@ def test_a_unit_the_run_loop_captured_and_that_later_goes_stale_names_that_captu
     [stored] = world.bucket.names(f"{world.root}ingestion_units/")
     captured_at = json.loads(world.bucket.versions[stored][-1][1])["retrieved_at_utc"]
     world.clock.advance(hours=21)
-    refused_run(world, unit, "20261114T000000Z-bbbbbbbb")
+    refused_run(world, unit, "ingestion_bbbbbbbb")
     record = only_stale(world, unit)
     check([item["stored_file_name"] for item in record["last_capture"]] == sorted(OBJECT_NAMES), f"{record['last_capture']}")
     check(

@@ -77,12 +77,13 @@ from unittest import mock
 import jinja2
 from botocore.exceptions import ClientError
 
+from orchestration import training_contract
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import record_key, research_run_id
+from orchestration.training_contract import compose_run_id, record_key, research_run_id, run_id_parts
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
@@ -103,13 +104,41 @@ from scripts.orchestration.ecs_run_fixtures import (
     table_pair,
 )
 
+
+def derived_run_id(parent_run: str, layer: str) -> str:
+    """The run ID of ``layer`` in the pipeline run of ``parent_run``: the layer's name and the parent's hex and attempt."""
+    parts = run_id_parts(parent_run)
+    return compose_run_id(layer, parts.hex, parts.attempt)
+
+
+CONTRACT_NAMES = {
+    name: getattr(training_contract, name) for name in ("BASE_RUN", "SET_RUN", "DRIFT_RUN", "RESEARCH_RUN", "RUN_ID", "run_id_pattern", "model_run_pattern")
+}
+
+
+def static_value(node: ast.expr) -> Any:
+    """The value of a DAG form's constant expression: a literal, or an f-string over the contract's run ID patterns and the DAG's own constants."""
+    if isinstance(node, ast.JoinedStr):
+        return "".join(str(static_value(part.value)) if isinstance(part, ast.FormattedValue) else str(part.value) for part in node.values)
+    if isinstance(node, ast.Name):
+        return {**CONTRACT_NAMES, "MODEL": "m1", "RETRY_DAYS": training_contract.RETRY_DAYS}[node.id]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in CONTRACT_NAMES:
+        return CONTRACT_NAMES[node.func.id](
+            *(static_value(item) for item in node.args), **{item.arg: static_value(item.value) for item in node.keywords if item.arg}
+        )
+    return ast.literal_eval(node)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 TRAIN_LAUNCH = {key: TRAIN_PARAMS[key] for key in ("features_run", "population", "hai_types", "trigger", "mlflow")}
 BUCKET = "example-private-bucket"
 PREFIX = launch_record_prefix()
 SCRATCH_FREE = 400 * 2**30
-FEATURES_RUN = "20261104T100000Z-feed5eed"
-OTHER_RUN = "20261104T110000Z-0f0f0f0f"
+FEATURES_RUN = "features_feed5eed"
+SET_FEATURES_RUN = "features_ols_feed5eed"
+OTHER_RUN = "silver_0f0f0f0f"
+OTHER_BASE = "features_0f0f0f0f"
+OTHER_SET_RUN = "features_elastic_net_0f0f0f0f"
 RUN_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
 DAG_ID = re.compile(r'dag_id="([a-z0-9_]+)"')
@@ -118,8 +147,8 @@ HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
 # The publisher host definition as infra/jobs/publisher.tf plans it (publisher_host): its containers, the label of its init container and its task memory.
 # A Terraform test (tests/publisher.tftest.hcl) keeps this file equal to that plan.
 PUBLISHER_HOST_DEFINITION = ROOT / "infra/jobs/tests/publisher_host_definition.json"
-PUBLISHER_RUN = "20261110T120000Z-ab12cd34"
-PUBLISHER_TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+PUBLISHER_RUN = "ingestion_ab12cd34"
+PUBLISHER_TEST_ROOT = "ingestion_test/ingestion_0a1b2c3d/"
 PUBLISHER_PARAMS = {"run_id": PUBLISHER_RUN, "mode": "real", "run_kind": "bootstrap", "capture_root": "raw/"}
 LAYER_JOBS = frozenset({"silver", "gold", "features"})
 POLARIS = "http://10.0.0.5:8181/api/catalog"
@@ -247,7 +276,9 @@ class Rig:
             read_object=steps.object_reader(self.stage, BUCKET),
         )
         self.reports: list[str] = []
-        self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"]))
+        self.stage_runs(
+            BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, SET_FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"])
+        )
 
     def read_host_cap(self) -> str | None:
         """The stand-in of the host job cap reader: the value the services stack renders into the environment."""
@@ -570,7 +601,7 @@ def chain_runs_without_a_signed_record() -> None:
         require(current.step("pin_bronze") == "succeeded", "a chain step did not run without a signed record")
     require(rig.tasks_started() == 1, "the chain step did not launch its job")
     rig = Rig()
-    silver = preflight.derived_run_id(BRONZE_RUN, "silver")
+    silver = derived_run_id(BRONZE_RUN, "silver")
     with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
         require(current.step("chain_gate") == "succeeded", "the chain gate did not run without a signed record")
     require(rig.preflight.code_runs.stored(silver) == BRONZE_RUN, "the chain gate did not bind the silver run to the bronze run's code")
@@ -651,7 +682,7 @@ def local_mlflow_is_refused_visibly() -> None:
         require('"mlflow": "aws"' in (ROOT / "dags" / f"{dag_id}.py").read_text(), f"{dag_id} starts its drift check with another MLflow lane than aws")
 
 
-FRESH_SILVER_RUN = "20261104T140000Z-f2e5f2e5"
+FRESH_SILVER_RUN = "silver_f2e5f2e5"
 
 
 def unfinished_silver_launch(rig: Rig) -> str:
@@ -721,7 +752,7 @@ def bronze_request_is_checked_and_bound() -> None:
         require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
 
 
-SERVE_BASE = "20261109T000000Z-b45e0001"
+SERVE_BASE = "features_b45e0001"
 SERVE_RESEARCH = research_run_id(SERVE_BASE)
 SERVE_FORM = {"run_id": SERVE_RUN, "mode": "real", "hai_type": "HAI_1", "deploy_mode": "stable", "research_run": "latest"}
 SERVE_CANARY = {**SERVE_FORM, "deploy_mode": "canary", "research_run": SERVE_RESEARCH}
@@ -759,7 +790,7 @@ def serving_request_is_closed_and_derived() -> None:
     with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "research_run": "latest"}) as current:
         error = refuses(LaunchRefused, lambda: current.step("serve_deploy"))
         require("names none" in str(error), f"a canary without a research run: {error}")
-    stable_run = "20261030T120000Z-5e5e5e5f"
+    stable_run = "serving_5e5e5e5f"
     rig.stage_runs(stable_run)
     with world(rig, "serving_deploy_dag", {**SERVE_FORM, "run_id": stable_run}) as current:
         require(current.step("serve_deploy") == "succeeded", "a stable deploy did not run")
@@ -772,7 +803,7 @@ def serving_request_is_closed_and_derived() -> None:
     for extra in ({"candidate_version": "9"}, {"percent": 40}, {"candidate_version": "9", "percent": 40}, {"deploy_mode": "rollback"}):
         training = {"hai_type": "HAI_1", "deploy_mode": "canary", **extra}
         request = SubmissionRequest(
-            "serve_deploy", "20261030T120000Z-5e5e5e60", "real", 1, "serving_deploy_dag", "serve_deploy", "manual__test", SERVE_RESEARCH, training=training
+            "serve_deploy", "serving_5e5e5e60", "real", 1, "serving_deploy_dag", "serve_deploy", "manual__test", SERVE_RESEARCH, training=training
         )
         rig.stage_runs(request.run_id)
         refuses(LaunchRefused, partial(rig.preflight.prepare, request))
@@ -797,7 +828,7 @@ def code_digest_is_checked() -> None:
 
 def code_run_is_bound_once() -> None:
     rig = Rig()
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     params = {"run_id": BRONZE_RUN, "mode": "real"}
     with world(rig, "bronze_chain_dag", params) as current:
@@ -808,7 +839,7 @@ def code_run_is_bound_once() -> None:
     with world(rig, "silver_transform_dag", {"run_id": silver, "mode": "real"}) as current:
         current.step("pin_bronze")
         require(rig.environment()["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the layer run fetches its own code, not its bronze run's")
-    other = layers("20261031T090000Z-b1b1b1b1", "silver")
+    other = layers("silver_b1b1b1b1", "silver")
     require(other != silver, "two bronze runs share a layer run")
     with world(rig, "bronze_chain_dag", params) as current:
         rig.stage.objects[RUN_KEY.format(run=silver, name="code_run.json")] = json.dumps({"code_run": "20261031T090000Z-b1b1b1b1"}).encode()
@@ -937,7 +968,7 @@ def malformed_capacity_refuses() -> None:
     for dag_id, params, template in (
         ("silver_transform_dag", SILVER, "pin_bronze"),
         ("gold_transform_dag", GOLD, "pin_silver"),
-        ("drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws", "model": "m1", "features_run": FEATURES_RUN}, "drift_run"),
+        ("drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws", "model": "m1", "features_run": SET_FEATURES_RUN}, "drift_run"),
     ):
         rig = Rig(capacity="")
         with world(rig, dag_id, params) as current:
@@ -1415,7 +1446,7 @@ def unavailable_is_bounded() -> None:
 def five_dags_run_end_to_end() -> None:
     """The chain's three layers, one model's features DAG, its drift check and its training run, each launched once and each run bound to the bronze code."""
     rig = Rig()
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     features = layers(gold, "features")
@@ -1465,15 +1496,15 @@ def form_mode_defaults() -> dict[str, Any]:
             if isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values, strict=True):
                     if isinstance(key, ast.Constant) and key.value == "mode" and isinstance(value, ast.Call) and value.args:
-                        found[path.stem] = ast.literal_eval(value.args[0])
+                        found[path.stem] = static_value(value.args[0])
     return found
 
 
 # Values of every JSON type but string, for a parameter the form declares as a string.
 NON_STRINGS: tuple[Any, ...] = (None, 20261104, 1.5, True, [GOLD_RUN], {"run": GOLD_RUN})
 PRODUCER_RUNS = (
-    ("gold_transform_dag.py", "silver_snapshot_run"),
-    ("features_base_dag.py", "gold_snapshot_run"),
+    ("gold_transform_dag.py", "silver_snapshot_run", "gold_0f0f0f0f", SILVER_RUN),
+    ("features_base_dag.py", "gold_snapshot_run", "features_0f0f0f0f", GOLD_RUN),
 )
 
 
@@ -1485,17 +1516,17 @@ def dags_run_with_their_form_defaults() -> None:
     accepted = {"model_promotion_dag": "promote"}  # the promotion form's mode is the operation; the step maps it to real
     wrong = {dag: mode for dag, mode in defaults.items() if mode != accepted.get(dag, "real")}
     require(len(defaults) >= 10 and not wrong, f"DAG forms default to a mode the direct path refuses: {wrong}")
-    for dag_file, name in PRODUCER_RUNS:
+    for dag_file, name, _, sample in PRODUCER_RUNS:
         declared = form_parameter(dag_file, name)
         arguments, settings = declared or ([], {})
         pattern = str(settings.get("pattern", ""))
         require(declared is not None and not arguments, f"{dag_file} does not require {name}: {declared}")
         require(
-            bool(pattern) and re.search(pattern, GOLD_RUN) is not None and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + GOLD_RUN)),
+            bool(pattern) and re.search(pattern, sample) is not None and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + sample)),
             f"{dag_file}'s {name} pattern does not accept exactly a run ID: {pattern}",
         )
     rig = Rig()
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     features = layers(gold, "features")
@@ -1517,17 +1548,17 @@ def dags_run_with_their_form_defaults() -> None:
             require(bool(states) and not failed, f"{dag_id} with only its required inputs did not finish: {failed}")
         require(rig.tasks_started() == before + 1, f"{dag_id} started {rig.tasks_started() - before} tasks, not one")
         require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{dag_id}: {job} has no success record")
-    for dag_file, name in PRODUCER_RUNS:
+    for dag_file, name, own_run, _ in PRODUCER_RUNS:
         dag_id = dag_file.removesuffix(".py")
         # Omitted, latest, and values of another JSON type than the declared string: each is refused at the form.
         triggers: list[dict[str, Any]] = [
-            {"run_id": OTHER_RUN},
-            {"run_id": OTHER_RUN, name: "latest"},
-            *({"run_id": OTHER_RUN, name: value} for value in NON_STRINGS),
+            {"run_id": own_run},
+            {"run_id": own_run, name: "latest"},
+            *({"run_id": own_run, name: value} for value in NON_STRINGS),
         ]
         for params in triggers:
             rig = Rig()
-            rig.stage_runs(OTHER_RUN)
+            rig.stage_runs(own_run)
             with world(rig, dag_id, params) as current:
                 error = refuses(FormRefused, partial(current.run_dag, dag_file))
                 require(name in str(error) and not current.states, f"{dag_id} with {params} was not refused at the form: {error}")
@@ -1609,7 +1640,7 @@ def collapsed_job_dags_are_one_chain() -> None:
     require("no successful launch" in str(error) and not rig.ecs.calls, f"evidence without a launch was not refused: {error}")
 
 
-BASE_DAG_RUN = "20261104T120000Z-5a5a5a5a"
+BASE_DAG_RUN = "features_5a5a5a5a"
 GOLD_RUN_PARAMETER = "gold_snapshot_run"
 
 
@@ -1630,7 +1661,7 @@ def form_parameter(dag_file: str, name: str) -> tuple[list[Any], dict[str, Any]]
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values, strict=True):
                 if isinstance(key, ast.Constant) and key.value == name and isinstance(value, ast.Call):
-                    return [ast.literal_eval(item) for item in value.args], {item.arg: ast.literal_eval(item.value) for item in value.keywords if item.arg}
+                    return [static_value(item) for item in value.args], {item.arg: static_value(item.value) for item in value.keywords if item.arg}
     return None
 
 
@@ -1650,7 +1681,7 @@ def base_dag_takes_its_gold_run() -> None:
     )
     rig = Rig()
     rig.stage_runs(BASE_DAG_RUN)
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
@@ -1673,6 +1704,10 @@ def base_dag_takes_its_gold_run() -> None:
         error = refuses(FormRefused, lambda: current.run_dag("features_base_dag.py"))
         require(GOLD_RUN_PARAMETER in str(error) and not current.states, f"features_base_dag without a gold run was not refused at the form: {error}")
     with world(rig, "features_base_dag", {"run_id": BASE_DAG_RUN, GOLD_RUN_PARAMETER: BASE_DAG_RUN}) as current:
+        error = refuses(FormRefused, lambda: current.run_dag("features_base_dag.py"))
+        require(GOLD_RUN_PARAMETER in str(error) and not current.states, f"a features run as the gold run was not refused at the form: {error}")
+    rig.stage_runs("gold_5a5a5a5a")
+    with world(rig, "features_base_dag", {"run_id": BASE_DAG_RUN, GOLD_RUN_PARAMETER: "gold_5a5a5a5a"}) as current:
         states = current.run_dag("features_base_dag.py")
         refused = [str(result) for result in current.results.values() if "needs the gold job" in str(result)]
         require(states.get("gate") == "failed" and bool(refused), f"a gold run that never passed was not refused by the preflight: {current.results}")
@@ -1685,7 +1720,7 @@ def base_dag_takes_its_gold_run() -> None:
 def features_job_names_its_feature_set() -> None:
     """The features job's containers read FEATURE_SET, and the launch library names it from the DAG that starts the job: the base DAG launches base. A DAG
     that names no feature set cannot launch the features job, so a job never runs the single path by default."""
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     gold = layers(layers(BRONZE_RUN, "silver"), "gold")
     rig = Rig()
     rig.stage_runs(BASE_DAG_RUN)
@@ -1715,9 +1750,9 @@ def features_job_names_its_feature_set() -> None:
         "release" not in sent and sent["feast"]["RELEASE_MODEL"] == "" and sent["feast"]["FEATURES_RUN"] == "",
         f"a features build was told to release a model set's online load: {sent}",
     )
-    rig.stage_runs(OTHER_RUN)
+    rig.stage_runs("gold_0f0f0f0f")
     started = rig.tasks_started()
-    with world(rig, "gold_transform_dag", {"run_id": OTHER_RUN, "mode": "real", GOLD_RUN_PARAMETER: gold}) as current:
+    with world(rig, "gold_transform_dag", {"run_id": "gold_0f0f0f0f", "mode": "real", GOLD_RUN_PARAMETER: gold}) as current:
         error = refuses(LaunchRefused, lambda: current.step("pin_gold"))
     require("feature set" in str(error) and rig.tasks_started() == started, f"a DAG that names no feature set launched the features job: {error}")
 
@@ -1730,7 +1765,7 @@ FEATURE_CONTAINERS = {"pin", "build", "validate", "export", "publish", "upload",
 def base_run_passed(rig: Rig, base_fails: bool = False) -> tuple[str, str]:
     """Run the chain gate, silver, gold and the features base DAG over the rig and return the gold run and the base run that its features job published.
     With ``base_fails`` the base DAG's job fails instead, and the base DAG is left to the caller to run again for its states."""
-    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     base = layers(gold, "features")
@@ -1815,7 +1850,7 @@ def model_dag_takes_its_base_run() -> None:
             f"{dag_id}: the form's pattern does not accept exactly a run ID: {pattern}",
         )
         rig = Rig()
-        with world(rig, dag_id, {"run_id": OTHER_RUN, "mode": "real"}) as current:
+        with world(rig, dag_id, {"run_id": model_run(OTHER_BASE, MODEL_DAGS[dag_id]), "mode": "real"}) as current:
             error = refuses(FormRefused, partial(current.run_dag, f"{dag_id}.py"))
             require(BASE_RUN_PARAMETER in str(error) and not current.states, f"{dag_id} without a base run was not refused at the form: {error}")
         require(not rig.ecs.calls and not rig.records.calls, f"{dag_id} reached ECS or the launch records without a base run")
@@ -1827,9 +1862,12 @@ def model_dag_needs_the_base_job_to_pass() -> None:
     rig = Rig()
     gold, base = base_run_passed(rig)
     started = rig.tasks_started()
-    refused_runs = {"a gold run": gold, "a run that never ran": OTHER_RUN}
+    run = model_run(base, "m1")
+    with world(rig, "features_m1_dag", {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: gold}) as current:
+        error = refuses(FormRefused, lambda: current.run_dag("features_m1_dag.py"))
+        require(BASE_RUN_PARAMETER in str(error) and not current.states, f"a gold run as the base run was not refused at the form: {error}")
+    refused_runs = {"a base run that never ran": OTHER_BASE}
     for label, producer in refused_runs.items():
-        run = model_run(base, "m1")
         with world(rig, "features_m1_dag", {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: producer}) as current:
             states = current.run_dag("features_m1_dag.py")
             refused = [str(result) for result in current.results.values() if "needs the features job" in str(result)]
@@ -1856,7 +1894,7 @@ def model_run_code_is_bound() -> None:
     unbound = Rig()
     _, other_base = base_run_passed(unbound)
     started = unbound.tasks_started()
-    with world(unbound, "features_m2_dag", {"run_id": OTHER_RUN, "mode": "real", BASE_RUN_PARAMETER: other_base}) as current:
+    with world(unbound, "features_m2_dag", {"run_id": model_run(OTHER_BASE, "m2"), "mode": "real", BASE_RUN_PARAMETER: other_base}) as current:
         states = current.run_dag("features_m2_dag.py")
         require(states.get("preflight") == "failed" and states.get("gate") == "failed", f"an unbound model run was not refused: {states} {current.results}")
     require(unbound.tasks_started() == started, "an unbound model run started a task")
@@ -1894,7 +1932,7 @@ def base_dag_triggers_six_model_dags() -> None:
                 f"trigger_{model} sends {sent['conf']}",
             )
             require(
-                sent["trigger_run_id"].endswith(model_run(base, model)) and model in sent["trigger_run_id"],
+                sent["trigger_run_id"] == model_run(base, model) == sent["conf"]["run_id"],
                 f"trigger_{model}'s run id is {sent['trigger_run_id']}",
             )
             require(states[f"trigger_{model}"] == "success", f"trigger_{model} did not run after a passed base run: {states}")
@@ -1943,7 +1981,7 @@ def model_dags_share_the_host_pool() -> None:
     _, base = base_run_passed(rig)
     for dag_id in MODEL_DAGS:
         with (
-            world(rig, dag_id, {"run_id": OTHER_RUN, "mode": "real", BASE_RUN_PARAMETER: base}) as current,
+            world(rig, dag_id, {"run_id": model_run(base, MODEL_DAGS[dag_id]), "mode": "real", BASE_RUN_PARAMETER: base}) as current,
             mock.patch.dict("os.environ", {"HAI_LAUNCH_POOL": "host_jobs"}),
         ):
             current.run_dag(f"{dag_id}.py")
@@ -2238,8 +2276,8 @@ def drift_dag_takes_its_model_and_features_run() -> None:
     require(not arguments and settings.get("type") == "string", f"the features run must be required, with no default: {declared}")
     require(
         bool(pattern)
-        and re.fullmatch(pattern.strip("^$"), FEATURES_RUN) is not None
-        and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + FEATURES_RUN)),
+        and re.fullmatch(pattern.strip("^$"), SET_FEATURES_RUN) is not None
+        and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + SET_FEATURES_RUN)),
         f"the form's pattern does not accept exactly a run ID: {pattern}",
     )
 
@@ -2266,13 +2304,13 @@ def drift_job_needs_its_model_run_to_pass() -> None:
     refusal comes before any ECS call."""
     rig = Rig()
     _, run = model_chain_passed(rig, "m2")
-    rig.stage_runs(OTHER_RUN, drift_run_of(OTHER_RUN))
+    rig.stage_runs(OTHER_SET_RUN, drift_run_of(OTHER_SET_RUN))
     started = rig.tasks_started()
     params = {"mode": "real", "mlflow": "aws", "model": "m2"}
-    with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(OTHER_RUN), "features_run": OTHER_RUN}) as current:
+    with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(OTHER_SET_RUN), "features_run": OTHER_SET_RUN}) as current:
         error = refuses(LaunchRefused, lambda: current.step("drift_run"))
     require("needs the features_m2 job" in str(error), f"a model run that never passed was not refused by the job of its set's family: {error}")
-    with world(rig, "drift_monitoring_dag", {**params, "run_id": OTHER_RUN, "features_run": run}) as current:
+    with world(rig, "drift_monitoring_dag", {**params, "run_id": "drift_elastic_net_0f0f0f0f", "features_run": run}) as current:
         error = refuses(LaunchRefused, lambda: current.step("drift_run"))
     require("derive" in str(error), f"a drift run that does not derive from its model run was not refused by name: {error}")
     with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(run), "features_run": run, "model": "m7"}) as current:
@@ -2286,12 +2324,14 @@ def drift_attempt_ids_and_form() -> None:
     raises by name. The form takes the attempt as an integer from 1 to 99 that defaults to 1."""
     contract = importlib.import_module("orchestration.training_contract")
     features = model_run(base_run_passed(Rig())[1], "m2")
-    unchanged = f"{features[:16]}-{hashlib.sha256(f'drift:{features}'.encode()).hexdigest()[:8]}"
+    unchanged = features.replace("features_", "drift_", 1)
     require(contract.model_drift_run_id(features) == unchanged == contract.model_drift_run_id(features, 1), "attempt 1 changed the drift run ID")
     later = {attempt: contract.model_drift_run_id(features, attempt) for attempt in (2, 3, 99)}
-    require(len({unchanged, *later.values()}) == 4 and all(run.startswith(features[:16]) for run in later.values()), f"the attempts share a run: {later}")
+    require(
+        len({unchanged, *later.values()}) == 4 and all(run == f"{unchanged}_{attempt}" for attempt, run in later.items()), f"the attempts share a run: {later}"
+    )
     require(contract.model_drift_run_id(features, 2) == later[2], "an attempt derives another run for every call")
-    for bad in (0, 100, -1, True, "2", None, 2.0):
+    for bad in (0, 100, -1, True, "2", 2.0):
         try:
             contract.model_drift_run_id(features, bad)
         except ValueError as error:
@@ -2412,10 +2452,9 @@ def bronze_chain_has_no_model_less_drift_layer() -> None:
     rig = Rig()
     with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
         require(current.step("chain_gate") == "succeeded", "the chain gate failed")
-    features = preflight.derived_run_id(preflight.derived_run_id(preflight.derived_run_id(BRONZE_RUN, "silver"), "gold"), "features")
-    old_drift = preflight.derived_run_id(features, "drift")
-    for run in (old_drift, contract.training_run_id(old_drift)):
-        require(RUN_KEY.format(run=run, name="code_run.json") not in rig.stage.objects, "the chain gate still binds the model-less drift layer's runs")
+    old_drift = f"drift_{BRONZE_RUN.removeprefix('bronze_')}"
+    require(RUN_KEY.format(run=old_drift, name="code_run.json") not in rig.stage.objects, "the chain gate still binds the model-less drift layer's runs")
+    require(re.fullmatch(contract.RUN_ID, old_drift) is None, "a drift run without a model is a run ID")
 
 
 def graph_rules_cover_the_model_drift_trigger() -> None:
@@ -2707,8 +2746,8 @@ def metadata_uses_the_host_containers() -> None:
     )
     require("a_container_the_definition_lacks" in str(error) and not probe.tasks, f"the fake took an override for a container its definition lacks: {error}")
     rig = Rig()
-    run = OTHER_RUN
-    features_run = "20261104T120000Z-feed0001"
+    run = "metadata_0f0f0f0f"
+    features_run = "features_feed0001"
     with world(rig, "metadata_ingest_dag", {"run_id": run, "mode": "real", "features_run": features_run}) as current:
         require(current.step("metadata_run") == "succeeded", "the metadata job did not pass")
     values = rig.environment()
@@ -2716,7 +2755,7 @@ def metadata_uses_the_host_containers() -> None:
         values == {"ingest": {"RUN_ID": run, "POLARIS_URI": POLARIS, "FEATURES_RUN": features_run}},
         f"the metadata overrides are not the host container's, with the features run of the form: {values}",
     )
-    for missing in (None, "latest", "", "20261104T120000Z-FEED0001"):
+    for missing in (None, "latest", "", "20261104T120000Z-feed0001"):
         bad = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", missing)
         error = refuses(LaunchRefused, lambda bad=bad: Rig().preflight.prepare(bad))
         require("FEATURES_RUN" in str(error) and "latest" in str(error), f"the features run {missing!r} was not refused by name: {error}")

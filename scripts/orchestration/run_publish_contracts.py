@@ -54,8 +54,8 @@ def collect(root: Path) -> dict[str, Any]:
         checks[name] = {"ok": name in declared and declared[name]["manual"], "observed": declared.get(name)}
     request_schema = json.loads((root / "data_contracts/orchestration/submission_request.schema.json").read_text())
     validator = Draft202012Validator(request_schema)
-    request = SubmissionRequest("pin_silver", "20261017T120000Z-00000001", "publish_fixture", 1, "silver_transform_dag", "pin_silver", "manual__contract")
-    chosen = dataclasses.replace(request, input_run_id="20261017T110000Z-00000002")
+    request = SubmissionRequest("pin_silver", "silver_00000001", "publish_fixture", 1, "silver_transform_dag", "pin_silver", "manual__contract")
+    chosen = dataclasses.replace(request, input_run_id="silver_00000002")
     selected = chosen.as_dict()
     accepted = not list(validator.iter_errors(selected))
     wrong_step = {**selected, "template": "gold_build"}

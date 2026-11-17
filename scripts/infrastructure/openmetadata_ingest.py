@@ -28,6 +28,8 @@ from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+
 SOURCES = ("glue", "dbt")
 ALLOWED_SOURCE_TYPES = frozenset({"glue", "dbt"})
 # The script's own setting in dbt.json: the OpenMetadata database and the Glue schema of each mirrored dbt model folder. It never reaches the workflow.
@@ -70,7 +72,7 @@ SQL_RELATION = re.compile(r'(?<![\w."])"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_
 DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, in chain order
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
 OLD_MIRROR_PREFIX = "hai_mirror_"  # the Glue databases of the mirror before the rename of Nov 17 2026 (hai_mirror_<layer>)
-DBT_RUN = re.compile(r"^(silver|gold|features)=([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")
+DBT_RUN = re.compile(rf"^(silver|gold|features)=({RUN_ID_PATTERN})$")
 MISSING_MANIFEST_EXIT = 3  # at least one dbt batch had no manifest.json and was skipped; the others were ingested
 
 

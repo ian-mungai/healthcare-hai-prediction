@@ -17,7 +17,7 @@ from scripts.acquisition.tests.test_task_keys import ACCOUNT, PLANTED, ROLE, TAS
 from tests.support import check
 
 BUCKET = "example-project-data-dev"
-RUN_ID = "20261101T000000Z-abcd0123"
+RUN_ID = "ingestion_abcd0123"
 QUEUE_SHA256 = "a" * 64
 
 

@@ -336,7 +336,7 @@ def rewrite_and_placement_agree() -> None:
         )
 
 
-RUNS = {"silver": "20261104T100000Z-5111e201", "gold": "20261104T110000Z-601d0001", "features": "20261104T120000Z-feed0001"}
+RUNS = {"silver": "silver_5111e201", "gold": "gold_601d0001", "features": "features_feed0001"}
 
 
 class WriteOnceBucket:

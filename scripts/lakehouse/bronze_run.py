@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import run_id_pattern
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
@@ -51,7 +52,7 @@ RECORD = "bronze_run.json"
 DRY_MARKER = "dry_run"
 PLAN_FILE = "dry_run_plan.json"
 PLAN_PREFIX = "DRY_RUN_PLAN "
-RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+RUN_ID = re.compile(run_id_pattern("bronze"))
 SHA256 = re.compile(r"[a-f0-9]{64}")
 DRY_VALUES = ("1", "true", "yes")
 
@@ -301,7 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="load: print and save the checked plan and write nothing (also set by BRONZE_DRY_RUN=1)")
     args = parser.parse_args(argv)
     if not RUN_ID.fullmatch(args.run):
-        parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
+        parser.error("the run ID must look like bronze_0a1b2c3d")
     work = args.work
     folder = work / "state" / args.run
     dry = args.dry_run or os.environ.get("BRONZE_DRY_RUN", "") in DRY_VALUES

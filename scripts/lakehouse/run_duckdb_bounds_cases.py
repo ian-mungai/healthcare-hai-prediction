@@ -353,7 +353,7 @@ def message_cases() -> dict[str, bool]:
         (code / "plain_probe.py").write_text("import sys\nsys.stderr.write('another failure\\n')\nsys.exit(1)\n")
         spill = Path(scratch) / "spill"
         spill.mkdir()
-        job = layer_run.Job("silver", "20261101T000000Z-abcdef12", "real", code)
+        job = layer_run.Job("silver", "silver_abcdef12", "real", code)
         environment = {**task_environment(Path(scratch), 20 * MIB), "PYTHONPATH": str(ROOT)}
         cap, directory = environment["HAI_DUCKDB_MAX_TEMP_BYTES"], environment["HAI_DUCKDB_TEMP_DIRECTORY"]
         for module in ("cap_probe", "spill_probe", "quoted_probe", "plain_probe"):

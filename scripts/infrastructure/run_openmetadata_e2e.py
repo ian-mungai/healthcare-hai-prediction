@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from orchestration.training_contract import BASE_RUN, run_id_pattern
 from scripts.infrastructure.openmetadata_bootstrap import ADMIN_EMAIL
 from scripts.process import run_command
 
@@ -255,6 +256,16 @@ class FakeS3:
             found["NextContinuationToken"] = str(start + self.page)
         return found
 
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        """The time an object was stored: one second later for each key in key order, so a case names its order by the keys it stores."""
+        from datetime import UTC, datetime, timedelta
+
+        from botocore.exceptions import ClientError
+
+        if Key not in self.keys:
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+        return {"LastModified": datetime(2026, 11, 1, tzinfo=UTC) + timedelta(seconds=sorted(self.keys).index(Key))}
+
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         import io
 
@@ -462,7 +473,7 @@ def run_host_ingest(args: list[str], env: dict[str, str], workflow: Callable[[di
     return code, out.getvalue(), err.getvalue()
 
 
-SILVER_RUN, GOLD_RUN, FEATURES_RUN = "20261104T100000Z-5111e201", "20261104T110000Z-601d0001", "20261104T120000Z-feed0001"
+SILVER_RUN, GOLD_RUN, FEATURES_RUN = "features_5111e201", "silver_601d0001", "silver_feed0001"
 
 
 def chain_keys(**change: Any) -> dict[str, bytes]:
@@ -497,7 +508,7 @@ def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str
     return ["--config-dir", str(INGESTION), "--work-dir", str(root / "work"), "glue", "dbt"], env
 
 
-BRONZE_RUN = "20261104T100000Z-abcdef01"
+BRONZE_RUN = "bronze_abcdef01"
 BRONZE_KEY = f"lakehouse/bronze_runs/{BRONZE_RUN}/check.json"
 
 
@@ -606,7 +617,7 @@ def object_of(table: str, index: int, version: str = "v1") -> tuple[str, str, st
     return f"cms/{table}/file_{index:03d}.csv", f"{version}-{index}", f"{index:064x}", 10 + index
 
 
-ACQ_RUN_A, ACQ_RUN_B = "20261001T090000Z-aaaaaaa1", "20261002T090000Z-bbbbbbb2"
+ACQ_RUN_A, ACQ_RUN_B = "silver_aaaaaaa1", "silver_bbbbbbb2"
 
 
 def raw_files_name_their_receipt_and_acquisition_run() -> None:
@@ -805,7 +816,7 @@ def raw_files_write_is_idempotent_and_keeps_other_text() -> None:
     require(first.startswith("Hospital measures from CMS.\n\n<!-- hai-raw-files:start -->"), f"the existing text is kept: {first[:80]}")
     code, out, _ = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
     require(code == 0 and catalog.patches() == 1 and "1 unchanged" in out, f"a repeat wrote again: {catalog.patches()} patches, {out}")
-    later = "20261105T100000Z-abcdef02"
+    later = "silver_abcdef02"
     keys[f"lakehouse/bronze_runs/{later}/check.json"] = json.dumps(bronze_record({"cms_hai_hospital": 3}, later, "w")).encode()
     require(run_raw_files(["--bronze-run", later], raw_files_environment(), keys, catalog)[0] == 0 and catalog.patches() == 2, "a later run writes once")
     second = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
@@ -840,7 +851,7 @@ def raw_files_writer_refuses_and_fails_visibly() -> None:
     catalog = FakeCatalog({"cms_hai_hospital": ""})
     code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), {}, catalog)
     require(code == 1 and BRONZE_KEY in err and "missing" in err and not catalog.calls, (code, err))
-    wrong = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1}, run="20261104T100000Z-ffffffff")).encode()}
+    wrong = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1}, run="silver_ffffffff")).encode()}
     code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), wrong, FakeCatalog({}))
     require(code == 1 and BRONZE_KEY in err and "another run" in err, (code, err))
     two = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1, "cms_hai_state": 1})).encode()}
@@ -1546,7 +1557,11 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
     require(set(params) == {"run_id", "mode", "features_run"}, f"the form is {sorted(params)}")
     features = params["features_run"]
     require(
-        features["args"] == () and "default" not in features and features["type"] == "string" and features["pattern"] == params["run_id"]["pattern"],
+        features["args"] == ()
+        and "default" not in features
+        and features["type"] == "string"
+        and features["pattern"] == f"^{BASE_RUN}$"
+        and params["run_id"]["pattern"] == f"^{run_id_pattern('metadata')}$",
         f"features_run is a required run ID with no default (never latest): {features}",
     )
     require(calls == [], "importing the DAG must not start a step")

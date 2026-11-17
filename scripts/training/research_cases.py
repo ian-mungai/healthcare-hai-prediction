@@ -17,8 +17,8 @@ from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTra
 from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
 from scripts.training.presigned_probe import ProbingClient
 
-RESEARCH_RUN = "20261024T000009Z-1234abcd"
-RUNS = {"m1": "20261024T000001Z-1234abcd", "m2": "20261024T000002Z-1234abcd", "m4": "20261024T000004Z-1234abcd"}
+RESEARCH_RUN = "research_1234abcd"
+RUNS = {"m1": "training_ols_1234abce", "m2": "training_elastic_net_1234abcf", "m4": "training_gradient_boosting_1234abc0"}
 NAME = f"hai_model_{HAI_TYPE}"
 PARAMETERS = {"base_run": BASE_RUN, "population": "primary", "hai_types": [HAI_TYPE], "mlflow": "local"}
 
@@ -109,7 +109,7 @@ def research_cases(cases: Any, folder: Path) -> None:
         """The record names, for each model, the features run its training run read (the tag of its parent run, not a run derived from the base run), and
         records that no Production model exists (``production_version`` is None, present in the record) so the promotion chain can tell a first champion."""
         tracking, fixtures = finished_models(folder / "identity_runs")
-        real = {model: f"20261023T00000{position}Z-1234abcd" for position, model in enumerate(("m1", "m2", "m4"), start=1)}
+        real = {model: f"features_{training_contract.MODEL_NAMES[model]}_1234abc{position}" for position, model in enumerate(("m1", "m2", "m4"), start=1)}
         for model, run in real.items():
             parent_of(tracking, model)["tags"]["features_run_id"] = run
         code, _, error, output = research(folder / "identity_runs_research", fixtures["m2"])
@@ -125,7 +125,7 @@ def research_cases(cases: Any, folder: Path) -> None:
         require(listing(output) == [] and not tracking.models[NAME]["aliases"], "a refused research wrote output or an alias")
 
     def refuses_runs_of_another_base() -> None:
-        tracking, fixtures = finished_models(folder / "other_base", m4={"base_run": "20261022T000000Z-9999abcd"})
+        tracking, fixtures = finished_models(folder / "other_base", m4={"base_run": "features_9999abcd"})
         code, _, error, _ = research(folder / "other_base_research", fixtures["m2"])
         require(code == job.EXIT_FAILED and failure_of(error) == "research_models_missing" and "m4" in error, f"{code} {error}")
         require(not tracking.models[NAME]["aliases"], "a challenger was chosen across two bases")
@@ -162,7 +162,7 @@ def research_cases(cases: Any, folder: Path) -> None:
 
     def later_run_of_a_model_counts() -> None:
         tracking, fixtures = finished_models(folder / "later")
-        later = "20261024T000012Z-1234abcd"
+        later = "training_elastic_net_1234abc1"
         finished_models(folder / "later_m2", models=("m2",), tracking=tracking, runs={"m2": later})
         code, _, error, output = research(folder / "later_research", fixtures["m2"])
         require(code == 0, f"research failed: {error}")
@@ -192,7 +192,7 @@ def research_cases(cases: Any, folder: Path) -> None:
         first = research(folder / "freeze_first", fixtures["m2"])
         require(first[0] == 0, f"research failed: {first[2]}")
         before = dict(tracking.models[NAME]["aliases"])
-        later = "20261024T000012Z-1234abcd"
+        later = "training_elastic_net_1234abc1"
         finished_models(folder / "freeze_later", models=("m2",), tracking=tracking, runs={"m2": later})
         for parent in tracking.parents().values():
             if parent["tags"].get("run_id") == later:

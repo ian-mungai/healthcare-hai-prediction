@@ -429,7 +429,7 @@ class FakeObjects:
         Path(Filename).write_bytes(self.source.read_bytes())
 
 
-DERIVED_RUN = "20261030T000000Z-0d371ed1"
+DERIVED_RUN = "training_elastic_net_0d371ed1"
 
 
 def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN, tools: Path | None = None) -> tuple[int, str]:
@@ -787,7 +787,7 @@ def scenarios(cases: Any, folder: Path) -> None:
 
 PROMOTION = {"hai_type": HAI_TYPE, "model_version": "2", "promotion_mode": "promote", "mlflow": "aws"}
 MODEL = f"hai_model_{HAI_TYPE}"
-RUN_B = "20261024T000001Z-5678abcd"
+RUN_B = "training_elastic_net_5678abcd"
 INTENT_KEY = f"promote/{RUN}/intent.json"
 ATTEMPT_KEY = f"promote/{RUN}/attempt.json"
 LEASE_PREFIX = f"promote/models/{MODEL}/"
@@ -807,7 +807,7 @@ def registry_fixture(folder: Path) -> Fixture:
     store = fixture.tracking
     store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
     for tags in (
-        {"promotion_verdict": "pass", "promoted_run": "20250101T000000Z-aaaaaaaa"},
+        {"promotion_verdict": "pass", "promoted_run": "promote_clabsi_aaaaaaaa"},
         {"promotion_verdict": "pass", **canary("2")},
         {"promotion_verdict": "fail:fairness"},
     ):

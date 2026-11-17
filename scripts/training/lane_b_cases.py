@@ -28,10 +28,10 @@ from scripts.training import job_inputs
 from scripts.training.step_records import verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = "20261024T000000Z-1234abcd"
-PUBLICATION = "20261023T000000Z-1234abcd"
-GOLD = "20261022T000000Z-1234abcd"
-BASE = "20261023T000000Z-5678abcd"
+RUN = "training_elastic_net_1234abcd"
+PUBLICATION = "features_elastic_net_1234abce"
+GOLD = "gold_1234abcd"
+BASE = "features_5678abcd"
 MODEL = "m1"
 PARAMETERS = {
     "features_run": "latest",

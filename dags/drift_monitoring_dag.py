@@ -24,7 +24,16 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration import dag_runtime
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, GateRefused, decide_drift_gate, model_training_run_id, parameters_for
+from orchestration.training_contract import (
+    HAI_TYPES,
+    LAUNCH_LANES,
+    SET_RUN,
+    GateRefused,
+    decide_drift_gate,
+    model_training_run_id,
+    parameters_for,
+    run_id_pattern,
+)
 
 LOG = logging.getLogger(__name__)
 MARKER = "_complete.json"
@@ -116,7 +125,7 @@ def training_requests(drift_run: str, mlflow: str, model: str, features_run: str
     training = {"features_run": features_run, "population": "primary", "hai_types": types, "trigger": f"drift:{drift_run}", "mlflow": mlflow, "model": model}
     return [
         {
-            "trigger_run_id": f"drift__{drift_run}",
+            "trigger_run_id": model_training_run_id(drift_run, model),
             "conf": {"run_id": model_training_run_id(drift_run, model), "mode": "real", **parameters_for("training_dag", training, LAUNCH_LANES)},
         }
     ]
@@ -129,13 +138,13 @@ with DAG(
     max_active_runs=1,
     tags=["monitoring"],
     params={
-        "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
+        "run_id": Param(type="string", pattern=f"^{run_id_pattern('drift', qualified=True)}$"),
         "mode": Param("real", type="string", enum=["real"]),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The model whose drift this run checks and whose training it starts (orchestration.training_contract.MODELS).
         "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
         # The run of the model's published set: the drift job reads that set (its features job must have passed) and the training run it starts fits on it.
-        "features_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        "features_run": Param(type="string", pattern=f"^{SET_RUN}$"),
         # The attempt of this model run's drift check: 1 is the run every model run has. The launch of a run is terminal once it ended, so a check that
         # failed starts again as attempt 2 or later, with the run ID that the attempt derives (training_contract.model_drift_run_id) and its own training run.
         "drift_attempt": Param(1, type="integer", minimum=1, maximum=99),
