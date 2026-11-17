@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import json
+import posixpath
 import re
 from pathlib import Path
 
@@ -52,12 +53,27 @@ GONE = (
 # Names that no other file spells, so the bare word is enough. The host stop's own name is also a parameter and a function name elsewhere, so it is only
 # judged in its dotted, path and import forms.
 UNIQUE = (STDERR, PROTOCOL, CASES, STANDINS, SOURCE_CHECKS, MUTATIONS, STOP_CASES, f"{SCHEMA}.schema.json", f"examples/{SCHEMA}.json")
+SEPARATOR = r"/+(?:\./+)*"
+
+
+def path_pattern(path: str) -> re.Pattern[str]:
+    """The path as a Dockerfile, compose file, Terraform file or script writes it: behind any prefix (``./``, ``../``, ``$root/``, ``/app/``), with doubled
+    slashes or ``./`` between its parts. A name that only ends in the same letters (``myscripts/``, ``vendor-scripts/``) is another path."""
+    return re.compile(r"(?<![\w-])" + SEPARATOR.join(re.escape(part) for part in path.split("/")))
+
+
+def import_pattern(package: str, name: str) -> re.Pattern[str]:
+    """``from package import ... name``, on one line, over backslash line ends or inside a parenthesized list that spans lines."""
+    return re.compile(r"\bfrom\s+" + re.escape(package) + r"\s+import\s+(?:\([^)]*?|(?:[^\n]|\\\n)*?)\b" + re.escape(name) + r"\b")
+
+
 TEXT_PATTERNS = (
     *(re.compile(r"(?<![\w.])" + re.escape(dotted) + r"\b") for dotted in sorted(DOTTED)),
-    *(re.compile(r"(?<![\w/.])" + re.escape(path)) for path in PATHS),
+    *(path_pattern(path) for path in PATHS),
     *(re.compile(r"(?<![\w])" + re.escape(name) + r"(?![\w])") for name in UNIQUE),
-    *(re.compile(r"\bfrom\s+" + re.escape(package) + r"\s+import\s+(?:\(\s*)?[^\n]*?\b" + re.escape(name) + r"\b") for package, name in MODULES),
+    *(import_pattern(package, name) for package, name in MODULES),
 )
+PATH_TOKEN = re.compile(r"[\w./-]+")
 SKIPPED_FOLDERS = frozenset({".git", ".venv", ".terraform", "__pycache__", "node_modules", "data", "e2e", ".worktrees", ".tools", ".mypy_cache", ".ruff_cache"})
 SKIPPED_NAMES = frozenset({"CHANGELOG.md", "uv.lock"})
 MAX_BYTES = 2_000_000
@@ -71,6 +87,12 @@ def listed_files(root: Path) -> list[str]:
     else:
         names = [str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()]
     return sorted(name for name in names if (root / name).is_file() and not SKIPPED_FOLDERS & set(Path(name).parts) and Path(name).name not in SKIPPED_NAMES)
+
+
+def variants(text: str) -> str:
+    """The text, and after it every path token that holds a parent folder part in its resolved form (``scripts/other/../name.py`` is ``scripts/name.py``)."""
+    resolved = {posixpath.normpath(token) for token in PATH_TOKEN.findall(text) if ".." in token.split("/")}
+    return text + "\n" + "\n".join(sorted(resolved)) if resolved else text
 
 
 def removed_import(tree: ast.AST, relative: str) -> bool:
@@ -103,7 +125,7 @@ def scan(root: Path, skipped: frozenset[str] = frozenset()) -> list[str]:
             text = path.read_text()
         except (UnicodeDecodeError, OSError):
             continue
-        if any(pattern.search(text) for pattern in TEXT_PATTERNS):
+        if any(pattern.search(variants(text)) for pattern in TEXT_PATTERNS):
             found.append(relative)
             continue
         if relative.endswith(".py"):
@@ -139,11 +161,26 @@ PLANTED = {
     "workflow command": (".github/workflows/x.yml", f"jobs:\n  a:\n    steps:\n      - run: python -m scripts.orchestration.{CASES} --check-fixtures\n"),
     "shell group step": ("scripts/ci/groups/x.sh", f'timed "x" "$python_bin" -B -m scripts.orchestration.{MUTATIONS} --output "$out"\n'),
     "Markdown command": ("notes/x.md", f"Run it:\n\n```bash\npython -m scripts.orchestration.{SOURCE_CHECKS}\n```\n"),
+    "Dockerfile copy with a leading dot slash": ("services/x/Dockerfile", f"FROM scratch\nCOPY ./scripts/{GROUP}.py /opt/hai/\n"),
+    "Dockerfile copy with a parent folder": ("services/x/Dockerfile", f"FROM scratch\nCOPY ../scripts/{GROUP}.py /opt/hai/\n"),
+    "Dockerfile copy with two parent folders": ("services/x/Dockerfile", f"FROM scratch\nCOPY ../../scripts/{GROUP}.py /opt/hai/\n"),
+    "compose volume with a leading dot slash": ("docker-compose.yaml", f"services:\n  a:\n    volumes:\n      - ./scripts/{GROUP}.py:/opt/hai/{GROUP}.py:ro\n"),
+    "shell command with a leading dot slash": ("scripts/ci/groups/x.sh", f'timed "x" python ./scripts/{GROUP}.py\n'),
+    "shell command behind a variable": ("scripts/ci/groups/x.sh", f'timed "x" python "$repo_root/scripts/{GROUP}.py"\n'),
+    "Terraform path behind a module path": ("infra/services/x.tf", f'locals {{\n  file = "${{path.module}}/../../scripts/{GROUP}.py"\n}}\n'),
+    "absolute path in an image": ("services/x/Dockerfile", f'FROM scratch\nCMD ["python", "/app/scripts/{GROUP}.py"]\n'),
+    "doubled slash": ("scripts/ci/groups/x.sh", f"python scripts//{GROUP}.py\n"),
+    "dot folder inside the path": ("scripts/ci/groups/x.sh", f"python scripts/./{GROUP}.py\n"),
+    "parent folder inside the path": ("scripts/ci/groups/x.sh", f"python scripts/other/../{GROUP}.py\n"),
+    "Markdown multi-line import": ("README.md", f"```python\nfrom scripts import (\n    process,\n    {GROUP},\n)\n```\n"),
+    "Markdown import with a line continuation": ("notes/x.md", f"```python\nfrom scripts import process, \\\n    {GROUP}\n```\n"),
     "Markdown import example": ("README.md", f"```python\nfrom scripts import {GROUP}\n```\n"),
     "JSON registration": ("config/quality/x.json", f'{{"files": ["scripts/orchestration/{STOP_CASES}.py"]}}\n'),
     "restored schema name": ("config/x.json", f'{{"schema": "data_contracts/orchestration/{SCHEMA}.schema.json"}}\n'),
 }
 CLEAN = {
+    "services/x/Dockerfile": "FROM scratch\nCOPY ./scripts/process.py ../scripts/other.py scripts/process_group_notes.py /opt/hai/\n",
+    "scripts/ci/groups/y.sh": 'timed "y" python "$repo_root/scripts/process.py" ./myscripts/' + GROUP + ".py vendor-scripts/" + GROUP + ".py\n",
     "scripts/process.py": "def stop_process_group(process_group: int) -> None:\n    return None\n",
     "scripts/other.py": "from scripts import process\nfrom orchestration import launcher\n",
     "scripts/orchestration/other.py": "from . import ledger\nfrom .task_guard import guard\n",
