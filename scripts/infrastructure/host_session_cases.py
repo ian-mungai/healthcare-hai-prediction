@@ -1081,6 +1081,48 @@ def a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown() -> dict
     }
 
 
+def log_page_calls(host: StandInHost, model: str) -> list[dict[str, list[str]]]:
+    """The options of the log page requests that the session made for the reload log of ``model``."""
+    reload_tasks = [arn.rsplit("/", 1)[-1] for arn, task in host.tasks.items() if task["key"] == "online_reload"]
+    owner = reload_tasks[[item["model"] for item in host.reloads].index(model)]
+    return [entry["options"] for entry in host.log if entry["operation"] == "get-log-events" and entry["options"]["--log-stream-name"][0].endswith(f"/{owner}")]
+
+
+def a_reload_result_is_one_complete_line_across_every_log_page() -> dict[str, bool]:
+    """The log of a reload is read to its end, page by page (CloudWatch ``nextForwardToken`` until it repeats): a complete result on a page that is not
+    the first still counts, a second complete result on any page leaves the outcome unknown whatever the first page holds, an empty page does not end
+    the log, and a log that never ends is unknown at the deadline, never a reload."""
+    paged = {"reload_forged_first_page:m2", "reload_empty_middle_page:m4", "reload_late_result:m1"}
+    host, session, lines = build(paged)
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    unknown = step_lines(lines, "online_store_reload_outcome_unknown")
+    endless_host, endless_session, endless_lines = build({"reload_endless_pages:m2", "reload_paged:m1"})
+    begun = endless_host.now
+    endless_message = failure(lambda: endless_session.start(code=(CODE_RUN, CODE_SHA)))
+    endless_unknown = step_lines(endless_lines, "online_store_reload_outcome_unknown")
+    endless_calls = log_page_calls(endless_host, "m2")
+    return {
+        "start does not fail": message is None and host.desired == 1 and endless_message is None and endless_host.desired == 1,
+        "a forged complete loaded line on page 1 and the genuine skipped line on page 2 leave m2 unknown, not reloaded": any(
+            line.startswith("online_store_reload_outcome_unknown: m2:") for line in lines
+        )
+        and "online_store_reloaded: m2" not in lines
+        and not step_lines(lines, "online_store_reload_skipped"),
+        "a forged line, an empty page and the genuine line leave m4 unknown": any(line.startswith("online_store_reload_outcome_unknown: m4:") for line in lines)
+        and "online_store_reloaded: m4" not in lines,
+        "a single complete result after two empty pages is read and m1 is reloaded": "online_store_reloaded: m1" in lines
+        and not any(line.startswith("online_store_reload_outcome_unknown: m1:") for line in lines),
+        "exactly m2 and m4 are unknown": len(unknown) == 2,
+        "the session followed the tokens of the first set to their end": [call.get("--next-token") for call in log_page_calls(host, "m1")][:4]
+        == [None, ["f/1"], ["f/2"], ["f/3"]],
+        "a log that never ends is unknown for m2 and the other sets are read": len(endless_unknown) == 1
+        and endless_unknown[0].startswith("online_store_reload_outcome_unknown: m2:")
+        and "online_store_reloaded: m2" not in endless_lines
+        and "online_store_reloaded: m1" in endless_lines,
+        "the endless log is read within the deadline and no further": 2 <= len(endless_calls) <= 180 // 5 + 2 and endless_host.now - begun < 3 * 400 + 5000,
+    }
+
+
 def an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip() -> dict[str, bool]:
     """The closing report keeps the sets whose outcome is unknown apart from the sets that a result confirmed as skipped: only a confirmed skip says that a
     set serves no online features."""
@@ -1110,11 +1152,28 @@ def start_without_code_reloads_the_recorded_run() -> dict[str, bool]:
     return {
         "every reload carries the run and digest recorded for the checkout": len(release) == len(sets_online())
         and all(item["CODE_RUN_ID"] == OTHER_RUN and item["CODE_SHA256"] == OLD_SHA for item in release),
-        "the identity came from the log of the identity task in the code log group": len(reads) == 1
-        and reads[0]["options"]["--log-group-name"] == [LOG_GROUP]
-        and reads[0]["options"]["--log-stream-name"][0].startswith("code_fetch/code_fetch/"),
+        "the identity came from the log of the identity task in the code log group, read to its end": [entry["options"].get("--next-token") for entry in reads]
+        == [None, ["f/1"]]
+        and all(
+            entry["options"]["--log-group-name"] == [LOG_GROUP] and entry["options"]["--log-stream-name"][0].startswith("code_fetch/code_fetch/")
+            for entry in reads
+        ),
         "the identity is reported by run only": any(line == f"code_identity: {OTHER_RUN}" for line in lines),
         "the host keeps its checkout": host.checkout == OLD_SHA,
+    }
+
+
+def the_code_identity_is_read_from_a_later_log_page() -> dict[str, bool]:
+    """The identity line of the identity task counts on any page of its log, as the result line of a reload does: a log whose first page is empty is read on."""
+    host, session, lines = build({"identity_late_line"}, checkout=OLD_SHA, code_run=OTHER_RUN)
+    message = failure(session.start)
+    reads = [entry["options"] for entry in host.log if entry["service"] == "logs" and entry["options"]["--log-group-name"] == [LOG_GROUP]]
+    return {
+        "start does not fail": message is None,
+        "the identity of the second page is the code of every reload": len(reload_runs(host)) == len(sets_online())
+        and all(item["launch"]["fetch"]["CODE_RUN_ID"] == OTHER_RUN and item["launch"]["fetch"]["CODE_SHA256"] == OLD_SHA for item in reload_runs(host)),
+        "the identity is reported by run only": f"code_identity: {OTHER_RUN}" in lines,
+        "the second page was asked for with the token of the first": any(call.get("--next-token") == ["f/1"] for call in reads),
     }
 
 
@@ -1433,8 +1492,10 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "a_start_with_every_set_loaded_reports_no_unloaded_set": a_start_with_every_set_loaded_reports_no_unloaded_set,
     "a_reload_with_no_readable_result_is_reported_and_does_not_stop_start": a_reload_with_no_readable_result_is_reported_and_does_not_stop_start,
     "a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown": a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown,
+    "a_reload_result_is_one_complete_line_across_every_log_page": a_reload_result_is_one_complete_line_across_every_log_page,
     "an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip": an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip,
     "start_without_code_reloads_the_recorded_run": start_without_code_reloads_the_recorded_run,
+    "the_code_identity_is_read_from_a_later_log_page": the_code_identity_is_read_from_a_later_log_page,
     "start_with_code_does_not_read_the_record": start_with_code_does_not_read_the_record,
     "start_without_a_code_record_is_refused": start_without_a_code_record_is_refused,
     "start_without_a_code_record_keeps_the_host_with_keep_on": start_without_a_code_record_keeps_the_host_with_keep_on,

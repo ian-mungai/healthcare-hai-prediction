@@ -36,6 +36,9 @@ BASE_RUN = "20261116T000000Z-0000b001"  # the base run that a loaded reload name
 LOAD_ID = "load-stand-in-1"
 LOG_GROUP = "stand-in-airflow-log-group"
 JOBS_LOG_GROUP = "stand-in-jobs-log-group"
+PAGE_SECONDS = 5  # the virtual time of one log page request while a log never ends
+PAGE_LIMIT = 500  # log page requests per task before the stand-in gives up on a client that never stops reading (a runaway, not a result)
+PAGE_BREAK = "\f"  # separates the pages of a task's output (a page may be empty)
 RELOAD_STREAM = "features/feast"  # the awslogs stream prefix of the features task (the layer) and its container that runs the reload
 HOST_ADDRESS = "stand-in-host"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:111111111111:"
@@ -105,12 +108,18 @@ class StandInHost:
     The features task (``online_reload``) and the code identity are always there: ``reload_fails:<set>`` makes the reload launch of that set exit 1,
     ``never_starts:<key>`` makes a task of the key stop without an exit code (``TaskFailedToStart``), ``task_seconds:<key>=<n>`` makes it run n virtual
     seconds, ``no_code_record`` makes the identity task refuse as a host with no run ID record does, ``no_identity_log`` and ``bad_identity_line`` make its
-    log empty or malformed. A reload launch prints its result line (``online_reload`` prints one JSON line) in the jobs log group: ``loaded`` for its set,
+    log empty or malformed and ``identity_late_line`` puts its line on the second page of its log.
+    A reload launch prints its result line (``online_reload`` prints one JSON line) in the jobs log group: ``loaded`` for its set,
     ``reload_skipped:<set>`` makes it print ``skipped`` with a held run and a reason and exit 0, ``reload_no_log`` makes its log empty,
     ``reload_incomplete:<set>`` makes its line lack the fields of its outcome, ``reload_forged_after:<set>`` appends a bare ``loaded`` line and
     ``reload_second_result:<set>`` appends a second complete ``loaded`` line.
-    A log request (``get-log-events``) answers the output of a stopped task and fails with ``ResourceNotFoundException`` for a stream or a group that has no
-    such task.
+    A log request (``get-log-events``) answers the output of a stopped task one page at a time, as CloudWatch does: the token ``f/<n>`` starts at page n,
+    every answer carries the token of the next page, and a token past the last page answers an empty page with the token it was given. A log has one
+    page, and these faults split a reload log: ``reload_paged:<set>`` puts every line on a page of its own, ``reload_forged_first_page:<set>`` puts a
+    complete forged ``loaded`` line on page 1 and the genuine line on page 2, ``reload_empty_middle_page:<set>`` puts an empty page between the forged
+    line and the genuine line, ``reload_late_result:<set>`` puts the genuine line after two empty pages and ``reload_endless_pages:<set>`` follows the
+    genuine page with empty pages and a new token for ever, each request taking ``PAGE_SECONDS`` of virtual time. A request that is not made against
+    a stopped task answers one empty page, and a log request fails with ``ResourceNotFoundException`` for a stream or a group that has no such task.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
@@ -127,6 +136,7 @@ class StandInHost:
         # The code digest that /data/repo shows and the run ID recorded beside it. The code one-shot changes them only when it exits 0 with a digest in its
         # overrides, and exits 1 without overrides on a host that has none, as infra/services/scripts/code_fetch.py does. The identity task prints them.
         self.checkout, self.code_run, self.pending_output = checkout, code_run, ""
+        self.pending_endless = False
         self.reloads: list[dict[str, Any]] = []
         self.online: dict[str, tuple[str, str]] = {}
         self.now = 0.0
@@ -357,9 +367,11 @@ class StandInHost:
             "options": options,
             "started": self.now,
             "output": self.pending_output,
+            "endless": self.pending_endless,
+            "page_requests": 0,
             "unstarted": f"never_starts:{key}" in self.faults,
         }
-        self.pending_output = ""
+        self.pending_output, self.pending_endless = "", False
         if token:
             self.tokens[token] = arn
         return {"tasks": [{"taskArn": arn}], "failures": []}
@@ -375,7 +387,8 @@ class StandInHost:
             if "bad_identity_line" in self.faults:
                 self.pending_output = f"code_identify: identity run latest code {self.checkout}"
             elif "no_identity_log" not in self.faults:
-                self.pending_output = f"code_identify: identity run {self.code_run} code {self.checkout}"
+                line = f"code_identify: identity run {self.code_run} code {self.checkout}"
+                self.pending_output = PAGE_BREAK + line if "identity_late_line" in self.faults else line
             return 0
         if environment.get("CODE_MODE") == "verify":
             return 0 if environment.get("CODE_SHA256") == self.checkout and "verify_fails" not in self.faults else 1
@@ -400,7 +413,8 @@ class StandInHost:
         if code == 0 and f"reload_fails:{model}" in self.faults:
             return 1
         if code == 0:
-            self.pending_output = "\n".join(json.dumps(line, sort_keys=True) for line in self.reload_lines(model))
+            self.pending_output = PAGE_BREAK.join("\n".join(json.dumps(line, sort_keys=True) for line in page) for page in self.reload_pages(model))
+            self.pending_endless = f"reload_endless_pages:{model}" in self.faults
         if code == 0 and f"reload_skipped:{model}" not in self.faults:
             fetch = launch.get("fetch", {})
             self.online[model] = (fetch.get("CODE_RUN_ID", ""), fetch.get("CODE_SHA256", ""))
@@ -423,8 +437,22 @@ class StandInHost:
             lines.append(loaded)
         return lines
 
+    def reload_pages(self, model: str) -> list[list[dict[str, Any]]]:
+        """The pages of the reload log of ``model``: one page of every line, or the split that a paging fault asks for (see the class docstring)."""
+        lines = self.reload_lines(model)
+        forged = {"feature_set": model, "outcome": "loaded", "run_id": OLDER_RUN, "base_run": BASE_RUN, "load_id": "load-forged", "skipped_held": []}
+        if f"reload_forged_first_page:{model}" in self.faults:
+            return [[forged], lines]
+        if f"reload_empty_middle_page:{model}" in self.faults:
+            return [[forged], [], lines]
+        if f"reload_late_result:{model}" in self.faults:
+            return [[], [], lines]
+        if f"reload_paged:{model}" in self.faults:
+            return [[line] for line in lines]
+        return [lines]
+
     def logs_get_log_events(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        """The log of one task: its output once it stopped. A group other than the stand-in's, or a stream with no such task, is not found."""
+        """One page of the log of one task: its output once it stopped. A group other than the stand-in's, or a stream with no such task, is not found."""
         stream = options["--log-stream-name"][0].split("/")
         found = [task for arn, task in self.tasks.items() if arn.rsplit("/", 1)[-1] == stream[-1] and task["key"] == stream[0] == stream[1]]
         group = LOG_GROUP
@@ -434,8 +462,18 @@ class StandInHost:
         if options["--log-group-name"] != [group] or len(stream) != 3 or not found:
             raise StandInError("ResourceNotFoundException")
         task = found[0]
-        events = [{"message": line} for line in task.get("output", "").splitlines()] if task["status"] == "STOPPED" else []
-        return {"events": events, "nextForwardToken": "f/0"}
+        pages = task.get("output", "").split(PAGE_BREAK) if task["status"] == "STOPPED" else []
+        index = int(options["--next-token"][0].split("/")[1]) if "--next-token" in options else 0
+        if task.get("endless"):
+            task["page_requests"] += 1
+            self.advance(PAGE_SECONDS)
+            if task["page_requests"] > PAGE_LIMIT:
+                raise StandInError("a client that reads the log pages for ever")
+            events = [{"message": line} for line in pages[index].splitlines()] if index < len(pages) else []
+            return {"events": events, "nextForwardToken": f"f/{index + 1}"}
+        if index >= len(pages):
+            return {"events": [], "nextForwardToken": f"f/{index}"}
+        return {"events": [{"message": line} for line in pages[index].splitlines()], "nextForwardToken": f"f/{index + 1}"}
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         if self.describe_task_failures > 0:

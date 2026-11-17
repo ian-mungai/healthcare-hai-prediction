@@ -840,16 +840,33 @@ class Session:
         self.step("code_identity", found[0])
         return found
 
+    def log_events(self, group: str, stream: str) -> list[dict[str, Any]] | None:
+        """Every event of one log stream, read from its start to its end: CloudWatch answers in pages, some of them empty, and ``nextForwardToken`` repeats
+        when no page follows. None while the stream does not exist. The reading is bounded by the deadline of the running wait, and a log that passes it
+        raises, so no caller gets the first pages of a log as the whole log."""
+        events: list[dict[str, Any]] = []
+        token = ""
+        while True:
+            arguments = ["--log-group-name", group, "--log-stream-name", stream, "--start-from-head"]
+            try:
+                page = self.call("logs", "get-log-events", arguments + (["--next-token", token] if token else []))
+            except HostSessionError as error:
+                if "ResourceNotFound" in str(error):
+                    return None
+                raise
+            events += page.get("events", [])
+            following = page.get("nextForwardToken")
+            if not isinstance(following, str) or not following or following == token:
+                return events
+            token = following
+
     def identity_line(self, task: str) -> tuple[str, str] | None:
         """The identity of the identity task's log: (run ID, digest), or None while the log has no such line yet."""
         stream = f"{CODE_LOG_CONTAINER}/{CODE_LOG_CONTAINER}/{task.rsplit('/', 1)[-1]}"
-        try:
-            events = self.call("logs", "get-log-events", ["--log-group-name", self.names.log_group, "--log-stream-name", stream, "--start-from-head"])
-        except HostSessionError as error:
-            if "ResourceNotFound" in str(error):
-                return None
-            raise
-        found = [CODE_IDENTITY.fullmatch(str(event.get("message", "")).strip()) for event in events.get("events", [])]
+        events = self.log_events(self.names.log_group, stream)
+        if events is None:
+            return None
+        found = [CODE_IDENTITY.fullmatch(str(event.get("message", "")).strip()) for event in events]
         lines = [(item.group(1), item.group(2)) for item in found if item is not None]
         return lines[-1] if lines else None
 
@@ -892,21 +909,18 @@ class Session:
 
     def reload_outcome(self, model: str, task: str) -> dict[str, Any] | None:
         """The result of a finished reload launch, from the task's log in the jobs log group: the one JSON line that ``scripts.features.online_reload`` prints
-        for ``model`` (outcome ``loaded``, ``already_loaded`` or ``skipped``), with the fields of its outcome (``complete_result``). None when the log has no
-        such line within ``RELOAD_OUTCOME_SECONDS``, has more than one line of a result for the set, has a line without its fields or cannot be read: the task
-        exited 0, so its reload finished, and only the report of its outcome is missing."""
+        for ``model`` (outcome ``loaded``, ``already_loaded`` or ``skipped``), with the fields of its outcome (``complete_result``). The log is read to its
+        end (``log_events``), so the one line counts across every page.
+        None when the log has no such line within ``RELOAD_OUTCOME_SECONDS``, which bounds the reading of the pages too (a log that never ends is
+        unknown), has more than one line of a result for the set on any page, has a line without its fields or cannot be read: the task exited 0, so its
+        reload finished, and only the report of its outcome is missing."""
         if not self.names.jobs_log_group:
             return None
         stream = f"{RELOAD_LOG_STREAM}/{task.rsplit('/', 1)[-1]}"
 
         def line() -> list[dict[str, Any]] | None:
-            try:
-                events = self.call("logs", "get-log-events", ["--log-group-name", self.names.jobs_log_group, "--log-stream-name", stream, "--start-from-head"])
-            except HostSessionError as error:
-                if "ResourceNotFound" in str(error):
-                    return None
-                raise
-            found = [result_line(str(event.get("message", "")), model) for event in events.get("events", [])]
+            events = self.log_events(self.names.jobs_log_group, stream)
+            found = [result_line(str(event.get("message", "")), model) for event in events or []]
             return [item for item in found if item is not None] or None
 
         try:
