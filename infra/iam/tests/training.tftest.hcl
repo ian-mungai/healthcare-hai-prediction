@@ -293,3 +293,35 @@ run "the_alerts_topic_must_be_an_sns_topic_arn" {
 
   expect_failures = [var.alerts_topic_arn]
 }
+
+run "grafana_publishes_to_the_one_alerts_topic_only_when_told_the_topic" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.grafana_alerts) == 0
+    error_message = "Without a topic the control plane role gains no alert grant."
+  }
+}
+
+run "the_control_plane_role_gets_two_sns_actions_on_the_one_alerts_topic" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.grafana_alerts[0].role == aws_iam_role.control_plane_task.name &&
+      jsondecode(aws_iam_role_policy.grafana_alerts[0].policy).Statement == [
+        {
+          Sid      = "PublishGrafanaAlerts"
+          Effect   = "Allow"
+          Action   = ["sns:Publish", "sns:GetTopicAttributes"]
+          Resource = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+        }
+      ]
+    )
+    error_message = "Grafana's contact point publishes with the control plane role: sns:Publish and sns:GetTopicAttributes on the one alerts topic, no subscribe, create or change action and no other topic."
+  }
+}

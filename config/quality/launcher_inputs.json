@@ -1249,6 +1249,7 @@
     "infra/iam/owner_policies/drift_records.json",
     "infra/iam/owner_policies/drift_records_read.json",
     "infra/iam/owner_policies/ecs_host.json",
+    "infra/iam/owner_policies/grafana_alerts.json",
     "infra/iam/owner_policies/job_drift_images.json",
     "infra/iam/owner_policies/job_drift_parameter.json",
     "infra/iam/owner_policies/job_dvc_baseline.json",
