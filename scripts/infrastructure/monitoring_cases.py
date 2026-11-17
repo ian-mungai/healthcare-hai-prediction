@@ -19,6 +19,12 @@ from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = "monitoring/grafana/dashboards/hai_overview.json"
 ALERTS = "monitoring/prometheus/alerts.yml"
+ALERTING = "monitoring/grafana/provisioning/alerting"
+RULES_AIRFLOW = f"{ALERTING}/rules_airflow.yml"
+RULES_API = f"{ALERTING}/rules_api.yml"
+RULES_MONITORING = f"{ALERTING}/rules_monitoring.yml"
+CONTACT = f"{ALERTING}/contact_points.yml"
+POLICIES = f"{ALERTING}/policies.yml"
 SCRAPE = "monitoring/prometheus/prometheus.yml"
 MAPPING = "monitoring/statsd/mapping.yml"
 DATASOURCE = "monitoring/grafana/provisioning/datasources/prometheus.yml"
@@ -71,7 +77,9 @@ def dashboard_metric_typo(root: Path) -> dict[str, bool]:
 
 def alert_metric_no_one_emits(root: Path) -> dict[str, bool]:
     return reported(
-        root, lambda tree: edit(tree, ALERTS, "airflow_dag_processing_import_errors > 0", "airflow_dag_import_failures > 0"), "airflow_dag_import_failures"
+        root,
+        lambda tree: edit(tree, RULES_AIRFLOW, "airflow_dag_processing_import_errors > bool 0", "airflow_dag_import_failures > bool 0"),
+        "airflow_dag_import_failures",
     )
 
 
@@ -120,21 +128,33 @@ def panel_without_an_expression(root: Path) -> dict[str, bool]:
 def alert_without_summary(root: Path) -> dict[str, bool]:
     return reported(
         root,
-        lambda tree: edit(tree, ALERTS, "summary: The Airflow scheduler sent no heartbeat for 10 minutes.", "description: x"),
+        lambda tree: edit(tree, RULES_AIRFLOW, "summary: The Airflow scheduler sent no heartbeat for 10 minutes.", "description: x"),
         "AirflowSchedulerSilent has no summary",
     )
 
 
 def duplicate_alert_name(root: Path) -> dict[str, bool]:
-    return reported(root, lambda tree: edit(tree, ALERTS, "alert: AirflowTaskFailed", "alert: AirflowDagRunFailed"), "AirflowDagRunFailed is defined twice")
+    return reported(
+        root, lambda tree: edit(tree, RULES_AIRFLOW, "title: AirflowTaskFailed", "title: AirflowDagRunFailed"), "AirflowDagRunFailed is defined twice"
+    )
+
+
+def duplicate_alert_uid(root: Path) -> dict[str, bool]:
+    return reported(
+        root, lambda tree: edit(tree, RULES_AIRFLOW, "uid: airflow_task_failed", "uid: airflow_dag_run_failed"), "uid airflow_dag_run_failed is used twice"
+    )
 
 
 def alert_for_a_job_nobody_scrapes(root: Path) -> dict[str, bool]:
     return reported(root, lambda tree: edit(tree, SCRAPE, "job_name: statsd_exporter", "job_name: statsd"), "statsd_exporter")
 
 
-def rule_file_missing(root: Path) -> dict[str, bool]:
-    return reported(root, lambda tree: edit(tree, SCRAPE, "/etc/prometheus/alerts.yml", "/etc/prometheus/rules.yml"), "rules.yml")
+def alerts_file_is_still_there(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: (tree / ALERTS).write_text("groups: []\n", encoding="utf-8"), f"{ALERTS} must not exist")
+
+
+def prometheus_still_loads_rule_files(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "scrape_configs:", "rule_files:\n  - /etc/prometheus/alerts.yml\n\nscrape_configs:"), "rule_files")
 
 
 def scrape_port_differs_from_terraform(root: Path) -> dict[str, bool]:
@@ -178,9 +198,91 @@ def scrape_job_with_another_target(root: Path) -> dict[str, bool]:
 def scheduler_alert_misses_a_silent_start(root: Path) -> dict[str, bool]:
     return reported(
         root,
-        lambda tree: edit(tree, ALERTS, " or absent(airflow_scheduler_heartbeat_total)", ""),
+        lambda tree: edit(tree, RULES_AIRFLOW, " or absent(airflow_scheduler_heartbeat_total)", ""),
         "AirflowSchedulerSilent must also fire when no heartbeat series exists",
     )
+
+
+def rule_label_not_on_metric(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES_AIRFLOW, "airflow_task_instance_finished_total{state=", "airflow_task_instance_finished_total{status="),
+        "label status",
+    )
+
+
+def rule_severity_is_unknown(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_AIRFLOW, "severity: critical", "severity: page"), "AirflowSchedulerSilent needs a severity")
+
+
+def rule_condition_names_a_missing_step(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_AIRFLOW, "condition: C", "condition: Z"), "condition Z is not a step")
+
+
+def rule_reads_an_unprovisioned_datasource(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_AIRFLOW, "datasourceUid: hai_prometheus", "datasourceUid: other"), "uses the data source other")
+
+
+def rule_is_paused(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_AIRFLOW, "execErrState: Error", "execErrState: Error\n        isPaused: true"), "is paused")
+
+
+def rule_duration_is_not_valid(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_AIRFLOW, "for: 10m", "for: 10 minutes"), "10 minutes")
+
+
+def rule_names_another_receiver(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES_API, "severity: critical", "severity: critical\n        notification_settings:\n          receiver: other"),
+        "routes to other",
+    )
+
+
+def rule_file_has_no_rules(root: Path) -> dict[str, bool]:
+    def plant(tree: Path) -> None:
+        for relative in (RULES_AIRFLOW, RULES_API, RULES_MONITORING):
+            (tree / relative).unlink()
+
+    return reported(root, plant, "holds no alert rule")
+
+
+def contact_point_has_a_literal_topic(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, CONTACT, "topic_arn: ${ALERTS_TOPIC_ARN}", "topic_arn: arn:aws:sns:us-west-2:111111111111:example_alerts"),
+        "topic_arn must be ${ALERTS_TOPIC_ARN}",
+    )
+
+
+def contact_point_has_a_static_key(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, CONTACT, "          sigv4:\n", "          sigv4:\n            access_key: x\n"), "access_key")
+
+
+def contact_point_is_not_sns(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, CONTACT, "type: sns", "type: email"), "must be of type sns")
+
+
+def contact_point_has_no_subject(root: Path) -> dict[str, bool]:
+    return reported(
+        root, lambda tree: edit(tree, CONTACT, "          subject: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'\n", ""), "needs a subject"
+    )
+
+
+def contact_point_file_is_missing(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: (tree / CONTACT).unlink(), f"{CONTACT} does not exist")
+
+
+def policy_default_receiver_is_another(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, POLICIES, "receiver: hai_sns", "receiver: other"), "default receiver")
+
+
+def policy_has_a_route_to_another_receiver(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, POLICIES, "    group_by:", "    routes:\n      - receiver: other\n    group_by:"), "routes to other")
+
+
+def grafana_environment_lacks_the_topic_arn(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, TERRAFORM, '{ name = "ALERTS_TOPIC_ARN", value = var.alerts_topic_arn },', ""), "ALERTS_TOPIC_ARN")
 
 
 def dropped_panel_reads_the_unmapped_counter(root: Path) -> dict[str, bool]:
@@ -203,8 +305,10 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "panel_without_an_expression": panel_without_an_expression,
     "alert_without_summary": alert_without_summary,
     "duplicate_alert_name": duplicate_alert_name,
+    "duplicate_alert_uid": duplicate_alert_uid,
     "alert_for_a_job_nobody_scrapes": alert_for_a_job_nobody_scrapes,
-    "rule_file_missing": rule_file_missing,
+    "alerts_file_is_still_there": alerts_file_is_still_there,
+    "prometheus_still_loads_rule_files": prometheus_still_loads_rule_files,
     "scrape_port_differs_from_terraform": scrape_port_differs_from_terraform,
     "datasource_port_differs_from_terraform": datasource_port_differs_from_terraform,
     "mapping_without_the_drop_rule": mapping_without_the_drop_rule,
@@ -215,6 +319,22 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "scrape_job_without_targets": scrape_job_without_targets,
     "scrape_job_with_another_target": scrape_job_with_another_target,
     "scheduler_alert_misses_a_silent_start": scheduler_alert_misses_a_silent_start,
+    "rule_label_not_on_metric": rule_label_not_on_metric,
+    "rule_severity_is_unknown": rule_severity_is_unknown,
+    "rule_condition_names_a_missing_step": rule_condition_names_a_missing_step,
+    "rule_reads_an_unprovisioned_datasource": rule_reads_an_unprovisioned_datasource,
+    "rule_is_paused": rule_is_paused,
+    "rule_duration_is_not_valid": rule_duration_is_not_valid,
+    "rule_names_another_receiver": rule_names_another_receiver,
+    "rule_file_has_no_rules": rule_file_has_no_rules,
+    "contact_point_has_a_literal_topic": contact_point_has_a_literal_topic,
+    "contact_point_has_a_static_key": contact_point_has_a_static_key,
+    "contact_point_is_not_sns": contact_point_is_not_sns,
+    "contact_point_has_no_subject": contact_point_has_no_subject,
+    "contact_point_file_is_missing": contact_point_file_is_missing,
+    "policy_default_receiver_is_another": policy_default_receiver_is_another,
+    "policy_has_a_route_to_another_receiver": policy_has_a_route_to_another_receiver,
+    "grafana_environment_lacks_the_topic_arn": grafana_environment_lacks_the_topic_arn,
     "dropped_panel_reads_the_unmapped_counter": dropped_panel_reads_the_unmapped_counter,
 }
 

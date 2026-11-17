@@ -1,0 +1,155 @@
+# Airflow alerts. Each rule queries the provisioned Prometheus data source and fires when its expression is 1; the expression is written with bool so it returns 1 or 0.
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_airflow
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: airflow_scheduler_silent
+        title: AirflowSchedulerSilent
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(sum(increase(airflow_scheduler_heartbeat_total[10m])) == bool 0) or absent(airflow_scheduler_heartbeat_total)'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: The Airflow scheduler sent no heartbeat for 10 minutes.
+
+      - uid: airflow_dag_run_failed
+        title: AirflowDagRunFailed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'sum by (dag_id) (increase(airflow_dagrun_duration_seconds_count{state="failed"}[1h])) > bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A DAG run failed in the last hour.
+
+      - uid: airflow_task_failed
+        title: AirflowTaskFailed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'sum by (dag_id, task_id) (increase(airflow_task_instance_finished_total{state="failed"}[1h])) > bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A task failed in the last hour.
+
+      - uid: airflow_dag_import_errors
+        title: AirflowDagImportErrors
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'airflow_dag_processing_import_errors > bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A DAG file fails to import.

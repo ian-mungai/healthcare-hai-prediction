@@ -20,6 +20,7 @@ variables {
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
   monitoring_enabled          = true
+  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 
   # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
   # that does not set a switch tests it off, so the fixture sets each one explicitly.
@@ -638,4 +639,41 @@ run "grafana_password_name_must_be_a_plain_parameter_path" {
   }
 
   expect_failures = [var.grafana_admin_password_name]
+}
+
+run "grafana_gets_the_alerts_topic_and_the_region_for_its_sns_contact_point" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[2].environment, { name = "ALERTS_TOPIC_ARN", value = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[2].environment, { name = "AWS_REGION", value = "us-west-2" })
+    )
+    error_message = "The Grafana container carries the alerts topic ARN and the region that provisioning/alerting/contact_points.yml reads, and no access key or secret."
+  }
+
+  assert {
+    condition     = !can(regex("AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN", aws_ecs_task_definition.service["monitoring"].container_definitions))
+    error_message = "No monitoring container carries a static AWS credential: Grafana signs with the task role through the default credential chain."
+  }
+}
+
+run "monitoring_without_the_alerts_topic_is_refused" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = null
+  }
+
+  expect_failures = [var.alerts_topic_arn]
+}
+
+run "a_topic_arn_with_a_wildcard_is_refused" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:*"
+  }
+
+  expect_failures = [var.alerts_topic_arn]
 }

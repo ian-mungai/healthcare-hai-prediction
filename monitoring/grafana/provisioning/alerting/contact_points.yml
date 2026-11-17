@@ -1,0 +1,17 @@
+# The one contact point: Amazon SNS, the platform alerts topic. Grafana expands the environment variables of its container in provisioning files: the monitoring
+# task sets ALERTS_TOPIC_ARN (the platform output) and AWS_REGION. No access key, secret, profile or role is set, so Grafana signs with the task role through the
+# default credential chain (the container credentials provider). The SNS subject cannot be empty.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: hai_sns
+    receivers:
+      - uid: hai_sns
+        type: sns
+        settings:
+          topic_arn: ${ALERTS_TOPIC_ARN}
+          sigv4:
+            region: ${AWS_REGION}
+          subject: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+          message: '{{ template "sns.default.message" . }}'

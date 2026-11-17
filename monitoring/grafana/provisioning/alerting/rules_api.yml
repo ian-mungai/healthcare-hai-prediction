@@ -1,0 +1,120 @@
+# Model API alerts.
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_api
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: api_down
+        title: ApiDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'up{job="hai_api"} == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Prometheus cannot scrape the model API. Expected until the API runs on the host.
+
+      - uid: api_error_rate_high
+        title: ApiErrorRateHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'sum(rate(hai_api_requests_total{status=~"5.."}[5m])) / sum(rate(hai_api_requests_total[5m])) > bool 0.05'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5 percent of API requests ended in a server error for 10 minutes.
+
+      - uid: api_latency_high
+        title: ApiLatencyHigh
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'histogram_quantile(0.95, sum by (le) (rate(hai_api_request_duration_seconds_bucket[5m]))) > bool 1'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The 95th percentile API latency exceeded 1 second for 10 minutes.

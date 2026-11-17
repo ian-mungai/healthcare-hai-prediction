@@ -4,7 +4,8 @@ Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.monit
 
 - ``monitoring/statsd/mapping.yml``: the Prometheus metrics Airflow's StatsD events become.
 - ``monitoring/known_metrics.json``: the other metrics a dashboard or alert may name, and the contract the model API has to meet.
-- ``monitoring/prometheus/prometheus.yml`` and ``alerts.yml``: the scrape jobs and the alert rules.
+- ``monitoring/prometheus/prometheus.yml``: the scrape jobs. ``alerts.yml`` must not exist: the alert rules are Grafana-managed.
+- ``monitoring/grafana/provisioning/alerting/``: the alert rules (``rules_*.yml``), the one Amazon SNS contact point and the notification policy.
 - ``monitoring/grafana/provisioning/**`` and ``monitoring/grafana/dashboards/*.json``: the data source and the dashboards.
 - ``infra/services/monitoring.tf``: the ports and the folders the task mounts.
 
@@ -30,6 +31,13 @@ KNOWN = f"{MONITORING}/known_metrics.json"
 MAPPING = f"{MONITORING}/statsd/mapping.yml"
 SCRAPE = f"{MONITORING}/prometheus/prometheus.yml"
 ALERTS = f"{MONITORING}/prometheus/alerts.yml"
+ALERTING = f"{MONITORING}/grafana/provisioning/alerting"
+CONTACT = f"{ALERTING}/contact_points.yml"
+POLICIES = f"{ALERTING}/policies.yml"
+CONTACT_NAME = "hai_sns"
+TOPIC_REFERENCE = "${ALERTS_TOPIC_ARN}"
+STATIC_CREDENTIALS = ("access_key", "secret_key", "profile", "role_arn")
+STATES = ("OK", "Alerting", "NoData", "Error")
 DATASOURCE = f"{MONITORING}/grafana/provisioning/datasources/prometheus.yml"
 PROVIDER = f"{MONITORING}/grafana/provisioning/dashboards/dashboards.yml"
 DASHBOARDS = f"{MONITORING}/grafana/dashboards"
@@ -241,33 +249,130 @@ def expression_problems(where: str, expression: str, metrics: dict[str, set[str]
     return problems
 
 
-def alert_problems(document: Any, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
-    """Problems with the alert rules file."""
+def step_problems(where: str, rule: dict[str, Any], datasource_uid: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
+    """Problems with the query and expression steps of one Grafana-managed rule: the condition, the data source and every PromQL expression."""
     problems: list[str] = []
-    seen: set[str] = set()
-    groups = document.get("groups") if isinstance(document, dict) else None
-    if not isinstance(groups, list) or not groups:
-        return [f"{ALERTS} needs a groups list"]
-    for group in groups:
-        for rule in group.get("rules", []):
-            name = str(rule.get("alert", ""))
-            if not name:
-                problems.append(f"{ALERTS} has a rule without an alert name")
-                continue
-            if name in seen:
-                problems.append(f"{ALERTS}: {name} is defined twice")
-            seen.add(name)
-            if not isinstance(rule.get("expr"), str) or not rule["expr"].strip():
-                problems.append(f"{ALERTS}: {name} has no expression")
-            else:
-                problems.extend(expression_problems(f"{ALERTS}: {name}", rule["expr"], metrics, jobs))
-            if rule.get("labels", {}).get("severity") not in SEVERITIES:
-                problems.append(f"{ALERTS}: {name} needs a severity label of {' or '.join(SEVERITIES)}")
-            if not str(rule.get("annotations", {}).get("summary", "")).strip():
-                problems.append(f"{ALERTS}: {name} has no summary")
-            if "for" in rule and not DURATION.match(str(rule["for"])):
-                problems.append(f"{ALERTS}: {name} has the duration {rule['for']}, which is not a whole number of seconds, minutes or hours")
+    steps = [step for step in rule.get("data", []) if isinstance(step, dict)]
+    refs = {str(step.get("refId")) for step in steps}
+    if str(rule.get("condition")) not in refs:
+        problems.append(f"{where}: condition {rule.get('condition')} is not a step of the rule")
+    queries = 0
+    for step in steps:
+        raw_model = step.get("model")
+        model: dict[str, Any] = raw_model if isinstance(raw_model, dict) else {}
+        if step.get("datasourceUid") == "__expr__":
+            if str(model.get("expression", "")) not in refs:
+                problems.append(f"{where}: step {step.get('refId')} reads {model.get('expression')}, which is not a step of the rule")
+            continue
+        queries += 1
+        if step.get("datasourceUid") != datasource_uid:
+            problems.append(
+                f"{where}: step {step.get('refId')} uses the data source {step.get('datasourceUid')}, which is not provisioned (only {datasource_uid} is)"
+            )
+        expression = model.get("expr")
+        if not isinstance(expression, str) or not expression.strip():
+            problems.append(f"{where}: step {step.get('refId')} has no expression")
+        else:
+            problems.extend(expression_problems(where, expression, metrics, jobs))
+    if queries == 0:
+        problems.append(f"{where}: has no query")
     return problems
+
+
+def alert_problems(root: Path, metrics: dict[str, set[str] | None], jobs: set[str], datasource_uid: str, receivers: set[str]) -> list[str]:
+    """Problems with the Grafana-managed alert rule files: identity, steps, severity, summary, duration, pause state and routing."""
+    problems: list[str] = []
+    titles: set[str] = set()
+    uids: set[str] = set()
+    total = 0
+    folder = root / ALERTING
+    for path in sorted(folder.glob("rules_*.yml")) if folder.is_dir() else []:
+        relative = path.relative_to(root).as_posix()
+        document = read_yaml(root, relative, problems)
+        groups = document.get("groups") if isinstance(document, dict) else None
+        if not isinstance(groups, list) or not groups:
+            problems.append(f"{relative} needs a groups list")
+            continue
+        for group in groups:
+            if not DURATION.match(str(group.get("interval", ""))):
+                problems.append(f"{relative}: group {group.get('name')} needs an interval of whole seconds, minutes or hours")
+            for rule in group.get("rules", []):
+                total += 1
+                name = str(rule.get("title", ""))
+                where = f"{relative}: {name}"
+                if not name:
+                    problems.append(f"{relative} has a rule without a title")
+                    continue
+                if name in titles:
+                    problems.append(f"{relative}: {name} is defined twice")
+                titles.add(name)
+                uid = str(rule.get("uid", ""))
+                if not uid:
+                    problems.append(f"{where} has no uid")
+                elif uid in uids:
+                    problems.append(f"{where}: uid {uid} is used twice")
+                uids.add(uid)
+                problems.extend(step_problems(where, rule, datasource_uid, metrics, jobs))
+                if rule.get("labels", {}).get("severity") not in SEVERITIES:
+                    problems.append(f"{where} needs a severity label of {' or '.join(SEVERITIES)}")
+                if not str(rule.get("annotations", {}).get("summary", "")).strip():
+                    problems.append(f"{where} has no summary")
+                if "for" in rule and not DURATION.match(str(rule["for"])):
+                    problems.append(f"{where} has the duration {rule['for']}, which is not a whole number of seconds, minutes or hours")
+                for state in ("noDataState", "execErrState"):
+                    if rule.get(state) not in STATES:
+                        problems.append(f"{where}: {state} must be one of {', '.join(STATES)}")
+                if rule.get("isPaused"):
+                    problems.append(f"{where} is paused, so it never alerts")
+                routed = (rule.get("notification_settings") or {}).get("receiver")
+                if routed is not None and routed not in receivers:
+                    problems.append(f"{where} routes to {routed}, which is not the SNS contact point")
+                if name == SCHEDULER_ALERT and SCHEDULER_ABSENT not in json.dumps(rule):
+                    problems.append(f"{where}: {SCHEDULER_ALERT} must also fire when no heartbeat series exists")
+    if total == 0:
+        problems.append(f"{ALERTING} holds no alert rule")
+    return problems
+
+
+def contact_point_problems(contact: Any, policies: Any) -> tuple[list[str], set[str]]:
+    """Problems with the contact point and the policy tree, and the receiver names that are valid."""
+    problems: list[str] = []
+    points = contact.get("contactPoints") if isinstance(contact, dict) else None
+    receivers: set[str] = set()
+    if not isinstance(points, list) or len(points) != 1 or len(points[0].get("receivers", [])) != 1:
+        problems.append(f"{CONTACT} must provision exactly one contact point with one integration")
+    else:
+        name, integration = points[0].get("name"), points[0]["receivers"][0]
+        receivers.add(str(name))
+        settings = integration.get("settings") if isinstance(integration.get("settings"), dict) else {}
+        if name != CONTACT_NAME:
+            problems.append(f"{CONTACT}: the contact point must be named {CONTACT_NAME}")
+        if integration.get("type") != "sns":
+            problems.append(f"{CONTACT}: the integration must be of type sns")
+        if settings.get("topic_arn") != TOPIC_REFERENCE:
+            problems.append(f"{CONTACT}: topic_arn must be {TOPIC_REFERENCE}, so the ARN comes from Terraform and is never typed here")
+        if not str(settings.get("subject", "")).strip():
+            problems.append(f"{CONTACT} needs a subject, because SNS refuses an empty one")
+        raw_sigv4 = settings.get("sigv4")
+        sigv4: dict[str, Any] = raw_sigv4 if isinstance(raw_sigv4, dict) else {}
+        for field in STATIC_CREDENTIALS:
+            if field in sigv4:
+                problems.append(f"{CONTACT}: sigv4 sets {field}, but the contact point must use the task role through the default credential chain")
+    tree = policies.get("policies") if isinstance(policies, dict) else None
+    if not isinstance(tree, list) or len(tree) != 1:
+        problems.append(f"{POLICIES} must provision exactly one policy tree")
+        return problems, receivers
+
+    def walk(node: dict[str, Any], default: bool) -> None:
+        if node.get("receiver") not in receivers:
+            problems.append(
+                f"{POLICIES}: the {'default receiver' if default else 'route'} routes to {node.get('receiver')}, which is not the SNS contact point"
+            )
+        for child in node.get("routes", []):
+            walk(child, False)
+
+    walk(tree[0], True)
+    return problems, receivers
 
 
 def dashboard_problems(relative: str, dashboard: Any, datasource_uid: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
@@ -320,6 +425,9 @@ def terraform_problems(root: Path, scrape: Any, datasource: Any, provider: Any) 
     if text is None:
         return problems
     ports = {int(port) for port in HOST_PORT.findall(text)}
+    for variable in ("ALERTS_TOPIC_ARN", "AWS_REGION"):
+        if f'name = "{variable}"' not in text:
+            problems.append(f"{TERRAFORM}: the Grafana container must set {variable}, which {CONTACT} reads")
     for folder in sorted(set(MOUNT_FOLDER.findall(text))):
         if not (root / folder).is_dir():
             problems.append(f"{TERRAFORM} mounts {folder}, which does not exist")
@@ -357,7 +465,6 @@ def check(root: Path = ROOT) -> list[str]:
     mapping = read_yaml(root, MAPPING, problems)
     known = read_json(root, KNOWN, problems)
     scrape = read_yaml(root, SCRAPE, problems)
-    alerts = read_yaml(root, ALERTS, problems)
     datasource = read_yaml(root, DATASOURCE, problems)
     provider = read_yaml(root, PROVIDER, problems)
     metrics = {**known_metrics(known, problems), **(mapping_metrics(mapping, problems) if mapping is not None else {})}
@@ -370,16 +477,20 @@ def check(root: Path = ROOT) -> list[str]:
         targets = [str(target) for config in job.get("static_configs", []) for target in config.get("targets", [])]
         if expected is not None and targets != expected:
             problems.append(f"{SCRAPE}: job {job['job_name']} must scrape {', '.join(expected)}, not {targets}")
-    for group in (alerts or {}).get("groups", []):
-        for rule in group.get("rules", []):
-            if rule.get("alert") == SCHEDULER_ALERT and SCHEDULER_ABSENT not in str(rule.get("expr")):
-                problems.append(f"{ALERTS}: {SCHEDULER_ALERT} must also fire when no heartbeat series exists")
-    if alerts is not None:
-        problems.extend(alert_problems(alerts, metrics, jobs))
     datasources = (datasource or {}).get("datasources", [])
     uids = [str(source.get("uid")) for source in datasources]
     if datasource is not None and len(uids) != 1:
         problems.append(f"{DATASOURCE} must provision exactly one data source")
+    if (root / ALERTS).exists():
+        problems.append(f"{ALERTS} must not exist: the alert rules are Grafana-managed (monitoring/grafana/provisioning/alerting)")
+    if scrape is not None and (scrape.get("rule_files") or scrape.get("alerting")):
+        problems.append(f"{SCRAPE}: rule_files and alerting must not be set, because Grafana evaluates the alert rules")
+    contact = read_yaml(root, CONTACT, problems)
+    policies = read_yaml(root, POLICIES, problems)
+    contact_problems, receivers = contact_point_problems(contact, policies) if contact is not None and policies is not None else ([], set())
+    problems.extend(contact_problems)
+    if uids:
+        problems.extend(alert_problems(root, metrics, jobs, uids[0], receivers))
     folder = root / DASHBOARDS
     files = sorted(folder.glob("*.json")) if folder.is_dir() else []
     if not files:

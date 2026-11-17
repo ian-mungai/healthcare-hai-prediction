@@ -98,6 +98,9 @@ locals {
         { name = "GF_SNAPSHOTS_EXTERNAL_ENABLED", value = "false" },
         { name = "GF_PATHS_PROVISIONING", value = "/etc/grafana/provisioning" },
         { name = "GF_LOG_MODE", value = "console" },
+        # The alert contact point (provisioning/alerting/contact_points.yml) reads the topic and the region from these two variables.
+        { name = "ALERTS_TOPIC_ARN", value = var.alerts_topic_arn },
+        { name = "AWS_REGION", value = var.aws_region },
       ]
       secrets = [{ name = "GF_SECURITY_ADMIN_PASSWORD", valueFrom = local.secret_arn["grafana_admin_password"] }]
       mountPoints = [

@@ -501,6 +501,22 @@ variable "grafana_admin_password_name" {
   }
 }
 
+variable "alerts_topic_arn" {
+  description = "ARN of the platform alerts topic (the alerts_topic_arn output of infra/platform). Grafana sends its alert notifications to this one topic through the Amazon SNS contact point in monitoring/grafana/provisioning/alerting, which reads the ARN from the container environment ALERTS_TOPIC_ARN. The task role (control_plane_task) needs sns:Publish and sns:GetTopicAttributes on it (infra/iam). Required while monitoring_enabled is true, because Grafana refuses to provision a contact point without a topic."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alerts_topic_arn == null || can(regex("^arn:aws:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$", var.alerts_topic_arn))
+    error_message = "Use the ARN of one SNS topic with no wildcard, for example the platform output alerts_topic_arn."
+  }
+
+  validation {
+    condition     = !var.monitoring_enabled || var.alerts_topic_arn != null
+    error_message = "Supply alerts_topic_arn while monitoring_enabled is true, or Grafana has no topic for its alert notifications."
+  }
+}
+
 variable "monitoring_memory_mib" {
   description = "Hard limit and reservation in MiB of each monitoring container. These are estimates for a few hundred series and one dashboard, not measurements: replace them after the silver and gold runs show the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana and 32 MiB for the exporter, and at least its reservation."
   type = object({

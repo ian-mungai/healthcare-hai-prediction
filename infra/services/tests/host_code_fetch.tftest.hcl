@@ -21,6 +21,7 @@ variables {
   data_mount_path                 = "/mnt/example-data"
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
+  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
   mlflow_enabled                  = true
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   host_private_ip                 = "10.0.1.20"

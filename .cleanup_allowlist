@@ -103,3 +103,5 @@ flag scripts/training/aws_run_cases.py -- the file's own --port option of a live
 flag services/mlflow/docker-compose.mlflow.yaml -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
 unused-code scripts/infrastructure/monitoring_panel_cases.py -- http.server dispatches do_GET and log_message of the loopback Prometheus stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/metrics_push_cases.py -- http.server dispatches do_PUT, do_DELETE and log_message of the loopback Pushgateway stand-in by method name, and reads daemon_threads -- permanent
+config scripts/infrastructure/monitoring_files.py -- the check must name the Prometheus rule_files and alerting keys that it forbids, because the alert rules moved to Grafana -- permanent
+config scripts/infrastructure/monitoring_cases.py -- the planted defect puts the removed Prometheus rule_files key back to prove the check refuses it -- permanent

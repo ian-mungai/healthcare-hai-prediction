@@ -1,0 +1,46 @@
+# Monitoring alerts.
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_monitoring
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: statsd_exporter_down
+        title: StatsdExporterDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'up{job="statsd_exporter"} == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Prometheus cannot scrape the StatsD exporter, so Airflow metrics are lost.

@@ -280,6 +280,7 @@ class Pusher:
         each = self.request_timeout if self.request_timeout is not None else REQUEST_TIMEOUT
         ends = time.monotonic() + total
         self.closed = True
+        waited = self.lock.acquire(timeout=max(0.0, min(each, ends - time.monotonic())))
         try:
             values = {
                 "hai_job_finish_timestamp_seconds": time.time(),
@@ -291,12 +292,15 @@ class Pusher:
             body = exposition(self.clean([*(Sample(name, value) for name, value in values.items() if value is not None), *samples]))
             if not self.send("PUT", outcome, body, min(each, ends - time.monotonic())):
                 return False
-            if self.running_sent:
+            if self.running_sent or not waited:
                 self.send("DELETE", "running", "", min(each, ends - time.monotonic()))
             return True
         except Exception as error:
             line("metrics_push_failed", step="put", reason=f"{type(error).__name__}: {error}")
             return False
+        finally:
+            if waited:
+                self.lock.release()
 
 
 class Heartbeat(threading.Thread):
