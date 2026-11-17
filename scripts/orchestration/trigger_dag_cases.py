@@ -622,6 +622,11 @@ def live_check_cases() -> dict[str, bool]:
         "--run-kind": ("monthly", "run kind"),
         "--capture-root": ("raw/", "capture root"),
         "--research-attempt": ("2", "research attempt"),
+        "--population": ("sensitivity", "takes only"),
+        "--mlflow": ("local", "takes only"),
+        "--hai-types": ("HAI_6", "takes only"),
+        "--trigger": ("drift:anything", "takes only"),
+        "--promotion-mode": ("rollback", "takes only"),
     }
     return {
         "the live check triggers with the run, the mode, the model and the type and nothing else": code == 0
@@ -644,6 +649,69 @@ def live_check_cases() -> dict[str, bool]:
     }
 
 
+FLAG_VALUES = {
+    "--run-id": RUN,
+    "--silver-snapshot-run": SILVER,
+    "--gold-snapshot-run": SILVER,
+    "--run-kind": "monthly",
+    "--capture-root": "raw/",
+    "--base-run": BASE,
+    "--features-run": FEATURES_RUN,
+    "--research-attempt": "2",
+    "--drift-attempt": "2",
+    "--population": "sensitivity",
+    "--hai-types": "HAI_6",
+    "--trigger": "drift:anything",
+    "--mlflow": "aws",
+    "--model": "m2",
+    "--hai-type": HAI_TYPE,
+    "--model-version": "7",
+    "--promotion-mode": "rollback",
+    "--deploy-mode": "stable",
+    "--research-run": RESEARCH_RUN,
+}
+# What each workflow's form takes besides the mode and the wait: the contract, written out here and not read from the command.
+ACCEPTED_FLAGS = {
+    "ingestion_dag": {"--run-id", "--run-kind", "--capture-root"},
+    "silver_transform_dag": {"--run-id"},
+    "gold_transform_dag": {"--run-id", "--silver-snapshot-run"},
+    "features_base_dag": {"--run-id", "--gold-snapshot-run"},
+    "training_dag": {"--run-id", "--base-run", "--features-run", "--population", "--hai-types", "--trigger", "--mlflow", "--model"},
+    "research_dag": {"--run-id", "--base-run", "--research-attempt", "--population", "--hai-types", "--mlflow"},
+    "model_promotion_dag": {"--run-id", "--hai-type", "--model-version", "--promotion-mode", "--mlflow"},
+    "serving_deploy_dag": {"--run-id", "--hai-type", "--deploy-mode", "--research-run"},
+    "drift_live_check_dag": {"--run-id", "--model", "--hai-type"},
+    "drift_monitoring_dag": {"--run-id", "--model", "--features-run", "--drift-attempt", "--mlflow"},
+}
+REQUIRED_FLAGS = {
+    "gold_transform_dag": ("--silver-snapshot-run",),
+    "features_base_dag": ("--gold-snapshot-run",),
+    "training_dag": ("--model",),
+    "research_dag": ("--base-run",),
+    "model_promotion_dag": ("--hai-type", "--model-version"),
+    "serving_deploy_dag": ("--hai-type", "--deploy-mode"),
+    "drift_live_check_dag": ("--model", "--hai-type"),
+    "drift_monitoring_dag": ("--model", "--features-run", "--drift-attempt"),
+}
+
+
+def every_workflow_takes_only_its_options() -> dict[str, bool]:
+    """An option that a workflow's form does not take is refused when it is given, whatever its value and even when it equals the default, before the secret
+    is read and before any Airflow call. The table of accepted options is the contract of the forms, and each workflow is tried with each option outside it."""
+    results = {}
+    for dag, accepted in ACCEPTED_FLAGS.items():
+        needed = REQUIRED_FLAGS.get(dag, ())
+        base = ["--dag", dag, "--mode", "real", *[part for flag in needed for part in (flag, FLAG_VALUES[flag])], "--wait-seconds", "5"]
+        outside = sorted(set(FLAG_VALUES) - accepted - set(needed))
+        refused = []
+        for flag in outside:
+            api = Ends()
+            code, printed, _, _ = invoke(api, [*base, flag, FLAG_VALUES[flag]])
+            refused.append(code == 1 and printed is None and not api.calls and api.token_reads == 0)
+        results[f"{dag} refuses each of its {len(outside)} unsupported options before any call"] = bool(outside) and all(refused)
+    return results
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -655,6 +723,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "base run": base_run_cases,
     "drift attempt": drift_attempt_cases,
     "live check": live_check_cases,
+    "accepted options": every_workflow_takes_only_its_options,
 }
 
 

@@ -104,6 +104,43 @@ RESEARCH_DAG = "research_dag"
 SERVING_DAG = "serving_deploy_dag"
 LIVE_DAG = "drift_live_check_dag"
 DRIFT_DAG = "drift_monitoring_dag"
+# The options of each workflow's form besides the mode and the wait, by the name of their argument. A workflow takes no other option: one that is given and is
+# not here is refused before the secret is read, whatever its value and even when it equals the default.
+ACCEPTED_OPTIONS = {
+    "ingestion_dag": {"run_id", "run_kind", "capture_root"},
+    "silver_transform_dag": {"run_id"},
+    "gold_transform_dag": {"run_id", "silver_snapshot_run"},
+    "features_base_dag": {"run_id", "gold_snapshot_run"},
+    "training_dag": {"run_id", "base_run", "features_run", "population", "hai_types", "trigger", "mlflow", "model"},
+    "research_dag": {"run_id", "base_run", "research_attempt", "population", "hai_types", "mlflow"},
+    "model_promotion_dag": {"run_id", "hai_type", "model_version", "promotion_mode", "mlflow"},
+    "serving_deploy_dag": {"run_id", "hai_type", "deploy_mode", "research_run"},
+    LIVE_DAG: {"run_id", "model", "hai_type"},
+    DRIFT_DAG: {"run_id", "model", "features_run", "drift_attempt", "mlflow"},
+}
+# The options that have a default. They are unset after parsing, so that the ones the caller gave are known, and take their default afterwards.
+OPTION_DEFAULTS: dict[str, Any] = {"population": "primary", "hai_types": list(HAI_TYPES), "trigger": "manual", "mlflow": "aws", "promotion_mode": "promote"}
+OPTION_NAMES = (
+    "run_id",
+    "silver_snapshot_run",
+    "run_kind",
+    "capture_root",
+    "gold_snapshot_run",
+    "base_run",
+    "features_run",
+    "research_attempt",
+    "drift_attempt",
+    "population",
+    "hai_types",
+    "trigger",
+    "mlflow",
+    "model",
+    "hai_type",
+    "model_version",
+    "promotion_mode",
+    "deploy_mode",
+    "research_run",
+)
 FAILED_TASK_STATES = ("failed", "upstream_failed")
 # The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
 PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
@@ -343,6 +380,16 @@ def drift_attempt_conf(args: argparse.Namespace) -> dict[str, Any]:
     return {"run_id": derived, "mode": args.mode, "mlflow": "aws", "model": args.model, "features_run": args.features_run, "drift_attempt": attempt}
 
 
+def require_accepted_options(dag: str, given: set[str]) -> None:
+    """Refuse every option that was given and that the form of ``dag`` does not take."""
+    extra = sorted(given - ACCEPTED_OPTIONS[dag])
+    if extra:
+        takes = ", ".join("--" + name.replace("_", "-") for name in sorted(ACCEPTED_OPTIONS[dag]))
+        raise TriggerError(
+            f"refused: {dag} takes only --mode, --wait-seconds{', ' + takes if takes else ''}, not {', '.join('--' + name.replace('_', '-') for name in extra)}"
+        )
+
+
 def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
     """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states."""
     started = time.monotonic()
@@ -445,16 +492,16 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="drift_monitoring_dag only, with --model and --features-run: the attempt (2 to 99) of the drift check of a model run, after a check that failed",
     )
-    cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
-    cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
-    cli.add_argument("--trigger", default="manual")
-    cli.add_argument("--mlflow", choices=("local", "aws"), default="aws")
+    cli.add_argument("--population", choices=("primary", "sensitivity"))
+    cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+")
+    cli.add_argument("--trigger")
+    cli.add_argument("--mlflow", choices=("local", "aws"))
     cli.add_argument(
         "--model", choices=MODELS, help="the model a training run fits (required for training_dag), a drift attempt checks or the live drift check covers"
     )
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
-    cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
+    cli.add_argument("--promotion-mode", choices=("promote", "rollback"))
     cli.add_argument("--deploy-mode", help="serving_deploy_dag only, required: canary or stable")
     cli.add_argument("--research-run", help="serving_deploy_dag canary only, required: the research run (a run ID) whose record names the challenger")
     cli.add_argument("--wait-seconds", type=float, required=True, help=f"the deadline of the whole wait, at most {MAX_WAIT_SECONDS} s")
@@ -463,6 +510,10 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--settle", action="store_true", help="pause the DAG and mark the run --run-id failed unless it is absent or has ended")
     action.add_argument("--clear-failed", action="store_true", help="run the failed tasks of the failed run --run-id again in the same run")
     args = cli.parse_args(argv)
+    given = {name for name in OPTION_NAMES if getattr(args, name) is not None}
+    for name, value in OPTION_DEFAULTS.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
     inspecting = "status" if args.status else "settle" if args.settle else "clear" if args.clear_failed else None
     if inspecting and (
         args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None or args.drift_attempt is not None
@@ -495,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
             raise TriggerError(f"refused: {args.dag} takes no deploy mode and no research run, only {SERVING_DAG} does")
         if args.dag == DRIFT_DAG:
             conf = drift_attempt_conf(args)
+            require_accepted_options(args.dag, given)
             result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), read_token_secret(deadline), deadline=deadline))
             sys.stdout.write(json.dumps(result) + "\n")
             return 0 if result["state"] == "success" else 1
@@ -528,6 +580,7 @@ def main(argv: list[str] | None = None) -> int:
             args.capture_root,
         )
         conf |= extra
+        require_accepted_options(args.dag, given)
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:
