@@ -19,6 +19,7 @@ from scripts.infrastructure.host_session_stand_in import CATALOG_SETUP_FAMILY, P
 TASK_DEFINITION_NEW = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:9"
 TASK_DEFINITION_OLD = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:8"
 OLD_TASK = "arn:aws:ecs:stand-in:111111111111:task/stand-in-cluster/postgrestask0000"
+PENDING_KEY = "lakehouse/host_state/catalog_recovery_pending.json"
 RECORD_BUCKET = "stand-in-data-bucket"
 RECORD_KEY = "lakehouse/host_state/code_run_record.json"
 MLFLOW_USER_FAMILY = "stand-in-mlflow-user"
@@ -45,27 +46,57 @@ class RecordHost(StandInHost):
         **fields: Any,
     ) -> None:
         super().__init__(faults, code_fetch=True, **fields)
-        self.record: str | None = None
+        self.objects: dict[str, str] = {}
         self.puts: list[dict[str, list[str]]] = []
         self.setup_exits, self.old_setup, self.restored = setup_exits, old_setup, restored
+        self.marker_at_launch: list[bool] = []
         self.handlers[("s3api", "get-object")] = self.s3_get_object
         self.handlers[("s3api", "put-object")] = self.s3_put_object
+        self.handlers[("s3api", "delete-object")] = self.s3_delete_object
+
+    @property
+    def record(self) -> str | None:
+        """The code run record object, or None."""
+        return self.objects.get(RECORD_KEY)
+
+    @record.setter
+    def record(self, value: str | None) -> None:
+        if value is None:
+            self.objects.pop(RECORD_KEY, None)
+        else:
+            self.objects[RECORD_KEY] = value
+
+    def denied(self, key: str) -> bool:
+        """Every object call is refused by ``s3_denied``; only the pending-recovery marker by ``s3_denied_pending``."""
+        return "s3_denied" in self.faults or ("s3_denied_pending" in self.faults and key == PENDING_KEY)
 
     def s3_get_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        if "s3_denied" in self.faults:
-            raise StandInError("AccessDenied")
         key, target = options["--key"][0], options["--key"][1]
-        if key != RECORD_KEY or self.record is None:
+        if self.denied(key):
+            raise StandInError("AccessDenied")
+        if key not in self.objects:
             raise StandInError("NoSuchKey")
-        Path(target).write_text(self.record, encoding="utf-8")
-        return {"ContentLength": len(self.record)}
+        Path(target).write_text(self.objects[key], encoding="utf-8")
+        return {"ContentLength": len(self.objects[key])}
 
     def s3_put_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        if "s3_denied" in self.faults:
+        key = options["--key"][0]
+        if self.denied(key):
             raise StandInError("AccessDenied")
         self.puts.append(options)
-        self.record = Path(options["--body"][0]).read_text(encoding="utf-8").strip()
+        self.objects[key] = Path(options["--body"][0]).read_text(encoding="utf-8").strip()
         return {"ETag": "stand-in"}
+
+    def s3_delete_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        key = options["--key"][0]
+        if self.denied(key) or "s3_delete_denied" in self.faults:
+            raise StandInError("AccessDenied")
+        self.objects.pop(key, None)
+        return {}
+
+    def catalog_setup_exit(self, options: dict[str, list[str]], code: int) -> int:
+        self.marker_at_launch.append(PENDING_KEY in self.objects)
+        return super().catalog_setup_exit(options, code)
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         if self.setup_exits is not None and options.get("--service-name") == [SERVICES["postgres"]]:
@@ -101,6 +132,8 @@ class RecordHost(StandInHost):
 
     def logs_get_log_events(self, options: dict[str, list[str]]) -> dict[str, Any]:
         stream = options["--log-stream-name"][0]
+        if options["--log-group-name"] == [POSTGRES_LOG_GROUP] and "log_denied" in self.faults:
+            raise StandInError("AccessDeniedException")
         if options["--log-group-name"] == [POSTGRES_LOG_GROUP]:
             reasons = {
                 "postgres_databases": "postgres_databases: restore refused: database airflow: pg_restore failed or passed its 1200 second deadline",
@@ -127,6 +160,8 @@ def build(
     old_setup: bool = False,
     restored: bool = False,
     catalog_setup: bool = True,
+    host: RecordHost | None = None,
+    log_group: str = POSTGRES_LOG_GROUP,
 ) -> tuple[RecordHost, Session, list[str]]:
     """A session over the stand-in. ``record`` is the value of the code run record; ``named`` gives the session the parameter and log group names;
     ``catalog_setup`` gives the stack the catalog setup one-shot, which the restore step runs in."""
@@ -134,12 +169,16 @@ def build(
 
     cases = importlib.import_module("scripts.infrastructure.host_session_cases")
     module = importlib.import_module("scripts.infrastructure.host_session")  # the module as it is loaded now: a plant replaces it in sys.modules
-    host, lines = RecordHost(faults, setup_exits, old_setup, restored, checkout=checkout, code_run=code_run, catalog_setup=catalog_setup), list[str]()
+    lines = list[str]()
+    if host is None:
+        host = RecordHost(faults, setup_exits, old_setup, restored, checkout=checkout, code_run=code_run, catalog_setup=catalog_setup)
+        host.record = record
+    else:
+        host.faults, host.setup_exits, host.restored = set(faults or ()), setup_exits, restored
     if mlflow_user:
         host.families["mlflow_user"] = MLFLOW_USER_FAMILY
-    host.record = record
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION, "data_bucket_name": RECORD_BUCKET, "expected_account_id": "1" * 12}, host.runner)
-    names = replace(cases.names(), code_record_bucket=RECORD_BUCKET, postgres_log_group=POSTGRES_LOG_GROUP) if named else cases.names()
+    names = replace(cases.names(), code_record_bucket=RECORD_BUCKET, postgres_log_group=log_group) if named else cases.names()
     if mlflow_user:
         names = replace(names, one_shot={**names.one_shot, "mlflow_user": MLFLOW_USER_FAMILY})
     if catalog_setup:
@@ -427,6 +466,91 @@ def a_result_line_that_is_not_the_restore_reply_fails_start() -> dict[str, bool]
     return {"start fails and says the line is not the restore reply": message is not None and "not the restore reply" in message}
 
 
+SETUP_OK = {"postgres_restore_fetch": 0, "postgres_databases": 0}
+
+
+def a_failed_catalog_recovery_is_retried_by_the_next_start() -> dict[str, bool]:
+    host, session, _ = build({"restore_refuses"}, setup_exits=SETUP_OK, restored=True)
+    first = failure(session.start)
+    kept = PENDING_KEY in host.objects
+    host2, session2, lines2 = build(setup_exits=SETUP_OK, restored=False, host=host)
+    session2.start()
+    return {
+        "the first start fails by name": first is not None and "catalog restore failed" in first,
+        "the marker stays after the failure": kept,
+        "the next start runs the recovery although nothing was restored in it": len(host.catalog_launches) == 2 and host2 is host,
+        "the recovery succeeded and the marker is cleared": PENDING_KEY not in host.objects and any(line.startswith("catalog_restored") for line in lines2),
+        "the start after that runs no recovery": run_again_skips(host),
+    }
+
+
+def run_again_skips(host: RecordHost) -> bool:
+    launches = len(host.catalog_launches)
+    _, session, _ = build(setup_exits=SETUP_OK, restored=False, host=host)
+    session.start()
+    return len(host.catalog_launches) == launches
+
+
+def the_pending_marker_is_written_before_the_recovery_and_cleared_after_it() -> dict[str, bool]:
+    host, session, lines = build(setup_exits=SETUP_OK, restored=True)
+    session.start()
+    return {
+        "the recovery found the marker already written": host.marker_at_launch == [True],
+        "the marker is cleared after the recovery succeeded": PENDING_KEY not in host.objects,
+        "the report names the recovery": any(line.startswith("catalog_restored") for line in lines),
+    }
+
+
+def an_unreadable_setup_log_runs_the_recovery() -> dict[str, bool]:
+    host, session, _ = build({"log_denied"}, setup_exits=SETUP_OK, restored=False)
+    session.start()
+    return {"the recovery ran once": len(host.catalog_launches) == 1, "start finished": bool(host.reloads) and host.desired == 1}
+
+
+def an_unknown_log_group_runs_the_recovery() -> dict[str, bool]:
+    host, session, _ = build(setup_exits=SETUP_OK, restored=False, log_group="")
+    session.start()
+    return {"the recovery ran once": len(host.catalog_launches) == 1}
+
+
+def an_unreadable_pending_marker_runs_the_recovery() -> dict[str, bool]:
+    host, session, _ = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=False)
+    session.start()
+    return {"the recovery ran once": len(host.catalog_launches) == 1, "start finished": bool(host.reloads)}
+
+
+def a_marker_that_cannot_be_written_does_not_skip_the_recovery() -> dict[str, bool]:
+    host, session, lines = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=True)
+    session.start()
+    return {
+        "the recovery ran once": len(host.catalog_launches) == 1,
+        "the report says the marker was not written": any(line.startswith("catalog_recovery_marker_not_written") for line in lines),
+    }
+
+
+def a_pending_marker_of_an_earlier_start_runs_the_recovery_and_is_cleared() -> dict[str, bool]:
+    host, session, _ = build(setup_exits=SETUP_OK, restored=False)
+    host.objects[PENDING_KEY] = "pending"
+    session.start()
+    return {"the recovery ran once": len(host.catalog_launches) == 1, "the marker is cleared": PENDING_KEY not in host.objects}
+
+
+def a_marker_that_cannot_be_cleared_is_reported_and_start_continues() -> dict[str, bool]:
+    host, session, lines = build({"s3_delete_denied"}, setup_exits=SETUP_OK, restored=True)
+    session.start()
+    return {
+        "start finished": bool(host.reloads) and host.desired == 1,
+        "the marker stays so the next start retries": PENDING_KEY in host.objects,
+        "the report says the marker was not cleared": any(line.startswith("catalog_recovery_marker_not_cleared") for line in lines),
+    }
+
+
+def a_readable_log_without_a_restore_and_no_marker_runs_no_recovery() -> dict[str, bool]:
+    host, session, _ = build(setup_exits=SETUP_OK, restored=False)
+    session.start()
+    return {"no recovery ran": host.catalog_launches == [], "no marker was written": PENDING_KEY not in host.objects}
+
+
 def a_stack_without_setup_containers_is_not_checked() -> dict[str, bool]:
     host, session, _ = build()
     session.start()
@@ -436,5 +560,5 @@ def a_stack_without_setup_containers_is_not_checked() -> dict[str, bool]:
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "restore_" + name: function
     for name, function in sorted(globals().items())
-    if callable(function) and function.__module__ == __name__ and name not in {"build", "failure", "installs", "RecordHost"}
+    if callable(function) and function.__module__ == __name__ and name not in {"build", "failure", "installs", "RecordHost", "run_again_skips"}
 }

@@ -571,6 +571,21 @@ def recovery_snapshot(h: Harness) -> Check:
             refuses(lambda: publish.commit_publish(ctx)) and path.read_bytes() == bytes_before + b" "
         )
         path.write_bytes(bytes_before)
+    row = publish.committed_run(ctx)
+    ledger_before = publish.metadata_file(ctx, ctx.plan.runs_table)
+    if row is not None:
+        sibling = {**row, "run_id": run_id(8)}
+        ctx.spark.sql(publish.MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=publish.runs_view(ctx, sibling)))
+    checks["a sibling run's row advances the shared ledger and moves no table of the first run"] = (
+        publish.metadata_file(ctx, ctx.plan.runs_table) != ledger_before and {n: int(m) for n, m in mains(ctx).items() if m is not None} == view["set"]
+    )
+    try:
+        sibling_rerun = publish.commit_publish(ctx)
+    except PublishError:
+        sibling_rerun = {}
+    checks["the first run's rerun after the sibling commit succeeds and leaves its snapshot unchanged"] = (
+        sibling_rerun.get("recovery_snapshot", {}).get("created") is False and path is not None and path.read_bytes() == bytes_before
+    )
     ctx2 = h.context(2, 2)
     run_steps(ctx2)
     late = publish.commit_publish(ctx)

@@ -196,6 +196,58 @@ def case_a_different_snapshot_of_the_run_is_refused_and_kept() -> dict[str, bool
     }
 
 
+def case_a_rerun_of_a_run_after_a_sibling_commit_leaves_its_snapshot_unchanged() -> dict[str, bool]:
+    """Two model-set runs share the publish_runs ledger: the second commit advances the ledger's metadata file and main but moves no table of the first."""
+    store = new_store()
+    spark = committed_catalog()
+    first = context(spark, store)
+    publish.write_committed_snapshot(first, SNAPSHOT_SET)
+    path = store.root / publish.committed_name(RUN)
+    before = (path.read_bytes(), path.stat().st_ino)
+    sibling = {"fct_visit": 1101, "dim_site": 1202}
+    spark.tables["hai_lakehouse.gold.publish_runs"] = {"refs": {"main": RUNS_MAIN + 1}, "file": metadata_file("gold", "publish_runs", 12)}
+    spark.runs.append(
+        (OTHER_RUN, "real", datetime(2026, 11, 17, 18, tzinfo=UTC), SHA, "b" * 64, f"catalog_backup_{OTHER_RUN}.json", "c" * 64, json.dumps(sibling), None)
+    )
+    answer = publish.ensure_committed_snapshot(first, SNAPSHOT_SET)
+    return {
+        "the rerun succeeds and reports the snapshot was not created": answer.get("created") is False and "skipped" not in answer,
+        "the stored snapshot is the same file with the same bytes": (path.read_bytes(), path.stat().st_ino) == before,
+        "no other object appeared": listing(store) == [path.name],
+    }
+
+
+def case_a_sibling_commit_does_not_excuse_a_different_table_state() -> dict[str, bool]:
+    store = new_store()
+    spark = committed_catalog()
+    publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+    path = store.root / publish.committed_name(RUN)
+    kept = path.read_bytes()
+    spark.tables["hai_lakehouse.gold.publish_runs"] = {"refs": {"main": RUNS_MAIN + 1}, "file": metadata_file("gold", "publish_runs", 12)}
+    spark.tables["hai_lakehouse.gold.dim_site"]["file"] = metadata_file("gold", "dim_site", 77)
+    message = refused(lambda: publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET))
+    return {
+        "a changed table of the run is still refused": message is not None and "never replaced" in message,
+        "the stored snapshot is unchanged": path.read_bytes() == kept,
+    }
+
+
+def case_a_stored_snapshot_of_another_shape_is_refused_even_when_only_the_ledger_differs() -> dict[str, bool]:
+    store = new_store()
+    spark = committed_catalog()
+    publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+    path = store.root / publish.committed_name(RUN)
+    stored = json.loads(path.read_bytes())
+    stored["tables"].pop("publish_runs")
+    path.write_bytes(publish.canonical(stored))
+    kept = path.read_bytes()
+    message = refused(lambda: publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET))
+    return {
+        "a snapshot without a ledger entry is refused": message is not None and "never replaced" in message,
+        "it is not rewritten": path.read_bytes() == kept,
+    }
+
+
 def case_a_rerun_after_a_later_commit_writes_nothing() -> dict[str, bool]:
     store = new_store()
     later = committed_catalog(OTHER_RUN, {"fct_visit": 2101, "dim_site": 2202})

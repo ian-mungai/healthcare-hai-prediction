@@ -30,6 +30,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -111,6 +112,7 @@ RELOAD_CONTAINER = (
 RELOAD_VARIABLE = "RELEASE_MODEL"
 POLARIS_PORT = 8181
 CODE_RECORD_KEY = "lakehouse/host_state/code_run_record.json"
+CATALOG_PENDING_KEY = "lakehouse/host_state/catalog_recovery_pending.json"
 CODE_RECORD = re.compile(rf"({CODE_RUN}) ([a-f0-9]{{64}})")
 SETUP_CONTAINERS = ("postgres_restore_fetch", "postgres_databases")  # the setup containers of the postgres task, in the order they run
 SETUP_REASON_WORDS = ("refused", "failed")
@@ -1130,29 +1132,70 @@ class Session:
         """True when the postgres setup has completed and every service is settled."""
         return self.postgres_setup() and self.services_stable()
 
-    def setup_restored(self) -> bool:
-        """True when the databases container of the current postgres task logged a restore (``restored database``)."""
-        if not self.setup_task or not self.names.postgres_log_group:
+    def setup_restore_state(self) -> bool | None:
+        """Whether the databases container of the current postgres task logged a restore (``restored database``): True or False, or None when that cannot
+        be told (the log group is not known or the log cannot be read). A stack whose postgres task has no finished setup container answers False."""
+        if not self.setup_task:
             return False
+        if not self.names.postgres_log_group:
+            return None
         stream = f"postgres_databases/postgres_databases/{self.setup_task.rsplit('/', 1)[-1]}"
         try:
             events = self.call("logs", "get-log-events", ["--log-group-name", self.names.postgres_log_group, "--log-stream-name", stream, "--start-from-head"])
         except HostSessionError:
-            return False
+            return None
         return any(SETUP_RESTORED_WORDS in str(event.get("message", "")) for event in events.get("events", []))
 
+    def pending_marker(self) -> str:
+        """The pending catalog recovery marker kept outside the data volume (an object in the data bucket): ``present``, ``absent``, ``unreadable`` or ``off``
+        when the session names no bucket."""
+        if not self.names.code_record_bucket:
+            return "off"
+        with tempfile.TemporaryDirectory(prefix="catalog_pending_") as folder:
+            try:
+                self.call("s3api", "get-object", ["--key", CATALOG_PENDING_KEY, str(Path(folder) / "marker")])
+            except HostSessionError as error:
+                return "absent" if "NoSuchKey" in str(error) else "unreadable"
+        return "present"
+
+    def write_pending_marker(self) -> bool:
+        """Record that the catalog recovery is owed. A failed write is reported; the recovery still runs on this start."""
+        with tempfile.TemporaryDirectory(prefix="catalog_pending_") as folder:
+            body = Path(folder) / "marker"
+            body.write_text(json.dumps({"pending": "catalog recovery", "since_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")}) + "\n", encoding="utf-8")
+            try:
+                self.call("s3api", "put-object", ["--key", CATALOG_PENDING_KEY, "--body", str(body), "--content-type", "application/json"])
+            except HostSessionError as error:
+                self.step("catalog_recovery_marker_not_written", f"{error}; a failed recovery is then retried only while the restore log shows it")
+                return False
+        return True
+
+    def clear_pending_marker(self) -> None:
+        """Remove the marker after the recovery succeeded. A failed delete is reported and the marker stays, so the next start repeats the recovery."""
+        try:
+            self.call("s3api", "delete-object", ["--key", CATALOG_PENDING_KEY])
+        except HostSessionError as error:
+            self.step("catalog_recovery_marker_not_cleared", f"{error}; the next start repeats the catalog recovery")
+
     def catalog_recovery(self) -> None:
-        """After a start whose database setup restored a database, bring the catalog to the newest committed snapshot of each layer: the ``restore`` step of the
-        catalog setup one-shot, which runs on the host under its own role with the root credential. A failure fails the start, because the catalog would
-        otherwise show an older committed set."""
-        if not self.setup_restored():
+        """Bring the catalog to the newest committed snapshot of each layer (the ``restore`` step of the catalog setup one-shot, which runs on the host under
+        its own role with the root credential) when it is owed: this start restored a database, an earlier start left the pending marker (kept outside the data
+        volume until a recovery succeeded), or either could not be told. The recovery is idempotent, so an unreadable log or marker runs it and never skips it.
+        A stack with no setup container has no restore, so only a marker left earlier runs it there. The marker is written before the run and cleared only
+        after it succeeds, so a failed recovery is retried by the next start. A failure fails the start, because the catalog would otherwise show an older
+        committed set."""
+        restored, marker = self.setup_restore_state(), self.pending_marker()
+        if (restored is False and marker in ("absent", "off")) or (not self.setup_task and marker != "present"):
             return
+        owed = marker == "present" or (marker in ("absent", "unreadable") and self.write_pending_marker())
         try:
             lines = self.catalog_setup("restore", seconds=CATALOG_RESTORE_SECONDS)
         except HostSessionError as error:
             raise HostSessionError(f"catalog restore failed: {error}") from None
         counts = restore_counts(lines)
         self.step("catalog_restored", ", ".join(f"{word} {count}" for word, count in sorted(counts.items())) or "no table to restore")
+        if owed:
+            self.clear_pending_marker()
 
     def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
         """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch

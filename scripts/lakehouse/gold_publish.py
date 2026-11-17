@@ -689,23 +689,41 @@ def committed_document(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[st
     }
 
 
+def same_run_state(stored: bytes, document: Mapping[str, Any], runs_table: str) -> bool:
+    """True when a stored snapshot is this run's state: every field equals the regenerated document except the ledger entry (``publish_runs``), which a
+    later run that shares the ledger advances. The ledger entry only has to keep its shape, so a stored snapshot of any other state of the run's own tables
+    differs."""
+    try:
+        old = json.loads(stored)
+    except ValueError:
+        return False
+    if not isinstance(old, dict) or not isinstance(old.get("tables"), dict):
+        return False
+    ledger = old["tables"].get(runs_table)
+    if not isinstance(ledger, dict) or not isinstance(ledger.get("metadata_file"), str) or type(ledger.get("main_snapshot_id")) is not int:
+        return False
+    return {**old, "tables": {name: entry for name, entry in old["tables"].items() if name != runs_table}} == {
+        **document,
+        "tables": {name: entry for name, entry in document["tables"].items() if name != runs_table},
+    }
+
+
 def write_committed_snapshot(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
-    """Create ``catalog_committed_<run>.json`` once and read it back. An object that exists with the same bytes is left alone; one with other bytes stops the
-    step, and nothing is ever replaced."""
+    """Create ``catalog_committed_<run>.json`` once and read it back. An object that exists is left alone when it is this run's state (the ledger entry may have
+    moved on because a later run advanced the shared ``publish_runs``); one that differs in anything else stops the step, and nothing is ever replaced."""
     if ctx.store is None:
         raise PublishError("no backup location is configured")
-    data = canonical(committed_document(ctx, snapshot_set))
+    document = committed_document(ctx, snapshot_set)
+    data = canonical(document)
     name = committed_name(ctx.run_id)
     created = ctx.store.put_new(name, data)
     ctx.faults.hit("commit:after_committed_snapshot_write")
     stored = ctx.store.get(name)
-    if stored != data:
-        raise PublishError(
-            "a different recovery snapshot of this run already exists and is never replaced"
-            if not created
-            else "the recovery snapshot read back differs from what was written"
-        )
-    return {"name": name, "snapshot_sha256": sha256_bytes(data), "created": created}
+    if created and stored != data:
+        raise PublishError("the recovery snapshot read back differs from what was written")
+    if not created and stored != data and not same_run_state(stored, document, ctx.plan.runs_table):
+        raise PublishError("a different recovery snapshot of this run already exists and is never replaced")
+    return {"name": name, "snapshot_sha256": sha256_bytes(stored), "created": created}
 
 
 def ensure_committed_snapshot(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
