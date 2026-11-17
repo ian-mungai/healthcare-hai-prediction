@@ -53,6 +53,18 @@
       "hai_quality_checks_warned": {"type": "gauge", "labels": ["job", "phase", "outcome", "kind"]},
       "hai_openmetadata_ingest_entities": {"type": "gauge", "labels": ["job", "phase", "outcome", "source"]},
       "hai_openmetadata_ingest_failures": {"type": "gauge", "labels": ["job", "phase", "outcome", "source"]},
+      "hai_training_holdout_rmse": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "model", "slot"]},
+      "hai_training_selected": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "model", "slot"]},
+      "hai_training_challenger_registered": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "model"]},
+      "hai_research_candidate_rmse": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "model"]},
+      "hai_research_eligible_candidates": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_research_challenger": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_research_challenger_model": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "model"]},
+      "hai_research_production_version": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_canary_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "decision"]},
+      "hai_promotion_executed": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "action"]},
+      "hai_promotion_version": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_promotion_notice": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "verdict"]},
       "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
     }
   },

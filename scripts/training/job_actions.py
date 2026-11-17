@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import training_contract
-from scripts.training import dvc_baseline, job_inputs, run_tracking, step_records, targets
+from scripts.training import dvc_baseline, job_inputs, run_tracking, step_records, targets, training_metrics
 from scripts.training.job_failure import EXIT_DEADLINE, JobFailure
 from scripts.training.job_inputs import InputError
 
@@ -423,6 +423,7 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
     }
     bundle_hash = bundle.sha256_of(done["outputs"], hai_type)
     chosen, candidate = result["selection"]["selected"], result["selection"]["registry_candidate"]
+    training_metrics.fit_selection(parameters["model"], hai_type, result["selection"])
     params = {
         "hai_type": hai_type,
         "population": manifest["population"],

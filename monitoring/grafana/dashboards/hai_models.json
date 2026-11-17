@@ -1,0 +1,370 @@
+{
+  "uid": "hai_models",
+  "title": "HAI models",
+  "description": "Training, research, canary and promotion results, pushed by the training job phases.",
+  "tags": [
+    "hai"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Training",
+      "id": 1,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Holdout RMSE, by HAI type, model and slot",
+      "description": "From the latest fit of each type.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, model, slot) (hai_training_holdout_rmse)",
+          "legendFormat": "{{hai_type}} {{model}} {{slot}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Selected slot, by HAI type and model",
+      "description": "1 for the slot that the fit selected.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, model, slot) (hai_training_selected)",
+          "legendFormat": "{{hai_type}} {{model}} {{slot}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Challenger registered by the fit",
+      "description": "1 when the fit registered a candidate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, model) (hai_training_challenger_registered)",
+          "legendFormat": "{{hai_type}} {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Research",
+      "id": 5,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Candidate holdout RMSE, by HAI type and model",
+      "description": "Candidates of the latest research.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, model) (hai_research_candidate_rmse)",
+          "legendFormat": "{{hai_type}} {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Challenger chosen, by HAI type",
+      "description": "1 when the research chose a challenger.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type) (hai_research_challenger)",
+          "legendFormat": "{{hai_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Production version at research, by HAI type",
+      "description": "The registry version that was Production.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type) (hai_research_production_version)",
+          "legendFormat": "{{hai_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Canary and promotion",
+      "id": 9,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Canary decision, by HAI type",
+      "description": "Promote or hold.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, decision) (hai_canary_result)",
+          "legendFormat": "{{hai_type}} {{decision}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Executed promotions and rollbacks, by HAI type",
+      "description": "Latest action and the version it made Production.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, action) (hai_promotion_executed)",
+          "legendFormat": "{{hai_type}} {{action}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type) (hai_promotion_version)",
+          "legendFormat": "{{hai_type}} version"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Owner notice verdict, by HAI type",
+      "description": "What the owner was told about the challenger.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (hai_type, verdict) (hai_promotion_notice)",
+          "legendFormat": "{{hai_type}} {{verdict}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

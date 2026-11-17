@@ -44,11 +44,17 @@ JOB_PHASES: dict[str, tuple[str, ...]] = {
 HAI_TYPE = re.compile(r"HAI_[1-6]")
 WORD = re.compile(r"[a-z][a-z_]{0,23}")
 SET_NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
+SLOT = re.compile(r"[a-z][a-z0-9_]{0,30}")
 LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "hai_type": lambda value: HAI_TYPE.fullmatch(value) is not None,
     "status": lambda value: value in ("checked", "skipped", "success", "error", "pass", "fail", "warn"),
     "kind": lambda value: value in ("silver", "gold", "cross", "features"),
     "source": lambda value: value in ("glue", "dbt", "raw_files"),
+    "model": lambda value: value in ("m1", "m2", "m3", "m4", "m5", "m6"),
+    "slot": lambda value: SLOT.fullmatch(value) is not None,
+    "action": lambda value: value in ("promote", "rollback"),
+    "decision": lambda value: value in ("promote", "hold"),
+    "verdict": lambda value: value in ("promoted", "promoted_not_rolled_out", "held", "rolled_back"),
     "feature_set": lambda value: SET_NAME.fullmatch(value) is not None,
     "mode": lambda value: value in ("load", "hold", "release", "offline"),
     "result": lambda value: WORD.fullmatch(value) is not None,
@@ -92,6 +98,18 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_quality_checks_warned": ("Quality checks of the gate that warned.", ("kind",)),
     "hai_openmetadata_ingest_entities": ("Entities the latest OpenMetadata ingestion of the source ingested.", ("source",)),
     "hai_openmetadata_ingest_failures": ("Failures of the source and the sink in the latest OpenMetadata ingestion of the source.", ("source",)),
+    "hai_training_holdout_rmse": ("Holdout RMSE of a model slot of a type in the latest fit.", ("hai_type", "model", "slot")),
+    "hai_training_selected": ("1 for the model slot that the latest fit of a type selected.", ("hai_type", "model", "slot")),
+    "hai_training_challenger_registered": ("1 when the latest fit of a model registered a candidate for the type.", ("hai_type", "model")),
+    "hai_research_candidate_rmse": ("Holdout RMSE of a candidate model in the latest research of a type.", ("hai_type", "model")),
+    "hai_research_eligible_candidates": ("Candidates of the latest research of a type that are eligible.", ("hai_type",)),
+    "hai_research_challenger": ("1 when the latest research of a type chose a challenger.", ("hai_type",)),
+    "hai_research_challenger_model": ("1 for the model that the latest research chose as challenger.", ("hai_type", "model")),
+    "hai_research_production_version": ("The Production version of the type's registered model at its latest research.", ("hai_type",)),
+    "hai_canary_result": ("1 for the decision of the latest canary of a type.", ("hai_type", "decision")),
+    "hai_promotion_executed": ("1 for the latest promotion or rollback executed for a type, by action.", ("hai_type", "action")),
+    "hai_promotion_version": ("The version that the latest executed promotion or rollback made Production.", ("hai_type",)),
+    "hai_promotion_notice": ("1 for the verdict of the latest owner notice about a type's challenger.", ("hai_type", "verdict")),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
 PENDING: list[Sample] = []

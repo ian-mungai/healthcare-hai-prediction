@@ -57,7 +57,7 @@ from orchestration import code_digest, mlflow_service, training_contract
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
-from scripts.training import job, promote_lease, promote_receipt
+from scripts.training import job, promote_lease, promote_receipt, training_metrics
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
@@ -243,6 +243,7 @@ def promote(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
     step = run_action(work, run, mode, "promote")
     publish_receipt(work, run, destination)
+    training_metrics.promotion_executed(parameters)
     sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return [step]
 
@@ -369,6 +370,7 @@ def canary(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
         except (auto_promotion.CandidateRefused, ValueError, KeyError) as error:
             raise RunRefused(f"the canary of {parameters['hai_type']} names no single candidate: {error}") from None
     store_chain_record(client, destination, "canary", "canary", parameters, auto_promotion.canary_result(parameters["research_run"], record, decision))
+    training_metrics.canary_decision(parameters["hai_type"], decision)
     step = {"step": "canary", "code": 0, "resumed": False, "decision": decision["decision"]}
     sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return [step]
@@ -413,6 +415,7 @@ def notify(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
             },
         )
         step = {"step": "notify", "code": 0, "resumed": False}
+    training_metrics.notice_verdict(parameters["hai_type"], parameters["outcome"])
     sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return [step]
 

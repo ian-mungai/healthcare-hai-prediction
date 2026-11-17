@@ -39,6 +39,26 @@
       "dashboard": "hai_services.json",
       "panel": "Tasks stopped in the last hour, by service and stop code",
       "reason": "Empty while no service task stopped in the last hour."
+    },
+    {
+      "dashboard": "hai_models.json",
+      "panel": "Executed promotions and rollbacks, by HAI type",
+      "reason": "Empty until a promotion or rollback is executed."
+    },
+    {
+      "dashboard": "hai_models.json",
+      "panel": "Owner notice verdict, by HAI type",
+      "reason": "Empty until a research chain sends its first owner notice."
+    },
+    {
+      "dashboard": "hai_models.json",
+      "panel": "Canary decision, by HAI type",
+      "reason": "Empty until a research chain runs its canary phase."
+    },
+    {
+      "dashboard": "hai_models.json",
+      "panel": "Production version at research, by HAI type",
+      "reason": "Empty for a type with no Production model yet."
     }
   ]
 }

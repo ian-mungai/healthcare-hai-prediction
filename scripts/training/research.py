@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import training_contract
-from scripts.training import job_actions, job_inputs, promotion, registry, research_tests, run_tracking
+from scripts.training import job_actions, job_inputs, promotion, registry, research_tests, run_tracking, training_metrics
 from scripts.training.job_failure import JobFailure
 from scripts.training.models.common import MODEL_SLOT, Deadline, ModelError, seed_for
 
@@ -201,6 +201,7 @@ def research_type(store: Any, parameters: Mapping[str, Any], hai_type: str, run:
     }
     if "research_attempt" in parameters:
         document["research_attempt"] = parameters["research_attempt"]
+    training_metrics.research_record(document)
     body = job_actions.text(document)
     digest = hashlib.sha256(body).hexdigest()
     numbers = (
