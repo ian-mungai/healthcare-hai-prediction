@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import hashlib
 import json
 import logging
@@ -2437,6 +2438,7 @@ def boot_host(
     console: str = "file",
     exit_grace: float = CONSOLE_EXIT_GRACE,
     seed_files: dict[str, str] | None = None,
+    plant_reader: bool = False,
 ) -> tuple[Path, dict[str, str], dict[str, Any], Any]:
     """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result.
 
@@ -2476,21 +2478,30 @@ def boot_host(
     started = time.monotonic()
     observation: dict[str, Any] | None = None
     script_seconds = 0.0
+    # A test seam: a reader on the console pipe lets the console copy finish, so the blocked-writer condition of a planted console wait does not hold.
+    reader = os.open(root / BOOT_PATHS["console_device"], os.O_RDONLY | os.O_NONBLOCK) if plant_reader else None
+    watch = ConsoleWatch(root) if console == "fifo" else None
     with LaunchPool(max_workers=1) as pool:
         run = pool.submit(evidence.run, name, command, root, {**environment, **case_environment})
         try:
             while not run.done() and not exited.exists() and time.monotonic() - started < BOOT_RUN_LIMIT:
+                if watch is not None:
+                    watch.sample()
                 time.sleep(0.05)
             if exited.exists():
                 script_seconds = time.monotonic() - started
                 observation = observe_console_copy(root, exit_grace)
         finally:
             released.touch()
+            if reader is not None:
+                os.close(reader)
         step, result = run.result()
     if observation is None:
         raise CheckFailed(f"{name}: the boot script did not exit within {BOOT_RUN_LIMIT} seconds")
     step["console_copy"] = observation
     step["duration_seconds"] = round(script_seconds, 6)
+    if watch is not None:
+        step["console_watch"] = watch.record()
     return root, environment, step, result
 
 
@@ -2553,6 +2564,87 @@ def console_copy_pid(log: str) -> int | None:
     """Return the process number that the boot script's first log line names for its console copy, or None when the log names none."""
     found = re.search(r"\(process (\d+)\)", log)
     return None if found is None else int(found.group(1))
+
+
+class ConsoleWatch:
+    """Watch, while a boot script runs, whether its console copy is blocked on a pipe that nobody reads.
+
+    A planted console wait only means something while the copy stays blocked on its write until the script's own limit ends it. A reader on the pipe
+    or a copy that ended on its own removes the delay, so the case would then miss the defect it plants. ``blocked_writer_problems`` names each such difference.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.pipe = root / BOOT_PATHS["console_device"]
+        self.log = root / BOOT_PATHS["log_file"]
+        self.stop_file = root / f"{BOOT_PATHS['log_file']}.stop"
+        self.pid: int | None = None
+        self.stop_at: float | None = None
+        self.alive_at_stop: bool | None = None
+        self.gone_after_stop: float | None = None
+        self.reader_seen = False
+        self.samples = 0
+
+    def has_reader(self) -> bool:
+        """Whether some process holds the pipe open for reading: a write open that does not wait fails with ENXIO when none does."""
+        try:
+            descriptor = os.open(self.pipe, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as error:
+            if error.errno == errno.ENXIO:
+                return False
+            raise
+        os.close(descriptor)
+        return True
+
+    def sample(self) -> None:
+        """Take one reading: the copy's process number once the log names it, the reader check and the copy's life since the script's stop request."""
+        self.samples += 1
+        if self.pid is None:
+            self.pid = console_copy_pid("\n".join(read_lines(self.log)))
+        stopping = self.stop_file.exists()
+        if stopping and self.stop_at is None:
+            self.stop_at = time.monotonic()
+            self.alive_at_stop = None if self.pid is None else not process_gone(self.pid)
+        if self.has_reader():
+            self.reader_seen = True
+        if self.stop_at is not None and self.pid is not None and self.gone_after_stop is None and process_gone(self.pid):
+            self.gone_after_stop = time.monotonic() - self.stop_at
+
+    def record(self) -> dict[str, Any]:
+        """What the watch saw, for the step's evidence."""
+        return {
+            "samples": self.samples,
+            "pid": self.pid,
+            "reader_seen": self.reader_seen,
+            "stop_seen": self.stop_at is not None,
+            "copy_alive_at_stop": self.alive_at_stop,
+            "copy_ended_seconds_after_stop": None if self.gone_after_stop is None else round(self.gone_after_stop, 3),
+        }
+
+
+def blocked_writer_problems(watch: dict[str, Any], blocked_seconds: float) -> list[str]:
+    """Each way the watch record shows that the console copy was not blocked on its write for the ``blocked_seconds`` that a planted console wait needs."""
+    found = []
+    if watch["reader_seen"]:
+        found.append("a process held the console pipe open for reading, so the copy was not blocked")
+    if not watch["stop_seen"]:
+        found.append("the script never asked the console copy to stop while the watch ran")
+    elif not watch["copy_alive_at_stop"]:
+        found.append("the console copy was already gone when the script asked it to stop")
+    elif watch["copy_ended_seconds_after_stop"] is not None and watch["copy_ended_seconds_after_stop"] < blocked_seconds:
+        ended = watch["copy_ended_seconds_after_stop"]
+        found.append(f"the console copy ended {ended:.1f} seconds after the stop request, before the {blocked_seconds:g} seconds of the wait")
+    return found
+
+
+def require_blocked_writer(step: dict[str, Any]) -> None:
+    """Stop the suite as a setup error, never as a missed defect, when the console copy was not blocked for as long as the planted wait needs."""
+    problems = blocked_writer_problems(step["console_watch"], CONSOLE_FLUSH_LIMIT)
+    step["assertions"].append({"name": "console_copy_blocked_for_the_planted_wait", "passed": not problems})
+    if problems:
+        step["not_run"] = problems
+        raise CheckFailed(
+            f"{step['name']}: not run, because the blocked-writer condition did not hold ({'; '.join(problems)}). This is a setup error, not a missed defect"
+        )
 
 
 def observe_console_copy(root: Path, exit_grace: float) -> dict[str, Any]:
@@ -2624,6 +2716,11 @@ def console_copy_problems(root: Path, returncode: int | None, duration: float, m
     return problems
 
 
+def planted_console_wait(template: str) -> str:
+    """Plant a console wait of 15 seconds, over the flush limit, in place of the script's 4."""
+    return replace_once(template, "console_flush_seconds=4", "console_flush_seconds=15")
+
+
 def kill_the_copy_late(template: str) -> str:
     """Plant a copy that ends one second after the boot script has exited, as a KILL does when the kernel is slow to finish it."""
     short = replace_once(template, "console_flush_seconds=4", "console_flush_seconds=1")
@@ -2690,7 +2787,7 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
         ),
         "boot_with_console_wait_unbounded": (
             "the script took",
-            lambda text: replace_once(text, "console_flush_seconds=4", "console_flush_seconds=15"),
+            planted_console_wait,
             "fifo",
             {},
             {},
@@ -2717,7 +2814,17 @@ def run_console_copy_cases(evidence: Evidence, bash: str, template: str, gnu_tim
         stalled = "Mounting the data volume did not finish within 120 seconds." if "mount" in stub_overrides else None
         problems = console_copy_problems(root, result.returncode, step["duration_seconds"], stalled, CONSOLE_FLUSH_LIMIT, step["console_copy"])
         step["console_problems"] = problems
+        if name == "boot_with_console_wait_unbounded":
+            require_blocked_writer(step)
         evidence.check(step, "planted_console_defect_is_reported", any(expected in problem for problem in problems))
+    # The condition itself: with a reader on the pipe the same planted script ends early, and the watch must say that the wait was not tested.
+    root, _, step, _ = boot_host(
+        evidence, bash, "boot_with_console_wait_unbounded_and_a_reader", planted_console_wait(template), {}, {}, gnu_timeout, "fifo", plant_reader=True
+    )
+    watch = step["console_watch"]
+    evidence.check(step, "reader_on_the_pipe_is_seen", watch["reader_seen"])
+    evidence.check(step, "the_wait_was_not_served", step["duration_seconds"] < CONSOLE_FLUSH_LIMIT)
+    evidence.check(step, "blocked_writer_condition_is_reported_unmet", bool(blocked_writer_problems(watch, CONSOLE_FLUSH_LIMIT)))
     run_boot_interrupt_cases(evidence, bash, gnu_timeout)
 
 
