@@ -261,14 +261,14 @@ regexp_full_match(
 
 {% macro state_date(column, serial=false) %}
 {#- A date written M/D/YYYY, MM/DD/YYYY or YYYY-MM-DD, optionally followed by a time of 00:00:00. With serial, a five-digit Excel serial number from 2000-01-01
-    (36526) to 2099-12-31 (73414) counts days from 1899-12-30, and an eight-digit YYYYMMDD of the 2000s is a date; the published text stays beside the date. Anything else is null. -#}
+    (36526) to 2099-12-31 (73050, any fraction of that day) counts days from 1899-12-30, and an eight-digit YYYYMMDD of the 2000s is a date; the published text stays beside the date. Anything else is null. -#}
 {%- set value = "nullif(trim(" ~ column ~ "), '')" -%}
 coalesce(
     try_strptime(regexp_replace({{ value }}, ' 00:00:00$', ''), '%m/%d/%Y'),
     try_strptime(regexp_replace({{ value }}, ' 00:00:00$', ''), '%Y-%m-%d')
     {%- if serial %},
     case
-        when regexp_full_match({{ value }}, '[0-9]{5}(\.[0-9]+)?') and {{ value }}::double between 36526 and 73414
+        when regexp_full_match({{ value }}, '[0-9]{5}(\.[0-9]+)?') and floor({{ value }}::double) between 36526 and 73050
             then date '1899-12-30' + floor({{ value }}::double)::integer
     end::timestamp,
     case when regexp_full_match({{ value }}, '20[0-9]{6}') then try_strptime({{ value }}, '%Y%m%d') end
@@ -318,16 +318,16 @@ count(*) filter (where trim({{ column }}) <> '' and ({{ state_number(column) }})
 {%- endmacro %}
 
 {% macro hcai_finance_value_form(column) %}
-{#- The form of a financial-disclosure value, from the shapes that cannot spell a person: blank, the redaction mark, a missing token, a number (up to 8 plain
-    digits, or digits grouped by commas; 9 or more plain digits could be a phone number or an identifier), a number in parentheses, an M/D/YYYY date or one
+{#- The form of a financial-disclosure value, from the shapes that cannot spell a person: blank, the redaction mark, a missing token, a number (what state_number
+    types, with or without thousands separators and whatever its length), a number in parentheses, an M/D/YYYY date or one
     letter or yes or no. Any other text is other and never carried into silver; line-specific rules wait for the HCAI dictionary review. -#}
 {%- set value = "trim(" ~ column ~ ")" -%}
 case
     when coalesce({{ value }}, '') = '' then 'blank'
     when {{ value }} = '[REDACTED]' then 'redacted'
     when {{ value }} in {{ state_missing_token_list() }} then 'missing_token'
-    when regexp_full_match({{ value }}, '[-+]?[0-9]{1,8}(\.[0-9]+)?|[-+]?\.[0-9]+|[-+]?[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?') then 'number'
-    when regexp_full_match({{ value }}, '\([0-9]{1,3}(,[0-9]{3})*(\.[0-9]+)?\)|\([0-9]{1,8}(\.[0-9]+)?\)') then 'parenthesised_number'
+    when ({{ state_number(column) }}) is not null then 'number'
+    when {{ value }} like '(%)' and ({{ state_number('substr(' ~ value ~ ', 2, length(' ~ value ~ ') - 2)') }}) is not null then 'parenthesised_number'
     when regexp_full_match({{ value }}, '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}') then 'date'
     when regexp_full_match(upper({{ value }}), '[A-Z]|YES|NO') then 'flag'
     else 'other'

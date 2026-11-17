@@ -4,7 +4,8 @@
 -- county name that does not identify exactly one county of Illinois is held in int_state_source_holds without its content, never typed. The county code
 -- comes from the county name within Illinois (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches
 -- seed. The measure texts (description, rationale, evidence) stay in bronze. is_latest_release marks the row of the newest release of each key
--- (publication date, then download run).
+-- (publication date, then download run). The newest release of a key is chosen among the rows with a usable key before the held rows are left out, so a
+-- newest row that is held leaves no older row marked latest: the key has no latest row and the hold says why.
 {{ config(materialized='table') }}
 
 with
@@ -62,10 +63,11 @@ typed as (
         {{ state_number('reasoned.denominator') }} as denominator,
         reasoned.county_fips,
         files.latest_publication_date as publication_date,
-        files.latest_download_run
+        files.latest_download_run,
+        reasoned.hold_reason
     from reasoned
     left join files on reasoned._member_sha256 = files.member_sha256
-    where reasoned.hold_reason is null
+    where reasoned.hold_reason is null or reasoned.hold_reason in ('value_not_a_number', 'county_not_matched', 'period_reversed')
 ),
 
 joined as (
@@ -76,13 +78,20 @@ joined as (
         case when matches.ccn is null then null else 'reviewed_match' end as ccn_source
     from typed
     left join matches on typed.entity_id = matches.facility_key
+),
+
+ranked as (
+    select
+        *,
+        dense_rank() over (
+            partition by entity_id, measure_id, period_start, period_end
+            order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
+        ) = 1 as is_latest_release
+    from joined
 )
 
 select
-    * exclude (latest_download_run),
-    member_sha256 || ':' || source_row_number as il_row_key,
-    dense_rank() over (
-        partition by entity_id, measure_id, period_start, period_end
-        order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
-    ) = 1 as is_latest_release
-from joined
+    * exclude (latest_download_run, hold_reason),
+    member_sha256 || ':' || source_row_number as il_row_key
+from ranked
+where hold_reason is null

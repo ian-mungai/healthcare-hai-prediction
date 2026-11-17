@@ -2328,6 +2328,10 @@
           "INTEGER[]"
         ],
         [
+          "is_latest_release",
+          "BOOLEAN"
+        ],
+        [
           "finance_row_key",
           "VARCHAR"
         ],
@@ -2353,10 +2357,6 @@
         ],
         [
           "is_redacted",
-          "BOOLEAN"
-        ],
-        [
-          "is_latest_release",
           "BOOLEAN"
         ]
       ],
@@ -3365,16 +3365,16 @@
           "VARCHAR"
         ],
         [
+          "is_latest_release",
+          "BOOLEAN"
+        ],
+        [
           "util_row_key",
           "VARCHAR"
         ],
         [
           "report_year",
           "BIGINT"
-        ],
-        [
-          "is_latest_release",
-          "BOOLEAN"
         ]
       ],
       "new": true,
@@ -4851,12 +4851,12 @@
           "VARCHAR"
         ],
         [
-          "il_row_key",
-          "VARCHAR"
-        ],
-        [
           "is_latest_release",
           "BOOLEAN"
+        ],
+        [
+          "il_row_key",
+          "VARCHAR"
         ]
       ],
       "new": true,

@@ -7,7 +7,9 @@
 -- with its text in nulled_values_published, a JSON object from column to text ('{}' when none). A row with any other number text, a facility that is no
 -- number, a period that is no date or runs backwards, or a county name that does not identify exactly one county of California is held in
 -- int_state_source_holds without its content, never typed. The person, phone and address cells never leave bronze. The county code comes from the county
--- name within California (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches seed.
+-- name within California (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches seed. The newest
+-- release of a key is chosen among the rows with a usable key before the held rows are left out, so a newest row that is held leaves no older row marked
+-- latest: the key has no latest row and the hold says why.
 {{ config(materialized='table') }}
 
 with
@@ -86,10 +88,11 @@ typed as (
         ], entry -> entry.published is not null)))::varchar as nulled_values_published,
         reasoned.county_fips,
         files.latest_publication_date as publication_date,
-        files.latest_download_run
+        files.latest_download_run,
+        reasoned.hold_reason
     from reasoned
     left join files on reasoned._member_sha256 = files.member_sha256
-    where reasoned.hold_reason is null
+    where reasoned.hold_reason is null or reasoned.hold_reason in ('value_not_a_number', 'county_not_matched', 'period_reversed')
 ),
 
 joined as (
@@ -100,14 +103,21 @@ joined as (
         case when matches.ccn is null then null else 'reviewed_match' end as ccn_source
     from typed
     left join matches on typed.fac_no = matches.facility_key
+),
+
+ranked as (
+    select
+        *,
+        dense_rank() over (
+            partition by fac_no, period_begin_date, period_end_date, response_status
+            order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
+        ) = 1 as is_latest_release
+    from joined
 )
 
 select
-    * exclude (latest_download_run),
+    * exclude (latest_download_run, hold_reason),
     member_sha256 || ':' || source_row_number as util_row_key,
-    year(period_end_date) as report_year,
-    dense_rank() over (
-        partition by fac_no, period_begin_date, period_end_date, response_status
-        order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
-    ) = 1 as is_latest_release
-from joined
+    year(period_end_date) as report_year
+from ranked
+where hold_reason is null

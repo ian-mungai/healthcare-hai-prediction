@@ -4,7 +4,8 @@
 -- or code is not in its published shape, is held in int_state_source_holds without its content. The code keeps its full published form; page, column and
 -- line are parsed only for the three-component layout and the page for both layouts. is_latest_release marks the row of the newest release of each key
 -- (publication date, then download run). The meaning and unit of a code come from the HCAI data dictionary in bronze. The stored copy is the privacy-
--- filtered derivative.
+-- filtered derivative. The newest release of a key is chosen among the rows with a usable key before the held rows are left out, so a newest row that is
+-- held leaves no older row marked latest: the key has no latest row and the hold says why.
 {{ config(materialized='table') }}
 
 with
@@ -27,25 +28,33 @@ typed as (
         stg.pagecolumnline as page_column_line,
         stg.value_form,
         stg.value_text as value_published,
+        {{ hcai_finance_hold_reason('stg') }} as hold_reason,
         files.latest_publication_date as publication_date,
         files.latest_download_run,
         list_transform(string_split(stg.pagecolumnline, '.'), part -> part::integer) as line_code_parts
     from {{ ref('stg_hcai_finance_csv') }} as stg
     left join files on stg._member_sha256 = files.member_sha256
-    where {{ hcai_finance_hold_reason('stg') }} is null
+    where {{ hcai_finance_hold_reason('stg') }} is null or {{ hcai_finance_hold_reason('stg') }} = 'value_not_a_reviewed_form'
+),
+
+ranked as (
+    select
+        *,
+        dense_rank() over (
+            partition by facility_id, report_period_end, page_column_line
+            order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
+        ) = 1 as is_latest_release
+    from typed
 )
 
 select
-    * exclude (latest_download_run),
+    * exclude (latest_download_run, hold_reason),
     member_sha256 || ':' || source_row_number as finance_row_key,
     case when len(line_code_parts) = 3 then 'page_column_line' else 'four_part_code' end as code_layout,
     line_code_parts[1] as page_number,
     case when len(line_code_parts) = 3 then line_code_parts[2] end as column_number,
     case when len(line_code_parts) = 3 then line_code_parts[3] end as line_number,
     {{ state_number('value_published') }} as value_number,
-    value_form = 'redacted' as is_redacted,
-    dense_rank() over (
-        partition by facility_id, report_period_end, page_column_line
-        order by publication_date desc nulls last, latest_download_run desc nulls last, member_sha256 desc
-    ) = 1 as is_latest_release
-from typed
+    value_form = 'redacted' as is_redacted
+from ranked
+where hold_reason is null

@@ -2218,7 +2218,7 @@ GROUP_E = (
         "2023-06-30",
         "finance_2015.csv",
         sha("state_finance_a"),
-        12,
+        14,
         records=(
             cc(u_id="1", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="0.1.1", values="FIXTURE HEALTH SYSTEM"),
             cc(u_id="2", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,234,567"),
@@ -2232,6 +2232,8 @@ GROUP_E = (
             cc(u_id="10", oshpd_id="SENTINEL_FACILITY", rpe="06/30/2015", pagecolumnline="3.1.2", values="5"),
             cc(u_id="11", oshpd_id="100000001", rpe="SENTINEL_DATE", pagecolumnline="3.1.3", values="5"),
             cc(u_id="12", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="SENTINEL_LINE", values="5"),
+            cc(u_id="13", oshpd_id="100000003", rpe="06/30/2015", pagecolumnline="4.1.1", values="123456789"),
+            cc(u_id="14", oshpd_id="100000003", rpe="06/30/2015", pagecolumnline="4.1.2", values="1e6"),
         ),
     ),
     Stored(
@@ -2240,11 +2242,12 @@ GROUP_E = (
         "2024-06-30",
         "finance_2015_revised.csv",
         sha("state_finance_b"),
-        3,
+        4,
         records=(
             cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,300,000"),
             cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.6", values="77"),
             cc(oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.x", values="7"),
+            cc(oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.1", values="SENTINEL_PSEUDONYM_NEWEST"),
         ),
     ),
     Stored(
@@ -2253,7 +2256,7 @@ GROUP_E = (
         "2024-12-31",
         "page_1_6.csv",
         sha("state_util_pages"),
-        11,
+        13,
         records=(
             util_row(
                 fac_no="106000001",
@@ -2301,6 +2304,22 @@ GROUP_E = (
             util_row(fac_no="106000008", county="ALAMEDA", tot_lic_beds="SENTINEL_NUMBER", **UTIL_FULL_YEAR),
             util_row(fac_no="SENTINEL_FAC", county="ALAMEDA", **UTIL_FULL_YEAR),
             util_row(fac_no="106000009", county="", **UTIL_FULL_YEAR),
+            # The last serial of the 2000s (2099-12-31, with a fraction of a day) is kept; the next day is no date.
+            util_row(fac_no="106000010", county="ALAMEDA", fac_op_per_begin_dt="73050", fac_op_per_end_dt="73050.5"),
+            util_row(fac_no="106000011", county="ALAMEDA", fac_op_per_begin_dt="73051", fac_op_per_end_dt="73051.2"),
+        ),
+    ),
+    # A newer release whose value for 106000001 does not type: that value is held, so the older release must not be marked latest.
+    Stored(
+        "hcai_util_pages_csv",
+        "hu2",
+        "2025-12-31",
+        "page_1_6_2025.csv",
+        sha("state_util_pages_newer"),
+        2,
+        records=(
+            util_row(fac_no="106000001", fac_name="FIXTURE GENERAL HOSPITAL", county="ALAMEDA", tot_lic_beds="SENTINEL_NUMBER", **UTIL_FULL_YEAR),
+            util_row(fac_no="106000012", fac_name="FOURTH FIXTURE HOSPITAL", county="ALAMEDA", tot_lic_beds="7", **UTIL_FULL_YEAR),
         ),
     ),
     Stored(
@@ -2354,6 +2373,19 @@ GROUP_E = (
         sha("state_il_b"),
         1,
         records=(cc(entity_id="1001", county_name="Cook", measure_id="101", value="1.6", numerator="4", **IL_PERIOD),),
+    ),
+    # A newer release whose 2021 value for entity 1001 does not type: held, so the older 2021 row must not stay latest.
+    Stored(
+        "illinois_report_card_csv",
+        "il3",
+        "2025-12-31",
+        "IL_history_fixture_c.csv",
+        sha("state_il_c"),
+        2,
+        records=(
+            cc(entity_id="1001", county_name="Cook", measure_id="101", date_start="2021-01-01", date_end="2021-12-31", value="high"),
+            cc(entity_id="1007", county_name="Cook", measure_id="103", value="2", **IL_PERIOD),
+        ),
     ),
 )
 
@@ -6542,8 +6574,10 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("100000001", "2015-06-30", "1.2.4", page_column_line, "1", "2", "4", "[REDACTED]", "", "redacted", "true", "2023-06-30", "true"),
         ("100000001", "2015-06-30", "1.2.6", page_column_line, "1", "2", "6", "77", "77.0", "number", "false", "2024-06-30", "true"),
         ("100000001", "2015-06-30", "3.3.1.40", "four_part_code", "3", "", "", "12", "12.0", "number", "false", "2023-06-30", "true"),
-        ("100000002", "2015-12-31", "2.1.1", page_column_line, "2", "1", "1", "-45.5", "-45.5", "number", "false", "2023-06-30", "true"),
+        ("100000002", "2015-12-31", "2.1.1", page_column_line, "2", "1", "1", "-45.5", "-45.5", "number", "false", "2023-06-30", "false"),
         ("100000002", "2015-12-31", "2.1.2", page_column_line, "2", "1", "2", "(250)", "", "parenthesised_number", "false", "2023-06-30", "true"),
+        ("100000003", "2015-06-30", "4.1.1", page_column_line, "4", "1", "1", "123456789", "123456789.0", "number", "false", "2023-06-30", "true"),
+        ("100000003", "2015-06-30", "4.1.2", page_column_line, "4", "1", "2", "1e6", "1000000.0", "number", "false", "2023-06-30", "true"),
     ]
     full_year = ("2023-01-01", "2023-12-31")
     checks["hcai_util_match_expected"] = base.get("hcai_util") == [
@@ -6564,7 +6598,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
             '{"emer_dept_hr_diversion_tot":"#DIV/0!"}',
             "050001",
             "reviewed_match",
-            "true",
+            "false",
         ),
         (
             "106000001",
@@ -6588,35 +6622,40 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ),
         ("106000002", "responded", *full_year, "44927", "45291", "2023", "06037", "name_match", "", "", "", "", "", '{"tot_lic_beds":"N/A"}', "", "", "true"),
         ("106000004", "nonresponse", *full_year, "01/01/2023", "12/31/2023", "2023", "06001", "name_match", "", "", "", "", "", "{}", "", "", "true"),
+        ("106000010", "responded", "2099-12-31", "2099-12-31", "73050", "73050.5", "2099", "06001", "name_match", "", "", "", "", "", "{}", "", "", "true"),
+        ("106000012", "responded", *full_year, "01/01/2023", "12/31/2023", "2023", "06001", "name_match", "", "7.0", "", "", "", "{}", "", "", "true"),
     ]
     checks["illinois_match_expected"] = base.get("illinois") == [
-        ("1001", "101", "2021-01-01", "2021-12-31", "17031", "name_match", "", "", "", "", "140001", "2023-12-31", "true"),
+        ("1001", "101", "2021-01-01", "2021-12-31", "17031", "name_match", "", "", "", "", "140001", "2023-12-31", "false"),
         ("1001", "101", "2022-01-01", "2022-12-31", "17031", "name_match", "1.5", "1.5", "3.0", "2000.0", "140001", "2023-12-31", "false"),
         ("1001", "101", "2022-01-01", "2022-12-31", "17031", "name_match", "1.6", "1.6", "4.0", "", "140001", "2024-12-31", "true"),
         ("1002", "102", "2022-01-01", "2022-12-31", "17037", "name_match", "", "N/A", "", "", "", "2023-12-31", "true"),
+        ("1007", "103", "2022-01-01", "2022-12-31", "17031", "name_match", "2.0", "2", "", "", "", "2025-12-31", "true"),
     ]
     checks["state_holds_match_expected"] = base.get("state_holds") == [
         ("hcai_finance_csv", "facility_not_a_facility_number", "2"),
         ("hcai_finance_csv", "line_not_a_publisher_code", "2"),
         ("hcai_finance_csv", "period_not_a_date", "2"),
-        ("hcai_finance_csv", "value_not_a_reviewed_form", "2"),
+        ("hcai_finance_csv", "value_not_a_reviewed_form", "3"),
         ("hcai_util_pages_csv", "county_not_matched", "2"),
         ("hcai_util_pages_csv", "facility_not_a_facility_number", "2"),
-        ("hcai_util_pages_csv", "period_not_a_date", "1"),
+        ("hcai_util_pages_csv", "period_not_a_date", "2"),
         ("hcai_util_pages_csv", "period_reversed", "1"),
-        ("hcai_util_pages_csv", "value_not_a_number", "2"),
+        ("hcai_util_pages_csv", "value_not_a_number", "3"),
         ("illinois_report_card_csv", "county_not_matched", "2"),
         ("illinois_report_card_csv", "entity_not_a_number", "2"),
         ("illinois_report_card_csv", "measure_not_a_number", "1"),
         ("illinois_report_card_csv", "period_reversed", "1"),
-        ("illinois_report_card_csv", "value_not_a_number", "1"),
+        ("illinois_report_card_csv", "value_not_a_number", "2"),
     ]
     checks["state_hold_details_name_fields_only"] = base.get("state_hold_detail") == [
         ("hcai_util_pages_csv", "value_not_a_number", "longitude"),
         ("hcai_util_pages_csv", "value_not_a_number", "tot_lic_beds"),
+        ("hcai_util_pages_csv", "value_not_a_number", "tot_lic_beds"),
+        ("illinois_report_card_csv", "value_not_a_number", "value"),
         ("illinois_report_card_csv", "value_not_a_number", "value"),
     ]
-    checks["state_silver_keeps_no_person_cell_or_rejected_text"] = base.get("state_sentinels") == [("0", "11")]
+    checks["state_silver_keeps_no_person_cell_or_rejected_text"] = base.get("state_sentinels") == [("0", "15")]
     checks["onc_attestations_match_expected"] = base.get("onc_attestations") == [("010001", "2014", "7", "2014", "Fixture Developer A")]
     # The wage and the three shares are formulas saved in features/ (silver section 4).
     checks["occmix_matches_expected"] = base.get("occmix") == [
