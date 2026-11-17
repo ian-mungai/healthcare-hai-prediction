@@ -85,6 +85,9 @@
         "streamlit_enabled": {
           "type": "boolean"
         },
+        "evidently_ui_enabled": {
+          "type": "boolean"
+        },
         "monitoring_enabled": {
           "type": "boolean"
         },
@@ -95,6 +98,10 @@
         "streamlit_task_role_arn": {
           "type": "string",
           "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:streamlit_task)_(dev|prod)$"
+        },
+        "evidently_ui_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:evidently_ui_task)_(dev|prod)$"
         },
         "serving_execution_role_arn": {
           "type": "string",

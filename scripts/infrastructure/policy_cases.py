@@ -1188,7 +1188,7 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"layer pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"layer pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
-    for name in ("job_train_task", "mlflow_task", "host_code_fetch_task", "prometheus_history_task", "prometheus_restore_task"):
+    for name in ("job_train_task", "mlflow_task", "host_code_fetch_task", "prometheus_history_task", "prometheus_restore_task", "evidently_ui_task"):
         yield Case(
             f"training pass: {name} to ECS tasks",
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
@@ -1268,6 +1268,8 @@ def job_project_cases() -> Iterator[Case]:
         "prometheus_restore_task_extra",
         "prometheus_history",
         "prometheus_restore",
+        "evidently_ui_task_extra",
+        "evidently_ui",
     ):
         yield Case(
             f"training pass: refuse {name}",
@@ -3069,6 +3071,14 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         statement = by_sid(documents, "iam", "PassTrainingRoles")
         statement["Resource"] = [role("host_code_fetch_task*") if item == role("host_code_fetch_task") else item for item in as_list(statement["Resource"])]
 
+    def training_pass_without_evidently_ui_role(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        statement["Resource"] = [item for item in as_list(statement["Resource"]) if item != role("evidently_ui_task")]
+
+    def training_pass_evidently_ui_role_widened(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        statement["Resource"] = [role("evidently_ui_task*") if item == role("evidently_ui_task") else item for item in as_list(statement["Resource"])]
+
     def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
 
@@ -3247,6 +3257,8 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 job_resource("iam", "PassTrainingRoles", 0, role("job_train_task*")),
             ),
             "training PassRole lacks the code one-shot task role": ("training pass: host_code_fetch_task to ECS tasks", training_pass_without_code_fetch_role),
+            "training PassRole lacks the Evidently UI task role": ("training pass: evidently_ui_task to ECS tasks", training_pass_without_evidently_ui_role),
+            "Evidently UI PassRole resource widened": ("training pass: refuse evidently_ui_task_extra", training_pass_evidently_ui_role_widened),
             "code one-shot PassRole resource widened": (
                 "training pass: refuse host_code_fetch_task_extra",
                 training_pass_code_fetch_role_widened,

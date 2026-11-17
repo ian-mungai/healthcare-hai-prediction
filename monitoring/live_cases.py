@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import re
+import shutil
 import sys
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -383,6 +385,62 @@ def loaded_live_dag() -> Any:
         dag_cases.DAG_FILE = previous
 
 
+IAM_FOLDER = ROOT / "infra/iam"
+GRANT_BLOCK = re.compile(
+    r'resource\s+"(aws_iam_role_policy|aws_iam_role_policy_attachment|aws_iam_policy_attachment|aws_iam_role_policies_exclusive)"\s+"[^"]+"\s*\{'
+)
+
+
+def grants_to_the_ui_role(folder: Path) -> list[str]:
+    """The policy-attaching IAM resources of the Terraform files in ``folder`` whose body names the Evidently UI task role."""
+    found = []
+    for path in sorted(folder.glob("*.tf")):
+        text = path.read_text()
+        for match in GRANT_BLOCK.finditer(text):
+            depth, end = 1, match.end()
+            while depth and end < len(text):
+                depth += {"{": 1, "}": -1}.get(text[end], 0)
+                end += 1
+            if "evidently_ui_task" in text[match.end() : end]:
+                found.append(f"{path.name}: {text[match.start() : match.end()].split(chr(34))[3]}")
+    return found
+
+
+def ui_role_exists_and_holds_no_grant(folder: Path) -> Problems:
+    """The Evidently UI task role is defined in the IAM stack and nothing attaches a policy to it: it calls no AWS service, so it needs no grant."""
+    role_file = IAM_FOLDER / "evidently_ui.tf"
+    problems = (
+        []
+        if role_file.is_file() and 'resource "aws_iam_role" "evidently_ui_task"' in role_file.read_text()
+        else ["infra/iam/evidently_ui.tf does not define the role"]
+    )
+    found = grants_to_the_ui_role(IAM_FOLDER)
+    return problems + ([f"a policy is attached to the UI role: {found}"] if found else [])
+
+
+def ui_role_check_catches_a_planted_s3_grant(folder: Path) -> Problems:
+    """The check above is effective: in a copy of the IAM stack, an inline S3 read policy and a managed attachment on the role are each found."""
+    plant = folder / "iam_copy"
+    shutil.copytree(IAM_FOLDER, plant, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfstate*"))
+    unplanted = grants_to_the_ui_role(plant)
+    inline = [
+        'resource "aws_iam_role_policy" "ui_reads_s3" {',
+        "  role   = aws_iam_role.evidently_ui_task[0].name",
+        '  policy = jsonencode({ Statement = [{ Effect = "Allow", Action = ["s3:GetObject"], Resource = ["arn:aws:s3:::example/*"] }] })',
+        "}",
+    ]
+    managed = [
+        'resource "aws_iam_role_policy_attachment" "ui_managed" {',
+        "  role       = aws_iam_role.evidently_ui_task[0].name",
+        '  policy_arn = "arn:aws:iam::aws:policy/S3ReadOnly"',
+        "}",
+    ]
+    (plant / "planted.tf").write_text("\n".join([*inline, *managed]) + "\n")
+    planted = grants_to_the_ui_role(plant)
+    problems = [f"the copy already held a grant: {unplanted}"] if unplanted else []
+    return problems + ([] if sorted(planted) == ["planted.tf: ui_managed", "planted.tf: ui_reads_s3"] else [f"the planted grants were found as {planted}"])
+
+
 def dag_declares_one_job_chain_and_triggers_nothing(folder: Path) -> Problems:
     with loaded_live_dag() as module:
         dag = module.dag
@@ -461,6 +519,8 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("live_task_publish_repeats_to_the_same_result", publish_repeats_to_the_same_result),
         ("live_task_publish_refuses_missing_outputs", publish_refuses_missing_outputs),
         ("live_task_publish_cli_refuses_a_bad_bucket_name", publish_cli_refuses_a_bad_bucket_name),
+        ("live_ui_role_exists_and_holds_no_grant", ui_role_exists_and_holds_no_grant),
+        ("live_ui_role_check_catches_a_planted_s3_grant", ui_role_check_catches_a_planted_s3_grant),
         ("live_dag_declares_one_job_chain_and_triggers_nothing", dag_declares_one_job_chain_and_triggers_nothing),
         ("live_dag_form_takes_a_run_a_model_and_a_type", dag_form_takes_a_run_a_model_and_a_type),
         ("live_dag_request_carries_the_model_and_the_type", dag_request_carries_the_model_and_the_type),
