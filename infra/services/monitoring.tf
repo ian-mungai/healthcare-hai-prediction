@@ -266,7 +266,7 @@ locals {
       stopTimeout            = 30
       command = [
         "--web.listen-address=127.0.0.1:9187",
-        "--no-collector.settings",
+        "--collector.settings",
         "--no-collector.stat_user_tables",
         "--no-collector.statio_user_tables",
         "--no-collector.replication",

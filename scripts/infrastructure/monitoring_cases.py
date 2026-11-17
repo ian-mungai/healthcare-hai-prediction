@@ -20,6 +20,7 @@ from scripts.infrastructure.layer_publish_cases import CASES as PUBLISH_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 from scripts.infrastructure.postgres_activity_cases import CASES as POSTGRES_CASES
+from scripts.infrastructure.postgres_metric_cases import CASES as PG_METRIC_CASES
 from scripts.infrastructure.probe_service_cases import CASES as PROBE_CASES
 from scripts.infrastructure.publisher_metrics_cases import CASES as PUBLISHER_CASES
 from scripts.infrastructure.redis_acl_cases import CASES as REDIS_CASES
@@ -487,3 +488,4 @@ CASES |= POSTGRES_CASES
 CASES |= HOST_POLICY_CASES
 CASES |= JOB_IDENTITY_CASES
 CASES |= PROBE_CASES
+CASES |= PG_METRIC_CASES

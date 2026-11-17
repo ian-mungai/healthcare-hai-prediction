@@ -898,7 +898,7 @@ run "the_exporters_listen_on_loopback_with_the_flags_that_were_verified" {
   assert {
     condition = (
       toset(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[7].command) == toset([
-        "--web.listen-address=127.0.0.1:9187", "--no-collector.settings", "--no-collector.stat_user_tables", "--no-collector.statio_user_tables", "--no-collector.replication",
+        "--web.listen-address=127.0.0.1:9187", "--collector.settings", "--no-collector.stat_user_tables", "--no-collector.statio_user_tables", "--no-collector.replication",
         "--no-collector.replication_slots", "--no-collector.stat_replication", "--no-collector.stat_archiver", "--no-collector.stat_progress_vacuum", "--no-collector.roles",
         "--collector.database_wraparound", "--collector.long_running_transactions", "--collector.postmaster",
       ])
