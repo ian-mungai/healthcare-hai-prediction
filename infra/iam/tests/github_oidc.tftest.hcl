@@ -61,8 +61,12 @@ variables {
   data_bucket_name    = "example-data-bucket"
 }
 
-run "delivery_roles_are_off_by_default" {
+run "delivery_roles_are_off_when_the_flag_is_off" {
   command = plan
+
+  variables {
+    github_oidc_enabled = false
+  }
 
   assert {
     condition = (
@@ -100,7 +104,8 @@ run "enabled_provider_and_four_separate_roles" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -127,7 +132,8 @@ run "trust_binds_this_repository_and_named_environments" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -144,21 +150,21 @@ run "trust_binds_this_repository_and_named_environments" {
 
   assert {
     condition = (
-      jsondecode(aws_iam_role.github["image_push"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:image-push"] &&
-      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:model-api-deploy"]
+      jsondecode(aws_iam_role.github["image_push"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:image-push"] &&
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:model-api-deploy"]
     )
     error_message = "Push and deploy roles must trust one protected environment of this repository each."
   }
 
   assert {
-    condition     = jsondecode(aws_iam_role.github["code_staging"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:code-staging"]
+    condition     = jsondecode(aws_iam_role.github["code_staging"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:code-staging"]
     error_message = "The code staging role must trust the one code-staging environment of this repository, which has no approval step and runs from main only."
   }
 
   assert {
     condition = (
       jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] ==
-      ["repo:ian-mungai/healthcare-hai-prediction:pull_request", "repo:ian-mungai/healthcare-hai-prediction:environment:terraform-plan"]
+      ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request", "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"]
     )
     error_message = "Only the read-only plan role may trust pull requests."
   }
@@ -176,7 +182,8 @@ run "only_the_plan_role_trusts_pull_requests" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -186,6 +193,163 @@ run "only_the_plan_role_trusts_pull_requests" {
     ])
     error_message = "Pull request tokens must reach only the read-only plan role."
   }
+}
+
+run "delivery_roles_are_on_by_default_without_the_plan_role" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_iam_openid_connect_provider.github) == 1 &&
+      join(",", sort(keys(aws_iam_role.github))) == "code_staging,deploy,image_push" &&
+      join(",", sort(keys(aws_iam_role_policy.github))) == "code_staging,deploy,image_push" &&
+      output.github_oidc_contract.enabled == true
+    )
+    error_message = "With no variable set the committed defaults must plan the provider, the three roles that push, deploy and stage, and their three policies."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, role in aws_iam_role.github :
+      !strcontains(role.assume_role_policy, ":pull_request") && !strcontains(role.assume_role_policy, "terraform-plan")
+    ]) && join(",", sort(keys(output.github_oidc_contract.roles))) == "code_staging,deploy,image_push" && join(",", sort(keys(output.github_oidc_contract.subjects))) == "code_staging,deploy,image_push"
+    error_message = "Until the plan role is switched on, nothing trusts a pull request or the terraform-plan environment."
+  }
+}
+
+run "the_plan_role_appears_when_its_variable_and_the_flag_are_on" {
+  command = plan
+
+  variables {
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
+  }
+
+  assert {
+    condition = (
+      join(",", sort(keys(aws_iam_role.github))) == "code_staging,deploy,image_push,terraform_plan" &&
+      join(",", sort(keys(aws_iam_role_policy.github))) == "code_staging,deploy,image_push,terraform_plan" &&
+      jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == [
+        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request",
+        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"
+      ] &&
+      aws_iam_role.github["terraform_plan"].name == "example_project_gh_terraform_plan_dev"
+    )
+    error_message = "With both on, the plan role appears with its trust and policy as before."
+  }
+}
+
+run "the_plan_role_variable_creates_nothing_while_the_flag_is_off" {
+  command = plan
+
+  variables {
+    github_oidc_enabled           = false
+    github_oidc_plan_role_enabled = true
+  }
+
+  assert {
+    condition     = length(aws_iam_role.github) == 0 && length(aws_iam_role_policy.github) == 0 && length(aws_iam_openid_connect_provider.github) == 0
+    error_message = "The plan role variable alone must create nothing."
+  }
+}
+
+run "the_trusted_subjects_are_exactly_the_immutable_id_form" {
+  command = plan
+
+  variables {
+    github_oidc_plan_role_enabled = true
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.github["image_push"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:image-push"] &&
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:model-api-deploy"] &&
+      jsondecode(aws_iam_role.github["code_staging"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:code-staging"] &&
+      jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == [
+        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request",
+        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"
+      ]
+    )
+    error_message = "Each role must trust exactly the ID-form subjects of its purpose, and the plan role also the pull request subject."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, role in aws_iam_role.github :
+      !strcontains(role.assume_role_policy, "repo:ian-mungai/") && !strcontains(role.assume_role_policy, "healthcare-hai-prediction:")
+    ])
+    error_message = "No role may accept the name-form subject, which an immutable-subject token never carries."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, role in aws_iam_role.github :
+      alltrue([
+        for subject in jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] :
+        startswith(subject, "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:")
+      ])
+    ])
+    error_message = "Every trusted subject must start with the ID-form repository prefix."
+  }
+}
+
+run "a_custom_subject_prefix_replaces_the_default_in_every_role" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:example-owner@111/example-repository@222"
+  }
+
+  assert {
+    condition = alltrue([
+      for key, role in aws_iam_role.github :
+      alltrue([
+        for subject in jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] :
+        startswith(subject, "repo:example-owner@111/example-repository@222:")
+      ])
+    ])
+    error_message = "The subject prefix variable must reach every trusted subject."
+  }
+}
+
+run "the_subject_prefix_refuses_the_name_form" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:ian-mungai/healthcare-hai-prediction"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "the_subject_prefix_refuses_a_pattern" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:ian-mungai@29179213/*@1376048206"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "the_subject_prefix_refuses_a_missing_repository_id" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:ian-mungai@29179213/healthcare-hai-prediction"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "the_subject_prefix_refuses_a_trailing_claim" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:image-push"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
 }
 
 run "custom_permissions_stay_inside_the_approved_list" {
@@ -205,7 +369,8 @@ run "plan_role_holds_no_write_and_no_secret_read" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -232,7 +397,8 @@ run "plan_role_reads_no_parameter_metadata" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   # Delivery plan role (owner A, Nov 10 2026): the plan role holds no parameter listing or tag read, and the delivery boundary stays unchanged.
@@ -249,7 +415,8 @@ run "state_access_is_per_stack_and_leaves_out_iam_and_storage" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -268,8 +435,9 @@ run "no_delivery_role_can_apply_or_write_state" {
   command = plan
 
   variables {
-    github_oidc_enabled         = true
-    github_oidc_deploy_services = ["example_project_dev_model_api"]
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
+    github_oidc_deploy_services   = ["example_project_dev_model_api"]
   }
 
   # D18: GitHub runs Terraform plans with the read-only plan role and the owner applies them. No role may write state or hold a lock.
@@ -292,8 +460,9 @@ run "deploy_role_is_limited_to_named_services" {
   command = plan
 
   variables {
-    github_oidc_enabled         = true
-    github_oidc_deploy_services = ["example_project_dev_model_api"]
+    github_oidc_enabled                = true
+    github_oidc_deploy_serving_enabled = false
+    github_oidc_deploy_services        = ["example_project_dev_model_api"]
   }
 
   assert {
@@ -306,16 +475,67 @@ run "deploy_role_is_limited_to_named_services" {
   }
 }
 
-run "deploy_without_a_named_service_updates_nothing" {
+run "the_deploy_policy_names_exactly_the_two_derived_serving_services" {
   command = plan
 
-  variables {
-    github_oidc_enabled = true
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : statement if contains(tolist(statement.Action), "ecs:UpdateService")]) == 1 &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement :
+        statement.Effect == "Allow" &&
+        join(",", tolist(statement.Action)) == "ecs:UpdateService" &&
+        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api",
+          "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_streamlit"
+        ])) &&
+        !contains(keys(statement), "Condition")
+        if contains(tolist(statement.Action), "ecs:UpdateService")
+      ])
+    )
+    error_message = "By default the deploy role may update exactly the model API and dashboard services of the project cluster, derived from the project and environment names."
   }
 
   assert {
-    condition     = !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService")
-    error_message = "Until the model API names its service the deploy role must hold no service update grant."
+    condition     = length(output.github_oidc_actions_outside_boundary) == 0 && length(output.github_oidc_grants_outside_boundary) == 0
+    error_message = "The derived service grants must stay inside the deploy boundary."
+  }
+
+  assert {
+    condition     = !anytrue([for key in ["image_push", "code_staging"] : strcontains(aws_iam_role_policy.github[key].policy, "ecs:UpdateService")])
+    error_message = "Only the deploy role updates a service."
+  }
+}
+
+run "the_serving_switch_off_removes_the_service_update_statement" {
+  command = plan
+
+  variables {
+    github_oidc_deploy_serving_enabled = false
+  }
+
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.github["deploy"].policy, "ecs:UpdateService") && !strcontains(aws_iam_role_policy.github["deploy"].policy, "service/")
+    error_message = "With the serving switch off and no extra names the deploy role must hold no service update grant."
+  }
+}
+
+run "extra_service_names_join_the_derived_ones_without_a_duplicate" {
+  command = plan
+
+  variables {
+    github_oidc_deploy_services = ["example_project_dev_model_api"]
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : statement if contains(tolist(statement.Action), "ecs:UpdateService")]) == 1 &&
+      join(",", sort(flatten([for statement in jsondecode(aws_iam_role_policy.github["deploy"].policy).Statement : tolist(statement.Resource) if contains(tolist(statement.Action), "ecs:UpdateService")]))) == join(",", sort([
+        "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_model_api",
+        "arn:aws:ecs:us-west-2:111111111111:service/example_project_cluster_dev/example_project_dev_streamlit"
+      ]))
+    )
+    error_message = "A named service equal to a derived one must appear once."
   }
 }
 
@@ -341,7 +561,8 @@ run "plan_role_is_denied_every_object_read_except_its_state_keys" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -373,7 +594,8 @@ run "plan_role_allows_object_reads_on_state_keys_only" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -400,7 +622,8 @@ run "plan_role_cannot_list_versions_or_uploads" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -478,7 +701,8 @@ run "plan_role_returns_configuration_never_content" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -494,7 +718,8 @@ run "plan_role_keeps_the_resources_of_the_approved_statements" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   # ecr:ListImages and s3:ListBucket were allowed on every repository and bucket of the account. They must reach only the project's own.
@@ -579,7 +804,8 @@ run "every_delivery_role_carries_its_own_boundary" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   # The deploy role's grants (registering the serving families, passing the serving roles) do not fit beside the push and plan grants in the 6,144
@@ -871,7 +1097,8 @@ run "the_plan_role_writes_saved_plans_to_one_prefix_only" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -907,7 +1134,8 @@ run "the_plan_role_cannot_read_list_or_delete_saved_plans" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -943,7 +1171,8 @@ run "the_delivery_boundary_writes_only_saved_plans" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -976,8 +1205,9 @@ run "the_deploy_role_registers_only_the_serving_families" {
   command = plan
 
   variables {
-    github_oidc_enabled         = true
-    github_oidc_deploy_services = ["example_project_dev_model_api"]
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
+    github_oidc_deploy_services   = ["example_project_dev_model_api"]
   }
 
   assert {
@@ -1025,8 +1255,9 @@ run "the_deploy_role_passes_only_the_serving_roles" {
   command = plan
 
   variables {
-    github_oidc_enabled         = true
-    github_oidc_deploy_services = ["example_project_dev_model_api"]
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
+    github_oidc_deploy_services   = ["example_project_dev_model_api"]
   }
 
   assert {
@@ -1097,7 +1328,8 @@ run "each_delivery_policy_is_attached_to_its_own_role" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
@@ -1172,7 +1404,8 @@ run "no_other_delivery_role_can_put_a_parameter_or_a_code_file" {
   command = plan
 
   variables {
-    github_oidc_enabled = true
+    github_oidc_enabled           = true
+    github_oidc_plan_role_enabled = true
   }
 
   assert {
