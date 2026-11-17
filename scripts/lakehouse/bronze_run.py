@@ -382,18 +382,69 @@ def read_run_record(client: Any, bucket: str, key: str) -> dict[str, Any] | None
     return record
 
 
+def put_once(client: Any, bucket: str, key: str, body: bytes) -> bool:
+    """Create ``key`` only if it does not exist: True when this call created it, False when an earlier call had (the bucket refuses the write)."""
+    from botocore.exceptions import ClientError
+
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
+            raise
+        return False
+    return True
+
+
+def read_own_record(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    """One record this run wrote, or None when the key cannot be read. The role cannot list its records folder, so a key that does not exist answers 403
+    as well as 404: both read as missing."""
+    from botocore.exceptions import ClientError
+
+    try:
+        record = json.loads(client.get_object(Bucket=bucket, Key=key)["Body"].read())
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) in ("NoSuchKey", "404", "AccessDenied", "403"):
+            return None
+        raise
+    return record if isinstance(record, dict) else None
+
+
+def json_bytes(document: dict[str, Any]) -> bytes:
+    return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+
+
+CLAIMED = "claimed"
+NO_OUTCOME = "unknown: an earlier attempt of this run claimed the notice and recorded no outcome, so it is not sent again"
+
+
+def recorded_carried_over(client: Any, bucket: str, run: str) -> dict[str, Any]:
+    """The carried-over record a first attempt of the run wrote, with the outcome of its notice. A repeated attempt reports this and sends nothing."""
+    document = read_own_record(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json")
+    if document is None:
+        return {"schema": 1, "bronze_run": run, "carried_over": None, "notice": "kept: an earlier attempt recorded it and the record cannot be read"}
+    if document.get("notice") == CLAIMED:
+        outcome = read_own_record(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over_notice.json")
+        document["notice"] = str(outcome["notice"]) if outcome is not None and "notice" in outcome else NO_OUTCOME
+    return document
+
+
 def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any) -> dict[str, Any]:
     """Name the source files that no run of the ingestion run's retry period captured, in the bronze run record and in the owner notice.
 
     Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The files are the units that
-    the ingestion run failed or did not attempt, less those a retry day captured (``ingestion_schedule.carried_over``). The record
-    ``lakehouse/bronze_runs/<run>/carried_over.json`` is written once, after the notice, so it says whether the notice was sent. A run with no ingestion run
-    record (a hand-staged bronze run) says that, and names no file. A notice that fails is recorded and never fails the run.
+    the ingestion run failed or did not attempt, less those a retry day captured (``ingestion_schedule.carried_over``). A run with no ingestion run
+    record (a hand-staged bronze run) says that, and names no file.
+
+    The record ``lakehouse/bronze_runs/<run>/carried_over.json`` is created once and is the claim on the notice: the attempt that creates it sends the notice,
+    and any later attempt reads the record, sends nothing and reports it. The outcome of the notice goes to ``carried_over_notice.json``, created once after the
+    send. So a notice is sent at most once per run. An attempt that is interrupted between the claim and the outcome leaves a record that says the outcome is
+    unknown: the notice may or may not have gone, and it is not sent again. A notice that fails is recorded and never fails the run.
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder = f"{root}ingestion_runs/"
     first = read_run_record(client, bucket, f"{folder}{original}/run.json") if root else None
     document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries)}
+    message: tuple[str, str] | None = None
     if not root:
         document |= {
             "carried_over": None,
@@ -411,21 +462,18 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
         elif not topic:
             document["notice"] = "not sent: no alerts topic"
         else:
-            subject, message = ingestion_schedule.carried_over_notice(run, files)
-            try:
-                notify.publish(TopicArn=topic, Subject=subject, Message=message)
-                document["notice"] = "sent"
-            except Exception as error:
-                document["notice"] = f"failed: {type(error).__name__}"
-    key = f"lakehouse/bronze_runs/{run}/carried_over.json"
-    body = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
-    from botocore.exceptions import ClientError
-
-    try:
-        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
-    except ClientError as error:
-        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
-            raise
+            document["notice"] = CLAIMED
+            message = ingestion_schedule.carried_over_notice(run, files)
+    if not put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json", json_bytes(document)):
+        return recorded_carried_over(client, bucket, run)
+    if message is not None:
+        try:
+            notify.publish(TopicArn=topic, Subject=message[0], Message=message[1])
+            outcome = "sent"
+        except Exception as error:
+            outcome = f"failed: {type(error).__name__}"
+        put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over_notice.json", json_bytes({"schema": 1, "bronze_run": run, "notice": outcome}))
+        document["notice"] = outcome
     return document
 
 
