@@ -30,7 +30,7 @@ HEARTBEAT_SECONDS = 30.0
 OUTCOMES = ("running", "succeeded", "failed", "interrupted")
 FINAL_OUTCOMES = OUTCOMES[1:]
 JOB_PHASES: dict[str, tuple[str, ...]] = {
-    "bronze": ("pin", "load", "check", "inventory"),
+    "bronze": ("pin", "load", "check", "inventory", "spark"),
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
     "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
@@ -75,6 +75,14 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_feature_set_online_mode": ("1 for the online load mode of the latest feature set publish.", ("feature_set", "mode")),
     "hai_feature_reload_result": ("1 for the result of the latest online store reload of a feature set.", ("feature_set", "result")),
     "hai_feature_release_result": ("1 for the result of the latest release of a held online load of a feature set.", ("feature_set", "result")),
+    "hai_spark_stages_active": ("Spark stages that run now in the bronze session.", ()),
+    "hai_spark_tasks_running": ("Spark tasks that run now across the active stages.", ()),
+    "hai_spark_tasks_completed": ("Spark tasks completed in the bronze session so far.", ()),
+    "hai_spark_tasks_failed": ("Spark tasks that failed in the bronze session so far.", ()),
+    "hai_spark_jobs_running": ("Spark jobs that run now in the bronze session.", ()),
+    "hai_spark_jobs_completed": ("Spark jobs that succeeded in the bronze session so far.", ()),
+    "hai_spark_jobs_failed": ("Spark jobs that failed in the bronze session so far.", ()),
+    "hai_spark_poll_timestamp_seconds": ("Unix time of the latest read of the Spark status tracker.", ()),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
 PENDING: list[Sample] = []
@@ -166,6 +174,7 @@ class Pusher:
         self.running_sent = False
         self.closed = False
         self.heartbeat_failures = 0
+        self.sample_failures = 0
         self.lock = threading.Lock()
 
     @classmethod
@@ -259,6 +268,25 @@ class Pusher:
             return False
         finally:
             self.lock.release()
+
+    def push_samples(self, outcome: str, samples: Sequence[Sample]) -> bool:
+        """Replace one group with the samples, for a process that pushes its own group (the Spark reporter). The first failure is logged, later ones are not."""
+        if outcome not in OUTCOMES:
+            line("metrics_push_skipped", reason="the outcome is not in the closed set")
+            return False
+        timeout = self.request_timeout if self.request_timeout is not None else REQUEST_TIMEOUT
+        try:
+            ok = self.send("PUT", outcome, exposition(self.clean(samples)), timeout, quiet=self.sample_failures > 0)
+        except Exception as error:
+            line("metrics_push_failed", step="put", reason=f"{type(error).__name__}: {error}")
+            return False
+        self.sample_failures = 0 if ok else self.sample_failures + 1
+        return ok
+
+    def delete_group(self, outcome: str) -> bool:
+        """Delete one group, best effort."""
+        timeout = self.request_timeout if self.request_timeout is not None else REQUEST_TIMEOUT
+        return outcome in OUTCOMES and self.send("DELETE", outcome, "", timeout, quiet=self.sample_failures > 0)
 
     def start(self, *, memory_current: float | None = None, memory_peak: float | None = None, scratch_peak: float | None = None) -> bool:
         return self.heartbeat(memory_current=memory_current, memory_peak=memory_peak, scratch_peak=scratch_peak, first=True)

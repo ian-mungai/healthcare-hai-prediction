@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -92,6 +93,11 @@ def spark_session(app_name: str, warehouse: Path | None = None, memory: str | No
     configured = builder.getOrCreate()
     if warehouse is None and task_catalog:
         configured.conf.set(f"{prefix}.credential", f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}")
+    # The bronze job pushes the progress of its Spark session; nothing here may fail the job (scripts/lakehouse/spark_progress.py).
+    with contextlib.suppress(Exception):
+        from scripts.lakehouse import spark_progress
+
+        spark_progress.maybe_start(configured)
     return configured
 
 

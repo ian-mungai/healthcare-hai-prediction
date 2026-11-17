@@ -16,6 +16,7 @@ from scripts.infrastructure import monitoring_files
 from scripts.infrastructure.host_state_exporter_cases import CASES as EXPORTER_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
+from scripts.infrastructure.spark_progress_cases import CASES as SPARK_CASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = "monitoring/grafana/dashboards/hai_overview.json"
@@ -27,6 +28,7 @@ RULES_MONITORING = f"{ALERTING}/rules_monitoring.yml"
 CONTACT = f"{ALERTING}/contact_points.yml"
 POLICIES = f"{ALERTING}/policies.yml"
 RULES_JOBS = f"{ALERTING}/rules_jobs.yml"
+RULES_SPARK = f"{ALERTING}/rules_spark.yml"
 KNOWN = "monitoring/known_metrics.json"
 SCRAPE = "monitoring/prometheus/prometheus.yml"
 MAPPING = "monitoring/statsd/mapping.yml"
@@ -341,6 +343,10 @@ def job_rule_uses_a_label_the_pushed_metric_lacks(root: Path) -> dict[str, bool]
     )
 
 
+def spark_rule_reads_a_metric_nobody_pushes(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_SPARK, "hai_spark_tasks_failed", "hai_spark_task_failures"), "hai_spark_task_failures")
+
+
 def new_dashboard_without_a_row_is_reported(root: Path) -> dict[str, bool]:
     def plant(tree: Path) -> None:
         path = tree / "monitoring/grafana/dashboards/hai_jobs.json"
@@ -413,6 +419,7 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "known_list_lacks_a_host_state_metric": known_list_lacks_a_host_state_metric,
     "job_rule_names_a_family_nobody_pushes": job_rule_names_a_family_nobody_pushes,
     "job_rule_uses_a_label_the_pushed_metric_lacks": job_rule_uses_a_label_the_pushed_metric_lacks,
+    "spark_rule_reads_a_metric_nobody_pushes": spark_rule_reads_a_metric_nobody_pushes,
     "new_dashboard_without_a_row_is_reported": new_dashboard_without_a_row_is_reported,
     "dashboard_uid_is_used_twice": dashboard_uid_is_used_twice,
 }
@@ -420,3 +427,4 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
 CASES |= PANEL_CASES
 CASES |= PUSH_CASES
 CASES |= EXPORTER_CASES
+CASES |= SPARK_CASES

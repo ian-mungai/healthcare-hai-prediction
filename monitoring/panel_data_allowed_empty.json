@@ -29,6 +29,11 @@
       "dashboard": "hai_feature_store.json",
       "panel": "Result of the latest release, by feature set",
       "reason": "Empty until a held online load is released; a chain without a held load never releases."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Spark tasks and stages running now",
+      "reason": "Empty while the bronze load does not run, which is the state once the chain run has finished."
     }
   ]
 }

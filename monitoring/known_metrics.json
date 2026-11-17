@@ -38,6 +38,14 @@
       "hai_feature_set_online_mode": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "mode"]},
       "hai_feature_reload_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "result"]},
       "hai_feature_release_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "result"]},
+      "hai_spark_stages_active": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_tasks_running": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_tasks_completed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_tasks_failed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_jobs_running": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_jobs_completed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_jobs_failed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_spark_poll_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
       "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
     }
   },
