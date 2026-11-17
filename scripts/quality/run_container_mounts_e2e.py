@@ -35,8 +35,10 @@ TRAINING = "orchestration/training_render.py"
 JOB = "scripts/training/job.py"
 EXTRACT = "scripts/features/training_extract.py"
 TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
-# Where the Terraform stacks read repository files from above their own folder: the jobs root has the repository path, the others walk up two folders.
-STACK_FILE_READS = (r"\$\{path\.module\}/\.\./\.\./([A-Za-z0-9_./-]+)", r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)")
+# Where the Terraform stacks read repository files from above their own folder: a path that climbs out of the stack folder, written with or without the
+# module prefix and at any depth, and the jobs root's repository path. Each one is resolved from the stack folder (the folder of the stack under test).
+STACK_FILE_READS = (r'(?:\$\{path\.module\}/|")((?:\.\./)+[A-Za-z0-9_./-]+)',)
+REPOSITORY_FILE_READS = (r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)",)
 # The run deadline is a hang guard for the whole run, not part of what a case proves: every case has its own hook deadline. A fixed 720 s ran out before the
 # last of the 52 cases on hosted runners (11 to 16 s a case with every group running at once, 3.5 s on an idle machine), and the run then printed
 # "46/52 passed" with no failed case. The limit grows with the number of cases instead.
@@ -532,14 +534,57 @@ def group_stack_files() -> list[str]:
     return found.group(1).split() if found else []
 
 
-def stack_read_files() -> set[str]:
+def stack_read_files(root: Path = ROOT) -> set[str]:
     """Every repository file below the repository root that a stack or a stack test reads above its folder."""
     names: set[str] = set()
     for pattern in ("*.tf", "*.tftest.hcl"):
-        for path in (ROOT / "infra").rglob(pattern):
+        for path in (root / "infra").rglob(pattern):
+            if ".terraform" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            relative = path.relative_to(root / "infra")
+            stack = root / "infra" / relative.parts[0] if len(relative.parts) > 1 else root / "infra"
             for expression in STACK_FILE_READS:
-                names.update(name for name in re.findall(expression, path.read_text(encoding="utf-8")) if (ROOT / name).is_file())
+                for reach in re.findall(expression, text):
+                    target = (stack / reach).resolve()
+                    if target.is_file() and target.is_relative_to(root.resolve()) and not target.is_relative_to(stack.resolve()):
+                        names.add(target.relative_to(root.resolve()).as_posix())
+            for expression in REPOSITORY_FILE_READS:
+                names.update(name for name in re.findall(expression, text) if (root / name).is_file())
     return names
+
+
+def stack_file_read_guard_case() -> dict[str, object]:
+    """Plant each form of read above a stack folder in a synthetic tree and require the guard to list exactly the files read outside the stack."""
+    files = {
+        "infra/platform/main.tf": (
+            'locals {\n  images = jsondecode(file("${path.module}/../services/images.json")).images\n  own = file("${path.module}/policies/own.json")\n}\n'
+        ),
+        "infra/platform/policies/own.json": "{}\n",
+        "infra/services/images.json": "{}\n",
+        "infra/iam/tests/bare.tftest.hcl": 'locals {\n  a = jsondecode(file("../../config/bare.json"))\n}\n',
+        "infra/iam/main.tf": (
+            'locals {\n  b = jsondecode(file("${path.module}/../../config/two_levels.json"))\n  c = file("${path.module}/../../config/absent.json")\n}\n'
+        ),
+        "infra/jobs/host.tf": 'module "flow" {\n  source = "../services/tests/flow"\n}\n',
+        "infra/services/tests/flow/main.tf": "\n",
+        "config/bare.json": "{}\n",
+        "config/two_levels.json": "{}\n",
+    }
+    expected = {"infra/services/images.json", "config/bare.json", "config/two_levels.json"}
+    with tempfile.TemporaryDirectory(prefix="stack_reads.") as folder:
+        for name, text in files.items():
+            target = Path(folder) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        found = stack_read_files(Path(folder))
+    checks = {
+        "a one-level relative read is listed": "infra/services/images.json" in found,
+        "a read with no module prefix is listed": "config/bare.json" in found,
+        "a two-level read is listed": "config/two_levels.json" in found,
+        "a read of a file inside the stack, of a missing file and of a folder is not listed": found <= expected,
+    }
+    return {"name": "stack_file_read_guard", "passed": all(checks.values()), "guard_checks": checks, "found": sorted(found)}
 
 
 def remaining(deadline: float, cap: float) -> float:
@@ -776,7 +821,7 @@ def case_reason(row: dict[str, Any]) -> str:
     if row.get("observed_exit") == 124 and row.get("expected_exit") != 124:
         started = "yes" if row.get("checker_started") else "no"
         return f"stopped by the hook deadline ({row.get('attempts', 1)} runs, last limit {row.get('seconds', '?'):g} s), checker started: {started}"
-    broken = [str(name) for key in ("path_selection", "dispatched_once") for name, ok in dict(row.get(key, {})).items() if not ok]
+    broken = [str(name) for key in ("path_selection", "dispatched_once", "guard_checks") for name, ok in dict(row.get(key, {})).items() if not ok]
     if broken:
         return "failed: " + ", ".join(broken[:4])
     parts = []
@@ -897,10 +942,10 @@ def main() -> int:
         if unknown := set(args.case) - {case.name for case in selected}:
             parser.error("Unknown case: " + ", ".join(sorted(unknown)))
         selected = [case for case in selected if case.name in args.case]
-    total = len(selected) + int(not args.case) + (5 + len(checker_mutations()) if args.mutants else 0)
+    total = len(selected) + 2 * int(not args.case) + (5 + len(checker_mutations()) if args.mutants else 0)
     run_limit = args.run_seconds or default_run_limit(total)
     deadline = clock_start + run_limit
-    expected = [case.name for case in selected] + ([] if args.case else ["ci_selection_and_dispatch"])
+    expected = [case.name for case in selected] + ([] if args.case else ["ci_selection_and_dispatch", "stack_file_read_guard"])
     report: dict[str, object] = {
         "started_at_utc": started.isoformat(),
         "run_limit_seconds": run_limit,
@@ -917,6 +962,7 @@ def main() -> int:
             results.append(run_case(case, source, workspace, deadline))
         if not args.case:
             results.append(ci_case(source, workspace, deadline))
+            results.append(stack_file_read_guard_case())
         if args.mutants:
             results.extend(mutant_cases(source, workspace, deadline, all_cases))
     except (ChildProcessError, TimeoutExpired) as error:

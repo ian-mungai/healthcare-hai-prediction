@@ -44,6 +44,8 @@ METADATA = ROOT / METADATA_FILE
 OPENMETADATA = {"openmetadata_server": "server", "openmetadata_ingestion": "ingestion", "openmetadata_search": "search"}
 PLATFORM = "linux/arm64"
 KINDS = ("mirror", "build", "blocked")
+# Which platform switch keeps the ECR repository of an image: always, or only while the monitoring or the serving switch is true.
+REPOSITORY_GROUPS = ("always", "monitoring", "serving")
 SERVICE_IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow")
 LOCAL_PIN_FILES = ("docker-compose.yaml", "services/orchestration/egress_proxy.json")
 PINNED = re.compile(r"@sha256:[0-9a-f]{64}$")
@@ -148,6 +150,10 @@ def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
         for field in ("tag", "arm64", "runs_as"):
             if not isinstance(image.get(field), str) or not image[field]:
                 problems.append(f"{name}: {field} is required")
+        if not isinstance(image.get("repository_group"), str) or not image["repository_group"]:
+            problems.append(f"{name}: repository_group is required")
+        elif image["repository_group"] not in REPOSITORY_GROUPS:
+            problems.append(f"{name}: repository_group must be one of {', '.join(REPOSITORY_GROUPS)}")
         if image.get("kind") in ("mirror", "blocked"):
             source = str(image.get("source", ""))
             if not PINNED.search(source):

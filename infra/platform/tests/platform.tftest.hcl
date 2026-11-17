@@ -201,6 +201,26 @@ run "serving_flag_off_leaves_out_its_repositories" {
   }
 }
 
+# The repository groups of images.json decide which flag keeps a repository, whatever the free text of an entry says.
+run "repository_groups_decide_the_gates" {
+  command = plan
+
+  variables {
+    monitoring_enabled = false
+    serving_enabled    = true
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_ecr_repository.image)) == toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group != "monitoring"]) &&
+      toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group == "monitoring"]) == toset(["prometheus", "grafana", "statsd_exporter"]) &&
+      toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group == "serving"]) == toset(["model_api", "streamlit"]) &&
+      alltrue([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : contains(["always", "monitoring", "serving"], image.repository_group)])
+    )
+    error_message = "The monitoring group is three images, the serving group two, and a false flag removes exactly its own group."
+  }
+}
+
 run "both_flags_off_keep_the_base_images" {
   command = plan
 

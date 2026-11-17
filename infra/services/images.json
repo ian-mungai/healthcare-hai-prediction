@@ -7,6 +7,7 @@
       "source": "postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f",
       "tag": "17-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "repository_group": "always",
       "runs_as": "ECS service on the host (P7d)"
     },
     "redis": {
@@ -15,6 +16,7 @@
       "tag": "7.2-bookworm-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026); new pin, not used by the local stack",
+      "repository_group": "always",
       "runs_as": "ECS service on the host (P7d)"
     },
     "polaris": {
@@ -22,6 +24,7 @@
       "source": "apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b",
       "tag": "1.8.0-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "repository_group": "always",
       "runs_as": "ECS service on the host (P7d)"
     },
     "airflow": {
@@ -33,6 +36,7 @@
       "local_tag": "hai-airflow:3.4.0-python3.12",
       "tag": "3.4.0-python3.12-arm64",
       "arm64": "base and builder pins list linux/arm64; built on Apple silicon, so the local image is arm64 until docker image inspect says otherwise",
+      "repository_group": "always",
       "runs_as": "ECS services on the host (P7d)"
     },
     "polaris_admin": {
@@ -44,6 +48,7 @@
       "local_tag": "hai-polaris-admin:1.8.0",
       "tag": "1.8.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
+      "repository_group": "always",
       "runs_as": "one-shot Polaris bootstrap task on the host (P7d)"
     },
     "spark": {
@@ -55,6 +60,7 @@
       "local_tag": "hai-lakehouse-spark:4.1.2-iceberg1.11.0",
       "tag": "4.1.2-iceberg1.11.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
+      "repository_group": "always",
       "runs_as": "job task (P7b)"
     },
     "analytics": {
@@ -69,6 +75,7 @@
       "local_tag": "hai-analytics:duckdb1.5.6-dbt1.11.15",
       "tag": "duckdb1.5.6-dbt1.11.15-arm64",
       "arm64": "base and builder pins list linux/arm64",
+      "repository_group": "always",
       "runs_as": "job task (P7b) and the Run 3 publisher host task, which needs the publisher packages the build argument installs"
     },
     "quality": {
@@ -80,6 +87,7 @@
       "local_tag": "hai-quality:gx1.23.2-duckdb1.5.6",
       "tag": "gx1.23.2-duckdb1.5.6-arm64",
       "arm64": "base and builder pins list linux/arm64",
+      "repository_group": "always",
       "runs_as": "job task (P7b)"
     },
     "egress_proxy": {
@@ -87,6 +95,7 @@
       "source": "ubuntu/squid@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c",
       "tag": "squid-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
+      "repository_group": "always",
       "runs_as": "job network class with closed egress (P7b)"
     },
     "mlflow": {
@@ -95,6 +104,7 @@
       "local_tag": "hai-mlflow:3.17.2",
       "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64",
+      "repository_group": "always",
       "runs_as": "ECS service on the host when mlflow_enabled is true"
     },
     "training": {
@@ -103,6 +113,7 @@
       "local_tag": "hai-training:3.17.2",
       "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64 and the DVC lock lists Apple silicon, x86 Linux and Arm Linux hashes; the linux/arm64 build has not been run yet",
+      "repository_group": "always",
       "runs_as": "job task"
     },
     "feature_store": {
@@ -114,6 +125,7 @@
       "local_tag": "hai-feature-store:feast0.67.0",
       "tag": "feast0.67.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
+      "repository_group": "always",
       "runs_as": "job task, extract step"
     },
     "drift": {
@@ -122,6 +134,7 @@
       "local_tag": "hai-drift:evidently0.7.23",
       "tag": "evidently0.7.23-arm64",
       "arm64": "base pin lists linux/arm64; the linux/arm64 build has not been run yet",
+      "repository_group": "always",
       "runs_as": "job task, drift check step"
     },
     "prometheus": {
@@ -130,6 +143,7 @@
       "tag": "v3.15.1-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the busybox variant, which has the shell and wget the preparation and health check containers use",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true"
     },
     "grafana": {
@@ -138,6 +152,7 @@
       "tag": "13.2.5-ubuntu-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the Ubuntu variant, which has the bash the health check uses",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true"
     },
     "statsd_exporter": {
@@ -146,6 +161,7 @@
       "tag": "v0.31.0-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true"
     },
     "pushgateway": {
@@ -154,6 +170,7 @@
       "tag": "v1.11.2-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Nov 17 2026: sha256:175450c3f356564a2256772b9d084ee62884a50b81bfbaa172c314810291b8d3); new pin, not used by the local stack; the busybox base has the wget the health check uses (to confirm when the image runs on the host)",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: host jobs push their own metrics to it"
     },
     "redis_exporter": {
@@ -162,6 +179,7 @@
       "tag": "v1.97.0-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: Redis metrics, as the Redis user exporter"
     },
     "postgres_exporter": {
@@ -170,6 +188,7 @@
       "tag": "v0.20.1-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: Postgres metrics, as the role postgres_exporter"
     },
     "node_exporter": {
@@ -178,6 +197,7 @@
       "tag": "v1.12.1-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: host CPU, memory, load, disk and kernel counters, with no privilege"
     },
     "model_api": {
@@ -187,6 +207,7 @@
       "local_tag": "hai-model-api:1",
       "tag": "1-arm64",
       "arm64": "base pin lists linux/arm64; the lock needs the owner's compile on the training lock, and the linux/arm64 build has not been run yet",
+      "repository_group": "serving",
       "runs_as": "ECS service on the host when model_api_enabled is true"
     },
     "streamlit": {
@@ -196,6 +217,7 @@
       "local_tag": "hai-streamlit:1",
       "tag": "1-arm64",
       "arm64": "base pin lists linux/arm64; the lock needs the owner's compile, and the linux/arm64 build has not been run yet",
+      "repository_group": "serving",
       "runs_as": "ECS service on the host when streamlit_enabled is true"
     },
     "openmetadata_server": {
@@ -206,6 +228,7 @@
       "metadata_image": "server",
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "repository_group": "always",
       "runs_as": "the persistent catalog server and its migration step on the host (openmetadata_persistent_enabled)"
     },
     "openmetadata_ingestion": {
@@ -216,6 +239,7 @@
       "metadata_image": "ingestion",
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "repository_group": "always",
       "runs_as": "the one-shot catalog bootstrap on the host (openmetadata_persistent_enabled)"
     },
     "openmetadata_search": {
@@ -226,6 +250,7 @@
       "metadata_image": "search",
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
+      "repository_group": "always",
       "runs_as": "the persistent catalog's OpenSearch single node on the host (openmetadata_persistent_enabled)"
     }
   }

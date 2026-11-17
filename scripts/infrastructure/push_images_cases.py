@@ -204,6 +204,43 @@ def list_refusals() -> dict[str, bool]:
     }
 
 
+def repository_groups() -> dict[str, bool]:
+    """Every image names its repository group; a missing or unknown group is refused, and the real groups are the ones the platform stack gates."""
+    base = real_config()
+    images = base["images"]
+
+    def problems(mutate: Callable[[dict[str, Any]], None]) -> str:
+        config = copy.deepcopy(base)
+        mutate(config["images"])
+        return "\n".join(push_images.check(config))
+
+    def missing(images: dict[str, Any]) -> None:
+        del images["postgres"]["repository_group"]
+
+    def unknown(images: dict[str, Any]) -> None:
+        images["postgres"]["repository_group"] = "base"
+
+    def wrong_type(images: dict[str, Any]) -> None:
+        images["postgres"]["repository_group"] = ["always"]
+
+    def regrouped(images: dict[str, Any]) -> None:
+        images["postgres"]["repository_group"] = "monitoring"
+
+    def groups(group: str) -> set[str]:
+        return {name for name, image in images.items() if image.get("repository_group") == group}
+
+    return {
+        "the list is valid with a group on every image": push_images.check(base) == [],
+        "the monitoring group is the three monitoring images": groups("monitoring") == {"prometheus", "grafana", "statsd_exporter"},
+        "the serving group is the model API and the page": groups("serving") == {"model_api", "streamlit"},
+        "every other image is in the always group": {name for name in images if name not in groups("monitoring") | groups("serving")} == groups("always"),
+        "a missing group is refused with the image name": "postgres" in problems(missing) and "repository_group is required" in problems(missing),
+        "an unknown group is refused with the allowed values": "postgres" in problems(unknown) and "always, monitoring, serving" in problems(unknown),
+        "a group that is not a string is refused": "postgres" in problems(wrong_type) and "repository_group" in problems(wrong_type),
+        "a regrouped image still passes the list check, so the platform tests own the group contents": "postgres" not in problems(regrouped),
+    }
+
+
 def plan_lines() -> dict[str, bool]:
     """The plan mirrors each image by its digest, skips one that ECR holds with that digest and reads the digest back."""
     config = real_config()
@@ -614,6 +651,7 @@ AUDITED: list[object] = []
 CASES: dict[str, Case] = {
     "list_pins": list_pins,
     "list_refusals": list_refusals,
+    "repository_groups": repository_groups,
     "plan_lines": plan_lines,
     "drift_image": drift_image,
     "publisher_analytics_image": publisher_analytics_image,
