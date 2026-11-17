@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.infrastructure import openmetadata_persistent_bootstrap as bootstrap
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,7 +109,12 @@ def test_no_stack_takes_a_marquez_switch_image_or_secret(stack: str) -> None:
 
 COMPARISON_BOT_NAMES = ("openmetadata_bot_comparison", "comparison-bot", "DataConsumer")
 COMPARISON_BOT_REFUSALS = frozenset(
-    {"infra/iam/tests/openmetadata_persistent.tftest.hcl", "infra/services/tests/openmetadata.tftest.hcl", "tests/test_no_marquez_leftovers.py"}
+    {
+        "infra/iam/tests/openmetadata_persistent.tftest.hcl",
+        "infra/services/tests/openmetadata.tftest.hcl",
+        "scripts/infrastructure/run_openmetadata_persistent_e2e.py",
+        "tests/test_no_marquez_leftovers.py",
+    }
 )
 
 
@@ -124,7 +130,7 @@ def test_the_openmetadata_comparison_bot_that_only_the_marquez_comparison_used_i
         if any(name in text for name in COMPARISON_BOT_NAMES):
             named.append(relative(path))
     check(not named, f"these files still name the comparison bot, its token parameter or its role: {named}")
-    bootstrap = (ROOT / "scripts/infrastructure/openmetadata_persistent_bootstrap.py").read_text()
-    check('"comparison"' not in bootstrap, "the bootstrap still creates a comparison caller")
+    check("comparison" not in bootstrap.CALLER_ROLES, "the bootstrap still creates a comparison caller")
+    check(bootstrap.RETIRED_CALLERS == ("comparison",), "the bootstrap no longer retires the comparison bot that earlier releases created")
     for stack in ("infra/iam/openmetadata_persistent.tf", "infra/services/openmetadata_variables.tf"):
         check('"comparison"' not in (ROOT / stack).read_text(), f"{stack} still names a comparison caller")

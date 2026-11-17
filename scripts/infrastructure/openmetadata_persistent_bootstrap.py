@@ -10,6 +10,10 @@ OpenMetadata 2.0.7 keeps those settings in its database (``openLineageSettings``
 SettingsCache), not in a configuration file, so the bootstrap reads ``GET /v1/system/settings/openLineageSettings`` and writes
 ``PUT /v1/system/settings`` only when the value is not already false; the other OpenLineage settings keep the server's values.
 A rerun changes nothing when everything is current. A token that differs from its parameter is written again.
+It also retires the bots that earlier releases created for callers that no longer exist (``RETIRED_CALLERS``): it revokes the token and deletes the bot and
+its user. It touches a bot only when its name is exactly ``<caller>-bot`` and its user is the bot user this script creates (same name, ``<name>@example.org``,
+``isBot``); any other bot of that name is left and reported. An absent bot is a no-op. The token parameter of a retired caller is not deleted here, because the
+task role may only read and write the parameters of the current callers: the owner deletes it.
 Exit codes: 0 done, 1 a step failed (the message names the caller or the class of the error), 2 the configuration was refused before any call.
 Output names steps and callers and never prints a password or a token.
 The routes and the role names are the ones of the OpenMetadata REST API as the author knew them and are unproven against release 2.0.7.
@@ -33,6 +37,7 @@ except ImportError:
     base = importlib.import_module("openmetadata_bootstrap")
 
 CALLER_ROLES = {"lineage": "IngestionBotRole", "ingestion": "IngestionBotRole"}
+RETIRED_CALLERS = ("comparison",)
 PARAMETER_PATTERN = re.compile(r"^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$")
 
 
@@ -93,6 +98,34 @@ def ensure_bot(api: str, session: str, caller: str) -> str:
     if not token:
         raise RuntimeError("the bot has no token")
     return str(token)
+
+
+def retire_bot(api: str, session: str, caller: str) -> str:
+    """Retire the project's bot of a caller that no longer exists; return ``absent``, ``retired`` or ``left``.
+
+    Raises RuntimeError with a fixed reason when a step is refused.
+
+    The bot is touched only when its user is the one ``ensure_bot`` creates, so a bot of someone else that carries the name is never revoked or deleted.
+    """
+    name = f"{caller}-bot"
+    status, bot = base.call("GET", f"{api}/v1/bots/name/{name}", session=session)
+    if status == 404:
+        return "absent"
+    if status != 200 or not isinstance(bot, dict):
+        raise RuntimeError("the bot could not be read")
+    bot_id = bot.get("id")
+    user_id = (bot.get("botUser") or {}).get("id")
+    if not bot_id or not user_id:
+        return "left"
+    status, user = base.call("GET", f"{api}/v1/users/{user_id}", session=session)
+    if status != 200 or not (user.get("name") == name and user.get("email") == f"{name}@example.org" and user.get("isBot") is True):
+        return "left"
+    if base.call("PUT", f"{api}/v1/users/revokeToken", {"id": user_id}, session)[0] != 200:
+        raise RuntimeError("the token was not revoked")
+    for kind, identity in (("bots", bot_id), ("users", user_id)):
+        if base.call("DELETE", f"{api}/v1/{kind}/{identity}?hardDelete=true", session=session)[0] not in (200, 404):
+            raise RuntimeError(f"the {kind[:-1]} was not deleted")
+    return "retired"
 
 
 def lineage_settings(api: str, session: str) -> str:
@@ -167,6 +200,11 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
             failed.append(f"{caller} ({error})")
         except Exception as error:
             failed.append(f"{caller} ({type(error).__name__})")
+    for caller in (caller for caller in RETIRED_CALLERS if caller not in CALLER_ROLES):
+        try:
+            sys.stdout.write(f"openmetadata_persistent_bootstrap: {caller} bot {retire_bot(api, session, caller)}\n")
+        except RuntimeError as error:
+            failed.append(f"{caller} retirement ({error})")
     try:
         sys.stdout.write(f"openmetadata_persistent_bootstrap: OpenLineage settings {lineage_settings(api, session)}\n")
     except RuntimeError as error:

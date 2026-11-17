@@ -34,6 +34,13 @@ PARAMETERS = {
     "ingestion": "/example/openmetadata_bot_ingestion",
 }
 OBSERVED: dict[str, Any] = {}
+# The caller that earlier releases created and this release retires, with the token parameter those releases wrote for it.
+RETIRED_BOT = "comparison-bot"
+RETIRED_PARAMETER = "/example/retired_caller_token"
+
+
+def bot_id(name: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "bot:" + name))
 
 
 def require(condition: object, message: object) -> None:
@@ -76,6 +83,8 @@ class FakeServer:
         self.users: dict[str, dict[str, Any]] = {}
         self.calls: list[tuple[str, str]] = []
         self.refuse_bot: str | None = None
+        self.refuse_delete = False
+        self.revoked: list[str] = []
         self.missing_role: str | None = None
         self.password_changes = 0
         # OpenMetadata 2.0.7 seeds openLineageSettings in its database on first start (SettingsCache) with these values; no config file sets them.
@@ -136,7 +145,11 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     return self.reply(404) if name == state.missing_role else self.reply(200, {"id": str(uuid.uuid5(uuid.NAMESPACE_DNS, name)), "name": name})
                 if self.path.startswith("/api/v1/bots/name/"):
                     name = self.path.rsplit("/", 1)[1]
-                    return self.reply(200, {"name": name, "botUser": {"id": state.bots[name]}}) if name in state.bots else self.reply(404)
+                    return self.reply(200, {"id": bot_id(name), "name": name, "botUser": {"id": state.bots[name]}}) if name in state.bots else self.reply(404)
+                if self.path.startswith("/api/v1/users/") and "/auth-mechanism/" not in self.path:
+                    user_id = self.path.split("?", 1)[0].rsplit("/", 1)[1]
+                    found = next((item for item in state.users.values() if item["id"] == user_id), None)
+                    return self.reply(200, {key: found[key] for key in ("id", "name", "email", "isBot")}) if found else self.reply(404)
                 if self.path.startswith("/api/v1/users/auth-mechanism/"):
                     user_id = self.path.rsplit("/", 1)[1]
                     user = next((item for item in state.users.values() if item["id"] == user_id), None)
@@ -167,6 +180,12 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     state.openlineage = dict(request["config_value"])
                     state.settings_writes += 1
                     return self.reply(200, request)
+                if self.path == "/api/v1/users/revokeToken":
+                    if state.refuse_delete:
+                        return self.reply(403)
+                    require(any(item["id"] == request.get("id") for item in state.users.values()), "a token revocation must name a known user")
+                    state.revoked.append(str(request["id"]))
+                    return self.reply(200, {})
                 if self.path == "/api/v1/users/changePassword":
                     # UserResource.changeUserPassword of 2.0.7 answers a success with the plain text below, not JSON, and a refusal with {"code", "message"}.
                     if state.password_refusal is not None:
@@ -184,7 +203,13 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     existing = state.users.get(request["name"])
                     if existing is None:
                         digest = hashlib.sha256(f"{request['name']}-token-material".encode()).hexdigest()
-                        existing = {"id": str(uuid.uuid5(uuid.NAMESPACE_URL, request["name"])), "token": f"synthetic.{digest}.jwt"}
+                        existing = {
+                            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, request["name"])),
+                            "token": f"synthetic.{digest}.jwt",
+                            "name": request["name"],
+                            "email": request["email"],
+                            "isBot": True,
+                        }
                         state.users[request["name"]] = existing
                     return self.reply(200, {"id": existing["id"], "name": request["name"]})
                 if self.path == "/api/v1/bots":
@@ -192,6 +217,30 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                         return self.reply(403)
                     state.bots[request["name"]] = state.users[request["botUser"]]["id"]
                     return self.reply(200, {"name": request["name"]})
+            self.reply(404)
+
+        def do_DELETE(self) -> None:
+            with lock:
+                state.calls.append(("DELETE", self.path))
+                if not self.authorized():
+                    return self.reply(401)
+                if state.refuse_delete:
+                    return self.reply(403)
+                route, _, query = self.path.partition("?")
+                require(query == "hardDelete=true", "a retired bot and user are deleted for good")
+                _, _, kind, target = route.rsplit("/", 3)
+                if kind == "bots":
+                    name = next((item for item in state.bots if bot_id(item) == target), None)
+                    if name is None:
+                        return self.reply(404)
+                    del state.bots[name]
+                    return self.reply(200, {})
+                if kind == "users":
+                    name = next((key for key, item in state.users.items() if item["id"] == target), None)
+                    if name is None:
+                        return self.reply(404)
+                    del state.users[name]
+                    return self.reply(200, {})
             self.reply(404)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -234,6 +283,9 @@ def fresh_start() -> None:
         store = FakeParameterStore()
         code, out, err = run(environment(base), store)
         require(code == 0, f"a fresh start failed: {err}")
+        require(
+            not [call for call in state.calls if call[0] == "DELETE" or call[1].endswith("/revokeToken")], "a bot that is absent must be a no-op, not a request"
+        )
         require(state.admin == ADMIN_VALUE and state.password_changes == 1, "the factory password was not replaced exactly once")
         require(sorted(state.bots) == ["ingestion-bot", "lineage-bot"], f"wrong bots: {sorted(state.bots)}")
         require(set(store.values) == set(PARAMETERS.values()), "every caller needs its own token parameter")
@@ -413,7 +465,85 @@ def stored_password_outside_the_server_policy_is_refused_first() -> None:
     OBSERVED["password_policy"] = sorted(bad)
 
 
+def seed_bot(state: FakeServer, name: str, *, email: str | None = None, store: FakeParameterStore | None = None, parameter: str = "") -> None:
+    """A bot and its user as an earlier run or someone else left them; with a store and a parameter, also the token parameter an earlier run wrote."""
+    user: dict[str, Any] = {
+        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, name)),
+        "token": f"synthetic.{hashlib.sha256(name.encode()).hexdigest()}.jwt",
+        "name": name,
+        "email": email or f"{name}@example.org",
+        "isBot": True,
+    }
+    state.users[name] = user
+    state.bots[name] = user["id"]
+    if store is not None and parameter:
+        store.values[parameter] = user["token"]
+
+
+def retirements(state: FakeServer, since: int = 0) -> list[tuple[str, str]]:
+    return [call for call in state.calls[since:] if call[0] == "DELETE" or call[1].endswith("/revokeToken")]
+
+
+def retired_bot_is_removed_on_upgrade() -> None:
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        code, _out, err = run(environment(base), store)
+        require(code == 0, f"the current callers failed first: {err}")
+        seed_bot(state, RETIRED_BOT, store=store, parameter=RETIRED_PARAMETER)
+        require(sorted(state.bots) == [RETIRED_BOT, "ingestion-bot", "lineage-bot"], "the earlier release left three bots")
+        code, out, err = run(environment(base), store)
+        require(code == 0, f"the upgrade run failed: {code} {err}")
+        require(sorted(state.bots) == ["ingestion-bot", "lineage-bot"], f"the retired bot is still there: {sorted(state.bots)}")
+        require(sorted(state.users) == ["ingestion-bot", "lineage-bot"], f"the retired bot user is still there: {sorted(state.users)}")
+        require(len(state.revoked) == 1 and state.revoked[0] == str(uuid.uuid5(uuid.NAMESPACE_URL, RETIRED_BOT)), "the retired token was not revoked")
+        require([call[0] for call in retirements(state)] == ["PUT", "DELETE", "DELETE"], f"revoke, then delete the bot and its user: {retirements(state)}")
+        require(RETIRED_PARAMETER in store.values, "the bootstrap role cannot delete a parameter; that is an owner step")
+        require("retired" in out and "comparison" in out, f"the run must say what it retired: {out}")
+        assert_no_values(out, err)
+        seen = len(state.calls)
+        code, out, err = run(environment(base), store)
+        require(code == 0 and retirements(state, seen) == [], f"a rerun must retire nothing: {retirements(state, seen)}")
+        OBSERVED["retired_bot"] = {"bots_after": sorted(state.bots), "requests": [call[0] for call in retirements(state)]}
+
+
+def foreign_bots_are_left_alone() -> None:
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, "airflow-bot", email="airflow-bot@other.example")
+        seed_bot(state, RETIRED_BOT + "-extra")
+        before = sorted(state.bots)
+        code, out, err = run(environment(base), store)
+        require(code == 0, f"foreign bots must not fail a run: {err}")
+        require(retirements(state) == [] and set(before) <= set(state.bots), f"a foreign bot was touched: {retirements(state)}")
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, RETIRED_BOT, email="someone@other.example")
+        code, out, err = run(environment(base), store)
+        require(
+            code == 0 and RETIRED_BOT in state.bots and RETIRED_BOT in state.users, f"a bot with this name that the project did not create must stay: {err}"
+        )
+        require(retirements(state) == [], f"nothing may be revoked or deleted: {retirements(state)}")
+        require("left" in out, f"the run must say it left the bot: {out}")
+        OBSERVED["foreign_bots"] = {"requests": 0}
+
+
+def refused_retirement_fails_visibly_but_others_finish() -> None:
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, RETIRED_BOT, store=store, parameter=RETIRED_PARAMETER)
+        state.refuse_delete = True
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "comparison" in err, f"a refused retirement must fail and name the caller: {code} {err}")
+        require(RETIRED_BOT in state.bots, "a refused retirement must leave the bot where it is")
+        require(PARAMETERS["lineage"] in store.values and PARAMETERS["ingestion"] in store.values, "a refused retirement stopped the other callers")
+        assert_no_values(out, err)
+        OBSERVED["refused_retirement"] = {"exit": code}
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "retired_bot_is_removed_on_upgrade": retired_bot_is_removed_on_upgrade,
+    "foreign_bots_are_left_alone": foreign_bots_are_left_alone,
+    "refused_retirement_fails_visibly_but_others_finish": refused_retirement_fails_visibly_but_others_finish,
     "fresh_start": fresh_start,
     "refused_password_change_shows_status_and_server_message": refused_password_change_shows_status_and_server_message,
     "stored_password_outside_the_server_policy_is_refused_first": stored_password_outside_the_server_policy_is_refused_first,
