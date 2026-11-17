@@ -1822,6 +1822,8 @@
     "scripts/lakehouse/bridge_references.py",
     "scripts/lakehouse/bronze.py",
     "scripts/lakehouse/bronze_dispatch.py",
+    "scripts/lakehouse/bronze_entry_cases.py",
+    "scripts/lakehouse/bronze_entry_stand_in.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_namespace_cases.py",
     "scripts/lakehouse/bronze_pin.py",

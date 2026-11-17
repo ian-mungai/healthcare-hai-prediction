@@ -1490,4 +1490,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``bronze_pin``, ``unit_records`` and ``dictionary`` import the module by its package name: a second
+    # copy with a ``BronzeError`` of its own, so ``main`` would not catch what they raise. Run the package copy, so that every module shares one set of classes.
+    from scripts.lakehouse.bronze import main as packaged_main
+
+    raise SystemExit(packaged_main())

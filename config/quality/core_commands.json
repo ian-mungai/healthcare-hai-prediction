@@ -53,6 +53,8 @@
     "\"$python_bin\" -m scripts.quality.ci_group_files",
     "\"$python_bin\" -m scripts.quality.container_mounts",
     "\"$python_bin\" -m scripts.quality.core_commands",
+    "\"$python_bin\" -m scripts.quality.entry_copies",
+    "\"$python_bin\" -m scripts.quality.entry_copies --planted",
     "\"$python_bin\" -m scripts.quality.install_dvc",
     "\"$python_bin\" -m scripts.quality.lint_sources sql",
     "\"$python_bin\" -m scripts.quality.run_case_shards_e2e --output-directory \"$quality_output/case_shards\"",

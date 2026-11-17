@@ -13,6 +13,8 @@ repository_code_checks() {
   timed "repository_code_checks: suppressions" python_suppressions
   timed "repository_code_checks: subprocess imports" python_subprocess_imports
   timed "repository_code_checks: process start guard" process_start_guard
+  timed "repository_code_checks: entry point copies" "$python_bin" -m scripts.quality.entry_copies
+  timed "repository_code_checks: entry point copies planted" "$python_bin" -m scripts.quality.entry_copies --planted
   timed "repository_code_checks: CI group files" "$python_bin" -m scripts.quality.ci_group_files
   timed "repository_code_checks: container imports" "$python_bin" -m scripts.quality.container_mounts
   timed "repository_code_checks: documentation review E2E" "$python_bin" -m scripts.quality.run_documentation_review_e2e

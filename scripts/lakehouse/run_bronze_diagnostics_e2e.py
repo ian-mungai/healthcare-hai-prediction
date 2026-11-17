@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from orchestration import launcher
-from scripts.lakehouse import bronze, bronze_metadata, catalog, dictionary
+from scripts.lakehouse import bronze, bronze_entry_cases, bronze_metadata, catalog, dictionary
 from scripts.quality.model_metadata import load_yaml
 
 TABLE = {"table": "files", "collection": "cms/synthetic", "roles": ["data"], "format": "csv", "encodings": ["utf-8"], "member_pattern": r"\.csv$"}
@@ -787,6 +787,11 @@ def catalog_cases(root: Path) -> dict[str, bool]:
     return results
 
 
+def entry_cases() -> dict[str, bool]:
+    """Run the real ``python -m scripts.lakehouse.bronze`` command in a child process against service stand-ins."""
+    return {f"{name}: {check}": passed for name, case in bronze_entry_cases.CASES.items() for check, passed in case().items()}
+
+
 def main() -> int:
     """Write synthetic assertion results and return failure if any result fails."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -807,6 +812,7 @@ def main() -> int:
         results = {
             **row_cases(),
             **command_cases(folder),
+            **entry_cases(),
             **ownership_cases(folder),
             **all_ownership_groups(folder),
             **ownership_reference_commands(folder),

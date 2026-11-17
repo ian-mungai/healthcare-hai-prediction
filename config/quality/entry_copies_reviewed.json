@@ -1,0 +1,4 @@
+{
+  "scripts.lakehouse.glue_mirror": "open: static finding that was not reproduced. python -m scripts.lakehouse.glue_mirror runs as __main__ and gold_publish imports the package copy and names MirrorError and MirrorDeadline. Check whether a path of main reaches a raise in the package copy, then apply the block of scripts/infrastructure/host_session.py",
+  "scripts.lakehouse.run_lock": "open: static finding that was not reproduced. python -m scripts.lakehouse.run_lock runs as __main__ and orchestration.launcher imports the package copy and names Refused and RegistryError. Check whether a path of main reaches a raise in the package copy, then apply the block of scripts/infrastructure/host_session.py"
+}

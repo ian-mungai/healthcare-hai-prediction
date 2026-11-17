@@ -622,4 +622,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # ``python -m`` loads this file as ``__main__``, and ``archive_review`` (in ``expand_archive``) imports the module by its package name: a second copy
+    # with a ``StorageError`` of its own, so a caller that catches ``StorageError`` would not catch what this copy's ``AwsCli`` raises. Run the package
+    # copy, so that every module shares one set of classes.
+    from scripts.acquisition.s3_store import main as packaged_main
+
+    packaged_main()
