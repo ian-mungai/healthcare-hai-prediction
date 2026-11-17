@@ -698,7 +698,7 @@ def unreadable_output_record() -> None:
 
 
 OPENMETADATA_REFUSAL = json.dumps({"code": 400, "message": "Invalid request format"}).encode()
-JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z")
+JAVA_TIME = re.compile(r"(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z")
 
 
 def stored_millis(text: str) -> tuple[int, int] | None:
@@ -707,8 +707,9 @@ def stored_millis(text: str) -> tuple[int, int] | None:
     ``.000000``. That format takes the digits after the point as one whole number of milliseconds, whatever their count: ``.123`` is 123 ms (meant),
     ``.123456`` is 123456 ms (2 min 3.456 s later than meant) and ``.1`` is 1 ms (not the 100 ms meant). Only a ``Z`` zone is read, so a numeric offset is
     refused. ``meant`` is the instant the text says, cut to whole milliseconds.
-    Where Java and this model could differ, the stand-in refuses instead of guessing: a fraction of ten or more digits (Java narrows it to an int and can
-    wrap) and calendar fields out of range (Java's lenient calendar rolls them over) both return None."""
+    The stand-in accepts only the form production sends (owner A, Nov 17 2026): a year from 2000 to 2099, valid calendar fields, three fraction digits
+    or none, and Z. In that form Java's reading equals the instant the text says. Every other form returns None (refused), so no corner of Java's
+    lenient parser (other fraction lengths, rolled-over fields, the 1582 calendar cutover) can pass a case."""
     found = JAVA_TIME.fullmatch(text)
     if found is None:
         return None
@@ -1085,9 +1086,9 @@ def event_times_are_stored_as_the_launch_instant() -> None:
 
 
 def stand_in_stores_time_as_openmetadata_does() -> None:
-    """The stand-in decodes an eventTime the way OpenMetadata 2.0.7 does and refuses every form it would store as another instant, so that a time of
-    six digits (the defect of Nov 17 2026) or of one digit fails a case. The refusals are those of the observed behavior (numeric offset, no ``Z``) and
-    of the source (the digits are whole milliseconds)."""
+    """The stand-in accepts only the production form of an eventTime (year 2000 to 2099, valid fields, three fraction digits or none, ``Z``), where
+    OpenMetadata 2.0.7 stores the instant the text says, and refuses every other form, so that a time of six digits (the defect of Nov 17 2026), of one
+    digit, with an offset, with rolled-over fields or before the 1582 cutover fails a case."""
     plain = {"eventType": "START", "inputs": [], "outputs": []}
     for text, stored in (
         ("2026-11-04T10:00:00Z", BASE_MILLIS),
@@ -1098,16 +1099,6 @@ def stand_in_stores_time_as_openmetadata_does() -> None:
         require(
             resolve({**plain, "eventTime": text}, set())[0] == 200 and stored_millis(text) == (stored, stored), f"{text} is stored as {stored_millis(text)}"
         )
-    for text, stored, meant in (
-        ("2026-11-04T10:00:00.123456Z", BASE_MILLIS + 123456, BASE_MILLIS + 123),
-        ("2026-11-04T10:00:00.1Z", BASE_MILLIS + 1, BASE_MILLIS + 100),
-        ("2026-11-04T10:00:00.12Z", BASE_MILLIS + 12, BASE_MILLIS + 120),
-        ("2026-11-04T10:00:00.1234Z", BASE_MILLIS + 1234, BASE_MILLIS + 123),
-        ("2026-11-04T10:00:00.123456789Z", BASE_MILLIS + 123456789, BASE_MILLIS + 123),
-    ):
-        status, body = resolve({**plain, "eventTime": text}, set())
-        require(stored_millis(text) == (stored, meant), f"{text} is stored as {stored_millis(text)}, not {(stored, meant)}")
-        require(status == 400 and f"stored as {stored} ms" in body["message"], f"{text} is not refused as a wrong instant: {status} {body}")
     for text in (
         "2026-11-04T10:00:00+00:00",
         "2026-11-04T10:00:00.123+00:00",
@@ -1119,6 +1110,15 @@ def stand_in_stores_time_as_openmetadata_does() -> None:
         "2026-13-04T10:00:00Z",
         "2026-11-31T10:00:00Z",
         "2026-11-04T24:00:00Z",
+        "2026-11-04T10:00:00.123456Z",
+        "2026-11-04T10:00:00.1Z",
+        "2026-11-04T10:00:00.12Z",
+        "2026-11-04T10:00:00.1234Z",
+        "2026-11-04T10:00:00.123456789Z",
+        "1500-01-01T00:00:00.000Z",
+        "1582-10-04T00:00:00.000Z",
+        "1999-12-31T23:59:59.999Z",
+        "2150-01-01T00:00:00.000Z",
     ):
         require(resolve({**plain, "eventTime": text}, set()) == (400, json.loads(OPENMETADATA_REFUSAL)), f"{text!r} is not refused as OpenMetadata refuses it")
     require(resolve(plain, set())[0] == 400, "an event with no time is refused")

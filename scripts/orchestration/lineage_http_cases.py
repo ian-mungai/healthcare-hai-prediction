@@ -59,7 +59,7 @@ TIME_CASES = [
     ("2026-11-16T19:31:22.123456Z", "2026-11-16T19:31:22.123Z", 123),
     ("2026-11-16T19:31:22.123456789Z", "2026-11-16T19:31:22.123Z", 123),
 ]
-JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z")
+JAVA_TIME = re.compile(r"(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z")
 
 
 def stored_millis(text: str) -> int | None:
@@ -67,8 +67,9 @@ def stored_millis(text: str) -> int | None:
     ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")`` (JsonUtils.java, 2.0.7-release, line 121) after padding a bare-second time with ``.000000``. That
     format takes the digits after the point as one whole number of milliseconds, so ``.123`` is 123 ms and ``.123456`` is 123456 ms. Only ``Z`` is read.
     The same rule is in ``scripts/orchestration/ecs_lineage_cases.py`` (this file runs in the Airflow image, where that module does not import).
-    Where Java and this model could differ, the stand-in refuses instead of guessing: a fraction of ten or more digits (Java narrows it to an int and can
-    wrap) and calendar fields out of range (Java's lenient calendar rolls them over) both return None."""
+    The stand-in accepts only the form production sends (owner A, Nov 17 2026): a year from 2000 to 2099, valid calendar fields, three fraction digits
+    or none, and Z. In that form Java's reading equals the instant the text says. Every other form returns None (refused), so no corner of Java's
+    lenient parser (other fraction lengths, rolled-over fields, the 1582 calendar cutover) can pass a case."""
     found = JAVA_TIME.fullmatch(text)
     if found is None:
         return None
