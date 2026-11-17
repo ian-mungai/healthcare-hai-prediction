@@ -12,9 +12,10 @@ It makes or verifies, in this order, each item that Git ignores:
    ``infra/platform``, copied from the main checkout (no state file is ever copied).
 3. ``.env`` and ``infra/deployment.auto.tfvars.json``, copied only when absent, in mode 0600. They hold the account, bucket and profile names and no credential.
 4. The ``.terraform`` folder of ``infra/jobs``, made by ``terraform init -backend=false`` from the copied providers (the main checkout may hold none to copy).
-   An existing folder is accepted only when its manifest lists every module that the configuration calls (read from the ``module`` blocks, local modules
-   included) and the providers of the lock file are all there; otherwise init runs again. Init writes by path, so it runs only when the lock file and
-   everything in an existing folder are plain files and folders with one name; the one link allowed is the one init makes to the copied providers.
+   An existing folder is accepted only when the providers of the lock file are all there and ``terraform modules -json`` succeeds, which it does only when
+   Terraform itself finds every module that the configuration declares installed from its declared source; otherwise init runs again, and a modules command
+   that cannot run, outlives its deadline or fails never ends as ready. Terraform runs only when the lock file and everything in an existing folder are
+   plain files and folders with one name; the one link allowed is the one init makes to the copied providers.
 5. The generated requirement and pin files of ``lock_env images``, which include ``services/orchestration/constraints-3.12.txt``, the file that the
    ``airflow-check`` service bind-mounts.
 
@@ -84,10 +85,7 @@ MAX_JUDGED = 1 << 20  # A copied small file larger than this is the owner's own,
 DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 EXISTING_FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC  # Non-blocking, so a pipe swapped in after the check cannot hold the run.
-MODULE_CALL = re.compile(r'module[ \t]+"([^"\n]+)"[ \t]*\{')
-SOURCE_ATTRIBUTE = re.compile(r"source[ \t]*=[ \t]*")
-HEREDOC = re.compile(r"<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\r?\n")
-MODULE_DEPTH = 8
+COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 LOCK_PROVIDER = re.compile(r'provider\s+"([^"]+)"\s*\{\s*version\s*=\s*"([^"]+)"')
 
 
@@ -674,149 +672,32 @@ def judge_existing(setup: Setup, relative: str, parent: int, name: str, data: by
         setup.report.note(f"kept {relative} (it differs from the main checkout's file, which is not copied over it)")
 
 
-def skip_template(text: str, start: int) -> int:
-    """The index after the ``${ }`` or ``%{ }`` part of a string whose body starts at ``start``."""
-    depth, index = 1, start
-    while index < len(text) and depth:
-        if text[index] == '"':
-            index = skip_string(text, index)
-            continue
-        depth += (text[index] == "{") - (text[index] == "}")
-        index += 1
-    return index
+def modules_gap(setup: Setup) -> str | None:
+    """Why terraform does not take the modules of the configuration as installed (None when it does): ``terraform modules -json`` decides.
 
-
-def skip_string(text: str, start: int) -> int:
-    """The index after the quoted string that starts at ``start``, with its templates and escapes."""
-    index = start + 1
-    while index < len(text):
-        if text[index] == "\\":
-            index += 2
-        elif text[index] == '"':
-            return index + 1
-        elif text.startswith(("$${", "%%{"), index):
-            index += 3
-        elif text.startswith(("${", "%{"), index):
-            index = skip_template(text, index + 2)
-        else:
-            index += 1
-    return len(text)
-
-
-def skip_lexical(text: str, index: int) -> int:
-    """The index after the comment, string or heredoc that starts at ``index``; ``index + 1`` for any other character."""
-    if text[index] == "#" or text.startswith("//", index):
-        end = text.find("\n", index)
-        return len(text) if end < 0 else end
-    if text.startswith("/*", index):
-        end = text.find("*/", index + 2)
-        return len(text) if end < 0 else end + 2
-    if text[index] == '"':
-        return skip_string(text, index)
-    heredoc = HEREDOC.match(text, index) if text.startswith("<<", index) else None
-    if heredoc:
-        closing = re.compile(rf"^[ \t]*{re.escape(heredoc.group(1))}[ \t]*\r?$", re.MULTILINE).search(text, heredoc.end())
-        return len(text) if closing is None else closing.end()
-    return index + 1
-
-
-def block_end(text: str, start: int) -> int:
-    """The index after the brace that closes the block whose body starts at ``start``."""
-    depth, index = 1, start
-    while index < len(text) and depth:
-        skipped = skip_lexical(text, index)
-        if skipped == index + 1:
-            depth += (text[index] == "{") - (text[index] == "}")
-        index = skipped
-    return index
-
-
-def word_starts(text: str, index: int, word: str) -> bool:
-    return text.startswith(word, index) and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] in "_-"))
-
-
-def literal_source(body: str) -> str | None:
-    """The plain string of the top-level ``source`` attribute of a module block body, or None when it is not a plain string."""
-    depth, index = 0, 0
-    while index < len(body):
-        skipped = skip_lexical(body, index)
-        if skipped != index + 1:
-            index = skipped
-            continue
-        if body[index] in "{[(":
-            depth += 1
-        elif body[index] in "}])":
-            depth -= 1
-        elif depth == 0 and word_starts(body, index, "source"):
-            attribute = SOURCE_ATTRIBUTE.match(body, index)
-            if attribute and body.startswith('"', attribute.end()):
-                end = skip_string(body, attribute.end())
-                value = body[attribute.end() + 1 : end - 1]
-                return None if any(mark in value for mark in ("${", "%{", "\\")) else value
-            return None
-        index += 1
+    The command fails when a module the configuration declares is not installed or its source has changed, and it lists every installed module, nested ones
+    included. A command that cannot run, outlives its deadline or fails counts as incomplete, so the caller runs init and never reports ready.
+    """
+    arguments = [f"-chdir={setup.worktree / JOBS}", "modules", "-json"]
+    try:
+        result = run_command("terraform", arguments, cwd=setup.worktree, timeout=TERRAFORM_DEADLINE)
+    except (OSError, SubprocessError) as error:
+        return f"terraform modules could not run ({type(error).__name__})"
+    if result.returncode:
+        said = " ".join(COLOUR.sub("", result.stderr or result.stdout).split())
+        return f"terraform modules failed ({result.returncode}): {said[-400:]}"
+    try:
+        listed = json.loads(result.stdout)["modules"]
+        if not isinstance(listed, list) or not all(isinstance(item, dict) and isinstance(item.get("key"), str) for item in listed):
+            raise TypeError
+    except (ValueError, KeyError, TypeError):
+        return "terraform modules printed no list of modules"
     return None
 
 
-def module_calls(text: str) -> list[tuple[str, str | None]]:
-    """Name and plain source (None when it is not a plain string) of every top-level ``module`` block of the configuration text."""
-    calls: list[tuple[str, str | None]] = []
-    depth, index = 0, 0
-    while index < len(text):
-        skipped = skip_lexical(text, index)
-        if skipped != index + 1:
-            index = skipped
-            continue
-        if text[index] in "{[(":
-            depth += 1
-        elif text[index] in "}])":
-            depth -= 1
-        elif depth == 0 and word_starts(text, index, "module"):
-            found = MODULE_CALL.match(text, index)
-            if found:
-                end = block_end(text, found.end())
-                calls.append((found.group(1), literal_source(text[found.end() : end - 1])))
-                index = end
-                continue
-        index += 1
-    return calls
-
-
-def required_modules(folder: Path, prefix: str = "", depth: int = 0) -> dict[str, str | None]:
-    """Manifest key to plain source of every module the configuration in ``folder`` calls; a local module is read for its own calls (key ``a.b``)."""
-    found: dict[str, str | None] = {}
-    for path in sorted(folder.glob("*.tf")):
-        for name, source in module_calls(path.read_text(encoding="utf-8")):
-            found[f"{prefix}{name}"] = source
-            if source and source.startswith(("./", "../")) and depth < MODULE_DEPTH and (folder / source).is_dir():
-                found.update(required_modules(folder / source, f"{prefix}{name}.", depth + 1))
-    return found
-
-
 def jobs_cache_gap(setup: Setup) -> str | None:
-    """Why the jobs stack's ``.terraform`` is not a complete cache: None when its modules and every provider of the lock file are there."""
+    """Why the jobs stack's ``.terraform`` is not a complete cache: None when every lock file provider is there and terraform finds every module installed."""
     cache = setup.worktree / JOBS / ".terraform"
-    try:
-        modules = json.loads((cache / "modules/modules.json").read_text(encoding="utf-8"))["Modules"]
-        if not isinstance(modules, list):
-            raise TypeError
-    except (OSError, ValueError, KeyError, TypeError):
-        return "modules/modules.json is missing or unreadable"
-    listed: dict[str, dict[str, object]] = {}
-    for module in modules:
-        folder = module.get("Dir") if isinstance(module, dict) else None
-        if not isinstance(folder, str) or not os.path.isdir(os.path.join(setup.worktree, JOBS, folder)):
-            return f"the module folder {folder} is missing"
-        listed[str(module.get("Key"))] = module
-    try:
-        required = required_modules(setup.worktree / JOBS)
-    except (OSError, ValueError) as error:
-        return f"the module calls of the configuration cannot be read ({type(error).__name__})"
-    for key, source in required.items():
-        if key not in listed:
-            return f"the module {key} of the configuration is not in modules.json"
-        if source is not None and listed[key].get("Source") != source:
-            return f"the module {key} is installed from another source than the configuration's {source}"
     try:
         lock = (setup.worktree / JOBS_LOCK).read_text(encoding="utf-8")
     except OSError:
@@ -834,7 +715,7 @@ def jobs_cache_gap(setup: Setup) -> str | None:
             copied = setup.worktree / PROVIDERS / host / namespace / name / version / path.parent.name / path.name
             if os.path.isfile(copied) and not os.path.samefile(copied, path) and source_digest(copied) != source_digest(path):
                 return f"the provider file {path.name} differs from the copied providers"
-    return None
+    return modules_gap(setup)
 
 
 def native_provider_link(setup: Setup, cache: Path, path: Path) -> bool:
@@ -892,6 +773,10 @@ def initialise_jobs(setup: Setup) -> None:
     if found is not None and not stat.S_ISDIR(found.st_mode):
         report.problem(relative, "is a link or not a folder; it was left as it is")
         return
+    hazard = init_hazard(setup, setup.worktree / relative)
+    if hazard:
+        report.problem(JOBS, f"terraform was not run: {hazard}")
+        return
     gap = jobs_cache_gap(setup) if found is not None else "it does not exist"
     if gap is None:
         report.note(f"verified {relative}")
@@ -900,10 +785,6 @@ def initialise_jobs(setup: Setup) -> None:
         report.problem(JOBS, f"cannot be initialised: {PROVIDERS} is missing")
         return
     if setup.refuse(relative, folder=True):
-        return
-    hazard = init_hazard(setup, setup.worktree / relative)
-    if hazard:
-        report.problem(JOBS, f"terraform init was not run: {hazard}")
         return
     arguments = [f"-chdir={setup.worktree / JOBS}", "init", "-backend=false", "-input=false", f"-plugin-dir={setup.worktree / PROVIDERS}"]
     try:
