@@ -46,8 +46,8 @@ run "default_prepares_no_catalog_role" {
   command = plan
 
   assert {
-    condition     = !var.openmetadata_prepared && !var.openmetadata_marquez_reachable
-    error_message = "Both catalog switches must default to false."
+    condition     = !var.openmetadata_prepared
+    error_message = "The catalog switch must default to false."
   }
 
   assert {
@@ -172,23 +172,3 @@ run "prepared_forward_document_fixes_port_and_destination" {
   }
 }
 
-run "marquez_switch_needs_the_role" {
-  command = plan
-
-  variables {
-    openmetadata_marquez_reachable = true
-  }
-
-  expect_failures = [var.openmetadata_marquez_reachable]
-}
-
-run "marquez_switch_opens_no_port" {
-  command = plan
-
-  variables {
-    openmetadata_prepared          = true
-    openmetadata_marquez_reachable = true
-  }
-
-  expect_failures = [check.marquez_port_is_retired]
-}

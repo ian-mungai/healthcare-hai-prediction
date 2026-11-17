@@ -34,7 +34,6 @@ locals {
     var.airflow_fernet_key_name,
     var.airflow_jwt_secret_name,
     var.airflow_api_secret_key_name,
-    var.marquez_db_password_name,
     var.redis_password_name,
     var.mlflow_db_password_name,
     var.mlflow_admin_password_name,

@@ -1,6 +1,6 @@
-"""Offline cases of ``scripts/orchestration/db_dump.py`` on a stand-in metadata database (failure mode 932b).
+"""Offline cases of ``scripts/orchestration/xcom_dump.py`` on a stand-in metadata database (failure mode 932b).
 
-``db_dump.py`` imports ``psycopg2``, which only the Airflow image provides, so the cases load it with a stand-in of the ``sql`` module and run ``dump_xcom``
+``xcom_dump.py`` imports ``psycopg2``, which only the Airflow image provides, so the cases load it with a stand-in of the ``sql`` module and run ``dump_xcom``
 itself over a stand-in database. Nothing starts a container; the real database check is the dump job of the ``orchestration_dump`` template in the stack.
 """
 
@@ -16,7 +16,7 @@ from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
-DUMP_SCRIPT = ROOT / "scripts" / "orchestration" / "db_dump.py"
+DUMP_SCRIPT = ROOT / "scripts" / "orchestration" / "xcom_dump.py"
 LEGACY_MARKER, CURRENT_MARKER = "LEGACY_CONTROL_MARKER", "CURRENT_CONTROL_MARKER"
 
 
@@ -84,13 +84,13 @@ class FakeMetadataDatabase:
         self.rowcount = len(rows)
 
 
-def load_db_dump() -> ModuleType:
-    """``db_dump.py`` imported with ``psycopg2`` replaced by the stand-in of its ``sql`` module."""
+def load_xcom_dump() -> ModuleType:
+    """``xcom_dump.py`` imported with ``psycopg2`` replaced by the stand-in of its ``sql`` module."""
     sql_module = SimpleNamespace(SQL=StubComposable, Identifier=stub_identifier)
     package = SimpleNamespace(sql=sql_module)
-    spec = importlib.util.spec_from_file_location("db_dump_under_test", DUMP_SCRIPT)
+    spec = importlib.util.spec_from_file_location("xcom_dump_under_test", DUMP_SCRIPT)
     if spec is None or spec.loader is None:
-        raise RuntimeError("db_dump.py cannot be loaded")
+        raise RuntimeError("xcom_dump.py cannot be loaded")
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, {"psycopg2": package, "psycopg2.sql": sql_module}):
         spec.loader.exec_module(module)
@@ -116,7 +116,7 @@ def xcom_dump_cases() -> dict[str, bool]:
     ``xcom`` ends in an undefined-table error and the dump file stays empty; only one of the two tables is dumped, so the rows of the other are never
     scanned; a missing XCom table is skipped and the job still reports success; a table name is written into the query text without identifier quoting.
     """
-    module = load_db_dump()
+    module = load_xcom_dump()
     release_340: dict[str, list[tuple[str, ...]]] = {
         "task_instance": [("1",)],
         "xcom_v1": [("1", "task", "-1", "key", LEGACY_MARKER)],

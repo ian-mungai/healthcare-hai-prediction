@@ -38,7 +38,6 @@
       "Resource": [
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POSTGRES_PASSWORD_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_DB_PASSWORD_NAME}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${MARQUEZ_DB_PASSWORD_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_FERNET_KEY_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_JWT_SECRET_NAME}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${AIRFLOW_API_SECRET_KEY_NAME}",

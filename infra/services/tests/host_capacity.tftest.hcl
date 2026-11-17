@@ -16,7 +16,6 @@ variables {
   control_plane_task_role_arn     = "arn:aws:iam::111111111111:role/example-control"
   openmetadata_task_role_arn      = "arn:aws:iam::111111111111:role/example-openmetadata"
   data_mount_path                 = "/mnt/example-data"
-  marquez_enabled                 = true
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
   mlflow_enabled                  = true
@@ -42,13 +41,13 @@ variables {
   model_api_mlflow_uri         = ""
 
   log_group_names = {
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
-    polaris    = "/example/polaris"
-    airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
-    mlflow     = "/example/mlflow"
-    monitoring = "/example/monitoring"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    openmetadata = "/example/openmetadata"
+    mlflow       = "/example/mlflow"
+    monitoring   = "/example/monitoring"
   }
 
   ecr_repository_urls = {
@@ -57,8 +56,6 @@ variables {
     polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
@@ -76,8 +73,6 @@ variables {
     polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez                = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web            = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
@@ -202,7 +197,7 @@ run "a_larger_system_reserve_that_removes_the_room_for_the_cap_is_refused" {
     host_system_reserve_mib = 4096
   }
 
-  # The cap (21040) no longer fits: 30720 less 4096 less 7632 leaves 18992 MiB. The owner lowers host_job_cap_mib in the same change.
+  # The cap (21040) no longer fits: 30720 less 4096 less 7024 leaves 19600 MiB. The owner lowers host_job_cap_mib in the same change.
   expect_failures = [output.host_job_memory_mib]
 }
 
@@ -211,7 +206,7 @@ run "a_larger_system_reserve_with_a_lowered_cap_is_accepted" {
 
   variables {
     host_system_reserve_mib = 4096
-    host_job_cap_mib        = 18992
+    host_job_cap_mib        = 19600
   }
 
   assert {
@@ -380,11 +375,10 @@ run "the_host_job_cap_is_rendered_into_every_airflow_container" {
 run "the_default_cap_is_the_job_room_the_committed_default_services_leave" {
   command = plan
 
-  # The committed defaults run MLflow, the model API, the page, monitoring and persistent OpenMetadata, and not Marquez, on the 32768 MiB host: the services
+  # The committed defaults run MLflow, the model API, the page, monitoring and persistent OpenMetadata on the 32768 MiB host: the services
   # reserve 7920 MiB, so one job has 32768 - 2048 - 7920 = 22800 MiB. The default of host_job_cap_mib is that figure (one host job at a time, set from the
   # Airflow pool of one slot).
   variables {
-    marquez_enabled                 = false
     mlflow_enabled                  = true
     model_api_enabled               = true
     model_api_mlflow_uri            = "http://127.0.0.1:5100"
@@ -415,9 +409,8 @@ run "the_default_cap_is_the_job_room_the_committed_default_services_leave" {
 run "a_cap_above_the_job_room_is_refused" {
   command = plan
 
-  # Marquez on beside the committed default services leaves less than the default cap of 22800 MiB on the 32768 MiB host.
+  # The committed default services leave 22800 MiB on the 32768 MiB host, so a cap one MiB larger is refused.
   variables {
-    marquez_enabled                 = true
     mlflow_enabled                  = true
     model_api_enabled               = true
     model_api_mlflow_uri            = "http://127.0.0.1:5100"
@@ -426,7 +419,7 @@ run "a_cap_above_the_job_room_is_refused" {
     openmetadata_persistent_enabled = true
     airflow_lineage_http_enabled    = true
     host_usable_memory_mib          = null
-    host_job_cap_mib                = null
+    host_job_cap_mib                = 22801
   }
 
   expect_failures = [output.host_job_memory_mib]

@@ -3671,7 +3671,7 @@ def stale_result_checks(
 
 
 def stack_family_case(env: Env, key: str, label: str, extra: dict[str, Any]) -> dict[str, bool]:
-    """The teardown of a stack record (catalog, orchestration, lineage or online store) at its confirmation step, replaced by a newer record in the registry
+    """The teardown of a stack record (catalog, orchestration or online store) at its confirmation step, replaced by a newer record in the registry
     (a handler-contract test: the launcher itself never leaves a teardown before its own confirmation result)."""
     env.start()
     env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher is serving")
@@ -3696,13 +3696,6 @@ def orchestration_stale_confirm(env: Env) -> dict[str, bool]:
     """The confirmation worker of an orchestration stack teardown that ended must not settle the teardown of a newer record.
     A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
     return stack_family_case(env, "orchestration", f"{launcher.LABEL_STACK}={launcher.ORCHESTRATION_STACK}", {"network": None})
-
-
-@case("lineage_stale_confirm")
-def lineage_stale_confirm(env: Env) -> dict[str, bool]:
-    """The confirmation worker of a lineage stack teardown that ended must not settle the teardown of a newer record.
-    A handler-contract test: the launcher itself ends a record only through its own result, so the case replaces the record in the registry."""
-    return stack_family_case(env, "lineage", f"{launcher.LABEL_STACK}={launcher.LINEAGE_STACK}", {"networks": {}})
 
 
 @case("online_store_stale_confirm")
@@ -3889,20 +3882,6 @@ def orchestration_stale_limits(env: Env) -> dict[str, bool]:
         )
 
 
-@case("lineage_stale_limits")
-def lineage_stale_limits(env: Env) -> dict[str, bool]:
-    """The limit worker of a lineage start that the owner stopped must not settle the next start, which runs its own worker."""
-    with stack_folder(env, "postgres", "config") as folder:
-        params = {"state": str(folder), "api_port": 18181, "web_port": 18182, "checkout": str(ROOT)}
-
-        def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
-            instance.m_lineage_up(start_ctx("lineage_up", params, identity, state))
-
-        return stale_limits_checks(
-            env, ("lineage", "lineagelimits", {"phase": "down", "services": {}, "networks": {}}), begin, "the lineage services cannot start"
-        )
-
-
 @case("online_store_stale_limits")
 def online_store_stale_limits(env: Env) -> dict[str, bool]:
     """The limit worker of an online store start that ended must not settle the next start, which runs its own worker."""
@@ -4012,34 +3991,6 @@ def orchestration_stale_health(env: Env) -> dict[str, bool]:
         {"phase": "down", "services": {}},
         begin,
         lambda instance, state, actions: instance.advance_orchestration(state, actions),
-        lambda record: record.get("health", {}).get("postgres"),
-    )
-
-
-@case("lineage_stale_health")
-def lineage_stale_health(env: Env) -> dict[str, bool]:
-    """The health worker of a lineage start that ended must not mark the next start healthy, and a result after the removal changes nothing."""
-
-    def begin(state: dict[str, Any], identity: str) -> None:
-        state["attempts"][f"{identity}-attempt"] = started_attempt(f"{identity}-attempt")
-        state["launcher"]["lineage"] = {
-            "id": identity,
-            "phase": "starting",
-            "step": "postgres",
-            "services": {"postgres": f"{identity}-attempt"},
-            "health": {},
-            "error": "",
-            "checkout": str(ROOT),
-            "start_deadline": time.time() + 3600,
-        }
-
-    return stale_health_checks(
-        env,
-        "lineage",
-        "lineagehealth",
-        {"phase": "down", "services": {}, "networks": {}},
-        begin,
-        lambda instance, state, actions: instance.advance_lineage(state, actions),
         lambda record: record.get("health", {}).get("postgres"),
     )
 
@@ -6099,7 +6050,6 @@ class NotingRenderer(launcher.Renderer):
         "render",
         "render_service",
         "render_orchestration_service",
-        "render_lineage_service",
         "render_online_store_service",
         "render_mlflow_service",
     )
@@ -7197,104 +7147,6 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["env"]["POLARIS_CLIENT_SECRET"] == secrets_file["POLARIS_GOLD_WRITER_CLIENT_SECRET"]
         and f["cmd"] == ["commit", "--run", PINS_RUN, "--mode", "publish_fixture", "--sealed-sha256", sealed_sha, "--accepted-result-sha256", accepted]
         and f["entrypoint"] == wrapped(["python", "-m", "scripts.lakehouse.gold_publish"])
-    )
-    lineage_state = (env.work / "lineage").resolve()
-    for part in ("postgres", "config"):
-        (lineage_state / part).mkdir(parents=True, exist_ok=True)
-    lineage_password = env.secret_values["LINEAGE_DB_PASSWORD"]
-    lineage_limits = {"postgres": 512 * 1024**2, "api": 768 * 1024**2, "web": 256 * 1024**2}
-    lineage_values = {
-        **values,
-        "HAI_LINEAGE_STATE": str(lineage_state),
-        "HAI_LINEAGE_API_PORT": "15000",
-        "HAI_LINEAGE_WEB_PORT": "13000",
-        **{f"HAI_LINEAGE_MEM_{service.upper()}": str(limit) for service, limit in lineage_limits.items()},
-    }
-    lineage_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_COMPOSE)
-    checks_model = launcher.ComposeModel(ROOT / launcher.LINEAGE_CHECKS_COMPOSE)
-    lineage_renderer = NotingRenderer(config, lineage_model, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
-    dump_renderer = NotingRenderer(config, checks_model, ROOT, ROOT, b"k" * 32, noted=rendered_templates)
-    lineage_document = importlib.import_module("yaml").safe_load((ROOT / launcher.LINEAGE_COMPOSE).read_text())["services"]
-    backend, frontend = f"hai-{registry_id[:8]}-lineage-backend", f"hai-{registry_id[:8]}-lineage-frontend"
-
-    def lineage_input(template: str, params: dict[str, Any]) -> launcher.RenderInput:
-        return launcher.RenderInput(
-            template, "lineage", "l1", 1, 1, "op-1", lineage_values, int(time.time()) + 600, [], params, {"hai.registry_id": registry_id}
-        )
-
-    def lineage_service(service: str) -> dict[str, Any]:
-        return facts(lineage_renderer.render_lineage_service(lineage_input("lineage_service", {"service": service}), service, registry_id))
-
-    def endpoints(f: dict[str, Any]) -> dict[str, list[str]]:
-        return {name: entry["Aliases"] for name, entry in f["body"]["NetworkingConfig"]["EndpointsConfig"].items()}
-
-    stacks = {service: lineage_service(service) for service in ("postgres", "api", "web")}
-    for service, f in stacks.items():
-        out[f"lineage_service {service}: pinned image, own limit, no deadline wrapper, no privilege gain"] = (
-            f["image"] == lineage_model.image(service)
-            and "@sha256:" in f["image"]
-            and f["memory"] == lineage_limits[service]
-            and f["env"]
-            == {key: str(value).replace("${LINEAGE_DB_PASSWORD}", lineage_password) for key, value in lineage_document[service]["environment"].items()}
-            and "Entrypoint" not in f["body"]
-            and "HAI_DEADLINE_UTC" not in f["env"]
-            and "User" not in f["body"]
-            and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
-            and f["body"]["Labels"][launcher.LABEL_STACK] == "lineage"
-            and f["body"]["Labels"][launcher.LABEL_SERVICE] == f"lineage-{service}"
-            and f["body"]["Healthcheck"]["Test"][0] == "CMD"
-            and f["init"] is True
-        )
-    out["lineage_service postgres: backend network only, no published port, only its data folder mounted"] = (
-        stacks["postgres"]["network"] == backend
-        and endpoints(stacks["postgres"]) == {backend: ["lineage-postgres"]}
-        and stacks["postgres"]["joins"] == {}
-        and stacks["postgres"]["ports"] == {}
-        and stacks["postgres"]["mounts"] == {(str(lineage_state / "postgres"), "/var/lib/postgresql/data", False)}
-    )
-    out["lineage_service api: created on the frontend network and joined to the backend before it starts, loopback port, config read-only"] = (
-        stacks["api"]["network"] == frontend
-        and endpoints(stacks["api"]) == {frontend: ["lineage-api"]}
-        and stacks["api"]["joins"] == {backend: ["lineage-api"]}
-        and stacks["api"]["ports"] == {"5000/tcp": [("127.0.0.1", "15000")]}
-        and stacks["api"]["mounts"] == {(str(lineage_state / "config"), "/run/hai/config", True)}
-    )
-    out["lineage_service web: frontend network only, loopback port, no mount"] = (
-        stacks["web"]["network"] == frontend
-        and endpoints(stacks["web"]) == {frontend: ["lineage-web"]}
-        and stacks["web"]["joins"] == {}
-        and stacks["web"]["ports"] == {"3000/tcp": [("127.0.0.1", "13000")]}
-        and stacks["web"]["mounts"] == set()
-    )
-    unknown = expect_error_of(lambda: lineage_service("bogus"))
-    out["lineage_service: an unknown service is refused"] = (
-        isinstance(unknown, launcher.LauncherError) and unknown.code == "args" and "unknown lineage service" in str(unknown)
-    )
-    f = facts(dump_renderer.render(lineage_input("lineage_dump", {"state": str(lineage_state)}), registry_id))
-    out["lineage_dump"] = (
-        f["image"] == checks_model.image("dump")
-        and f["network"] == backend
-        and f["ports"] == {}
-        and f["entrypoint"] == wrapped(["python"])
-        and f["cmd"] == ["/opt/hai/lineage_dump.py"]
-        and f["body"]["User"] == f"{os.getuid()}:0"
-        and f["body"]["HostConfig"]["CapDrop"] == ["ALL"]
-        and f["body"]["HostConfig"]["SecurityOpt"] == ["no-new-privileges:true"]
-        and f["memory"] == int(values["JOB_MEMORY_LIMIT"])
-        and f["mounts"]
-        == {
-            (str(ROOT / "services/lineage/db_dump.py"), "/opt/hai/lineage_dump.py", True),
-            (str(lineage_state / "dumps"), "/out", False),
-        }
-        and f["env"] == {"HAI_DEADLINE_UTC": f["env"]["HAI_DEADLINE_UTC"], "MARQUEZ_DB_PASSWORD": lineage_password}
-        and f["init"] is True
-        and (lineage_state / "dumps").stat().st_mode & 0o777 == 0o700
-    )
-    incomplete = env.work / "lineage_incomplete"
-    (incomplete / "postgres").mkdir(parents=True, exist_ok=True)
-    refusal = expect_error_of(lambda: dump_renderer.render(lineage_input("lineage_dump", {"state": str(incomplete)}), registry_id))
-    out["lineage_dump: a state folder without the config folder is refused and nothing is created in it"] = (
-        isinstance(refusal, launcher.LauncherError) and refusal.code == "args" and "incomplete" in str(refusal) and not (incomplete / "dumps").exists()
     )
     from orchestration import network_policy
 
@@ -11017,15 +10869,12 @@ ALL_CASES = (
     docker_restart_stale_ping,
     catalog_stale_confirm,
     orchestration_stale_confirm,
-    lineage_stale_confirm,
     online_store_stale_confirm,
     mlflow_stale_stop,
     orchestration_stale_limits,
-    lineage_stale_limits,
     online_store_stale_limits,
     catalog_stale_health,
     orchestration_stale_health,
-    lineage_stale_health,
     online_store_stale_health,
     mlflow_stale_health,
     mlflow_stop_overlap,

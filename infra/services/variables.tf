@@ -101,7 +101,7 @@ variable "polaris_task_role_arn" {
 }
 
 variable "control_plane_task_role_arn" {
-  description = "Foundation output: the task role of Postgres, Redis, Airflow, Marquez and the host preparation task. It holds no data permission."
+  description = "Foundation output: the task role of Postgres, Redis, Airflow and the host preparation task. It holds no data permission."
   type        = string
 
   validation {
@@ -111,7 +111,7 @@ variable "control_plane_task_role_arn" {
 
   validation {
     condition     = var.control_plane_task_role_arn != var.polaris_task_role_arn
-    error_message = "Polaris must have its own task role, so Airflow, Postgres, Redis and Marquez hold no lakehouse permission."
+    error_message = "Polaris must have its own task role, so Airflow, Postgres and Redis hold no lakehouse permission."
   }
 }
 
@@ -137,12 +137,17 @@ variable "serving_execution_role_arn" {
 }
 
 variable "log_group_names" {
-  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris, airflow and marquez are required, mlflow when mlflow_enabled is true, and monitoring when monitoring_enabled is true; components may share a group."
+  description = "Foundation output: log group name for each component. The keys postgres, redis, polaris and airflow are required, mlflow when mlflow_enabled is true, openmetadata when openmetadata_persistent_enabled is true, and monitoring when monitoring_enabled is true; components may share a group."
   type        = map(string)
 
   validation {
-    condition     = alltrue([for component in ["postgres", "redis", "polaris", "airflow", "marquez"] : contains(keys(var.log_group_names), component)])
-    error_message = "Name a log group for postgres, redis, polaris, airflow and marquez."
+    condition     = alltrue([for component in ["postgres", "redis", "polaris", "airflow"] : contains(keys(var.log_group_names), component)])
+    error_message = "Name a log group for postgres, redis, polaris and airflow."
+  }
+
+  validation {
+    condition     = !var.openmetadata_persistent_enabled || contains(keys(var.log_group_names), "openmetadata")
+    error_message = "Name a log group for openmetadata, or set openmetadata_persistent_enabled to false."
   }
 
   validation {
@@ -157,12 +162,12 @@ variable "log_group_names" {
 }
 
 variable "ecr_repository_urls" {
-  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, marquez and marquez_web when marquez_enabled is true, mlflow when mlflow_enabled is true, model_api when model_api_enabled is true, streamlit when streamlit_enabled is true, prometheus, grafana and statsd_exporter when monitoring_enabled is true, and openmetadata_server, openmetadata_ingestion and openmetadata_search when openmetadata_persistent_enabled is true."
+  description = "Foundation output: ECR repository URL for each image. The keys postgres, redis, polaris, polaris_admin and airflow are required, mlflow when mlflow_enabled is true, model_api when model_api_enabled is true, streamlit when streamlit_enabled is true, prometheus, grafana and statsd_exporter when monitoring_enabled is true, and openmetadata_server, openmetadata_ingestion and openmetadata_search when openmetadata_persistent_enabled is true."
   type        = map(string)
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.marquez_enabled ? ["marquez", "marquez_web"] : [], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs, the monitoring images included when monitoring_enabled is true."
@@ -181,11 +186,6 @@ variable "image_digests" {
   validation {
     condition     = alltrue([for image in ["postgres", "redis", "polaris", "polaris_admin", "airflow"] : contains(keys(var.image_digests), image)])
     error_message = "Supply a digest for postgres, redis, polaris, polaris_admin and airflow."
-  }
-
-  validation {
-    condition     = !var.marquez_enabled || alltrue([for image in ["marquez", "marquez_web"] : contains(keys(var.image_digests), image)])
-    error_message = "Supply a digest for marquez and marquez_web, or set marquez_enabled to false."
   }
 
   validation {
@@ -212,12 +212,6 @@ variable "image_digests" {
     condition     = !var.openmetadata_persistent_enabled || alltrue([for image in ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : contains(keys(var.image_digests), image)])
     error_message = "Supply a digest for openmetadata_server, openmetadata_ingestion and openmetadata_search, or set openmetadata_persistent_enabled to false."
   }
-}
-
-variable "marquez_enabled" {
-  description = "Run the Marquez services. Their arm64 images are built from source (push_images.py plan) and pushed first; this stays false until their digests are recorded."
-  type        = bool
-  default     = false
 }
 
 variable "mlflow_enabled" {
@@ -463,17 +457,6 @@ variable "airflow_api_secret_key_name" {
 
   validation {
     condition     = length(var.airflow_api_secret_key_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.airflow_api_secret_key_name)) && !can(regex("^/(?i:aws|ssm)", var.airflow_api_secret_key_name))
-    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
-  }
-}
-
-variable "marquez_db_password_name" {
-  description = "Parameter Store SecureString name of the password of the marquez database role."
-  type        = string
-  default     = "/healthcare_hai_prediction/marquez_db_password"
-
-  validation {
-    condition     = length(var.marquez_db_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.marquez_db_password_name)) && !can(regex("^/(?i:aws|ssm)", var.marquez_db_password_name))
     error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
   }
 }

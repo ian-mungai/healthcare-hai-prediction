@@ -309,7 +309,7 @@ run "the_five_owner_parameters_join_the_managed_inventory" {
 
   assert {
     condition = (
-      length(output.project_secret_names.managed_parameters) == 21 &&
+      length(output.project_secret_names.managed_parameters) == 20 &&
       alltrue([
         for name in ["model_api_key_hashes", "model_api_mlflow_user", "model_api_mlflow_credential", "model_api_redis_password", "streamlit_model_api_key"] :
         contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/${name}") && contains(output.project_secret_names.read_parameters, "/healthcare_hai_prediction/${name}")

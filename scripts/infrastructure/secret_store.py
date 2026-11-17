@@ -1,6 +1,6 @@
 """Read, create and put the project's managed secrets in AWS Systems Manager Parameter Store; a value lives in memory and nowhere else.
 
-The 22 managed names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check
+The 21 managed names are the committed defaults of the root variables in ``infra/iam/variables.tf``; ``terraform_defaults`` reads them back so a check
 can compare the two. Each is a SecureString parameter named ``/healthcare_hai_prediction/<name_with_underscores>`` on the standard tier, encrypted with
 the AWS managed key ``aws/ssm``. The four shared API keys stay in Secrets Manager and this module only reads them. The project profile and region come
 from the rendered ``infra/deployment.auto.tfvars.json``. Errors name the secret and the action, never a value.
@@ -38,7 +38,6 @@ AIRFLOW_DB_PASSWORD = PREFIX + "airflow_db_password"
 AIRFLOW_FERNET_KEY = PREFIX + "airflow_fernet_key"
 AIRFLOW_JWT_SECRET = PREFIX + "airflow_jwt_secret"
 AIRFLOW_API_SECRET_KEY = PREFIX + "airflow_api_secret_key"
-MARQUEZ_DB_PASSWORD = PREFIX + "marquez_db_password"
 AIRFLOW_ADMIN = PREFIX + "airflow_admin"
 REDIS_PASSWORD = PREFIX + "redis_password"
 MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
@@ -62,7 +61,6 @@ MANAGED = (
     AIRFLOW_FERNET_KEY,
     AIRFLOW_JWT_SECRET,
     AIRFLOW_API_SECRET_KEY,
-    MARQUEZ_DB_PASSWORD,
     REDIS_PASSWORD,
     MLFLOW_DB_PASSWORD,
     MLFLOW_ADMIN_PASSWORD,
@@ -78,7 +76,7 @@ SHARED = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 SHARED_VARIABLES = ("census_secret_name", "bls_secret_name", "hud_secret_name", "jev_secret_name")
 READ_ONLY_VARIABLES = ("airflow_admin_secret_name",)
 JOB_READER_VARIABLES = ("aws_polaris_reader_client_id_name", "aws_polaris_reader_client_secret_name")
-# Twelve of the fourteen AWS Polaris pair names: outside the 22 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
+# Twelve of the fourteen AWS Polaris pair names: outside the 21 managed names, written only by the AWS catalog setup (scripts/lakehouse/aws_catalog_setup.py).
 # The other two, the features pair, are declared beside the job writer variables (FEATURES_PAIR_VARIABLES).
 AWS_POLARIS_VARIABLES = (
     *JOB_READER_VARIABLES,

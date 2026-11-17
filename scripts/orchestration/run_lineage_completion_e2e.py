@@ -183,7 +183,7 @@ def main() -> int:
         "created_at": datetime.now(UTC).isoformat(),
         "command": [sys.executable, "-m", "scripts.orchestration.run_lineage_completion_e2e", *sys.argv[1:]],
         "environment": {"python": sys.version.split()[0], "platform": sys.platform},
-        "boundary": "synthetic provider callbacks and the real filesystem; no native provider, daemon or Marquez",
+        "boundary": "synthetic provider callbacks and the real filesystem; no native provider or daemon",
         "cases": results,
         "pass": all(row["pass"] for row in results),
         "source_sha256": before,

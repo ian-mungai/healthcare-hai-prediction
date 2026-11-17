@@ -258,17 +258,6 @@ variable "airflow_api_secret_key_name" {
   }
 }
 
-variable "marquez_db_password_name" {
-  description = "Parameter Store SecureString name of the lineage database password; the project may read, create and put it."
-  type        = string
-  default     = "/healthcare_hai_prediction/marquez_db_password"
-
-  validation {
-    condition     = length(var.marquez_db_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.marquez_db_password_name)) && !can(regex("^/(?i:aws|ssm)", var.marquez_db_password_name))
-    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
-  }
-}
-
 variable "redis_password_name" {
   description = "Parameter Store SecureString name of the Redis password; the project may read, create and put it."
   type        = string

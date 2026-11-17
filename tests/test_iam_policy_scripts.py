@@ -314,7 +314,7 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
         == {prefix + name for name in declared["READ_PARAMETER_NAME"]},
         "the two statements together must name exactly the parameters that are read",
     )
-    check(len(declared["READ_PARAMETER_NAME"]) == 23 and len(declared["MANAGED_PARAMETER_NAME"]) == 22, "23 parameters are read and 22 are written")
+    check(len(declared["READ_PARAMETER_NAME"]) == 22 and len(declared["MANAGED_PARAMETER_NAME"]) == 21, "22 parameters are read and 21 are written")
     check(
         "/healthcare_hai_prediction/airflow_admin" in declared["READ_PARAMETER_NAME"]
         and "/healthcare_hai_prediction/airflow_admin" not in declared["MANAGED_PARAMETER_NAME"],
@@ -326,10 +326,10 @@ def test_the_names_come_from_the_terraform_variable_defaults_and_nowhere_else() 
     owner = render_policy.render_template((REPO_ROOT / "infra/iam/owner_policies/task_execution.json").read_text(encoding="utf-8"), values)
     monitoring = render_policy.render_template((REPO_ROOT / "infra/iam/owner_policies/task_execution_monitoring.json").read_text(encoding="utf-8"), values)
     injected_names = [item for item in owner["Statement"] if item["Sid"] == "InjectNamedParameters"][0]["Resource"]
-    check(len(injected_names) == 8 and not any("grafana" in item for item in injected_names), "the base task execution policy names no Grafana parameter")
+    check(len(injected_names) == 7 and not any("grafana" in item for item in injected_names), "the base task execution policy names no Grafana parameter")
     injected_names = [*injected_names, *monitoring["Statement"][0]["Resource"]]
     check(
-        len(injected_names) == 9 and all(item.removeprefix(prefix) in declared["MANAGED_PARAMETER_NAME"] for item in injected_names),
+        len(injected_names) == 8 and all(item.removeprefix(prefix) in declared["MANAGED_PARAMETER_NAME"] for item in injected_names),
         "the task execution parameters must be managed parameters named by their variables, not PROJECT_NAME",
     )
     injected = {

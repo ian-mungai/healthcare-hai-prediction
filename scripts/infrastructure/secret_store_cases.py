@@ -89,7 +89,7 @@ def store_behaviour(root: Path) -> dict[str, bool]:
         plain_read = store.get(NAME)
         store.put(secret_store.AIRFLOW_JWT_SECRET, sentinel + "-one")
         store.put(secret_store.AIRFLOW_JWT_SECRET, sentinel + "-two")
-        missing = refusal(lambda: store.get(secret_store.MARQUEZ_DB_PASSWORD))
+        missing = refusal(lambda: store.get(secret_store.REDIS_PASSWORD))
         before_wrong = len(stand_in.log)
         wrong = refusal(lambda: store.put("other/name", sentinel))
         wrong_read = refusal(lambda: store.find("other/name"))
@@ -151,7 +151,7 @@ def store_behaviour(root: Path) -> dict[str, bool]:
         "a rerun reads the stored value and changes nothing": not created_again and again == sentinel and writes_rerun == writes_first,
         "a read asks for decryption and returns the plain value": plain_read == sentinel and not plain_read.startswith("AQECAH"),
         "a new value replaces the old one": stand_in.values[secret_store.AIRFLOW_JWT_SECRET] == sentinel + "-two",
-        "a missing secret fails and names it": missing is not None and secret_store.MARQUEZ_DB_PASSWORD in missing,
+        "a missing secret fails and names it": missing is not None and secret_store.REDIS_PASSWORD in missing,
         "a name outside the managed names, a dash name and a name without the leading slash are refused before any request": wrong is not None
         and wrong_read is not None
         and dash_name is not None
@@ -256,7 +256,7 @@ def store_races(root: Path) -> dict[str, bool]:
 def store_deadline(root: Path) -> dict[str, bool]:
     """A stalled fetch returns at the deadline naming each unread secret, and a healthy fetch returns every value."""
     sentinel = "fetch-" + os.urandom(8).hex()
-    names = [secret_store.POSTGRES_PASSWORD, secret_store.POLARIS_ROOT_SECRET, secret_store.MARQUEZ_DB_PASSWORD]
+    names = [secret_store.POSTGRES_PASSWORD, secret_store.POLARIS_ROOT_SECRET, secret_store.REDIS_PASSWORD]
     with StandIn({names[0]: sentinel + "-a", names[1]: sentinel + "-b"}) as stand_in:
         healthy = secret_store.fetch_all(root, stand_in.endpoint, names, 10)
         stand_in.stalled.add("GetParameter")
@@ -320,9 +320,9 @@ def terraform_names(root: Path) -> dict[str, bool]:
         "the source check matches every kind of block of the Secrets Manager and Parameter Store types": all(
             SECRET_RESOURCE.search(f'{kind} "{name}" "x" {{}}') for kind in ("resource", "data", "ephemeral") for name in (*family, *parameters)
         ),
-        "the 22 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
-        "the 22 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 23,
-        "the policy files grant the module's names: four shared keys read only, 23 parameters read and the 22 managed ones written": secret_store.policy_names(
+        "the 21 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
+        "the 21 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 22,
+        "the policy files grant the module's names: four shared keys read only, 22 parameters read and the 21 managed ones written": secret_store.policy_names(
             root / secret_store.VARIABLES
         )
         == {

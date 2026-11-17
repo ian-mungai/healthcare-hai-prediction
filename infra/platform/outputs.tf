@@ -110,6 +110,6 @@ output "polaris_task_role_arn" {
 }
 
 output "control_plane_task_role_arn" {
-  description = "Task role for Postgres, Redis, Airflow and Marquez: no AWS permissions."
+  description = "Task role for Postgres, Redis and Airflow: no AWS permissions."
   value       = "${local.role_arn_prefix}${local.control_plane_task_role_name}"
 }

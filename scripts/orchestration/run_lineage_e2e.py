@@ -1,10 +1,9 @@
-"""Check the submission request contract and the lineage service specification without launching containers."""
+"""Check the submission request contract without launching containers."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import json
 import sqlite3
 import sys
@@ -71,32 +70,7 @@ def identity_bounds() -> None:
     check(bool(list(schema.iter_errors({**payload, "lineage": ENVELOPE}))), "caller-supplied lineage accepted")
 
 
-def service_spec() -> None:
-    path = SCHEMA_ROOT / "services/lineage/docker-compose.lineage.yaml"
-    check(path.is_file(), "lineage Compose proposal is missing")
-    model = importlib.import_module("yaml").safe_load(path.read_text())
-    check(model["name"] == "hai-lineage", "lineage project is not independent")
-    services = model["services"]
-    check(set(services) == {"postgres", "api", "web"}, "unexpected lineage services")
-    for name, service in services.items():
-        check("@sha256:" in service["image"] and len(service["image"].split("@sha256:")[1]) == 64, f"{name} image is not pinned")
-        check(service["mem_limit"].startswith("${HAI_LINEAGE_MEM_"), f"{name} memory is not computed")
-        expected_networks = {"postgres": ["backend"], "api": ["frontend", "backend"], "web": ["frontend"]}[name]
-        check(service["networks"] == expected_networks and service.get("network_mode") is None, f"{name} network escaped its fixed role")
-        check(service["healthcheck"]["timeout"] in ("2s", "3s"), f"{name} health wait is unbounded")
-        for mount in service.get("volumes", []):
-            check(mount.startswith("${HAI_LINEAGE_STATE}/"), f"{name} mounts outside lineage state")
-            check(not any(value in mount for value in (".aws", "lakehouse", "/session")), f"{name} mounts foreign authority")
-    check(not services["postgres"].get("ports"), "PostgreSQL is published")
-    check(services["api"]["ports"] == ["127.0.0.1:${HAI_LINEAGE_API_PORT}:5000"], "API publishes beyond loopback or publishes admin")
-    check(services["web"]["ports"] == ["127.0.0.1:${HAI_LINEAGE_WEB_PORT}:3000"], "UI publishes beyond loopback")
-    check(model["networks"]["backend"]["internal"] is True, "PostgreSQL backend has external routing")
-    check(model["networks"]["frontend"]["internal"] is False, "frontend prevents host ingress")
-    check(services["api"]["environment"]["MARQUEZ_CONFIG"] == "/run/hai/config/marquez.yaml", "API config is not privately generated")
-
-
 CASES: dict[str, Callable[[], None]] = {
-    "service_spec": service_spec,
     "old_request": old_request,
     "identity_bounds": identity_bounds,
 }
@@ -114,7 +88,7 @@ def main() -> int:
     output.mkdir(parents=True)
     EVIDENCE = output
     result: dict[str, Any] = {
-        "boundary": "light contracts, no launcher, scheduler or Marquez",
+        "boundary": "light contracts, no launcher or scheduler",
         "mode": "light, not commit evidence",
         "environment": {"python": sys.version.split()[0], "platform": sys.platform, "jsonschema": version("jsonschema"), "sqlite": sqlite3.sqlite_version},
         "command": [sys.executable, "-m", "scripts.orchestration.run_lineage_e2e", *sys.argv[1:]],
@@ -123,7 +97,7 @@ def main() -> int:
         "cleanup": "no launcher or container started",
         "input_sha256": {
             name: hashlib.sha256((SCHEMA_ROOT / name).read_bytes()).hexdigest()
-            for name in ("data_contracts/orchestration/submission_request.schema.json", "services/lineage/docker-compose.lineage.yaml")
+            for name in ("data_contracts/orchestration/submission_request.schema.json",)
             if (SCHEMA_ROOT / name).is_file()
         },
     }

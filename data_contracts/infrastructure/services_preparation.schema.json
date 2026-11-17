@@ -38,9 +38,6 @@
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
         },
-        "marquez_enabled": {
-          "type": "boolean"
-        },
         "openmetadata_persistent_enabled": {
           "type": "boolean"
         },

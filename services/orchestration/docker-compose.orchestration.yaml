@@ -199,12 +199,12 @@ services:
   airflow-dump:
     <<: *airflow
     entrypoint: ["python"]
-    command: ["/opt/hai/checks/db_dump.py"]
+    command: ["/opt/hai/checks/xcom_dump.py"]
     environment:
       AIRFLOW_HOME: /tmp/airflow
       PYTHONPATH: /opt/hai
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_SQL_ALCHEMY_CONN}
     volumes:
-      - ${HAI_ORCH_REPO}/scripts/orchestration/db_dump.py:/opt/hai/checks/db_dump.py:ro
+      - ${HAI_ORCH_REPO}/scripts/orchestration/xcom_dump.py:/opt/hai/checks/xcom_dump.py:ro
       - ${HAI_ORCH_STATE}/dumps:/out
     mem_limit: ${JOB_MEMORY_LIMIT:?run through the orchestration_dump template}

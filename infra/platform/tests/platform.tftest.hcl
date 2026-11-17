@@ -115,7 +115,7 @@ run "image_repositories" {
   assert {
     condition = (
       toset(keys(aws_ecr_repository.image)) == toset([
-        "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
+        "airflow", "analytics", "egress_proxy", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
       ]) &&
       alltrue([
         for name, repository in aws_ecr_repository.image :
@@ -152,7 +152,7 @@ run "monitoring_flag_adds_its_foundation" {
     condition = (
       length(setintersection(toset(["prometheus", "grafana", "statsd_exporter"]), toset(keys(aws_ecr_repository.image)))) == 3 &&
       contains(keys(output.log_group_names), "monitoring") &&
-      length(aws_ecr_repository.image) == 14 && length(aws_cloudwatch_log_group.platform) == 7
+      length(aws_ecr_repository.image) == 12 && length(aws_cloudwatch_log_group.platform) == 7
     )
     error_message = "The monitoring flag adds three repositories and one log group, and nothing else."
   }
@@ -169,7 +169,7 @@ run "serving_flag_adds_its_repositories" {
   assert {
     condition = (
       length(setintersection(toset(["model_api", "streamlit"]), toset(keys(aws_ecr_repository.image)))) == 2 &&
-      length(aws_ecr_repository.image) == 13 && length(aws_cloudwatch_log_group.platform) == 6
+      length(aws_ecr_repository.image) == 11 && length(aws_cloudwatch_log_group.platform) == 6
     )
     error_message = "The serving flag adds two repositories and nothing else."
   }
@@ -190,15 +190,15 @@ run "reviewed_additions_create_their_repositories_and_log_group" {
 
   variables {
     ecr_repositories = [
-      "airflow", "analytics", "egress_proxy", "marquez", "marquez_web", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark",
+      "airflow", "analytics", "egress_proxy", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark",
       "drift", "feature_store", "mlflow", "training", "openmetadata_database", "openmetadata_ingestion", "openmetadata_search", "openmetadata_server",
     ]
-    log_groups = ["airflow", "jobs", "marquez", "polaris", "postgres", "redis", "mlflow"]
+    log_groups = ["airflow", "jobs", "openmetadata", "polaris", "postgres", "redis", "mlflow"]
   }
 
   assert {
     condition = (
-      length(aws_ecr_repository.image) == 19 &&
+      length(aws_ecr_repository.image) == 17 &&
       alltrue([for name in ["drift", "feature_store", "mlflow", "training", "openmetadata_server", "openmetadata_ingestion", "openmetadata_search", "openmetadata_database"] : contains(keys(aws_ecr_repository.image), name)]) &&
       contains(keys(output.log_group_names), "mlflow") && contains(keys(output.log_group_names), "jobs")
     )
@@ -267,7 +267,7 @@ run "logs_and_alert_topic" {
 
   assert {
     condition = (
-      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "marquez", "jobs"]) &&
+      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "openmetadata", "jobs"]) &&
       output.log_group_names["polaris"] == "example_project_polaris_dev" &&
       alltrue([for group in aws_cloudwatch_log_group.platform : group.retention_in_days == 7])
     )
@@ -323,7 +323,7 @@ run "role_names_match_the_iam_stack" {
       output.cluster_name == "example_project_cluster_dev" &&
       output.ec2_capacity_provider_name == "example_project_host_dev" &&
       output.data_mount_path == "/data" &&
-      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "marquez", "marquez_web", "spark", "analytics", "quality", "polaris_admin", "egress_proxy"]), toset(keys(output.ecr_repository_urls)))) == 0
+      length(setsubtract(toset(["postgres", "redis", "polaris", "airflow", "spark", "analytics", "quality", "polaris_admin", "egress_proxy"]), toset(keys(output.ecr_repository_urls)))) == 0
     )
     error_message = "The outputs the control-plane stack reads must keep their names and values."
   }
@@ -405,5 +405,19 @@ run "host_address_found_by_tag_and_exported" {
   assert {
     condition     = output.host_private_ip == "10.40.0.20"
     error_message = "The private address of the host's interface is exported as host_private_ip for the services and jobs renderers."
+  }
+}
+
+run "no_marquez_repository_log_group_or_output" {
+  command = plan
+
+  assert {
+    condition = (
+      !contains(keys(aws_ecr_repository.image), "marquez") && !contains(keys(aws_ecr_repository.image), "marquez_web") &&
+      !contains(keys(aws_ecr_lifecycle_policy.image), "marquez") && !contains(keys(aws_ecr_lifecycle_policy.image), "marquez_web") &&
+      !contains(keys(aws_cloudwatch_log_group.platform), "marquez") && !contains(keys(output.ecr_repository_urls), "marquez") && !contains(keys(output.log_group_names), "marquez") &&
+      contains(keys(output.log_group_names), "openmetadata")
+    )
+    error_message = "OpenMetadata alone holds lineage: the platform has no Marquez repository, lifecycle policy, log group or output, and OpenMetadata has its own log group."
   }
 }

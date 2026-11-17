@@ -64,7 +64,6 @@ from orchestration import (
     catalog_authority,
     code_digest,
     dbt_lineage,
-    lineage_services,
     mlflow_service,
     network_policy,
     online_store,
@@ -93,22 +92,10 @@ LABEL_PROBE = "hai.probe"
 LABEL_SERVICE = "hai.service"
 LABEL_STACK = "hai.stack"
 LABEL_ORCH_SERVICE = "hai.orch_service"
-LINEAGE_COMPOSE = "services/lineage/docker-compose.lineage.yaml"
-LINEAGE_CHECKS_COMPOSE = "services/lineage/docker-compose.checks.yaml"
-LINEAGE_ORDER = lineage_services.SERVICES
 # The committed layers a pipeline run pins as its source: the pin record and the contract that lists its publication tables (design 1.1 steps 4 to 6).
 PIPELINE_SOURCES = {
     "silver": {"pin_record": "silver_pins.json", "contract": "silver_publish.json"},
     "gold": {"pin_record": "gold_pins.json", "contract": "gold_contract.json"},
-}
-LINEAGE_STACK = "lineage"
-LINEAGE_OWNER = "stack:lineage"
-LINEAGE_START_SECONDS = 600
-LINEAGE_PRE_START = ("queued", "creating", "created", "starting")
-LINEAGE_MEMORY: dict[str, tuple[str, float, int]] = {
-    "postgres": ("POSTGRES", 0.03, 256 * 1024**2),
-    "api": ("API", 0.06, 1024**3),
-    "web": ("WEB", 0.02, 256 * 1024**2),
 }
 ORCHESTRATION_STACK = "orchestration"
 ORCHESTRATION_OWNER = "stack:orchestration"
@@ -847,7 +834,6 @@ STACK_SECRETS = {
     "AIRFLOW_FERNET_KEY": secret_store.AIRFLOW_FERNET_KEY,
     "AIRFLOW_JWT_SECRET": secret_store.AIRFLOW_JWT_SECRET,
     "AIRFLOW_API_SECRET_KEY": secret_store.AIRFLOW_API_SECRET_KEY,
-    "LINEAGE_DB_PASSWORD": secret_store.MARQUEZ_DB_PASSWORD,
 }
 SQL_ALCHEMY_CONN = "AIRFLOW_SQL_ALCHEMY_CONN"
 COMPOSE_SECRETS = {
@@ -1311,9 +1297,7 @@ TEMPLATES: dict[str, Template] = {
         ),
         Template("catalog_service", None, False, ("service",)),
         Template("orchestration_service", None, False, ("stack",)),
-        Template("lineage_service", None, False, ("stack",)),
         Template(online_store.TEMPLATE, None, False, ("stack",)),
-        Template("lineage_dump", None, True, ("alloc",), default_seconds=120, max_seconds=300),
         Template("orchestration_check", None, True, ("alloc",), default_seconds=900, max_seconds=3600),
         Template("orchestration_dump", None, True, ("alloc",), default_seconds=900, max_seconds=1800),
         Template("probe", "analytics", True, ("diagnostic",), default_seconds=60, max_seconds=60),
@@ -1744,7 +1728,6 @@ class Renderer:
             "probe": self.render_probe,
             "orchestration_check": self.render_orchestration_check,
             "orchestration_dump": self.render_orchestration_dump,
-            "lineage_dump": self.render_lineage_dump,
         }
 
     def network_name(self, registry_id: str) -> str:
@@ -1827,7 +1810,7 @@ class Renderer:
         return found
 
     def stack_values(self, service: str) -> dict[str, str]:
-        """The secret values the orchestration or lineage service's model names, read from Parameter Store into memory; a missing secret refuses the render."""
+        """The secret values the orchestration service's model names, read from Parameter Store into memory; a missing secret refuses the render."""
         wanted = self.service_names(service)
         names = [name for name in wanted if name in STACK_SECRETS]
         if SQL_ALCHEMY_CONN in wanted and "AIRFLOW_DB_PASSWORD" not in names:
@@ -2627,7 +2610,7 @@ class Renderer:
     def attach_networks(rendered: Rendered, memberships: Mapping[str, Sequence[str]]) -> None:
         """Put a container on several networks under aliases: it is created on the first and joined to the others before it starts.
 
-        API v1.43 creates a container on one network only, so every multi-network container (the lineage API, the proxy and the synthetic catalog)
+        API v1.43 creates a container on one network only, so every multi-network container (the proxy and the synthetic catalog)
         takes this one path. The first network must be the container's network mode.
         """
         first, *others = memberships
@@ -2934,52 +2917,6 @@ class Renderer:
             raise LauncherError(str(error), "spec") from None
         return rendered
 
-    def render_lineage_service(self, inp: RenderInput, service: str, registry_id: str) -> Rendered:
-        """Render only the three lineage services using validated runtime settings."""
-        try:
-            values = lineage_services.settings_for(service, inp.values)
-        except ValueError as error:
-            raise LauncherError(str(error), "args") from None
-        self.allowed(values["HAI_LINEAGE_STATE"], "lineage state")
-        values = {**values, **self.stack_values(service)}
-        raw = self.compose.service(service)
-        ports = [tuple(interpolate(str(entry), values).split(":")) for entry in raw.get("ports") or []]
-        if any(host != "127.0.0.1" for host, _, _ in ports):
-            raise LauncherError("lineage ports must bind IPv4 loopback", "spec")
-        rendered = self.assemble(
-            inp,
-            f"hai-{registry_id[:8]}-svc-lineage-{service}",
-            self.image(service),
-            list(raw.get("entrypoint") or []),
-            [interpolate(str(part), values) for part in raw.get("command") or []],
-            self.compose.environment(service, values),
-            self.compose.mounts(service, values),
-            self.compose.memory(service, values),
-            f"hai-{registry_id[:8]}-lineage-{'backend' if service == 'postgres' else 'frontend'}",
-            ports=[(host, int(host_port), int(container_port)) for host, host_port, container_port in ports],
-            healthcheck=self.compose.healthcheck(service),
-            aliases=[f"lineage-{service}"],
-            finite=False,
-            extra_labels={LABEL_STACK: "lineage", LABEL_SERVICE: f"lineage-{service}"},
-            **self.orchestration_hardening(raw, values),
-        )
-
-        if service == "api":
-            rendered.joins[f"hai-{registry_id[:8]}-lineage-backend"] = ["lineage-api"]
-        expected = {"postgres": ["backend"], "api": ["frontend", "backend"], "web": ["frontend"]}[service]
-        created_on = set(rendered.body["NetworkingConfig"]["EndpointsConfig"])
-        if (
-            raw.get("networks") != expected
-            or len(created_on) != 1
-            or created_on | set(rendered.joins) != {f"hai-{registry_id[:8]}-lineage-{role}" for role in expected}
-        ):
-            raise LauncherError("lineage service network membership differs from its fixed role", "spec")
-        try:
-            lineage_services.validate_bindings(service, rendered.body)
-        except ValueError as error:
-            raise LauncherError(str(error), "spec") from None
-        return rendered
-
     def render_orchestration_check(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """The offline check in the Airflow image: no argument, no parameter, no network, read-only repository mounts (failure mode 934)."""
         self.only_params(inp, ())
@@ -3033,36 +2970,6 @@ class Renderer:
             mounts,
             self.compose.memory("airflow-dump", values),
             self.orchestration_network_name(registry_id),
-            **self.orchestration_hardening(raw, values),
-        )
-
-    def render_lineage_dump(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
-        """Render a finite read-only Marquez dump on the owned internal backend without published ports."""
-        self.only_params(inp, ("state",))
-        if inp.args:
-            raise LauncherError("lineage_dump takes no arguments", "args")
-        state = self.allowed(str(inp.params["state"]), "state")
-        if not all((state / part).is_dir() and not (state / part).is_symlink() for part in ("postgres", "config")):
-            raise LauncherError("lineage dump state is incomplete", "args")
-        (state / "dumps").mkdir(mode=0o700, exist_ok=True)
-        values = {
-            "HAI_LINEAGE_REPO": str(self.checkout),
-            "HAI_LINEAGE_STATE": str(state.resolve()),
-            "HAI_ORCH_UID": str(os.getuid()),
-            "JOB_MEMORY_LIMIT": inp.values["JOB_MEMORY_LIMIT"],
-            **self.stack_values("dump"),
-        }
-        raw = self.compose.service("dump")
-        return self.assemble(
-            inp,
-            name,
-            self.image("dump"),
-            list(raw["entrypoint"]),
-            list(raw["command"]),
-            self.compose.environment("dump", values),
-            self.compose.mounts("dump", values),
-            self.compose.memory("dump", values),
-            f"hai-{registry_id[:8]}-lineage-backend",
             **self.orchestration_hardening(raw, values),
         )
 
@@ -3329,8 +3236,6 @@ METHODS: dict[str, MethodSpec] = {
     "pipeline_fixture_verify": MethodSpec(("run",)),
     "pipeline_test_catalog": MethodSpec(("run",)),
     "catalog_down": MethodSpec(("any",)),
-    "lineage_up": MethodSpec(("any",)),
-    "lineage_down": MethodSpec(("any",)),
     "pipeline_online_store_up": MethodSpec(("run",)),
     "online_store_down": MethodSpec(("any",)),
     "orchestration_up": MethodSpec(("any",)),
@@ -3547,11 +3452,6 @@ class Launcher:
             "health": self.on_health,
             "netremove": self.on_netremove,
             "catalogconfirm": self.on_catalogconfirm,
-            "lineagelimits": self.on_lineagelimits,
-            "lineagehealth": self.on_lineagehealth,
-            "lineagenetcreate": self.on_lineagenetcreate,
-            "lineagenetremove": self.on_lineagenetremove,
-            "lineageconfirm": self.on_lineageconfirm,
             "onlinelimits": self.on_onlinelimits,
             "onlinehealth": self.on_onlinehealth,
             "onlinenetcreate": self.on_onlinenetcreate,
@@ -3625,8 +3525,6 @@ class Launcher:
             "pipeline_fixture_verify": self.m_pipeline_fixture_verify,
             "pipeline_test_catalog": self.m_pipeline_test_catalog,
             "catalog_down": self.m_catalog_down,
-            "lineage_up": self.m_lineage_up,
-            "lineage_down": self.m_lineage_down,
             "pipeline_online_store_up": self.m_pipeline_online_store_up,
             "online_store_down": self.m_online_store_down,
             "orchestration_up": self.m_orchestration_up,
@@ -4239,7 +4137,6 @@ class Launcher:
         self.settle_unresolved_creates(listing["seq"])
         self.settle_network_ops(listing["networks"])
         self.settle_orchestration_network_ops(listing["networks"])
-        self.settle_lineage_network_ops(listing["networks"])
         self.settle_online_network_ops(listing["networks"])
         self.dirty.update(self.bound.values())
         self.dirty.update(self.open_attempt_ids())
@@ -4500,7 +4397,7 @@ class Launcher:
         if owner == DIAGNOSTIC_OWNER:
             return not self.stream_acked and self.probe is not None and self.probe["attempt"] == attempt["id"]
         if kind == "stack":
-            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", "lineage", online_store.STACK, "mlflow") else {}
+            stack = state["launcher"].get(ident) or {} if ident in ("orchestration", online_store.STACK, "mlflow") else {}
             return stack.get("phase") in ("starting", "up") and not state["launcher"].get("restart")
         if kind == "service" and ident.startswith("pipeline:"):
             run = state["runs"].get(ident.removeprefix("pipeline:"))
@@ -4575,14 +4472,6 @@ class Launcher:
                 missing = "training Compose model is missing"
             if not path.is_file():
                 raise LauncherError(missing, "spec")
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            if digest not in self.compose_models:
-                self.compose_models[digest] = ComposeModel(path)
-            return Renderer(self.cfg, self.compose_models[digest], checkout, self.main_checkout, self.key)
-        if template_name in ("lineage_service", "lineage_dump"):
-            path = checkout / (LINEAGE_COMPOSE if template_name == "lineage_service" else LINEAGE_CHECKS_COMPOSE)
-            if not path.is_file():
-                raise LauncherError("lineage Compose model is missing", "spec")
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest not in self.compose_models:
                 self.compose_models[digest] = ComposeModel(path)
@@ -4745,8 +4634,6 @@ class Launcher:
             return renderer.render_service(inp, str(attempt["params"]["service"]), self.registry_id)
         if template.name == "orchestration_service":
             return renderer.render_orchestration_service(inp, str(attempt["params"]["service"]), self.registry_id)
-        if template.name == "lineage_service":
-            return renderer.render_lineage_service(inp, str(attempt["params"]["service"]), self.registry_id)
         if template.name == online_store.TEMPLATE:
             return renderer.render_online_store_service(inp, self.registry_id)
         if template.name == mlflow_service.TEMPLATE:
@@ -4759,14 +4646,12 @@ class Launcher:
         renderer = self.renderer_of(attempt["template"], Path(attempt["checkout"]))
         if template.name == "pipeline_proxy":
             return network_policy.PROXY_IMAGE
-        if template.name in ("catalog_service", "orchestration_service", "lineage_service", online_store.TEMPLATE, mlflow_service.TEMPLATE):
+        if template.name in ("catalog_service", "orchestration_service", online_store.TEMPLATE, mlflow_service.TEMPLATE):
             return renderer.image(str(attempt["params"]["service"]))
         if template.name == "orchestration_check":
             return renderer.image("airflow-check")
         if template.name == "orchestration_dump":
             return renderer.image("airflow-dump")
-        if template.name == "lineage_dump":
-            return renderer.image("dump")
         return renderer.image(template.service or "analytics")
 
     def resolve_image(self, reference: str) -> dict[str, Any] | None:
@@ -4961,7 +4846,6 @@ class Launcher:
         """One pass over every open attempt and every owner: the state machine of D1 sections 4 to 6."""
         self.advance_desktop()
         if self.status == "starting" and not self.docker_ok:
-            self.expire_lineage_startup()
             self.expire_mlflow_startup()
             return
         actions: list[Callable[[], None]] = []
@@ -6114,13 +5998,6 @@ class Launcher:
             return self.online_store_status(state)
         if what == "mlflow":
             return dict(state["launcher"].get("mlflow") or {"phase": "down"})
-        if what == "lineage":
-            stack = dict(state["launcher"].get("lineage") or {"phase": "down"})
-            stack["service_phases"] = {
-                service: {"phase": state["attempts"][attempt_id]["phase"], "reason": state["attempts"][attempt_id]["reason"]}
-                for service, attempt_id in stack.get("services", {}).items()
-            }
-            return stack
         if what == "orchestration":
             return self.orchestration_view(state)
         raise LauncherError(f"unknown status target {what!r}", "args")
@@ -6203,9 +6080,9 @@ class Launcher:
         """The local ID of the image a Compose service names (the kit records it with its baselines); ``compose`` may name the orchestration model."""
         checkout = self.check_checkout(str(ctx.params.get("checkout") or self.cfg.root))
         compose = ctx.params.get("compose", "lakehouse")
-        if compose not in ("lakehouse", "orchestration", "lineage"):
+        if compose not in ("lakehouse", "orchestration"):
             raise LauncherError("compose must be lakehouse or orchestration", "args")
-        renderer = self.renderer_of("lineage_service" if compose == "lineage" else "orchestration_check" if compose == "orchestration" else "", checkout)
+        renderer = self.renderer_of("orchestration_check" if compose == "orchestration" else "", checkout)
         reference = renderer.image(str(ctx.params.get("service", "")))
         key = f"imageread:{id(ctx.conn)}:{ctx.request_id}"
         self.read_waiters[key] = (ctx.conn, ctx.request_id)
@@ -6423,7 +6300,6 @@ class Launcher:
         self.advance_allocations(state, actions)
         self.advance_catalog(state, actions)
         self.advance_orchestration(state, actions)
-        self.advance_lineage(state, actions)
         self.advance_online_store(state, actions)
         self.advance_mlflow(state, actions)
         self.advance_restart(state, actions)
@@ -6598,7 +6474,7 @@ class Launcher:
         if type(capture) is not bool or capture and (identity is None or template_name not in ("fixture_dbt", "real_dbt")):
             raise LauncherError("dbt artifact capture requires a dbt template and validated caller identity", "args")
         template = TEMPLATES.get(template_name)
-        if template is None or template_name in ("probe", "catalog_service", "orchestration_service", "lineage_service", online_store.TEMPLATE):
+        if template is None or template_name in ("probe", "catalog_service", "orchestration_service", online_store.TEMPLATE):
             raise LauncherError(f"template {template_name!r} cannot be submitted by a client", "refused")
         owner = self.owner_of(ctx)
         kind, _, ident = owner.partition(":")
@@ -6650,12 +6526,6 @@ class Launcher:
             raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
         if ctx.state["launcher"].get("restart"):
             raise LauncherError("a Docker restart is running", "refused")
-        if template_name == "lineage_dump":
-            stack = ctx.state["launcher"].get("lineage") or {}
-            dump_state = str(Path(str((params.get("params") or {}).get("state", ""))).resolve())
-            requested = str(params.get("checkout") or self.cfg.root)
-            if stack.get("phase") != "up" or stack.get("state") != dump_state or stack.get("checkout") != requested:
-                raise LauncherError("lineage dump requires this registry's active lineage state and checkout", "refused")
         if template_name == "orchestration_dump" and (ctx.state["launcher"].get("orchestration") or {}).get("phase") != "up":
             raise LauncherError("the orchestration stack is not up; the dump needs its database", "refused")
         if template.needs_catalog:
@@ -8199,420 +8069,6 @@ class Launcher:
         stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
         return {"phase": "tearing_down"}
 
-    def ensure_lineage_password(self, folder: Path) -> None:
-        """Worker: make sure the database password exists in Parameter Store (generated there once); refuse a new one next to an existing database.
-
-        The whole check runs under one absolute deadline and never on the launcher's loop."""
-
-        def check() -> None:
-            store = self.cfg.secret_store()
-            if (folder / "postgres" / "PG_VERSION").exists() and store.find(secret_store.MARQUEZ_DB_PASSWORD) is None:
-                raise LauncherError(
-                    f"the lineage database exists but secret {secret_store.MARQUEZ_DB_PASSWORD} is missing; run the one-time secrets move first", "refused"
-                )
-            store.ensure(secret_store.MARQUEZ_DB_PASSWORD, secret_store.new_password)
-
-        try:
-            secret_store.within(self.cfg.secret_fetch_seconds, check, "the lineage database password check")
-        except secret_store.SecretStoreError as error:
-            raise LauncherError(str(error), "spec") from None
-
-    def initialize_lineage_config(self, checkout: Path, folder: Path) -> None:
-        """Write the Marquez configuration once. It holds a reference to the container's ``MARQUEZ_DB_PASSWORD`` environment value and no secret."""
-        config_file = folder / "config" / "marquez.yaml"
-        if config_file.exists():
-            if not config_file.is_file() or config_file.is_symlink():
-                raise LauncherError("incomplete or unsafe lineage runtime configuration", "args")
-            return
-        os.chmod(folder / "config", 0o700)
-        template = (checkout / "services/lineage/marquez.yaml.tmpl").read_text()
-        if template.count("${MARQUEZ_DB_PASSWORD}") != 1:
-            raise LauncherError("lineage configuration has no unique password placeholder", "args")
-        fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as stream:
-            stream.write(template)
-            stream.flush()
-            os.fsync(stream.fileno())
-
-    def lineage_network_name(self, role: str) -> str:
-        """The closed service role determines the registry-owned network name."""
-        if role not in ("backend", "frontend"):
-            raise LauncherError("unknown lineage network role", "spec")
-        return f"hai-{self.registry_id[:8]}-lineage-{role}"
-
-    def lineage_network_role(self, name: str) -> str:
-        for role in ("backend", "frontend"):
-            if name == self.lineage_network_name(role):
-                return role
-        raise LauncherError("lineage operation names an unowned network", "spec")
-
-    def create_lineage_network(self, name: str, labels: dict[str, str]) -> str:
-        """Create a bridge for the recorded role, or validate it after a lost reply."""
-        internal = self.lineage_network_role(name) == "backend"
-        try:
-            return self.docker.create_network(name, labels, internal=internal)
-        except DockerError as error:
-            if error.status != 409:
-                raise
-            found = [n for n in self.docker.networks(self.network_label()) if n.get("Name") == name]
-            if len(found) != 1 or bool(found[0].get("Internal")) != internal or (found[0].get("Labels") or {}).get(LABEL_STACK) != LINEAGE_STACK:
-                raise LauncherError("existing lineage network differs from its owned role", "refused") from error
-            return str(found[0]["Id"])
-
-    def lineage_record(self, state: dict[str, Any]) -> dict[str, Any]:
-        return state["launcher"].setdefault("lineage", {"phase": "down", "services": {}, "networks": {}})
-
-    def lineage_state_folder(self, checkout: Path, text: Any) -> str:
-        """The stack's state folder: absolute, inside ``data/lineage/`` of the checkout or the main checkout (or a test registry's named
-        folder), outside any secrets folder and holding the configuration and database folders."""
-        if not isinstance(text, str) or not Path(text).is_absolute():
-            raise LauncherError("state must be an absolute folder", "args")
-        candidate = Path(text)
-        if secrets_part(folded(candidate)) or secrets_part(folded(candidate.resolve())):
-            raise LauncherError(f"state {text!r} lies in a secrets folder", "mount")
-        roots = [checkout / "data" / "lineage", self.main_checkout / "data" / "lineage", *self.cfg.allowed_roots]
-        if not inside(candidate, roots):
-            raise LauncherError(f"state {text!r} is outside the allowed folders", "args")
-        resolved = candidate.resolve()
-        if not resolved.is_dir():
-            raise LauncherError(f"state folder {text!r} does not exist", "args")
-        missing = [name for name in ("postgres", "config") if not (resolved / name).is_dir() or (resolved / name).is_symlink()]
-        if missing:
-            raise LauncherError(f"state folder {text!r} lacks {', '.join(missing)}", "args")
-        return str(resolved)
-
-    def m_lineage_up(self, ctx: Ctx) -> dict[str, Any]:
-        """Start the internal network, PostgreSQL, Marquez API and UI, waiting for health in order."""
-        params = ctx.params
-        unknown = sorted(set(params) - set(("state", "api_port", "web_port", "checkout")))
-        if unknown:
-            raise LauncherError(f"lineage_up has no parameter {', '.join(unknown)}", "args")
-        port = params.get("api_port")
-        web_port = params.get("web_port")
-        if type(web_port) is not int or not 1024 <= web_port <= 65535 or web_port == port:
-            raise LauncherError("web_port must be a distinct integer from 1024 to 65535", "args")
-        if type(port) is not int or not 1024 <= port <= 65535:
-            raise LauncherError("api_port must be an integer from 1024 to 65535", "args")
-        checkout = self.check_checkout(str(params.get("checkout") or self.cfg.root))
-        if not (checkout / LINEAGE_COMPOSE).is_file():
-            raise LauncherError(f"{checkout} has no {LINEAGE_COMPOSE}", "args")
-        folder = self.lineage_state_folder(checkout, params.get("state"))
-        stack = self.lineage_record(ctx.state)
-        if stack["phase"] == "tearing_down":
-            raise LauncherError("the lineage stack is being torn down", "refused")
-        if ctx.state["launcher"].get("restart"):
-            raise LauncherError("a Docker restart is running", "refused")
-        if self.foreign:
-            raise LauncherError("foreign legacy containers exist; the owner reconciles them first", "refused")
-        if stack["phase"] in ("up", "starting"):
-            wanted = {"checkout": str(checkout), "state": folder, "api_port": port, "web_port": web_port}
-            if {name: stack.get(name) for name in wanted} != wanted:
-                raise LauncherError("the lineage stack is up with other parameters; lineage_down first", "refused")
-            return {"phase": stack["phase"]}
-        self.initialize_lineage_config(checkout, Path(folder))
-        ctx.state["launcher"]["lineage"] = {
-            "id": ctx.key,
-            "phase": "starting",
-            "step": "limits",
-            "services": {},
-            "error": "",
-            "networks": {},
-            "settings": {},
-            "health": {},
-            "checkout": str(checkout),
-            "state": folder,
-            "api_port": port,
-            "web_port": web_port,
-            "started_at": utc_now(),
-            "start_deadline": time.time() + LINEAGE_START_SECONDS,
-        }
-        own = f"hai-{self.registry_id[:8]}-svc-lineage-"
-        growth = {name: limit for name, limit in self.growth_reserve_map(ctx.state).items() if not name.startswith(own)}
-        self.spawn(self.operation_key("lineage:limits", ctx.state["launcher"]["lineage"]), "lineagelimits", self.compute_lineage_limits, growth, Path(folder))
-        return {"phase": "starting"}
-
-    def compute_lineage_limits(self, growth: dict[str, int], folder: Path) -> dict[str, Any]:
-        """Worker: check the database password secret, then compute each service limit from one shared resource plan.
-
-        One resource snapshot gives the plan; the services run at the same time, so the sum of their limits (each raised to its minimum) must fit the
-        plan's free memory, or the start is refused here, before any network or container exists."""
-        self.ensure_lineage_password(folder)
-        plan = memory_budget.launch_plan(self.reader(), growth)
-        limits = {service: memory_budget.service_limit(plan.budget, share, minimum) for service, (_, share, minimum) in LINEAGE_MEMORY.items()}
-        total = sum(limits.values())
-        if total > plan.budget.free:
-            need, have = total / memory_budget.GIB, plan.budget.free / memory_budget.GIB
-            raise memory_budget.BudgetError(f"the lineage services need {need:.2f} GiB at the same time and the plan holds {have:.2f} GiB free")
-        return {"limits": limits}
-
-    def on_lineagelimits(self, key: str, outcome: str, value: Any) -> None:
-        """The limits are known: record them with the launcher's validated settings, register the services' limits and create the network."""
-        with self.tx() as state:
-            stack = self.lineage_record(state)
-            if stack["phase"] != "starting" or key != self.operation_key("lineage:limits", stack):
-                return
-            if outcome != "ok":
-                self.fail_lineage(stack, f"the lineage services cannot start: {failure_text(value)}")
-                return
-            settings = {
-                "HAI_LINEAGE_STATE": stack["state"],
-                "HAI_LINEAGE_API_PORT": str(stack["api_port"]),
-                "HAI_LINEAGE_WEB_PORT": str(stack["web_port"]),
-            }
-            for service, (name, _, _) in LINEAGE_MEMORY.items():
-                settings[f"HAI_LINEAGE_MEM_{name}"] = str(value["limits"][service])
-                state["services"][f"lineage-{service}"] = int(value["limits"][service])
-            stack["settings"] = settings
-            stack["step"] = "network"
-
-    def fail_lineage(self, stack: dict[str, Any], message: str) -> None:
-        """A failed start tears the started services down and leaves the stack down."""
-        stack.update({"phase": "tearing_down", "after": "down", "error": message, "stop_step": "network"})
-
-    def lineage_stack_attempt(self, state: dict[str, Any], stack: dict[str, Any], service: str) -> dict[str, Any]:
-        """The service's attempt, created on first use."""
-        attempt_id = stack["services"].get(service)
-        if attempt_id is not None:
-            return state["attempts"][attempt_id]
-        seconds = 10**7
-        attempt = self.new_attempt(
-            state,
-            LINEAGE_OWNER,
-            "lineage_service",
-            f"lineage-{service}",
-            [],
-            {"service": service},
-            request="launcher",
-            checkout=stack["checkout"],
-            seconds=seconds,
-        )
-        stack["services"][service] = attempt["id"]
-        return attempt
-
-    def advance_lineage(self, state: dict[str, Any], actions: list[Callable[[], None]]) -> None:
-        """Startup and teardown of the lineage stack as a recorded state machine, beside the catalog's and sharing none of its records."""
-        stack = state["launcher"].get("lineage")
-        if not stack or self.expire_lineage_start(state, stack):
-            return
-        if not self.docker_ok or self.status != "serving":
-            return
-        if stack["phase"] == "starting" and stack.get("step") not in (None, "limits"):
-            self.advance_lineage_start(state, stack, actions)
-        elif stack["phase"] == "tearing_down":
-            self.advance_lineage_stop(state, stack, actions)
-        elif stack["phase"] == "up":
-            ended = [service for service, attempt_id in stack["services"].items() if state["attempts"][attempt_id]["phase"] == "ended"]
-            stack["degraded"] = f"{', '.join(sorted(ended))} ended" if ended else ""
-
-    def expire_lineage_start(self, state: Mapping[str, Any], stack: dict[str, Any]) -> bool:
-        """Record an expired startup as its named timeout and hand the stack to teardown; True when it did.
-
-        Only the stack record changes, so this runs whatever the Docker connection is. Cancelling attempts, removing networks and confirming absence
-        stay with ``advance_lineage_stop``, behind the Docker and serving guard, and the limits are released only when absence is confirmed."""
-        late = self.lineage_start_phase(state, stack) if stack["phase"] == "starting" else None
-        if late is None:
-            return False
-        self.fail_lineage(stack, f"lineage startup timed out in the {late} phase after the {LINEAGE_START_SECONDS} s startup deadline")
-        return True
-
-    def expire_lineage_startup(self) -> None:
-        """Record an expired lineage startup while the Docker connection is down: a read first, so a pass with nothing expired writes nothing."""
-        with self.tx(write=False) as state:
-            stack = state["launcher"].get("lineage")
-            expired = bool(stack) and stack["phase"] == "starting" and self.lineage_start_phase(state, stack) is not None
-        if expired:
-            with self.tx() as state:
-                self.expire_lineage_start(state, state["launcher"]["lineage"])
-
-    def lineage_start_phase(self, state: Mapping[str, Any], stack: Mapping[str, Any]) -> str | None:
-        """The limits, network or pre-start service phase that outlived the startup deadline; None while in time.
-
-        A service that is started answers to ``health_wait`` and one that ended is reported by its own reason."""
-        if time.time() <= stack["start_deadline"]:
-            return None
-        step = stack["step"]
-        if step not in LINEAGE_ORDER:
-            return str(step)
-        attempt_id = stack["services"].get(step)
-        if attempt_id is not None and state["attempts"][attempt_id]["phase"] not in LINEAGE_PRE_START:
-            return None
-        return f"{step} start"
-
-    def advance_lineage_start(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
-        """Start the network and the three services in order; each service must be healthy first."""
-        step = stack["step"]
-        if step == "network":
-            op = next((o for o in state["operations"].values() if o["kind"] == "lineage_network_create" and o["state"] == "open"), None)
-            if op is None:
-                missing = [role for role in ("backend", "frontend") if role not in stack.setdefault("networks", {})]
-                if not missing:
-                    stack["step"] = LINEAGE_ORDER[0]
-                    return
-                op_id = self.record_network_op(state, "lineage_network_create", name=self.lineage_network_name(missing[0]))
-            elif f"op:{op['op_id']}" in self.inflight:
-                return
-            else:
-                op_id = op["op_id"]
-            name, labels = state["operations"][op_id]["network_name"], {LABEL_REGISTRY: self.registry_id, LABEL_STACK: LINEAGE_STACK}
-            actions.append(lambda: self.spawn(f"op:{op_id}", "lineagenetcreate", self.create_lineage_network, name, labels))
-            return
-        if step not in LINEAGE_ORDER:
-            return
-        service = step
-        attempt = self.lineage_stack_attempt(state, stack, service)
-        following = LINEAGE_ORDER[LINEAGE_ORDER.index(service) + 1 :]
-        if attempt["phase"] == "ended":
-            self.fail_lineage(stack, f"{service} ended: {attempt['reason']} (exit {attempt.get('exit_code')}) {attempt.get('detail', '')}".strip())
-            return
-        if attempt["phase"] != "started":
-            return
-        if stack["health"].get(service) == "healthy":
-            if following:
-                stack["step"] = following[0]
-            else:
-                stack.update({"phase": "up", "step": "done", "up_at": utc_now()})
-            return
-        started = stack.setdefault("waiting_since", {}).setdefault(service, time.time())
-        if time.time() - started > self.timings.health_wait:
-            self.fail_lineage(stack, f"{service} was not healthy within {self.timings.health_wait:.0f} s")
-            return
-        container_id = attempt["container_id"]
-        health_key = self.operation_key(f"lineagehealth:{service}", stack)
-        actions.append(lambda: self.spawn(health_key, "lineagehealth", self.read_health, container_id))
-
-    def on_lineagehealth(self, key: str, outcome: str, value: Any) -> None:
-        """Record a stack service's health."""
-        if outcome != "ok":
-            return
-        service = key.split(":", 2)[1]
-        with self.tx() as state:
-            stack = self.lineage_record(state)
-            if key != self.operation_key(f"lineagehealth:{service}", stack):
-                return
-            stack.setdefault("health", {})[service] = value
-
-    def on_lineagenetcreate(self, key: str, outcome: str, value: Any) -> None:
-        op_id = key.split(":", 1)[1]
-        if outcome == "docker" and value.status == 0:
-            return
-        with self.tx() as state:
-            stack = self.lineage_record(state)
-            op = state["operations"].get(op_id)
-            if op is None or op["state"] != "open":
-                return
-            role = self.lineage_network_role(op["network_name"])
-            self.settle_op(state, op_id, "created" if outcome == "ok" else f"failed: {failure_text(value)}")
-            if outcome == "ok":
-                stack.setdefault("networks", {})[role] = value
-                state["containers"]["network:" + str(value)] = {"kind": "network", "at": utc_now()}
-            elif stack["phase"] == "starting":
-                self.fail_lineage(stack, f"cannot create the lineage {role} network: {failure_text(value)}")
-
-    def settle_lineage_network_ops(self, networks: Sequence[Mapping[str, Any]]) -> None:
-        """Reconcile each durable role-specific network operation with an all-state scan."""
-        with self.tx() as state:
-            stack = self.lineage_record(state)
-            for op in list(state["operations"].values()):
-                if op["state"] != "open" or op["kind"] not in ("lineage_network_create", "lineage_network_remove"):
-                    continue
-                role = self.lineage_network_role(op["network_name"])
-                found = [n for n in networks if n.get("Name") == op["network_name"]]
-                if op["kind"] == "lineage_network_create" and found:
-                    if (
-                        len(found) != 1
-                        or bool(found[0].get("Internal")) != (role == "backend")
-                        or (found[0].get("Labels") or {}).get(LABEL_STACK) != LINEAGE_STACK
-                    ):
-                        self.fail_lineage(stack, f"lineage {role} network differs from its recorded role")
-                        continue
-                    self.settle_op(state, op["op_id"], "created", evidence="scan")
-                    network = str(found[0]["Id"])
-                    stack.setdefault("networks", {})[role] = network
-                    state["containers"]["network:" + network] = {"kind": "network", "at": utc_now()}
-                elif op["kind"] == "lineage_network_remove" and not found:
-                    self.settle_op(state, op["op_id"], "removed", evidence="scan")
-                    stack.setdefault("networks", {}).pop(role, None)
-
-    def advance_lineage_stop(self, state: dict[str, Any], stack: dict[str, Any], actions: list[Callable[[], None]]) -> None:
-        """Stop the UI and API together, then PostgreSQL, remove the network, then confirm absence before the stack is down."""
-        for group in (tuple(s for s in LINEAGE_ORDER if s != "postgres"), ("postgres",)):
-            open_attempts = [
-                state["attempts"][stack["services"][s]] for s in group if s in stack["services"] and is_open(state["attempts"][stack["services"][s]])
-            ]
-            for attempt in open_attempts:
-                if not attempt["cancel_intent"]:
-                    attempt["cancel_intent"] = {"reason": "lineage_down", "at": utc_now()}
-            if open_attempts:
-                return
-        step = stack.get("stop_step", "network")
-        create = next((o for o in state["operations"].values() if o["kind"] == "lineage_network_create" and o["state"] == "open"), None)
-        if step == "network" and create is not None:
-            if f"op:{create['op_id']}" not in self.inflight:
-                op_id = create["op_id"]
-                name, labels = state["operations"][op_id]["network_name"], {LABEL_REGISTRY: self.registry_id, LABEL_STACK: LINEAGE_STACK}
-                actions.append(lambda: self.spawn(f"op:{op_id}", "lineagenetcreate", self.create_lineage_network, name, labels))
-            return
-        if step == "network":
-            roles = [role for role in ("frontend", "backend") if role in stack.setdefault("networks", {})]
-            role = roles[0] if roles else None
-            network = stack["networks"].get(role)
-            op = next((o for o in state["operations"].values() if o["kind"] == "lineage_network_remove" and o["state"] == "open"), None)
-            if network is None:
-                stack["stop_step"] = "confirm"
-                return
-            if op is None:
-                op_id = self.record_network_op(state, "lineage_network_remove", network, name=self.lineage_network_name(str(role)))
-            elif f"op:{op['op_id']}" in self.inflight:
-                return
-            else:
-                op_id = op["op_id"]
-                network = op.get("network") or network
-            actions.append(lambda: self.spawn(f"op:{op_id}", "lineagenetremove", self.docker.remove_network, network))
-        elif step == "confirm":
-            confirm_key = self.operation_key("lineage:confirm", stack)
-            actions.append(lambda: self.spawn(confirm_key, "lineageconfirm", self.lineage_absent))
-
-    def lineage_absent(self) -> bool:
-        """Worker: True when no container and no network of the lineage stack exist, in any state."""
-        label = f"{LABEL_STACK}={LINEAGE_STACK}"
-        containers = [c for c in self.docker.containers(label=label) if (c.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
-        networks = [n for n in self.docker.networks(label) if (n.get("Labels") or {}).get(LABEL_REGISTRY) == self.registry_id]
-        return not containers and not networks
-
-    def on_lineagenetremove(self, key: str, outcome: str, value: Any) -> None:
-        """The stack's network is gone: confirm absence next."""
-        op_id = key.split(":", 1)[1]
-        if outcome == "docker" and value.status == 0:
-            return
-        with self.tx() as state:
-            op = state["operations"].get(op_id)
-            if op is None or op["state"] != "open":
-                return
-            self.settle_op(state, op_id, "removed" if outcome == "ok" else f"failed: {failure_text(value)}")
-            stack = self.lineage_record(state)
-            if outcome == "ok" and stack["phase"] == "tearing_down":
-                stack.setdefault("networks", {}).pop(self.lineage_network_role(op["network_name"]), None)
-
-    def on_lineageconfirm(self, key: str, outcome: str, value: Any) -> None:
-        """Absence shown by an all-state listing: the stack is down and its limits are released."""
-        if outcome != "ok" or not value:
-            return
-        with self.tx() as state:
-            stack = self.lineage_record(state)
-            if stack["phase"] != "tearing_down" or key != self.operation_key("lineage:confirm", stack):
-                return
-            state["launcher"]["lineage"] = {"phase": "down", "services": {}, "error": stack.get("error", ""), "down_at": utc_now()}
-            for service in LINEAGE_MEMORY:
-                state["services"].pop(f"lineage-{service}", None)
-
-    def m_lineage_down(self, ctx: Ctx) -> dict[str, Any]:
-        """Stop the UI and API, then PostgreSQL, remove the network and confirm that nothing of the stack remains."""
-        stack = self.lineage_record(ctx.state)
-        if stack["phase"] in ("down", "tearing_down"):
-            return {"phase": stack["phase"]}
-        stack.update({"phase": "tearing_down", "after": "down", "stop_step": "network"})
-        return {"phase": "tearing_down"}
-
     # -- the online feature store (design section 4.2) ------------------------------------------------------------
 
     @staticmethod
@@ -8930,7 +8386,6 @@ class Launcher:
         for path in (
             self.cfg.root / "docker-compose.yaml",
             self.cfg.root / ORCHESTRATION_COMPOSE,
-            self.cfg.root / LINEAGE_COMPOSE,
             self.cfg.root / online_store.COMPOSE,
             self.cfg.root / mlflow_service.COMPOSE,
             self.cfg.root / mlflow_service.TRAINING_COMPOSE,

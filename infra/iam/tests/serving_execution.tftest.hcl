@@ -111,7 +111,7 @@ run "the_serving_execution_role_injects_the_serving_parameters_and_nothing_else"
   assert {
     condition = !anytrue([
       for name in [
-        var.postgres_password_name, var.airflow_db_password_name, var.marquez_db_password_name, var.airflow_fernet_key_name, var.airflow_jwt_secret_name,
+        var.postgres_password_name, var.airflow_db_password_name, var.airflow_fernet_key_name, var.airflow_jwt_secret_name,
         var.airflow_api_secret_key_name, var.redis_password_name, var.polaris_root_secret_name, var.grafana_admin_password_name, var.mlflow_db_password_name,
         var.mlflow_admin_password_name
       ] : strcontains(aws_iam_role_policy.serving_execution[0].policy, name)

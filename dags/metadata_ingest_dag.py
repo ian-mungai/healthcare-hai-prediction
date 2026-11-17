@@ -1,6 +1,6 @@
 """Start the on-demand OpenMetadata catalog task through the direct ECS launch library and wait for it to end.
 
-The task rebuilds the catalog on each start from Polaris, dbt and Marquez, then serves the browsing UI privately until its own deadline and stops itself. The
+The task rebuilds the catalog on each start from Polaris and dbt, then serves the browsing UI privately until its own deadline and stops itself. The
 one step launches the task and waits for it. The step has no retry: a retry would start a second task that costs money, and the launch library refuses a
 second launch for the same run anyway. The step's limit is the longest task lifetime plus the job deadline's grace and a margin, so the step ends in Airflow.
 The chain DAG starts this DAG without waiting for it, so a failed catalog task never fails a chain run.

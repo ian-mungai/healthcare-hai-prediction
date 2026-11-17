@@ -166,7 +166,7 @@ check "render refuses a definition file that does not exist" file_refusal render
 
 # --- the configuration ------------------------------------------------------------------------------------------------------------------------
 check "the configuration names exactly the two serving services" test "$(jq -r '.services | keys | join(",")' "$config")" = "model_api,streamlit"
-check "the configuration names no control-plane parameter" test "$(jq -r '[.services[].parameters[]] | map(select(test("postgres|/redis_password$|airflow|marquez|polaris_root|mlflow_db|mlflow_admin|broker|grafana"))) | length' "$config")" = "0"
+check "the configuration names no control-plane parameter" test "$(jq -r '[.services[].parameters[]] | map(select(test("postgres|/redis_password$|airflow|polaris_root|mlflow_db|mlflow_admin|broker|grafana"))) | length' "$config")" = "0"
 variables=infra/iam/variables.tf
 default_of() { grep -A6 "^variable \"$1\"" "$variables" | grep -m1 'default' | sed 's/.*= *"\(.*\)"/\1/'; }
 all_parameters_match_the_variables() {

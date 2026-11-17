@@ -2,8 +2,7 @@ mock_provider "aws" {
   override_during = plan
 }
 
-# Prometheus, Grafana and the StatsD exporter run as one task behind monitoring_enabled. These cases turn the flag on with Marquez also on, the largest memory load the
-# stack plans today, and pin the flag-off plan in the first case. Every case reads the plan only: no image runs and nothing reaches AWS.
+# Prometheus, Grafana and the StatsD exporter run as one task behind monitoring_enabled. These cases turn the flag on and pin the flag-off plan in the first case. Every case reads the plan only: no image runs and nothing reaches AWS.
 variables {
   # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use. The default is the room the live stack leaves, which the
   # larger fixtures here do not have.
@@ -20,7 +19,6 @@ variables {
   polaris_task_role_arn       = "arn:aws:iam::111111111111:role/example-polaris"
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
-  marquez_enabled             = true
   monitoring_enabled          = true
 
   # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
@@ -33,12 +31,12 @@ variables {
   model_api_mlflow_uri            = ""
 
   log_group_names = {
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
-    polaris    = "/example/polaris"
-    airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
-    monitoring = "/example/monitoring"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    openmetadata = "/example/openmetadata"
+    monitoring   = "/example/monitoring"
   }
 
   ecr_repository_urls = {
@@ -47,8 +45,6 @@ variables {
     polaris         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     prometheus      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
     grafana         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
@@ -60,8 +56,6 @@ variables {
     polaris         = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez         = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web     = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     grafana         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
@@ -74,11 +68,11 @@ run "flag_off_plans_no_monitoring_and_no_statsd" {
   variables {
     monitoring_enabled = false
     log_group_names = {
-      postgres = "/example/postgres"
-      redis    = "/example/redis"
-      polaris  = "/example/polaris"
-      airflow  = "/example/airflow"
-      marquez  = "/example/marquez"
+      postgres     = "/example/postgres"
+      redis        = "/example/redis"
+      polaris      = "/example/polaris"
+      airflow      = "/example/airflow"
+      openmetadata = "/example/openmetadata"
     }
     ecr_repository_urls = {
       postgres      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres"
@@ -86,8 +80,6 @@ run "flag_off_plans_no_monitoring_and_no_statsd" {
       polaris       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
       polaris_admin = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
       airflow       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-      marquez       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-      marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     }
     image_digests = {
       postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -95,8 +87,6 @@ run "flag_off_plans_no_monitoring_and_no_statsd" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
@@ -197,8 +187,6 @@ run "tag_instead_of_digest_for_grafana_is_refused" {
       polaris         = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez         = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web     = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       grafana         = "13.2.5-ubuntu"
       statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
@@ -218,8 +206,6 @@ run "missing_monitoring_digest_is_refused" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
@@ -236,8 +222,6 @@ run "missing_monitoring_repository_is_refused" {
       polaris       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
       polaris_admin = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
       airflow       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-      marquez       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-      marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     }
   }
 
@@ -249,11 +233,11 @@ run "missing_monitoring_log_group_is_refused" {
 
   variables {
     log_group_names = {
-      postgres = "/example/postgres"
-      redis    = "/example/redis"
-      polaris  = "/example/polaris"
-      airflow  = "/example/airflow"
-      marquez  = "/example/marquez"
+      postgres     = "/example/postgres"
+      redis        = "/example/redis"
+      polaris      = "/example/polaris"
+      airflow      = "/example/airflow"
+      openmetadata = "/example/openmetadata"
     }
   }
 
@@ -365,19 +349,19 @@ run "memory_limits_are_small_and_stated" {
   }
 }
 
-run "monitoring_fits_beside_marquez_on_the_default_host" {
+run "monitoring_fits_on_the_default_host" {
   command = plan
 
   assert {
     condition     = output.reserved_memory_mib <= var.host_memory_mib - var.other_services_reserve_mib
-    error_message = "Reservations with monitoring and Marquez on must stay within the budget."
+    error_message = "Reservations with monitoring on must stay within the budget."
   }
 
   assert {
     condition = sum(flatten([
       for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [for container in jsondecode(definition.container_definitions) : container.memory]
     ])) <= var.host_memory_mib - 2048
-    error_message = "Hard limits with monitoring and Marquez on must leave 2 GiB for the operating system."
+    error_message = "Hard limits with monitoring on must leave 2 GiB for the operating system."
   }
 }
 
@@ -390,7 +374,6 @@ run "limits_change_in_one_place" {
       grafana         = { limit = 384, reservation = 192 }
       statsd_exporter = { limit = 64, reservation = 32 }
     }
-    marquez_enabled = false
     ecr_repository_urls = {
       postgres        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres"
       redis           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis"

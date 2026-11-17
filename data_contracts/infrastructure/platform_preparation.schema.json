@@ -43,8 +43,6 @@
               "drift",
               "egress_proxy",
               "feature_store",
-              "marquez",
-              "marquez_web",
               "mlflow",
               "openmetadata_database",
               "openmetadata_ingestion",
@@ -73,16 +71,6 @@
             {
               "contains": {
                 "const": "egress_proxy"
-              }
-            },
-            {
-              "contains": {
-                "const": "marquez"
-              }
-            },
-            {
-              "contains": {
-                "const": "marquez_web"
               }
             },
             {
@@ -125,8 +113,8 @@
             "enum": [
               "airflow",
               "jobs",
-              "marquez",
               "mlflow",
+              "openmetadata",
               "polaris",
               "postgres",
               "redis"
@@ -145,7 +133,7 @@
             },
             {
               "contains": {
-                "const": "marquez"
+                "const": "openmetadata"
               }
             },
             {

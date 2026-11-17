@@ -24,12 +24,11 @@ PARAMETER_NAME = re.compile(r"^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+){0,14}$")
 
 
 def stack_seeds() -> dict[str, str]:
-    """Synthetic values for the five secrets the orchestration and lineage stacks read; the Fernet key has the format Airflow requires."""
+    """Synthetic values for the four secrets the orchestration stack reads; the Fernet key has the format Airflow requires."""
     names = (
         secret_store.AIRFLOW_DB_PASSWORD,
         secret_store.AIRFLOW_JWT_SECRET,
         secret_store.AIRFLOW_API_SECRET_KEY,
-        secret_store.MARQUEZ_DB_PASSWORD,
     )
     seeds = {name: "stack-" + secrets.token_hex(12) for name in names}
     seeds[secret_store.AIRFLOW_FERNET_KEY] = secret_store.new_fernet_key()

@@ -45,7 +45,6 @@
     "\"$python_bin\" -m scripts.orchestration.run_job_catalog_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_completion_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_e2e",
-    "\"$python_bin\" -m scripts.orchestration.run_lineage_service_cases",
     "\"$python_bin\" -m scripts.orchestration.run_pipeline_light",
     "\"$python_bin\" -m scripts.orchestration.run_publish_contracts",
     "\"$python_bin\" -m scripts.orchestration.task_guard_cases",

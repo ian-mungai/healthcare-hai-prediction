@@ -1,6 +1,0 @@
-{
-  "service": "glue_mirror",
-  "database": "hai_lakehouse",
-  "dataset_pattern": "^(?P<schema>silver|gold|features)/(?P<table>[a-z0-9_]+)$",
-  "fqn_template": "{service}.{database}.hai_mirror_{schema}.{table}"
-}

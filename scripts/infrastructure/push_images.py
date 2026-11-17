@@ -7,10 +7,10 @@ The coordinating agent runs the printed Docker and AWS commands, because only th
     .venv/bin/python -m scripts.infrastructure.push_images record NAME=sha256:<DIGEST> [NAME=sha256:<DIGEST> ...]
 
 ``check`` validates ``infra/services/images.json`` offline: every mirror pinned by digest, every build context present, every base image of a
-built Dockerfile pinned by digest, every source build pinned to a commit and base digests, and every mirrored reference equal to the pin the
+built Dockerfile pinned by digest, and every mirrored reference equal to the pin the
 local stack uses. ``plan`` prints the commands for each image. ``urls.json`` is the foundation output ``ecr_repository_urls`` (``terraform output
 -json`` form or a plain object). The ECR repositories are immutable, so every push uses a unique tag: the tag in the list plus twelve hex digits of
-the pinned source digest (mirror), the local image ID (build) or the source commit (source build). The printed push is skipped when ECR already
+the pinned source digest (mirror), or the local image ID (build). The printed push is skipped when ECR already
 holds that tag, and the digest to record is read back from ECR. ``record`` merges those digests into ``infra/services/images.auto.tfvars.json``, the
 variable file the services stack reads. Images run by digest, never by tag, so a rerun that finds the same tag records the same digest.
 
@@ -28,7 +28,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -44,14 +43,13 @@ DIGESTS = ROOT / DIGESTS_FILE
 METADATA = ROOT / METADATA_FILE
 OPENMETADATA = {"openmetadata_server": "server", "openmetadata_ingestion": "ingestion", "openmetadata_search": "search"}
 PLATFORM = "linux/arm64"
-KINDS = ("mirror", "build", "source", "blocked")
+KINDS = ("mirror", "build", "blocked")
 SERVICE_IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow")
-LOCAL_PIN_FILES = ("docker-compose.yaml", "services/orchestration/egress_proxy.json", "services/lineage/docker-compose.lineage.yaml")
+LOCAL_PIN_FILES = ("docker-compose.yaml", "services/orchestration/egress_proxy.json")
 PINNED = re.compile(r"@sha256:[0-9a-f]{64}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 URL = re.compile(r"^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+$")
-COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FROM_LINE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?\s*$", re.IGNORECASE)
 
 
@@ -83,30 +81,6 @@ def dockerfile_problems(context: Path, root: Path, name: str = "Dockerfile") -> 
             problems.append(f"{dockerfile.relative_to(root)} base image {base} is not pinned by digest")
         if stage:
             stages.add(stage)
-    return problems
-
-
-def source_problems(name: str, image: dict[str, Any]) -> list[str]:
-    """Problems with a source build: a public repository, a full commit, digest-pinned base images, a local tag and well-formed edits."""
-    problems: list[str] = []
-    if not str(image.get("repository", "")).startswith("https://"):
-        problems.append(f"{name}: repository must be an https URL")
-    if not COMMIT.match(str(image.get("commit", ""))):
-        problems.append(f"{name}: commit must be a full 40-digit commit hash, not a tag or branch")
-    if not isinstance(image.get("context"), str) or not image["context"]:
-        problems.append(f"{name}: context is required")
-    if not isinstance(image.get("local_tag"), str) or not image["local_tag"]:
-        problems.append(f"{name}: local_tag is required")
-    if not isinstance(image.get("from_lines"), int) or image["from_lines"] < 1:
-        problems.append(f"{name}: from_lines must count the Dockerfile lines that name an outside base image")
-    base_pins = image.get("base_pins")
-    if not isinstance(base_pins, dict) or not base_pins:
-        problems.append(f"{name}: base_pins must pin every base image of the Dockerfile")
-    else:
-        problems.extend(f"{name}: base image {base} is not pinned to a sha256 digest" for base, digest in base_pins.items() if not DIGEST.match(str(digest)))
-    for edit in image.get("edits", []):
-        if not all(isinstance(edit.get(field), str) and edit[field] for field in ("file", "expression", "expect")):
-            problems.append(f"{name}: every edit needs file, expression and expect")
     return problems
 
 
@@ -192,8 +166,6 @@ def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
                     problems.append(f"{name}: build context {build_name} points to {path}, which does not exist")
             if not isinstance(image.get("local_tag"), str) or not image["local_tag"]:
                 problems.append(f"{name}: local_tag is required")
-        if image.get("kind") == "source":
-            problems.extend(source_problems(name, image))
         owner = seen_tags.setdefault(f"{name}:{image.get('tag')}", name)
         if owner != name:
             problems.append(f"{name}: repeats a tag of {owner}")
@@ -214,38 +186,7 @@ def repository_urls(path: Path) -> dict[str, str]:
     return urls
 
 
-def sed_pattern(text: str) -> str:
-    """Escape the characters that an extended regular expression reads as operators."""
-    return re.sub(r"([.\\[\]{}()*+?^$|])", r"\\\1", text)
-
-
-def source_prepare(name: str, image: dict[str, Any], clones: dict[str, str]) -> list[str]:
-    """Commands that check out the pinned commit, pin the base images by digest and apply the listed edits to a scratch copy."""
-    lines: list[str] = []
-    repository = str(image["repository"])
-    new_clone = repository not in clones
-    clone_variable = clones.setdefault(repository, f"SOURCE_{len(clones) + 1}")
-    if new_clone:
-        lines.extend(
-            [
-                f'{clone_variable}="$(mktemp -d)/source"   # scratch folder outside this repository',
-                f'git clone --no-checkout {shlex.quote(repository)} "${clone_variable}"',
-                f'git -C "${clone_variable}" checkout --detach {image["commit"]}',
-                f'git -C "${clone_variable}" rev-parse HEAD   # must print {image["commit"]}',
-            ]
-        )
-    dockerfile = "/".join(part for part in (str(image["context"]).strip("."), "Dockerfile") if part)
-    for base, digest in dict(image["base_pins"]).items():
-        expression = f"s#^FROM {sed_pattern(base)}( |$)#FROM {base}@{digest}\\1#"
-        lines.append(f'sed -i.orig -E {shlex.quote(expression)} "${clone_variable}/{dockerfile}"')
-    lines.append(f'grep -c "^FROM .*@sha256:" "${clone_variable}/{dockerfile}"   # must print {image["from_lines"]}')
-    for edit in image.get("edits", []):
-        lines.append(f'sed -i.orig -E {shlex.quote(str(edit["expression"]))} "${clone_variable}/{edit["file"]}"')
-        lines.append(f'grep -c {shlex.quote(str(edit["expect"]))} "${clone_variable}/{edit["file"]}"   # must print 1')
-    return lines
-
-
-def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region: str, clones: dict[str, str]) -> list[str]:
+def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region: str) -> list[str]:
     """The commands that obtain, check, tag, push and read back one image."""
     repository = urlsplit("//" + url).path.lstrip("/")
     tag_variable = f"TAG_{name.upper()}"
@@ -257,15 +198,6 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
         suffix = local.rsplit("@sha256:", maxsplit=1)[1][:12]
         lines.append(f"docker pull --platform {PLATFORM} {local}")
         tag = f"{image['tag']}-{suffix}"
-    elif image["kind"] == "source":
-        local = str(image["local_tag"])
-        lines.extend(source_prepare(name, image, clones))
-        clone_variable = clones[str(image["repository"])]
-        arguments = " ".join(f"--build-arg {key}={value}" for key, value in sorted(dict(image.get("build_args", {})).items()))
-        lines.append(
-            f'docker build --platform {PLATFORM} --tag {local} {arguments} "${clone_variable}/{str(image["context"]).strip(".") or "."}"'.replace("  ", " ")
-        )
-        tag = f"{image['tag']}-{str(image['commit'])[:12]}"
     else:
         local = str(image["local_tag"])
         contexts = " ".join(f"--build-context {key}={path}" for key, path in sorted(dict(image.get("build_contexts", {})).items()))
@@ -328,18 +260,14 @@ def plan(config: dict[str, Any], urls: dict[str, str], profile: str, region: str
         lines.append(f"aws ecr get-login-password --profile {profile} --region {region} | docker login --username AWS --password-stdin {registry}")
     if any(image["kind"] == "build" for image in chosen.values()):
         lines.append(".venv/bin/python -m scripts.quality.lock_env images   # writes the Git-ignored requirement files the Dockerfiles copy, from uv.lock")
-    clones: dict[str, str] = {}
     for name, image in chosen.items():
         lines.append("")
         if image["kind"] == "blocked":
             lines.append(f"# {name}: blocked. {image['arm64']}. Build an arm64 image from source or choose another route before this image is pushed.")
             continue
-        lines.extend(image_lines(name, image, urls[name], profile, region, clones))
+        lines.extend(image_lines(name, image, urls[name], profile, region))
     names = " ".join(f"{name}=sha256:<DIGEST>" for name, image in chosen.items() if image["kind"] != "blocked")
     lines.extend(["", f"# Then record the digests: .venv/bin/python -m scripts.infrastructure.push_images record {names}"])
-    if clones:
-        folders = " ".join(f'"$(dirname "${variable}")"' for variable in clones.values())
-        lines.append(f"# Then remove the scratch source folders: rm -rf {folders}")
     return lines
 
 

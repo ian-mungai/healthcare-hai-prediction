@@ -3,8 +3,7 @@ mock_provider "aws" {
 }
 
 # Persistent OpenMetadata and its OpenSearch node run as one host task behind openmetadata_persistent_enabled, with a one-shot bootstrap task. These cases pin the flag-off
-# plan (every limit exactly as before), the flag-on shape, the secret flow, the loopback rules and the memory arithmetic on r7g.large with Marquez also running (the
-# transition set). Every case reads the plan only: no image runs and nothing reaches AWS.
+# plan (every limit exactly as before), the flag-on shape, the secret flow, the loopback rules and the memory arithmetic on r7g.xlarge. Every case reads the plan only: no image runs and nothing reaches AWS.
 variables {
   # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use. The default is the room the live stack leaves, which the
   # larger fixtures here do not have.
@@ -22,7 +21,6 @@ variables {
   control_plane_task_role_arn     = "arn:aws:iam::111111111111:role/example-control"
   openmetadata_task_role_arn      = "arn:aws:iam::111111111111:role/example-openmetadata"
   data_mount_path                 = "/mnt/example-data"
-  marquez_enabled                 = true
   openmetadata_persistent_enabled = true
 
   # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
@@ -35,11 +33,11 @@ variables {
   model_api_mlflow_uri         = ""
 
   log_group_names = {
-    postgres = "/example/postgres"
-    redis    = "/example/redis"
-    polaris  = "/example/polaris"
-    airflow  = "/example/airflow"
-    marquez  = "/example/marquez"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    openmetadata = "/example/openmetadata"
   }
 
   ecr_repository_urls = {
@@ -48,8 +46,6 @@ variables {
     polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
@@ -61,8 +57,6 @@ variables {
     polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez                = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web            = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
@@ -96,7 +90,6 @@ run "flag_off_plans_nothing_new_and_keeps_every_limit" {
       airflow_scheduler     = { airflow_scheduler = [1536, 320] }
       airflow_triggerer     = { airflow_triggerer = [768, 256] }
       host_prepare          = { host_prepare = [128, 64] }
-      marquez               = { marquez_api = [1280, 768], marquez_web = [256, 128] }
       polaris               = { polaris = [2048, 320] }
       polaris_bootstrap     = { polaris_bootstrap = [1024, 512] }
       postgres              = { postgres = [2048, 128], postgres_databases = [128, 64] }
@@ -419,12 +412,12 @@ run "secrets_reach_no_file_argument_log_or_dump" {
   }
 }
 
-run "memory_fits_r7g_xlarge_with_marquez_running" {
+run "memory_fits_r7g_xlarge" {
   command = plan
 
   assert {
     condition     = output.reserved_memory_mib <= var.host_memory_mib - var.other_services_reserve_mib
-    error_message = "The reservations, OpenMetadata and Marquez included, leave the reserve for the operating system and the later services."
+    error_message = "The reservations, OpenMetadata included, leave the reserve for the operating system and the later services."
   }
 
   assert {
@@ -446,16 +439,16 @@ run "memory_fits_r7g_xlarge_with_marquez_running" {
   assert {
     condition = (
       output.reserved_memory_mib == sum(flatten([for key, definition in aws_ecs_task_definition.service : [for container in jsondecode(definition.container_definitions) : container.memoryReservation]]))
-      && output.reserved_memory_mib == 5280
+      && output.reserved_memory_mib == 4672
     )
-    error_message = "Recorded figure: with Marquez and OpenMetadata the always-on reservations total 5280 MiB. Current: ${output.reserved_memory_mib}"
+    error_message = "Recorded figure: with OpenMetadata the always-on reservations total 4672 MiB. Current: ${output.reserved_memory_mib}"
   }
 
   assert {
     condition = sum(flatten([
       for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [for container in jsondecode(definition.container_definitions) : container.memory]
-    ])) == 18880
-    error_message = "Recorded figure: with Marquez and OpenMetadata the hard limits total 18880 MiB of the 30720 MiB allowed on r7g.xlarge."
+    ])) == 17664
+    error_message = "Recorded figure: with OpenMetadata the hard limits total 17664 MiB of the 30720 MiB allowed on r7g.xlarge."
   }
 }
 
@@ -590,8 +583,6 @@ run "missing_openmetadata_digest_is_refused" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
@@ -665,7 +656,7 @@ run "logs_go_to_a_foundation_group" {
   assert {
     condition = alltrue([
       for container in concat(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions), jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)) :
-      container.logConfiguration.options["awslogs-group"] == "/example/marquez" && container.logConfiguration.options["awslogs-stream-prefix"] == container.name
+      container.logConfiguration.options["awslogs-group"] == "/example/openmetadata" && container.logConfiguration.options["awslogs-stream-prefix"] == container.name
     ])
     error_message = "The new containers log to the existing lineage group under their own stream prefix."
   }
@@ -772,4 +763,19 @@ run "lineage_url_is_a_private_address_on_8585" {
   }
 
   expect_failures = [var.airflow_lineage_url]
+}
+
+run "openmetadata_without_its_own_log_group_is_refused" {
+  command = plan
+
+  variables {
+    log_group_names = {
+      postgres = "/example/postgres"
+      redis    = "/example/redis"
+      polaris  = "/example/polaris"
+      airflow  = "/example/airflow"
+    }
+  }
+
+  expect_failures = [var.log_group_names]
 }

@@ -41,7 +41,6 @@ OPTIONAL_PREPARATION_FLAGS = (
     "model_api_prepared",
     "model_api_prediction_writes",
     "openmetadata_prepared",
-    "openmetadata_marquez_reachable",
     "openmetadata_persistent_prepared",
     "airflow_lineage_prepared",
     "serve_prepared",

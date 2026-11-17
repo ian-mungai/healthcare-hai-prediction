@@ -89,47 +89,6 @@
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
       "runs_as": "job network class with closed egress (P7b)"
     },
-    "marquez": {
-      "kind": "source",
-      "repository": "https://github.com/MarquezProject/marquez",
-      "commit": "27a4a1357d9078bc4e6738524dfe5ba9d77aa2df",
-      "source_tag": "0.51.1",
-      "context": ".",
-      "base_pins": {
-        "eclipse-temurin:17": "sha256:fe947d993c32dd9cf651a4353a6ed723c2370b3a9d034ea4cab4775404ea531a"
-      },
-      "edits": [],
-      "local_tag": "hai-marquez:0.51.1-arm64",
-      "tag": "0.51.1-arm64-r1",
-      "arm64": "no arm64 image exists (the pinned image and the 0.51.1 tag are linux/amd64 only, registry read, Oct 22 2026); built from the 0.51.1 source commit, whose base image index lists linux/arm64 (registry read, Oct 22 2026)",
-      "runs_as": "ECS service on the host (P7d) when marquez_enabled is true",
-      "from_lines": 2
-    },
-    "marquez_web": {
-      "kind": "source",
-      "repository": "https://github.com/MarquezProject/marquez",
-      "commit": "27a4a1357d9078bc4e6738524dfe5ba9d77aa2df",
-      "source_tag": "0.51.1",
-      "context": "web",
-      "base_pins": {
-        "node:18-alpine": "sha256:8d6421d663b4c28fd3ebc498332f249011d118945588d0a35cb9bc4b8ca09d9e"
-      },
-      "build_args": {
-        "REACT_APP_ADVANCED_SEARCH": "false"
-      },
-      "edits": [
-        {
-          "file": "web/setupProxy.js",
-          "expression": "s#app\\.listen\\(port, function\\(\\) \\{#app.listen(port, process.env.WEB_HOST || '127.0.0.1', function() {#",
-          "expect": "process.env.WEB_HOST"
-        }
-      ],
-      "local_tag": "hai-marquez-web:0.51.1-arm64",
-      "tag": "0.51.1-arm64-r1",
-      "arm64": "no arm64 image exists (registry read, Oct 22 2026); built from the 0.51.1 source commit, whose base image index lists linux/arm64 (registry read, Oct 22 2026); the edit makes the web server listen on WEB_HOST, 127.0.0.1 by default, because upstream listens on every interface",
-      "runs_as": "ECS service on the host (P7d) when marquez_enabled is true",
-      "from_lines": 1
-    },
     "mlflow": {
       "kind": "build",
       "context": "services/mlflow",

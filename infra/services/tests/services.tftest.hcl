@@ -19,7 +19,6 @@ variables {
   polaris_task_role_arn       = "arn:aws:iam::111111111111:role/example-polaris"
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
-  marquez_enabled             = true
   mlflow_task_role_arn        = "arn:aws:iam::111111111111:role/example-mlflow"
   host_private_ip             = "10.0.1.20"
   mlflow_artifact_bucket      = "example-project-data-dev"
@@ -35,12 +34,12 @@ variables {
   model_api_mlflow_uri            = ""
 
   log_group_names = {
-    postgres = "/example/postgres"
-    redis    = "/example/redis"
-    polaris  = "/example/polaris"
-    airflow  = "/example/airflow"
-    marquez  = "/example/marquez"
-    mlflow   = "/example/mlflow"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    openmetadata = "/example/openmetadata"
+    mlflow       = "/example/mlflow"
   }
 
   ecr_repository_urls = {
@@ -49,8 +48,6 @@ variables {
     polaris       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     mlflow        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow"
     model_api     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
     streamlit     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
@@ -62,8 +59,6 @@ variables {
     polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     mlflow        = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     model_api     = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     streamlit     = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
@@ -316,7 +311,6 @@ run "secrets_reach_no_file_argument_log_or_dump" {
       "airflow_dag_processor/airflow_dag_processor",
       "airflow_scheduler/airflow_scheduler",
       "airflow_triggerer/airflow_triggerer",
-      "marquez/marquez_api",
       "polaris/polaris",
       "polaris_bootstrap/polaris_bootstrap",
       "postgres/postgres",
@@ -648,8 +642,8 @@ run "database_passwords_stay_out_of_statement_logs" {
 
   assert {
     condition = (
-      can(regex("(?s)exec psql -X <<'SQL'\\n.*\\\\getenv airflow_password AIRFLOW_DB_PASSWORD\\n\\\\getenv marquez_password MARQUEZ_DB_PASSWORD\\n", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0]))
-      && can(regex("(?s)SET log_statement = 'none';\\nSET log_min_error_statement = 'panic';\\nSET log_min_duration_statement = -1;\\n.*ALTER ROLE airflow PASSWORD :'airflow_password';.*ALTER ROLE marquez PASSWORD :'marquez_password';", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0]))
+      can(regex("(?s)exec psql -X <<'SQL'\\n.*\\\\getenv airflow_password AIRFLOW_DB_PASSWORD\\n", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0]))
+      && can(regex("(?s)SET log_statement = 'none';\\nSET log_min_error_statement = 'panic';\\nSET log_min_duration_statement = -1;\\n.*ALTER ROLE airflow PASSWORD :'airflow_password';", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0]))
       && can(regex("\\\\set VERBOSITY terse\\n", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0]))
     )
     error_message = "The databases script must read each password with \\getenv, switch statement and error-statement logging off before the first ALTER ROLE and keep error reports terse."
@@ -665,7 +659,6 @@ run "secrets_come_from_parameter_store" {
       "/healthcare_hai_prediction/airflow_db_password",
       "/healthcare_hai_prediction/airflow_fernet_key",
       "/healthcare_hai_prediction/airflow_jwt_secret",
-      "/healthcare_hai_prediction/marquez_db_password",
       "/healthcare_hai_prediction/polaris_root_secret",
       "/healthcare_hai_prediction/postgres_password",
       "/healthcare_hai_prediction/redis_password",
@@ -711,13 +704,13 @@ run "each_secret_gets_its_own_arn" {
 run "the_arn_set_is_the_execution_role_grant" {
   command = plan
 
-  # The foundation grants ssm:GetParameters on arn:aws:ssm:<region>:<account>:parameter/healthcare_hai_prediction/<name> for these eight names, no other action and no KMS action.
+  # The foundation grants ssm:GetParameters on arn:aws:ssm:<region>:<account>:parameter/healthcare_hai_prediction/<name> for these seven names, no other action and no KMS action.
   assert {
     condition = toset(output.parameter_arns_used) == toset([
-      for name in ["postgres_password", "airflow_db_password", "marquez_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret"] :
+      for name in ["postgres_password", "airflow_db_password", "airflow_fernet_key", "airflow_jwt_secret", "airflow_api_secret_key", "redis_password", "polaris_root_secret"] :
       "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/${name}"
     ])
-    error_message = "The task definitions must inject exactly the eight parameters the execution role may read (the Airflow administrator password is not injected)."
+    error_message = "The task definitions must inject exactly the seven parameters the execution role may read (the Airflow administrator password is not injected)."
   }
 }
 
@@ -748,11 +741,11 @@ run "dashed_or_wildcard_parameter_name_is_refused" {
   command = plan
 
   variables {
-    airflow_fernet_key_name  = "/healthcare-hai-prediction/airflow-fernet-key"
-    marquez_db_password_name = "/healthcare_hai_prediction/*"
+    airflow_fernet_key_name = "/healthcare-hai-prediction/airflow-fernet-key"
+    redis_password_name     = "/healthcare_hai_prediction/*"
   }
 
-  expect_failures = [var.airflow_fernet_key_name, var.marquez_db_password_name]
+  expect_failures = [var.airflow_fernet_key_name, var.redis_password_name]
 }
 
 run "aws_prefixed_parameter_name_is_refused" {
@@ -932,7 +925,7 @@ run "roles_are_separated" {
       && alltrue([for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : key == "polaris" || definition.task_role_arn == var.control_plane_task_role_arn])
       && alltrue([for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : definition.execution_role_arn == var.execution_role_arn])
     )
-    error_message = "Only Polaris holds the lakehouse role; Airflow, Postgres, Redis, Marquez and the one-shot tasks hold none."
+    error_message = "Only Polaris holds the lakehouse role; Airflow, Postgres, Redis and the one-shot tasks hold none."
   }
 }
 
@@ -977,7 +970,7 @@ run "listeners_bind_loopback" {
       for key, definition in merge(aws_ecs_task_definition.service, aws_ecs_task_definition.one_shot) : [
         for container in jsondecode(definition.container_definitions) : [for mapping in lookup(container, "portMappings", []) : mapping.hostPort]
       ]
-    ])) == toset([3000, 5000, 5001, 5432, 6379, 8080, 8181, 8182, 8974])
+    ])) == toset([5432, 6379, 8080, 8181, 8182, 8974])
     error_message = "A new host port needs a loopback bind and a place in this list."
   }
 
@@ -997,15 +990,6 @@ run "listeners_bind_loopback" {
       && can(regex("\\nexec airflow triggerer --skip-serve-logs$", jsondecode(aws_ecs_task_definition.service["airflow_triggerer"].container_definitions)[0].command[2]))
     )
     error_message = "The scheduler and the triggerer log servers bind every interface and have no host option, so both must run with --skip-serve-logs."
-  }
-
-  assert {
-    condition = (
-      can(regex("type: http\\n\\s+bindHost: 127\\.0\\.0\\.1\\n\\s+port: 5000\\n", jsondecode(aws_ecs_task_definition.service["marquez"].container_definitions)[0].command[0]))
-      && can(regex("type: http\\n\\s+bindHost: 127\\.0\\.0\\.1\\n\\s+port: 5001\\n", jsondecode(aws_ecs_task_definition.service["marquez"].container_definitions)[0].command[0]))
-      && contains(jsondecode(aws_ecs_task_definition.service["marquez"].container_definitions)[1].environment, { name = "WEB_HOST", value = "127.0.0.1" })
-    )
-    error_message = "Both Marquez API connectors and the web server must bind 127.0.0.1."
   }
 
   assert {
@@ -1044,10 +1028,9 @@ run "start_order_inside_a_task" {
       jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].essential == false
       && jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].dependsOn[0].condition == "HEALTHY"
       && strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "CREATE DATABASE airflow")
-      && strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "CREATE DATABASE marquez")
       && strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "polaris_schema")
     )
-    error_message = "The databases container waits for a healthy Postgres, creates the airflow, marquez and Polaris schema objects and then exits."
+    error_message = "The databases container waits for a healthy Postgres, creates the airflow and Polaris schema objects and then exits."
   }
 
   assert {
@@ -1090,42 +1073,6 @@ run "polaris_bootstrap_keeps_the_root_secret_off_the_command_line" {
   }
 }
 
-run "marquez_is_optional" {
-  command = plan
-
-  variables {
-    marquez_enabled = false
-    image_digests = {
-      postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-      polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-      airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    }
-  }
-
-  assert {
-    condition     = !contains(keys(aws_ecs_service.service), "marquez") && length(aws_ecs_service.service) == 7
-    error_message = "Without Marquez the stack has the seven other services and needs no Marquez image."
-  }
-}
-
-run "marquez_without_image_is_refused" {
-  command = plan
-
-  variables {
-    image_digests = {
-      postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-      polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-      polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-      airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    }
-  }
-
-  expect_failures = [var.image_digests]
-}
-
 run "tag_instead_of_digest_is_refused" {
   command = plan
 
@@ -1136,8 +1083,6 @@ run "tag_instead_of_digest_is_refused" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
@@ -1149,10 +1094,10 @@ run "missing_log_group_is_refused" {
 
   variables {
     log_group_names = {
-      postgres = "/example/postgres"
-      polaris  = "/example/polaris"
-      airflow  = "/example/airflow"
-      marquez  = "/example/marquez"
+      postgres     = "/example/postgres"
+      polaris      = "/example/polaris"
+      airflow      = "/example/airflow"
+      openmetadata = "/example/openmetadata"
     }
   }
 
@@ -1221,35 +1166,13 @@ run "container_definitions_match_the_approved_versions" {
       "airflow_scheduler/airflow_scheduler"         = "adb0e3f5f1a0d999ae3bccb0138081cab224022723e71fd2ce9f787cd0b9ab81"
       "airflow_triggerer/airflow_triggerer"         = "a29a38f3ce0e7fd3360dc7f9260065e6972dfcb31b8457f9af50b0820f488c07"
       "host_prepare/host_prepare"                   = "4d8c9dad92ef904aa63c94480dd49e17225cbedad17021fb0a5da1b4a25b80ca"
-      "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
-      "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
       "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"
       "polaris_bootstrap/polaris_bootstrap"         = "1a0bffac42991a144cec7b17cc7809f2316317c916bd9af2f3271f62ec7899c5"
       "postgres/postgres"                           = "84ffdb77ff2045be5b3abcf4437443a9a14b42cd406a155da052da8c5c4d860f"
-      "postgres/postgres_databases"                 = "d1832558975c44ccb1c94ed39efbe9e024edaa1ddd6f3161b9d7e95288db71f4"
+      "postgres/postgres_databases"                 = "94c5b4ec2e22acf596ee7dd810208adac6532012542450d6a1d0b2a58690fe55"
       "redis/redis"                                 = "65ca3d65c4cf5e89cb31edbdbbc2eda34fb067c7ed8b58bfc4c078ff25f447be"
     }
     error_message = "A container script changed from its reviewed version. Review the change, then record its digest here. Current digests: ${jsonencode(output.execution_digests)}"
-  }
-}
-
-run "indent_change_in_a_script_changes_its_digest" {
-  command = plan
-
-  module {
-    source = "./tests/flow"
-  }
-
-  variables {
-    tasks = run.container_definitions_for_review.task_definition_settings
-    definitions = {
-      marquez = replace(run.container_definitions_for_review.container_definitions["marquez"], "  password: $${MARQUEZ_DB_PASSWORD}", " password: $${MARQUEZ_DB_PASSWORD}")
-    }
-  }
-
-  assert {
-    condition     = output.execution_digests["marquez/marquez_api"] != run.container_definitions_match_the_approved_versions.execution_digests["marquez/marquez_api"]
-    error_message = "A changed indent inside the Marquez configuration here-document must change the execution digest."
   }
 }
 
@@ -1564,7 +1487,7 @@ run "mlflow_is_off_by_default" {
   assert {
     condition = (
       !contains(keys(aws_ecs_service.service), "mlflow")
-      && length(aws_ecs_service.service) == 8
+      && length(aws_ecs_service.service) == 7
       && !contains(keys(output.host_ports_reachable_from_jobs), "mlflow")
       && !contains(output.parameter_names_used, var.mlflow_db_password_name)
       && !contains(output.parameter_names_used, var.mlflow_admin_password_name)
@@ -1582,11 +1505,11 @@ run "mlflow_off_needs_no_inputs" {
     host_private_ip        = null
     mlflow_artifact_bucket = null
     log_group_names = {
-      postgres = "/example/postgres"
-      redis    = "/example/redis"
-      polaris  = "/example/polaris"
-      airflow  = "/example/airflow"
-      marquez  = "/example/marquez"
+      postgres     = "/example/postgres"
+      redis        = "/example/redis"
+      polaris      = "/example/polaris"
+      airflow      = "/example/airflow"
+      openmetadata = "/example/openmetadata"
     }
     image_digests = {
       postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1594,13 +1517,11 @@ run "mlflow_off_needs_no_inputs" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
   assert {
-    condition     = length(aws_ecs_service.service) == 8
+    condition     = length(aws_ecs_service.service) == 7
     error_message = "With MLflow off the stack needs no MLflow role, address, bucket, log group or image."
   }
 }
@@ -1615,7 +1536,7 @@ run "mlflow_service_shape" {
   assert {
     condition = (
       contains(keys(aws_ecs_service.service), "mlflow")
-      && length(aws_ecs_service.service) == 9
+      && length(aws_ecs_service.service) == 8
       && aws_ecs_task_definition.service["mlflow"].task_role_arn == var.mlflow_task_role_arn
       && aws_ecs_task_definition.service["mlflow"].network_mode == "host"
       && length(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)) == 1
@@ -1748,8 +1669,6 @@ run "mlflow_without_image_is_refused" {
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez       = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web   = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
   }
 
@@ -1762,11 +1681,11 @@ run "mlflow_without_log_group_is_refused" {
   variables {
     mlflow_enabled = true
     log_group_names = {
-      postgres = "/example/postgres"
-      redis    = "/example/redis"
-      polaris  = "/example/polaris"
-      airflow  = "/example/airflow"
-      marquez  = "/example/marquez"
+      postgres     = "/example/postgres"
+      redis        = "/example/redis"
+      polaris      = "/example/polaris"
+      airflow      = "/example/airflow"
+      openmetadata = "/example/openmetadata"
     }
   }
 
@@ -1823,7 +1742,6 @@ run "model_api_is_private_and_pinned" {
 
   variables {
     model_api_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
     model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
@@ -1937,7 +1855,7 @@ run "model_api_with_a_public_mlflow_address_is_refused" {
   expect_failures = [var.model_api_mlflow_uri]
 }
 
-run "model_api_with_marquez_does_not_fit_the_small_host" {
+run "model_api_does_not_fit_the_small_host" {
   command = plan
 
   variables {
@@ -1954,7 +1872,7 @@ run "model_api_with_marquez_does_not_fit_the_small_host" {
   expect_failures = [aws_ecs_task_definition.service]
 }
 
-run "model_api_with_marquez_fits_the_resized_host" {
+run "model_api_fits_the_resized_host" {
   command = plan
 
   variables {
@@ -1968,8 +1886,8 @@ run "model_api_with_marquez_fits_the_resized_host" {
   }
 
   assert {
-    condition     = contains(keys(aws_ecs_task_definition.service), "model_api") && contains(keys(aws_ecs_task_definition.service), "marquez")
-    error_message = "Both optional services must plan on the resized host."
+    condition     = contains(keys(aws_ecs_task_definition.service), "model_api")
+    error_message = "The model API must plan on the resized host."
   }
 }
 
@@ -2169,7 +2087,6 @@ run "serving_services_are_their_own_resource" {
     host_memory_mib         = 32768
     model_api_enabled       = true
     streamlit_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
@@ -2204,7 +2121,6 @@ run "serving_task_definitions_use_the_serving_execution_role" {
     host_memory_mib         = 32768
     model_api_enabled       = true
     streamlit_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
@@ -2235,7 +2151,6 @@ run "the_serving_tasks_inject_only_what_the_serving_execution_role_reads" {
     host_memory_mib         = 32768
     model_api_enabled       = true
     streamlit_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
@@ -2273,7 +2188,6 @@ run "serving_without_the_serving_execution_role_is_refused" {
   variables {
     serving_execution_role_arn = null
     model_api_enabled          = true
-    marquez_enabled            = false
     model_api_task_role_arn    = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri     = "s3://example-data/serving/deployments"
     model_api_registry_uri     = "s3://example-data/lakehouse/feast/registry.pb"
@@ -2289,7 +2203,6 @@ run "serving_sharing_the_shared_execution_role_is_refused" {
   variables {
     serving_execution_role_arn = "arn:aws:iam::111111111111:role/example-execution"
     model_api_enabled          = true
-    marquez_enabled            = false
     model_api_task_role_arn    = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri     = "s3://example-data/serving/deployments"
     model_api_registry_uri     = "s3://example-data/lakehouse/feast/registry.pb"
@@ -2342,7 +2255,6 @@ run "redis_creates_a_read_only_user_for_the_model_api" {
   variables {
     host_memory_mib         = 32768
     model_api_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
     model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
@@ -2397,7 +2309,6 @@ run "the_model_api_logs_in_as_its_own_redis_user" {
   variables {
     host_memory_mib         = 32768
     model_api_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"
     model_api_registry_uri  = "s3://example-data/lakehouse/feast/registry.pb"
@@ -2432,7 +2343,6 @@ run "container_definitions_with_serving_for_review" {
     host_memory_mib         = 32768
     model_api_enabled       = true
     streamlit_enabled       = true
-    marquez_enabled         = false
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     streamlit_task_role_arn = "arn:aws:iam::111111111111:role/example-streamlit"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"

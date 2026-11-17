@@ -1,4 +1,4 @@
-"""Exercise the on-demand OpenMetadata catalog task offline: its ingestion guard, bootstrap, Marquez step, deadline wrapper, read-only policy and DAG.
+"""Exercise the on-demand OpenMetadata catalog task offline: its ingestion guard, bootstrap, deadline wrapper, read-only policy and DAG.
 
 Nothing here reaches AWS, Docker or a real OpenMetadata server. HTTP stand-ins on loopback sockets answer the routes the scripts call, so the cases prove the
 scripts' own behavior and not the real server's. Every case is a function that raises ``AssertionError`` on a defect. The runner writes one record per run.
@@ -17,7 +17,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -117,7 +116,7 @@ def real_configs_have_no_profiler_or_sampling() -> None:
     from scripts.infrastructure import openmetadata_ingest as ingest
 
     names = sorted(path.stem for path in INGESTION.glob("*.json"))
-    require({"glue", "dbt", "marquez"} <= set(names) and "polaris" not in names, f"wrong ingestion configs, found {names}")
+    require({"glue", "dbt"} <= set(names) and "polaris" not in names, f"wrong ingestion configs, found {names}")
     for name in names:
         found = ingest.violations(load(name))
         require(found == [], f"{name}.json: {found}")
@@ -1194,256 +1193,6 @@ def bootstrap_refuses_a_missing_password() -> None:
     require(code == 1 and "OM_ADMIN_PASSWORD" in err, (code, err))
 
 
-def marquez_routes() -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
-    graph = {
-        "graph": [
-            {
-                "id": "job:file:build_silver",
-                "type": "JOB",
-                "data": {},
-                "inEdges": [
-                    {"origin": "dataset:file:gold/dim_hospital", "destination": "job:file:build_silver"},
-                    {"origin": "dataset:file:silver/hospital", "destination": "job:file:build_silver"},
-                ],
-                "outEdges": [
-                    {"origin": "job:file:build_silver", "destination": "dataset:file:features/feature_matrix_hospital"},
-                    {"origin": "job:file:build_silver", "destination": "dataset:file:tmp/scratch_file"},
-                ],
-            },
-        ]
-    }
-
-    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        if path.startswith("/api/v1/namespaces?"):
-            return 200, {"namespaces": [{"name": "file"}]}
-        if path.startswith("/api/v1/namespaces/file/datasets"):
-            return 200, {"datasets": [{"name": "silver/hospital"}, {"name": "gold/dim_hospital"}, {"name": "features/feature_matrix_hospital"}]}
-        if path.startswith("/api/v1/lineage"):
-            return 200, graph
-        return 404, {}
-
-    return route
-
-
-def om_lineage_routes(edges: list[dict[str, Any]], looked_up: list[str] | None = None) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
-    looked_up = [] if looked_up is None else looked_up
-
-    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        if path.startswith("/api/v1/tables/name/"):
-            looked_up.append(urllib.parse.unquote(path.rsplit("/", 1)[-1]))
-            return 200, {"id": "id-of-" + path.rsplit("/", 1)[-1]}
-        if path == "/api/v1/lineage":
-            edges.append(body)
-            return 200, {}
-        return 404, {}
-
-    return route
-
-
-def run_marquez(args: list[str]) -> tuple[int, str, str]:
-    from scripts.infrastructure import openmetadata_marquez as marquez
-
-    with quiet() as (out, err):
-        code = marquez.main(args)
-    return code, out.getvalue(), err.getvalue()
-
-
-def marquez_step_adds_mapped_edges_and_reports_the_unmapped() -> None:
-    edges: list[dict[str, Any]] = []
-    looked_up: list[str] = []
-    with serving(marquez_routes()) as marquez, serving(om_lineage_routes(edges, looked_up)) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = ["--marquez", marquez.url, "--om-base", om.url + "/api", "--token-file", str(token), "--config", str(INGESTION / "marquez.json")]
-        code, out, err = run_marquez(args)
-        require(code == 0, (code, err))
-        require(len(edges) == 2, edges)
-        edge = edges[0]["edge"]
-        require(edge["fromEntity"]["type"] == "table" and edge["toEntity"]["type"] == "table", edge)
-        require("edges=2 unmapped=2" in out, f"the two pairs with a scratch end have no Glue table and stay unmapped: {out}")
-        require(
-            set(looked_up)
-            == {
-                "glue_mirror.hai_lakehouse.hai_mirror_silver.hospital",
-                "glue_mirror.hai_lakehouse.hai_mirror_gold.dim_hospital",
-                "glue_mirror.hai_lakehouse.hai_mirror_features.feature_matrix_hospital",
-            },
-            f"the step must look up the Glue mirror tables: {looked_up}",
-        )
-        edges.clear()
-        run_marquez(args)
-        require(len(edges) == 2, "a rerun must send the same edges again, which OpenMetadata treats as the same edges")
-
-
-def marquez_step_fails_visibly_when_marquez_is_down() -> None:
-    edges: list[dict[str, Any]] = []
-    with serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = [
-            "--marquez",
-            "http://127.0.0.1:9",
-            "--om-base",
-            om.url + "/api",
-            "--token-file",
-            str(token),
-            "--config",
-            str(INGESTION / "marquez.json"),
-            "--timeout-seconds",
-            "2",
-        ]
-        code, _, err = run_marquez(args)
-    require(code == 1 and edges == [] and "marquez" in err.lower(), (code, err))
-
-
-def paged_marquez_routes(namespaces: int, datasets: int, ignore_offset: bool = False) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
-    """A Marquez stand-in that pages its listings by limit and offset. The only connected pair sits at the end of the last page of the last namespace."""
-    names = [f"ns{index:03d}" for index in range(namespaces)] + ["file"]
-    rows = [f"filler/set_{index:03d}" for index in range(datasets - 2)] + ["gold/late_a", "features/late_b"]
-    graph = {
-        "graph": [
-            {
-                "id": "job:file:late_job",
-                "type": "JOB",
-                "inEdges": [{"origin": "dataset:file:gold/late_a", "destination": "job:file:late_job"}],
-                "outEdges": [{"origin": "job:file:late_job", "destination": "dataset:file:features/late_b"}],
-            }
-        ]
-    }
-
-    def window(items: list[Any], query: str) -> list[Any]:
-        values = dict(part.split("=") for part in query.split("&") if "=" in part)
-        limit, offset = int(values.get("limit", "100")), 0 if ignore_offset else int(values.get("offset", "0"))
-        return items[offset : offset + limit]
-
-    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        base, _, query = path.partition("?")
-        if base == "/api/v1/namespaces":
-            return 200, {"namespaces": [{"name": name} for name in window(names, query)]}
-        if base == "/api/v1/namespaces/file/datasets":
-            return 200, {"datasets": [{"name": name} for name in window(rows, query)], **({} if ignore_offset else {"totalCount": len(rows)})}
-        if base.startswith("/api/v1/namespaces/") and base.endswith("/datasets"):
-            return 200, {"datasets": [], "totalCount": 0}
-        if base == "/api/v1/lineage":
-            return 200, graph if "late_a" in query else {"graph": []}
-        return 404, {}
-
-    return route
-
-
-def marquez_step_pages_namespaces_and_datasets_to_the_end() -> None:
-    edges: list[dict[str, Any]] = []
-    with serving(paged_marquez_routes(205, 202)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = ["--marquez", marquez.url, "--om-base", om.url + "/api", "--token-file", str(token), "--config", str(INGESTION / "marquez.json")]
-        code, out, err = run_marquez(args)
-    require(code == 0 and len(edges) == 1, f"the edge beyond the first pages was dropped: exit {code}, edges {len(edges)}, {out.strip()} {err.strip()}")
-
-
-def marquez_step_stops_at_its_deadline_when_paging_never_ends() -> None:
-    edges: list[dict[str, Any]] = []
-    with serving(paged_marquez_routes(1, 300, ignore_offset=True)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = [
-            "--marquez",
-            marquez.url,
-            "--om-base",
-            om.url + "/api",
-            "--token-file",
-            str(token),
-            "--config",
-            str(INGESTION / "marquez.json"),
-            "--deadline-seconds",
-            "3",
-        ]
-        started = time.monotonic()
-        code, _, err = run_marquez(args)
-    require(
-        code == 1 and time.monotonic() - started < 30 and "deadline" in err.lower(), f"an endless listing must end at the deadline: exit {code}, {err.strip()}"
-    )
-
-
-def glue_and_marquez_configs_name_the_same_tables() -> None:
-    glue = load("glue")
-    marquez = load("marquez")
-    named = (glue["source"]["serviceName"], glue["source"]["serviceConnection"]["config"].get("databaseName"))
-    require(
-        named == (marquez["service"], marquez["database"]),
-        f"the Glue service and database are {named}, the mapper looks for {marquez['service']}.{marquez['database']}",
-    )
-
-
-def slow_marquez_routes(delay: float, datasets: int) -> Callable[[str, str, dict[str, Any]], tuple[int, Any]]:
-    """A Marquez stand-in whose lineage answers take ``delay`` seconds each, over ``datasets`` datasets in one namespace."""
-
-    def route(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        base, _, query = path.partition("?")
-        if base == "/api/v1/namespaces":
-            return 200, {"namespaces": [{"name": "file"}]}
-        if base == "/api/v1/namespaces/file/datasets":
-            return 200, {"datasets": [{"name": f"silver/set_{index}"} for index in range(datasets)], "totalCount": datasets}
-        if base == "/api/v1/lineage":
-            time.sleep(delay)
-            return 200, {"graph": []}
-        return 404, {}
-
-    return route
-
-
-def marquez_step_carries_its_deadline_through_every_graph_request() -> None:
-    edges: list[dict[str, Any]] = []
-    with serving(slow_marquez_routes(1.5, 6)) as marquez, serving(om_lineage_routes(edges)) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = [
-            "--marquez",
-            marquez.url,
-            "--om-base",
-            om.url + "/api",
-            "--token-file",
-            str(token),
-            "--config",
-            str(INGESTION / "marquez.json"),
-            "--deadline-seconds",
-            "2",
-        ]
-        started = time.monotonic()
-        code, _, err = run_marquez(args)
-        took = time.monotonic() - started
-    require(
-        code == 1 and took < 6 and "deadline" in err.lower(),
-        f"six slow graph requests must stop at the deadline: exit {code}, {took:.1f} seconds, {err.strip()}",
-    )
-
-
-def marquez_step_carries_its_deadline_through_the_openmetadata_requests() -> None:
-    def slow_om(method: str, path: str, body: dict[str, Any]) -> tuple[int, Any]:
-        time.sleep(3)
-        return 200, {"id": "table-id"}
-
-    with serving(marquez_routes()) as marquez, serving(slow_om) as om, tempfile.TemporaryDirectory() as folder:
-        token = Path(folder) / "token"
-        token.write_text(BEARER_VALUE)
-        args = [
-            "--marquez",
-            marquez.url,
-            "--om-base",
-            om.url + "/api",
-            "--token-file",
-            str(token),
-            "--config",
-            str(INGESTION / "marquez.json"),
-            "--deadline-seconds",
-            "1",
-        ]
-        started = time.monotonic()
-        code, _, err = run_marquez(args)
-        took = time.monotonic() - started
-    require(code == 1 and took < 2.8, f"a slow OpenMetadata must stop at the deadline: exit {code}, {took:.1f} seconds, {err.strip()}")
-
-
 def bounded_environment(root: Path, deadline_in: int) -> dict[str, str]:
     """The environment of one wrapper run: a deadline file the given number of seconds from now, an abort file path, a 1 second poll and a 3 second grace."""
     (root / "deadline").write_text(f"{int(time.time()) + deadline_in}\n")
@@ -1729,11 +1478,6 @@ def project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document
 
 
 CASES: list[Callable[[], None]] = [
-    marquez_step_carries_its_deadline_through_every_graph_request,
-    marquez_step_carries_its_deadline_through_the_openmetadata_requests,
-    marquez_step_pages_namespaces_and_datasets_to_the_end,
-    marquez_step_stops_at_its_deadline_when_paging_never_ends,
-    glue_and_marquez_configs_name_the_same_tables,
     glue_config_reads_the_two_mirror_databases_with_the_task_role,
     ingest_dbt_points_gold_and_features_models_at_the_glue_tables,
     bounded_wrapper_exits_zero_when_stopped_after_the_deadline,
@@ -1780,8 +1524,6 @@ CASES: list[Callable[[], None]] = [
     bootstrap_marks_an_abort_when_the_server_never_gets_healthy,
     bootstrap_marks_an_abort_when_no_known_password_logs_in,
     bootstrap_refuses_a_missing_password,
-    marquez_step_adds_mapped_edges_and_reports_the_unmapped,
-    marquez_step_fails_visibly_when_marquez_is_down,
     bounded_wrapper_stops_a_server_at_its_deadline_with_exit_zero,
     bounded_wrapper_passes_on_a_crash_and_a_clean_exit,
     bounded_wrapper_refuses_to_start_after_the_deadline,

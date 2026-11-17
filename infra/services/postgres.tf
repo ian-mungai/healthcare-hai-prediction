@@ -7,14 +7,10 @@ locals {
     SET log_min_error_statement = 'panic';
     SET log_min_duration_statement = -1;
     \getenv airflow_password AIRFLOW_DB_PASSWORD
-    \getenv marquez_password MARQUEZ_DB_PASSWORD
     CREATE SCHEMA IF NOT EXISTS polaris_schema;
     SELECT 'CREATE ROLE airflow LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'airflow') \gexec
     ALTER ROLE airflow PASSWORD :'airflow_password';
     SELECT 'CREATE DATABASE airflow OWNER airflow ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'airflow') \gexec
-    SELECT 'CREATE ROLE marquez LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'marquez') \gexec
-    ALTER ROLE marquez PASSWORD :'marquez_password';
-    SELECT 'CREATE DATABASE marquez OWNER marquez ENCODING ''UTF8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'marquez') \gexec
   EOT
 
   # The mlflow role and database exist only while mlflow_enabled is true, so the default definition stays unchanged. The statements repeat safely on every start.
@@ -93,7 +89,6 @@ locals {
       ]
       secrets = concat([
         { name = "AIRFLOW_DB_PASSWORD", valueFrom = local.secret_arn["airflow_db_password"] },
-        { name = "MARQUEZ_DB_PASSWORD", valueFrom = local.secret_arn["marquez_db_password"] },
         { name = "PGPASSWORD", valueFrom = local.secret_arn["postgres_password"] },
       ], var.mlflow_enabled ? [{ name = "MLFLOW_DB_PASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] }] : [], local.om_on ? [{ name = "OPENMETADATA_DB_PASSWORD", valueFrom = local.secret_arn["openmetadata_db_password"] }] : [])
       dependsOn        = [{ containerName = "postgres", condition = "HEALTHY" }]

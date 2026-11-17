@@ -68,7 +68,6 @@ def variables() -> dict[str, Any]:
         "model_api_task_role_arn": f"{role}-model-api",
         "streamlit_task_role_arn": f"{role}-streamlit",
         "data_mount_path": "/mnt/example-data",
-        "marquez_enabled": False,
         "mlflow_enabled": False,
         "monitoring_enabled": False,
         "openmetadata_persistent_enabled": False,

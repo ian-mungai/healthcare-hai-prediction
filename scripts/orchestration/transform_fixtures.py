@@ -1,4 +1,4 @@
-"""The checkout copy that the local Airflow stack mounts, for the training checks: Compose files, the DAG-side modules, the DAG folder and ``db_dump``."""
+"""The checkout copy that the local Airflow stack mounts, for the training checks: Compose files, the DAG-side modules, the DAG folder and ``xcom_dump``."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
 
 
 def prepare_checkout(folder: Path) -> None:
-    """A copy of what the Airflow stack mounts, so no test file enters ``dags/``: Compose files, the DAG-side modules, the DAG folder and ``db_dump``."""
+    """A copy of what the Airflow stack mounts, so no test file enters ``dags/``: Compose files, the DAG-side modules, the DAG folder and ``xcom_dump``."""
     (folder / "services" / "orchestration").mkdir(parents=True)
     (folder / "services" / "analytics").mkdir(parents=True)
     shutil.copytree(ROOT / "services" / "lineage", folder / "services" / "lineage", ignore=shutil.ignore_patterns("__pycache__"))
@@ -23,7 +23,7 @@ def prepare_checkout(folder: Path) -> None:
     shutil.copy2(ROOT / "services" / "analytics" / "resources.sql", folder / "services" / "analytics" / "resources.sql")
     platform = json.loads(PLATFORM_FILE.read_text())
     shutil.copy2(ROOT / platform["compose"]["file"], folder / platform["compose"]["file"])
-    shutil.copy2(ROOT / "scripts" / "orchestration" / "db_dump.py", folder / "scripts" / "orchestration" / "db_dump.py")
+    shutil.copy2(ROOT / "scripts" / "orchestration" / "xcom_dump.py", folder / "scripts" / "orchestration" / "xcom_dump.py")
     for name in ("__init__.py", "interface.py", "client.py", "dag_runtime.py", "training_contract.py"):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
     shutil.copy2(ROOT / "tests/orchestration/fixtures/combined_dag.py", folder / "dags" / "transform_dag.py")

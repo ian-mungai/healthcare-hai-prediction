@@ -69,8 +69,6 @@ PLATFORM_DEFAULT_REPOSITORIES = [
     "airflow",
     "analytics",
     "egress_proxy",
-    "marquez",
-    "marquez_web",
     "polaris",
     "polaris_admin",
     "postgres",
@@ -78,7 +76,7 @@ PLATFORM_DEFAULT_REPOSITORIES = [
     "redis",
     "spark",
 ]
-PLATFORM_DEFAULT_LOG_GROUPS = ["airflow", "jobs", "marquez", "polaris", "postgres", "redis"]
+PLATFORM_DEFAULT_LOG_GROUPS = ["airflow", "jobs", "openmetadata", "polaris", "postgres", "redis"]
 PLATFORM_ADDED_REPOSITORIES = [
     "drift",
     "feature_store",
@@ -145,7 +143,6 @@ ROWS: list[Row] = [
         "model_api_prepared",
         "model_api_prediction_writes",
         "openmetadata_prepared",
-        "openmetadata_marquez_reachable",
         "openmetadata_persistent_prepared",
         "serve_prepared",
         "training_prepared",
@@ -222,7 +219,6 @@ ROWS: list[Row] = [
         "services",
         "model_api_enabled",
         "streamlit_enabled",
-        "marquez_enabled",
         "mlflow_enabled",
         "monitoring_enabled",
         "openmetadata_persistent_enabled",

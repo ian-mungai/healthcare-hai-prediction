@@ -5,25 +5,6 @@ variable "openmetadata_prepared" {
   nullable    = false
 }
 
-variable "openmetadata_marquez_reachable" {
-  description = "Kept so the prepared inputs file stays valid. It opens no port, because no job security group remains, and true fails the plan check. Off by default."
-  type        = bool
-  default     = false
-  nullable    = false
-
-  validation {
-    condition     = !var.openmetadata_marquez_reachable || var.openmetadata_prepared
-    error_message = "Opening the Marquez port needs openmetadata_prepared."
-  }
-}
-
-check "marquez_port_is_retired" {
-  assert {
-    condition     = !var.openmetadata_marquez_reachable
-    error_message = "No job security group remains, so no rule can open port 5000 to Marquez: leave openmetadata_marquez_reachable false."
-  }
-}
-
 variable "openmetadata_admin_password_name" {
   description = "Parameter Store SecureString name of the catalog administrator password. The execution role may inject exactly this parameter. The owner sets the value outside Terraform."
   type        = string

@@ -8,7 +8,7 @@ locals {
   om_bootstrap_py = "${local.om_code_mount}/scripts/infrastructure/openmetadata_persistent_bootstrap.py"
 
   # Memory profile. The seven host services reserve their measured use rounded up to 64 MiB and keep the limits they had (D19, measured during the real gold run on Nov 3 2026,
-  # data/local_keep/gold_20261103/host_memory_sample.txt; the host is r7g.xlarge with 32 GiB), in both profiles. The services that were not measured (the Airflow migration, Marquez and the
+  # data/local_keep/gold_20261103/host_memory_sample.txt; the host is r7g.xlarge with 32 GiB), in both profiles. The services that were not measured (the Airflow migration and the
   # Polaris bootstrap) take the lowered values below when the flag is on and the deployed ones when it is off. A peak sample under load on the new host sets the final limits.
   memory_profile = {
     postgres = { limit = 2048, reservation = 128 }
@@ -20,8 +20,6 @@ locals {
     airflow_scheduler = { limit = 1536, reservation = 320 }
     airflow_dag_proc  = { limit = 1280, reservation = 192 }
     airflow_triggerer = { limit = 768, reservation = 256 }
-    marquez_api       = { limit = local.om_on ? 1024 : 1280, reservation = local.om_on ? 512 : 768 }
-    marquez_web       = { limit = local.om_on ? 192 : 256, reservation = local.om_on ? 96 : 128 }
     polaris_bootstrap = { limit = local.om_on ? 512 : 1024, reservation = local.om_on ? 256 : 512 }
   }
 

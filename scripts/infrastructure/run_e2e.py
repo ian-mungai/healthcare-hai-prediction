@@ -102,7 +102,7 @@ SERVICES_FOUNDATION = {
     "execution_role_arn": "arn:aws:iam::111111111111:role/example_execution",
     "polaris_task_role_arn": "arn:aws:iam::111111111111:role/example_polaris",
     "control_plane_task_role_arn": "arn:aws:iam::111111111111:role/example_control_plane",
-    "log_group_names": {name: f"/example_platform/{name}" for name in ("postgres", "redis", "polaris", "airflow", "marquez")},
+    "log_group_names": {name: f"/example_platform/{name}" for name in ("postgres", "redis", "polaris", "airflow")},
     "ecr_repository_urls": {
         name: f"111111111111.dkr.ecr.eu-west-1.amazonaws.com/example_platform/{name}" for name in ("postgres", "redis", "polaris", "polaris_admin", "airflow")
     },

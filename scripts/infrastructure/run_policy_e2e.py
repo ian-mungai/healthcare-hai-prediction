@@ -618,7 +618,7 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         "another parameter name in the managed list drifts from its variable default",
         check_names(drift(documents, "ssm", "ManageProjectParameters", "postgres_password", "postgres_passwd")),
     )
-    record("a managed parameter is missing from the managed list", check_names(dropped(documents, "ssm", "ManageProjectParameters", "marquez_db_password")))
+    record("a managed parameter is missing from the managed list", check_names(dropped(documents, "ssm", "ManageProjectParameters", "redis_password")))
     record(
         "another managed parameter is missing from the managed list", check_names(dropped(documents, "ssm", "ManageProjectParameters", "airflow_fernet_key"))
     )

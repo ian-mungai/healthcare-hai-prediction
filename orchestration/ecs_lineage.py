@@ -159,7 +159,7 @@ LAYERS = {
 }
 
 
-# A model set's features run pins the domain matrices of a base run (base_pins.json, with the digest of the base run's ledger row) and publishes its table
+# A model set's features run pins the domain matrices of a base run (the base pins file, with the digest of the base run's ledger row) and publishes its table
 MODEL_LAYER = Layer("base_pins.json", "features", "features_snapshot.json", "features", ("features", "features_snapshot.json"))
 
 TABLE_EVENT_JOBS = tuple(LAYERS)  # the jobs whose datasets travel in one event per table, never in the task's own event

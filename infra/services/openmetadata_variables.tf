@@ -1,5 +1,5 @@
 variable "openmetadata_persistent_enabled" {
-  description = "Run persistent OpenMetadata and its single-node OpenSearch as one host task, plus the one-shot bootstrap task that sets the administrator password and issues one bot token per caller. It replaces Marquez once the retirement comparison passes. Their images are pushed first (config/metadata/images.json) and their digests recorded; the committed default is true. False plans no OpenMetadata resource and leaves every existing limit as it was."
+  description = "Run persistent OpenMetadata and its single-node OpenSearch as one host task, plus the one-shot bootstrap task that sets the administrator password and issues one bot token per caller. It is the only lineage store. Their images are pushed first (config/metadata/images.json) and their digests recorded; the committed default is true. False plans no OpenMetadata resource and leaves every existing limit as it was."
   type        = bool
   default     = true
   nullable    = false
@@ -47,7 +47,7 @@ variable "openmetadata_db_password_name" {
 }
 
 variable "openmetadata_bot_token_names" {
-  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery), ingestion (the Polaris and dbt ingestion jobs) and comparison (the Marquez retirement comparison). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
+  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery), ingestion (the Polaris and dbt ingestion jobs) and comparison (a read-only caller). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
   type        = map(string)
   default = {
     lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"

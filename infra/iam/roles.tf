@@ -21,7 +21,6 @@ locals {
     ENVIRONMENT                 = var.environment
     POSTGRES_PASSWORD_NAME      = var.postgres_password_name
     AIRFLOW_DB_PASSWORD_NAME    = var.airflow_db_password_name
-    MARQUEZ_DB_PASSWORD_NAME    = var.marquez_db_password_name
     AIRFLOW_FERNET_KEY_NAME     = var.airflow_fernet_key_name
     AIRFLOW_JWT_SECRET_NAME     = var.airflow_jwt_secret_name
     AIRFLOW_API_SECRET_KEY_NAME = var.airflow_api_secret_key_name
@@ -189,7 +188,7 @@ resource "aws_iam_role_policy" "polaris_task" {
   policy = templatefile("${path.module}/owner_policies/polaris_task.json", merge(local.owner_policy_values, { DATA_BUCKET_NAME = var.data_bucket_name }))
 }
 
-# Postgres, Redis, Airflow and Marquez need no AWS access of their own: the role has no policy.
+# Postgres, Redis and Airflow need no AWS access of their own: the role has no policy.
 resource "aws_iam_role" "control_plane_task" {
   name               = format(local.platform_name, "control_plane_task")
   description        = "Control-plane services other than Polaris: no AWS permissions."
