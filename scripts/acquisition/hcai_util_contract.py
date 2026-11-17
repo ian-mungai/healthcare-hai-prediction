@@ -18,7 +18,7 @@ from pathlib import Path
 from scripts.acquisition.bls_api_contract import digest
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
-from scripts.acquisition.legacy_versions import bound_record, plan_matches
+from scripts.acquisition.legacy_versions import bound_record, plan_matches, predecessor_plan
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/hcai_util_2018_2025_plan.json"
@@ -28,6 +28,8 @@ RELEASE_PATH = "config/acquisition/access_releases_20260929.json"
 SOURCE_ID = "HCAI_UTIL"
 TERMS_URL = "https://data.chhs.ca.gov/pages/terms"
 PSEUDONYMIZE_AT_LOAD = "Names administrators and report preparers as published; bronze pseudonymizes the person cells at load."
+# The restriction wording of the version 2 plan from before bronze pseudonymized the person cells: a capture bound to that plan carries it.
+LEGACY_REDACT_AT_LOAD = "Names administrators and report preparers as published; bronze redacts the person cells at load ([REDACTED])."
 # Plan version 1 only: the redaction of the stored abstracted captures, kept so those captures keep verifying.
 REPLACEMENT = "[REDACTED]"
 REDACT = ["FAC_STR_ADDR", "FAC_PHONE", "FAC_ADMIN_NAME", "FAC_PAR_CORP_BUS_ADDR", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
@@ -365,7 +367,10 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     if paths == {*roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"}:
         verify_version_1(receipt, lineage, root, entry)
     else:
-        require(lineage["plan_sha256"] == canonical_hash(plan), "HCAI utilization capture plan differs")
+        # A capture bound to an archived predecessor plan is read as that plan: its year and its restriction wording are the predecessor's.
+        captured_plan = predecessor_plan(plan, lineage["plan_sha256"]) or plan
+        require(entry in captured_plan["years"], "HCAI utilization capture year not in its plan")
+        restriction = LEGACY_REDACT_AT_LOAD if "bronze redacts the person cells" in captured_plan["scope"] else PSEUDONYMIZE_AT_LOAD
         require(paths == {f"raw/{stored_name(entry)}", "evidence/download_proof.json", "references/scope.json"}, "HCAI utilization artifact set differs")
         require(not (root / "sheets").exists(), "HCAI utilization snapshot holds a derived copy")
         raw = (root / "raw" / stored_name(entry)).read_bytes()
@@ -382,7 +387,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
         require(
             governance["access_class"] == "public"
             and governance["contains_pii"] is True
-            and PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"]
+            and restriction in governance["use_restrictions"]
             and governance["license_or_terms_url"] == TERMS_URL,
             "HCAI utilization governance differs",
         )

@@ -17,7 +17,7 @@ from xml.sax.saxutils import escape
 
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import hcai_util_contract as contract
-from scripts.acquisition import s3_store
+from scripts.acquisition import legacy_versions, s3_store
 from scripts.acquisition.build_hcai_util_plan import build
 from scripts.acquisition.run_bls_api_e2e import inventory
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
@@ -53,6 +53,14 @@ HEADER = [
 ]
 # Synthetic people. The stored workbook holds them as published; bronze pseudonymizes them (tests/test_bronze_hcai_stored_workbook.py).
 PEOPLE = ["Pat Q Example", "Lee Sample", "Jordan Owner"]
+# The version 2 plan before bronze pseudonymized the person cells: its scope text, canonical hash and file SHA-256, which the legacy catalog binds as the
+# predecessor of the committed plan.
+EARLIER_SCOPE = (
+    "Collect the 2018-2024 annual files and the 2025 preliminary file; store each workbook whole under raw/ as published; "
+    "bronze redacts the person cells at load ([REDACTED], not pseudonyms); sheets checked on capture."
+)
+EARLIER_PLAN = "bc96254c49d9fee23450d0998c5b74b5bc176b0af25e3e1dc7c746c4a53e4e20"
+EARLIER_PLAN_FILE_SHA256 = "266faf99addfef20a13a8bf70c86e1bdbb49586969ef8b0190220f2de97bee65"
 YEARS = [2018, 2025]
 # Phone-like samples are assembled so this file does not trip the privacy scan.
 PHONE_ONE = "(555) 010" + "-0001"
@@ -278,6 +286,7 @@ def exercise(root: Path) -> list[dict]:
         scenario("repeat_two_no_effects", repeat)
         scenario("replay_without_network", lambda: execute(plan, last, run, False, True, client, OUTPUTS, Offline({}), LIMITS))
         check_scenarios(scenario, last)
+        predecessor_scenarios(scenario, root, plan, plan_path, last, web)
         version_1_scenario(scenario, plan, last, root, bodies[last["url"]])
         fetch_scenarios(scenario, plan, first, root, bodies)
         corrupt_scenarios(scenario, receipt_path, bodies[last["url"]])
@@ -310,6 +319,103 @@ def exercise(root: Path) -> list[dict]:
 
         scenario("failing_year_held_other_stored", independent)
     return scenarios
+
+
+def predecessor_scenarios(scenario: Any, root: Path, plan: dict, plan_path: Path, entry: dict, web: Web) -> None:
+    """A capture made under the plan from before bronze pseudonymized the person cells keeps verifying and resuming through the catalogued predecessor.
+
+    Its receipt carries the restriction wording of that plan, which only that plan admits. A digest no catalog lists, a changed archive and a mismatch
+    between plan and wording are refused.
+    """
+    folder = root / "predecessor"
+    folder.mkdir()
+    archive = folder / "archive"
+    archive.mkdir()
+    earlier = plan | {"scope": EARLIER_SCOPE}
+    uncataloged = plan | {"scope": EARLIER_SCOPE + " Reviewed again."}
+    paths = {}
+    for name, body in (("earlier", earlier), ("uncataloged", uncataloged)):
+        paths[name] = folder / f"{name}_plan.json"
+        write_once(paths[name], encoded_json(body))
+        write_once(paths[name].with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(body)}))
+    archived = archive / "earlier_plan.json"
+    write_once(archived, encoded_json(earlier))
+
+    def capture(label: str, body: dict, plan_file: Path, wording: str) -> Path:
+        with patch.object(contract, "PLAN_PATH", plan_file), patch.object(contract, "PSEUDONYMIZE_AT_LOAD", wording):
+            execute(body, entry, folder / label, True, False, None, OUTPUTS, web, LIMITS)
+        return folder / label / "batches" / entry["id"] / "capture/receipt.json"
+
+    def reworded(path: Path, wording: str, replacement: str) -> Path:
+        receipt = read_json(path)
+        receipt["governance"]["use_restrictions"] = [replacement if item == wording else item for item in receipt["governance"]["use_restrictions"]]
+        path.write_bytes(encoded_json(receipt))
+        return path
+
+    old, new = contract.LEGACY_REDACT_AT_LOAD, contract.PSEUDONYMIZE_AT_LOAD
+    receipts = {
+        "earlier": capture("earlier", earlier, paths["earlier"], old),
+        "uncataloged": capture("uncataloged", uncataloged, paths["uncataloged"], old),
+        "earlier_new_wording": reworded(capture("earlier_new_wording", earlier, paths["earlier"], old), old, new),
+        "current_old_wording": reworded(capture("current_old_wording", plan, plan_path, new), new, old),
+    }
+    catalog_entry = {"archive_path": str(archived), "sha256": fingerprint(archived)[0], "canonical_sha256": canonical_hash(earlier)}
+    catalog = {"catalog_version": 1, "plans": {canonical_hash(plan): [catalog_entry]}, "records": {}}
+    write_once(folder / "catalog.json", encoded_json(catalog))
+    write_once(folder / "catalog.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+
+    def catalogued(action: Any) -> Any:
+        with (
+            patch.object(legacy_versions, "CATALOG_PATH", folder / "catalog.json"),
+            patch.object(legacy_versions, "CATALOG_LOCK_PATH", folder / "catalog.lock.json"),
+            patch.object(legacy_versions, "ARCHIVE", archive),
+        ):
+            legacy_versions._catalog.cache_clear()
+            try:
+                return action()
+            finally:
+                legacy_versions._catalog.cache_clear()
+
+    def under_its_own_plan() -> None:
+        with patch.object(contract, "PLAN_PATH", paths["earlier"]):
+            verify_local(receipts["earlier"])
+
+    def resumed() -> None:
+        run = folder / "earlier"
+        before = inventory(run)
+        requests = web.requests
+        result = catalogued(lambda: execute(plan, entry, run, False, False, None, OUTPUTS, Offline({}), LIMITS))
+        require(
+            result["status"] == "capture_ready" and before == inventory(run) and web.requests == requests,
+            "Resuming changed the stored capture or used the network",
+        )
+
+    def archived_bytes_changed() -> None:
+        archived.write_bytes(archived.read_bytes() + b" ")
+        try:
+            catalogued(lambda: verify_local(receipts["earlier"]))
+        finally:
+            archived.write_bytes(archived.read_bytes()[:-1])
+
+    def committed_catalog_names_the_earlier_plan() -> None:
+        committed = read_json(REPO_ROOT / "config/acquisition/hcai_util_2018_2025_plan.json")
+        listed = legacy_versions.catalog()["plans"].get(canonical_hash(committed), [])
+        require(
+            (EARLIER_PLAN, EARLIER_PLAN_FILE_SHA256) in [(e["canonical_sha256"], e["sha256"]) for e in listed],
+            f"The earlier plan is not a catalogued predecessor of the committed plan: {[e['canonical_sha256'] for e in listed]}",
+        )
+
+    scenario("capture_verifies_under_the_plan_it_was_captured_under", under_its_own_plan)
+    scenario("earlier_plan_capture_refused_when_no_predecessor_is_catalogued", lambda: verify_local(receipts["earlier"]), "plan differs")
+    scenario("earlier_plan_capture_verifies_through_the_catalogued_predecessor", lambda: catalogued(lambda: verify_local(receipts["earlier"])))
+    scenario("earlier_plan_capture_resumes_without_changing_its_artifacts", resumed)
+    scenario("earlier_plan_capture_refused_when_the_archived_predecessor_changed", archived_bytes_changed, "plan differs")
+    scenario("capture_pinned_to_an_uncataloged_digest_refused", lambda: catalogued(lambda: verify_local(receipts["uncataloged"])), "plan differs")
+    scenario(
+        "earlier_plan_capture_with_the_new_wording_refused", lambda: catalogued(lambda: verify_local(receipts["earlier_new_wording"])), "governance differs"
+    )
+    scenario("current_plan_capture_with_the_earlier_wording_refused", lambda: verify_local(receipts["current_old_wording"]), "governance differs")
+    scenario("committed_catalog_names_the_earlier_plan", committed_catalog_names_the_earlier_plan)
 
 
 def check_scenarios(scenario: Any, entry: dict) -> None:
