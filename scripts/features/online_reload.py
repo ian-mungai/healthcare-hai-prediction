@@ -159,7 +159,7 @@ def reload_checked(
         request = feast_sets.LoadRequest(model, run, str(record["base_run"]), set_hash)
         recovered = loader.recover(request) if isinstance(loader, feast_sets.SetLoader) else None
         load_id = recovered if recovered else loader(request)
-        return {
+        record: dict[str, Any] = {
             "outcome": ALREADY_LOADED if recovered else LOADED,
             "feature_set": model,
             "run_id": run,
@@ -167,6 +167,8 @@ def reload_checked(
             "load_id": load_id,
             "skipped_held": skipped,
         }
+        rows = loader.entities.get(model) if isinstance(loader, feast_sets.SetLoader) and not recovered else None
+        return {**record, "rows": rows} if rows is not None else record
     return {"outcome": SKIPPED, "feature_set": model, "reason": f"no load evidence in any committed run of set {model}", "skipped_held": skipped}
 
 

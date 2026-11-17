@@ -18,6 +18,7 @@ from scripts.infrastructure.host_state_policy_cases import CASES as HOST_POLICY_
 from scripts.infrastructure.job_identity_cases import CASES as JOB_IDENTITY_CASES
 from scripts.infrastructure.layer_publish_cases import CASES as PUBLISH_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
+from scripts.infrastructure.monitoring_gap_cases import CASES as GAP_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 from scripts.infrastructure.postgres_activity_cases import CASES as POSTGRES_CASES
 from scripts.infrastructure.postgres_metric_cases import CASES as PG_METRIC_CASES
@@ -489,3 +490,4 @@ CASES |= HOST_POLICY_CASES
 CASES |= JOB_IDENTITY_CASES
 CASES |= PROBE_CASES
 CASES |= PG_METRIC_CASES
+CASES |= GAP_CASES

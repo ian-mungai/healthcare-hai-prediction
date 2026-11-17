@@ -964,7 +964,14 @@ def reload(job: Job) -> None:
     model = os.environ.get(MODEL_VARIABLE, "")
     if not model:
         raise StepError(f"{MODEL_VARIABLE} is not set: a reload names the model set whose online store it loads")
-    feature_metrics.reloaded(run_module(job, "scripts.features.online_reload", ["--model", model, "--run", job.run, "--mode", job.mode]))
+    started = time.monotonic()
+    try:
+        text = run_module(job, "scripts.features.online_reload", ["--model", model, "--run", job.run, "--mode", job.mode])
+    except BaseException:
+        feature_metrics.push_reload(model, None, time.monotonic() - started)
+        raise
+    feature_metrics.reloaded(text)
+    feature_metrics.push_reload(model, text, time.monotonic() - started)
 
 
 def release(job: Job) -> None:

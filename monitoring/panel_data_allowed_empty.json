@@ -134,6 +134,41 @@
       "dashboard": "hai_feature_store.json",
       "panel": "Features refusals in the last hour, by reason",
       "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
+    },
+    {
+      "dashboard": "hai_services.json",
+      "panel": "OpenSearch cluster status",
+      "reason": "Empty while OpenMetadata is off, because the exporter reads OpenSearch only when it runs."
+    },
+    {
+      "dashboard": "hai_services.json",
+      "panel": "Last exit code, by one-shot task",
+      "reason": "Empty until a one-shot task has stopped since the exporter started or within the hour that ECS lists stopped tasks."
+    },
+    {
+      "dashboard": "hai_services.json",
+      "panel": "Seconds since the last run, by one-shot task",
+      "reason": "Empty until a one-shot task has stopped since the exporter started or within the hour that ECS lists stopped tasks."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Result of the reload at host start, by feature set",
+      "reason": "Empty until the first host start has run the reload."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Reason a reload was skipped, by feature set",
+      "reason": "Empty while no set was skipped."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Entities loaded by the reload, by feature set",
+      "reason": "Empty until a reload has loaded a set fresh; an already loaded or skipped set loads no entities."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Reload duration, by feature set",
+      "reason": "Empty until the first host start has run the reload."
     }
   ]
 }

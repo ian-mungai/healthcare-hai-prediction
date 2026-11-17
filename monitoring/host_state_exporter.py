@@ -13,6 +13,9 @@ A source that fails is marked down (``host_state_exporter_source_up`` 0, ``host_
 dropped, so a panel shows no data and the alert fires; old numbers are never served as current. Every series is in ``CATALOG`` with a closed label set,
 and a sample outside it is dropped.
 Environment: ``ECS_CLUSTER``, ``AWS_REGION``, ``HAI_LAUNCH_HOST_JOB_CAP_MIB`` (the value the launch preflight reads) and ``OM_HEALTH_URL``.
+Optional: ``EVIDENTLY_UI_ENABLED`` (true or false, default false: the Evidently UI probe on 8600 is reported disabled while false),
+``OPENSEARCH_HEALTH_URL`` (the OpenSearch cluster status source exists only when set) and ``BOOTSTRAP_TASKS`` (comma-separated names of the one-shot
+tasks whose last exit code and stop time are read from ECS).
 """
 
 from __future__ import annotations
@@ -41,7 +44,8 @@ LISTEN = "127.0.0.1:9103"
 INTERVAL_SECONDS = 120.0
 OM_TIMEOUT_SECONDS = 5.0
 DEFAULT_OM_URL = "http://127.0.0.1:8586/healthcheck"
-SOURCES = ("host", "services", "probes", "disk", "openmetadata")
+SOURCES = ("host", "services", "probes", "disk", "openmetadata", "opensearch", "bootstrap")
+BOOTSTRAP_TASK_NAMES = ("code_fetch", "polaris_bootstrap", "openmetadata_bootstrap")
 CHECK_NAME = re.compile(r"[a-z][a-z0-9_]{0,40}")
 NAME = re.compile(r"[a-z][a-z0-9_]{0,40}")
 STOP_CODES = ("TaskFailedToStart", "EssentialContainerExited", "UserInitiated", "ServiceSchedulerInitiated", "SpotInterruption", "TerminationNotice")
@@ -52,6 +56,7 @@ LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "probe": lambda value: NAME.fullmatch(value) is not None,
     "stop_code": lambda value: value in (*STOP_CODES, "other"),
     "volume": lambda value: value in ("data", "scratch"),
+    "task": lambda value: value in BOOTSTRAP_TASK_NAMES,
 }
 STOPPED_WINDOW = timedelta(hours=1)
 STOPPED_LIMIT = 500
@@ -61,6 +66,7 @@ PATH = re.compile(r"/[A-Za-z0-9_./-]*")
 CLUSTER = re.compile(r"[A-Za-z0-9_-]{1,255}")
 REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+")
 OM_URL = re.compile(r"http://127\.0\.0\.1:[0-9]{2,5}/healthcheck")
+OPENSEARCH_URL = re.compile(r"http://127\.0\.0\.1:[0-9]{2,5}/_cluster/health")
 CATALOG: dict[str, tuple[str, tuple[str, ...], str]] = {
     "hai_host_instances": ("Active container instances in the cluster.", (), "gauge"),
     "hai_host_memory_registered_mib": ("Memory in MiB that ECS can place on the active instances.", (), "gauge"),
@@ -84,6 +90,18 @@ CATALOG: dict[str, tuple[str, tuple[str, ...], str]] = {
     "hai_host_scratch_separate_volume": ("1 when the job scratch folder is on a volume of its own, 0 when it shares the data volume.", (), "gauge"),
     "hai_openmetadata_healthy": ("1 when every check of the OpenMetadata health check is healthy.", (), "gauge"),
     "hai_openmetadata_check_healthy": ("1 when one named check of the OpenMetadata health check is healthy.", ("check",), "gauge"),
+    "hai_service_probe_disabled": (
+        "1 when the service of an optional health probe is switched off, so its probe is not asked and is not down.",
+        ("probe", "service"),
+        "gauge",
+    ),
+    "hai_opensearch_cluster_status": ("Status of the OpenSearch cluster: 0 green, 1 yellow, 2 red.", (), "gauge"),
+    "hai_bootstrap_task_last_exit_code": (
+        "Exit code of the latest run of a one-shot bootstrap task: the first non-zero code of its containers, -1 when none was recorded.",
+        ("task",),
+        "gauge",
+    ),
+    "hai_bootstrap_task_last_run_timestamp_seconds": ("Unix time the latest run of a one-shot bootstrap task stopped.", ("task",), "gauge"),
     "host_state_exporter_source_up": ("1 when the latest read of the source succeeded.", ("source",), "gauge"),
     "host_state_exporter_source_errors_total": ("Reads of the source that failed since the exporter started.", ("source",), "counter"),
     "host_state_exporter_source_last_success_timestamp_seconds": ("Unix time of the latest successful read of the source.", ("source",), "gauge"),
@@ -110,6 +128,9 @@ class Settings:
     service_prefix: str = ""
     data_path: str = ""
     scratch_path: str = ""
+    evidently_ui: bool = False
+    opensearch_url: str = ""
+    bootstrap_tasks: tuple[str, ...] = ()
 
 
 def settings(environ: Mapping[str, str]) -> Settings:
@@ -132,7 +153,21 @@ def settings(environ: Mapping[str, str]) -> Settings:
     for name, value in paths.items():
         if value and (not PATH.fullmatch(value) or ".." in value.split("/")):
             raise ValueError(f"{name} must be an absolute path without a parent step")
-    return Settings(cluster, region, int(cap) if cap else None, url, prefix, paths["HOST_DATA_PATH"], paths["HOST_SCRATCH_PATH"])
+    return Settings(cluster, region, int(cap) if cap else None, url, prefix, paths["HOST_DATA_PATH"], paths["HOST_SCRATCH_PATH"], *gap_settings(environ))
+
+
+def gap_settings(environ: Mapping[str, str]) -> tuple[bool, str, tuple[str, ...]]:
+    """The Evidently UI switch, the OpenSearch health address and the one-shot task names, or a ValueError that names the variable."""
+    switch = environ.get("EVIDENTLY_UI_ENABLED", "false")
+    if switch not in ("true", "false"):
+        raise ValueError("EVIDENTLY_UI_ENABLED must be true or false")
+    url = environ.get("OPENSEARCH_HEALTH_URL", "")
+    if url and not OPENSEARCH_URL.fullmatch(url):
+        raise ValueError("OPENSEARCH_HEALTH_URL must be a plain http address on 127.0.0.1 ending in /_cluster/health")
+    names = tuple(name for name in environ.get("BOOTSTRAP_TASKS", "").split(",") if name)
+    if len(set(names)) != len(names) or any(name not in BOOTSTRAP_TASK_NAMES for name in names):
+        raise ValueError("BOOTSTRAP_TASKS must list each of code_fetch, polaris_bootstrap and openmetadata_bootstrap at most once, separated by commas")
+    return switch == "true", url, names
 
 
 def ecs_client_config() -> Any:
@@ -295,6 +330,89 @@ def probe_samples(probes: Mapping[str, Probe], timeout: float = PROBE_TIMEOUT_SE
     return samples
 
 
+EVIDENTLY_PROBE = Probe("evidently_ui", "http://127.0.0.1:8600/api/version")
+
+
+def probe_table(evidently_ui: bool) -> dict[str, Probe]:
+    """The probes to ask: the default ones, and the Evidently UI only while its switch is on."""
+    return {**PROBES, **({"evidently_ui": EVIDENTLY_PROBE} if evidently_ui else {})}
+
+
+def disabled_probe_samples(evidently_ui: bool) -> list[Sample]:
+    """The Evidently UI is reported disabled while its switch is off. It has no up series then, so it is never down."""
+    if evidently_ui:
+        return []
+    return [Sample("hai_service_probe_disabled", 1.0, {"probe": "evidently_ui", "service": EVIDENTLY_PROBE.service})]
+
+
+OPENSEARCH_STATUS = {"green": 0.0, "yellow": 1.0, "red": 2.0}
+
+
+def opensearch_samples(url: str, timeout: float = OM_TIMEOUT_SECONDS) -> list[Sample]:
+    """The cluster status of OpenSearch on its internal port, read-only. Red is data; an unreadable answer is an error of the source."""
+    parsed = urlparse(url)
+    connection = http.client.HTTPConnection(parsed.hostname or "", parsed.port or 80, timeout=timeout)
+    try:
+        connection.request("GET", parsed.path or "/")
+        response = connection.getresponse()
+        raw = response.read(1024 * 1024)
+        status = response.status
+    except Exception as error:
+        raise SourceError(f"{type(error).__name__}") from None
+    finally:
+        connection.close()
+    if status != 200:
+        raise SourceError(f"HTTP_{status}")
+    try:
+        colour = json.loads(raw).get("status")
+    except (ValueError, AttributeError):
+        raise SourceError("the cluster health answer is not a JSON object") from None
+    if colour not in OPENSEARCH_STATUS:
+        raise SourceError("the cluster health answer has no green, yellow or red status")
+    return [Sample("hai_opensearch_cluster_status", OPENSEARCH_STATUS[colour])]
+
+
+class BootstrapMemory:
+    """The latest stopped run of each one-shot task. ECS lists a stopped task for about an hour only, so the exporter keeps what it last read."""
+
+    def __init__(self) -> None:
+        self.latest: dict[str, tuple[datetime, int]] = {}
+
+
+def exit_code_of(task: Mapping[str, Any]) -> int:
+    """The first non-zero exit code of the containers of a task, else -1 when a container has no exit code (it never ran) and 0 when all exited with 0."""
+    codes = [container.get("exitCode") for container in task.get("containers", [])]
+    failed = next((int(code) for code in codes if isinstance(code, int) and code != 0), None)
+    if failed is not None:
+        return failed
+    return -1 if not codes or any(not isinstance(code, int) for code in codes) else 0
+
+
+def bootstrap_samples(ecs: Any, cluster: str, prefix: str, names: Sequence[str], memory: BootstrapMemory) -> list[Sample]:
+    """The last exit code and stop time of each one-shot task, from ListTasks and DescribeTasks of the task definition family, read-only."""
+    for name in names:
+        arns = paged(ecs.list_tasks, "taskArns", cluster=cluster, family=f"{prefix}{name}", desiredStatus="STOPPED")[:STOPPED_LIMIT]
+        found: list[Mapping[str, Any]] = []
+        for start in range(0, len(arns), 100):
+            reply = ecs.describe_tasks(cluster=cluster, tasks=arns[start : start + 100])
+            if reply.get("failures"):
+                raise SourceError("ECS reported a failure describing a one-shot task")
+            found += [task for task in reply.get("tasks", []) if isinstance(task.get("stoppedAt"), datetime)]
+        if found:
+            newest = max(found, key=lambda task: task["stoppedAt"])
+            if name not in memory.latest or newest["stoppedAt"] >= memory.latest[name][0]:
+                memory.latest[name] = (newest["stoppedAt"], exit_code_of(newest))
+    samples: list[Sample] = []
+    for name in names:
+        if name in memory.latest:
+            stopped_at, code = memory.latest[name]
+            samples += [
+                Sample("hai_bootstrap_task_last_exit_code", float(code), {"task": name}),
+                Sample("hai_bootstrap_task_last_run_timestamp_seconds", stopped_at.timestamp(), {"task": name}),
+            ]
+    return samples
+
+
 def disk_usage(path: str) -> tuple[int, int, int]:
     total, used, free = shutil.disk_usage(path)
     return total, used, free
@@ -364,9 +482,14 @@ def collectors(configured: Settings, ecs: Any) -> dict[str, Callable[[], list[Sa
     found: dict[str, Callable[[], list[Sample]]] = {
         "host": lambda: host_samples(ecs, configured.cluster, configured.job_cap_mib),
         "services": lambda: service_samples(ecs, configured.cluster, configured.service_prefix),
-        "probes": lambda: probe_samples(PROBES),
+        "probes": lambda: probe_samples(probe_table(configured.evidently_ui)) + disabled_probe_samples(configured.evidently_ui),
         "openmetadata": lambda: openmetadata_samples(configured.om_url),
     }
+    if configured.opensearch_url:
+        found["opensearch"] = lambda: opensearch_samples(configured.opensearch_url)
+    if configured.bootstrap_tasks:
+        memory = BootstrapMemory()
+        found["bootstrap"] = lambda: bootstrap_samples(ecs, configured.cluster, configured.service_prefix, configured.bootstrap_tasks, memory)
     if configured.data_path and configured.scratch_path:
         found["disk"] = lambda: disk_samples({"data": configured.data_path, "scratch": configured.scratch_path})
     return found

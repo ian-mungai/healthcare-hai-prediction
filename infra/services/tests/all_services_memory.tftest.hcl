@@ -177,3 +177,20 @@ run "only_the_host_state_exporter_gets_the_mlflow_admin_credential_for_the_relay
     error_message = "The credential is injected as a secret and named nowhere in a command or an environment value."
   }
 }
+
+run "with_openmetadata_the_host_state_exporter_reads_opensearch_and_the_openmetadata_bootstrap_and_reserves_no_memory" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "OPENSEARCH_HEALTH_URL", value = "http://127.0.0.1:9200/_cluster/health" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "BOOTSTRAP_TASKS", value = "polaris_bootstrap,openmetadata_bootstrap" })
+    )
+    error_message = "With OpenMetadata on, the exporter gets the OpenSearch health address and both bootstrap one-shot names."
+  }
+
+  assert {
+    condition     = length(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)) == 9
+    error_message = "The gap reads add no container, so the memory rule (job cap plus service reservations plus 2048 within 32768) is unchanged."
+  }
+}

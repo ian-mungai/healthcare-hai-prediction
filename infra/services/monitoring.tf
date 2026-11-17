@@ -199,7 +199,7 @@ locals {
       workingDirectory       = "/opt/hai"
       entryPoint             = ["python"]
       command                = ["-m", "monitoring.host_state_exporter", "--listen", "127.0.0.1:9103", "--interval", "120"]
-      environment = [
+      environment = concat([
         { name = "ECS_CLUSTER", value = var.cluster_name },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "HAI_LAUNCH_HOST_JOB_CAP_MIB", value = tostring(local.host_job_memory_mib) },
@@ -209,7 +209,7 @@ locals {
         { name = "MLFLOW_METRICS_URL", value = "http://127.0.0.1:${local.mlflow_port}/metrics" },
         { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         { name = "HOME", value = "/tmp" },
-      ]
+      ], local.monitoring_gap_environment)
       # MLflow answers /metrics to its admin user only, so the exporter relays that one path with the admin credential, which it reads from Parameter Store at
       # start and keeps in memory. Only this container of the monitoring task holds it; the MLflow service holds it already.
       secrets = var.mlflow_enabled ? [{ name = "MLFLOW_ADMIN_PASSWORD", valueFrom = local.secret_arn["mlflow_admin_password"] }] : []

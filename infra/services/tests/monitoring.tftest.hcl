@@ -1029,3 +1029,38 @@ run "an_exporter_password_name_that_is_not_a_plain_parameter_path_is_refused" {
   expect_failures = [var.redis_exporter_password_name]
 }
 
+
+run "the_host_state_exporter_gets_the_switch_of_the_evidently_ui_and_no_opensearch_source_without_openmetadata" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "EVIDENTLY_UI_ENABLED", value = "false" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "OPENSEARCH_HEALTH_URL", value = "" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "BOOTSTRAP_TASKS", value = "polaris_bootstrap" })
+    )
+    error_message = "With the defaults the exporter gets the Evidently UI switch off, no OpenSearch address and only the Polaris one-shot task."
+  }
+}
+
+run "the_evidently_ui_switch_reaches_the_host_state_exporter" {
+  command = plan
+
+  variables {
+    evidently_ui_enabled = true
+  }
+
+  assert {
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "EVIDENTLY_UI_ENABLED", value = "true" })
+    error_message = "Turning evidently_ui_enabled on passes true to the exporter, which then probes the UI instead of reporting it disabled."
+  }
+}
+
+run "the_gap_settings_add_no_container_and_keep_the_monitoring_memory" {
+  command = plan
+
+  assert {
+    condition     = length(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)) == 9
+    error_message = "The monitoring task keeps its nine containers: the new reads run inside the host state exporter, so no memory is reserved for them."
+  }
+}

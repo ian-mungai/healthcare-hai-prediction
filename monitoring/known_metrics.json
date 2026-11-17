@@ -84,7 +84,12 @@
       "hai_publish_tables_changed": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type"]},
       "hai_publish_tables_empty": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type"]},
       "hai_publish_commit_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type"]},
-      "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "result"]}
+      "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "result"]},
+      "hai_online_reload_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "feature_set", "result"]},
+      "hai_online_reload_skip_reason": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "feature_set", "reason"]},
+      "hai_online_reload_rows": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "feature_set"]},
+      "hai_online_reload_duration_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "feature_set"]},
+      "hai_online_reload_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "feature_set"]}
     }
   },
   "pushgateway_itself": {
@@ -107,6 +112,10 @@
       "hai_service_tasks_stopped_recent": {"type": "gauge", "labels": ["service", "stop_code"]},
       "hai_service_probe_up": {"type": "gauge", "labels": ["probe", "service"]},
       "hai_service_probe_seconds": {"type": "gauge", "labels": ["probe", "service"]},
+      "hai_service_probe_disabled": {"type": "gauge", "labels": ["probe", "service"]},
+      "hai_opensearch_cluster_status": {"type": "gauge", "labels": []},
+      "hai_bootstrap_task_last_exit_code": {"type": "gauge", "labels": ["task"]},
+      "hai_bootstrap_task_last_run_timestamp_seconds": {"type": "gauge", "labels": ["task"]},
       "hai_host_disk_free_bytes": {"type": "gauge", "labels": ["volume"]},
       "hai_host_disk_total_bytes": {"type": "gauge", "labels": ["volume"]},
       "hai_host_scratch_separate_volume": {"type": "gauge", "labels": []},

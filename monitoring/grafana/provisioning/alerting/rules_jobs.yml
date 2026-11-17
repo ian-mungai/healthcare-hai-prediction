@@ -152,3 +152,39 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the Pushgateway, so the jobs' own metrics are lost.
+
+      - uid: online_reload_failed
+        title: OnlineReloadFailed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'max by (feature_set) (hai_online_reload_result{result="failed"}) > bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: The online store reload at host start failed for a feature set, so the store may be empty.

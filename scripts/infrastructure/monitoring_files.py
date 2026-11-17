@@ -276,7 +276,9 @@ def catalog_problems(document: Any) -> list[str]:
     if not isinstance(document, dict):
         return problems
     wanted = {
-        "pushgateway": {name: set(PUSH_GROUPING) | set(labels) for name, (_, labels) in metrics_push.CATALOG.items()},
+        "pushgateway": {
+            name: set(PUSH_GROUPING) | set(metrics_push.GROUP_LABELS.get(name, ())) | set(labels) for name, (_, labels) in metrics_push.CATALOG.items()
+        },
         "host_state_exporter": {name: set(labels) for name, (_, labels, _) in host_state_exporter.CATALOG.items()},
     }
     sources = {"pushgateway": "scripts/metrics_push.py", "host_state_exporter": "monitoring/host_state_exporter.py"}

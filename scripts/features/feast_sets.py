@@ -67,8 +67,9 @@ class SetLoader:
 
     A release that loaded the set but failed to write its receipt finds the finished load again through ``recover`` instead of loading a second time."""
 
-    def __init__(self, load: OnlineLoader, recover: Recovery) -> None:
+    def __init__(self, load: OnlineLoader, recover: Recovery, entities: dict[str, int] | None = None) -> None:
         self.load, self.recover = load, recover
+        self.entities = entities if entities is not None else {}
 
     def __call__(self, request: LoadRequest) -> str:
         return self.load(request)
@@ -248,6 +249,8 @@ def online_loader(
     The result also recovers a finished load (``SetLoader.recover``): the set's marker is ``ready`` for the run, set schema hash and publication digest,
     and it is still that same ready marker when read again after the publication is read."""
 
+    entities: dict[str, int] = {}
+
     def load(request: LoadRequest) -> str:
         document, _ = schema if schema is not None else reads.read_schema()
         entry = document["model_sets"][request.feature_set]
@@ -274,6 +277,7 @@ def online_loader(
                     deadline=deadline,
                     layout=layout,
                 )
+        entities[request.feature_set] = result.entity_count
         return result.load_id
 
     def recover(request: LoadRequest) -> str | None:
@@ -303,7 +307,7 @@ def online_loader(
         # The store can restart or be reloaded while the catalog is read: only a marker that is still the same ready load is recovered.
         return first["load_id"] if ready_marker() == first else None
 
-    return SetLoader(load, recover)
+    return SetLoader(load, recover, entities)
 
 
 def base_run_of(folder: Path) -> str:

@@ -51,7 +51,7 @@ JOB_PHASES: dict[str, tuple[str, ...]] = {
     "bronze": ("pin", "load", "check", "inventory", "spark"),
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
     "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
-    "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
+    "features": ("pin", "build", "validate", "export", "publish", "upload", "feast", "reload"),
     "train": ("prepare", "extract", "train", "research"),
     "promote": ("promote", "canary", "notify"),
     "drift": ("baseline", "current", "check", "publish"),
@@ -94,7 +94,10 @@ LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "feature_set": lambda value: SET_NAME.fullmatch(value) is not None,
     "mode": lambda value: value in ("load", "hold", "release", "offline"),
     "result": lambda value: WORD.fullmatch(value) is not None,
+    "reason": lambda value: value in ("no_load_evidence", "held_not_released"),
 }
+# Extra grouping keys of a group that one process pushes for each set, from closed patterns. The key is in the path, never in the body.
+GROUP_KEYS: dict[str, Callable[[str], bool]] = {"feature_set": lambda value: SET_NAME.fullmatch(value) is not None}
 COMMON = {
     "hai_job_start_timestamp_seconds": "Unix time the job process started.",
     "hai_job_heartbeat_timestamp_seconds": "Unix time of the latest heartbeat of the running job.",
@@ -119,6 +122,14 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_feature_set_online_mode": ("1 for the online load mode of the latest feature set publish.", ("feature_set", "mode")),
     "hai_feature_reload_result": ("1 for the result of the latest online store reload of a feature set.", ("feature_set", "result")),
     "hai_feature_release_result": ("1 for the result of the latest release of a held online load of a feature set.", ("feature_set", "result")),
+    "hai_online_reload_result": (
+        "1 for the result of the latest online store reload of the set at host start: loaded, already_loaded, skipped or failed.",
+        ("result",),
+    ),
+    "hai_online_reload_skip_reason": ("1 for the reason the latest online store reload of the set was skipped.", ("reason",)),
+    "hai_online_reload_rows": ("Entities the latest online store reload of the set loaded.", ()),
+    "hai_online_reload_duration_seconds": ("Seconds the latest online store reload of the set took.", ()),
+    "hai_online_reload_timestamp_seconds": ("Unix time the latest online store reload of the set ended.", ()),
     "hai_spark_stages_active": ("Spark stages that run now in the bronze session.", ()),
     "hai_spark_tasks_running": ("Spark tasks that run now across the active stages.", ()),
     "hai_spark_tasks_completed": ("Spark tasks completed in the bronze session so far.", ()),
@@ -165,6 +176,8 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_publisher_source_units_unfinished": ("Units of the data source that failed or were refused in the latest publisher run.", ("data_source",)),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
+# The metrics that a process pushes in a group with extra grouping keys: the labels the group adds to each series.
+GROUP_LABELS: dict[str, tuple[str, ...]] = {name: ("feature_set",) for name in CATALOG if name.startswith("hai_online_reload_")}
 PENDING: list[Sample] = []
 PENDING_LOCK = threading.Lock()
 
@@ -301,6 +314,7 @@ class Pusher:
         request_timeout: float | None = None,
         total_timeout: float | None = None,
         instance: Mapping[str, str] | None = None,
+        group: Mapping[str, str] | None = None,
     ) -> None:
         parsed = urlparse(url)
         if parsed.scheme != "http" or not parsed.hostname:
@@ -310,6 +324,10 @@ class Pusher:
         self.instance = dict(instance or {})
         if any(value not in INSTANCE_VALUES.get(key, ()) for key, value in self.instance.items()):
             raise ValueError("an instance key must be model_set (m1 to m6) or job_type (HAI_1 to HAI_6)")
+        for key, value in (group or {}).items():
+            if key not in GROUP_KEYS or not isinstance(value, str) or not GROUP_KEYS[key](value):
+                raise ValueError("the extra grouping key or its value is not in its closed set")
+        self.group = dict(group or {})
         self.host, self.port, self.job, self.phase = parsed.hostname, parsed.port or 80, job, phase
         self.request_timeout, self.total_timeout = request_timeout, total_timeout
         self.started_at = time.time()
@@ -344,7 +362,8 @@ class Pusher:
 
     def path(self, outcome: str) -> str:
         base = f"/metrics/job/{quote(self.job, safe='')}/phase/{quote(self.phase, safe='')}/outcome/{quote(outcome, safe='')}"
-        return base + "".join(f"/{key}/{quote(value, safe='')}" for key, value in sorted(self.instance.items()))
+        extra = "".join(f"/{quote(key, safe='')}/{quote(value, safe='')}" for key, value in self.group.items())
+        return base + "".join(f"/{key}/{quote(value, safe='')}" for key, value in sorted(self.instance.items())) + extra
 
     def send(self, method: str, outcome: str, body: str, timeout: float, *, quiet: bool = False) -> bool:
         """One request; False and one named line on any failure, unless ``quiet``."""

@@ -436,10 +436,10 @@ def ecs_client_has_hard_timeouts(root: Path) -> dict[str, bool]:
 def catalog_has_a_help_text_and_closed_labels(root: Path) -> dict[str, bool]:
     return {
         "every metric has a help text": all(text.strip() for text, _, _ in host_state_exporter.CATALOG.values()),
-        "the only label names are source, check, service, stop_code, probe and volume": {
+        "the only label names are source, check, service, stop_code, probe, volume and task": {
             label for _, labels, _ in host_state_exporter.CATALOG.values() for label in labels
         }
-        <= {"source", "check", "service", "stop_code", "probe", "volume"},
+        <= {"source", "check", "service", "stop_code", "probe", "volume", "task"},
         "metric names are valid": all(re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in host_state_exporter.CATALOG),
         "counters end in _total": all(name.endswith("_total") == (kind == "counter") for name, (_, _, kind) in host_state_exporter.CATALOG.items()),
     }
