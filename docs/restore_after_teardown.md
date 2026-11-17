@@ -41,6 +41,10 @@ The `postgres_backup` service runs two containers on the host. The dump containe
 
 1. Wait for one marker. 2. Stop the host. 3. Move the postgres data folder aside on a scratch host or delete the data volume in a test project, never the live one without approval. 4. `host_session start` and read `restored database` lines in the postgres log. 5. Read the `catalog_restored` line of the start or run `catalog-setup restore --dry-run`, then compare the counts of tables in Polaris with the last catalog backup.
 
+## Proof against a real server
+
+`python -m scripts.infrastructure.run_postgres_backup_e2e` runs every script against stand-ins and is part of the configuration checks. `python -m scripts.infrastructure.run_postgres_restore_real_e2e` runs the same scripts against a scratch PostgreSQL 17 server and real client programs, dumps it, wipes it, restores it and compares a hash of every table. It is a heavy run: read its docstring for the environment it needs. It refuses a server that holds any of the project databases.
+
 ## Limits
 
 - Backups expire after 30 days. A project idle for more than 30 days has none left.
