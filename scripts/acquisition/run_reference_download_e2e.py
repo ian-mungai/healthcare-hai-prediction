@@ -13,13 +13,13 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.acquisition import bls_api_contract as bls_contract
-from scripts.acquisition import legacy_versions
+from scripts.acquisition import legacy_versions, s3_store
 from scripts.acquisition import reference_download_contract as contract
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.run_bls_api_e2e import inventory
 from scripts.acquisition.run_hud_xlsx_e2e import download_metadata, set_origin
 from scripts.acquisition.s3_store import TERMS_ACCEPTANCE_PATH, encoded_json, fingerprint, write_once
-from scripts.acquisition.source_registry import canonical_hash, read_json, require
+from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 from scripts.acquisition.store_reference_download import execute, run_all, verify_local
 from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3
 
@@ -53,11 +53,22 @@ REQUESTS = [
         "media_type": "text/html",
         "release_binding": "terms",
     },
+    {
+        "source_id": "HCAI_UTIL",
+        "role": "dictionary",
+        "title": "HCAI hospital utilization data dictionary",
+        "publisher": "California Department of Health Care Access and Information",
+        "origin_url": "https://hcai.ca.gov/data/healthcare-utilization/hospital-utilization/",
+        "file_name": "hospital_utilization.html",
+        "media_type": "text/html",
+        "release_binding": "access_release",
+    },
 ]
 BODIES = {
     "la.txt": b"LAUS series identifiers\nla.area\tarea_code\tarea_text\nla.measure\tmeasure_code\tmeasure_text\n",
     "SVI2020Documentation_08.05.22.pdf": b"%PDF-1.4\n% synthetic SVI documentation\n%%EOF\n",
     "usps_crosswalk.html": b"<html><body><h1>USPS ZIP Code Crosswalk Files</h1><p>RES_RATIO: share of residential addresses</p></body></html>\n",
+    "hospital_utilization.html": b"<html><body><h1>Hospital annual utilization</h1><p>FAC_NO: facility number</p></body></html>\n",
 }
 REFERRER = "https://www.example.org/search?q=definitions"
 
@@ -150,6 +161,7 @@ def exercise(root: Path) -> list[dict]:
             require(lineage["terms_sha256"] == contract.digest(TERMS_ACCEPTANCE_PATH.read_bytes()), "Terms binding missing")
 
         scenario("held_reference_stored_with_terms_binding", held_with_terms)
+        release_scenarios(scenario, plan, entries, root, downloads)
         scenario(
             "unheld_receipt_has_no_binding",
             lambda: require("terms_sha256" not in json.loads(verify_local(receipt_path)["lineage"]["extraction_or_query"]), "Binding leaked"),
@@ -182,12 +194,44 @@ def exercise(root: Path) -> list[dict]:
             s3 = FakeS3()
             results, held = run_all(plan, root / "all", partial, True, s3, OUTPUTS)
             require([h["file_name"] for h in held] == ["SVI2020Documentation_08.05.22.pdf"] and "missing" in held[0]["reason"], f"Held set differs: {held}")
-            require(len(results) == 2 and all(r["status"] == "stored" for r in results), "Other files did not complete")
+            require(len(results) == len(REQUESTS) - 1 and all(r["status"] == "stored" for r in results), "Other files did not complete")
             again, held_again = run_all(plan, root / "all", partial, True, s3, OUTPUTS)
             require(again == results and len(held_again) == 1, "Rerun differs")
 
         scenario("failing_file_held_others_stored", independent)
     return scenarios
+
+
+def release_scenarios(scenario: Any, plan: dict, entries: dict, root: Path, downloads: Path) -> None:
+    """A held reference verifies against the access release record its receipt binds, newest or earlier, and only a listed record that releases its source."""
+    hcai = entries["hospital_utilization.html"]
+    stored: dict[str, Any] = {}
+    first, second, newest = (contract.digest(path.read_bytes()) for path in s3_store.ACCESS_RELEASE_PATHS[:3])
+
+    def bound_and_stored() -> None:
+        result = execute(plan, hcai, root / "hcai", downloads, True, FakeS3(), OUTPUTS)
+        path = Path(current(result["receipt_path"]))
+        receipt = read_json(path)
+        stored.update(receipt=receipt, folder=path.parent, lineage=json.loads(receipt["lineage"]["extraction_or_query"]))
+        require(result["status"] == "stored" and stored["lineage"]["access_release_sha256"] == newest, "Access release binding missing")
+
+    def verify_bound(recorded: str) -> None:
+        source = next(s for s in load_registry()["sources"] if s["source_id"] == "HCAI_UTIL")
+        lineage = stored["lineage"] | {"access_release_sha256": recorded}
+        contract.verify_capture(stored["receipt"], source, lineage, stored["folder"], False)
+
+    def another_source() -> None:
+        record = root / "other_source_release.json"
+        write_once(record, encoded_json({"releases": [{"source_id": "HUD", "released": True}]}))
+        with patch.object(s3_store, "ACCESS_RELEASE_PATHS", (record,)):
+            verify_bound(contract.digest(record.read_bytes()))
+
+    scenario("held_reference_stored_with_access_release_binding", bound_and_stored)
+    scenario("receipt_bound_to_the_newest_record_verifies", lambda: verify_bound(newest))
+    scenario("receipt_bound_to_the_second_record_verifies", lambda: verify_bound(second))
+    scenario("receipt_bound_to_the_first_record_verifies", lambda: verify_bound(first))
+    scenario("receipt_bound_to_an_unknown_record_refused", lambda: verify_bound("0" * 64), "release binding differs")
+    scenario("receipt_bound_to_a_record_of_another_source_refused", another_source, "release binding differs")
 
 
 def successor_scenarios(scenario: Any, plan: dict, root: Path, receipt_path: Path) -> None:
