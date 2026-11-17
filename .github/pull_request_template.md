@@ -19,5 +19,4 @@ List unresolved holds and obsolete references. If there are none, say so.
 
 ## Message review
 
-Use a Conventional Commit title. Remove AI credit and agent-session lines from
-the title and body. Human co-authors and factual tool mentions are allowed.
+Use a Conventional Commit title. Remove AI credit and agent-session lines from the title and body. Human co-authors and factual tool mentions are allowed.
