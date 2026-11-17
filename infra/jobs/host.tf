@@ -297,6 +297,9 @@ resource "aws_ecs_task_definition" "host" {
   }
 
   lifecycle {
+    # A replacement registers the new revision before it retires the old one, so a registration that ECS refuses keeps the old revision in the state. skip_destroy keeps it in ECS.
+    create_before_destroy = true
+
     precondition {
       condition     = try(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0], "") == tostring(var.host_job_memory_mib)
       error_message = "The capacity binding gives another job memory than host_job_memory_mib. Render both from the same services output with render_jobs_config."

@@ -19,6 +19,7 @@
     "\"$python_bin\" -m scripts.infrastructure.run_iam_preflight_e2e --output-directory \"$quality_output/iam_preflight\"",
     "\"$python_bin\" -m scripts.infrastructure.run_jobs_host_only_e2e --out \"$e2e_output/jobs_host_only\"",
     "\"$python_bin\" -m scripts.infrastructure.run_jobs_iam_e2e --output \"$quality_output/jobs_iam\"",
+    "\"$python_bin\" -m scripts.infrastructure.run_jobs_replace_order_e2e --out \"$e2e_output/jobs_replace_order\"",
     "\"$python_bin\" -m scripts.infrastructure.run_monitoring_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_openmetadata_e2e --output-directory \"$e2e_output/openmetadata\"",
     "\"$python_bin\" -m scripts.infrastructure.run_openmetadata_persistent_e2e --output-root \"$e2e_output/openmetadata_persistent\"",

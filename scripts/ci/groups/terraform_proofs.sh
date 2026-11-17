@@ -22,4 +22,7 @@ terraform_proofs() {
   # The apply that removes the retired Fargate job definitions only forgets them: the plan against the historical state changes exactly the 19 retired addresses and no host definition,
   # and the plan after it is empty.
   timed "terraform_proofs: retired definitions proof" "$python_bin" -m scripts.infrastructure.run_retired_definitions_e2e --out "$e2e_output/retired_definitions"
+  # A jobs apply that replaces a task definition registers the new revision before it retires the old one: the plan of a replacement of all sixteen host and publisher definitions
+  # creates first, and the old revision stays registered (skip_destroy), so a registration that ECS refuses keeps the old definition.
+  timed "terraform_proofs: jobs replace order proof" "$python_bin" -m scripts.infrastructure.run_jobs_replace_order_e2e --out "$e2e_output/jobs_replace_order"
 }
