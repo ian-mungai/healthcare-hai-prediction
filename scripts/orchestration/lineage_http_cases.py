@@ -7,8 +7,10 @@ receives. The Z form of the time is accepted by OpenMetadata 2.0.7 and the +00:0
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -33,22 +35,44 @@ RUN_ID, PARENT_ID = "13d9e9ef-93b2-4efc-90d5-066b1becf67d", "3589fe84-f7d0-49fe-
 NAMESPACE, PRODUCER = "hai-prediction-aws", "https://example.invalid/synthetic-producer"
 FAST_FAIL = {"total": 0, "read": 0, "connect": 0}
 
-# (sent eventTime, posted eventTime): every offset form, naive time, already-Z time and fractional seconds.
+# (sent eventTime, posted eventTime, milliseconds after TIME_BASE that OpenMetadata has to store): every offset form, naive time, already-Z time and
+# fractional seconds of 1, 3, 6 and 9 digits. OpenMetadata 2.0.7 reads the digits after the point as whole milliseconds (see ``stored_millis``), so the
+# transport posts exactly three digits (cut, not rounded) or none.
+TIME_BASE = calendar.timegm((2026, 11, 16, 19, 31, 22)) * 1000  # 2026-11-16T19:31:22Z, worked out here and not by the code under test
 TIME_CASES = [
-    ("2026-11-16T19:31:22+00:00", "2026-11-16T19:31:22Z"),
-    ("2026-11-16T19:31:22.123+00:00", "2026-11-16T19:31:22.123Z"),
-    ("2026-11-16T19:31:22.123456+00:00", "2026-11-16T19:31:22.123456Z"),
-    ("2026-11-16T19:31:22.1+00:00", "2026-11-16T19:31:22.1Z"),
-    ("2026-11-16T19:31:22+0000", "2026-11-16T19:31:22Z"),
-    ("2026-11-16T11:31:22-08:00", "2026-11-16T19:31:22Z"),
-    ("2026-11-17T01:01:22.250+05:30", "2026-11-16T19:31:22.250Z"),
-    ("2026-11-16T23:59:59.5-02:00", "2026-11-17T01:59:59.5Z"),
-    ("2026-11-16T19:31:22", "2026-11-16T19:31:22Z"),
-    ("2026-11-16T19:31:22.123", "2026-11-16T19:31:22.123Z"),
-    ("2026-11-16T19:31:22Z", "2026-11-16T19:31:22Z"),
-    ("2026-11-16T19:31:22.123Z", "2026-11-16T19:31:22.123Z"),
-    ("2026-11-16T19:31:22.123456Z", "2026-11-16T19:31:22.123456Z"),
+    ("2026-11-16T19:31:22+00:00", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-16T19:31:22.123+00:00", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22.123456+00:00", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22.123456789+00:00", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22.999999+00:00", "2026-11-16T19:31:22.999Z", 999),
+    ("2026-11-16T19:31:22.000456+00:00", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-16T19:31:22.1+00:00", "2026-11-16T19:31:22.100Z", 100),
+    ("2026-11-16T19:31:22+0000", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-16T11:31:22-08:00", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-17T01:01:22.250+05:30", "2026-11-16T19:31:22.250Z", 250),
+    ("2026-11-16T23:59:59.5-02:00", "2026-11-17T01:59:59.500Z", 500 + 6 * 3600 * 1000 + 28 * 60 * 1000 + 37 * 1000),
+    ("2026-11-16T19:31:22", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-16T19:31:22.123", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22Z", "2026-11-16T19:31:22Z", 0),
+    ("2026-11-16T19:31:22.1Z", "2026-11-16T19:31:22.100Z", 100),
+    ("2026-11-16T19:31:22.123Z", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22.123456Z", "2026-11-16T19:31:22.123Z", 123),
+    ("2026-11-16T19:31:22.123456789Z", "2026-11-16T19:31:22.123Z", 123),
 ]
+JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z")
+
+
+def stored_millis(text: str) -> int | None:
+    """The epoch milliseconds OpenMetadata 2.0.7 stores for an eventTime, or None when it refuses the text. Its mapper reads a time with
+    ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")`` (JsonUtils.java, 2.0.7-release, line 121) after padding a bare-second time with ``.000000``. That
+    format takes the digits after the point as one whole number of milliseconds, so ``.123`` is 123 ms and ``.123456`` is 123456 ms. Only ``Z`` is read.
+    The same rule is in ``scripts/orchestration/ecs_lineage_cases.py`` (this file runs in the Airflow image, where that module does not import)."""
+    found = JAVA_TIME.fullmatch(text)
+    if found is None:
+        return None
+    year, month, day, hour, minute, second = (int(part) for part in found.groups()[:6])
+    seconds = calendar.timegm((year, month, day, hour, minute, second))
+    return seconds * 1000 + int(found.group(7) or 0)
 
 
 class StandIn(ThreadingHTTPServer):
@@ -173,7 +197,7 @@ def failure_type(transport: Any, event: Any) -> str:
 def time_cases(server: StandIn, failures: list[str]) -> int:
     count = 0
     with scheduler_client(server.url) as client:
-        for sent, wanted in TIME_CASES:
+        for sent, wanted, after in TIME_CASES:
             for state in RunState:
                 event = run_event(state, sent)
                 got = posted_once(server, lambda event=event: client.emit(event))
@@ -182,13 +206,15 @@ def time_cases(server: StandIn, failures: list[str]) -> int:
                     failures.append(f"{state.value} {sent}: route or credential differs from the plain HTTP transport ({got['path']})")
                 elif got["body"] != expected_body(event, wanted):
                     failures.append(f"{state.value} {sent}: posted {got['body']['eventTime']}, wanted {wanted} with the rest of the event unchanged")
+                elif stored_millis(got["body"]["eventTime"]) != TIME_BASE + after:
+                    failures.append(f"{state.value} {sent}: OpenMetadata stores {stored_millis(got['body']['eventTime'])}, the instant is {TIME_BASE + after}")
                 if event.eventTime != sent:
                     failures.append(f"{state.value} {sent}: the caller's event was changed to {event.eventTime}")
         job = Job(namespace=NAMESPACE, name="transform_dag.silver_build")
         others: list[tuple[DatasetEvent | JobEvent, str]] = [
             (
                 DatasetEvent(eventTime="2026-11-16T11:31:22.5-08:00", dataset=StaticDataset(namespace=NAMESPACE, name="gold.encounters"), producer=PRODUCER),
-                "2026-11-16T19:31:22.5Z",
+                "2026-11-16T19:31:22.500Z",
             ),
             (JobEvent(eventTime="2026-11-16T19:31:22+00:00", job=job, producer=PRODUCER), "2026-11-16T19:31:22Z"),
         ]
@@ -227,7 +253,7 @@ def helper_cases(failures: list[str]) -> int:
         if http_transport.utc_event(value) is not value:
             failures.append(f"{value!r} was replaced although it has no time to rewrite")
     aware, naive = datetime(2026, 11, 16, 19, 31, 22, 500000, tzinfo=UTC), datetime(2026, 11, 16, 19, 31, 22)
-    for value, wanted in ((aware, "2026-11-16T19:31:22.500000Z"), (naive, "2026-11-16T19:31:22Z")):
+    for value, wanted in ((aware, "2026-11-16T19:31:22.500Z"), (naive, "2026-11-16T19:31:22Z")):
         got = http_transport.utc_event(Timed(value))
         if got.eventTime != wanted or got.other != "kept":
             failures.append(f"datetime {value!r} became {got.eventTime!r}, wanted {wanted!r}")

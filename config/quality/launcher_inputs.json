@@ -345,7 +345,7 @@
     {
       "module": "scripts/orchestration/ecs_lineage_cases.py",
       "pattern": "^data_contracts/openlineage/[^/]+[.]json$",
-      "why": "reviewed: the lineage cases list the copied OpenLineage specification files with glob at scripts/orchestration/ecs_lineage_cases.py:154 and :811 on SPEC_FOLDER (:35 = ROOT / data_contracts / openlineage) and read each match; the second site compares the folder with the digests that orchestration/ecs_lineage.py pins, so an extra file fails; no other folder is listed"
+      "why": "reviewed: the lineage cases list the copied OpenLineage specification files with glob at scripts/orchestration/ecs_lineage_cases.py:162 and :863 on SPEC_FOLDER (:43 = ROOT / data_contracts / openlineage) and read each match; the second site compares the folder with the digests that orchestration/ecs_lineage.py pins, so an extra file fails; no other folder is listed"
     },
     {
       "module": "scripts/orchestration/in_image_checks.py",

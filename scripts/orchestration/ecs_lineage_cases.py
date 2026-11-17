@@ -10,6 +10,7 @@ receiver is a local HTTP stand-in of the OpenMetadata lineage route. The events 
 from __future__ import annotations
 
 import ast
+import calendar
 import copy
 import hashlib
 import importlib
@@ -20,6 +21,8 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
+from datetime import UTC, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -694,16 +697,36 @@ def unreadable_output_record() -> None:
     require(found["inputs"] == [] and found["outputs"] == [], f"the live facets name no dataset: {found}")
 
 
-OFFSET_TIME = re.compile(r"[+-]\d{2}:?\d{2}$")
 OPENMETADATA_REFUSAL = json.dumps({"code": 400, "message": "Invalid request format"}).encode()
+JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z")
+
+
+def stored_millis(text: str) -> tuple[int, int] | None:
+    """What OpenMetadata 2.0.7 stores for an eventTime string, as (stored, meant) epoch milliseconds, or None when it refuses the string. Its mapper reads a
+    time with ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")`` (JsonUtils.java, 2.0.7-release, line 121), after padding a bare-second time with
+    ``.000000``. That format takes the digits after the point as one whole number of milliseconds, whatever their count: ``.123`` is 123 ms (meant),
+    ``.123456`` is 123456 ms (2 min 3.456 s later than meant) and ``.1`` is 1 ms (not the 100 ms meant). Only a ``Z`` zone is read, so a numeric offset is
+    refused. ``meant`` is the instant the text says, cut to whole milliseconds."""
+    found = JAVA_TIME.fullmatch(text)
+    if found is None:
+        return None
+    year, month, day, hour, minute, second = (int(part) for part in found.groups()[:6])
+    seconds = calendar.timegm((year, month, day, hour, minute, second)) * 1000
+    digits = found.group(7) or ""
+    return seconds + (int(digits) if digits else 0), seconds + int(digits.ljust(3, "0")[:3])
 
 
 def resolve(event: dict[str, Any], catalogue: set[tuple[str, str]]) -> tuple[int, dict[str, Any]]:
-    """What OpenMetadata 2.0.7 does with an event (observed Nov 16 2026): an eventTime with a numeric offset is refused with 400, a dataset is found by its
-    last two name parts (``<schema>.<table>``, whatever its namespace and database part) among the catalogued tables, and a COMPLETE event draws an edge from
-    every resolved input to every resolved output."""
-    if OFFSET_TIME.search(str(event.get("eventTime", ""))):
+    """What OpenMetadata 2.0.7 does with an event (observed Nov 16 2026, and read from its source): an eventTime that is not read (a numeric offset, no
+    ``Z``) is refused with 400; one that it would store as another instant (see ``stored_millis``) is refused here too, with a reply that names the
+    two instants, so that a case fails where OpenMetadata would store the wrong time without a word. A dataset is found by its last two name parts
+    (``<schema>.<table>``, whatever its namespace and database part) among the catalogued tables, and a COMPLETE event draws an edge from every resolved
+    input to every resolved output."""
+    decoded = stored_millis(str(event.get("eventTime", "")))
+    if decoded is None:
         return 400, json.loads(OPENMETADATA_REFUSAL)
+    if decoded[0] != decoded[1]:
+        return 400, {"code": 400, "message": f"eventTime {event['eventTime']} is stored as {decoded[0]} ms since the epoch, not {decoded[1]}"}
     found = {side: [item for item in event.get(side, []) if tuple(item["name"].split(".")[-2:]) in catalogue] for side in ("inputs", "outputs")}
     unresolved = [item["name"] for side in ("inputs", "outputs") for item in event.get(side, []) if tuple(item["name"].split(".")[-2:]) not in catalogue]
     edges = len(found["inputs"]) * len(found["outputs"]) if event.get("eventType") == "COMPLETE" else 0
@@ -977,7 +1000,7 @@ def model_set_digest_is_bound_to_its_base_row() -> None:
         require(word in str(error), f"{name} is refused with {error}")
 
 
-Z_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z")
+Z_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z")
 PROJECT_TRANSPORT = "hai_lineage.http_transport.UtcHttpTransport"  # OPENLINEAGE__TRANSPORT__TYPE in infra/services/airflow.tf
 
 
@@ -1009,29 +1032,141 @@ def event_times_leave_in_the_z_form() -> None:
     require(all(status == 200 for status, _ in receiver.replies) and len(receiver.replies) == 6, f"the receiver answered {receiver.replies}")
 
 
+BASE_MILLIS = calendar.timegm((2026, 11, 4, 10, 0, 0)) * 1000  # 2026-11-04T10:00:00Z, worked out here and not by the code under test
+# (launch time, milliseconds after BASE_MILLIS that OpenMetadata has to store): zero, one, three, six and nine fraction digits, with Z, with an offset and
+# with none, a fraction that is cut and not rounded, a leading zero, a sub-millisecond fraction, an offset that changes the date and a time with no zone.
+FRACTION_TIMES = [
+    ("2026-11-04T10:00:00+00:00", 0),
+    ("2026-11-04T10:00:00Z", 0),
+    ("2026-11-04T10:00:00", 0),
+    ("2026-11-04T12:00:00+02:00", 0),
+    ("2026-11-04T10:00:00.1+00:00", 100),
+    ("2026-11-04T10:00:00.1Z", 100),
+    ("2026-11-04T10:00:00.123+00:00", 123),
+    ("2026-11-04T10:00:00.123Z", 123),
+    ("2026-11-04T10:00:00.123456+00:00", 123),
+    ("2026-11-04T10:00:00.123456Z", 123),
+    ("2026-11-04T10:00:00.123456789+00:00", 123),
+    ("2026-11-04T10:00:00.123456789Z", 123),
+    ("2026-11-04T10:00:00.999999+00:00", 999),
+    ("2026-11-04T10:00:00.012345+00:00", 12),
+    ("2026-11-04T10:00:00.000456Z", 0),
+    ("2026-11-04T12:00:00.987654+02:00", 987),
+    ("2026-11-03T23:59:59.5-10:00", 500 - 1000),
+    ("2026-11-04T10:00:00.5", 500),
+]
+
+
+def event_times_are_stored_as_the_launch_instant() -> None:
+    """OpenMetadata 2.0.7 reads the digits after the point of an eventTime as whole milliseconds (``stored_millis``), so the six digits of a launch time
+    such as ``.123456`` were stored as 123456 ms, two minutes late. Every launch time form (0, 1, 3, 6 and 9 fraction digits, with ``Z``, with an offset and
+    with none) leaves ``ecs_lineage`` as exactly three digits, cut and not rounded, or none, and the stand-in stores the instant of the launch."""
+    base = facts("gold")
+    bucket = evidence_bucket()
+    lineage = ecs_lineage.job_lineage("gold", invocation("gold"), DECLARED["gold"], ecs_lineage.S3Evidence(bucket, BUCKET), base)
+    with receiving(catalogue=set()) as receiver:
+        for form, after in FRACTION_TIMES:
+            sent = ecs_lineage.events(lineage, invocation("gold"), replace(base, started_at=form, ended_at=form))
+            times = [event["eventTime"] for event in sent]
+            require(all(Z_TIME.fullmatch(time_) for time_ in times), f"{form}: the events carry {times}, not three fraction digits or none, and a Z")
+            for event in sent:
+                ecs_lineage.send_within([ecs_lineage.canonical(event)], receiver.url, CREDENTIAL, 10)
+            stored = [stored_millis(json.loads(item["body"])["eventTime"]) for item in receiver.requests[-2:]]
+            require(stored == [(BASE_MILLIS + after,) * 2] * 2, f"{form}: OpenMetadata stores {stored}, the launch is {BASE_MILLIS + after}")
+    require(
+        all(status == 200 for status, _ in receiver.replies) and len(receiver.replies) == 2 * len(FRACTION_TIMES), f"the receiver answered {receiver.replies}"
+    )
+
+
+def stand_in_stores_time_as_openmetadata_does() -> None:
+    """The stand-in decodes an eventTime the way OpenMetadata 2.0.7 does and refuses every form it would store as another instant, so that a time of
+    six digits (the defect of Nov 17 2026) or of one digit fails a case. The refusals are those of the observed behavior (numeric offset, no ``Z``) and
+    of the source (the digits are whole milliseconds)."""
+    plain = {"eventType": "START", "inputs": [], "outputs": []}
+    for text, stored in (
+        ("2026-11-04T10:00:00Z", BASE_MILLIS),
+        ("2026-11-04T10:00:00.000Z", BASE_MILLIS),
+        ("2026-11-04T10:00:00.123Z", BASE_MILLIS + 123),
+        ("2026-11-04T10:00:00.012Z", BASE_MILLIS + 12),
+    ):
+        require(
+            resolve({**plain, "eventTime": text}, set())[0] == 200 and stored_millis(text) == (stored, stored), f"{text} is stored as {stored_millis(text)}"
+        )
+    for text, stored, meant in (
+        ("2026-11-04T10:00:00.123456Z", BASE_MILLIS + 123456, BASE_MILLIS + 123),
+        ("2026-11-04T10:00:00.1Z", BASE_MILLIS + 1, BASE_MILLIS + 100),
+        ("2026-11-04T10:00:00.12Z", BASE_MILLIS + 12, BASE_MILLIS + 120),
+        ("2026-11-04T10:00:00.1234Z", BASE_MILLIS + 1234, BASE_MILLIS + 123),
+        ("2026-11-04T10:00:00.123456789Z", BASE_MILLIS + 123456789, BASE_MILLIS + 123),
+    ):
+        status, body = resolve({**plain, "eventTime": text}, set())
+        require(stored_millis(text) == (stored, meant), f"{text} is stored as {stored_millis(text)}, not {(stored, meant)}")
+        require(status == 400 and f"stored as {stored} ms" in body["message"], f"{text} is not refused as a wrong instant: {status} {body}")
+    for text in ("2026-11-04T10:00:00+00:00", "2026-11-04T10:00:00.123+00:00", "2026-11-04T10:00:00", "2026-11-04", "not a time", ""):
+        require(resolve({**plain, "eventTime": text}, set()) == (400, json.loads(OPENMETADATA_REFUSAL)), f"{text!r} is not refused as OpenMetadata refuses it")
+    require(resolve(plain, set())[0] == 400, "an event with no time is refused")
+
+
+def fractional_launch_times_replay_in_three_digits() -> None:
+    """A launch whose records carry microseconds (``iso()`` writes them when the clock does) replays the same bytes every time, with each time cut to
+    three digits (the first three of the record's own, not rounded), and the stand-in stores the launch's instant."""
+    rig = Rig()
+    evidence_bucket(rig)
+    rig.time.now += 0.123456
+    operator(rig, None).execute(context())
+    record = ecs_lineage.launch_facts(source(rig, spec(), DECLARED["gold"]).store, RUN, "gold", 1)
+    require(re.search(r"\.\d{6}\+00:00$", record.started_at) is not None, f"the launch record gives {record.started_at}: the case needs microseconds")
+    arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    with receiving(catalogue=set()) as receiver:
+        first = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
+        second = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"])
+    require(first == second and len(first) == 4, "two replays give the same bytes")
+    wanted = [re.sub(r"(\.\d{3})\d*\+00:00$", r"\1Z", text) for text in (record.started_at, record.ended_at)]
+    times = [json.loads(line)["eventTime"] for line in first]
+    require(sorted(set(times)) == sorted(set(wanted)), f"the replay carries {times}, the launch records give {wanted}")
+    require(all(status == 200 for status, _ in receiver.replies) and len(receiver.replies) == 4, f"the receiver answered {receiver.replies}")
+
+
 def utc_time_is_the_transports_helper() -> None:
     """``ecs_lineage.utc_time`` (standard library only: the module runs where the OpenLineage client may be missing) gives what the project transport's own
-    ``utc_time`` (services/lineage/http_transport.py, imported here over a stand-in of the client it imports) gives for every string form."""
+    ``utc_time`` (services/lineage/http_transport.py, imported here over a stand-in of the client it imports) gives for every string form, which is the
+    UTC time with exactly three fraction digits (cut, not rounded) or none. A second pass changes nothing, and a ``datetime`` goes the same way."""
     stubs: dict[str, Any] = {name: ModuleType(name) for name in ("openlineage", "openlineage.client", "openlineage.client.transport")}
     stubs["openlineage.client.transport.http"] = SimpleNamespace(HttpTransport=type("HttpTransport", (), {}))
     with mock.patch.dict(sys.modules, stubs):
         module = importlib.import_module("services.lineage.http_transport")  # a literal name: the launcher input scan follows it
-    forms = [
-        "2026-11-04T10:00:00+00:00",
-        "2026-11-04T10:00:00.123456+00:00",
-        "2026-11-04T10:00:00.1+00:00",
-        "2026-11-04T10:00:00,5+00:00",
-        "2026-11-04T10:00:00.1234567+00:00",
-        "2026-11-04T12:00:00+02:00",
-        "2026-11-04T10:00:00",
-        "2026-11-04T10:00:00Z",
-        "2026-11-04T10:00:00.5Z",
-        "2026-11-04",
-        "not a time",
-        "",
-    ]
-    for form in forms:
-        require(ecs_lineage.utc_time(form) == module.utc_time(form), f"{form!r}: {ecs_lineage.utc_time(form)!r} is not {module.utc_time(form)!r}")
+    forms = {
+        "2026-11-04T10:00:00+00:00": "2026-11-04T10:00:00Z",
+        "2026-11-04T10:00:00.123456+00:00": "2026-11-04T10:00:00.123Z",
+        "2026-11-04T10:00:00.1+00:00": "2026-11-04T10:00:00.100Z",
+        "2026-11-04T10:00:00,5+00:00": "2026-11-04T10:00:00.500Z",
+        "2026-11-04T10:00:00.1234567+00:00": "2026-11-04T10:00:00.123Z",
+        "2026-11-04T10:00:00.999999+00:00": "2026-11-04T10:00:00.999Z",
+        "2026-11-04T10:00:00.000456+00:00": "2026-11-04T10:00:00Z",
+        "2026-11-04T12:00:00+02:00": "2026-11-04T10:00:00Z",
+        "2026-11-04T12:00:00.987654+02:00": "2026-11-04T10:00:00.987Z",
+        "2026-11-04T10:00:00": "2026-11-04T10:00:00Z",
+        "2026-11-04T10:00:00.25": "2026-11-04T10:00:00.250Z",
+        "2026-11-04T10:00:00Z": "2026-11-04T10:00:00Z",
+        "2026-11-04T10:00:00.5Z": "2026-11-04T10:00:00.500Z",
+        "2026-11-04T10:00:00.123Z": "2026-11-04T10:00:00.123Z",
+        "2026-11-04T10:00:00.123456Z": "2026-11-04T10:00:00.123Z",
+        "2026-11-04T10:00:00.123456789Z": "2026-11-04T10:00:00.123Z",
+        "2026-11-04": "2026-11-04",
+        "not a time": "not a time",
+        "": "",
+    }
+    for form, wanted in forms.items():
+        got = (ecs_lineage.utc_time(form), module.utc_time(form))
+        require(got == (wanted, wanted), f"{form!r}: {got}, wanted {wanted!r} from both")
+        require(ecs_lineage.utc_time(wanted) == wanted and module.utc_time(wanted) == wanted, f"{wanted!r} changes in a second pass")
+    for moment, wanted in (
+        (datetime(2026, 11, 4, 10, 0, 0, 123456, tzinfo=UTC), "2026-11-04T10:00:00.123Z"),
+        (datetime(2026, 11, 4, 10, 0, 0, 999999), "2026-11-04T10:00:00.999Z"),
+        (datetime(2026, 11, 4, 10, 0, 0, tzinfo=UTC), "2026-11-04T10:00:00Z"),
+    ):
+        require(module.utc_time(moment) == wanted, f"{moment!r} became {module.utc_time(moment)!r}, wanted {wanted!r}")
     require(ecs_lineage.utc_time("2026-11-04T12:00:00+02:00") == "2026-11-04T10:00:00Z", "another offset is converted to UTC")
 
 
@@ -1150,6 +1285,9 @@ CASES: dict[str, Callable[[], None]] = {
     "replay_rebuilds_the_same_events": replay_rebuilds_the_same_events,
     "adopted_retry_keeps_its_lineage": adopted_retry_keeps_its_lineage,
     "event_times_leave_in_the_z_form": event_times_leave_in_the_z_form,
+    "event_times_are_stored_as_the_launch_instant": event_times_are_stored_as_the_launch_instant,
+    "stand_in_stores_time_as_openmetadata_does": stand_in_stores_time_as_openmetadata_does,
+    "fractional_launch_times_replay_in_three_digits": fractional_launch_times_replay_in_three_digits,
     "utc_time_is_the_transports_helper": utc_time_is_the_transports_helper,
     "table_events_are_sent_for_the_project_transport_type": table_events_are_sent_for_the_project_transport_type,
     "layer_dag_names_resolve_in_the_catalogue": layer_dag_names_resolve_in_the_catalogue,

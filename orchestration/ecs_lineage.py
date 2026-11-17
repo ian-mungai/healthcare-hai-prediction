@@ -19,7 +19,8 @@ Where the parts come from:
   they are the same while the mirror's ``enabled`` is false; OpenMetadata resolves them once the mirror is on and ingested (it creates no unresolved
   entity). Bronze is a mirror layer like the others (``bronze``), so a bronze table is named the same way and resolves once the mirror holds it.
 - The launch identity, the times, the outcome and the input run bound at launch come from the launch records (``orchestration/ecs_launch.py``). The records
-  write times as ``+00:00``, which OpenMetadata 2.0.7 refuses with a 400, so every event carries its eventTime in the UTC Z form (``utc_time``).
+  write times as ``+00:00``, which OpenMetadata 2.0.7 refuses with a 400, so every event carries its eventTime in the UTC Z form with no fraction or
+  exactly three digits, as milliseconds (``utc_time``).
 - The versions come from the job's evidence under ``lakehouse/layer_runs/<layer>/<run>/``: the pin file (the input snapshots) and the output record.
   The input snapshot record is checked by ``snapshots.validate_input_record``: it names exactly the declared inputs, and its pins equal the frozen pins.
   For gold and features the frozen pins are the snapshot set that the input run bound at launch published; the pin must also name that run. Silver pins
@@ -306,26 +307,25 @@ def timestamp_text(value: Any, where: str) -> str:
     return str(value)
 
 
-FRACTION = re.compile(r":\d{2}[.,](\d+)")
-
-
 def utc_time(value: str) -> str:
-    """An ISO 8601 time in UTC with a trailing Z, keeping the fractional digits (at most six), as OpenMetadata 2.0.7 accepts it and refuses a numeric offset
-    such as ``+00:00`` (the launch records write that form). Anything that is not an ISO 8601 date-time is returned as given. A case compares this with
-    ``services/lineage/http_transport.py`` ``utc_time``, which does the same for the scheduler's events and cannot be imported here (it needs the client)."""
-    if "t" not in value.lower() or value.endswith("Z"):
+    """An ISO 8601 time in UTC with a trailing Z and no fraction (when it has no whole millisecond) or exactly three fraction digits (milliseconds, cut
+    and not rounded). OpenMetadata 2.0.7 refuses a numeric offset such as ``+00:00`` (the launch records write that form) and reads the digits after the
+    point as whole milliseconds (JsonUtils.java, ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")``), so ``.123456`` is stored as 123456 ms, two
+    minutes late, and ``.1`` as 1 ms; three digits are the only count it stores as written. Anything that is not an ISO 8601 date-time is returned as
+    given. A case compares this with ``services/lineage/http_transport.py`` ``utc_time``, which does the same for the scheduler's events and cannot be
+    imported here (it needs the client)."""
+    if "t" not in value.lower():
         return value
     try:
         moment = datetime.fromisoformat(value)
     except ValueError:
         return value
-    match = FRACTION.search(value)
-    digits = min(len(match.group(1)), 6) if match else 0
     try:
         moment = (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(UTC)
     except OverflowError:
         return value
-    fraction = f".{moment.microsecond:06d}"[: digits + 1] if digits else ""
+    millis = moment.microsecond // 1000
+    fraction = f".{millis:03d}" if millis else ""
     return moment.isoformat(timespec="seconds").removesuffix("+00:00") + fraction + "Z"
 
 

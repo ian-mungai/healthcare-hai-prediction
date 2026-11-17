@@ -2,34 +2,33 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from typing import Any
 
 import attr
 from openlineage.client.transport.http import HttpTransport
 
-FRACTION = re.compile(r":\d{2}[.,](\d+)")
-
 
 def utc_time(value: Any) -> Any:
-    """Return a time in UTC with a trailing Z, keeping the fractional digits (at most six), or the value itself when it is not an ISO 8601 date-time."""
+    """Return a time in UTC with a trailing Z and no fraction (when it has no whole millisecond) or exactly three fraction digits (milliseconds, cut and not
+    rounded), or the value itself when it is not an ISO 8601 date-time. OpenMetadata 2.0.7 reads the digits after the point as whole milliseconds
+    (JsonUtils.java, ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")``), so ``.123456`` is stored as 123456 ms, two minutes late, and ``.1`` as 1 ms;
+    three digits are the only count it stores as written. ``orchestration/ecs_lineage.py`` ``utc_time`` is the same code for the direct ECS jobs' events."""
     if isinstance(value, datetime):
-        moment, digits = value, 6 if value.microsecond else 0
-    elif isinstance(value, str) and "t" in value.lower() and not value.endswith("Z"):
+        moment = value
+    elif isinstance(value, str) and "t" in value.lower():
         try:
             moment = datetime.fromisoformat(value)
         except ValueError:
             return value
-        match = FRACTION.search(value)
-        digits = min(len(match.group(1)), 6) if match else 0
     else:
         return value
     try:
         moment = (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(UTC)
     except OverflowError:
         return value
-    fraction = f".{moment.microsecond:06d}"[: digits + 1] if digits else ""
+    millis = moment.microsecond // 1000
+    fraction = f".{millis:03d}" if millis else ""
     return moment.isoformat(timespec="seconds").removesuffix("+00:00") + fraction + "Z"
 
 
