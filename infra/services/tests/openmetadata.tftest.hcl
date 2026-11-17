@@ -366,7 +366,7 @@ run "bootstrap_reads_one_password_and_names_the_token_parameters" {
   assert {
     condition = (
       jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].secrets == [{ name = "OM_ADMIN_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/openmetadata_admin_password" }]
-      && contains(jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].environment, { name = "OM_BOT_PARAMETERS", value = jsonencode({ comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison", ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion", lineage = "/healthcare_hai_prediction/openmetadata_bot_lineage" }) })
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].environment, { name = "OM_BOT_PARAMETERS", value = jsonencode({ ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion", lineage = "/healthcare_hai_prediction/openmetadata_bot_lineage" }) })
     )
     error_message = "The bootstrap reads the administrator password as a secret and is told the parameter name of each caller's bot token. It receives no token value."
   }
@@ -594,9 +594,8 @@ run "bot_token_name_with_a_dash_is_refused" {
 
   variables {
     openmetadata_bot_token_names = {
-      lineage    = "/healthcare_hai_prediction/openmetadata-bot-lineage"
-      ingestion  = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
-      comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+      lineage   = "/healthcare_hai_prediction/openmetadata-bot-lineage"
+      ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
     }
   }
 
@@ -608,9 +607,8 @@ run "two_callers_sharing_one_token_parameter_are_refused" {
 
   variables {
     openmetadata_bot_token_names = {
-      lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"
-      ingestion  = "/healthcare_hai_prediction/openmetadata_bot_lineage"
-      comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+      lineage   = "/healthcare_hai_prediction/openmetadata_bot_lineage"
+      ingestion = "/healthcare_hai_prediction/openmetadata_bot_lineage"
     }
   }
 
@@ -622,9 +620,8 @@ run "token_parameter_equal_to_the_admin_password_is_refused" {
 
   variables {
     openmetadata_bot_token_names = {
-      lineage    = "/healthcare_hai_prediction/openmetadata_admin_password"
-      ingestion  = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
-      comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+      lineage   = "/healthcare_hai_prediction/openmetadata_admin_password"
+      ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
     }
   }
 
@@ -778,4 +775,18 @@ run "openmetadata_without_its_own_log_group_is_refused" {
   }
 
   expect_failures = [var.log_group_names]
+}
+
+run "a_third_caller_is_refused" {
+  command = plan
+
+  variables {
+    openmetadata_bot_token_names = {
+      lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"
+      ingestion  = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
+      comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+    }
+  }
+
+  expect_failures = [var.openmetadata_bot_token_names]
 }

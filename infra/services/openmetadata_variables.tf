@@ -47,24 +47,23 @@ variable "openmetadata_db_password_name" {
 }
 
 variable "openmetadata_bot_token_names" {
-  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery), ingestion (the Polaris and dbt ingestion jobs) and comparison (a read-only caller). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
+  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery) and ingestion (the Polaris and dbt ingestion jobs). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
   type        = map(string)
   default = {
-    lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"
-    ingestion  = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
-    comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+    lineage   = "/healthcare_hai_prediction/openmetadata_bot_lineage"
+    ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
   }
   nullable = false
 
   validation {
     condition = (
-      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"]) &&
+      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion"]) &&
       alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))]) &&
-      length(distinct(values(var.openmetadata_bot_token_names))) == 3 &&
+      length(distinct(values(var.openmetadata_bot_token_names))) == 2 &&
       !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name) &&
       !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
     )
-    error_message = "Name exactly the callers lineage, ingestion and comparison, each with its own parameter path of letters, digits and underscores (no dashes, wildcards, spaces or the prefixes aws and ssm), none equal to another or to the administrator or database password."
+    error_message = "Name exactly the callers lineage and ingestion, each with its own parameter path of letters, digits and underscores (no dashes, wildcards, spaces or the prefixes aws and ssm), none equal to another or to the administrator or database password."
   }
 }
 

@@ -171,7 +171,6 @@ OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
 OPENMETADATA_NEIGHBORS = (
     "openmetadata_bot_lineage",
     "openmetadata_bot_ingestion",
-    "openmetadata_bot_comparison",
     "openmetadata_admin",
     "openmetadata_password",
 )

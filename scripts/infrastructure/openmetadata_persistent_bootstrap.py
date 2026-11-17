@@ -2,7 +2,7 @@
 
 Runs in the ingestion image as the one-shot ``openmetadata_bootstrap`` host task: ``python openmetadata_persistent_bootstrap.py``.
 It reads ``OM_API``, ``OM_ADMIN_PASSWORD`` (injected from Parameter Store by the task definition) and ``OM_BOT_PARAMETERS``
-(a JSON object that names the token parameter of the callers lineage, ingestion and comparison).
+(a JSON object that names the token parameter of the callers lineage and ingestion).
 It waits for the server within a deadline, replaces the factory administrator password, makes sure each caller has a bot with its role,
 writes each bot's token straight to that caller's SecureString parameter, and turns ``autoCreateEntities`` off in the OpenLineage settings
 (owner decision of Nov 7 2026: the OpenLineage API resolves only tables the Glue connector cataloged and never invents a table or a pipeline).
@@ -32,7 +32,7 @@ try:
 except ImportError:
     base = importlib.import_module("openmetadata_bootstrap")
 
-CALLER_ROLES = {"lineage": "IngestionBotRole", "ingestion": "IngestionBotRole", "comparison": "DataConsumer"}
+CALLER_ROLES = {"lineage": "IngestionBotRole", "ingestion": "IngestionBotRole"}
 PARAMETER_PATTERN = re.compile(r"^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$")
 
 
@@ -126,7 +126,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
     if not api or not secret:
         return fail("OM_API and OM_ADMIN_PASSWORD must be set", 2)
     if parameters is None:
-        return fail("OM_BOT_PARAMETERS must name one distinct absolute parameter for each of the callers lineage, ingestion and comparison", 2)
+        return fail("OM_BOT_PARAMETERS must name one distinct absolute parameter for each of the callers lineage and ingestion", 2)
     limit = time.monotonic() + options.deadline_seconds
     while base.call("GET", f"{api}/v1/system/version")[0] != 200:
         if time.monotonic() >= limit:

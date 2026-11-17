@@ -32,7 +32,6 @@ FACTORY_VALUE = "admin"
 PARAMETERS = {
     "lineage": "/example/openmetadata_bot_lineage",
     "ingestion": "/example/openmetadata_bot_ingestion",
-    "comparison": "/example/openmetadata_bot_comparison",
 }
 OBSERVED: dict[str, Any] = {}
 
@@ -236,9 +235,9 @@ def fresh_start() -> None:
         code, out, err = run(environment(base), store)
         require(code == 0, f"a fresh start failed: {err}")
         require(state.admin == ADMIN_VALUE and state.password_changes == 1, "the factory password was not replaced exactly once")
-        require(sorted(state.bots) == ["comparison-bot", "ingestion-bot", "lineage-bot"], f"wrong bots: {sorted(state.bots)}")
+        require(sorted(state.bots) == ["ingestion-bot", "lineage-bot"], f"wrong bots: {sorted(state.bots)}")
         require(set(store.values) == set(PARAMETERS.values()), "every caller needs its own token parameter")
-        require(len(set(store.values.values())) == 3, "two callers received the same token")
+        require(len(set(store.values.values())) == 2, "two callers received the same token")
         require(state.openlineage["autoCreateEntities"] is False, "the OpenLineage API must not create tables or pipelines for unknown datasets")
         require(
             {key: value for key, value in state.openlineage.items() if key != "autoCreateEntities"}
@@ -298,6 +297,7 @@ def refused_configuration_changes_nothing() -> None:
             "no admin password": environment(base, OM_ADMIN_PASSWORD=None),
             "parameters not json": environment(base, OM_BOT_PARAMETERS="lineage"),
             "unknown caller": environment(base, OM_BOT_PARAMETERS=json.dumps({**PARAMETERS, "extra": "/example/x"})),
+            "removed caller": environment(base, OM_BOT_PARAMETERS=json.dumps({**PARAMETERS, "comparison": "/example/x"})),
             "missing caller": environment(base, OM_BOT_PARAMETERS=json.dumps({"lineage": PARAMETERS["lineage"]})),
             "shared parameter": environment(base, OM_BOT_PARAMETERS=json.dumps({**PARAMETERS, "ingestion": PARAMETERS["lineage"]})),
             "relative parameter": environment(base, OM_BOT_PARAMETERS=json.dumps({**PARAMETERS, "lineage": "lineage"})),
@@ -316,18 +316,18 @@ def refused_bot_fails_but_others_finish() -> None:
         code, _out, err = run(environment(base), store)
         require(code == 1 and "ingestion" in err, f"a refused bot must fail visibly and name the caller: {code} {err}")
         require(PARAMETERS["ingestion"] not in store.values, "a token was written for a bot that was never created")
-        require(PARAMETERS["lineage"] in store.values and PARAMETERS["comparison"] in store.values, "one refused bot stopped the others")
+        require(PARAMETERS["lineage"] in store.values, "one refused bot stopped the other")
         assert_no_values(err)
         OBSERVED["refused_bot"] = {"exit": code}
 
 
 def missing_role_fails_visibly() -> None:
     with open_metadata() as (state, base):
-        state.missing_role = "DataConsumer"
+        state.missing_role = "IngestionBotRole"
         store = FakeParameterStore()
         code, _out, err = run(environment(base), store)
-        require(code == 1 and "comparison" in err and "role" in err, f"a missing role must fail and name the caller: {code} {err}")
-        require(PARAMETERS["comparison"] not in store.values, "a token was written for a caller without its role")
+        require(code == 1 and "lineage" in err and "role" in err, f"a missing role must fail and name the caller: {code} {err}")
+        require(not store.values, "a token was written for a caller without its role")
         OBSERVED["missing_role"] = {"exit": code}
 
 

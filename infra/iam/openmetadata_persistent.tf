@@ -30,24 +30,23 @@ variable "openmetadata_db_password_name" {
 }
 
 variable "openmetadata_bot_token_names" {
-  description = "Parameter Store SecureString name of the bot token of each caller: lineage, ingestion and comparison. The bootstrap task role may read and write exactly these three parameters. Terraform never reads a value."
+  description = "Parameter Store SecureString name of the bot token of each caller: lineage and ingestion. The bootstrap task role may read and write exactly these two parameters. Terraform never reads a value."
   type        = map(string)
   default = {
-    lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"
-    ingestion  = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
-    comparison = "/healthcare_hai_prediction/openmetadata_bot_comparison"
+    lineage   = "/healthcare_hai_prediction/openmetadata_bot_lineage"
+    ingestion = "/healthcare_hai_prediction/openmetadata_bot_ingestion"
   }
   nullable = false
 
   validation {
     condition = (
-      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion", "comparison"]) &&
+      toset(keys(var.openmetadata_bot_token_names)) == toset(["lineage", "ingestion"]) &&
       alltrue([for name in values(var.openmetadata_bot_token_names) : length(name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", name)) && !can(regex("^/(?i:aws|ssm)", name))]) &&
-      length(distinct(values(var.openmetadata_bot_token_names))) == 3 &&
+      length(distinct(values(var.openmetadata_bot_token_names))) == 2 &&
       !contains(values(var.openmetadata_bot_token_names), var.openmetadata_admin_password_name) &&
       !contains(values(var.openmetadata_bot_token_names), var.openmetadata_db_password_name)
     )
-    error_message = "Name exactly the callers lineage, ingestion and comparison, each with its own parameter path of letters, digits and underscores, none equal to another or to the administrator or database password."
+    error_message = "Name exactly the callers lineage and ingestion, each with its own parameter path of letters, digits and underscores, none equal to another or to the administrator or database password."
   }
 }
 

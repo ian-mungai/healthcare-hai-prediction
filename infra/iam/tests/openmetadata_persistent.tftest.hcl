@@ -42,9 +42,8 @@ variables {
   openmetadata_admin_password_name = "/example_project/openmetadata_admin_password"
   openmetadata_db_password_name    = "/example_project/openmetadata_db_password"
   openmetadata_bot_token_names = {
-    lineage    = "/example_project/openmetadata_bot_lineage"
-    ingestion  = "/example_project/openmetadata_bot_ingestion"
-    comparison = "/example_project/openmetadata_bot_comparison"
+    lineage   = "/example_project/openmetadata_bot_lineage"
+    ingestion = "/example_project/openmetadata_bot_ingestion"
   }
 }
 
@@ -90,7 +89,6 @@ run "prepared_role_writes_exactly_three_token_parameters" {
       toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_host_task[0].policy).Statement : flatten([statement.Resource])])) == toset([
         "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_lineage",
         "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_ingestion",
-        "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_comparison",
       ])
       && toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_host_task[0].policy).Statement : flatten([statement.Action])])) == toset(["ssm:GetParameter", "ssm:PutParameter"])
     )
@@ -156,9 +154,8 @@ run "token_name_equal_to_the_admin_password_is_refused" {
   variables {
     openmetadata_persistent_prepared = true
     openmetadata_bot_token_names = {
-      lineage    = "/example_project/openmetadata_admin_password"
-      ingestion  = "/example_project/openmetadata_bot_ingestion"
-      comparison = "/example_project/openmetadata_bot_comparison"
+      lineage   = "/example_project/openmetadata_admin_password"
+      ingestion = "/example_project/openmetadata_bot_ingestion"
     }
   }
 
@@ -171,9 +168,8 @@ run "dashed_token_name_is_refused" {
   variables {
     openmetadata_persistent_prepared = true
     openmetadata_bot_token_names = {
-      lineage    = "/example_project/openmetadata-bot-lineage"
-      ingestion  = "/example_project/openmetadata_bot_ingestion"
-      comparison = "/example_project/openmetadata_bot_comparison"
+      lineage   = "/example_project/openmetadata-bot-lineage"
+      ingestion = "/example_project/openmetadata_bot_ingestion"
     }
   }
 
@@ -193,7 +189,7 @@ run "job_execution_role_injects_only_the_ingestion_token" {
       && jsondecode(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy).Statement[0].Action == "ssm:GetParameters"
       && jsondecode(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_ingestion"]
     )
-    error_message = "The job execution role may inject exactly the ingestion bot token for the ingestion steps, and neither the lineage nor the comparison token."
+    error_message = "The job execution role may inject exactly the ingestion bot token for the ingestion steps, and neither the lineage token nor any other."
   }
 }
 
@@ -270,9 +266,8 @@ run "airflow_lineage_flag_follows_a_renamed_token_parameter" {
     openmetadata_persistent_prepared = true
     airflow_lineage_prepared         = true
     openmetadata_bot_token_names = {
-      lineage    = "/example_project/renamed_lineage"
-      ingestion  = "/example_project/openmetadata_bot_ingestion"
-      comparison = "/example_project/openmetadata_bot_comparison"
+      lineage   = "/example_project/renamed_lineage"
+      ingestion = "/example_project/openmetadata_bot_ingestion"
     }
   }
 
@@ -290,4 +285,18 @@ run "airflow_lineage_flag_without_the_persistent_catalog_is_refused" {
   }
 
   expect_failures = [var.airflow_lineage_prepared]
+}
+
+run "a_third_caller_is_refused" {
+  command = plan
+
+  variables {
+    openmetadata_bot_token_names = {
+      lineage    = "/example_project/openmetadata_bot_lineage"
+      ingestion  = "/example_project/openmetadata_bot_ingestion"
+      comparison = "/example_project/openmetadata_bot_comparison"
+    }
+  }
+
+  expect_failures = [var.openmetadata_bot_token_names]
 }
