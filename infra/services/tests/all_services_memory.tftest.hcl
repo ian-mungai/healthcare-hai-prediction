@@ -3,8 +3,8 @@ mock_provider "aws" {
 }
 
 # The memory rule with every service on (owner decision B, Nov 17 2026): the host job cap plus the service reservations plus the 2048 MiB system reserve must fit the
-# 32768 MiB host. The monitoring task reserves 392 MiB (the preparation container 16, Prometheus 128, Grafana 128, the StatsD exporter 32, the Pushgateway 32 and the host
-# exporter 56), so the reservations of the full stack are 8080 MiB and the cap is at most 22640 MiB. The live cap of 22800 MiB fits only the stack without the Pushgateway,
+# 32768 MiB host. The monitoring task reserves 464 MiB (the preparation container 16, Prometheus 128, Grafana 128, the StatsD exporter 32, the Pushgateway 32, the host
+# state exporter 56 and the Redis, Postgres and node exporters 24 each), so the reservations of the full stack are 8080 MiB and the cap is at most 22640 MiB. The live cap of 22800 MiB fits only the stack without the Pushgateway,
 # the host state exporter and the three exporters. These cases read the plan only: no image runs and nothing reaches AWS. The cap value itself is set where the settings live, not here.
 variables {
   aws_profile                     = "example_project_dev"
