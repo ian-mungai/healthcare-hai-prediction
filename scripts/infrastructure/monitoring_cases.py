@@ -41,7 +41,8 @@ def scratch_copy(root: Path, destination: Path) -> Path:
     """A copy of the monitoring folder and its Terraform file below ``destination``."""
     shutil.copytree(root / "monitoring", destination / "monitoring")
     (destination / "infra/services").mkdir(parents=True)
-    shutil.copy2(root / TERRAFORM, destination / TERRAFORM)
+    for relative in (TERRAFORM, "infra/services/polaris.tf", "infra/services/openmetadata.tf"):
+        shutil.copy2(root / relative, destination / relative)
     return destination
 
 
@@ -368,6 +369,42 @@ def dashboard_uid_is_used_twice(root: Path) -> dict[str, bool]:
     return reported(root, plant, "uid hai_jobs is used by two dashboards")
 
 
+def polaris_scrape_port_differs(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "127.0.0.1:8182", "127.0.0.1:8183"), "job polaris must scrape 127.0.0.1:8182")
+
+
+def polaris_scrape_path_is_wrong(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "metrics_path: /q/metrics", "metrics_path: /metrics"), "job polaris must use the path /q/metrics")
+
+
+def openmetadata_scrape_path_is_wrong(root: Path) -> dict[str, bool]:
+    return reported(
+        root, lambda tree: edit(tree, SCRAPE, "metrics_path: /prometheus", "metrics_path: /metrics"), "job openmetadata must use the path /prometheus"
+    )
+
+
+def mlflow_scrape_skips_the_relay(root: Path) -> dict[str, bool]:
+    return reported(
+        root, lambda tree: edit(tree, SCRAPE, "metrics_path: /mlflow_metrics", "metrics_path: /metrics"), "job mlflow must use the path /mlflow_metrics"
+    )
+
+
+def redis_exporter_keeps_every_db_series(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "action: drop", "action: keep"), "redis_exporter must drop")
+
+
+def node_exporter_scrape_port_differs(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "127.0.0.1:9100", "127.0.0.1:9101"), "job node_exporter must scrape 127.0.0.1:9100")
+
+
+def exporter_scrape_job_is_missing(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "job_name: postgres_exporter", "job_name: pg"), "no scrape job postgres_exporter")
+
+
+def known_list_lacks_redis_up(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, KNOWN, '"redis_up"', '"redis_status"'), "redis_up")
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "committed_files_pass": committed_files_pass,
     "dashboard_metric_typo": dashboard_metric_typo,
@@ -420,6 +457,14 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "job_rule_names_a_family_nobody_pushes": job_rule_names_a_family_nobody_pushes,
     "job_rule_uses_a_label_the_pushed_metric_lacks": job_rule_uses_a_label_the_pushed_metric_lacks,
     "spark_rule_reads_a_metric_nobody_pushes": spark_rule_reads_a_metric_nobody_pushes,
+    "polaris_scrape_port_differs": polaris_scrape_port_differs,
+    "polaris_scrape_path_is_wrong": polaris_scrape_path_is_wrong,
+    "openmetadata_scrape_path_is_wrong": openmetadata_scrape_path_is_wrong,
+    "mlflow_scrape_skips_the_relay": mlflow_scrape_skips_the_relay,
+    "redis_exporter_keeps_every_db_series": redis_exporter_keeps_every_db_series,
+    "node_exporter_scrape_port_differs": node_exporter_scrape_port_differs,
+    "exporter_scrape_job_is_missing": exporter_scrape_job_is_missing,
+    "known_list_lacks_redis_up": known_list_lacks_redis_up,
     "new_dashboard_without_a_row_is_reported": new_dashboard_without_a_row_is_reported,
     "dashboard_uid_is_used_twice": dashboard_uid_is_used_twice,
 }

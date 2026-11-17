@@ -6,9 +6,11 @@ exporter server on loopback and scrape it over HTTP. No AWS service is contacted
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -19,10 +21,11 @@ from pathlib import Path
 from typing import Any
 
 from monitoring import host_state_exporter
-from scripts.infrastructure.metrics_push_cases import valid_exposition
+from scripts.infrastructure.metrics_push_cases import quiet, valid_exposition
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLUSTER = "example-project-dev"
+RELAY_PHRASE = "relay-test-" + "value-4711"
 
 
 def instance(status: str = "ACTIVE", cpu: tuple[int, int] = (4096, 1024), memory: tuple[int, int] = (32100, 9388), tasks: int = 2) -> dict[str, Any]:
@@ -656,6 +659,147 @@ def the_command_builds_every_source(root: Path) -> dict[str, bool]:
     }
 
 
+class MlflowStandIn:
+    """A loopback MLflow /metrics that answers only the admin user's Basic credential, like the real one with its authentication on."""
+
+    def __init__(self, user: str = "admin", phrase: str = RELAY_PHRASE, status: int = 200, delay: float = 0.0) -> None:
+        self.user, self.phrase, self.status, self.delay = user, phrase, status, delay
+        self.seen: list[str | None] = []
+        stand_in = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                stand_in.seen.append(self.headers.get("Authorization"))
+                time.sleep(stand_in.delay)
+                expected = "Basic " + base64.b64encode(f"{stand_in.user}:{stand_in.phrase}".encode()).decode()
+                ok = self.path == "/metrics" and self.headers.get("Authorization") == expected and stand_in.status == 200
+                payload = b"# TYPE mlflow_http_request_total counter\nmlflow_http_request_total 3\n" if ok else b"denied"
+                self.send_response(200 if ok else (stand_in.status if stand_in.status != 200 else 401))
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8" if ok else "text/plain")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/metrics"
+
+    def __enter__(self) -> MlflowStandIn:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=10)
+
+
+def fetch(port: int, path: str) -> tuple[int, str, str]:
+    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+    connection.request("GET", path)
+    response = connection.getresponse()
+    body = response.read().decode()
+    kind = response.getheader("Content-Type") or ""
+    connection.close()
+    return response.status, kind, body
+
+
+def running_with_relay(relay: Callable[[], tuple[int, bytes]] | None) -> hai_exporter_running:
+    return host_state_exporter.serve(host_state_exporter.Exporter({}), "127.0.0.1", 0, interval=60, relay=relay)
+
+
+hai_exporter_running = host_state_exporter.Running
+
+
+def the_relay_serves_only_the_mlflow_metrics_text_with_the_admin_credential(root: Path) -> dict[str, bool]:
+    with MlflowStandIn() as mlflow:
+        relay = host_state_exporter.mlflow_relay(mlflow.url, RELAY_PHRASE, 3.0)
+        running = running_with_relay(relay)
+        try:
+            status, kind, body = fetch(running.port, "/mlflow_metrics")
+            other = fetch(running.port, "/mlflow_metrics/extra")[0], fetch(running.port, "/admin")[0], fetch(running.port, "/metrics")[0]
+        finally:
+            running.stop()
+        seen = list(mlflow.seen)
+    return {
+        "the text of MLflow's /metrics is relayed as it came": status == 200 and kind.startswith("text/plain") and "mlflow_http_request_total 3" in body,
+        "MLflow got the admin Basic credential": seen[:1] == ["Basic " + base64.b64encode(f"admin:{RELAY_PHRASE}".encode()).decode()],
+        "no other path is relayed": other[0] == 404 and other[1] == 404 and other[2] == 200,
+        "the credential is not in what the relay answered": RELAY_PHRASE not in body and RELAY_PHRASE not in kind,
+    }
+
+
+def a_refusing_or_unreachable_mlflow_gives_an_empty_502_and_no_credential(root: Path) -> dict[str, bool]:
+    with MlflowStandIn(phrase="another") as wrong:
+        relay = host_state_exporter.mlflow_relay(wrong.url, RELAY_PHRASE, 3.0)
+        running = running_with_relay(relay)
+        try:
+            refused = fetch(running.port, "/mlflow_metrics")
+        finally:
+            running.stop()
+    with MlflowStandIn() as closed:
+        url = closed.url
+    relay = host_state_exporter.mlflow_relay(url, RELAY_PHRASE, 1.0)
+    running = running_with_relay(relay)
+    try:
+        unreachable = fetch(running.port, "/mlflow_metrics")
+    finally:
+        running.stop()
+    with MlflowStandIn(delay=2.0) as slow:
+        relay = host_state_exporter.mlflow_relay(slow.url, RELAY_PHRASE, 0.3)
+        running = running_with_relay(relay)
+        started = time.monotonic()
+        try:
+            late = fetch(running.port, "/mlflow_metrics")
+        finally:
+            running.stop()
+        waited = time.monotonic() - started
+    return {
+        "a refused credential is a 502 with no body": refused[0] == 502 and refused[2] == "",
+        "an unreachable MLflow is a 502 with no body": unreachable[0] == 502 and unreachable[2] == "",
+        "a slow MLflow is a 502 inside the timeout": late[0] == 502 and waited < 1.8,
+        "nothing the relay answered holds the credential": all(RELAY_PHRASE not in text for answer in (refused, unreachable, late) for text in answer[1:]),
+    }
+
+
+def the_relay_never_logs_or_writes_the_credential(root: Path) -> dict[str, bool]:
+    with MlflowStandIn(phrase="another") as wrong, tempfile.TemporaryDirectory(prefix="relay_case_") as scratch:
+        relay = host_state_exporter.mlflow_relay(wrong.url, RELAY_PHRASE, 3.0)
+        running = running_with_relay(relay)
+        try:
+            _, text = quiet(lambda: fetch(running.port, "/mlflow_metrics"))
+        finally:
+            running.stop()
+        written = list(Path(scratch).iterdir())
+    return {
+        "standard error names the failure without the credential": RELAY_PHRASE not in text,
+        "the relay writes no file": written == [],
+        "the module source holds no credential text": RELAY_PHRASE not in Path(host_state_exporter.__file__).read_text(encoding="utf-8"),
+    }
+
+
+def without_a_password_there_is_no_relay(root: Path) -> dict[str, bool]:
+    configured = host_state_exporter.settings({"ECS_CLUSTER": CLUSTER, "AWS_REGION": "us-west-2"})
+    running = running_with_relay(None)
+    try:
+        status = fetch(running.port, "/mlflow_metrics")[0]
+    finally:
+        running.stop()
+    return {
+        "the path is 404 when no relay is configured": status == 404,
+        "the settings carry no credential field": not hasattr(configured, "mlflow_password"),
+        "the relay address must be MLflow's metrics path on loopback": not host_state_exporter.relay_url_ok("http://10.0.0.5:5100/metrics")
+        and host_state_exporter.relay_url_ok("http://127.0.0.1:5100/metrics"),
+    }
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "exporter_host_capacity_is_exact": host_capacity_is_exact,
     "exporter_several_instances_are_summed_and_only_active_ones_count": several_instances_are_summed_and_only_active_ones_count,
@@ -687,4 +831,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "exporter_the_real_disk_reader_reads_a_real_folder": the_real_disk_reader_reads_a_real_folder,
     "exporter_settings_gain_the_prefix_and_the_two_disk_paths": settings_gain_the_prefix_and_the_two_disk_paths,
     "exporter_the_command_builds_every_source": the_command_builds_every_source,
+    "exporter_the_relay_serves_only_the_mlflow_metrics_text_with_the_admin_credential": the_relay_serves_only_the_mlflow_metrics_text_with_the_admin_credential,
+    "exporter_a_refusing_or_unreachable_mlflow_gives_an_empty_502_and_no_credential": a_refusing_or_unreachable_mlflow_gives_an_empty_502_and_no_credential,
+    "exporter_the_relay_never_logs_or_writes_the_credential": the_relay_never_logs_or_writes_the_credential,
+    "exporter_without_a_password_there_is_no_relay": without_a_password_there_is_no_relay,
 }

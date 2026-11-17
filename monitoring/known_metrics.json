@@ -46,6 +46,13 @@
       "hai_spark_jobs_completed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
       "hai_spark_jobs_failed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
       "hai_spark_poll_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_dbt_models": {"type": "gauge", "labels": ["job", "phase", "outcome", "status"]},
+      "hai_dbt_tests": {"type": "gauge", "labels": ["job", "phase", "outcome", "status"]},
+      "hai_quality_checks_run": {"type": "gauge", "labels": ["job", "phase", "outcome", "kind"]},
+      "hai_quality_checks_failed": {"type": "gauge", "labels": ["job", "phase", "outcome", "kind"]},
+      "hai_quality_checks_warned": {"type": "gauge", "labels": ["job", "phase", "outcome", "kind"]},
+      "hai_openmetadata_ingest_entities": {"type": "gauge", "labels": ["job", "phase", "outcome", "source"]},
+      "hai_openmetadata_ingest_failures": {"type": "gauge", "labels": ["job", "phase", "outcome", "source"]},
       "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
     }
   },
@@ -78,5 +85,21 @@
       "host_state_exporter_source_errors_total": {"type": "counter", "labels": ["source"]},
       "host_state_exporter_source_last_success_timestamp_seconds": {"type": "gauge", "labels": ["source"]}
     }
+  },
+  "redis_exporter": {
+    "emitted_by": "the Redis exporter, scraped as the redis_exporter job on 127.0.0.1:9121",
+    "metrics": ["redis_up", "redis_memory_used_bytes", "redis_memory_max_bytes", "redis_connected_clients", "redis_evicted_keys_total", "redis_db_keys"]
+  },
+  "postgres_exporter": {
+    "emitted_by": "the Postgres exporter, scraped as the postgres_exporter job on 127.0.0.1:9187",
+    "metrics": ["pg_up", "pg_stat_database_numbackends", "pg_settings_max_connections", "pg_database_wraparound_age_datfrozenxid_seconds"]
+  },
+  "node_exporter": {
+    "emitted_by": "the node exporter with the restricted collectors, scraped as the node_exporter job on 127.0.0.1:9100",
+    "metrics": ["node_vmstat_oom_kill", "node_filesystem_avail_bytes", "node_filesystem_size_bytes", "node_memory_MemAvailable_bytes", "node_load1"]
+  },
+  "polaris": {
+    "emitted_by": "Polaris (Quarkus) on its management port, scraped as the polaris job",
+    "metrics": []
   }
 }

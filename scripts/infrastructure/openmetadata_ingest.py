@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from scripts.infrastructure import openmetadata_metrics
 
 SOURCES = ("glue", "dbt")
 ALLOWED_SOURCE_TYPES = frozenset({"glue", "dbt"})
@@ -303,6 +304,7 @@ def run_workflow(config: dict[str, Any]) -> None:
     """Run the OpenMetadata metadata workflow and raise when it recorded a failure."""
     workflow = importlib.import_module("metadata.workflow.metadata").MetadataWorkflow.create(config)
     workflow.execute()
+    openmetadata_metrics.record(config, workflow)
     workflow.raise_from_status()
     workflow.print_status()
     workflow.stop()

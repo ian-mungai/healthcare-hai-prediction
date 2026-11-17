@@ -46,7 +46,9 @@ WORD = re.compile(r"[a-z][a-z_]{0,23}")
 SET_NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
 LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "hai_type": lambda value: HAI_TYPE.fullmatch(value) is not None,
-    "status": lambda value: value in ("checked", "skipped"),
+    "status": lambda value: value in ("checked", "skipped", "success", "error", "pass", "fail", "warn"),
+    "kind": lambda value: value in ("silver", "gold", "cross", "features"),
+    "source": lambda value: value in ("glue", "dbt", "raw_files"),
     "feature_set": lambda value: SET_NAME.fullmatch(value) is not None,
     "mode": lambda value: value in ("load", "hold", "release", "offline"),
     "result": lambda value: WORD.fullmatch(value) is not None,
@@ -83,6 +85,13 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_spark_jobs_completed": ("Spark jobs that succeeded in the bronze session so far.", ()),
     "hai_spark_jobs_failed": ("Spark jobs that failed in the bronze session so far.", ()),
     "hai_spark_poll_timestamp_seconds": ("Unix time of the latest read of the Spark status tracker.", ()),
+    "hai_dbt_models": ("Models of the latest dbt run of the layer, by status.", ("status",)),
+    "hai_dbt_tests": ("Tests of the latest dbt run of the layer, by status.", ("status",)),
+    "hai_quality_checks_run": ("Quality checks the layer's gate ran, by gate.", ("kind",)),
+    "hai_quality_checks_failed": ("Quality checks of the gate that failed.", ("kind",)),
+    "hai_quality_checks_warned": ("Quality checks of the gate that warned.", ("kind",)),
+    "hai_openmetadata_ingest_entities": ("Entities the latest OpenMetadata ingestion of the source ingested.", ("source",)),
+    "hai_openmetadata_ingest_failures": ("Failures of the source and the sink in the latest OpenMetadata ingestion of the source.", ("source",)),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
 PENDING: list[Sample] = []
@@ -99,6 +108,7 @@ class Sample:
 def add(name: str, value: float, **labels: str) -> None:
     """Register a family metric that the exit push of this process sends. A bad sample is dropped at the push, never here, so a job cannot fail on it."""
     with PENDING_LOCK:
+        PENDING[:] = [sample for sample in PENDING if not (sample.name == name and dict(sample.labels) == labels)]
         PENDING.append(Sample(name, value, dict(labels)))
 
 

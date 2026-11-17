@@ -1831,6 +1831,7 @@
     "scripts/lakehouse/ipps_file_labels.py",
     "scripts/lakehouse/launcher_cleanup.py",
     "scripts/lakehouse/layer_acceptance.py",
+    "scripts/lakehouse/layer_metrics.py",
     "scripts/lakehouse/layer_run.py",
     "scripts/lakehouse/mac_route_probe.py",
     "scripts/lakehouse/measure_domains.py",

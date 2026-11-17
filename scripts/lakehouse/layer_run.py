@@ -83,7 +83,7 @@ from orchestration.training_contract import CODE_RUN
 from scripts import resource_peaks
 from scripts.features import feature_metrics, feature_sets
 from scripts.infrastructure import startup_check
-from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
+from scripts.lakehouse import code_archive, duckdb_bounds, layer_metrics, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
 
@@ -605,6 +605,18 @@ def build(job: Job) -> None:
         run_module(job, "scripts.features.features_build", [*arguments, *job.set_flags], environment | phase_deadline_environment(job))
     else:
         run_module(job, "scripts.lakehouse.pipeline_build", ["--layer", job.layer, *arguments], environment)
+    push_dbt_results(job)
+
+
+def push_dbt_results(job: Job) -> None:
+    """Hand the dbt run of the build to the exit push; a missing file adds nothing and nothing here can fail the job."""
+    layer_metrics.dbt_file(job.folder / "target" / "run_results.json")
+
+
+def push_quality_results(job: Job) -> None:
+    """Hand the quality gates of the layer to the exit push, with the same rule."""
+    for kind in QUALITY.get(job.layer, ()):
+        layer_metrics.quality_file(kind, job.folder / f"quality_{kind}" / "result.json")
 
 
 def validate(job: Job) -> None:
@@ -628,6 +640,7 @@ def validate(job: Job) -> None:
             run_module(job, "scripts.lakehouse.gold_reconcile", [*arguments, "--baselines", Path(SUITES) / baselines])
         else:
             run_module(job, "scripts.lakehouse.silver_quality", [*arguments, "--baselines", Path(SUITES) / baselines])
+    push_quality_results(job)
     validated_sha(job)
 
 

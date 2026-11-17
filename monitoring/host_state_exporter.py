@@ -18,6 +18,7 @@ Environment: ``ECS_CLUSTER``, ``AWS_REGION``, ``HAI_LAUNCH_HOST_JOB_CAP_MIB`` (t
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import http.client
 import json
@@ -320,6 +321,44 @@ def disk_samples(paths: Mapping[str, str], usage: Callable[[str], tuple[int, int
     return samples
 
 
+MLFLOW_URL = re.compile(r"http://127\.0\.0\.1:[0-9]{2,5}/metrics")
+RELAY_PATH = "/mlflow_metrics"
+RELAY_LIMIT_BYTES = 4 * 1024 * 1024
+RELAY_USER = "admin"
+
+
+def relay_url_ok(url: str) -> bool:
+    return MLFLOW_URL.fullmatch(url) is not None
+
+
+def mlflow_relay(url: str, login_phrase: str, timeout: float = PROBE_TIMEOUT_SECONDS) -> Callable[[], tuple[int, bytes]]:
+    """A function that asks MLflow for ``/metrics`` with the admin credential and returns (200, text), or (502, nothing) on any failure.
+
+    MLflow answers ``/metrics`` to its admin user only. The credential lives in this process only: it is never written to a file, a log line or an answer, and
+    the relay serves nothing but the relayed text.
+    """
+    parsed = urlparse(url)
+    header = "Basic " + base64.b64encode(f"{RELAY_USER}:{login_phrase}".encode()).decode()
+
+    def relay() -> tuple[int, bytes]:
+        connection = http.client.HTTPConnection(parsed.hostname or "", parsed.port or 80, timeout=timeout)
+        try:
+            connection.request("GET", parsed.path, headers={"Authorization": header})
+            response = connection.getresponse()
+            body = response.read(RELAY_LIMIT_BYTES + 1)
+            if response.status != 200 or len(body) > RELAY_LIMIT_BYTES:
+                sys.stderr.write(f"event=exporter_relay_failed reason=HTTP_{response.status}\n")
+                return 502, b""
+            return 200, body
+        except Exception as error:
+            sys.stderr.write(f"event=exporter_relay_failed reason={type(error).__name__}\n")
+            return 502, b""
+        finally:
+            connection.close()
+
+    return relay
+
+
 def collectors(configured: Settings, ecs: Any) -> dict[str, Callable[[], list[Sample]]]:
     """The sources of one exporter: the disk source exists only when both folders are named."""
     found: dict[str, Callable[[], list[Sample]]] = {
@@ -411,20 +450,24 @@ class Running:
             thread.join(timeout=10)
 
 
-def serve(exporter: Exporter, host: str, port: int, *, interval: float) -> Running:
+def serve(exporter: Exporter, host: str, port: int, *, interval: float, relay: Callable[[], tuple[int, bytes]] | None = None) -> Running:
     """Listen on loopback and read the sources every ``interval`` seconds, the first read at once. Any other address is refused."""
     if host != "127.0.0.1":
         raise ValueError("the exporter listens on 127.0.0.1 only")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path.split("?")[0] != "/metrics":
+            path = self.path.split("?")[0]
+            if path == RELAY_PATH and relay is not None:
+                status, payload = relay()
+            elif path == "/metrics":
+                status, payload = 200, exporter.render().encode()
+            else:
                 self.send_response(404)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            payload = exporter.render().encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -465,7 +508,12 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
 
         ecs = boto3.client("ecs", region_name=configured.region, config=ecs_client_config())
         exporter = Exporter(collectors(configured, ecs))
-        running = serve(exporter, host, int(port), interval=arguments.interval)
+        # The credential is read once and dropped from the environment, so no child process or dump can show it.
+        login_phrase = (environ if environ is not None else os.environ).get("MLFLOW_ADMIN_PASSWORD", "")
+        os.environ.pop("MLFLOW_ADMIN_PASSWORD", None)
+        relay_address = (environ if environ is not None else os.environ).get("MLFLOW_METRICS_URL", "http://127.0.0.1:5100/metrics")
+        relay = mlflow_relay(relay_address, login_phrase) if login_phrase and relay_url_ok(relay_address) else None
+        running = serve(exporter, host, int(port), interval=arguments.interval, relay=relay)
     except (ValueError, ImportError) as error:
         sys.stderr.write(f"host_state_exporter: {error}\n")
         return 2

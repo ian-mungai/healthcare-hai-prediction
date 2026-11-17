@@ -41,15 +41,48 @@ STATES = ("OK", "Alerting", "NoData", "Error")
 DATASOURCE = f"{MONITORING}/grafana/provisioning/datasources/prometheus.yml"
 PROVIDER = f"{MONITORING}/grafana/provisioning/dashboards/dashboards.yml"
 DASHBOARDS = f"{MONITORING}/grafana/dashboards"
-REQUIRED_JOBS = ("prometheus", "statsd_exporter", "hai_api", "pushgateway", "host_state_exporter")
+REQUIRED_JOBS = (
+    "prometheus",
+    "statsd_exporter",
+    "hai_api",
+    "pushgateway",
+    "host_state_exporter",
+    "polaris",
+    "openmetadata",
+    "grafana",
+    "mlflow",
+    "redis_exporter",
+    "postgres_exporter",
+    "node_exporter",
+)
 EXPECTED_TARGETS = {
     "prometheus": ["127.0.0.1:9090"],
     "statsd_exporter": ["127.0.0.1:9102"],
     "hai_api": ["127.0.0.1:8000"],
     "pushgateway": ["127.0.0.1:9091"],
     "host_state_exporter": ["127.0.0.1:9103"],
+    "polaris": ["127.0.0.1:8182"],
+    "openmetadata": ["127.0.0.1:8586"],
+    "grafana": ["127.0.0.1:3001"],
+    "mlflow": ["127.0.0.1:9103"],
+    "redis_exporter": ["127.0.0.1:9121"],
+    "postgres_exporter": ["127.0.0.1:9187"],
+    "node_exporter": ["127.0.0.1:9100"],
 }
-TERRAFORM_JOBS = ("prometheus", "statsd_exporter", "pushgateway", "host_state_exporter")
+EXPECTED_PATHS = {"polaris": "/q/metrics", "openmetadata": "/prometheus", "mlflow": "/mlflow_metrics"}
+PORT_FILES = ("infra/services/monitoring.tf", "infra/services/polaris.tf", "infra/services/openmetadata.tf")
+TERRAFORM_JOBS = (
+    "prometheus",
+    "statsd_exporter",
+    "pushgateway",
+    "host_state_exporter",
+    "polaris",
+    "openmetadata",
+    "grafana",
+    "redis_exporter",
+    "postgres_exporter",
+    "node_exporter",
+)
 OVERVIEW = "hai_overview"
 PUSH_GROUPING = ("job", "phase", "outcome")
 SCHEDULER_ALERT = "AirflowSchedulerSilent"
@@ -135,6 +168,7 @@ MATCHER = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~|!~|!=|=)\s*"(?:[^"\\]|\\
 GROUPING = re.compile(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
 IDENTIFIER = re.compile(r"(?<![0-9A-Za-z_:.])[a-zA-Z_:][a-zA-Z0-9_:]*(?![a-zA-Z0-9_:])")
 HOST_PORT = re.compile(r"hostPort\s*=\s*([0-9]+)")
+PORT_ASSIGN = re.compile(r"\b[a-z_]*port\s*=\s*([0-9]{2,5})\b")
 MOUNT_FOLDER = re.compile(r'"\$\{local\.code_path\}/(monitoring/[A-Za-z0-9_/]+)"')
 CONTAINER_PATH = re.compile(r'sourceVolume\s*=\s*"(code_monitoring_[a-z_]+)",\s*containerPath\s*=\s*"([^"]+)"')
 VOLUME_FOLDER = re.compile(r'(code_monitoring_[a-z_]+)\s*=\s*"\$\{local\.code_path\}/(monitoring/[A-Za-z0-9_/]+)"')
@@ -463,6 +497,9 @@ def terraform_problems(root: Path, scrape: Any, datasource: Any, provider: Any) 
     if text is None:
         return problems
     ports = {int(port) for port in HOST_PORT.findall(text)}
+    for extra in PORT_FILES[1:]:
+        more = read_text(root, extra, problems) or ""
+        ports |= {int(port) for port in HOST_PORT.findall(more)} | {int(port) for port in PORT_ASSIGN.findall(more)}
     for variable in ("ALERTS_TOPIC_ARN", "AWS_REGION"):
         if f'name = "{variable}"' not in text:
             problems.append(f"{TERRAFORM}: the Grafana container must set {variable}, which {CONTACT} reads")
@@ -519,6 +556,13 @@ def check(root: Path = ROOT) -> list[str]:
         targets = [str(target) for config in job.get("static_configs", []) for target in config.get("targets", [])]
         if expected is not None and targets != expected:
             problems.append(f"{SCRAPE}: job {job['job_name']} must scrape {', '.join(expected)}, not {targets}")
+        wanted_path = EXPECTED_PATHS.get(str(job.get("job_name")))
+        if wanted_path is not None and job.get("metrics_path") != wanted_path:
+            problems.append(f"{SCRAPE}: job {job['job_name']} must use the path {wanted_path}, not {job.get('metrics_path', '/metrics')}")
+        if job.get("job_name") == "redis_exporter" and not any(
+            item.get("action") == "drop" and "redis_db_keys" in str(item.get("regex")) for item in job.get("metric_relabel_configs", [])
+        ):
+            problems.append(f"{SCRAPE}: the job redis_exporter must drop redis_db_keys of the databases that hold no data (0 and 3 to 15)")
         if job.get("job_name") == "pushgateway" and job.get("honor_labels") is not True:
             problems.append(f"{SCRAPE}: the job pushgateway must set honor_labels: true, or the pushed job, phase and outcome labels are renamed")
     datasources = (datasource or {}).get("datasources", [])

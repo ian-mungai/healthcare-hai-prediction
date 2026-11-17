@@ -21,7 +21,8 @@ import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 from urllib.parse import unquote, urlparse
 
@@ -632,6 +633,163 @@ def layer_run_reload_and_release_push_their_result(root: Path) -> dict[str, bool
     }
 
 
+def dbt_results_become_counts_by_status(root: Path) -> dict[str, bool]:
+    from scripts.lakehouse import layer_metrics
+
+    metrics_push.drain()
+    document = {
+        "results": [
+            {"unique_id": "model.hai.dim_hospital", "status": "success"},
+            {"unique_id": "model.hai.fct_hai_outcome", "status": "success"},
+            {"unique_id": "model.hai.bridge_x", "status": "error"},
+            {"unique_id": "model.hai.later", "status": "skipped"},
+            {"unique_id": "test.hai.not_null_dim_hospital_ccn.abc", "status": "pass"},
+            {"unique_id": "test.hai.unique_dim_hospital_ccn.def", "status": "pass"},
+            {"unique_id": "test.hai.relationships_x.ghi", "status": "fail"},
+            {"unique_id": "test.hai.accepted_values_y.jkl", "status": "warn"},
+            {"unique_id": "seed.hai.some_seed", "status": "success"},
+            {"unique_id": "model.hai.odd", "status": "<script>"},
+        ]
+    }
+    layer_metrics.dbt_results(document)
+    found = pending()
+    return {
+        "models are counted by status": found.get(("hai_dbt_models", (("status", "success"),))) == 2
+        and found.get(("hai_dbt_models", (("status", "error"),))) == 1
+        and found.get(("hai_dbt_models", (("status", "skipped"),))) == 1,
+        "tests are counted by status": found.get(("hai_dbt_tests", (("status", "pass"),))) == 2
+        and found.get(("hai_dbt_tests", (("status", "fail"),))) == 1
+        and found.get(("hai_dbt_tests", (("status", "warn"),))) == 1,
+        "a seed is neither a model nor a test": not any("seed" in str(labels) for _, labels in found),
+        "a status outside the closed set is never a label": not any("script" in str(labels) for _, labels in found),
+        "no table or model name is a label": all(
+            name in {"hai_dbt_models", "hai_dbt_tests"} and [key for key, _ in labels] == ["status"] for name, labels in found
+        ),
+    }
+
+
+def quality_results_become_counts_by_kind(root: Path) -> dict[str, bool]:
+    from scripts.lakehouse import layer_metrics
+
+    metrics_push.drain()
+    layer_metrics.quality_result("silver", {"counts": {"pass": 40, "fail": 0, "warn": 2}})
+    layer_metrics.quality_result("cross", {"counts": {"pass": 7, "fail": 1, "warn": 0}})
+    layer_metrics.quality_result("unknown_kind", {"counts": {"pass": 1}})
+    layer_metrics.quality_result("gold", {"counts": "not a mapping"})
+    layer_metrics.quality_result("features", {})
+    found = pending()
+    return {
+        "checks run are the sum of the counts": found.get(("hai_quality_checks_run", (("kind", "silver"),))) == 42,
+        "failed and warned checks have their own series": found.get(("hai_quality_checks_failed", (("kind", "cross"),))) == 1
+        and found.get(("hai_quality_checks_warned", (("kind", "silver"),))) == 2,
+        "an unknown kind or an unreadable count adds nothing": not any(dict(labels).get("kind") in {"unknown_kind", "gold"} for _, labels in found),
+        "an empty result adds nothing and raises nothing": not any(dict(labels).get("kind") == "features" for _, labels in found),
+    }
+
+
+def unreadable_dbt_and_quality_files_add_nothing(root: Path) -> dict[str, bool]:
+    from scripts.lakehouse import layer_metrics
+
+    metrics_push.drain()
+    with tempfile.TemporaryDirectory(prefix="layer_metrics_") as scratch:
+        folder = Path(scratch)
+        (folder / "target").mkdir()
+        (folder / "target/run_results.json").write_text("not json", encoding="utf-8")
+        layer_metrics.dbt_file(folder / "target/run_results.json")
+        layer_metrics.dbt_file(folder / "target/missing.json")
+        layer_metrics.dbt_results(cast(Any, None))
+        layer_metrics.quality_file("silver", folder / "nothing.json")
+    return {"nothing is pending after garbage and missing files": pending() == {}}
+
+
+def layer_run_hands_its_dbt_and_quality_results_to_the_exit_push(root: Path) -> dict[str, bool]:
+    from scripts.lakehouse import layer_run
+
+    with tempfile.TemporaryDirectory(prefix="layer_run_metrics_") as scratch:
+        code = Path(scratch) / "code"
+        job = layer_run.Job(layer="gold", run="20261117T120000Z-0a1b2c3d", mode="real", code=code)
+        (job.folder / "target").mkdir(parents=True)
+        (job.folder / "target/run_results.json").write_text(json.dumps({"results": [{"unique_id": "model.hai.a", "status": "success"}]}), encoding="utf-8")
+        (job.folder / "quality_gold").mkdir()
+        (job.folder / "quality_gold/result.json").write_text(json.dumps({"counts": {"pass": 5, "fail": 0, "warn": 0}}), encoding="utf-8")
+        metrics_push.drain()
+        layer_run.push_dbt_results(job)
+        layer_run.push_quality_results(job)
+        found = pending()
+    return {
+        "the dbt run of the build is counted": found.get(("hai_dbt_models", (("status", "success"),))) == 1,
+        "the gold quality checks are counted": found.get(("hai_quality_checks_run", (("kind", "gold"),))) == 5,
+    }
+
+
+class FakeStatus:
+    def __init__(self, records: int, failures: int) -> None:
+        self.records, self.failures = [f"entity_{index}" for index in range(records)], [f"failure_{index}" for index in range(failures)]
+
+
+class FakeWorkflow:
+    def __init__(self, records: int = 5, failures: int = 0, sink_failures: int = 0, broken: bool = False) -> None:
+        self.source, self.sink, self.broken = (
+            SimpleNamespace(get_status=lambda: FakeStatus(records, failures)),
+            SimpleNamespace(get_status=lambda: FakeStatus(0, sink_failures)),
+            broken,
+        )
+        self.calls: list[str] = []
+
+    def execute(self) -> None:
+        self.calls.append("execute")
+
+    def raise_from_status(self) -> None:
+        self.calls.append("raise_from_status")
+        if self.source.get_status().failures:
+            raise RuntimeError("the workflow recorded a failure")
+
+    def print_status(self) -> None:
+        self.calls.append("print_status")
+
+    def stop(self) -> None:
+        self.calls.append("stop")
+
+
+def openmetadata_ingest_counts_entities_and_failures_by_source(root: Path) -> dict[str, bool]:
+    from scripts.infrastructure import openmetadata_metrics
+
+    metrics_push.drain()
+    openmetadata_metrics.record({"source": {"type": "glue"}}, FakeWorkflow(records=525, failures=1, sink_failures=2))
+    openmetadata_metrics.record({"source": {"type": "dbt"}}, FakeWorkflow(records=7))
+    openmetadata_metrics.record({"source": {"type": "surprise"}}, FakeWorkflow())
+    openmetadata_metrics.record({"source": {}}, FakeWorkflow())
+    openmetadata_metrics.record({"source": {"type": "glue"}}, SimpleNamespace())
+    found = pending()
+    return {
+        "entities ingested per source": found.get(("hai_openmetadata_ingest_entities", (("source", "glue"),))) == 525
+        and found.get(("hai_openmetadata_ingest_entities", (("source", "dbt"),))) == 7,
+        "failures add the source and the sink": found.get(("hai_openmetadata_ingest_failures", (("source", "glue"),))) == 3,
+        "an unknown source type or a workflow without a status adds nothing": not any(dict(labels).get("source") == "surprise" for _, labels in found)
+        and len(found) == 4,
+    }
+
+
+def run_workflow_records_its_status_before_it_can_raise(root: Path) -> dict[str, bool]:
+    from scripts.infrastructure import openmetadata_ingest
+
+    metrics_push.drain()
+    workflow = FakeWorkflow(records=4, failures=1)
+    fake_module = SimpleNamespace(MetadataWorkflow=SimpleNamespace(create=lambda _config: workflow))
+    with mock.patch.object(openmetadata_ingest.importlib, "import_module", lambda _name: fake_module):
+        try:
+            openmetadata_ingest.run_workflow({"source": {"type": "glue"}})
+            raised = False
+        except RuntimeError:
+            raised = True
+    found = pending()
+    return {
+        "the failure still raises as before": raised and workflow.calls[:2] == ["execute", "raise_from_status"],
+        "the counts were recorded before the raise": found.get(("hai_openmetadata_ingest_failures", (("source", "glue"),))) == 1
+        and found.get(("hai_openmetadata_ingest_entities", (("source", "glue"),))) == 4,
+    }
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_puts_the_group_with_valid_exposition": push_puts_the_group_with_valid_exposition,
     "push_unavailable_scratch_is_left_out": unavailable_scratch_is_left_out,
@@ -661,4 +819,10 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_feature_state_is_parsed_from_the_step_output": feature_state_is_parsed_from_the_step_output,
     "push_unreadable_step_output_adds_nothing_and_never_raises": unreadable_step_output_adds_nothing_and_never_raises,
     "push_layer_run_reload_and_release_push_their_result": layer_run_reload_and_release_push_their_result,
+    "push_dbt_results_become_counts_by_status": dbt_results_become_counts_by_status,
+    "push_quality_results_become_counts_by_kind": quality_results_become_counts_by_kind,
+    "push_unreadable_dbt_and_quality_files_add_nothing": unreadable_dbt_and_quality_files_add_nothing,
+    "push_layer_run_hands_its_dbt_and_quality_results_to_the_exit_push": layer_run_hands_its_dbt_and_quality_results_to_the_exit_push,
+    "push_openmetadata_ingest_counts_entities_and_failures_by_source": openmetadata_ingest_counts_entities_and_failures_by_source,
+    "push_run_workflow_records_its_status_before_it_can_raise": run_workflow_records_its_status_before_it_can_raise,
 }
