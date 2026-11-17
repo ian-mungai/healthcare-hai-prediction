@@ -27,6 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
 # The two settings this tool sets, and the image record that the renderer reads from its own file.
 INSTALLER_SETTINGS = ("code_fetch_task_role_arn", "code_bucket_name")
+# The setting the same tool sets for the catalog setup one-shot when it is given that role; without the role an existing value is kept as it is.
+CATALOG_SETUP_SETTING = "catalog_setup_task_role_arn"
 RENDERED_SEPARATELY = ("image_digests",)
 
 
@@ -61,14 +63,16 @@ def read_object(path: Path, what: str) -> dict[str, Any]:
     return document
 
 
-def build(existing: dict[str, Any], role_arn: str, bucket: str) -> tuple[dict[str, Any], dict[str, list[str]]]:
+def build(existing: dict[str, Any], role_arn: str, bucket: str, catalog_setup_role_arn: str | None = None) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """The preparation document and a report of setting names: kept, set, left to the renderer and ignored."""
     supported, declared, rendered = supported_variables(), declared_variables(), rendered_variables()
     blocked = sorted(name for name in existing if name in declared and name not in supported and name not in rendered)
     if blocked:
         raise InputsRefused(f"the services stack declares these existing settings, but no preparation file can carry them: {', '.join(blocked)}. Stop and ask")
-    variables = {name: value for name, value in existing.items() if name in supported and name not in INSTALLER_SETTINGS}
     new = {"code_fetch_task_role_arn": role_arn, "code_bucket_name": bucket}
+    if catalog_setup_role_arn is not None:
+        new[CATALOG_SETUP_SETTING] = catalog_setup_role_arn
+    variables = {name: value for name, value in existing.items() if name in supported and name not in new}
     report = {
         "kept": sorted(variables),
         "set": sorted(name for name, value in new.items() if existing.get(name) != value),
@@ -93,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--existing", type=Path, required=True, help="the complete existing rendered services inputs")
     parser.add_argument("--role-file", type=Path, required=True, help="the host_code_fetch_role output of the IAM stack (JSON with an arn)")
     parser.add_argument("--bucket-file", type=Path, required=True, help="a file holding the data bucket name")
+    parser.add_argument(
+        "--catalog-setup-role-file", type=Path, help="the host_catalog_setup_role output of the IAM stack (JSON with an arn); sets the catalog setup one-shot"
+    )
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args(argv)
     try:
@@ -104,7 +111,12 @@ def main(argv: list[str] | None = None) -> int:
             raise InputsRefused(f"the bucket file cannot be read: {arguments.bucket_file}") from None
         if not isinstance(role, str) or not bucket:
             raise InputsRefused("the role file needs an arn string and the bucket file a bucket name")
-        document, report = build(existing, role, bucket)
+        catalog_setup = None
+        if arguments.catalog_setup_role_file is not None:
+            catalog_setup = read_object(arguments.catalog_setup_role_file, "catalog setup role").get("arn")
+            if not isinstance(catalog_setup, str):
+                raise InputsRefused("the catalog setup role file needs an arn string")
+        document, report = build(existing, role, bucket, catalog_setup)
         staged = arguments.output.with_name(arguments.output.name + ".next")
         staged.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         staged.chmod(0o600)

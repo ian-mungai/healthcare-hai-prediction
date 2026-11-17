@@ -751,6 +751,35 @@ def services_inputs_keep_every_existing_supported_setting() -> dict[str, bool]:
     }
 
 
+def services_inputs_set_the_catalog_setup_role() -> dict[str, bool]:
+    """With the catalog setup role file the tool sets that role beside the code one-shot's; without it an existing catalog setup role is kept, and a role of
+    another family is refused by the preparation schema with nothing written."""
+    account = "".join(["123"] * 4)
+    catalog_role = f"arn:aws:iam::{account}:role/example_project_host_catalog_setup_task_dev"
+    old_role = f"arn:aws:iam::{account}:role/example_project_old_host_catalog_setup_task_dev"
+    files = services_inputs_files()
+    work = files["work"]
+    (work / "catalog_role.json").write_text(json.dumps({"name": "example_project_host_catalog_setup_task_dev", "arn": catalog_role}), encoding="utf-8")
+    code, text = run_inputs_tool(files, catalog_setup_role_file=work / "catalog_role.json")
+    output = work / "services_code.json"
+    written = json.loads(output.read_text(encoding="utf-8"))["variables"] if output.is_file() else {}
+    (work / "existing.json").write_text(json.dumps({**files["existing"], "catalog_setup_task_role_arn": old_role}), encoding="utf-8")
+    kept_code, _ = run_inputs_tool(files)
+    kept = json.loads(output.read_text(encoding="utf-8"))["variables"] if output.is_file() else {}
+    (work / "catalog_role.json").write_text(json.dumps({"arn": files["role"]}), encoding="utf-8")
+    output.unlink()
+    wrong_code, _ = run_inputs_tool(files, catalog_setup_role_file=work / "catalog_role.json")
+    return {
+        "the tool succeeds": code == 0,
+        "the catalog setup role is set beside the code one-shot role": written.get("catalog_setup_task_role_arn") == catalog_role
+        and written.get("code_fetch_task_role_arn") == files["role"],
+        "the other supported settings are kept": written.get("mlflow_enabled") is True,
+        "the output names the setting and no ARN or account": "catalog_setup_task_role_arn" in text and "arn:aws" not in text and account not in text,
+        "without the flag an existing catalog setup role is kept": kept_code == 0 and kept.get("catalog_setup_task_role_arn") == old_role,
+        "a role of another family is refused and nothing is written": wrong_code != 0 and not output.exists(),
+    }
+
+
 def services_inputs_refuse_what_they_cannot_carry() -> dict[str, bool]:
     from scripts.infrastructure import services_code_inputs
 
@@ -810,6 +839,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "the_script_fits_the_run_task_override_limit": the_script_fits_the_run_task_override_limit,
     "repair_of_the_selected_release_keeps_repo_readable_at_every_rename": repair_of_the_selected_release_keeps_repo_readable_at_every_rename,
     "services_inputs_keep_every_existing_supported_setting": services_inputs_keep_every_existing_supported_setting,
+    "services_inputs_set_the_catalog_setup_role": services_inputs_set_the_catalog_setup_role,
     "services_inputs_refuse_what_they_cannot_carry": services_inputs_refuse_what_they_cannot_carry,
 }
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError)
