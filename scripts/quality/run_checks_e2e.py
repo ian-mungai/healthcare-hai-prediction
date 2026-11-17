@@ -2270,6 +2270,18 @@ CASES = [
     ),
     Case("source file with tfstate in its name", "credential-files", True, {"scripts/restored.tfstate.py": "VALUE = 1\n"}),
     Case("private key file", "credential-files", False, {"keys/deploy.pem": "placeholder\n"}),
+    # The scratch repository has no ignore rules, so each file below is staged as a force-added file would be.
+    Case("Terraform variables file", "credential-files", False, {"infra/prod.tfvars": 'db_password = "placeholder"\n'}),
+    Case("Terraform variables JSON file", "credential-files", False, {"infra/prod.tfvars.json": '{"db_password": "placeholder"}\n'}),
+    Case("Terraform crash log", "credential-files", False, {"infra/crash.log": "placeholder\n"}),
+    Case("Terraform crash log of a provider", "credential-files", False, {"infra/crash.1234.log": "placeholder\n"}),
+    Case("committed example variables file", "credential-files", True, {"infra/example.tfvars.example": 'db_password = "your-password"\n'}),
+    Case(
+        "source files named like the blocked ones",
+        "credential-files",
+        True,
+        {"infra/variables.tf": 'variable "db_password" {}\n', "scripts/crash_report.py": "X = 1\n"},
+    ),
     Case("CSV in the declared folder", "data-files", True, {"tests/fixtures/result.csv": "a,b\n1,2\n"}),
     Case("CSV dbt seed in the declared seeds folder", "data-files", True, {"dbt/seeds/labels.csv": "a,b\n1,2\n"}),
     Case("CSV beside the dbt seeds folder", "data-files", False, {"dbt/models/labels.csv": "a,b\n1,2\n"}),
