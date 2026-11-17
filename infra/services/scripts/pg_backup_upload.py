@@ -91,7 +91,7 @@ def check_dump(folder: Path, name: str, tables: int, size: int) -> None:
 def put_once(client: Any, bucket: str, key: str, path: Path, digest: str, record: Path) -> None:
     """Create ``key`` from ``path`` once. The role may write and may not read, so a key that exists is accepted only when this folder's own record
     (``uploaded.tsv``, written after a confirmed put) says an earlier try of this same set wrote the same hash; otherwise the set is refused."""
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import BotoCoreError, ClientError
 
     line = f"{key}\t{digest}"
     done = record.read_text(encoding="utf-8").splitlines() if record.exists() else []
@@ -105,7 +105,7 @@ def put_once(client: Any, bucket: str, key: str, path: Path, digest: str, record
         if line not in done:
             raise Refused(f"the key {key} already exists and this set did not write it") from None
         return
-    except OSError as error:
+    except (OSError, BotoCoreError) as error:
         raise Failed(f"upload of {key} failed ({type(error).__name__})") from None
     if line not in done:
         with record.open("a", encoding="utf-8") as handle:

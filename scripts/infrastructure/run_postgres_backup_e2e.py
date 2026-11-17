@@ -172,6 +172,18 @@ def case_upload_needs_no_read_permission() -> dict[str, bool]:
     return {"the upload never reads or lists": code == 0 and not client.gets and client.heads == 0}
 
 
+def case_upload_treats_a_client_library_error_as_a_failed_try() -> dict[str, bool]:
+    from botocore.exceptions import ParamValidationError
+
+    client = StandInS3()
+    client.put_error = ParamValidationError(report="Unknown parameter in input: IfNoneMatch")
+    backups = Path(tempfile.mkdtemp(prefix="pg_backups_"))
+    ready_folder(backups, RUN_A, {"airflow": 3})
+    script = load("pg_backup_upload")
+    codes = [script.run(backups, BUCKET, client, lambda: 0.0) for _ in range(3)]
+    return {"each try fails and none raises": codes == [1, 1, 1], "the set is set aside as failed": (backups / f"{RUN_A}.failed").is_dir()}
+
+
 def case_upload_stops_at_its_deadline() -> dict[str, bool]:
     ticks = iter([0.0, 0.0, 5000.0] + [5000.0] * 50)
     code, client, backups = upload_case(lambda b: ready_folder(b, RUN_A, {"airflow": 3, "mlflow": 2, "polaris": 5}), clock=lambda: next(ticks))

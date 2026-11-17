@@ -146,6 +146,7 @@ class StandInS3:
         self.gets: list[str] = []
         self.heads = 0
         self.fail_put_after: int | None = None
+        self.put_error: Exception | None = None
         self.fail_get = False
         self.fail_list = False
 
@@ -154,6 +155,8 @@ class StandInS3:
         return ClientError({"Error": {"Code": code, "Message": "stand-in"}}, operation)
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
+        if self.put_error is not None:
+            raise self.put_error
         if self.fail_put_after is not None and len(self.puts) >= self.fail_put_after:
             raise ConnectionError("stand-in connection lost")
         key, body = arguments["Key"], arguments["Body"]
