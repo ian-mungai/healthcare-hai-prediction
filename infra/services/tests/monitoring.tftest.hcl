@@ -989,6 +989,17 @@ run "postgres_creates_the_exporter_role_again_without_harm" {
     )
     error_message = "Postgres creates the role once, sets its password on every start and grants it pg_monitor, so a repeat changes nothing."
   }
+
+  # pg_monitor includes pg_read_all_stats, which shows the text of other sessions' running statements, so the bootstrap session stops reporting its activity
+  # before it sends any password (review round 2, finding 2). The SET comes before the first \getenv and the first password statement.
+  assert {
+    condition = (
+      strcontains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0], "SET track_activities = off;")
+      && length(split("SET track_activities = off;", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0])[0]) < length(split("\\getenv", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0])[0])
+      && length(split("SET track_activities = off;", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0])[0]) < length(split("PASSWORD", jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].command[0])[0])
+    )
+    error_message = "The bootstrap session turns activity tracking off before the first \\getenv and the first password statement."
+  }
 }
 
 run "without_monitoring_redis_and_postgres_keep_their_definitions" {

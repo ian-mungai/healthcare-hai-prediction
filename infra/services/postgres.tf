@@ -1,8 +1,11 @@
 locals {
+  # The session sends the role passwords as statements, so it stops reporting its activity first: pg_stat_activity then shows no statement text of it to a role with
+  # pg_read_all_stats (pg_monitor includes it), which the monitoring role holds from the second start on. The connection user is the superuser, who may set it.
   postgres_databases_main = <<-EOT
     exec psql -X <<'SQL'
     \set ON_ERROR_STOP on
     \set VERBOSITY terse
+    SET track_activities = off;
     SET log_statement = 'none';
     SET log_min_error_statement = 'panic';
     SET log_min_duration_statement = -1;
