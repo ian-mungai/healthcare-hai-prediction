@@ -97,6 +97,8 @@ TEST_CODE = re.compile(
     r"|(?:^|[/_])fixtures?\.py$|_fixtures?(?:$|[/_.-])"
     r"|(?:^|[/_])plants?\.py$|_faults\.py$"
 )
+# The job configs of the launcher (the paths of orchestration/ecs_preflight.py): the only JSON files whose lists declare the variables of a container.
+JOB_CONFIGS = ("config/orchestration/ecs_broker_jobs.json", "config/orchestration/direct_jobs.json", "config/orchestration/host_jobs.json")
 # Where Terraform, the job templates and the launcher configs set the variables of a container.
 CONTAINER_SETTERS = re.compile(r"(?:infra/|config/orchestration/|data_contracts/orchestration/|services/|docker-compose[^/]*$)")
 SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts"}
@@ -639,55 +641,59 @@ def env_setter_kind(path: str) -> str | None:
     return {".tf": "hcl", ".hcl": "hcl", ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".py": "python"}.get(Path(path).suffix)
 
 
-def json_container_variables(text: str) -> set[str]:
-    """Return the strings in the lists under a ``containers`` key of a JSON file: the variables that the launch contract declares for each container."""
+def job_config_variables(text: str) -> set[str]:
+    """Return the variables that a job config declares: the strings of ``jobs.<job>.containers.<container>``, which is a list of names.
+
+    Only that exact path counts, so a ``containers`` key anywhere else, notes or metadata never declares a variable. A file with a key that one of its objects
+    holds twice, or that is not JSON, declares none.
+    """
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one JSON object, refusing a key that it holds twice."""
+        if len({key for key, _ in items}) != len(items):
+            raise ValueError("a key is held twice")
+        return dict(items)
+
     try:
-        data = json.loads(text)
+        data = json.loads(text, object_pairs_hook=pairs)
     except ValueError:
         return set()
     found: set[str] = set()
-
-    def walk(node: Any, declared: bool) -> None:
-        """Collect the strings of the lists below a ``containers`` key."""
-        if isinstance(node, dict):
-            for key, value in node.items():
-                walk(value, declared or key == "containers")
-        elif isinstance(node, list):
-            for item in node:
-                if declared and isinstance(item, str):
-                    found.add(item)
-                else:
-                    walk(item, declared)
-
-    walk(data, False)
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    for job in jobs.values() if isinstance(jobs, dict) else ():
+        containers = job.get("containers") if isinstance(job, dict) else None
+        for variables in containers.values() if isinstance(containers, dict) else ():
+            if isinstance(variables, list):
+                found.update(item for item in variables if isinstance(item, str))
     return found
 
 
 def env_setters(path: str, text: str, names: set[str]) -> set[str]:
     """Return the ``names`` that the file ``path`` sets in an assignment form.
 
-    The forms are ``name = "X"`` or ``"name": "X"`` (an environment entry), ``"X=value"``, a mapping key (``X = ...`` in HCL, ``"X": ...`` in JSON, ``X: ...``
-    and ``- X=...`` in YAML), ``X=...`` or ``export X=...`` in shell, ``ENV X`` in a Dockerfile and ``env["X"] = ...`` or ``setdefault("X", ...)`` in Python.
-    A JSON file also sets the strings in the lists under its ``containers`` keys (see ``json_container_variables``). Comments and reads never count.
+    The forms are ``name = "X"`` (an environment entry) and ``"X=value"`` in HCL, YAML and Python, a mapping key (``X = ...`` in HCL, ``X: ...`` and
+    ``- X=...`` in YAML, ``"X": ...`` in Python), ``X=...`` or ``export X=...`` in shell, ``ENV X`` in a Dockerfile and ``env["X"] = ...`` or
+    ``setdefault("X", ...)`` in Python. A JSON file sets only what ``job_config_variables`` finds in one of the ``JOB_CONFIGS``: no other JSON file sets a
+    variable, whatever it holds. Comments and reads never count.
     """
     kind = env_setter_kind(path)
     if kind is None or not names:
         return set()
+    if kind == "json":
+        return names & job_config_variables(text) if path in JOB_CONFIGS else set()
     alt = "|".join(map(re.escape, sorted(names)))
     forms = {
         "name": rf"""["']?\bname["']?\s*[:=]\s*["']?({alt})["']?(?!\w)""",
         "string": rf"""["']({alt})=""",
-        "json": rf"""["']({alt})["']\s*:""",
         "hcl": rf"""["']({alt})["']\s*=(?!=)|^\s*({alt})\s*=(?!=)""",
         "yaml": rf"""["']({alt})["']\s*:|^\s*-?\s*({alt})\s*:|^\s*-\s*({alt})=""",
         "shell": rf"""^\s*(?:export\s+)?({alt})=""",
         "docker": rf"""^\s*ENV\s+({alt})(?:=|\s)""",
         "python": rf"""\[\s*["']({alt})["']\s*\]\s*=(?!=)|\bsetdefault\(\s*["']({alt})["']|["']({alt})["']\s*:""",
     }
-    wanted = {"hcl": ("name", "string", "hcl"), "json": ("name", "string", "json"), "yaml": ("name", "string", "yaml"), "python": ("name", "string", "python")}
+    wanted = {"hcl": ("name", "string", "hcl"), "yaml": ("name", "string", "yaml"), "python": ("name", "string", "python")}
     pattern = re.compile("|".join(forms[form] for form in wanted.get(kind, (kind,))), re.M)
-    found = {next(group for group in match.groups() if group) for match in pattern.finditer(env_without_comments(text, kind))}
-    return found | (names & json_container_variables(text) if kind == "json" else set())
+    return {next(group for group in match.groups() if group) for match in pattern.finditer(env_without_comments(text, kind))}
 
 
 def env_example() -> list[Finding]:
@@ -697,9 +703,10 @@ def env_example() -> list[Finding]:
     each. Every other name is in ``ENV_LIST`` with a category: ``test`` (only test code uses it, see ``TEST_CODE``), ``container`` (Terraform, ECS, Airflow,
     a job template or the launcher sets it inside a container), ``shell`` (an optional override that a person may export for one command) or ``tool``
     (the OS or a tool sets it). A container name must be set in an assignment form (see ``env_setters``) in a ``CONTAINER_SETTERS`` file, in the file named by
-    ``set_in`` or by the platform (``set_by`` is ``ecs``). ``set_by`` ``alias`` with ``set_in`` is the one exception that is not verified: project code sets
-    the name through a constant that the check does not follow, and ``set_in`` only has to use the name. The check shows where a name is set, not that the
-    value is right. Aliases, indirect and dynamic reads, and reads in shell or template files only are not followed.
+    ``set_in`` or by the platform (``set_by`` is ``ecs``). A JSON file counts only as one of the ``JOB_CONFIGS``, at the exact path of ``job_config_variables``.
+    ``set_by`` ``alias`` with ``set_in`` is the one exception that is not verified: project code sets the name through a constant that the check does not
+    follow, and ``set_in``, a Python file, only has to use the name. The check shows where a name is set, not that the value is right. Aliases, indirect
+    and dynamic reads, and reads in shell or template files only are not followed.
     """
     data, twice = env_list()
     env_file: list[str] = data.get("env_file", [])
@@ -812,9 +819,9 @@ def env_example() -> list[Finding]:
                     )
                 )
             elif entry.get("set_by") == "alias":
-                if not (home in tracked and not is_test(home) and re.search(rf"\b{re.escape(name)}\b", Path(home).read_text())):
-                    fix = f"name a tracked production file that uses {name} in set_in, or remove it"
-                    message = f"{name} is listed with set_by alias and set_in {home}, which is not a tracked production file that uses it"
+                if not (home in tracked and home.endswith(".py") and not is_test(home) and re.search(rf"\b{re.escape(name)}\b", Path(home).read_text())):
+                    fix = f"name a tracked production Python file that uses {name} in set_in, or remove it"
+                    message = f"{name} is listed with set_by alias and set_in {home}, which is not a tracked production Python file that uses it"
                     findings.append(Finding(ENV_LIST, message, f"{POLICY}: docs match the code", fix))
             elif not (home in tracked and not is_test(home) and name in env_setters(home, Path(home).read_text(), {name})):
                 fix = f"name a tracked production file that sets {name} in set_in, or remove it"

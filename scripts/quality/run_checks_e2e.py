@@ -147,6 +147,10 @@ ENV_LIST = "config/quality/env_names.json"
 # The settings a person puts in .env, in the order of .env.example. The env-example cases start from a repository that holds only these.
 ENV_FILE_NAMES = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCOUNT_ID", "PROJECT_NAME", "S3_BUCKET", "ENVIRONMENT", "ALERT_EMAIL"]
 CONTAINER_SETTER = "infra/jobs/sample.tf"
+ECS_JOBS = "config/orchestration/ecs_broker_jobs.json"
+DIRECT_JOBS = "config/orchestration/direct_jobs.json"
+HOST_JOBS = "config/orchestration/host_jobs.json"
+CONTAINER_UNSET = "is listed as container but nothing in infra/ or the job and launcher configs sets it"
 CONTAINER_SETTER_TEXT = f'environment = [{{ name = "{CONTAINER_SETTING}", value = "x" }}]\n'
 SHELL_SETTING = "SAMPLE_SHELL" + "_SETTING"
 CONTAINER_SETTER_NAME = "SAMPLE_COMMENTED" + "_SETTING"
@@ -267,6 +271,11 @@ def env_names(names: dict[str, dict[str, str]] | None = None, modules: list[str]
     """The name list of a sample repository: the settings of .env, the extra test modules ``modules`` and the entries ``names``."""
     data = {"env_file": ENV_FILE_NAMES if env_file is None else env_file, "test_modules": {path: "sample test module" for path in modules or []}}
     return json.dumps({**data, "names": names or {}}) + "\n"
+
+
+def job_config(*names: str) -> str:
+    """A job config with one job whose container declares the variables ``names``."""
+    return json.dumps({"version": 1, "jobs": {"run": {"containers": {"run": ["RUN_ID", *names]}}}}) + "\n"
 
 
 def env_example_text(*names: str) -> str:
@@ -2659,20 +2668,115 @@ CASES = [
         True,
         {
             "app/tool.py": read_sample(CONTAINER_SETTING),
-            "config/orchestration/sample_jobs.json": json.dumps({"jobs": [{"containers": {"run": ["RUN_ID", CONTAINER_SETTING]}}]}) + "\n",
+            ECS_JOBS: job_config(CONTAINER_SETTING),
             ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
         },
     ),
     Case(
-        "container variable in a job config list that declares no container",
+        "container variable declared in the direct and host job configs",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING) + read_sample(CONTAINER_SETTER_NAME),
+            DIRECT_JOBS: job_config(CONTAINER_SETTING),
+            HOST_JOBS: job_config(CONTAINER_SETTER_NAME),
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container"), CONTAINER_SETTER_NAME: env_entry("container")}),
+        },
+    ),
+    Case(
+        "container variable set_in names a job config",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            ECS_JOBS: job_config(CONTAINER_SETTING),
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in=ECS_JOBS)}),
+        },
+    ),
+    Case(
+        "container variable in notes under containers",
         "env-example",
         False,
         {
             "app/tool.py": read_sample(CONTAINER_SETTING),
-            "config/orchestration/sample_jobs.json": json.dumps({"jobs": [{"allowed": ["RUN_ID", CONTAINER_SETTING]}]}) + "\n",
+            "config/orchestration/notes.json": json.dumps({"documentation": {"containers": {"unused": [CONTAINER_SETTING]}}}) + "\n",
             ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
         },
-        reason=f"{CONTAINER_SETTING} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+        reason=CONTAINER_UNSET,
+    ),
+    Case(
+        "container variable nested in metadata of a job config",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            ECS_JOBS: json.dumps(
+                {"jobs": {"run": {"notes": {"containers": {"unused": [CONTAINER_SETTING]}}, "containers": {"run": {"meta": [CONTAINER_SETTING]}}}}}
+            )
+            + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=CONTAINER_UNSET,
+    ),
+    Case(
+        "container variable in a job config outside a job",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            ECS_JOBS: json.dumps({"containers": {"run": [CONTAINER_SETTING]}, "steps": {"jobs": {"containers": {"run": [CONTAINER_SETTING]}}}}) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=CONTAINER_UNSET,
+    ),
+    Case(
+        "container variable in a job config list under a key twice",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            ECS_JOBS: '{"jobs": {"run": {"containers": {"run": ["'
+            + CONTAINER_SETTING
+            + '"]}}}, "jobs": {"run": {"containers": {"run": ["'
+            + CONTAINER_SETTING
+            + '"]}}}}\n',
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=CONTAINER_UNSET,
+    ),
+    Case(
+        "container variable as a key of another JSON file",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "config/orchestration/notes.json": json.dumps({"environment": {CONTAINER_SETTING: "x"}, "name": CONTAINER_SETTING}) + "\n",
+            "data_contracts/orchestration/examples/notes.json": json.dumps([{"name": CONTAINER_SETTING, "value": "x"}]) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=CONTAINER_UNSET,
+    ),
+    Case(
+        "container variable set_in names an unrelated JSON file",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "config/orchestration/notes.json": json.dumps({"containers": {"unused": [CONTAINER_SETTING]}, CONTAINER_SETTING: "x"}) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in="config/orchestration/notes.json")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed with set_in config/orchestration/notes.json, which is not a tracked production file that sets it",
+    ),
+    Case(
+        "container variable set_in names a job config that does not declare it",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            ECS_JOBS: job_config("OTHER_SETTING"),
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in=ECS_JOBS)}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed with set_in {ECS_JOBS}, which is not a tracked production file that sets it",
     ),
     Case(
         "container variable set through an alias",
@@ -2693,7 +2797,18 @@ CASES = [
             "app/launch.py": "X = 1\n",
             ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_by="alias", set_in="app/launch.py")}),
         },
-        reason=f"{CONTAINER_SETTING} is listed with set_by alias and set_in app/launch.py, which is not a tracked production file that uses it",
+        reason=f"{CONTAINER_SETTING} is listed with set_by alias and set_in app/launch.py, which is not a tracked production Python file that uses it",
+    ),
+    Case(
+        "container variable alias set_in names a JSON file",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "config/orchestration/notes.json": json.dumps({"notes": [CONTAINER_SETTING]}) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_by="alias", set_in="config/orchestration/notes.json")}),
+        },
+        reason="set_by alias and set_in config/orchestration/notes.json, which is not a tracked production Python file that uses it",
     ),
     Case(
         "variable read by a listed test module",
