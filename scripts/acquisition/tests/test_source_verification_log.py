@@ -59,6 +59,21 @@ def test_rows_cover_bronze_sources_validation_only_and_rejected(built: dict[str,
     check({row["status"] for row in built["rows"]} <= set(log_module.STATUSES), "{row['status'] for row in built['rows']} <= set(log_module.STATUSES)")
 
 
+def test_hcai_utilization_is_dated_by_the_newest_release_record(built: dict[str, Any], inputs: dict[str, Any]) -> None:
+    row = rows_by_id(built)["HCAI_UTIL"]
+    check(len(inputs["releases"]) == 3, "three access release records are read")
+    check(
+        row["verification"] == {"date": "2026-11-17", "basis": "access release record access_releases_20261117.json"},
+        "HCAI_UTIL carries the newest record's date",
+    )
+    newest = [release for release in inputs["releases"][-1]["releases"] if release["source_id"] == "HCAI_UTIL"]
+    check(len(newest) == 1 and "not model-eligible" not in newest[0]["scope"], "the newest record no longer says not model-eligible")
+    rows = rows_by_id(built)
+    for source_id in ("HCAI_FINANCE", "HCAI_UTIL", "IL"):
+        check(rows[source_id]["status"] == "verified" and "built in silver" in rows[source_id]["status_reason"], f"{source_id} is verified as built in silver")
+    check(rows["TX"]["status"] == "deferred", "a state source without a data model stays deferred")
+
+
 def test_research_sources_are_public_and_carry_no_personal_field(built: dict[str, Any]) -> None:
     rows = rows_by_id(built)
     for source_id in ("CMS_OWNERS", "CMS_CHOW", "HCAI_FINANCE", "HCAI_UTIL"):

@@ -807,11 +807,10 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "deferred",
-      "status_reason": "State source (group E), deferred by project fact 10",
-      "deferral_trigger": "not recorded",
+      "status": "verified",
+      "status_reason": "State source (group E) built in silver (owner decision Nov 17 2026)",
+      "deferral_trigger": null,
       "not_recorded": [
-        "deferral_trigger",
         "evidence.object_version",
         "evidence.receipt_path",
         "evidence.receipt_sha256",
@@ -832,8 +831,8 @@
       "data_class": "Public",
       "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
       "verification": {
-        "date": "2026-10-02",
-        "basis": "access release record access_releases_20261002.json"
+        "date": "2026-11-17",
+        "basis": "access release record access_releases_20261117.json"
       },
       "evidence": {
         "registry_record_sha256": "d1a11653b368001b13fbed6d35e94223fba0f9d17b751d55a8a491d47c02e7f2",
@@ -844,11 +843,10 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "deferred",
-      "status_reason": "State source (group E), deferred by project fact 10",
-      "deferral_trigger": "not recorded",
+      "status": "verified",
+      "status_reason": "State source (group E) built in silver (owner decision Nov 17 2026)",
+      "deferral_trigger": null,
       "not_recorded": [
-        "deferral_trigger",
         "evidence.object_version",
         "evidence.receipt_path",
         "evidence.receipt_sha256",
@@ -1100,11 +1098,10 @@
         "object_version": "not recorded",
         "receipt_path": "not recorded"
       },
-      "status": "deferred",
-      "status_reason": "State source (group E), deferred by project fact 10",
-      "deferral_trigger": "not recorded",
+      "status": "verified",
+      "status_reason": "State source (group E) built in silver (owner decision Nov 17 2026)",
+      "deferral_trigger": null,
       "not_recorded": [
-        "deferral_trigger",
         "evidence.object_version",
         "evidence.receipt_path",
         "evidence.receipt_sha256",

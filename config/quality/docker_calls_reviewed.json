@@ -17,7 +17,7 @@
         "scripts/acquisition/collector_state.py": "sha256:9879b4137b41ef3e2adb95d371637a8f38752043d3dfe1749b21213d24856dcd",
         "scripts/acquisition/legacy_versions.py": "sha256:ca66d0226179136947759508e1a887b8a02fad73b88d6e7c342c340de85fca99",
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
@@ -42,7 +42,7 @@
         "scripts/acquisition/data_paths.py": "sha256:2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42",
         "scripts/acquisition/legacy_versions.py": "sha256:ca66d0226179136947759508e1a887b8a02fad73b88d6e7c342c340de85fca99",
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
@@ -69,7 +69,7 @@
         "scripts/acquisition/hud_api_transport.py": "sha256:ce322d9fbae092432b7ed111511bbb9a6d242744a2f9fc984d70e69936f9cafd",
         "scripts/acquisition/legacy_versions.py": "sha256:ca66d0226179136947759508e1a887b8a02fad73b88d6e7c342c340de85fca99",
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
@@ -101,7 +101,7 @@
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
         "scripts/acquisition/redownload_route.py": "sha256:f78341524a8f34181d600ce275ce3656165b773ca81f8635388a2ea294ffaa9c",
         "scripts/acquisition/restored_outcomes.py": "sha256:41b8e7dd7e9c2caae5eb7ae77b775085d3c1edac2c0f985cf74f1af7f8297fb9",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
@@ -139,7 +139,7 @@
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
         "scripts/acquisition/redownload_route.py": "sha256:f78341524a8f34181d600ce275ce3656165b773ca81f8635388a2ea294ffaa9c",
         "scripts/acquisition/restored_outcomes.py": "sha256:41b8e7dd7e9c2caae5eb7ae77b775085d3c1edac2c0f985cf74f1af7f8297fb9",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
@@ -162,7 +162,7 @@
       "occurrences": 7,
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -185,7 +185,7 @@
       "occurrences": 2,
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -203,7 +203,7 @@
       "occurrences": 1,
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -220,7 +220,7 @@
       "occurrences": 2,
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -238,7 +238,7 @@
       "occurrences": 1,
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -253,7 +253,7 @@
       "code_sha256": "962a22937797ee9ea7002ee945cfd503ef912f7f9cbba903504e74f093ef4686",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+      "file_sha256": "4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
       "dependencies": {
         "scripts/acquisition/archive_review.py": "sha256:59a6b2660eb64c96c8003b6dc47b7a3535bc32b07627e99001aaca35157cb6f8",
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
@@ -303,7 +303,7 @@
       "file_sha256": "3fee838e3d2ca334dea731b9a6e175130e24c18365020bef645bb618a2a245a7",
       "dependencies": {
         "scripts/acquisition/collection_layout.py": "sha256:dcc4c7e6a949f3e8c98200df56a1cde91884e5543b601d967d1f5054e8686621",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "tests/support.py": "sha256:d94c83009e222255d9076939b6826d80dcf6face84d56e9efdcd86fb14bbd11f"
       },
@@ -420,7 +420,7 @@
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
         "scripts/lakehouse/run_silver_e2e.py": "sha256:e68daa9239ecc3d528f8be2efa175a355cce1c3e5f468392075cab4383ef7387",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/docker_calls.py": "sha256:1fd945eba023c5f1ceae05f3535127041aa19b33e8983341191bbd7fde5a2230",
@@ -671,7 +671,7 @@
       "code_sha256": "cea51af81ad31da866b00bfa3d89cd75975f39dad3cced550e5d8fc50b4f6260",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -683,7 +683,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -701,7 +701,7 @@
       "code_sha256": "b864f3eac42ef73c72e3e0a2693616c4b4965a9e11d784251ad1bc15cb756e0a",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -713,7 +713,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -731,7 +731,7 @@
       "code_sha256": "fd1f9e336ab11fac06944ba4d1b2926ff6077564d1b64804113bfc1eaadd9e6e",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -743,7 +743,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -761,7 +761,7 @@
       "code_sha256": "648c46d344dc7a53a19a1563eb241b65ff4cbece6eb3c67ccb0b94ed5e8fc269",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -773,7 +773,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -792,7 +792,7 @@
       "code_sha256": "95dd581b1eaada383ceeffdc273e23526918dd2308cb1f85cd35d115bd67c150",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -804,7 +804,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -822,7 +822,7 @@
       "code_sha256": "a26b388ab5da803e661e88dde435cb482811e34de84e93aad8ab2d9b78c39c2c",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -834,7 +834,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -852,7 +852,7 @@
       "code_sha256": "827292aec5c6ad85c5b6770761c279227f39da26427fe83eb757e8ae3b0ad333",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -864,7 +864,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -882,7 +882,7 @@
       "code_sha256": "e26a81d7996aee1bd619aa4e37f515f2a90fe5515a37805a095ebc461e4a40cb",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -894,7 +894,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -912,7 +912,7 @@
       "code_sha256": "229b8e273a73ec9df34e47d7e1cf66f576ae2c45ad99218e4510784c6e783acf",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -924,7 +924,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -942,7 +942,7 @@
       "code_sha256": "1a42ce7ff4f4bdfc54c3ac1538a16e4a99b723b8b51256f5e554ab4a5015d166",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -954,7 +954,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -972,7 +972,7 @@
       "code_sha256": "3b0686cb047227ddc9ba07aa8916b6dad462b0667235ee062f014d31858cc96b",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -984,7 +984,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1002,7 +1002,7 @@
       "code_sha256": "f2c881f3a19770199bd02753e2fc0e98faec063f2559bea3a238dc7bbcbd9d36",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1014,7 +1014,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1032,7 +1032,7 @@
       "code_sha256": "a1d3de85faf84095a1a10d81d60068e637acb23bcf82237617c6159261c4a9cf",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1044,7 +1044,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1062,7 +1062,7 @@
       "code_sha256": "84d911b519c6ff4a31c00c3221389fcc6b5d5756f2f39b5b89a9715dc8aeaa14",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1074,7 +1074,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1092,7 +1092,7 @@
       "code_sha256": "ce026e5bea9a46c073de33729f1b2c41b307e48317673a09d4513b9a265626d1",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1104,7 +1104,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1122,7 +1122,7 @@
       "code_sha256": "f8c56d974f57abe387f78f0bef9bbf3b8eef1ad258f002599ef6a36441d701a7",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1134,7 +1134,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1154,7 +1154,7 @@
       "code_sha256": "6dd021ab58597f33e292f66b3a0076b6d54d8565d2c0bfa5aaecfa2e4f8961b6",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1166,7 +1166,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1184,7 +1184,7 @@
       "code_sha256": "50ff933cd99a83b74ed4a247f6e52cb7173ff88d0c99e34db877ce0e5fcca602",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1196,7 +1196,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1214,7 +1214,7 @@
       "code_sha256": "4dd27b23892f8634c026aa81d2f2f090761c80451c40b896358d88ae650129bd",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1226,7 +1226,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1244,7 +1244,7 @@
       "code_sha256": "c3f9ba562c1caf375fa46d0673969769db48769524adfba2404e2903dbc76003",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1256,7 +1256,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1274,7 +1274,7 @@
       "code_sha256": "f70c6ad0b46a8e06984ed714f73a2574f12863da6f819efc30fd34bd7de7f264",
       "dependencies": {
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/tests/test_capture.py": "sha256:88ae075bd853a07fda3ebb8c954a2a2c4540cb1624adfc66861009192c2014f8",
@@ -1286,7 +1286,7 @@
         "scripts/lakehouse/duckdb_cli.py": "sha256:50fd99992af8982ef6bdaf83556c15f55d3f66b0132bd98b05cb1badfb30b538",
         "scripts/lakehouse/ipps_file_labels.py": "sha256:5da81f7ef711f72f155fef387dbb70072c56d927a6c280944a060468f745bff4",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_staging_e2e.py": "sha256:76256ecb56e124419bd97d6c2bb7bbf9322f20147d5f23c0f311c80b43bee754",
+        "scripts/lakehouse/run_staging_e2e.py": "sha256:0d52d136b228e2c552b2cbb2dc41e96d2b9dea23e1b758b6271b5f1e94cf4703",
         "scripts/lakehouse/storage_metadata_comparison.py": "sha256:941b546b2ce852d72b28255c0403d444d9fdb098220de062a910034c1d10ecf6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1377,7 +1377,7 @@
       "dependencies": {
         "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
         "scripts/infrastructure/render_platform_config.py": "sha256:f005cf2b9ee54712cd873b1897080c7fe9166ca4baa86d436f342f670bf0f79d",
         "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
@@ -1579,7 +1579,7 @@
       "file_sha256": "2dbcc5a784fb7583f8bc168570c97c22d2f7b7b7a967e0d7c055b5eacfbff0c9",
       "dependencies": {
         "orchestration/ecs_preflight.py": "sha256:519b264655dd28d604cec99069449a156756f0ec1c68a0e88ebbe5c930fa14e4",
-        "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/acquisition/s3_store.py": "sha256:4530cc6c6d2bc94856a14c25f811a21ba859fc48cc11b75d3eedeb6936b9e982",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
         "scripts/infrastructure/host_session.py": "sha256:625cc37ac546b142241c1a06fa5e3f4ccc48780167d94e7b6b91299fc2205b65",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7b3526a3ea78ffb4bc77e11c8ef67784396524e0cba1bbb072d7d673c5ed2893",

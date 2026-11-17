@@ -339,13 +339,13 @@ def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries:
 def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
     """New receipts bind the newest release record; receipts that bind an earlier record still verify (failure modes 15 to 18)."""
     paths = s3_store.ACCESS_RELEASE_PATHS
-    newest, earliest = (hashlib.sha256(path.read_bytes()).hexdigest() for path in (paths[-1], paths[0]))
+    newest, middle, earliest = (hashlib.sha256(path.read_bytes()).hexdigest() for path in (paths[-1], paths[1], paths[0]))
     hcai = candidate("e2e-hcai-reference", source_id="HCAI_UTIL", source_ids=["HCAI_UTIL"], release_binding="access_release")
     source = {"source_id": "HCAI_UTIL"}
 
     def planned() -> None:
         bindings = extend([hcai])[0]["plan"].get("lineage_bindings")
-        require(len(paths) == 2 and bindings == {"access_release_sha256": newest}, f"Binding is not the newest record: {bindings}")
+        require(len(paths) == 3 and bindings == {"access_release_sha256": newest}, f"Binding is not the newest record: {bindings}")
 
     scenario("documentation_release_bound_to_newest_record", planned)
 
@@ -358,6 +358,26 @@ def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
         "earlier_release_record_still_verifies",
         lambda: require(s3_store.released_by_record(source, {"access_release_sha256": earliest}), "Earlier record no longer releases its receipts"),
     )
+    scenario(
+        "second_release_record_still_verifies",
+        lambda: require(s3_store.released_by_record(source, {"access_release_sha256": middle}), "Second record no longer releases its receipts"),
+    )
+
+    def eligible() -> None:
+        released = [r for r in json.loads(paths[-1].read_text())["releases"] if r["source_id"] == "HCAI_UTIL"]
+        require(len(released) == 1 and released[0]["released"] is True, f"The newest record does not release HCAI utilization: {released}")
+        text = " ".join([released[0]["scope"], released[0]["hold"], *released[0]["decisions"]])
+        require("not model-eligible" not in text and "nothing published" not in text, "The newest record keeps the withdrawn scope")
+        require(
+            "model-eligible" in released[0]["scope"] and "silver" in released[0]["scope"], "The newest record does not make HCAI utilization model-eligible"
+        )
+        require(
+            "administrator" in released[0]["hold"] and "redacts" in released[0]["hold"] and "silver" in released[0]["hold"],
+            "The privacy note lost its protections",
+        )
+        require("Nov 10 2026" in text and "Nov 17 2026" in text, "The newest record does not cite both owner decisions")
+
+    scenario("newest_record_makes_hcai_utilization_model_eligible", eligible)
     scenario(
         "unlisted_release_record_refused",
         lambda: require(not s3_store.released_by_record(source, {"access_release_sha256": "0" * 64}), "Unlisted record accepted"),

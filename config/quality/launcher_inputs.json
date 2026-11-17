@@ -536,6 +536,7 @@
     "airflow_plugins/hai_timetables.py",
     "config/acquisition/access_releases_20260929.json",
     "config/acquisition/access_releases_20261002.json",
+    "config/acquisition/access_releases_20261117.json",
     "config/acquisition/bls_api_code_versions.json",
     "config/acquisition/bls_api_plan.json",
     "config/acquisition/census_acs_api_code_versions.json",

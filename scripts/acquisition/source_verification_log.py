@@ -18,6 +18,8 @@ ALLOWLIST_PATH = CONFIG / "source_verification_text_allowlist.json"
 BRONZE_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 LOG_VERSION = 1
 NOT_RECORDED = "not recorded"
+# The access release records, oldest first; a later record supersedes an earlier one for a source it names.
+RELEASE_RECORDS = ("access_releases_20260929.json", "access_releases_20261002.json", "access_releases_20261117.json")
 STATUSES = ("verified", "deferred", "validation-only", "rejected", NOT_RECORDED)
 ROW_FIELDS = (
     "dataset_id",
@@ -76,6 +78,8 @@ GUIDE_SECTION_8 = {
     "AHRF": ("Health Resources and Services Administration (HRSA)", "Free, public, annual, county-level, no DUA"),
     "NHSN": ("CDC", "Requires a formal Data Use Agreement"),
 }
+# The state sources whose data rows have silver models; the document-only state sources stay deferred.
+SILVER_BUILT_STATE = frozenset({"HCAI_FINANCE", "HCAI_UTIL", "IL"})
 GUIDE_BUILT = frozenset({"main-hai-pdc", "care-general-cms", "care-hcahps-cms", "care-timely-cms", "care-hac-cms", "CMS_HCRIS_PUF", "main-cmi-ipps", "SVI"})
 # Publisher names the project guide uses for the layout's publisher folders (section 8 and its data classification text).
 PUBLISHER_NAMES = {
@@ -131,7 +135,7 @@ def load_inputs(root: Path = REPO_ROOT) -> dict[str, Any]:
         "closeout": read_json(config / "collection_closeout.json"),
         "terms": read_json(config / "terms_acceptance_20260928.json"),
         "allowlist": read_json(config / ALLOWLIST_PATH.name),
-        "releases": [read_json(config / name) for name in ("access_releases_20260929.json", "access_releases_20261002.json")],
+        "releases": [read_json(config / name) for name in RELEASE_RECORDS],
     }
 
 
@@ -186,8 +190,7 @@ def dated_decisions(inputs: dict[str, Any]) -> dict[str, tuple[str, str]]:
                 dates[source] = (decision["decision_date"], "owner source decision recorded in the registry closeout")
     for source in TERMS_ACCEPTANCE_SOURCES:
         dates[source] = (inputs["terms"]["decision_date"], "owner terms acceptance record terms_acceptance_20260928.json")
-    names = ("access_releases_20260929.json", "access_releases_20261002.json")
-    for name, record in zip(names, inputs["releases"], strict=True):
+    for name, record in zip(RELEASE_RECORDS, inputs["releases"], strict=True):
         for release in record["releases"]:
             if release.get("released"):
                 dates[release["source_id"]] = (record["recorded_at_utc"][:10], f"access release record {name}")
@@ -239,6 +242,8 @@ def build_row(source: dict[str, Any], inputs: dict[str, Any], groups: dict[str, 
         status, reason = "rejected", REJECTED[source_id]
     elif source_id in VALIDATION_ONLY:
         status, reason = "validation-only", VALIDATION_ONLY[source_id]
+    elif source_id in SILVER_BUILT_STATE:
+        status, reason = "verified", "State source (group E) built in silver (owner decision Nov 17 2026)"
     elif groups.get(collection) == {"state_sources"}:
         status, reason, trigger = "deferred", "State source (group E), deferred by project fact 10", NOT_RECORDED
     elif closeout and candidates == snapshots and isinstance(candidates, int) and candidates > 0:

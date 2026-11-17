@@ -325,6 +325,7 @@ TERMS_ACCEPTANCE_PATH = REPO_ROOT / "config/acquisition/terms_acceptance_2026092
 ACCESS_RELEASE_PATHS = (
     REPO_ROOT / "config/acquisition/access_releases_20260929.json",
     REPO_ROOT / "config/acquisition/access_releases_20261002.json",
+    REPO_ROOT / "config/acquisition/access_releases_20261117.json",
 )
 # New receipts bind the newest record.
 ACCESS_RELEASE_PATH = ACCESS_RELEASE_PATHS[-1]
