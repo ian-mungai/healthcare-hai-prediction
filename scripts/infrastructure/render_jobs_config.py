@@ -22,7 +22,14 @@ from scripts.infrastructure.render_project_config import (
     verify_project_identity,
     write_or_check,
 )
-from scripts.infrastructure.stack_settings import project_parameter_values, require_local_override, terraform_default
+from scripts.infrastructure.stack_settings import (
+    JOB_IMAGES,
+    SELECTION_SETTINGS,
+    needed_images,
+    project_parameter_values,
+    require_local_override,
+    terraform_default,
+)
 from scripts.process import TimeoutExpired, run_command
 
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
@@ -41,17 +48,6 @@ PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/jobs_preparation
 # The pushed image digests that push_images record keeps for the services stack: the one record of what ECR holds.
 IMAGE_RECORD = SERVICES_DIRECTORY / "images.auto.tfvars.json"
 DIGEST_FORM = re.compile(r"sha256:[0-9a-f]{64}")
-# The committed defaults of these switches and lists, with the overrides on top, are the selection that decides which images and stack outputs are needed.
-SELECTION_SETTINGS = (
-    "bronze_job_enabled",
-    "drift_enabled",
-    "host_jobs",
-    "host_jobs_enabled",
-    "layer_jobs",
-    "layer_jobs_enabled",
-    "publisher_job_enabled",
-    "train_enabled",
-)
 # The jobs inputs that hold an account, the project or the environment, so they are built here and never committed. The job switches, the host job families,
 # the host repository path and the serve prefix are the committed Terraform defaults.
 JOB_ROLES = {
@@ -62,13 +58,6 @@ JOB_ROLES = {
     "openmetadata_roles": ("execution", "openmetadata_task"),
 }
 WRITER_LAYERS = ("silver", "gold", "features")
-# Each image input maps its keys to the repository, named <project>_<repository>_<environment>, whose digest the record holds.
-JOB_IMAGES = {
-    "images": {"analytics": "analytics", "quality": "quality", "spark": "spark"},
-    "train_images": {"training": "training", "feature_store": "feature_store"},
-    "drift_images": {"training": "training", "feature_store": "feature_store", "drift": "drift"},
-    "openmetadata_images": {"ingestion": "openmetadata_ingestion"},
-}
 
 
 def jobs_values(storage: dict[str, str]) -> dict[str, str]:
@@ -91,26 +80,6 @@ def image_digests(path: Path | None = None) -> dict[str, str]:
 def effective_selection(prepared: dict[str, Any]) -> dict[str, Any]:
     """The job switches and lists the jobs stack will run with: the committed default of each, or the value the overrides give."""
     return {name: prepared[name] if name in prepared else terraform_default(JOBS_SOURCE, name) for name in SELECTION_SETTINGS}
-
-
-def needed_images(selection: dict[str, Any]) -> dict[str, tuple[str, ...]]:
-    """The image keys of each image input that the effective selection needs, named as the jobs stack validates them."""
-    layers, trains = selection["layer_jobs_enabled"] is True, selection["train_enabled"] is True
-    families = set(selection["host_jobs"]) if selection["host_jobs_enabled"] is True else set()
-    wanted = {
-        "images": {
-            *(("analytics",) if selection["publisher_job_enabled"] is True or layers else ()),
-            *(("quality",) if layers else ()),
-            *(("spark",) if layers or selection["bronze_job_enabled"] is True else ()),
-        },
-        "train_images": {
-            *(("training", "feature_store") if trains else ()),
-            *(("feature_store",) if layers and "features" in selection["layer_jobs"] else ()),
-        },
-        "drift_images": {"training", "feature_store", "drift"} if selection["drift_enabled"] is True else set(),
-        "openmetadata_images": {"ingestion"} if "metadata" in families else set(),
-    }
-    return {group: tuple(key for key in JOB_IMAGES[group] if key in keys) for group, keys in wanted.items() if keys}
 
 
 def job_images(storage: dict[str, str], digests: dict[str, str], needed: dict[str, tuple[str, ...]]) -> dict[str, dict[str, str]]:
@@ -263,7 +232,8 @@ def main() -> int:
         directory = JOBS_DIRECTORY
         selection = effective_selection(prepared)
         families = set(selection["host_jobs"]) if selection["host_jobs_enabled"] is True else set()
-        values.update(environment_values(storage, image_digests(), needed_images(selection)))
+        needed = needed_images(selection)
+        values.update(environment_values(storage, image_digests() if needed else {}, needed))
         if selection["host_jobs_enabled"] is True or selection["publisher_job_enabled"] is True:
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
         if "metadata" in families:

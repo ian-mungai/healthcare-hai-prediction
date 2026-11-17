@@ -408,48 +408,164 @@ def test_an_overrides_file_inside_the_repository_must_be_untracked_and_ignored(
     check("untracked" in capsys.readouterr().err, "the refusal says the file must be untracked and ignored")
 
 
-def no_change_plan(*actions: list[str]) -> dict[str, Any]:
-    changes = [{"address": f'aws_ecs_task_definition.host["family_{index}"]', "change": {"actions": action}} for index, action in enumerate(actions)]
-    return {"complete": True, "errored": False, "resource_changes": changes}
+SERVICES_IMAGES = {"postgres": "sha256:" + "1" * 64, "redis": "sha256:" + "2" * 64, "airflow": "sha256:" + "3" * 64}
+OTHER_DIGEST = "sha256:" + "9" * 64
+SELECTION_NAMES = (
+    "bronze_job_enabled",
+    "drift_enabled",
+    "host_jobs",
+    "host_jobs_enabled",
+    "layer_jobs",
+    "layer_jobs_enabled",
+    "publisher_job_enabled",
+    "train_enabled",
+)
 
 
-def run_no_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan: dict[str, Any], sha256: str | None = None) -> int:
-    record = tmp_path / "images.auto.tfvars.json"
-    record.write_bytes(IMAGE_RECORD_FIXTURE.read_bytes())
-    monkeypatch.setattr(stack_settings, "IMAGE_RECORD", record)
+def stack_resources(stack: str) -> list[str]:
+    """The ``type.name`` of every resource block of a stack, read from its source."""
+    found: list[str] = []
+    for source in sorted((ROOT / "infra" / stack).glob("*.tf")):
+        found += [f"{kind}.{name}" for kind, name in re.findall(r'^resource "([a-z0-9_]+)" "([a-z0-9_]+)"', source.read_text(encoding="utf-8"), re.M)]
+    return found
+
+
+def declared_variables(stack: str) -> set[str]:
+    names: set[str] = set()
+    for source in sorted((ROOT / "infra" / stack).glob("*.tf")):
+        names |= set(re.findall(r'^variable "([a-z0-9_]+)" \{', source.read_text(encoding="utf-8"), re.M))
+    return names
+
+
+def record_digests() -> dict[str, str]:
+    return {**load(IMAGE_RECORD_FIXTURE)["image_digests"], **SERVICES_IMAGES}
+
+
+def stack_plan(stack: str, *actions: list[str]) -> dict[str, Any]:
+    """A saved plan as ``terraform show -json`` prints it for one stack: its declared variables, its image inputs and a resource change each."""
+    if stack == "services":
+        variables: dict[str, Any] = {"image_digests": {"value": dict(SERVICES_IMAGES)}}
+        address = 'aws_ecs_task_definition.service["airflow_apiserver"]'
+    else:
+        variables = {name: {"value": terraform_default("jobs", name)} for name in SELECTION_NAMES}
+        variables |= {"project_name": {"value": PROJECT}, "environment": {"value": "dev"}}
+        live = restore(load(JOBS_LIVE))
+        variables |= {group: {"value": dict(live[group])} for group in ("images", "train_images", "drift_images", "openmetadata_images")}
+        address = 'aws_ecs_task_definition.host["silver"]'
+    changes = [
+        {"address": address.replace("silver", f"silver_{index}").replace("airflow_apiserver", f"airflow_{index}"), "change": {"actions": action}}
+        for index, action in enumerate(actions or ([["no-op"]]))
+    ]
+    configuration: dict[str, Any] = {"root_module": {"variables": {name: {} for name in declared_variables(stack)}}}
+    return {"complete": True, "errored": False, "variables": variables, "configuration": configuration, "resource_changes": changes}
+
+
+def run_no_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan: dict[str, Any], stack: str = "jobs", sha256: str | None = None, record: dict[str, str] | None = None
+) -> int:
+    """Run the plan check through its command line with the saved plan answered by a stand-in for ``terraform show -json`` and a record of known digests."""
+    record_file = tmp_path / "images.auto.tfvars.json"
+    record_file.write_text(json.dumps({"image_digests": record or record_digests()}), encoding="utf-8")
+    monkeypatch.setattr(stack_settings, "IMAGE_RECORD", record_file)
     monkeypatch.setattr(stack_settings, "run_command", lambda program, arguments, **keywords: CompletedProcess([program, *arguments], 0, json.dumps(plan), ""))
-    digest = sha256 or hashlib.sha256(IMAGE_RECORD_FIXTURE.read_bytes()).hexdigest()
-    monkeypatch.setattr(sys, "argv", ["check", "--stack", "jobs", "--plan", str(tmp_path / "jobs.tfplan"), "--image-record-sha256", digest])
+    digest = sha256 or hashlib.sha256(record_file.read_bytes()).hexdigest()
+    monkeypatch.setattr(sys, "argv", ["check", "--stack", stack, "--plan", str(tmp_path / "plan.tfplan"), "--image-record-sha256", digest])
     return stack_settings.main()
 
 
+def refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], plan: dict[str, Any], stack: str, **keywords: Any) -> str:
+    with pytest.raises(SystemExit):
+        run_no_change(tmp_path, monkeypatch, plan, stack, **keywords)
+    return capsys.readouterr().err
+
+
+@pytest.mark.parametrize("stack", ["services", "jobs"])
 def test_a_plan_without_changes_made_with_the_recorded_images_passes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stack: str
 ) -> None:
-    check(run_no_change(tmp_path, monkeypatch, no_change_plan(["no-op"], ["no-op"])) == 0, "the check passes")
+    check(run_no_change(tmp_path, monkeypatch, stack_plan(stack, ["no-op"], ["no-op"]), stack) == 0, "the check passes")
     line = capsys.readouterr().out
-    check(hashlib.sha256(IMAGE_RECORD_FIXTURE.read_bytes()).hexdigest() in line and "changes=0" in line, "the evidence line carries the record digest")
+    record_sha = hashlib.sha256((tmp_path / "images.auto.tfvars.json").read_bytes()).hexdigest()
+    check(f"stack={stack}" in line and record_sha in line and "changes=0" in line, "the evidence line carries the stack and the record digest")
 
 
 @pytest.mark.parametrize("actions", [["update"], ["create"], ["delete", "create"]])
 def test_a_plan_that_changes_a_resource_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], actions: list[str]
 ) -> None:
-    with pytest.raises(SystemExit):
-        run_no_change(tmp_path, monkeypatch, no_change_plan(["no-op"], actions))
-    check("family_1" in capsys.readouterr().err, "the refusal names the changed resource")
+    error = refused(tmp_path, monkeypatch, capsys, stack_plan("jobs", ["no-op"], actions), "jobs")
+    check("silver_1" in error, "the refusal names the changed resource")
 
 
 def test_a_plan_made_with_another_image_record_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit):
-        run_no_change(tmp_path, monkeypatch, no_change_plan(["no-op"]), sha256="0" * 64)
-    check("differs" in capsys.readouterr().err, "the refusal says the record differs")
+    check("differs" in refused(tmp_path, monkeypatch, capsys, stack_plan("jobs"), "jobs", sha256="0" * 64), "the refusal says the record differs")
 
 
 def test_an_errored_or_incomplete_plan_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for plan in ({**no_change_plan(["no-op"]), "errored": True}, {**no_change_plan(["no-op"]), "complete": False}, {"complete": True}):
+    for plan in ({**stack_plan("jobs"), "errored": True}, {**stack_plan("jobs"), "complete": False}, {"complete": True}):
         with pytest.raises(SystemExit):
             run_no_change(tmp_path, monkeypatch, plan)
+
+
+@pytest.mark.parametrize(
+    ("stack", "group", "key"), [("services", "image_digests", "postgres"), ("jobs", "images", "analytics"), ("jobs", "train_images", "feature_store")]
+)
+def test_a_plan_made_with_older_images_than_the_record_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stack: str, group: str, key: str
+) -> None:
+    plan = stack_plan(stack)
+    current = plan["variables"][group]["value"][key]
+    plan["variables"][group]["value"][key] = current.rsplit("@", 1)[0] + "@" + OTHER_DIGEST if "@" in current else OTHER_DIGEST
+    error = refused(tmp_path, monkeypatch, capsys, plan, stack)
+    check(group in error and key in error and "record" in error, f"the refusal names the image input that differs: {error}")
+
+
+@pytest.mark.parametrize(("plan_stack", "selected"), [("jobs", "services"), ("services", "jobs")])
+def test_a_plan_of_the_other_stack_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], plan_stack: str, selected: str
+) -> None:
+    error = refused(tmp_path, monkeypatch, capsys, stack_plan(plan_stack), selected)
+    check(f"does not belong to the {selected} stack" in error, f"the refusal says the plan is of another stack: {error}")
+
+
+def test_a_plan_without_the_images_its_selection_needs_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    plan = stack_plan("services")
+    del plan["variables"]["image_digests"]
+    check("image_digests" in refused(tmp_path, monkeypatch, capsys, plan, "services"), "a services plan with no image digests is refused")
+    plan = stack_plan("jobs")
+    del plan["variables"]["images"]["value"]["spark"]
+    error = refused(tmp_path, monkeypatch, capsys, plan, "jobs")
+    check("images" in error and "spark" in error, f"a jobs plan without a needed image names it: {error}")
+
+
+def test_a_plan_with_an_image_the_record_lacks_or_does_not_know_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = {name: digest for name, digest in record_digests().items() if name != "drift"}
+    plan = stack_plan("jobs")
+    plan["variables"]["drift_images"] = {"value": {"drift": plan["variables"]["images"]["value"]["analytics"].replace("analytics", "drift")}}
+    check("drift" in refused(tmp_path, monkeypatch, capsys, plan, "jobs", record=record), "an image the record lacks is named")
+    plan = stack_plan("jobs")
+    plan["variables"]["images"]["value"]["extra"] = plan["variables"]["images"]["value"]["spark"]
+    check("extra" in refused(tmp_path, monkeypatch, capsys, plan, "jobs"), "an image key the stack does not know is named")
+    plan = stack_plan("jobs")
+    plan["variables"]["images"]["value"]["spark"] = plan["variables"]["images"]["value"]["quality"]
+    check("spark" in refused(tmp_path, monkeypatch, capsys, plan, "jobs"), "an image of another repository in a slot is named")
+
+
+@pytest.mark.parametrize("address", ['aws_ecs_task_definition.other["silver"]', 'module.copy.aws_ecs_task_definition.host["silver"]', "aws_s3_bucket.data"])
+def test_a_plan_with_a_resource_the_stack_does_not_declare_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], address: str
+) -> None:
+    plan = stack_plan("jobs")
+    plan["resource_changes"].append({"address": address, "change": {"actions": ["no-op"]}})
+    check(address in refused(tmp_path, monkeypatch, capsys, plan, "jobs"), "the refusal names the resource that is not in the stack")
+
+
+def test_a_plan_that_lists_no_resource_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    plan = stack_plan("services")
+    plan["resource_changes"] = []
+    check("no resource" in refused(tmp_path, monkeypatch, capsys, plan, "services"), "a plan of no resource shows nothing")
 
 
 def test_the_job_room_constants_equal_the_services_default() -> None:
@@ -461,3 +577,52 @@ def test_the_job_room_constants_equal_the_services_default() -> None:
     whole = {name: row["memory_mib"] for name, row in host["jobs"].items() if not row.get("reserve")}
     check(whole and set(whole.values()) == {cap}, f"every whole-room row of config/orchestration/host_jobs.json says {cap}: {whole}")
     check(f"{cap:,} MiB" in host["reserve_note"] and "26,816" not in host["reserve_note"], "the reserve note names the services default")
+
+
+ALL_DISABLED = {
+    "publisher_job_enabled": False,
+    "host_jobs_enabled": False,
+    "layer_jobs_enabled": False,
+    "bronze_job_enabled": False,
+    "train_enabled": False,
+    "drift_enabled": False,
+    "promote_enabled": False,
+    "serve_enabled": False,
+}
+
+
+def test_a_selection_that_needs_no_image_reads_no_image_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rendered = render_jobs(tmp_path, monkeypatch, *reviewed(tmp_path, "jobs", ALL_DISABLED), record=tmp_path / "absent.json", outputs={})
+    check(
+        not rendered.keys() & {"images", "train_images", "drift_images", "openmetadata_images"} and OUTPUTS_ASKED == [],
+        "no image and no output is rendered or read",
+    )
+
+
+@pytest.mark.parametrize("stack", ["services", "jobs"])
+@pytest.mark.parametrize("where", ["tracked", "ignored", "outside", "folder"])
+def test_an_overrides_file_that_is_a_symbolic_link_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stack: str, where: str
+) -> None:
+    git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("overrides/\n", encoding="utf-8")
+    variables = {"monitoring_enabled": False} if stack == "services" else {"publisher_job_enabled": False}
+    flags = reviewed(tmp_path, stack, variables)
+    link = {
+        "tracked": tmp_path / "tracked_link.json",
+        "ignored": tmp_path / "overrides" / "link.json",
+        "outside": tmp_path.with_name(f"{tmp_path.name}_link.json"),
+        "folder": tmp_path / "linked_folder",
+    }[where]
+    link.parent.mkdir(exist_ok=True)
+    if where == "folder":
+        (tmp_path / "linked_folder").symlink_to(Path(flags[1]).parent, target_is_directory=True)
+        link = tmp_path / "linked_folder" / Path(flags[1]).name
+    else:
+        link.symlink_to(flags[1])
+    if where == "tracked":
+        git(tmp_path, "add", "-f", link.name)
+    render = render_services if stack == "services" else render_jobs
+    with pytest.raises(SystemExit):
+        render(tmp_path, monkeypatch, "--preparation-inputs", str(link), "--preparation-sha256", flags[3])
+    check("symbolic link" in capsys.readouterr().err, "the refusal says an overrides file may not be a symbolic link")
