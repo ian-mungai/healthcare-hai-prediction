@@ -172,7 +172,8 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
         raise ReadError(f"publish run {run_id} is retired: {namespace} ignores the runs committed before {retired_publications.cutover(namespace)}")
     if not live:
         raise ReadError(
-            f"{namespace}.{RUNS_TABLE} has no committed publication: its {len(parsed)} rows are runs committed before {retired_publications.cutover(namespace)}"
+            f"{namespace}.{RUNS_TABLE} has no committed publication: its {len(parsed)} rows are retired runs committed before "
+            f"{retired_publications.cutover(namespace)}"
         )
     parsed = live
     if run_id is None:

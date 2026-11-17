@@ -81,7 +81,7 @@ def q(spark: Any, template: str, **parts: Any) -> Any:
 
 
 def run_id(index: int) -> str:
-    return f"20261014T03{index:02d}00Z-{index + 1:08x}"
+    return f"gold_{index + 1:08x}"
 
 
 VARIANTS = {9: "add", 10: "drop", 11: "retype"}

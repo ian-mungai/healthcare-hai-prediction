@@ -215,7 +215,7 @@ def case_e33_not_held_checked(c: Checker) -> None:
 
         def attempt(model: str = "m4", newest: str | None = None, production: Any = None, mode: str = "publish_fixture", **changes: Any) -> dict[str, Any]:
             counter[0] += 1
-            run = f"20261110T03{counter[0]:02d}00Z-0000a004"
+            run = f"features_0000a{counter[0]:03x}"
             holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
             loaded_receipt(holds, schema, sha, "m4", run, **{name: (run if value == "RUN" else value) for name, value in changes.items()})
 
@@ -252,7 +252,7 @@ def case_e33_not_held_checked(c: Checker) -> None:
         c.refused("a load record without a base run is refused", lambda: attempt(base_run=None), "base_run")
         c.refused("a load record of another step is refused", lambda: attempt(step="apply"), "step")
         counter[0] += 1
-        run = f"20261110T03{counter[0]:02d}00Z-0000a004"
+        run = f"features_0000a{counter[0]:03x}"
         holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
         holds.write_new(feast_sets.MATERIALIZE_NAME, run, {"feature_set": "m4", "run_id": run, "online": "load"})
         c.refused(

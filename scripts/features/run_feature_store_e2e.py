@@ -1756,14 +1756,14 @@ def feature_set_cases(report: Report) -> None:
         and feature_sets.scoped_plan(plan, "base", schema) is plan,
     )
 
-    def row(run: str, tables: list[str]) -> dict[str, Any]:
-        return {"run_id": run, "snapshot_set": dict.fromkeys(tables, 1)}
+    def row(run: str, tables: list[str], committed: str = "2026-11-09T00:00:00Z") -> dict[str, Any]:
+        return {"run_id": run, "committed_at": committed, "snapshot_set": dict.fromkeys(tables, 1)}
 
     base_run, model_run = (lambda run: row(run, base)), (lambda run: row(run, ["feature_matrix_m1"]))
     rows = [
-        base_run("features_00000004"),
+        base_run("features_00000001"),
         model_run("features_elastic_net_00000002"),
-        base_run("features_00000005"),
+        base_run("features_00000003"),
         model_run("features_elastic_net_00000004"),
     ]
     found = feature_sets.newest_base_row(rows, base)
@@ -1777,15 +1777,16 @@ def feature_set_cases(report: Report) -> None:
         "F07",
         "FS3",
         "model rows alone, or a base row short of one table, are no base run",
-        feature_sets.newest_base_row([model_run("features_elastic_net_00000002"), row("features_00000005", base[:-1])], base) is None,
+        feature_sets.newest_base_row([model_run("features_elastic_net_00000002"), row("features_00000003", base[:-1])], base) is None,
     )
     report.case(
         "F08",
         "FS3",
         "a run of the single path counts as a base run",
-        feature_sets.newest_base_row([row("features_00000004", legacy)], base) is not None,
+        feature_sets.newest_base_row([row("features_00000001", legacy)], base) is not None,
     )
-    retired_run, fresh_run = row("features_14bad53c", base), row("features_00000006", base)
+    retired_run = row("features_14bad53c", base, "2026-11-07T13:37:42Z")
+    fresh_run = row("features_00000005", base, "2026-11-13T01:00:00Z")
 
     def newest_in(namespace: str, rows: list[dict[str, Any]]) -> str | None:
         """The run ID of the newest base row of the namespace, None for no base run or for a call that fails."""
@@ -1813,8 +1814,8 @@ def feature_set_cases(report: Report) -> None:
     report.case(
         "F20",
         "FS7",
-        "the recorded cutover follows the last single-path run (20261107T133742Z) and precedes the first per-model run (20261112T193636Z)",
-        isinstance(cutover, str) and "20261107T133742Z" < cutover <= "20261112T193636Z",
+        "the recorded cutover follows the last single-path run (committed 2026-11-07T13:37:42Z) and precedes the first per-model run (2026-11-12T19:36:36Z)",
+        isinstance(cutover, str) and "2026-11-07T13:37:42Z" < cutover <= "2026-11-12T19:36:36Z",
         cutover=cutover,
     )
     names = json.loads(feature_sets.MODEL_CONTRACT.read_text())["registered_models"]

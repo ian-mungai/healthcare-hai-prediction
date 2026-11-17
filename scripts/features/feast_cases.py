@@ -254,13 +254,18 @@ def case_e17_retired(c: Checker) -> None:
         catalog.namespace = namespace
         return catalog
 
-    only_old = stub("features", [runs_row(old_run, T0, good)])
+    retired_at, after_cutover = datetime(2026, 11, 7, 13, 37, 42, tzinfo=UTC), datetime(2026, 11, 13, 1, 0, 0, tzinfo=UTC)
+    only_old = stub("features", [runs_row(old_run, retired_at, good)])
     c.refused("a namespace whose only rows are older than the cutover has no publication", lambda: reads.read_publication(only_old, "features"), "retired")
     c.refused("a named run older than the cutover is refused by name", lambda: reads.read_publication(only_old, "features", old_run), old_run)
-    mixed = stub("features", [runs_row(old_run, T0 + timedelta(days=30), good), runs_row(newer_run, T0, good)])
-    c.check("the head skips a retired row even when its commit time is the newest", reads.read_publication(mixed, "features").run_id == newer_run)
+    mixed = stub("features", [runs_row(old_run, retired_at, good), runs_row(newer_run, after_cutover, good)])
+    c.check("the head skips a row committed before the cutover and takes the newest after it", reads.read_publication(mixed, "features").run_id == newer_run)
+    c.check(
+        "a row committed at the cutover is a publication",
+        reads.read_publication(stub("features", [runs_row(old_run, datetime(2026, 11, 12, tzinfo=UTC), good)]), "features").run_id == old_run,
+    )
     c.refused("the base run of a model set row that is retired is refused", lambda: reads.read_publication(mixed, "features", old_run), "retired")
-    fixture = stub("features_e2e", [runs_row(old_run, T0, good)])
+    fixture = stub("features_e2e", [runs_row(old_run, retired_at, good)])
     c.check("the same old row is readable in the fixture namespace", reads.read_publication(fixture, "features_e2e").run_id == old_run)
 
 
