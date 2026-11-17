@@ -70,7 +70,8 @@ def push_reload(model: str, text: str | None, seconds: float) -> bool:
 
     ``text`` is the standard output of ``scripts.features.online_reload``, or None when the reload failed or was refused. The result word, the closed skip
     reason, the rows of a fresh load and the duration are sent. The free text of the record and the run IDs never are. The group of the other outcome is
-    deleted, so a set has one current group. The push and the deletion share the pusher's total deadline. False when nothing was pushed. Nothing here raises."""
+    deleted first and the delete is confirmed before anything is published, so a set never has two current groups. When the delete fails the push reports
+    False, publishes nothing and names the group that may be stale. The delete and the push share the pusher's total deadline. Nothing here raises."""
     try:
         url = os.environ.get(metrics_push.URL_VARIABLE, "")
         if not url:
@@ -92,10 +93,17 @@ def push_reload(model: str, text: str | None, seconds: float) -> bool:
             samples.append(metrics_push.Sample("hai_online_reload_rows", rows))
         outcome, other = ("succeeded", "failed") if ok_run else ("failed", "succeeded")
         ends = time.monotonic() + pusher.budget()
-        pushed = pusher.push_samples(outcome, samples, within=ends - time.monotonic())
-        if pushed:
-            pusher.delete_group(other, within=ends - time.monotonic())
-        return pushed
+        if not pusher.delete_group(other, within=ends - time.monotonic()):
+            metrics_push.line(
+                "metrics_push_stale",
+                job="features",
+                phase="reload",
+                outcome=other,
+                feature_set=model,
+                reason="the delete was not confirmed, so this group may be stale and nothing was published",
+            )
+            return False
+        return pusher.push_samples(outcome, samples, within=ends - time.monotonic())
     except Exception as error:
         metrics_push.line("metrics_push_failed", step="put", reason=type(error).__name__)
         return False

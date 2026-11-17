@@ -8,7 +8,6 @@ contacted and every server is closed before its case returns.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
@@ -317,9 +316,12 @@ def the_new_series_render_as_valid_closed_exposition(root: Path) -> dict[str, bo
 class GroupGateway:
     """A loopback Pushgateway that stores groups under their whole path, so the grouping key with the set is visible."""
 
-    def __init__(self, *, delay: float = 0.0, status: int = 200) -> None:
-        self.groups: dict[str, str] = {}
+    def __init__(
+        self, *, delay: float = 0.0, status: int = 200, delete_status: int = 202, delete_delay: float = 0.0, seed: dict[str, str] | None = None
+    ) -> None:
+        self.groups: dict[str, str] = dict(seed or {})
         self.requests: list[tuple[str, str]] = []
+        self.delete_status, self.delete_delay = delete_status, delete_delay
         gateway = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -327,12 +329,13 @@ class GroupGateway:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(length).decode() if length else ""
                 gateway.requests.append((method, self.path))
-                time.sleep(delay)
+                time.sleep(delay + (gateway.delete_delay if method == "DELETE" else 0.0))
                 if method == "DELETE":
-                    gateway.groups.pop(self.path, None)
+                    if gateway.delete_status < 300:
+                        gateway.groups.pop(self.path, None)
                 elif status < 300 and valid_exposition(body):
                     gateway.groups[self.path] = body
-                self.send_response(status if method == "PUT" else 202)
+                self.send_response(status if method == "PUT" else gateway.delete_status)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
@@ -468,25 +471,210 @@ def the_reload_phase_pushes_its_result_and_a_failure_pushes_failed(root: Path) -
 
     job = layer_run.Job(layer="features", run=RUN, mode="real", code=Path("/nonexistent"), feature_set="")
 
-    def run(output: str | Exception) -> GroupGateway:
+    def run(output: str | Exception) -> tuple[GroupGateway, BaseException | None]:
         def step(*_args: Any, **_kwargs: Any) -> str:
             if isinstance(output, Exception):
                 raise output
             return output + "\n"
 
+        raised: BaseException | None = None
         with (
             GroupGateway() as gateway,
             mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m4", "PUSHGATEWAY_URL": gateway.url}),
             mock.patch.object(layer_run, "run_module", step),
-            contextlib.suppress(layer_run.StepError),
         ):
-            quiet(lambda: layer_run.reload(job))
-        return gateway
+            try:
+                quiet(lambda: layer_run.reload(job))
+            except BaseException as error:
+                raised = error
+        return gateway, raised
 
-    ok, failed = run(LOADED), run(layer_run.StepError("online_reload failed: refused"))
+    refusal = layer_run.StepError("online_reload failed: refused")
+    (ok, ok_raised), (failed, failed_raised) = run(LOADED), run(refusal)
     return {
         "a loaded reload pushes the succeeded group of its set": GROUP.format("succeeded", "m4") in ok.groups,
-        "a refused reload still raises and pushes the failed group": GROUP.format("failed", "m4") in failed.groups,
+        "a loaded reload raises nothing": ok_raised is None,
+        "a refused reload pushes the failed group": GROUP.format("failed", "m4") in failed.groups,
+        "a refused reload still fails the job with its own error": failed_raised is refusal,
+    }
+
+
+def seeded(outcome: str, model: str = "m4") -> dict[str, str]:
+    return {
+        GROUP.format(outcome, model): '# HELP hai_online_reload_result old\n# TYPE hai_online_reload_result gauge\nhai_online_reload_result{result="old"} 1\n'
+    }
+
+
+def push_into(gateway: GroupGateway, text: str | None, model: str = "m4", *, request: float | None = None, total: float | None = None) -> tuple[bool, str]:
+    from scripts.features import feature_metrics
+
+    with (
+        mock.patch.dict(os.environ, {"PUSHGATEWAY_URL": gateway.url}),
+        mock.patch.object(metrics_push, "REQUEST_TIMEOUT", request if request is not None else metrics_push.REQUEST_TIMEOUT),
+        mock.patch.object(metrics_push, "TOTAL_TIMEOUT", total if total is not None else metrics_push.TOTAL_TIMEOUT),
+    ):
+        ok, written = quiet(lambda: feature_metrics.push_reload(model, None if text is None else text + "\n", 3.0))
+    return bool(ok), written
+
+
+def a_set_has_one_current_group_after_each_transition(root: Path) -> dict[str, bool]:
+    with GroupGateway(seed=seeded("failed")) as recovered:
+        ok_recovered, _ = push_into(recovered, LOADED)
+    with GroupGateway(seed=seeded("succeeded")) as broken:
+        ok_broken, _ = push_into(broken, None)
+    with GroupGateway(seed={**seeded("succeeded"), **seeded("succeeded", "m1")}) as others:
+        push_into(others, None)
+    return {
+        "failed then loaded leaves only the succeeded group": ok_recovered and list(recovered.groups) == [GROUP.format("succeeded", "m4")],
+        "succeeded then failed leaves only the failed group": ok_broken and list(broken.groups) == [GROUP.format("failed", "m4")],
+        "the group of another set is never touched": GROUP.format("succeeded", "m1") in others.groups,
+    }
+
+
+def the_opposite_group_is_deleted_and_confirmed_before_the_publish(root: Path) -> dict[str, bool]:
+    with GroupGateway(seed=seeded("failed")) as gateway:
+        push_into(gateway, LOADED)
+    methods = [method for method, _ in gateway.requests]
+    return {
+        "the delete comes first and the put second": methods == ["DELETE", "PUT"],
+        "the delete names the opposite outcome": gateway.requests[0] == ("DELETE", GROUP.format("failed", "m4")),
+    }
+
+
+def a_rejected_delete_publishes_nothing_and_names_the_stale_group(root: Path) -> dict[str, bool]:
+    with GroupGateway(delete_status=503, seed=seeded("succeeded")) as gateway:
+        ok, written = push_into(gateway, None)
+    return {
+        "the push reports failure, so no caller sees a success": ok is False,
+        "no failed group is published beside the old success": list(gateway.groups) == [GROUP.format("succeeded", "m4")],
+        "no put was sent": all(method != "PUT" for method, _ in gateway.requests),
+        "the message names the group that may be stale": "event=metrics_push_stale" in written
+        and "outcome=succeeded" in written
+        and "feature_set=m4" in written,
+    }
+
+
+def a_delete_that_fails_once_leaves_one_group_after_the_retry(root: Path) -> dict[str, bool]:
+    with GroupGateway(delete_status=503, seed=seeded("succeeded")) as gateway:
+        first, _ = push_into(gateway, None)
+        gateway.delete_status = 202
+        second, _ = push_into(gateway, None)
+    return {
+        "the first push fails": first is False,
+        "the retry succeeds": second is True,
+        "one current group is left, the failed one": list(gateway.groups) == [GROUP.format("failed", "m4")],
+    }
+
+
+def a_delete_that_times_out_publishes_nothing(root: Path) -> dict[str, bool]:
+    with GroupGateway(delete_delay=1.5, seed=seeded("succeeded")) as gateway:
+        started = time.monotonic()
+        ok, written = push_into(gateway, None, request=0.3, total=1.0)
+        elapsed = time.monotonic() - started
+    return {
+        "the push reports failure": ok is False,
+        "no put follows the timed out delete": all(method != "PUT" for method, _ in gateway.requests),
+        "it ends inside the total deadline": elapsed < 1.4,
+        "the stale group is named": "event=metrics_push_stale" in written,
+    }
+
+
+def the_delete_and_the_publish_share_one_total_deadline(root: Path) -> dict[str, bool]:
+    from scripts.features import feature_metrics
+
+    seen: list[tuple[str, float]] = []
+
+    def send(self: Any, method: str, outcome: str, body: str, timeout: float, *, quiet: bool = False) -> bool:
+        seen.append((method, timeout))
+        if len(seen) == 1:
+            time.sleep(0.6)
+        return True
+
+    with (
+        mock.patch.dict(os.environ, {"PUSHGATEWAY_URL": "http://127.0.0.1:9"}),
+        mock.patch.object(metrics_push, "REQUEST_TIMEOUT", 1.0),
+        mock.patch.object(metrics_push, "TOTAL_TIMEOUT", 1.2),
+        mock.patch.object(metrics_push.Pusher, "send", send),
+    ):
+        ok = feature_metrics.push_reload("m4", LOADED + "\n", 1.0)
+    return {
+        "both requests were sent": ok is True and [method for method, _ in seen] == ["DELETE", "PUT"],
+        "the first request is cut to the request timeout": seen[0][1] <= 1.0,
+        "the second request gets only what is left of the total, not a fresh budget": seen[1][1] < 0.8,
+    }
+
+
+class TrickleOpenSearch:
+    """A loopback peer that sends a valid cluster health answer one byte every ``gap`` seconds: ``body_only`` sends the headers at once."""
+
+    def __init__(self, gap: float, *, body_only: bool = False) -> None:
+        import socket
+
+        self.gap, self.body_only, self.stopped = gap, body_only, threading.Event()
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(4)
+        self.listener.settimeout(0.2)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+
+    def serve(self) -> None:
+        payload = b'{"status":"green"}'
+        head = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
+        while not self.stopped.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except OSError:
+                continue
+            with connection:
+                try:
+                    connection.settimeout(1.0)
+                    connection.recv(4096)
+                    if self.body_only:
+                        connection.sendall(head)
+                        data = payload
+                    else:
+                        data = head + payload
+                    for index in range(len(data)):
+                        if self.stopped.is_set():
+                            break
+                        connection.sendall(data[index : index + 1])
+                        time.sleep(self.gap)
+                except OSError:
+                    continue
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.listener.getsockname()[1]}/_cluster/health"
+
+    def __enter__(self) -> TrickleOpenSearch:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stopped.set()
+        self.listener.close()
+        self.thread.join(timeout=10)
+
+
+def a_trickling_opensearch_answer_ends_at_one_absolute_deadline(root: Path) -> dict[str, bool]:
+    def timed(**options: Any) -> tuple[bool, float]:
+        with TrickleOpenSearch(0.02, **options) as peer:
+            started = time.monotonic()
+            try:
+                exporter.opensearch_samples(peer.url, 0.06)
+                failed = False
+            except exporter.SourceError:
+                failed = True
+            return failed, time.monotonic() - started
+
+    whole_failed, whole = timed()
+    body_failed, body = timed(body_only=True)
+    with TrickleOpenSearch(0.0) as quick:
+        answer = values(exporter.opensearch_samples(quick.url, 2.0))
+    return {
+        "a byte-by-byte answer from the first byte is an error at the deadline": whole_failed and whole < 0.25,
+        "a byte-by-byte body after quick headers is an error at the deadline": body_failed and body < 0.25,
+        "a prompt answer still reads": answer.get(("hai_opensearch_cluster_status", ())) == 0.0,
     }
 
 
@@ -609,6 +797,13 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "gaps_the_grouping_key_is_bounded": the_grouping_key_is_bounded,
     "gaps_the_reload_push_ends_at_one_absolute_deadline": the_reload_push_ends_at_one_absolute_deadline,
     "gaps_the_reload_phase_pushes_its_result_and_a_failure_pushes_failed": the_reload_phase_pushes_its_result_and_a_failure_pushes_failed,
+    "gaps_a_set_has_one_current_group_after_each_transition": a_set_has_one_current_group_after_each_transition,
+    "gaps_the_opposite_group_is_deleted_and_confirmed_before_the_publish": the_opposite_group_is_deleted_and_confirmed_before_the_publish,
+    "gaps_a_rejected_delete_publishes_nothing_and_names_the_stale_group": a_rejected_delete_publishes_nothing_and_names_the_stale_group,
+    "gaps_a_delete_that_fails_once_leaves_one_group_after_the_retry": a_delete_that_fails_once_leaves_one_group_after_the_retry,
+    "gaps_a_delete_that_times_out_publishes_nothing": a_delete_that_times_out_publishes_nothing,
+    "gaps_the_delete_and_the_publish_share_one_total_deadline": the_delete_and_the_publish_share_one_total_deadline,
+    "gaps_a_trickling_opensearch_answer_ends_at_one_absolute_deadline": a_trickling_opensearch_answer_ends_at_one_absolute_deadline,
     "gaps_the_loaded_record_carries_the_rows_of_a_fresh_load": the_loaded_record_carries_the_rows_of_a_fresh_load,
     "gaps_every_gap_has_a_panel_and_an_alert_rule": every_gap_has_a_panel_and_an_alert_rule,
     "gaps_the_new_alerts_have_a_summary_a_severity_and_the_no_data_rule": the_new_alerts_have_a_summary_a_severity_and_the_no_data_rule,

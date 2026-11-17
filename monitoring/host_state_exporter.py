@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import sys
 import threading
 import time
@@ -348,19 +349,43 @@ def disabled_probe_samples(evidently_ui: bool) -> list[Sample]:
 OPENSEARCH_STATUS = {"green": 0.0, "yellow": 1.0, "red": 2.0}
 
 
-def opensearch_samples(url: str, timeout: float = OM_TIMEOUT_SECONDS) -> list[Sample]:
-    """The cluster status of OpenSearch on its internal port, read-only. Red is data; an unreadable answer is an error of the source."""
+def deadline_get(url: str, timeout: float, limit: int = 1024 * 1024) -> tuple[int, bytes]:
+    """One HTTP/1.0 GET with one absolute deadline over the connect, the send, the headers and every read of the body, so an answer that trickles in byte by
+    byte ends at the deadline like a silent one. The answer is read to its end and cut at ``limit`` bytes. Raises SourceError."""
     parsed = urlparse(url)
-    connection = http.client.HTTPConnection(parsed.hostname or "", parsed.port or 80, timeout=timeout)
+    deadline = time.monotonic() + timeout
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SourceError("TimeoutError")
+        return remaining
+
     try:
-        connection.request("GET", parsed.path or "/")
-        response = connection.getresponse()
-        raw = response.read(1024 * 1024)
-        status = response.status
+        with socket.create_connection((parsed.hostname or "", parsed.port or 80), timeout=left()) as connection:
+            connection.settimeout(left())
+            connection.sendall(f"GET {parsed.path or '/'} HTTP/1.0\r\nHost: {parsed.hostname}\r\nConnection: close\r\n\r\n".encode("ascii"))
+            raw = b""
+            while len(raw) <= limit:
+                connection.settimeout(left())
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                raw += chunk
+    except SourceError:
+        raise
     except Exception as error:
         raise SourceError(f"{type(error).__name__}") from None
-    finally:
-        connection.close()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    parts = head.split(b"\r\n", 1)[0].split(b" ", 2)
+    if len(raw) > limit or len(parts) < 2 or not parts[0].startswith(b"HTTP/") or not parts[1].isdigit():
+        raise SourceError("the answer is not a bounded HTTP answer")
+    return int(parts[1]), body
+
+
+def opensearch_samples(url: str, timeout: float = OM_TIMEOUT_SECONDS) -> list[Sample]:
+    """The cluster status of OpenSearch on its internal port, read-only, within one absolute deadline. Red is data; an unreadable answer is an error."""
+    status, raw = deadline_get(url, timeout)
     if status != 200:
         raise SourceError(f"HTTP_{status}")
     try:
