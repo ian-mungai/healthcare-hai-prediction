@@ -4,7 +4,8 @@ The adapter holds no state. A job key names one task: the key gives both the ``c
 start returns the task that already runs (``list_tasks`` finds it by tag) or the one the first call created. Only the named job families start. Every call
 has a 5 second connect and 10 second read limit, and the caller owns the job deadline. Reads have two SDK retries. RunTask has none: it goes through a client
 of its own that makes one attempt per call (``send_config``), so every request that may reach ECS passes the caller's guard, and a retry can never answer
-for a request whose reply was lost (a task may exist). The adapter refuses a RunTask client with retries. Every job runs in one place: the bridge task of the
+for a request whose reply was lost (a task may exist). The guard runs again at the SDK's send boundary, after signing and any credential refresh, so a hold
+that is set while the SDK works still withholds the call. The adapter refuses a RunTask client with retries. Every job runs in one place: the bridge task of the
 family's ``_host`` definition on the host's EC2 capacity provider. It carries no awsvpc network, and the capacity provider strategy is always sent, so no
 change of the cluster default can move a task. A failure that a later call can cure raises ``TaskUnavailable``, the rest raise ``TaskRefused``. Reasons shown
 to callers carry no ARN and no account number.
@@ -12,6 +13,7 @@ to callers carry no ARN and no account number.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import re
 from collections.abc import Callable, Mapping
@@ -50,6 +52,14 @@ class SendUnknown(TaskUnavailable):
 
 class SendWithheld(Exception):
     """The caller's guard refused the RunTask call just before it was made. Nothing was sent."""
+
+
+class GuardFailed(Exception):
+    """The caller's guard raised ``error`` at the send boundary. Nothing was sent, and the error is the guard's own, not a failure of the call."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
 
 
 class CapacityUnavailable(TaskUnavailable):
@@ -155,11 +165,45 @@ class EcsAdapter:
         self.logs = logs
         self.settings = settings
         self.sender = ecs if sender is None else sender
+        self.at_send: contextvars.ContextVar[Callable[[], None] | None] = contextvars.ContextVar("at_send", default=None)
+        events = getattr(getattr(self.sender, "meta", None), "events", None)
+        if events is not None:
+            # First, so that nothing that answers the send runs before the guard; botocore runs this after signing and any credential refresh.
+            events.register_first("before-send.ecs.RunTask", self.check_at_send, unique_id=f"hai-send-guard-{id(self)}")
         if not sends_once(self.sender):
             raise ValueError(
                 "the RunTask client must make one attempt per call (build it with send_config): an SDK retry would send again after the caller's guard "
                 "and could hide the lost reply of a request that created a task"
             )
+
+    def check_at_send(self, **_: Any) -> None:
+        """The guard of the call in progress, run by the SDK right before the request leaves; a refusal stops the call and nothing is sent."""
+        guard = self.at_send.get()
+        if guard is not None:
+            guard()
+
+    def send(self, guard: Callable[[], None] | None, arguments: dict[str, Any]) -> dict[str, Any]:
+        """RunTask with ``guard`` run again at the SDK's send boundary. A client without SDK events (a stand-in) is guarded by the call before it only."""
+        if guard is None:
+            return self.sender.run_task(**arguments)
+        refused: list[Exception] = []
+
+        def at_send() -> None:
+            try:
+                guard()
+            except Exception as error:
+                refused.append(error)
+                raise
+
+        token = self.at_send.set(at_send)
+        try:
+            return self.sender.run_task(**arguments)
+        except Exception:
+            if refused:
+                raise GuardFailed(refused[0]) from None
+            raise
+        finally:
+            self.at_send.reset(token)
 
     @classmethod
     def from_session(cls, session: Any, settings: EcsSettings) -> EcsAdapter:
@@ -300,23 +344,28 @@ class EcsAdapter:
         if guard is not None:
             guard()
         try:
-            reply = self.sender.run_task(
-                cluster=self.settings.cluster,
-                taskDefinition=revision if revision is not None else self.definition(family),
-                count=1,
-                **where,
-                overrides={
-                    "containerOverrides": [
-                        {"name": name, "environment": [{"name": variable, "value": value} for variable, value in values.items()]}
-                        for name, values in environment.items()
-                    ]
-                },
-                propagateTags="TASK_DEFINITION",
-                enableECSManagedTags=True,
-                tags=[{"key": "Project", "value": self.settings.project_tag}, {"key": "HaiJob", "value": family}],
-                startedBy=started_by,
-                clientToken=digest,
+            reply = self.send(
+                guard,
+                dict(
+                    cluster=self.settings.cluster,
+                    taskDefinition=revision if revision is not None else self.definition(family),
+                    count=1,
+                    **where,
+                    overrides={
+                        "containerOverrides": [
+                            {"name": name, "environment": [{"name": variable, "value": value} for variable, value in values.items()]}
+                            for name, values in environment.items()
+                        ]
+                    },
+                    propagateTags="TASK_DEFINITION",
+                    enableECSManagedTags=True,
+                    tags=[{"key": "Project", "value": self.settings.project_tag}, {"key": "HaiJob", "value": family}],
+                    startedBy=started_by,
+                    clientToken=digest,
+                ),
             )
+        except GuardFailed as failed:
+            raise failed.error from None
         except (ClientError, BotoCoreError) as error:
             failure = classify(error)
             if isinstance(failure, TaskUnavailable):

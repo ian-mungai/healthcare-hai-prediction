@@ -1960,6 +1960,7 @@
     "scripts/orchestration/ledger.py",
     "scripts/orchestration/lineage_delivery_cases.py",
     "scripts/orchestration/lineage_http_cases.py",
+    "scripts/orchestration/loopback_trickle.py",
     "scripts/orchestration/offline_checks.py",
     "scripts/orchestration/override_docs_cases.py",
     "scripts/orchestration/process_group_stop_cases.py",
