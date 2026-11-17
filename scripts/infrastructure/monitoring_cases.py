@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts.infrastructure import monitoring_files
+from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = "monitoring/grafana/dashboards/hai_overview.json"
@@ -215,3 +216,5 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "scheduler_alert_misses_a_silent_start": scheduler_alert_misses_a_silent_start,
     "dropped_panel_reads_the_unmapped_counter": dropped_panel_reads_the_unmapped_counter,
 }
+
+CASES |= PANEL_CASES

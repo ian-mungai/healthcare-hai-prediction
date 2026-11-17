@@ -101,3 +101,4 @@ flag orchestration/mlflow_service.py -- the file's own --port option of a live s
 flag scripts/infrastructure/owner_list_host_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
 flag scripts/training/aws_run_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
 flag services/mlflow/docker-compose.mlflow.yaml -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+unused-code scripts/infrastructure/monitoring_panel_cases.py -- http.server dispatches do_GET and log_message of the loopback Prometheus stand-in by method name, and reads daemon_threads -- permanent

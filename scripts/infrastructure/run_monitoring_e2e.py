@@ -1,6 +1,7 @@
 """Run the monitoring file cases and keep the report under data/e2e/monitoring/.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.run_monitoring_e2e``. No AWS service is contacted and no container starts.
+The panel data cases open one loopback stand-in Prometheus at a time and close it.
 A case that raises is recorded as failed with the type of its exception, and the report is still saved.
 """
 
