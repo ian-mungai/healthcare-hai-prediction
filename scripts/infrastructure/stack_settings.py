@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -162,7 +161,8 @@ def terraform_default(directory: Path, name: str) -> Any:
 def require_local_override(path: Path, root: Path = REPO_ROOT) -> None:
     """Refuse an overrides file that is a symbolic link, and one inside the repository unless Git tracks no part of it and ignores it.
 
-    The path is checked as given before it is resolved, so a link inside the repository cannot lead the check outside it. A file outside the repository
+    The path is checked as given, before any normalization: a ``..`` component is refused, because removing it would make the Git checks look at another
+    file than the one that opens after a link. A link inside the repository cannot lead the check outside it. A file outside the repository
     cannot enter it.
     """
     refusal = ConfigurationError(
@@ -172,10 +172,15 @@ def require_local_override(path: Path, root: Path = REPO_ROOT) -> None:
     link_refusal = ConfigurationError(
         "A preparation file may not be a symbolic link, because it could point anywhere later. Name the file itself. No Terraform action was run."
     )
-    lexical = Path(os.path.abspath(path))
+    if ".." in path.parts:
+        raise ConfigurationError(
+            "A preparation file path may not contain a '..' component, because after a link it names another file than the one the Git checks see. "
+            "Give the path without it. No Terraform action was run."
+        )
+    lexical = path.absolute()
     if lexical.is_symlink():
         raise link_refusal
-    bases = {Path(os.path.abspath(root)), root.resolve()}
+    bases = {root.absolute(), root.resolve()}
     relatives: set[Path] = set()
     for base in bases:
         if lexical.is_relative_to(base):

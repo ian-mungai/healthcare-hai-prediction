@@ -626,3 +626,56 @@ def test_an_overrides_file_that_is_a_symbolic_link_is_refused(
     with pytest.raises(SystemExit):
         render(tmp_path, monkeypatch, "--preparation-inputs", str(link), "--preparation-sha256", flags[3])
     check("symbolic link" in capsys.readouterr().err, "the refusal says an overrides file may not be a symbolic link")
+
+
+def link_layout(tmp_path: Path) -> Path:
+    """The synthetic repository (it ignores overrides/) and a tracked link tracked_dir to a folder beside it, as ../<repository>_outside/child."""
+    git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("overrides/\n", encoding="utf-8")
+    outside = tmp_path.with_name(f"{tmp_path.name}_outside")
+    (outside / "child").mkdir(parents=True)
+    (tmp_path / "tracked_dir").symlink_to(Path("..") / outside.name / "child", target_is_directory=True)
+    git(tmp_path, "add", "-f", "tracked_dir")
+    return outside
+
+
+def override_path(tmp_path: Path, outside: Path, where: str) -> Path:
+    """The path of an overrides file as the caller gives it. ``Path`` keeps a ``..`` component and drops a ``.`` component and a repeated separator."""
+    return {
+        "reviewer": tmp_path / "tracked_dir" / ".." / "overrides" / "reviewed.json",
+        "inside_dotdot": tmp_path / "overrides" / ".." / "overrides" / "reviewed.json",
+        "external_dotdot": outside / "child" / ".." / "overrides" / "reviewed.json",
+        "dotted": Path(f"{tmp_path}/./overrides//reviewed.json"),
+        "linked_dot": Path(f"{tmp_path}/tracked_dir/./reviewed.json"),
+        "linked_double": Path(f"{tmp_path}//tracked_dir//reviewed.json"),
+        "external": outside / "reviewed.json",
+    }[where]
+
+
+@pytest.mark.parametrize("stack", ["services", "jobs"])
+@pytest.mark.parametrize(
+    ("where", "outcome"),
+    [
+        ("reviewer", "dot dot"),
+        ("inside_dotdot", "dot dot"),
+        ("external_dotdot", "dot dot"),
+        ("linked_dot", "symbolic link"),
+        ("linked_double", "symbolic link"),
+        ("dotted", "accepted"),
+        ("external", "accepted"),
+    ],
+)
+def test_an_overrides_path_is_checked_as_given_before_any_normalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stack: str, where: str, outcome: str
+) -> None:
+    outside = link_layout(tmp_path)
+    variables = {"monitoring_enabled": False} if stack == "services" else {"publisher_job_enabled": False}
+    flags = reviewed(tmp_path, stack, variables, at=override_path(tmp_path, outside, where))
+    render = render_services if stack == "services" else render_jobs
+    if outcome == "accepted":
+        render(tmp_path, monkeypatch, *flags)
+        return
+    with pytest.raises(SystemExit):
+        render(tmp_path, monkeypatch, *flags)
+    error = capsys.readouterr().err
+    check("'..' component" in error if outcome == "dot dot" else "symbolic link" in error, f"the refusal names its reason: {error}")
