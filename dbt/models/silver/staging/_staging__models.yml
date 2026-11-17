@@ -1557,8 +1557,7 @@ models:
 
   - name: stg_hcai_finance_csv
     description: >
-      Bronze `hcai_finance_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
-      The data columns pass through as published.
+      Bronze `hcai_finance_csv` with one copy of each stored file, read from its canonical object (failure mode 461) through a projection of safe columns: the facility, period and publisher code only in their published shape, and the value only in a reviewed form (value_form) with its text in value_text. The raw value, which can name a person, never leaves bronze. Typed in int_hcai_finance_values.
     meta:
       classification: Public
     columns:
@@ -1574,8 +1573,7 @@ models:
 
   - name: stg_hcai_util_pages_csv
     description: >
-      Bronze `hcai_util_pages_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
-      The data columns pass through as published.
+      Bronze `hcai_util_pages_csv` with one copy of each stored file, read from its canonical object (failure mode 461) through a projection of safe columns: the facility number, period dates and county only in their published shape, the typed numbers only when blank, a missing token or a number (the failed ones are named in unsafe_value_fields), and never the administrator, report preparer, phone, street address or parent corporation columns. Typed in int_hcai_util_facility_periods.
     meta:
       classification: Public
     columns:
@@ -1591,8 +1589,7 @@ models:
 
   - name: stg_hcai_util_nonresponse_csv
     description: >
-      Bronze `hcai_util_nonresponse_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
-      The data columns pass through as published.
+      Bronze `hcai_util_nonresponse_csv` with one copy of each stored file, read from its canonical object (failure mode 461) through a projection of safe columns: the facility number, period dates and county only in their published shape, the typed numbers only when blank, a missing token or a number (the failed ones are named in unsafe_value_fields), and never the administrator, report preparer, phone, street address or parent corporation columns. Typed in int_hcai_util_facility_periods.
     meta:
       classification: Public
     columns:
@@ -1608,8 +1605,7 @@ models:
 
   - name: stg_illinois_report_card_csv
     description: >
-      Bronze `illinois_report_card_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
-      The data columns pass through as published.
+      Bronze `illinois_report_card_csv` with one copy of each stored file, read from its canonical object (failure mode 461) through a projection of safe columns: the entity, measure, period dates and county only in their published shape, and the value, numerator and denominator only when blank, a missing token or a number (the failed ones are named in unsafe_value_fields). The measure description, rationale and evidence texts are not selected. Typed in int_illinois_report_card_values.
     meta:
       classification: Public
     columns:

@@ -1,9 +1,23 @@
--- The state-source rows that cannot be keyed, one row each, with the reason: a facility or entity that is no number, a period that is no date, or a
--- financial-disclosure line that is no page.column.line. The utilization description row is one. A held row stays here and is never dropped
--- silently; the typed models leave it out.
+-- The state-source rows that cannot be kept, one row each, with the reason: a facility, entity, measure, period or publisher code that is not in its
+-- published shape, a period that runs backwards, a number or financial value that is not in a reviewed form, or a county name that does not identify
+-- exactly one county of the state. A held row is identified by its file checksum and row number only: the rejected text, which can name a person, is
+-- never copied here. hold_detail names the number fields that failed and nothing else. The typed models leave these rows out, and
+-- assert_state_rows_reconcile makes typed rows plus held rows equal the staged rows of each file.
 {{ config(materialized='table') }}
 
 with
+
+util_county_keys as (
+    {{ state_county_keys('CA') }}
+),
+
+il_county_keys as (
+    {{ state_county_keys('IL') }}
+),
+
+util_sources as (
+    {{ hcai_util_sources() }}
+),
 
 held as (
     select
@@ -11,32 +25,26 @@ held as (
         stg._member_sha256 as member_sha256,
         stg._row_number as source_row_number,
         {{ hcai_finance_hold_reason('stg') }} as hold_reason,
-        nullif(trim(stg.oshpd_id), '') as facility_published
+        null::varchar as hold_detail
     from {{ ref('stg_hcai_finance_csv') }} as stg
     union all
     select
-        'hcai_util_pages_csv' as bronze_table,
-        stg._member_sha256 as member_sha256,
-        stg._row_number as source_row_number,
-        {{ hcai_util_hold_reason('stg') }} as hold_reason,
-        nullif(trim(stg.fac_no), '') as facility_published
-    from {{ ref('stg_hcai_util_pages_csv') }} as stg
-    union all
-    select
-        'hcai_util_nonresponse_csv' as bronze_table,
-        stg._member_sha256 as member_sha256,
-        stg._row_number as source_row_number,
-        {{ hcai_util_hold_reason('stg') }} as hold_reason,
-        nullif(trim(stg.fac_no), '') as facility_published
-    from {{ ref('stg_hcai_util_nonresponse_csv') }} as stg
+        sources.bronze_table,
+        sources._member_sha256 as member_sha256,
+        sources._row_number as source_row_number,
+        {{ hcai_util_hold_reason('sources', 'util_county_keys') }} as hold_reason,
+        sources.unsafe_value_fields as hold_detail
+    from util_sources as sources
+    left join util_county_keys on {{ state_county_key('sources.county') }} = util_county_keys.county_key
     union all
     select
         'illinois_report_card_csv' as bronze_table,
         stg._member_sha256 as member_sha256,
         stg._row_number as source_row_number,
-        {{ illinois_hold_reason('stg') }} as hold_reason,
-        nullif(trim(stg.entity_id), '') as facility_published
+        {{ illinois_hold_reason('stg', 'il_county_keys') }} as hold_reason,
+        stg.unsafe_value_fields as hold_detail
     from {{ ref('stg_illinois_report_card_csv') }} as stg
+    left join il_county_keys on {{ state_county_key('stg.county_name') }} = il_county_keys.county_key
 )
 
 select

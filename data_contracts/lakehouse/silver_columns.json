@@ -2288,13 +2288,9 @@
       "baseline_rows": null,
       "changes": {
         "grain": "finance_row_key",
-        "note": "New model: one row per HCAI financial-disclosure value of a facility, report period end, page.column.line and stored release, with the published text beside the typed number. It reads stg_hcai_finance_csv, so it has no beab859 baseline."
+        "note": "New model: one row per HCAI financial-disclosure value of a facility, report period end, publisher code and stored release, carried only in a reviewed form with the published text beside the typed number; other values are held without their content. It reads stg_hcai_finance_csv, so it has no beab859 baseline."
       },
       "columns": [
-        [
-          "finance_row_key",
-          "VARCHAR"
-        ],
         [
           "member_sha256",
           "VARCHAR"
@@ -2316,6 +2312,30 @@
           "VARCHAR"
         ],
         [
+          "value_form",
+          "VARCHAR"
+        ],
+        [
+          "value_published",
+          "VARCHAR"
+        ],
+        [
+          "publication_date",
+          "DATE"
+        ],
+        [
+          "line_code_parts",
+          "INTEGER[]"
+        ],
+        [
+          "finance_row_key",
+          "VARCHAR"
+        ],
+        [
+          "code_layout",
+          "VARCHAR"
+        ],
+        [
           "page_number",
           "INTEGER"
         ],
@@ -2328,20 +2348,12 @@
           "INTEGER"
         ],
         [
-          "value_published",
-          "VARCHAR"
-        ],
-        [
           "value_number",
           "DOUBLE"
         ],
         [
           "is_redacted",
           "BOOLEAN"
-        ],
-        [
-          "publication_date",
-          "DATE"
         ],
         [
           "is_latest_release",
@@ -2357,7 +2369,7 @@
       "baseline_rows": null,
       "changes": {
         "grain": "util_row_key",
-        "note": "New model: one row per HCAI utilization report of a facility for an operating period, from the page and non-response files, with typed numbers and no person, phone or address column. It reads stg_hcai_util_pages_csv and stg_hcai_util_nonresponse_csv, so it has no beab859 baseline."
+        "note": "New model: one row per HCAI utilization report of a facility for an operating period, from the page and non-response files, with typed numbers, decoded period dates and no person, phone or address column; rows with a number, period or county that cannot be kept are held. It reads stg_hcai_util_pages_csv and stg_hcai_util_nonresponse_csv, so it has no beab859 baseline."
       },
       "columns": [
         [
@@ -2421,14 +2433,6 @@
           "VARCHAR"
         ],
         [
-          "longitude",
-          "DOUBLE"
-        ],
-        [
-          "latitude",
-          "DOUBLE"
-        ],
-        [
           "census_tract_published",
           "VARCHAR"
         ],
@@ -2465,12 +2469,28 @@
           "VARCHAR"
         ],
         [
+          "period_begin_published",
+          "VARCHAR"
+        ],
+        [
+          "period_end_published",
+          "VARCHAR"
+        ],
+        [
           "period_begin_date",
           "DATE"
         ],
         [
           "period_end_date",
           "DATE"
+        ],
+        [
+          "longitude",
+          "DOUBLE"
+        ],
+        [
+          "latitude",
+          "DOUBLE"
         ],
         [
           "med_surg_lic_beds",
@@ -3325,12 +3345,12 @@
           "VARCHAR"
         ],
         [
-          "publication_date",
-          "DATE"
-        ],
-        [
           "county_fips",
           "VARCHAR"
+        ],
+        [
+          "publication_date",
+          "DATE"
         ],
         [
           "ccn",
@@ -4731,7 +4751,7 @@
       "baseline_rows": null,
       "changes": {
         "grain": "il_row_key",
-        "note": "New model: one row per Illinois Hospital Report Card value of an entity, measure, period and stored release. It reads stg_illinois_report_card_csv, so it has no beab859 baseline."
+        "note": "New model: one row per Illinois Hospital Report Card value of an entity, measure, period and stored release; rows with a number, period or county that cannot be kept are held. It reads stg_illinois_report_card_csv, so it has no beab859 baseline."
       },
       "columns": [
         [
@@ -4811,12 +4831,12 @@
           "DOUBLE"
         ],
         [
-          "publication_date",
-          "DATE"
-        ],
-        [
           "county_fips",
           "VARCHAR"
+        ],
+        [
+          "publication_date",
+          "DATE"
         ],
         [
           "ccn",
@@ -6851,7 +6871,7 @@
       "baseline_rows": null,
       "changes": {
         "grain": "hold_key",
-        "note": "New model: the state-source rows that cannot be keyed, with the reason. It reads the four state staging views, so it has no beab859 baseline."
+        "note": "New model: the state-source rows that cannot be kept, with the reason, identified by file checksum and row number only and never carrying the rejected text. It reads the four state staging views, so it has no beab859 baseline."
       },
       "columns": [
         [
@@ -6871,7 +6891,7 @@
           "VARCHAR"
         ],
         [
-          "facility_published",
+          "hold_detail",
           "VARCHAR"
         ],
         [

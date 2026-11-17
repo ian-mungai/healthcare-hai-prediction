@@ -1148,6 +1148,8 @@
     "dbt/tests/assert_state_county_names_match_rucc.sql",
     "dbt/tests/assert_state_fips_match_rucc.sql",
     "dbt/tests/assert_state_models_hold_no_person_columns.sql",
+    "dbt/tests/assert_state_rows_reconcile.sql",
+    "dbt/tests/assert_state_tables_hold_no_fixture_sentinel.sql",
     "dbt/tests/assert_state_values_cast.sql",
     "dbt/tests/assert_twins_leave_one_preferred_file.sql",
     "dbt/tests/assert_unsplit_measure_keys_keep_base_key.sql",

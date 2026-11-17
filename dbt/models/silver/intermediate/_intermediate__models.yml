@@ -1532,10 +1532,11 @@ models:
 
   - name: int_hcai_finance_values
     description: >
-      One row per California HCAI financial-disclosure value: facility (OSHPD number), report period end, page.column.line and stored release.
-      Grain: finance_row_key (file checksum and source row). The published text is kept beside the typed number; a redacted cell is flagged. The stored copy is
-      the privacy-filtered derivative, so no person cell reaches this model. The meaning and unit of a line come from the HCAI data dictionary in bronze.
-      Rows that cannot be keyed are held in int_state_source_holds. Only the newest release of a key has is_latest_release.
+      One row per California HCAI financial-disclosure value: facility (OSHPD number), report period end, publisher code (page.column.line, or the
+      four-component form) and stored release. Grain: finance_row_key (file checksum and source row). A value is carried only in a reviewed form (a number, a number
+      in parentheses, the redaction mark, a missing token, a date or one letter): free text that could name a person is held in int_state_source_holds without its
+      content. The published text is kept beside the typed number; a redacted cell is flagged. The meaning and unit of a code come from the HCAI data dictionary in
+      bronze. Only the newest release of a key has is_latest_release.
     meta:
       classification: Public
     data_tests:
@@ -1562,19 +1563,34 @@ models:
         description: The report period end (RPE), parsed from MM/DD/YYYY.
         data_tests: [not_null]
       - name: page_column_line
-        description: The disclosure page, column and line as published, for example 1.2.3.
+        description: The publisher code as published, with three components (page.column.line, for example 1.2.3) or four (for example 3.3.1.40).
         data_tests: [not_null]
+      - name: line_code_parts
+        description: The integer components of the publisher code, in order.
+        data_tests: [not_null]
+      - name: code_layout
+        description: page_column_line for a three-component code, four_part_code for a four-component code, whose components have no reviewed names yet.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [page_column_line, four_part_code]
       - name: page_number
-        description: The page of the line.
+        description: The first component of the code, the page.
         data_tests: [not_null]
       - name: column_number
-        description: The column of the line.
-        data_tests: [not_null]
+        description: The column of a page_column_line code; null for another layout.
       - name: line_number
-        description: The line number.
-        data_tests: [not_null]
+        description: The line of a page_column_line code; null for another layout.
+      - name: value_form
+        description: The reviewed form of the published value (blank, redacted, missing_token, number, parenthesised_number, date or flag).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [blank, redacted, missing_token, number, parenthesised_number, date, flag]
       - name: value_published
-        description: The published value text; null when blank.
+        description: The published value text in a reviewed form; null when blank.
       - name: value_number
         description: The value as a number when it is a plain number once thousands separators are removed; otherwise null.
       - name: is_redacted
@@ -1592,7 +1608,9 @@ models:
       (nonresponse). Grain: util_row_key (file checksum and source row); the latest release of a facility, period begin, period end and response status
       is unique. The numbers are typed from the columns of hcai_util_numeric_columns() with the published text of every value that did not type kept in
       nulled_values_published. The administrator and report preparer names, the phone, the street address and the parent corporation are never read.
-      County code by county name (state_county_names seed); CCN only from the reviewed matches seed (ccn_source reviewed_match).
+      A row whose number text does not type, whose facility or period is not in its published shape or runs backwards, or whose county name does not identify
+      exactly one county of California is held in int_state_source_holds without its content. County code by county name (state_county_names seed); CCN only
+      from the reviewed matches seed (ccn_source reviewed_match).
     meta:
       classification: Public
     data_tests:
@@ -1630,19 +1648,26 @@ models:
       - name: county_name_published
         description: The county name as published.
       - name: county_fips
-        description: The 5-digit county code found from the county name in California, or null (method in county_source).
+        description: The 5-digit county code found from the county name in California.
+        data_tests: [not_null]
       - name: county_source
-        description: name_match when exactly one California county has the published name, otherwise not_matched.
+        description: The method, name_match, when exactly one California county has the published name.
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values: [name_match, not_matched]
+                values: [name_match]
+      - name: period_begin_published
+        description: The published text of the period begin (a date, or the Excel serial number of the workbook cell).
+        data_tests: [not_null]
+      - name: period_end_published
+        description: The published text of the period end.
+        data_tests: [not_null]
       - name: period_begin_date
-        description: The first day of the operating period, parsed from MM/DD/YYYY.
+        description: The first day of the operating period, parsed from M/D/YYYY, YYYY-MM-DD or an Excel serial number.
         data_tests: [not_null]
       - name: period_end_date
-        description: The last day of the operating period.
+        description: The last day of the operating period; never before the first day.
         data_tests: [not_null]
       - name: report_year
         description: The calendar year of the period end.
@@ -1668,8 +1693,10 @@ models:
     description: >
       One row per Illinois Hospital Report Card value: entity, measure, period and stored release. Grain: il_row_key (file checksum and source row); the
       latest release of an entity, measure, period start and period end is unique. The value, numerator and denominator keep their published text beside the
-      typed number. County code by county name (state_county_names seed); CCN only from the reviewed matches seed. The measure description, rationale and
-      evidence texts stay in bronze. State context and validation only, never a predictor.
+      typed number. A row whose number text does not type, whose entity, measure or period is not in its published shape or runs backwards, or whose county name
+      does not identify exactly one county of Illinois is held in int_state_source_holds without its content. County code by county name (state_county_names
+      seed); CCN only from the reviewed matches seed. The measure description, rationale and evidence texts stay in bronze. State context and validation only,
+      never a predictor.
     meta:
       classification: Public
     data_tests:
@@ -1699,7 +1726,7 @@ models:
         description: The first day of the measure period.
         data_tests: [not_null]
       - name: period_end
-        description: The last day of the measure period.
+        description: The last day of the measure period; never before the first day.
         data_tests: [not_null]
       - name: default_unit
         description: The unit the publisher gives the measure (for example per 1,000); the value is not converted.
@@ -1716,14 +1743,15 @@ models:
       - name: denominator
         description: The denominator as a number.
       - name: county_fips
-        description: The 5-digit county code found from the county name in Illinois, or null (method in county_source).
+        description: The 5-digit county code found from the county name in Illinois.
+        data_tests: [not_null]
       - name: county_source
-        description: name_match when exactly one Illinois county has the published name, otherwise not_matched.
+        description: The method, name_match, when exactly one Illinois county has the published name.
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values: [name_match, not_matched]
+                values: [name_match]
       - name: ccn
         description: The CMS Certification Number of a reviewed match; null otherwise.
       - name: ccn_source
@@ -1740,7 +1768,9 @@ models:
 
   - name: int_state_source_holds
     description: >
-      The state-source rows that cannot be keyed, with the reason. Grain: one row per held file row. The typed state-source models leave these rows out.
+      The state-source rows that cannot be kept, with the reason. Grain: one row per held file row, identified by file checksum and row number only: the rejected text,
+      which can name a person, is never copied. The typed state-source models leave these rows out, and assert_state_rows_reconcile makes typed rows plus held rows equal
+      the staged rows of each file.
     meta:
       classification: Public
     columns:
@@ -1757,11 +1787,20 @@ models:
         description: Row position within the file, from 1.
         data_tests: [not_null]
       - name: hold_reason
-        description: Why the row cannot be keyed.
+        description: Why the row cannot be kept.
         data_tests:
           - not_null
           - accepted_values:
               arguments:
-                values: [facility_not_a_facility_number, period_not_a_date, line_not_page_column_line, entity_not_a_number, measure_not_a_number]
-      - name: facility_published
-        description: The facility, entity or OSHPD number as published; null when blank.
+                values:
+                  - facility_not_a_facility_number
+                  - period_not_a_date
+                  - period_reversed
+                  - line_not_a_publisher_code
+                  - value_not_a_reviewed_form
+                  - value_not_a_number
+                  - county_not_matched
+                  - entity_not_a_number
+                  - measure_not_a_number
+      - name: hold_detail
+        description: For value_not_a_number, the names of the number fields that failed, joined by a vertical bar; null otherwise. Never a published value.
