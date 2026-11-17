@@ -31,16 +31,17 @@ override_resource {
 }
 
 variables {
-  aws_profile                      = "example_project_dev"
-  environment                      = "dev"
-  admin_profile                    = "example_admin"
-  aws_region                       = "eu-west-1"
-  expected_account_id              = "111111111111"
-  data_bucket_name                 = "example-project-ci-bucket"
-  project_name                     = "example_project"
-  owner_ip_cidrs                   = []
-  openmetadata_admin_password_name = "/example_project/openmetadata_admin_password"
-  openmetadata_db_password_name    = "/example_project/openmetadata_db_password"
+  aws_profile                          = "example_project_dev"
+  environment                          = "dev"
+  admin_profile                        = "example_admin"
+  aws_region                           = "eu-west-1"
+  expected_account_id                  = "111111111111"
+  data_bucket_name                     = "example-project-ci-bucket"
+  project_name                         = "example_project"
+  owner_ip_cidrs                       = []
+  openmetadata_admin_password_name     = "/example_project/openmetadata_admin_password"
+  openmetadata_db_password_name        = "/example_project/openmetadata_db_password"
+  mlflow_metadata_reader_password_name = "/example_project/mlflow_metadata_reader_password"
   openmetadata_bot_token_names = {
     lineage   = "/example_project/openmetadata_bot_lineage"
     ingestion = "/example_project/openmetadata_bot_ingestion"
@@ -191,6 +192,45 @@ run "job_execution_role_injects_only_the_ingestion_token" {
     )
     error_message = "The job execution role may inject exactly the ingestion bot token for the ingestion steps, and neither the lineage token nor any other."
   }
+}
+
+# The metadata job's MLflow source reads the registry as the read-only metadata_reader. Its password parameter is injected through the same shared job execution role.
+run "job_execution_role_injects_only_the_registry_reader_password" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.job_execution_mlflow_metadata_reader[0].name == "mlflow_metadata_reader_password"
+      && jsondecode(aws_iam_role_policy.job_execution_mlflow_metadata_reader[0].policy).Statement[0].Action == "ssm:GetParameters"
+      && jsondecode(aws_iam_role_policy.job_execution_mlflow_metadata_reader[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/mlflow_metadata_reader_password"]
+      && length(jsondecode(aws_iam_role_policy.job_execution_mlflow_metadata_reader[0].policy).Statement) == 1
+    )
+    error_message = "The job execution role may inject exactly the registry reader password, and neither the MLflow administrator password nor a bot token."
+  }
+}
+
+run "registry_reader_grant_is_absent_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.job_execution_mlflow_metadata_reader) == 0
+    error_message = "With the flag off the job execution role gains no registry reader grant."
+  }
+}
+
+run "registry_reader_password_name_is_its_own_parameter" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared     = true
+    mlflow_metadata_reader_password_name = "/example_project/openmetadata_admin_password"
+  }
+
+  expect_failures = [var.mlflow_metadata_reader_password_name]
 }
 
 run "job_execution_grant_is_absent_by_default" {

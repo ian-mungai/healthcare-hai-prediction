@@ -29,6 +29,22 @@ variable "openmetadata_db_password_name" {
   }
 }
 
+variable "mlflow_metadata_reader_password_name" {
+  description = "Parameter Store SecureString name of the password of the read-only MLflow user metadata_reader, which the MLflow source of the metadata job reads the model registry with. The job execution role may inject exactly this parameter. The owner step scripts/infrastructure/mlflow_reader_setup.py writes it; Terraform never reads a value."
+  type        = string
+  default     = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
+  nullable    = false
+
+  validation {
+    condition = (
+      length(var.mlflow_metadata_reader_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.mlflow_metadata_reader_password_name)) && !can(regex("^/(?i:aws|ssm)", var.mlflow_metadata_reader_password_name))
+      && !contains([var.mlflow_admin_password_name, var.openmetadata_admin_password_name, var.openmetadata_db_password_name], var.mlflow_metadata_reader_password_name)
+      && !contains(values(var.openmetadata_bot_token_names), var.mlflow_metadata_reader_password_name)
+    )
+    error_message = "Use its own parameter path of letters, digits and underscores that starts with a slash, never the MLflow administrator password, a catalog password or a bot token."
+  }
+}
+
 variable "openmetadata_bot_token_names" {
   description = "Parameter Store SecureString name of the bot token of each caller: lineage and ingestion. The bootstrap task role may read and write exactly these two parameters. Terraform never reads a value."
   type        = map(string)
@@ -132,6 +148,24 @@ resource "aws_iam_role_policy" "job_execution_openmetadata_ingestion_token" {
       Effect   = "Allow"
       Action   = "ssm:GetParameters"
       Resource = [local.openmetadata_parameter_arn["ingestion"]]
+    }]
+  })
+}
+
+# The registry reader password reaches the metadata job's ingest container through the shared job execution role, beside the ingestion token. The MLflow
+# administrator password stays out of it: the source reads with the read-only user.
+resource "aws_iam_role_policy" "job_execution_mlflow_metadata_reader" {
+  count = var.openmetadata_persistent_prepared ? 1 : 0
+
+  name = "mlflow_metadata_reader_password"
+  role = aws_iam_role.job["execution"].name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InjectRegistryReaderPassword"
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = ["arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_metadata_reader_password_name}"]
     }]
   })
 }
