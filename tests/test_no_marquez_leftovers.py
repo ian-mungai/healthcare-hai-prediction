@@ -1,41 +1,25 @@
 """No Marquez service, image, repository, log group, switch, configuration or code path is left.
 
-OpenMetadata alone holds lineage. These checks fail when a Marquez piece comes back: the Terraform stacks, the launcher, the lineage code, the metadata
-ingestion configuration, the images list, the contracts and the guard-less scripts name no Marquez, and the files that only served it stay deleted.
+OpenMetadata alone holds lineage. These checks fail when a Marquez piece comes back: no file Git tracks or would add names Marquez in its path or its
+text, the files that only served it stay deleted, and the stacks take no Marquez input. The scan reads the list of files from Git, so a file is skipped only
+when Git ignores it or when its extension is a saved Terraform state or plan; its name is never a reason to skip it.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
 
 from scripts.infrastructure import openmetadata_persistent_bootstrap as bootstrap
+from scripts.process import run_command
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOTS = (
-    ".env.example",
-    ".github",
-    "README.md",
-    "config",
-    "dags",
-    "data_contracts",
-    "dbt",
-    "docker-compose.yaml",
-    "feature_store",
-    "features",
-    "infra",
-    "monitoring",
-    "orchestration",
-    "pyproject.toml",
-    "scripts",
-    "services",
-    "tests",
-)
-SKIPPED_PARTS = frozenset({".terraform", "__pycache__", "node_modules"})
-SKIPPED_MARKERS = ("tfstate", "tfplan")
+# Saved Terraform state and plan files are artifacts, matched by their final extension only. A tracked one is refused by the credential-files hook.
+ARTIFACT_EXTENSIONS = (".tfstate", ".tfplan", ".tfstate.backup")
 # Files that say a Marquez piece is absent. Everything else names no Marquez at all.
 NEGATIVE_FILES = frozenset({"tests/test_no_marquez_leftovers.py", "infra/platform/tests/platform.tftest.hcl"})
 GONE = (
@@ -52,41 +36,56 @@ GONE = (
     "scripts/orchestration/run_lineage_stack_e2e.py",
 )
 STACKS = ("infra/platform", "infra/iam", "infra/services")
+COMPARISON_BOT_NAMES = ("openmetadata_bot_comparison", "comparison-bot", "DataConsumer")
+# The files that refuse the comparison bot or retire it: the two Terraform refusal tests, the bootstrap E2E that seeds the old bot and this guard.
+COMPARISON_BOT_REFUSALS = frozenset(
+    {
+        "infra/iam/tests/openmetadata_persistent.tftest.hcl",
+        "infra/services/tests/openmetadata.tftest.hcl",
+        "scripts/infrastructure/run_openmetadata_persistent_e2e.py",
+        "tests/test_no_marquez_leftovers.py",
+    }
+)
 
 
-def tracked_text_files() -> list[Path]:
-    found: list[Path] = []
-    for entry in ROOTS:
-        base = ROOT / entry
-        candidates = [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []
-        for path in candidates:
-            if not path.is_file() or SKIPPED_PARTS & set(path.parts) or any(marker in path.name for marker in SKIPPED_MARKERS):
-                continue
-            found.append(path)
+def listed_files(root: Path) -> list[str]:
+    """Every file Git tracks or would add (not ignored) under ``root``, as paths relative to it. A deleted tracked file is not a file."""
+    result = run_command("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root, timeout=60, check=True)
+    names = {name for name in result.stdout.split("\0") if name}
+    return sorted(name for name in names if (root / name).is_file() and not name.endswith(ARTIFACT_EXTENSIONS))
+
+
+def named_files(root: Path, matches: Callable[[str], bool], allowed: Iterable[str]) -> list[str]:
+    """The listed files whose path or text satisfies ``matches``, except the allowed ones. A file that is not text is judged by its path only."""
+    skipped = frozenset(allowed)
+    found = []
+    for name in listed_files(root):
+        if name in skipped:
+            continue
+        if matches(name):
+            found.append(name)
+            continue
+        try:
+            text = (root / name).read_text()
+        except UnicodeDecodeError:
+            continue
+        if matches(text):
+            found.append(name)
     return found
 
 
-def relative(path: Path) -> str:
-    return str(path.relative_to(ROOT))
+def names_marquez(text: str) -> bool:
+    return "marquez" in text.lower()
+
+
+def names_comparison_bot(text: str) -> bool:
+    lowered = text.lower()
+    return any(name.lower() in lowered for name in COMPARISON_BOT_NAMES)
 
 
 def test_no_file_or_path_names_marquez() -> None:
-    named = [relative(path) for path in tracked_text_files() if "marquez" in relative(path).lower() and relative(path) not in NEGATIVE_FILES]
-    check(not named, f"these paths still name Marquez: {named}")
-
-
-def test_no_file_content_names_marquez() -> None:
-    named = []
-    for path in tracked_text_files():
-        if relative(path) in NEGATIVE_FILES:
-            continue
-        try:
-            text = path.read_text()
-        except UnicodeDecodeError:
-            continue
-        if "marquez" in text.lower():
-            named.append(relative(path))
-    check(not named, f"these files still name Marquez: {named}")
+    named = named_files(ROOT, names_marquez, NEGATIVE_FILES)
+    check(not named, f"these files or paths still name Marquez: {named}")
 
 
 @pytest.mark.parametrize("name", GONE)
@@ -107,30 +106,62 @@ def test_no_stack_takes_a_marquez_switch_image_or_secret(stack: str) -> None:
     check(not re.search(r"marquez_enabled|marquez_db_password|marquez_web|marquez_api", text, re.IGNORECASE), f"{stack} still takes a Marquez input")
 
 
-COMPARISON_BOT_NAMES = ("openmetadata_bot_comparison", "comparison-bot", "DataConsumer")
-COMPARISON_BOT_REFUSALS = frozenset(
-    {
-        "infra/iam/tests/openmetadata_persistent.tftest.hcl",
-        "infra/services/tests/openmetadata.tftest.hcl",
-        "scripts/infrastructure/run_openmetadata_persistent_e2e.py",
-        "tests/test_no_marquez_leftovers.py",
-    }
-)
-
-
 def test_the_openmetadata_comparison_bot_that_only_the_marquez_comparison_used_is_gone() -> None:
-    named = []
-    for path in tracked_text_files():
-        if relative(path) in COMPARISON_BOT_REFUSALS:
-            continue
-        try:
-            text = path.read_text()
-        except UnicodeDecodeError:
-            continue
-        if any(name in text for name in COMPARISON_BOT_NAMES):
-            named.append(relative(path))
+    named = named_files(ROOT, names_comparison_bot, COMPARISON_BOT_REFUSALS)
     check(not named, f"these files still name the comparison bot, its token parameter or its role: {named}")
     check("comparison" not in bootstrap.CALLER_ROLES, "the bootstrap still creates a comparison caller")
     check(bootstrap.RETIRED_CALLERS == ("comparison",), "the bootstrap no longer retires the comparison bot that earlier releases created")
     for stack in ("infra/iam/openmetadata_persistent.tf", "infra/services/openmetadata_variables.tf"):
         check('"comparison"' not in (ROOT / stack).read_text(), f"{stack} still names a comparison caller")
+
+
+def scratch_repository(folder: Path) -> Path:
+    root = folder / "repository"
+    root.mkdir()
+    run_command("git", ["init", "-q"], cwd=root, timeout=60, check=True)
+    (root / ".gitignore").write_text("ignored.tfstate\nbuild/\n")
+    return root
+
+
+@pytest.mark.parametrize(
+    ("path", "text"),
+    [
+        ("scripts/runtime_tfplan.py", "URL = 'http://Marquez:5000'\n"),
+        ("config/generated_tfstate_config.json", '{"url": "MARQUEZ"}\n'),
+        ("legacy/Marquez.py", "URL = 'http://marquez:5000'\n"),
+        ("legacy/other.py", "URL = 'http://marquez:5000'\n"),
+        ("handbook/notes.md", "The lineage store was Marquez.\n"),
+    ],
+)
+def test_the_scan_finds_marquez_whatever_the_file_name_or_folder(tmp_path: Path, path: str, text: str) -> None:
+    root = scratch_repository(tmp_path)
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    check(named_files(root, names_marquez, ()) == [path], f"the scan missed {path}")
+
+
+@pytest.mark.parametrize(
+    ("path", "text"),
+    [
+        ("scripts/runtime_tfplan.py", "COMPARISON_TOKEN = '/p/openmetadata_bot_comparison'\n"),
+        ("config/generated_tfstate_config.json", '{"bot": "comparison-bot"}\n'),
+        ("legacy/Comparison_Bot.py", "ROLE = 'DataConsumer'\n"),
+    ],
+)
+def test_the_comparison_bot_scan_finds_the_bot_whatever_the_file_name_or_folder(tmp_path: Path, path: str, text: str) -> None:
+    root = scratch_repository(tmp_path)
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    check(named_files(root, names_comparison_bot, ()) == [path], f"the scan missed {path}")
+
+
+def test_the_scan_skips_only_ignored_files_saved_state_and_plans_and_the_allowed_paths(tmp_path: Path) -> None:
+    root = scratch_repository(tmp_path)
+    (root / "build").mkdir()
+    for path in ("ignored.tfstate", "build/marquez.py", "saved.tfplan", "terraform.tfstate", "backup.tfstate.backup"):
+        (root / path).write_text("marquez\n")
+    (root / "allowed.md").write_text("marquez\n")
+    (root / "kept_tfstate.md").write_text("marquez\n")
+    check(named_files(root, names_marquez, ["allowed.md"]) == ["kept_tfstate.md"], "only a name that merely contains tfstate must still be scanned")

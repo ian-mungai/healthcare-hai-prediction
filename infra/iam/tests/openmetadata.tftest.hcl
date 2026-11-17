@@ -171,4 +171,3 @@ run "prepared_forward_document_fixes_port_and_destination" {
     error_message = "The destination host is limited by a pattern that starts with the first two octets of the platform network."
   }
 }
-
