@@ -37,7 +37,14 @@ ENV_VALUES = {
 }
 STAND_IN = """#!/bin/bash
 { printf '%s\\n' "$@"; printf '%s\\n' '--end--'; } >> "$STAND_IN_LOG"
-if [ "$1 $2" = "ec2 describe-instances" ]; then cat "$STAND_IN_INSTANCES"; exit 0; fi
+if [ "$1 $2" = "ec2 describe-instances" ]; then
+  if [ -n "$STAND_IN_LOOKUP_INTERRUPT" ]; then
+    kill -INT "$PPID"
+    sleep 5
+  fi
+  cat "$STAND_IN_INSTANCES"
+  exit 0
+fi
 if [ "$1 $2" = "ssm start-session" ]; then
   if [ -n "$STAND_IN_SESSION_ERROR" ]; then
     echo "An error occurred ($STAND_IN_SESSION_ERROR) when calling StartSession: arn:aws:ssm:us-west-2:111111111111:x" >&2
@@ -47,37 +54,37 @@ if [ "$1 $2" = "ssm start-session" ]; then
   stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
   echo "$$" > "$STAND_IN_PIDFILE"
   echo "start $(stamp)" >> "$STAND_IN_MARK"
-  if [ -n "$STAND_IN_PS_BREAK" ]; then : > "$STAND_IN_PS_BREAK"; fi
-  sleep "${STAND_IN_SLEEP:-60}" &
-  sleeper=$!
+  echo "$(ps -o pgid= -p $$ | tr -d ' ') $(ps -o pgid= -p $PPID | tr -d ' ')" > "$STAND_IN_GROUPFILE"
   case "$STAND_IN_SESSION_MODE" in
-    interrupt | hang) trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT ;;
-    *) trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"' INT ;;
+    terminal_ctrl_c | plugin_exits)
+      # Like the real CLI: ignore the interrupt here (a handler, so the plugin starts with the default) and let the plugin, a foreground child, handle it.
+      trap 'echo "aws_int $(stamp)" >> "$STAND_IN_MARK"' INT
+      session-manager-plugin
+      exit $?
+      ;;
+    *)
+      trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"' INT
+      case "$STAND_IN_SESSION_MODE" in
+        stubborn) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"' TERM ;;
+        *) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"; exit 0' TERM ;;
+      esac
+      while true; do sleep 0.1; done
+      ;;
   esac
-  case "$STAND_IN_SESSION_MODE" in
-    ignore_all) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"' TERM ;;
-    *) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' TERM ;;
-  esac
-  if [ "$STAND_IN_SESSION_MODE" != hang ]; then kill -INT "$PPID"; fi
-  if [ -n "$STAND_IN_REPEAT_AFTER" ]; then
-    sleep "$STAND_IN_REPEAT_AFTER"
-    kill -INT "$PPID"
-  fi
-  while [ "$STAND_IN_SESSION_MODE" = ignore_all ]; do sleep 1; done
-  while kill -0 "$sleeper" 2>/dev/null; do wait "$sleeper"; done
-  exit 0
 fi
 exit 3
 """
 
 
-PS_STAND_IN = """#!/bin/bash
-sleep "${STAND_IN_PS_DELAY:-0}"
-if [ -n "$STAND_IN_PS_BREAK" ] && [ -e "$STAND_IN_PS_BREAK" ]; then
-  echo "ps: the process table cannot be read" >&2
-  exit 1
-fi
-exec /bin/ps "$@"
+PLUGIN_STAND_IN = """#!/bin/bash
+stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\\n", time'; }
+echo "$$" > "$STAND_IN_PLUGIN_PIDFILE"
+sleep "${STAND_IN_SLEEP:-20}" &
+sleeper=$!
+trap 'echo "plugin_int $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT
+if [ "$STAND_IN_SESSION_MODE" = terminal_ctrl_c ]; then kill -INT 0; fi
+while kill -0 "$sleeper" 2>/dev/null; do wait "$sleeper"; done
+exit 0
 """
 
 
@@ -94,8 +101,8 @@ class Workspace:
         self.bin.mkdir()
         (self.bin / "aws").write_text(STAND_IN)
         (self.bin / "aws").chmod(0o755)
-        (self.bin / "ps").write_text(PS_STAND_IN)
-        (self.bin / "ps").chmod(0o755)
+        (self.bin / "session-manager-plugin").write_text(PLUGIN_STAND_IN)
+        (self.bin / "session-manager-plugin").chmod(0o755)
         self.log = folder / "calls.log"
         self.answer = folder / "instances.json"
         self.answer.write_text(answer)
@@ -110,6 +117,8 @@ class Workspace:
             "STAND_IN_SESSION_ERROR": session_error,
             "STAND_IN_MARK": str(self.folder / "marks.log"),
             "STAND_IN_PIDFILE": str(self.folder / "child.pid"),
+            "STAND_IN_PLUGIN_PIDFILE": str(self.folder / "plugin.pid"),
+            "STAND_IN_GROUPFILE": str(self.folder / "groups.txt"),
             **(extra or {}),
             "AWS_PROFILE": "an_inherited_profile",
             "AWS_REGION": "eu-west-1",
@@ -265,14 +274,12 @@ def test_a_failed_lookup_is_refused_without_a_session(tmp_path: Path) -> None:
     check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), "no session may start after a failed lookup")
 
 
-def test_a_failed_session_reports_only_the_error_category(tmp_path: Path) -> None:
+def test_a_failed_session_reports_its_exit_code(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path, instances(INSTANCE))
     result = workspace.run("airflow", session_error="TargetNotConnected")
     check(result.returncode == 1, f"a failed session must exit 1: {result.returncode}")
-    check("TargetNotConnected" in result.stderr, f"the message must name the error category: {result.stderr}")
-    check(
-        "arn:aws" not in result.stdout + result.stderr and "111111111111" not in result.stdout + result.stderr, "the output must name no ARN and no account ID"
-    )
+    check("exit code 254" in result.stderr, f"the message must give the exit code of aws: {result.stderr}")
+    check("TargetNotConnected" in result.stderr, f"aws's own message must reach the terminal, which is the owner's: {result.stderr}")
 
 
 def list_run(*arguments: str, cwd: Path) -> CompletedProcess[str]:
@@ -334,13 +341,13 @@ def test_a_refused_input_is_never_echoed(tmp_path: Path) -> None:
 
 
 def mark_times(workspace: Workspace) -> list[tuple[str, float]]:
-    """What the stand-in Session Manager child recorded, in order: ``start``, then each signal it received, each with its time."""
+    """What the stand-in processes recorded, in order: ``start``, then each signal one of them received, each with its time."""
     path = workspace.folder / "marks.log"
     return [(name, float(stamp)) for name, stamp in (line.split() for line in path.read_text().splitlines())] if path.exists() else []
 
 
 def marks(workspace: Workspace) -> list[str]:
-    """The signals the stand-in Session Manager child received, in order."""
+    """The signals the stand-in processes received, in order."""
     return [name for name, _ in mark_times(workspace) if name != "start"]
 
 
@@ -351,51 +358,199 @@ def seconds_between(workspace: Workspace, first: str, second: str) -> float:
     return next(stamp for name, stamp in times if name == second and stamp >= begin) - begin
 
 
-def stop_child(workspace: Workspace) -> None:
-    """Make sure no stand-in child and nothing in its process group (its sleeper) is left running, whatever the case did."""
-    path = workspace.folder / "child.pid"
-    if path.exists():
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(int(path.read_text()), signal.SIGKILL)
+def pids(workspace: Workspace) -> list[int]:
+    """The stand-in aws and plugin pids the case recorded."""
+    return [int((workspace.folder / name).read_text()) for name in ("child.pid", "plugin.pid") if (workspace.folder / name).exists()]
 
 
-def test_ctrl_c_sends_the_interrupt_to_the_aws_child_and_lets_it_close_the_session(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "interrupt", "HAI_OPEN_UI_STOP_SECONDS": "20"})
-    check(result.returncode == 0, f"a Ctrl+C that the child handles must end with exit 0: {result.returncode} {result.stderr}")
-    check(marks(workspace) == ["int"], f"the child must get SIGINT only, nothing stronger: {marks(workspace)}")
-    check("the session is closed" in result.stdout, f"the script must say the session is closed: {result.stdout}")
-    check("cannot confirm" in result.stdout, f"the script must state that it cannot confirm the AWS side: {result.stdout}")
-
-
-def test_a_child_that_ignores_the_interrupt_gets_term_only_after_the_bounded_wait(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "HAI_OPEN_UI_STOP_SECONDS": "1"})
-    check(result.returncode == 0, f"a child that ends on TERM must end with exit 0: {result.returncode} {result.stderr}")
-    check(marks(workspace) == ["int", "term"], f"the child must get SIGINT, then SIGTERM: {marks(workspace)}")
-
-
-def test_a_child_that_ignores_the_interrupt_and_term_is_killed_last_and_reported(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_all", "HAI_OPEN_UI_STOP_SECONDS": "1"})
-    check(result.returncode == 1, f"a killed child must end with exit 1: {result.returncode} {result.stdout} {result.stderr}")
-    check(marks(workspace) == ["int", "term"], f"the child must get SIGINT, then SIGTERM, then the kill: {marks(workspace)}")
-    check("did not close" in result.stderr and "idle timeout" in result.stderr, f"the message must say the AWS session may stay open: {result.stderr}")
-    pid = int((workspace.folder / "child.pid").read_text())
+def alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        pass
-    else:
-        raise AssertionError(f"the child {pid} must not be left running")
+        return False
+    return True
 
 
-def test_the_session_deadline_stops_the_child_by_the_same_graceful_steps(tmp_path: Path) -> None:
+def stop_child(workspace: Workspace) -> None:
+    """Make sure no stand-in process is left running, whatever the case did."""
+    for pid in pids(workspace):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def nothing_left(workspace: Workspace, case: str) -> None:
+    for pid in pids(workspace):
+        check(not alive(pid), f"{case}: the stand-in process {pid} must be gone when open_ui exits")
+
+
+def deliver_to_stand_ins(workspace: Workspace, number: int) -> None:
+    """Stand in for a signal to the process group: these cases run ``open_ui`` inside the test process, whose group is the developer's, so the group signal is
+    sent to the stand-in processes only."""
+    for pid in pids(workspace):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, number)
+
+
+def test_a_terminal_ctrl_c_reaches_aws_and_the_plugin_and_leaves_nothing_running(tmp_path: Path) -> None:
+    """A SIGINT to the whole process group, as a terminal sends it: open_ui, aws and the plugin share the group, open_ui outlives the child and reports."""
     workspace = Workspace(tmp_path, instances(INSTANCE))
-    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "hang", "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "20"})
-    check(result.returncode == 1, f"the deadline must end with exit 1: {result.returncode} {result.stdout} {result.stderr}")
-    check("deadline" in result.stderr, f"the message must name the deadline: {result.stderr}")
-    check(marks(workspace) == ["int"], f"the child must get SIGINT first and only: {marks(workspace)}")
+    try:
+        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "terminal_ctrl_c"})
+        output = result.stdout + result.stderr
+        check("Traceback" not in output and "KeyboardInterrupt" not in output, f"open_ui must not die on the terminal's Ctrl+C: {output}")
+        check(result.returncode == 0, f"the plugin closed the session on Ctrl+C: exit 0 expected, got {result.returncode}: {output}")
+        check("the session is closed" in result.stdout and "cannot confirm" in result.stdout, f"open_ui must report after the child ends: {result.stdout}")
+        check(
+            marks(workspace) == ["plugin_int", "aws_int"] or marks(workspace) == ["aws_int", "plugin_int"],
+            f"aws and the plugin must both get the Ctrl+C: {marks(workspace)}",
+        )
+        aws_group, open_ui_group = (workspace.folder / "groups.txt").read_text().split()
+        check(aws_group == open_ui_group, f"aws must run in open_ui's own process group, not a new one: {aws_group} {open_ui_group}")
+        nothing_left(workspace, "terminal Ctrl+C")
+    finally:
+        stop_child(workspace)
+
+
+def test_a_normal_end_leaves_nothing_running_and_reports_the_exit_code(tmp_path: Path) -> None:
+    for number, mode in enumerate(("plugin_exits", "")):
+        folder = tmp_path / f"case{number}"
+        folder.mkdir()
+        workspace = Workspace(folder, instances(INSTANCE))
+        try:
+            result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": mode, "STAND_IN_SLEEP": "1"} if mode else {})
+            check(result.returncode == 0, f"a session that ends by itself must exit 0: {result.returncode} {result.stderr}")
+            nothing_left(workspace, "normal end")
+        finally:
+            stop_child(workspace)
+
+
+def test_the_deadline_sends_only_the_interrupt_when_the_plugin_closes_on_it(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        began = time.monotonic()
+        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "plugin_exits", "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "20"})
+        elapsed = time.monotonic() - began
+        check(result.returncode == 1 and "deadline" in result.stderr, f"the deadline must end the session with exit 1: {result.returncode} {result.stderr}")
+        check("signals sent: SIGINT" in result.stderr and "SIGTERM" not in result.stderr, f"only SIGINT may be sent: {result.stderr}")
+        check("plugin_int" in marks(workspace), f"the plugin must get the interrupt: {marks(workspace)}")
+        check(elapsed < 10.0, f"the stop must end as soon as the child is gone, not wait the 20 s: {elapsed:.1f} s")
+        nothing_left(workspace, "deadline interrupt")
+    finally:
+        stop_child(workspace)
+
+
+def test_the_deadline_escalates_only_as_far_as_needed(tmp_path: Path) -> None:
+    for number, (mode, expected_sent, expected_marks) in enumerate(
+        (("stubborn_term", "SIGINT, SIGTERM", ["int", "term"]), ("stubborn", "SIGINT, SIGTERM, SIGKILL", ["int", "term"]))
+    ):
+        folder = tmp_path / f"case{number}"
+        folder.mkdir()
+        workspace = Workspace(folder, instances(INSTANCE))
+        try:
+            began = time.monotonic()
+            result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": mode, "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "1"})
+            elapsed = time.monotonic() - began
+            check(result.returncode == 1, f"{mode}: the deadline must end with exit 1: {result.returncode} {result.stderr}")
+            check(f"signals sent: {expected_sent})" in result.stderr, f"{mode}: the report must list exactly {expected_sent}: {result.stderr}")
+            check(marks(workspace) == expected_marks, f"{mode}: the child must receive {expected_marks}: {marks(workspace)}")
+            check(("SIGKILL" in result.stderr) == (mode == "stubborn"), f"{mode}: SIGKILL only when the child ignored the others: {result.stderr}")
+            check(elapsed >= (3.0 if mode == "stubborn" else 2.0), f"{mode}: each signal must wait the configured second first: {elapsed:.1f} s")
+            nothing_left(workspace, mode)
+        finally:
+            stop_child(workspace)
+
+
+def test_no_signal_is_sent_once_the_child_is_reaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    sent: list[tuple[str, int, int]] = []
+    real_kill = os.kill
+    for name, value in {
+        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "STAND_IN_LOG": str(workspace.log),
+        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
+        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
+        "STAND_IN_PLUGIN_PIDFILE": str(workspace.folder / "plugin.pid"),
+        "STAND_IN_GROUPFILE": str(workspace.folder / "groups.txt"),
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    def record_kill(pid: int, number: int) -> None:
+        sent.append(("kill", pid, number))
+        real_kill(pid, number)
+
+    def record_killpg(group: int, number: int) -> None:
+        sent.append(("killpg", group, number))
+        for pid in pids(workspace):
+            with contextlib.suppress(ProcessLookupError):
+                real_kill(pid, number)
+
+    monkeypatch.setattr(os, "kill", record_kill)
+    monkeypatch.setattr(os, "killpg", record_killpg)
+    try:
+        for mode, expected in (("plugin_exits", [signal.SIGINT]), ("stubborn_term", [signal.SIGINT, signal.SIGTERM])):
+            sent.clear()
+            monkeypatch.setenv("STAND_IN_SESSION_MODE", mode)
+            end = open_ui.run_session(["ssm", "start-session"], 0.5, 1.0)
+            check(end.sent == [number.name for number in expected], f"{mode}: the signals sent must be {expected}: {end.sent}")
+            check(
+                [number for _, _, number in sent] == expected,
+                f"{mode}: the operating system must see exactly {expected}, nothing after the child was reaped: {sent}",
+            )
+            check(end.alive is False and end.reason == "deadline", f"{mode}: the session must be over: {end}")
+        check(not any(kind == "killpg" and number != signal.SIGINT for kind, _, number in sent), "only the interrupt may go to the group")
+    finally:
+        stop_child(workspace)
+
+
+def test_an_error_inside_the_wait_still_stops_and_reaps_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    for name, value in {
+        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "STAND_IN_LOG": str(workspace.log),
+        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
+        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
+        "STAND_IN_PLUGIN_PIDFILE": str(workspace.folder / "plugin.pid"),
+        "STAND_IN_GROUPFILE": str(workspace.folder / "groups.txt"),
+        "STAND_IN_SESSION_MODE": "stubborn_term",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    def broken(end: float) -> bool:
+        raise RuntimeError("the wait failed")
+
+    monkeypatch.setattr(open_ui, "session_expired", broken)
+    monkeypatch.setattr(os, "killpg", lambda group, number: deliver_to_stand_ins(workspace, number))
+    try:
+        with pytest.raises(RuntimeError, match="the wait failed"):
+            open_ui.run_session(["ssm", "start-session"], 60.0, 1.0)
+        nothing_left(workspace, "an error in the wait")
+        check(signal.getsignal(signal.SIGINT) is signal.default_int_handler, "the SIGINT disposition must be restored")
+    finally:
+        stop_child(workspace)
+
+
+def test_a_ctrl_c_before_the_session_starts_leaves_no_child(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    result = workspace.run("airflow", extra={"STAND_IN_LOOKUP_INTERRUPT": "1"})
+    output = result.stdout + result.stderr
+    check(result.returncode == 130, f"a Ctrl+C during the host lookup must exit 130: {result.returncode} {output}")
+    check("Traceback" not in output and "interrupted" in result.stderr, f"the interruption must be reported plainly: {output}")
+    check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), "no session may start after the interruption")
+
+
+def test_the_defaults_are_a_fifteen_second_wait_and_an_eight_hour_deadline() -> None:
+    check(open_ui.STOP_SECONDS == 15.0 and open_ui.SESSION_SECONDS == 8 * 3600, "the defaults must be a 15 s wait and an 8 hour deadline")
+
+
+def test_the_default_wait_is_fifteen_seconds(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "stubborn_term", "HAI_OPEN_UI_SESSION_SECONDS": "1"})
+        check(result.returncode == 1, f"the deadline must end with exit 1: {result.returncode} {result.stderr}")
+        gap = seconds_between(workspace, "int", "term")
+        check(14.0 <= gap <= 18.0, f"with no stop setting, SIGTERM must follow SIGINT after 15 s, not {gap:.2f} s")
+    finally:
+        stop_child(workspace)
 
 
 def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> None:
@@ -410,153 +565,13 @@ def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> No
             check(workspace.calls() == [], f"{name}={value}: no AWS call may happen")
 
 
-def test_a_second_ctrl_c_right_after_the_first_still_stops_the_session_cleanly(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run(
-            "airflow",
-            extra={
-                "STAND_IN_SESSION_MODE": "interrupt",
-                "STAND_IN_REPEAT_AFTER": "0.5",
-                "STAND_IN_PS_DELAY": "1.0",
-                "STAND_IN_SLEEP": "8",
-                "HAI_OPEN_UI_STOP_SECONDS": "20",
-            },
-        )
-        output = result.stdout + result.stderr
-        check("Traceback" not in output and "KeyboardInterrupt" not in output, f"a second Ctrl+C must not escape as an error: {output}")
-        check(result.returncode == 0, f"the session must close cleanly: {result.returncode} {output}")
-        check(marks(workspace) == ["int"], f"the child must still get SIGINT from the stop steps: {marks(workspace)}")
-        pid = int((workspace.folder / "child.pid").read_text())
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise AssertionError(f"the child {pid} must not be left running")
-    finally:
-        stop_child(workspace)
-
-
-def test_the_wait_after_each_signal_is_the_configured_time(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        began = time.monotonic()
-        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_all", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_STOP_SECONDS": "2"})
-        elapsed = time.monotonic() - began
-        check(result.returncode == 1, f"a killed child must end with exit 1: {result.returncode} {result.stderr}")
-        gap = seconds_between(workspace, "int", "term")
-        check(2.0 <= gap <= 3.5, f"SIGTERM must follow SIGINT after the configured 2 s, not {gap:.2f} s")
-        check(elapsed >= 4.0, f"the kill must follow SIGTERM after another 2 s: the whole stop took {elapsed:.2f} s")
-    finally:
-        stop_child(workspace)
-
-
-def test_the_default_wait_is_fifteen_seconds(tmp_path: Path) -> None:
-    check(open_ui.STOP_SECONDS == 15.0 and open_ui.SESSION_SECONDS == 8 * 3600, "the defaults must be a 15 s wait and an 8 hour deadline")
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "STAND_IN_SLEEP": "40"})
-        check(result.returncode == 0, f"a child that ends on SIGTERM must end with exit 0: {result.returncode} {result.stderr}")
-        gap = seconds_between(workspace, "int", "term")
-        check(14.8 <= gap <= 18.0, f"with no setting, SIGTERM must follow SIGINT after 15 s, not {gap:.2f} s")
-    finally:
-        stop_child(workspace)
-
-
-def test_a_second_ctrl_c_skips_only_the_wait_it_interrupts(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run(
-            "airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "STAND_IN_REPEAT_AFTER": "0.6", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_STOP_SECONDS": "20"}
-        )
-        check(result.returncode == 0, f"a child that ends on SIGTERM must end with exit 0: {result.returncode} {result.stderr}")
-        check(marks(workspace)[0] == "int", f"the child must get SIGINT first: {marks(workspace)}")
-        check(marks(workspace)[-1] == "term", f"the second Ctrl+C must move on to SIGTERM: {marks(workspace)}")
-        gap = seconds_between(workspace, "int", "term")
-        check(gap < 6.0, f"the second Ctrl+C must skip the 20 s wait, SIGTERM came after {gap:.2f} s")
-    finally:
-        stop_child(workspace)
-
-
-def test_the_session_deadline_is_the_configured_time(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run(
-            "airflow", extra={"STAND_IN_SESSION_MODE": "hang", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_SESSION_SECONDS": "2", "HAI_OPEN_UI_STOP_SECONDS": "20"}
-        )
-        check(result.returncode == 1 and "deadline" in result.stderr, f"the deadline must end the session: {result.returncode} {result.stderr}")
-        gap = seconds_between(workspace, "start", "int")
-        check(2.0 <= gap <= 4.5, f"SIGINT must come at the configured 2 s deadline, not after {gap:.2f} s")
-    finally:
-        stop_child(workspace)
-
-
-def test_a_failing_process_listing_cannot_stop_the_bounded_stop_of_the_owned_child(tmp_path: Path) -> None:
-    for number, (mode, code, expected_marks, expected_sent) in enumerate(
-        (("interrupt", 0, ["int"], "SIGINT"), ("ignore_all", 1, ["int", "term"], "SIGINT, SIGTERM, SIGKILL"))
-    ):
-        folder = tmp_path / f"case{number}"
-        folder.mkdir()
-        workspace = Workspace(folder, instances(INSTANCE))
-        try:
-            began = time.monotonic()
-            result = workspace.run(
-                "airflow",
-                extra={
-                    "STAND_IN_SESSION_MODE": mode,
-                    "STAND_IN_SLEEP": "30",
-                    "STAND_IN_PS_BREAK": str(folder / "ps_broken"),
-                    "HAI_OPEN_UI_STOP_SECONDS": "1",
-                },
-            )
-            elapsed = time.monotonic() - began
-            output = result.stdout + result.stderr
-            check((folder / "ps_broken").exists(), "the case needs the process listing to fail once the session runs")
-            check(result.returncode == code, f"{mode}: exit {code} expected, got {result.returncode}: {output}")
-            check(elapsed < 12.0, f"{mode}: the parent must exit within the bounded stop, it took {elapsed:.1f} s")
-            check(marks(workspace) == expected_marks, f"{mode}: the child must get exactly {expected_marks}: {marks(workspace)}")
-            if code:
-                check(f"signals sent: {expected_sent}" in result.stderr, f"{mode}: the report must list the signals actually sent: {result.stderr}")
-            pid = int((folder / "child.pid").read_text())
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise AssertionError(f"{mode}: the child {pid} must be gone when the parent exits")
-            check("did not end after SIGKILL" not in output, f"{mode}: the report must not claim a SIGKILL that was not needed: {output}")
-        finally:
-            stop_child(workspace)
-
-
-def test_a_failure_inside_the_stop_still_kills_the_owned_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    for name, value in {
-        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
-        "STAND_IN_LOG": str(workspace.log),
-        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
-        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
-        "STAND_IN_SESSION_MODE": "hang",
-        "STAND_IN_SLEEP": "30",
-    }.items():
-        monkeypatch.setenv(name, value)
-
-    def broken(session: object, stop_seconds: float) -> list[str]:
-        raise RuntimeError("the stop failed")
-
-    monkeypatch.setattr(open_ui, "stop_session", broken)
-    try:
-        with pytest.raises(RuntimeError, match="the stop failed"):
-            open_ui.run_session(["ssm", "start-session"], 0.5, 1.0)
-        time.sleep(0.5)
-        pid = int((workspace.folder / "child.pid").read_text())
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise AssertionError(f"the child {pid} must be killed when the stop fails")
-        check(signal.getsignal(signal.SIGINT) is signal.default_int_handler, "the SIGINT handler must be restored")
-    finally:
-        stop_child(workspace)
+def test_a_child_that_exited_before_the_stop_gets_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stop polls before every signal: a child that has exited (not yet reaped) is reaped and nothing is sent, so no signal can reach a reused pid."""
+    sent: list[tuple[str, int]] = []
+    monkeypatch.setattr(os, "kill", lambda pid, number: sent.append(("kill", number)))
+    monkeypatch.setattr(os, "killpg", lambda group, number: sent.append(("killpg", number)))
+    pid = os.posix_spawnp("true", ["true"], os.environ.copy())
+    time.sleep(0.5)
+    child = open_ui.Child(pid)
+    check(open_ui.stop_child(child, 1.0) == [], "a child that already exited must get no signal")
+    check(sent == [] and child.code == 0, f"nothing may be sent and the child must be reaped with its exit code: {sent} {child.code}")
