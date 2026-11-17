@@ -40,42 +40,50 @@ def edges() -> Any:
     return openmetadata_mlmodel_edges
 
 
-def contract_models() -> list[str]:
+def model_sets() -> dict[str, dict[str, str]]:
+    """The model sets of the feature schema (set key to its slot list and its table), read straight from the file, not through the code under test."""
     root = Path(__file__).resolve().parents[2]
-    return sorted(json.loads((root / "data_contracts/training/model_contract.json").read_text())["registered_models"].values())
+    schema = json.loads((root / "data_contracts/features/feature_schema.json").read_text())["model_sets"]
+    return {key: {"slot": spec["list"], "table": spec["table"]} for key, spec in schema.items()}
 
 
-def feature_tables() -> list[str]:
-    """The feature_matrix tables the registrable slots' feature lists name, read straight from the files, so the case does not use the code under test."""
-    root = Path(__file__).resolve().parents[2]
-    contract = json.loads((root / "data_contracts/training/model_contract.json").read_text())
-    slots = json.loads((root / "config/training/models.json").read_text())["slots"]
-    found: set[str] = set()
-    for slot in contract["registrable_slots"]:
-        references = json.loads((root / "config/training/feature_lists" / slots[slot]["feature_list"]).read_text())["references"]
-        found.update(reference.split(":")[0] for reference in references)
-    return sorted(found)
+def set_tags(key: str) -> dict[str, str]:
+    """The version tags a registered version carries for a model set: the set key and the slot (``model``)."""
+    return {"feature_set": key, "model": model_sets()[key]["slot"]}
 
 
 class World:
     """One MLflow server and one OpenMetadata server in memory. A call is ``world(method, url, headers, body)``; every call is logged."""
 
-    def __init__(self, models: tuple[str, ...] = (), ingested: tuple[str, ...] | None = None, grants: str = "reader") -> None:
-        self.mlflow_models = set(models)
+    def __init__(
+        self,
+        models: tuple[str, ...] | Mapping[str, list[dict[str, str]]] = (),
+        ingested: tuple[str, ...] | None = None,
+        grants: str = "reader",
+    ) -> None:
+        # Each registered model with its versions in order (version 1 first), each version as its tags. A plain name list gives one version of set m2.
+        self.versions: dict[str, list[dict[str, str]]] = dict(models) if isinstance(models, Mapping) else {name: [set_tags("m2")] for name in models}
+        self.mlflow_models = set(self.versions)
         self.grants = grants  # reader: wildcard READ on models, experiments and logged models; none: no grant at all; model_only: one model name only
         self.mlmodels = {f"{SERVICE}.{name}": f"model-{index}" for index, name in enumerate(sorted(self.mlflow_models if ingested is None else ingested))}
         self.tables: dict[str, str] = {}
         self.edge_set: set[tuple[str, str]] = set()
         self.calls: list[tuple[str, str]] = []
         self.fail_put = False
+        self.fail_delete = False
+        self.foreign_edges: set[tuple[str, str]] = set()
         self.hide_edges = False
         self.token = base().BEARER_VALUE
 
     def catalog_all_tables(self) -> None:
+        for spec in model_sets().values():
+            self.tables[self.fqn(spec["table"])] = f"table-{spec['table']}"
+
+    @staticmethod
+    def fqn(table: str) -> str:
         from orchestration import ecs_lineage
 
-        for table in feature_tables():
-            self.tables[ecs_lineage.connector_fqn(ecs_lineage.dataset("features", table))] = f"table-{table}"
+        return ecs_lineage.connector_fqn(ecs_lineage.dataset("features", table))
 
     def reingest(self) -> None:
         """What the connector does on a second run: the MlModel is written again from the registry. Its edges are separate entity relationships."""
@@ -112,10 +120,20 @@ class World:
                 return 500, {"code": 500, "message": "boom"}
             self.edge_set.add((edge["fromEntity"]["id"], edge["toEntity"]["id"]))
             return 200, {}
+        if method == "DELETE" and path.startswith("/api/v1/lineage/table/"):
+            _, _, _, _, _, source, _, target = path.split("/")
+            if self.fail_delete:
+                return 500, {"code": 500, "message": "boom"}
+            self.edge_set.discard((source, target))
+            return 200, {}
         if method == "GET" and path.startswith("/api/v1/lineage/mlmodel/name/"):
             fqn = path.rsplit("/", 1)[1]
             model = self.mlmodels[fqn]
-            upstream = [] if self.hide_edges else [{"fromEntity": source, "toEntity": target} for source, target in sorted(self.edge_set) if target == model]
+            upstream = (
+                []
+                if self.hide_edges
+                else [{"fromEntity": source, "toEntity": target} for source, target in sorted(self.edge_set | self.foreign_edges) if target == model]
+            )
             return 200, {"entity": {"id": model, "type": "mlmodel", "fullyQualifiedName": fqn}, "nodes": [], "upstreamEdges": upstream, "downstreamEdges": []}
         return 404, {"code": 404, "message": f"no route {method} {path}"}
 
@@ -144,6 +162,19 @@ class World:
             if name in self.mlflow_models:
                 return 200, {"registered_model": {"name": name}}
             return 404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": f"Registered Model with name={name} not found"}
+        if method == "GET" and path == "/api/2.0/mlflow/model-versions/search":
+            name = query["filter"][0].removeprefix("name='").removesuffix("'")
+            found = [
+                {
+                    "name": name,
+                    "version": str(number),
+                    "run_id": f"run-{number}",
+                    "status": "READY",
+                    **({"tags": [{"key": k, "value": v} for k, v in tags.items()]} if tags else {}),
+                }
+                for number, tags in sorted(enumerate(self.versions.get(name, []), start=1), reverse=True)
+            ]
+            return 200, ({"model_versions": found} if found else {})
         return 404, {"error_code": "ENDPOINT_NOT_FOUND", "message": path}
 
 
@@ -183,9 +214,12 @@ def tables_are_named_by_the_mirror_config() -> None:
     world.catalog_all_tables()
     code, out, err = run(world)
     require(code == 0, (code, out, err))
-    asked = sorted(url.rsplit("/", 1)[1] for method, url in world.calls if method == "GET" and "/api/v1/tables/name/" in url)
-    expected = sorted(f"glue_mirror.hai_lakehouse.{schema}.{table}" for table in feature_tables())
-    require(asked == expected, f"table names do not follow the mirror config: {asked}")
+    asked = {url.rsplit("/", 1)[1] for method, url in world.calls if method == "GET" and "/api/v1/tables/name/" in url}
+    wanted = f"glue_mirror.hai_lakehouse.{schema}.{model_sets()['m2']['table']}"
+    require(
+        wanted in asked and all(name.startswith(f"glue_mirror.hai_lakehouse.{schema}.") for name in asked),
+        f"table names do not follow the mirror config: {asked}",
+    )
     # A renamed mirror database (the plain-names change) is followed with no code change: the names come from the mapping function only.
     plain = ecs_lineage.Connector("glue_mirror", "hai_lakehouse", {**ecs_lineage.connector().schemas, "features": "features"})
     renamed = World(models=("hai_model_HAI_1",))
@@ -194,26 +228,69 @@ def tables_are_named_by_the_mirror_config() -> None:
         code, out, err = run(renamed)
     require(code == 0, (code, out, err))
     require(
-        all(f"/glue_mirror.hai_lakehouse.features.{table}" in " ".join(url for _, url in renamed.calls) for table in feature_tables()),
+        f"/glue_mirror.hai_lakehouse.features.{model_sets()['m2']['table']}" in " ".join(url for _, url in renamed.calls),
         "a renamed mirror database is not followed",
     )
     source = (Path(__file__).resolve().parent / "openmetadata_mlmodel_edges.py").read_text()
     require("hai_mirror" not in source and "hai_lakehouse" not in source, "the edge step must not spell a mirror database or table prefix")
 
 
-def one_edge_is_drawn_from_each_feature_table_to_each_registered_model() -> None:
+def each_model_gets_edges_only_from_the_table_of_its_own_model_set() -> None:
+    """The union of the six matrix tables is gone: a model trained on set m2 has one edge, from the m2 table, and no other model's table reaches it."""
     require = base().require
-    models = ("hai_model_HAI_1", "hai_model_HAI_4")
-    world = World(models=models)
+    trained = {"hai_model_HAI_1": "m1", "hai_model_HAI_2": "m2", "hai_model_HAI_4": "m4"}
+    world = World(models={name: [set_tags(key)] for name, key in trained.items()})
     world.catalog_all_tables()
     code, out, err = run(world)
     require(code == 0, (code, out, err))
-    tables = feature_tables()
-    require(len(tables) >= 2 and "feature_matrix_hospital_window" in tables, tables)
-    require(len(world.edge_set) == len(models) * len(tables), f"edges: {len(world.edge_set)}")
-    require(all(source.startswith("table-") and target.startswith("model-") for source, target in world.edge_set), world.edge_set)
-    require(f"{len(models) * len(tables)} edges" in out, out)
-    require("hai_model_HAI_2" in out and "no registered model yet" in out, f"the types without a registered model are reported: {out}")
+    expected = {(f"table-{model_sets()[key]['table']}", world.mlmodels[f"{SERVICE}.{name}"]) for name, key in trained.items()}
+    require(world.edge_set == expected, f"edges differ from the one table of each model's set: {sorted(world.edge_set)}")
+    require(len(world.edge_set) == len(trained), "one edge per model: no union of tables")
+    require("3 edges" in out, out)
+    require("hai_model_HAI_3" in out and "no registered model yet" in out, f"the types without a registered model are reported: {out}")
+    secrets_absent(out, err)
+
+
+def a_model_whose_set_cannot_be_resolved_fails_naming_it() -> None:
+    require = base().require
+    good = {"hai_model_HAI_1": [set_tags("m2")]}
+    unresolved: dict[str, list[dict[str, str]]] = {
+        "no tags": [{}],
+        "no versions": [],
+        "unknown set": [{"feature_set": "m9", "model": "m9_other"}],
+        "unknown slot only": [{"model": "m9_other"}],
+        "set and slot disagree": [{"feature_set": "m2", "model": model_sets()["m4"]["slot"]}],
+        "newest version untagged": [set_tags("m2"), {}],
+    }
+    for label, versions in unresolved.items():
+        world = World(models={**good, "hai_model_HAI_2": versions})
+        world.catalog_all_tables()
+        code, out, err = run(world)
+        require(code == 1 and "hai_model_HAI_2" in err and "hai_model_HAI_1" not in err, (label, code, err))
+        require(not world.edge_set and not any(call[0] in ("PUT", "DELETE") for call in world.calls), f"{label}: a run that cannot resolve a set draws nothing")
+        secrets_absent(out, err)
+    only_slot = World(models={"hai_model_HAI_1": [{"model": model_sets()["m4"]["slot"]}]})
+    only_slot.catalog_all_tables()
+    code, out, err = run(only_slot)
+    require(code == 0 and only_slot.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, f"a slot alone resolves its set: {(code, err)}")
+
+
+def the_newest_version_decides_the_set_and_a_changed_set_replaces_the_edge() -> None:
+    require = base().require
+    world = World(models={"hai_model_HAI_1": [set_tags("m2"), set_tags("m4")]})
+    world.catalog_all_tables()
+    foreign = ("table-another-source", "model-0")
+    world.foreign_edges.add(foreign)
+    code, out, err = run(world)
+    require(code == 0 and world.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, (code, err, world.edge_set))
+    world.versions["hai_model_HAI_1"].append(set_tags("m1"))  # a newer version trained on another set
+    code, out, err = run(world)
+    require(code == 0 and world.edge_set == {(f"table-{model_sets()['m1']['table']}", "model-0")}, f"the old edge must go: {(code, err, world.edge_set)}")
+    require(foreign in world.foreign_edges and any(call[0] == "DELETE" for call in world.calls), "only the model-set tables' stale edges are removed")
+    world.versions["hai_model_HAI_1"].append(set_tags("m2"))
+    world.fail_delete = True
+    code, out, err = run(world)
+    require(code == 1 and "500" in err and "feature_matrix_m1" in err, f"a refused removal fails and names the table: {(code, err)}")
     secrets_absent(out, err)
 
 
@@ -253,7 +330,7 @@ def a_rerun_and_a_second_ingest_keep_the_same_edges() -> None:
     first = set(world.edge_set)
     world.reingest()
     code, out, err = run(world)
-    require(code == 0 and world.edge_set == first and len(first) == len(feature_tables()), (code, out, err))
+    require(code == 0 and world.edge_set == first and len(first) == 1, (code, out, err))
     world.hide_edges = False
     require(all(call[0] != "PATCH" for call in world.calls), "a repeat must not patch")
 
@@ -318,11 +395,16 @@ def a_table_the_catalog_lacks_stops_the_run_before_any_edge() -> None:
     require = base().require
     world = World(models=("hai_model_HAI_1",))
     world.catalog_all_tables()
-    gone = sorted(world.tables)[0]
+    gone = world.fqn(model_sets()["m2"]["table"])
     del world.tables[gone]
     code, out, err = run(world)
     require(code == 1 and gone in err and not world.edge_set, (code, err))
     require(not any(call[0] == "PUT" for call in world.calls), "an edge was drawn although a table is absent")
+    other = World(models=("hai_model_HAI_1",))
+    other.catalog_all_tables()
+    del other.tables[other.fqn(model_sets()["m3"]["table"])]
+    code, out, err = run(other)
+    require(code == 0 and len(other.edge_set) == 1, f"a table of a set that no model uses may be absent: {(code, err)}")
 
 
 def a_refused_edge_or_a_missing_read_back_fails_without_secrets() -> None:
@@ -396,7 +478,7 @@ def the_host_ingest_runs_the_mlflow_source_and_then_the_edges() -> None:
     shown = seen[0]["source"]["serviceConnection"]["config"]
     require(shown["trackingUri"] == MLFLOW_URI == shown["registryUri"] and "${" not in json.dumps(seen[0]), shown)
     require(seen[0]["workflowConfig"]["openMetadataServerConfig"]["hostPort"] == base().HOST_API, "the workflow must aim at the persistent catalog")
-    require(len(world.edge_set) == len(feature_tables()), "the edge step must follow the source")
+    require(len(world.edge_set) == 1, "the edge step must follow the source")
     secrets_absent(out.getvalue(), err.getvalue())
     failing = World(models=("hai_model_HAI_1",), grants="none")
     with tempfile.TemporaryDirectory() as folder:
@@ -594,7 +676,9 @@ def the_setup_talks_only_to_a_loopback_registry() -> None:
 
 CASES = [
     tables_are_named_by_the_mirror_config,
-    one_edge_is_drawn_from_each_feature_table_to_each_registered_model,
+    each_model_gets_edges_only_from_the_table_of_its_own_model_set,
+    a_model_whose_set_cannot_be_resolved_fails_naming_it,
+    the_newest_version_decides_the_set_and_a_changed_set_replaces_the_edge,
     the_edge_request_is_the_probed_one_and_never_a_patch,
     a_rerun_and_a_second_ingest_keep_the_same_edges,
     a_reader_without_the_wildcard_grants_fails_visibly,

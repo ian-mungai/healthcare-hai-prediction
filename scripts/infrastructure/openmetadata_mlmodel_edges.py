@@ -4,9 +4,13 @@ Runs in the ingestion image as the last source of ``openmetadata_host_ingest`` (
 entity named ``<service>.<registered model>`` but sets no feature sources, and the catalog refuses a patch of them (HTTP 400, probe of Nov 17 2026). The edge is
 therefore drawn directly: ``PUT /api/v1/lineage`` from a table to the ``mlmodel``, which the probe showed is accepted, read back and kept by a second ingest.
 
-Which edges: every registered model of the model contract (``data_contracts/training/model_contract.json``) is trained on the feature_matrix tables that the
-feature lists of the registrable slots name (``config/training/feature_lists``). A table is named as OpenMetadata's Glue connector names it, by the one mapping
-function of ``orchestration.ecs_lineage`` (the Glue database of the features layer comes from ``config/lakehouse/athena_mirror.json``, never from this file).
+Which edges: a registered model is trained on its own model set, so it gets an edge only from the table of that set (``feature_matrix_m1`` to
+``feature_matrix_m6``, the ``table`` of each entry of ``model_sets`` in ``data_contracts/features/feature_schema.json``), never from a union of tables. The set
+comes from the tags of the version the connector ingests (the highest version number): ``feature_set`` (the set key, written by ``promotion_check``) and
+``model`` (the slot, which the same file's ``list`` names for each set). Either one resolves the set and, when both are present, they must agree. A model whose
+set cannot be resolved stops the run and is named. When the newest version moves to another set, the edge from the old set's table is deleted, so the lineage
+always says what the ingested version was trained on; an edge from any other table is left alone. A table is named as OpenMetadata's Glue connector names it, by
+the one mapping function of ``orchestration.ecs_lineage`` (the Glue database of the features layer comes from ``config/lakehouse/athena_mirror.json``).
 
 The login: the registry asks for a login on every request and grants nothing by default, so the step reads it as ``MLFLOW_TRACKING_USERNAME`` and
 ``MLFLOW_TRACKING_PASSWORD`` from the task's secrets and holds it in memory only. MLflow answers a reader without grants with an empty registry, which looks
@@ -14,7 +18,8 @@ like no model yet. The step therefore reads the reader's own permissions first a
 model. Then the rules:
 
 - a model that the registry holds but the catalog lacks (the connector read none of them) stops the run and is named;
-- a table that the catalog lacks stops the run before any edge is drawn;
+- a model whose set cannot be resolved stops the run before any edge is drawn;
+- the table of a set that a model uses must be in the catalog, or the run stops before any edge is drawn;
 - no registered model yet (no champion has been registered) is reported and is not a failure;
 - every edge drawn is read back from the lineage of its model.
 
@@ -42,8 +47,10 @@ from scripts.infrastructure.openmetadata_raw_files import Http, WriteFailed, htt
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CONFIG = Path("config/metadata/ingestion/mlflow.json")
 CONTRACT = Path("data_contracts/training/model_contract.json")
-TRAINING = Path("config/training/models.json")
-FEATURE_LISTS = Path("config/training/feature_lists")
+FEATURE_SCHEMA = Path("data_contracts/features/feature_schema.json")
+SET_TAG = "feature_set"  # the version tag that promotion_check writes
+SLOT_TAG = "model"  # the version tag of the slot (data_contracts/training/model_contract.json version_tags)
+MAX_VERSION_PAGES = 20
 MODEL_SERVICE = str(json.loads((ROOT / SOURCE_CONFIG).read_text())["source"]["serviceName"])
 MLFLOW_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):5100")
 READER = "metadata_reader"
@@ -54,7 +61,7 @@ GRANT_KINDS = (
 )  # what the connector reads: the model list, the run of a version and the logged model's signature
 READ_OR_MORE = frozenset({"READ", "USE", "EDIT", "MANAGE"})
 DEADLINE_SECONDS = 600.0
-EDGE_NOTE = "feature table that the registered model is trained on"
+EDGE_NOTE = "table of the model set that the newest version of the registered model is trained on"
 TRACKING_LOGIN = ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
 
 
@@ -67,21 +74,37 @@ def registered_models() -> list[str]:
     return sorted(json.loads((ROOT / CONTRACT).read_text())["registered_models"].values())
 
 
-def feature_tables() -> list[str]:
-    """The feature tables of the feature lists of the registrable slots: each reference names ``<table>:<column>``."""
-    slots = json.loads((ROOT / TRAINING).read_text())["slots"]
-    tables: set[str] = set()
-    for slot in json.loads((ROOT / CONTRACT).read_text())["registrable_slots"]:
-        references = json.loads((ROOT / FEATURE_LISTS / slots[slot]["feature_list"]).read_text())["references"]
-        tables.update(str(reference).split(":", 1)[0] for reference in references)
-    return sorted(tables)
+def model_sets() -> dict[str, dict[str, str]]:
+    """Each model set key with its slot (``list``) and its table, from the feature schema."""
+    sets = json.loads((ROOT / FEATURE_SCHEMA).read_text())["model_sets"]
+    return {str(key): {"slot": str(spec["list"]), "table": str(spec["table"])} for key, spec in sets.items()}
 
 
-def table_fqns() -> dict[str, str]:
-    """The catalog name of each feature table, as the Glue connector creates it."""
+def table_fqn(table: str) -> str:
+    """The catalog name of a features table, as the Glue connector creates it."""
     from orchestration import ecs_lineage
 
-    return {table: ecs_lineage.connector_fqn(ecs_lineage.dataset("features", table)) for table in feature_tables()}
+    return ecs_lineage.connector_fqn(ecs_lineage.dataset("features", table))
+
+
+def resolve_set(tags: Mapping[str, str]) -> str:
+    """The model set a version was trained on, from its tags. Raises ``StepFailed`` with the reason when no set resolves or the tags disagree."""
+    sets = model_sets()
+    found: dict[str, str] = {}
+    if SET_TAG in tags:
+        if tags[SET_TAG] not in sets:
+            raise StepFailed(f"its {SET_TAG} tag {tags[SET_TAG]!r} is not a model set")
+        found[SET_TAG] = tags[SET_TAG]
+    if SLOT_TAG in tags:
+        owners = [key for key, spec in sets.items() if spec["slot"] == tags[SLOT_TAG]]
+        if not owners:
+            raise StepFailed(f"its {SLOT_TAG} tag {tags[SLOT_TAG]!r} is not the slot of a model set")
+        found[SLOT_TAG] = owners[0]
+    if not found:
+        raise StepFailed(f"its newest version has neither a {SET_TAG} nor a {SLOT_TAG} tag")
+    if len(set(found.values())) != 1:
+        raise StepFailed(f"its {SET_TAG} tag names {found[SET_TAG]} but its {SLOT_TAG} tag names {found[SLOT_TAG]}")
+    return next(iter(found.values()))
 
 
 def registry_address_is_valid(uri: str) -> bool:
@@ -127,8 +150,8 @@ def reader_may_read(permissions: Any) -> bool:
     return all(kind in granted for kind in GRANT_KINDS)
 
 
-def existing_models(client: Client, registry: str, headers: Mapping[str, str]) -> list[str]:
-    """The contract's registered models that the registry holds. A missing one is not an error: its type has no champion yet."""
+def existing_models(client: Client, registry: str, headers: Mapping[str, str]) -> dict[str, str]:
+    """The contract's registered models that the registry holds, each with its model set key. A missing one is not an error: its type has no champion yet."""
     status, permissions = client.call("GET", f"{registry}/api/3.0/mlflow/users/current/permissions", headers)
     if status != 200:
         raise StepFailed(f"the registry refused the login: HTTP {status} on the permissions of the reader")
@@ -137,14 +160,44 @@ def existing_models(client: Client, registry: str, headers: Mapping[str, str]) -
             f"the registry login is not {READER} with READ on every registered model, experiment and logged model (resource_pattern *): "
             "such a reader sees an empty registry, so the step stops instead of reading that as no model yet"
         )
-    found = []
+    found = {}
+    unresolved = []
     for name in registered_models():
         status, _ = client.call("GET", f"{registry}/api/2.0/mlflow/registered-models/get?{urllib.parse.urlencode({'name': name})}", headers)
-        if status == 200:
-            found.append(name)
-        elif status != 404:
+        if status == 404:
+            continue
+        if status != 200:
             raise StepFailed(f"the registry answered HTTP {status} for the registered model {name}")
+        try:
+            found[name] = resolve_set(newest_tags(client, registry, headers, name))
+        except StepFailed as error:
+            unresolved.append(f"{name}: {error}")
+    if unresolved:
+        raise StepFailed(f"the model set of {len(unresolved)} registered models cannot be resolved, so no edge was drawn: " + "; ".join(unresolved))
     return found
+
+
+def newest_tags(client: Client, registry: str, headers: Mapping[str, str], name: str) -> dict[str, str]:
+    """The tags of the highest-numbered version of a registered model, which is the version the MLflow source ingests."""
+    newest: tuple[int, dict[str, str]] | None = None
+    token = ""
+    for _ in range(MAX_VERSION_PAGES):
+        query = {"filter": f"name='{name}'", "max_results": "200", **({"page_token": token} if token else {})}
+        status, page = client.call("GET", f"{registry}/api/2.0/mlflow/model-versions/search?{urllib.parse.urlencode(query)}", headers)
+        if status != 200 or not isinstance(page, dict):
+            raise StepFailed(f"the registry answered HTTP {status} when the versions were listed")
+        for version in page.get("model_versions") or []:
+            number = int(version["version"])
+            if newest is None or number > newest[0]:
+                newest = (number, {str(tag["key"]): str(tag["value"]) for tag in version.get("tags") or []})
+        token = str(page.get("next_page_token") or "")
+        if not token:
+            break
+    else:
+        raise StepFailed(f"more than {MAX_VERSION_PAGES} pages of versions")
+    if newest is None:
+        raise StepFailed("it has no version")
+    return newest[1]
 
 
 def catalog_id(client: Client, api: str, headers: Mapping[str, str], kind: str, fqn: str) -> str | None:
@@ -156,32 +209,48 @@ def catalog_id(client: Client, api: str, headers: Mapping[str, str], kind: str, 
     return str(entity["id"])
 
 
-def draw(client: Client, api: str, headers: Mapping[str, str], models: list[str]) -> int:
-    """Check every model and table first, then draw each edge and read it back. Returns the number of edges."""
+def lineage_sources(client: Client, api: str, headers: Mapping[str, str], model: str) -> set[str]:
+    """The IDs of the entities with an edge into the model, as the lineage read of the catalog shows them."""
+    fqn = urllib.parse.quote(f"{MODEL_SERVICE}.{model}", safe="")
+    status, lineage = client.call("GET", f"{api}/v1/lineage/mlmodel/name/{fqn}?upstreamDepth=2&downstreamDepth=0", headers)
+    if status != 200 or not isinstance(lineage, dict):
+        raise StepFailed(f"the lineage of {model} cannot be read: HTTP {status}")
+    return {str(edge.get("fromEntity")) for edge in lineage.get("upstreamEdges", [])}
+
+
+def draw(client: Client, api: str, headers: Mapping[str, str], models: Mapping[str, str]) -> tuple[int, int]:
+    """Check every model and table first, then draw each model's one edge, remove the edges of its other sets' tables and read the lineage back.
+
+    Returns the number of edges drawn and the number of stale edges removed."""
     model_ids = {name: catalog_id(client, api, headers, "mlmodels", f"{MODEL_SERVICE}.{name}") for name in models}
     lacking = [name for name, found in model_ids.items() if found is None]
     if lacking:
         raise StepFailed(f"the registry holds {', '.join(lacking)} but the catalog has no MlModel of it: the MLflow source read none of them")
-    names = table_fqns()
-    table_ids = {table: catalog_id(client, api, headers, "tables", fqn) for table, fqn in names.items()}
-    absent = [names[table] for table, found in table_ids.items() if found is None]
+    sets = model_sets()
+    names = {key: table_fqn(spec["table"]) for key, spec in sets.items()}
+    table_ids = {key: catalog_id(client, api, headers, "tables", fqn) for key, fqn in names.items()}
+    absent = sorted(names[key] for key in set(models.values()) if table_ids[key] is None)
     if absent:
         raise StepFailed(f"the catalog has no table {', '.join(absent)}: no edge was drawn")
-    count = 0
-    for name in models:
-        for table, table_id in table_ids.items():
-            edge = {"fromEntity": {"id": table_id, "type": "table"}, "toEntity": {"id": model_ids[name], "type": "mlmodel"}, "description": EDGE_NOTE}
-            status, _ = client.call("PUT", f"{api}/v1/lineage", headers, {"edge": edge})
-            if status != 200:
-                raise StepFailed(f"the catalog refused the edge from {names[table]} to {name}: HTTP {status}")
-            count += 1
-        status, lineage = client.call(
-            "GET", f"{api}/v1/lineage/mlmodel/name/{urllib.parse.quote(f'{MODEL_SERVICE}.{name}', safe='')}?upstreamDepth=1&downstreamDepth=0", headers
-        )
-        shown = {edge.get("fromEntity") for edge in (lineage or {}).get("upstreamEdges", [])} if status == 200 and isinstance(lineage, dict) else set()
-        if not set(table_ids.values()) <= shown:
-            raise StepFailed(f"the lineage of {name} does not show all {len(table_ids)} edges when it is read back (HTTP {status})")
-    return count
+    count = stale = 0
+    for name, key in models.items():
+        edge = {"fromEntity": {"id": table_ids[key], "type": "table"}, "toEntity": {"id": model_ids[name], "type": "mlmodel"}, "description": EDGE_NOTE}
+        status, _ = client.call("PUT", f"{api}/v1/lineage", headers, {"edge": edge})
+        if status != 200:
+            raise StepFailed(f"the catalog refused the edge from {names[key]} to {name}: HTTP {status}")
+        count += 1
+        shown = lineage_sources(client, api, headers, name)
+        if table_ids[key] not in shown:
+            raise StepFailed(f"the lineage of {name} does not show the edge from {names[key]} when it is read back")
+        for other, other_id in table_ids.items():
+            if other != key and other_id in shown:
+                status, _ = client.call("DELETE", f"{api}/v1/lineage/table/{other_id}/mlmodel/{model_ids[name]}", headers)
+                if status != 200:
+                    raise StepFailed(f"the catalog refused to remove the stale edge from {names[other]} to {name}: HTTP {status}")
+                stale += 1
+        if stale and any(other_id in lineage_sources(client, api, headers, name) for other, other_id in table_ids.items() if other != key):
+            raise StepFailed(f"the lineage of {name} still shows an edge from a table of another model set after the removal")
+    return count, stale
 
 
 def run(api: str, token: str, environment: Mapping[str, str], http: Http = http_request) -> int:
@@ -203,13 +272,14 @@ def run(api: str, token: str, environment: Mapping[str, str], http: Http = http_
         if not models:
             sys.stdout.write("openmetadata_mlmodel_edges: no registered model yet, so no edge is drawn\n")
             return 0
-        count = draw(client, api, {"Authorization": f"Bearer {token}"}, models)
+        count, stale = draw(client, api, {"Authorization": f"Bearer {token}"}, models)
     except StepFailed as error:
         sys.stderr.write(f"openmetadata_mlmodel_edges: {error}\n")
         return 1
     waiting = [name for name in registered_models() if name not in models]
     note = f"; no registered model yet: {', '.join(waiting)}" if waiting else ""
-    sys.stdout.write(f"openmetadata_mlmodel_edges: {len(models)} models, {len(table_fqns())} tables, {count} edges drawn and read back{note}\n")
+    removed = f", {stale} stale edges removed" if stale else ""
+    sys.stdout.write(f"openmetadata_mlmodel_edges: {len(models)} models, {count} edges drawn and read back{removed}{note}\n")
     return 0
 
 
