@@ -13,6 +13,7 @@ import importlib
 import json
 import os
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,24 @@ from scripts.lakehouse.run_launcher_e2e import GIB, Env, creates, host_tools
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
+# The launcher's own default probe limit (10 s). The launcher E2E default of 2 s failed these scenarios when parallel load delayed the probe event.
+PROBE_LIMIT = 10.0
 SERVICES = ("spark", "analytics", "analytics-dbt", "analytics-ui")
+
+
+def delay_probe_events(env: Env, seconds: float) -> None:
+    """Make the fake daemon deliver the probe container's events late, as a loaded machine does."""
+    publish = env.daemon.publish
+
+    def delayed(action: str, container: dict[str, Any], **extra: str) -> None:
+        if "hai.probe" in container["Config"]["Labels"]:
+            timer = threading.Timer(seconds, publish, args=(action, container), kwargs=extra)
+            timer.daemon = True
+            timer.start()
+        else:
+            publish(action, container, **extra)
+
+    env.daemon.publish = delayed
 
 
 def scenario(
@@ -34,10 +52,16 @@ def scenario(
     docker_cpus: int = 16,
     total: int = 32 * GIB,
     usage: int | None = 3 * GIB,
+    probe_delay: float = 0.0,
+    never_acknowledge: bool = False,
+    timings: dict[str, float] | None = None,
 ) -> tuple[dict[str, Any], Env, dict[str, str]]:
     """Run the launch planner twice against synthetic readings; returns the results, the environment (still open) and the command environment."""
-    env = Env(name, report)
+    env = Env(name, report, timings={"probe_timeout": PROBE_LIMIT, **(timings or {})})
     env.daemon.mem_total = total
+    env.daemon.suppress_probe_events = never_acknowledge
+    if probe_delay:
+        delay_probe_events(env, probe_delay)
     env.daemon.cpus = docker_cpus
     if usage is not None:
         env.daemon.create_rogue("other_project", {}, running=True)
@@ -90,6 +114,10 @@ def main() -> int:
         # Free 6 - 2 = 4 GiB meets the floor but its 75% (3 GiB) does not.
         "cap_below_floor": ({"mac_gib": 6}, "after the 75% allocation cap"),
         "bad_total": ({"total": 0}, "Docker memory"),
+        # The probe's acknowledgment arrives 3 s late, as under the gate's parallel load: the Docker memory error must still be the one reported.
+        "bad_total_slow_probe": ({"total": 0, "probe_delay": 3.0}, "Docker memory"),
+        # The refusal still fires: a probe that is never acknowledged within its limit is reported, not turned into a plan.
+        "probe_never_acknowledged": ({"never_acknowledge": True, "timings": {"probe_timeout": 1.5}}, "not acknowledged"),
         "zero_docker_cpus": ({"docker_cpus": 0}, "CPU count"),
         "invalid_host_cpus": ({"host_cpus": "invalid"}, "CPU count"),
     }
