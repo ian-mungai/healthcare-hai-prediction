@@ -1,6 +1,6 @@
 -- Fails for each column of a published state-source table (staging views included) that is a withheld person, phone or address column of the HCAI
--- utilization files, or whose name says so, and for each column of the held rows that could carry rejected text. Bronze redacts these cells; silver
--- never reads them.
+-- utilization files, or whose name says so, that is a pseudonym column, and for each column of the held rows that could carry rejected text. Bronze
+-- pseudonymizes the person cells; silver never reads them and publishes no pseudonym.
 with
 
 withheld as (
@@ -34,6 +34,7 @@ where
         or schema_columns.column_name like '%admin%'
         or schema_columns.column_name like '%prep_name%'
         or schema_columns.column_name like '%street%'
+        or schema_columns.column_name like '%pseudonym%'
         or (schema_columns.table_name = 'int_state_source_holds' and schema_columns.column_name like '%published%')
         or (schema_columns.table_name = 'stg_hcai_finance_csv' and schema_columns.column_name in ('values', 'u_id'))
     )

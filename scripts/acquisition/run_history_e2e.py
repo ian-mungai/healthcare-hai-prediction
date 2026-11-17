@@ -337,7 +337,7 @@ def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries:
     release_scenarios(scenario, extend, execute)
 
 
-# The person, contact and address columns of the HCAI utilization files that the release scope must name as never read by silver.
+# The person, contact and address columns of the HCAI utilization files that the release scope must name as never read by silver; bronze pseudonymizes them.
 PRIVACY_EXCLUSIONS = ("administrator", "report-preparer", "phone", "street address", "parent corporation")
 
 
@@ -346,10 +346,16 @@ def privacy_problems(release: dict[str, Any]) -> list[str]:
     match = re.search(r"silver never reads the (.+?) columns", release["scope"])
     named = match.group(1) if match else ""
     problems = [f"the scope does not say silver never reads the {name} columns" for name in PRIVACY_EXCLUSIONS if name not in named]
-    if "bronze redacts the person cells at load" not in release["scope"]:
-        problems.append("the scope does not say bronze redacts the person cells at load")
-    if "administrator" not in release["hold"] or "bronze redacts these cells at load" not in release["hold"] or "silver excludes them" not in release["hold"]:
-        problems.append("the hold does not name the administrator details, the bronze redaction and the silver exclusion")
+    if "bronze pseudonymizes the person cells at load" not in release["scope"]:
+        problems.append("the scope does not say bronze pseudonymizes the person cells at load")
+    if "silver publishes no pseudonym" not in release["scope"]:
+        problems.append("the scope does not say silver publishes no pseudonym")
+    if (
+        "administrator" not in release["hold"]
+        or "bronze pseudonymizes these cells at load" not in release["hold"]
+        or "silver excludes them" not in release["hold"]
+    ):
+        problems.append("the hold does not name the administrator details, the bronze pseudonymization and the silver exclusion")
     return problems
 
 
@@ -422,7 +428,16 @@ def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
             lambda name=name: mutation_caught(lambda r: r | {"scope": r["scope"].replace(name, "")}),
         )
     scenario("hold_without_the_silver_exclusion_fails", lambda: mutation_caught(lambda r: r | {"hold": r["hold"].replace("silver excludes them", "")}))
-    scenario("hold_without_the_bronze_redaction_fails", lambda: mutation_caught(lambda r: r | {"hold": r["hold"].replace("bronze redacts", "bronze keeps")}))
+    scenario(
+        "hold_without_the_bronze_pseudonymization_fails",
+        lambda: mutation_caught(lambda r: r | {"hold": r["hold"].replace("bronze pseudonymizes", "bronze keeps")}),
+    )
+    scenario(
+        "scope_that_says_bronze_redacts_fails", lambda: mutation_caught(lambda r: r | {"scope": r["scope"].replace("bronze pseudonymizes", "bronze redacts")})
+    )
+    scenario(
+        "scope_without_the_pseudonym_exclusion_fails", lambda: mutation_caught(lambda r: r | {"scope": r["scope"].replace("silver publishes no pseudonym", "")})
+    )
     scenario(
         "unlisted_release_record_refused",
         lambda: require(not s3_store.released_by_record(source, {"access_release_sha256": "0" * 64}), "Unlisted record accepted"),

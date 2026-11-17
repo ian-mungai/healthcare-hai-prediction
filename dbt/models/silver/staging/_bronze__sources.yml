@@ -353,7 +353,7 @@ sources:
             description: Row position within the file, from 1.
             data_tests: [not_null]
       - name: hcai_util_pages_csv
-        description: California HCAI annual hospital utilization, one row per facility and operating period (the page files), every stored copy. Bronze redacts the person cells.
+        description: California HCAI annual hospital utilization, one row per facility and operating period (the page files), every stored copy. Bronze pseudonymizes the person cells; silver reads none of them.
         meta:
           classification: Public
         columns:
