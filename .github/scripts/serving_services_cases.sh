@@ -88,4 +88,52 @@ check "a change of the serving release configuration selects the group" selected
 check "a change of the Redis ACL cases selects the group" selected .github/scripts/redis_acl_cases.sh
 check "an unrelated runner does not select the group" test "$(selected scripts/infrastructure/run_policy_e2e.py && echo selected || echo not)" = not
 
+# --- the proofs keep their reports, not their copies of the stack ----------------------------------------------------------------------------------------
+# Each proof copies the stack with its provider binary (several hundred MB) for the first plan and for every planted defect. The copies of a passing run are
+# removed and the plans, states and reports stay. The copy of a defect that no check caught, and every copy of a failing run, stay for diagnosis.
+# The first case plants a real folder tree and calls the shared helper; the rest read that each runner uses it for every copy.
+python_for_cases="${python_bin:-.venv/bin/python}"
+retention_cases() {
+  local work
+  work="$(mktemp -d)"
+  "$python_for_cases" - "$work" << 'PY'
+import sys
+from pathlib import Path
+
+from scripts.infrastructure import run_serving_release_real_e2e as proof
+
+work = Path(sys.argv[1])
+
+
+def plant(name: str) -> Path:
+    copy = work / name
+    (copy / ".terraform/providers").mkdir(parents=True)
+    (copy / ".terraform/providers/provider_binary").write_bytes(b"x" * 4096)
+    (copy / "main.tf").write_text("resource {}\n")
+    return copy
+
+
+caught, uncaught, base = plant("defect_0"), plant("defect_1"), plant("stack")
+(work / "report.json").write_text("{}\n")
+proof.discard_copy(caught, keep=False)
+proof.discard_copy(uncaught, keep=True)
+proof.discard_copy(base, keep=False)
+checks = {
+    "the copy of a caught defect is removed": not caught.exists(),
+    "the copy of an uncaught defect stays for diagnosis": (uncaught / ".terraform/providers/provider_binary").is_file(),
+    "the base copy of a passing run is removed": not base.exists(),
+    "the report stays": (work / "report.json").is_file(),
+}
+failed = [name for name, ok in checks.items() if not ok]
+sys.exit("; ".join(failed) if failed else 0)
+PY
+  local status=$?
+  rm -rf "$work"
+  return "$status"
+}
+check "a passing proof removes its copies of the stack and a failing proof keeps them" retention_cases
+runner_discards() { [[ "$(grep -c "discard_copy(" "scripts/infrastructure/$1.py")" -ge "$2" ]]; }
+check "the release check on the real definitions discards each defect copy and the base copy" runner_discards run_serving_release_real_e2e 2
+check "the serving transition proof discards each defect copy and the base copy" runner_discards run_serving_transition_e2e 2
+
 [[ $failures -eq 0 ]]

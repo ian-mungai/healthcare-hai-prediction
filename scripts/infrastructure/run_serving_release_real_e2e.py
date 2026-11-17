@@ -84,6 +84,12 @@ def variables() -> dict[str, Any]:
     }
 
 
+def discard_copy(copy: Path, keep: bool) -> None:
+    """Remove a copy of the stack, which holds the provider binary, unless it is evidence of a failure: the plans, states and reports stay either way."""
+    if not keep:
+        shutil.rmtree(copy)
+
+
 def terraform(arguments: list[str], cwd: Path, extra_environment: Mapping[str, str] | None = None) -> tuple[int, str]:
     """Run terraform in ``cwd`` with no AWS profile or credential of the caller, and return its exit code and combined text."""
     # Only what terraform needs: the caller's PATH (CI puts the pinned terraform there) and the provider cache. No AWS profile, key or token passes.
@@ -310,9 +316,11 @@ def run(output: Path, plugin_directory: Path | None, source: Path = STACK) -> di
         definitions = plan_definitions(planted)
         if isinstance(definitions, str):
             report["defects"].append({"defect": name, "caught": True, "detail": "the stack no longer plans"})
+            discard_copy(planted, keep=False)
             continue
         code, text = check(definitions["model_api"], "model_api")
         report["defects"].append({"defect": name, "caught": code == 1, "detail": text[-160:]})
+        discard_copy(planted, keep=code != 1)
     report["passed"] = (
         bool(report["cases"])
         and all(item["passed"] for item in report["cases"])
@@ -330,6 +338,8 @@ def main() -> int:
     arguments = parser.parse_args()
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())
+    if (output / "stack").is_dir():
+        discard_copy(output / "stack", keep=not report["passed"])
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"event=serving_release_real_e2e passed={report['passed']}\n")
     for item in report["cases"]:

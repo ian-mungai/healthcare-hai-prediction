@@ -385,13 +385,11 @@ def run(output: Path, plugin_directory: Path | None, source: Path = release.STAC
         for name, file, mutate in DEFECTS if proved else []:
             planted = output / f"defect_{len(report['defects'])}"
             shutil.copytree(base, planted, ignore=shutil.ignore_patterns("plan.bin"))
-            try:
-                (planted / file).write_text(mutate((planted / file).read_text(encoding="utf-8")), encoding="utf-8")
-                found = checks(planted, output, f"defect_{len(report['defects'])}")
-            finally:
-                # Each copy holds the provider binary; keep one at a time so the hosted runner's disk does not fill.
-                shutil.rmtree(planted, ignore_errors=True)
+            (planted / file).write_text(mutate((planted / file).read_text(encoding="utf-8")), encoding="utf-8")
+            found = checks(planted, output, f"defect_{len(report['defects'])}")
             caught = {kind: items[:2] for kind, items in found.items() if items}
+            # Each copy holds the provider binary: keep one at a time, and only the copy of an uncaught defect stays as evidence.
+            release.discard_copy(planted, keep=not caught)
             report["defects"].append({"defect": name, "caught": bool(caught), "caught_by": caught})
     finally:
         # The step, the stand-in and the definitions are scratch files of this run.
@@ -412,6 +410,8 @@ def main() -> int:
     arguments = parser.parse_args()
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())
+    if (output / "stack").is_dir():
+        release.discard_copy(output / "stack", keep=not report["passed"])
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"event=serving_transition_e2e passed={report['passed']}\n")
     for kind, items in report["checks"].items():
