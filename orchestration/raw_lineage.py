@@ -85,6 +85,11 @@ SHA256 = re.compile(r"[a-f0-9]{64}")
 
 def loaded_objects(record: Any, key: str, run_id: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """The loaded objects and the table snapshots of a bronze run record, after every shape rule; a broken record is refused with its key."""
+    if isinstance(record, dict) and set(record) == BRONZE_RECORD_KEYS - {"skipped_tables"}:
+        raise LineageRefused(
+            f"{key}: has the older shape without skipped_tables, which the bronze check phase wrote before it named the tables it skipped; "
+            "a record of that shape is not read, so run bronze again to write a new one"
+        )
     if not isinstance(record, dict) or set(record) != BRONZE_RECORD_KEYS or record["schema_version"] != 1:
         raise LineageRefused(f"{key}: does not have exactly the keys {sorted(BRONZE_RECORD_KEYS)} of schema version 1")
     if record["run_id"] != run_id:

@@ -107,6 +107,13 @@ def test_the_record_names_the_tables_the_stage_left_out_with_their_reason_and_th
     raw_lineage.loaded_objects(document, "check.json", RUN)
 
 
+def test_a_record_of_the_older_shape_without_skipped_tables_is_refused_with_a_message_that_says_why() -> None:
+    document = record()
+    del document["skipped_tables"]
+    with pytest.raises(LineageRefused, match=r"check\.json.*older shape.*skipped_tables"):
+        raw_lineage.loaded_objects(document, "check.json", RUN)
+
+
 @pytest.mark.parametrize(
     "bad",
     [

@@ -408,7 +408,11 @@ def bronze_record_refusals() -> None:
     """The bronze run record, which the catalog writer reads for each table's raw files, is refused by its key and the rule when it is missing, unreadable or
     wrong."""
     first = OBJECTS[0]
+    older = check_record()
+    older.pop("skipped_tables")
     cases: list[tuple[Any, str]] = [
+        (older, "skipped_tables"),
+        (check_record(skipped_tables="empty_data"), "skipped tables"),
         (check_record(run_id="silver_fffffff0"), "another run"),
         (check_record(target="qualify"), "real target"),
         (check_record(objects=[]), "no loaded object"),

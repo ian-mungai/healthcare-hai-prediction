@@ -537,6 +537,7 @@ def bronze_record(files: dict[str, int], run: str = BRONZE_RUN, version: str = "
         "metadata_generation": "generation-0001",
         "snapshots": {table: 50 + index for index, table in enumerate(tables)},
         "objects": objects,
+        "skipped_tables": [],
     }
 
 
@@ -854,6 +855,14 @@ def raw_files_writer_refuses_and_fails_visibly() -> None:
     wrong = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1}, run="silver_ffffffff")).encode()}
     code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), wrong, FakeCatalog({}))
     require(code == 1 and BRONZE_KEY in err and "another run" in err, (code, err))
+    older = bronze_record({"cms_hai_hospital": 1})
+    older.pop("skipped_tables")  # a record of the shape that the bronze check phase wrote before it named the tables it skipped
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), {BRONZE_KEY: json.dumps(older).encode()}, catalog)
+    require(
+        code == 1 and BRONZE_KEY in err and "skipped_tables" in err and "older" in err and not catalog.calls,
+        f"an old-shape record is refused by name: {code}, {err}",
+    )
     two = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1, "cms_hai_state": 1})).encode()}
     catalog = FakeCatalog({"cms_hai_hospital": ""})
     code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), two, catalog)
