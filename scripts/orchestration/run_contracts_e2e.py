@@ -119,74 +119,118 @@ def ledger() -> dict[str, bool]:
     return results
 
 
-LEGACY_GROUPS = (
-    "cloud admission before a task is accepted",
-    "FARGATE placement of a started task, target ecs",
-    "FARGATE_SPOT placement of a started task, target auto",
-)
+def docker_line() -> dict[str, Any]:
+    """A valid intent line of a docker submission that holds one running docker placement, the base of every refused variant below."""
+    line = copy.deepcopy(load("ledger_states.json")["finished"][0])
+    return {
+        **line,
+        "target": "docker",
+        "execution": {
+            "version": 1,
+            "requested_target": "docker",
+            "queued_at": 1791718801,
+            "deadline_utc": 1791722401,
+            "catalog_epoch": None,
+            "live_try": "hai_try_1",
+            "placements": [
+                {
+                    "try_id": "hai_try_1",
+                    "target": "docker",
+                    "capacity_provider": None,
+                    "state": "running",
+                    "reason": "capacity",
+                    "created_at": 1791718801.0,
+                    "deadline_utc": 1791722401,
+                    "cpu": 1024,
+                    "memory_mib": 2048,
+                    "storage_gib": 21,
+                    "task_arn": None,
+                    "started": True,
+                }
+            ],
+        },
+    }
 
 
-def ledger_history() -> dict[str, bool]:
-    """Old ecs and Fargate ledger lines and requests still read, group and recover; only the admission of a new submission refuses ecs."""
+def retired_ecs() -> dict[str, bool]:
+    """A line or request that names the ecs target or a Fargate capacity provider is refused by the schemas, by the ledger and by the fake's admission.
+
+    Each refusal must name the offending value, so an unrelated error cannot pass it. The unchanged docker line and the auto request pass beside them.
+    """
     import tempfile
 
-    from orchestration.fake import FakeSubmissions
-    from orchestration.interface import Handle, SubmissionRequest
-    from scripts.orchestration.ledger import Ledger
+    from scripts.orchestration.ledger import Ledger, LedgerError
 
-    results: dict[str, bool] = {}
-    states = load("ledger_states.json")
-    for case in LEGACY_GROUPS:
-        lines = states[case]
-        with tempfile.TemporaryDirectory(prefix="ledger_history_") as folder:
-            store = Ledger(Path(folder))
-            run = lines[0]["run_id"]
-            path = store.path(run)
-            path.write_text("".join(json.dumps(line) + "\n" for line in lines))
-            before = path.read_bytes()
-            read = store.read(run)
-            results[f"old ledger history reads: {case}"] = read == lines
-            results[f"old ledger history groups by submission: {case}"] = sum(len(group) for group in store.submissions(run).values()) == len(lines)
-            results[f"old ledger history is read without a change: {case}"] = path.read_bytes() == before
-    finished = copy.deepcopy(states["finished"])
-    for line in finished:
-        line["target"] = "ecs"
-        line.update(
-            request_version=2,
-            dag_id="synthetic_dag",
-            task_id="silver_build",
-            dag_run_id="manual__synthetic",
-            lineage={"version": 1, "inputs": [], "outputs": []},
-        )
     check = validator("ledger_line.schema.json")
-    results["old ecs request lines validate"] = all(not list(check.iter_errors(line)) for line in finished)
-    submissions = FakeSubmissions(load("job_templates.json"))
-    submissions.ledger = finished
-    handle = Handle(finished[0]["submission_id"], finished[0]["container_name"])
+    execution = validator("execution.schema.json")
+    base = docker_line()
+    results: dict[str, bool] = {"a docker line with a docker placement validates": not list(check.iter_errors(base))}
+    results["its execution record validates alone"] = not list(execution.iter_errors(base["execution"]))
+
+    def variant(change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        line = copy.deepcopy(base)
+        change(line)
+        return line
+
+    def provider(value: str) -> Callable[[dict[str, Any]], None]:
+        return lambda line: line["execution"]["placements"][0].update(capacity_provider=value)
+
+    cases: dict[str, tuple[dict[str, Any], str]] = {
+        "target ecs": (variant(lambda line: line.update(target="ecs")), "ecs"),
+        "requested target ecs": (variant(lambda line: line["execution"].update(requested_target="ecs")), "ecs"),
+        "a placement on the ecs target": (variant(lambda line: line["execution"]["placements"][0].update(target="ecs")), "ecs"),
+        "a placement with the FARGATE provider": (variant(provider("FARGATE")), "FARGATE"),
+        "a placement with the FARGATE_SPOT provider": (variant(provider("FARGATE_SPOT")), "FARGATE_SPOT"),
+    }
+    for name, (line, value) in cases.items():
+        errors = [error.message for error in check.iter_errors(line)]
+        results[f"ledger line refused: {name}"] = bool(errors) and all(value in message and "is not one of" in message for message in errors)
+        with tempfile.TemporaryDirectory(prefix="ledger_retired_") as folder:
+            store = Ledger(Path(folder))
+            path = store.path(line["run_id"])
+            path.write_text(json.dumps(line) + "\n")
+            try:
+                store.read(line["run_id"])
+                reason = ""
+            except LedgerError as refusal:
+                reason = str(refusal)
+            results[f"Ledger.read refuses a line with {name}"] = value in reason and "is not one of" in reason
+            try:
+                store.append(line)
+                appended = True
+            except LedgerError:
+                appended = False
+            results[f"Ledger.append refuses a line with {name}"] = not appended
+    for name, value in (("execution record with requested target ecs", "ecs"), ("execution record with the FARGATE provider", "FARGATE")):
+        record = copy.deepcopy(base["execution"])
+        if value == "ecs":
+            record["requested_target"] = value
+        else:
+            record["placements"][0]["capacity_provider"] = value
+        errors = [error.message for error in execution.iter_errors(record)]
+        results[f"execution schema refuses an {name}"] = bool(errors) and all(value in message and "is not one of" in message for message in errors)
+    request = validator("submission_request.schema.json")
+    ecs_request = {**load("submission_requests.json")["accepted"][0], "target": "ecs"}
+    errors = [error.message for error in request.iter_errors(ecs_request)]
+    results["request refused: target ecs"] = bool(errors) and all("ecs" in message and "is not one of" in message for message in errors)
     try:
-        recovered = SubmissionRequest.from_record(finished[0])
-        results["old ecs request is recovered from its ledger line"] = recovered.target == "ecs"
+        SubmissionRequest.from_record({**ecs_request, "request_version": 2})
+        recovered = True
     except SubmissionRefused:
-        results["old ecs request is recovered from its ledger line"] = False
-    results["old ecs submission status reads"] = submissions.status(handle).state == State.SUCCEEDED
-    results["old ecs submission record reads"] = submissions.record(handle) == finished[-1]
-    submissions.ledger = finished[:-1]
-    try:
-        submissions.cancel(handle)
-        results["old ecs submission is cancelled from its ledger line"] = True
-    except SubmissionRefused:
-        results["old ecs submission is cancelled from its ledger line"] = False
+        recovered = False
+    results["a persisted request with target ecs is not recovered"] = not recovered
     fresh = FakeSubmissions(load("job_templates.json"))
     new = SubmissionRequest("silver_build", RUN, "fixture", 9, "synthetic_dag", "silver_build", "manual__new", target="ecs")
     try:
         fresh.submit(new)
-        refused = False
-    except SubmissionRefused:
-        refused = True
-    results["a new ecs submission is refused and writes no ledger line"] = refused and fresh.ledger == []
-    results["a new auto submission is admitted"] = fresh.submit(
-        SubmissionRequest("silver_build", RUN, "fixture", 10, "synthetic_dag", "silver_build", "manual__new")
-    ).submission_id.endswith(":10")
+        message = ""
+    except SubmissionRefused as refusal:
+        message = str(refusal)
+    results["a new ecs submission is refused by the request schema and writes no ledger line"] = "is not one of" in message and fresh.ledger == []
+    for target in (None, "auto", "docker"):
+        admitted = FakeSubmissions(load("job_templates.json"))
+        handle = admitted.submit(SubmissionRequest("silver_build", RUN, "fixture", 10, "synthetic_dag", "silver_build", "manual__new", target=target))
+        results[f"a new submission with target {target} is admitted"] = handle.submission_id.endswith(":10") and bool(admitted.ledger)
     return results
 
 
@@ -271,7 +315,7 @@ def main() -> int:
         "schemas": schemas,
         "launch specifications": templates,
         "ledger": ledger,
-        "ledger history": ledger_history,
+        "retired ecs target and Fargate providers": retired_ecs,
         "submission requests": requests,
         "fake submissions": fake,
     }

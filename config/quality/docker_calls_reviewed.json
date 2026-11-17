@@ -1612,7 +1612,7 @@
       "file_sha256": "8b68fb9bd3a9b120917020c467561952b36acd00194b5d403535e3b055875f4e",
       "dependencies": {
         "orchestration/ingestion_schedule.py": "sha256:5389d6543b521445459a1f135859b6af5ac728c5f3ad33e4918928cb8c69d8c0",
-        "orchestration/interface.py": "sha256:5c5c67a829b1a8504da4821b1b50ee302b40f9d2537e21d5b23bd0307704d8c5",
+        "orchestration/interface.py": "sha256:1b42a78e7c86b6357f59ba7ec6ef83e733a0e3c4c2c91e92dbf217fc1f966892",
         "orchestration/training_contract.py": "sha256:7dc47728636801a39dffa3cc3dc3e02937726e8619dd8c69207bf122122534b3"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",

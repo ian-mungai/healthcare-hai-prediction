@@ -183,7 +183,6 @@
             "target": {
               "enum": [
                 "auto",
-                "ecs",
                 "docker"
               ]
             }
@@ -331,7 +330,6 @@
     "target": {
       "enum": [
         "auto",
-        "ecs",
         "docker"
       ]
     },
@@ -357,7 +355,6 @@
         "requested_target": {
           "enum": [
             "auto",
-            "ecs",
             "docker"
           ]
         },
@@ -409,14 +406,11 @@
               },
               "target": {
                 "enum": [
-                  "ecs",
                   "docker"
                 ]
               },
               "capacity_provider": {
                 "enum": [
-                  "FARGATE_SPOT",
-                  "FARGATE",
                   null
                 ]
               },
@@ -510,34 +504,12 @@
                 "if": {
                   "properties": {
                     "target": {
-                      "const": "ecs"
-                    }
-                  }
-                },
-                "then": {
-                  "properties": {
-                    "capacity_provider": {
-                      "enum": [
-                        "FARGATE_SPOT",
-                        "FARGATE"
-                      ]
-                    }
-                  }
-                }
-              },
-              {
-                "if": {
-                  "properties": {
-                    "target": {
                       "const": "docker"
                     }
                   }
                 },
                 "then": {
                   "properties": {
-                    "capacity_provider": {
-                      "type": "null"
-                    },
                     "task_arn": {
                       "type": "null"
                     }
@@ -713,7 +685,6 @@
             "target": {
               "enum": [
                 "auto",
-                "ecs",
                 "docker"
               ]
             },
@@ -1234,7 +1205,6 @@
             "target": {
               "enum": [
                 "auto",
-                "ecs",
                 "docker"
               ]
             },

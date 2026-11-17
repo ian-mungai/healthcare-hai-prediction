@@ -80,7 +80,6 @@
         "target": {
           "enum": [
             "auto",
-            "ecs",
             "docker"
           ]
         },
