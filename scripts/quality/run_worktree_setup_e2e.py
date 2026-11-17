@@ -40,33 +40,108 @@ BINARY = bytes(range(256)) * 1200 + b"\0tail"
 GITIGNORE = ".env\n*.tfvars.json\n.terraform/\n/data/\n/.worktrees/\n/services/orchestration/constraints-3.12.txt\n"
 INFO_EXCLUDE = "/.venv\n/.tools\n"
 LOCK = 'provider "registry.terraform.io/hashicorp/aws" {\n  version     = "6.66.0"\n  constraints = "~> 6.0"\n}\n'
-TERRAFORM = r"""#!/bin/sh
-printf '%s\n' "$*" >> "$TERRAFORM_LOG"
-[ "$*" = "$TERRAFORM_EXPECTED" ] || { echo "unexpected terraform arguments: $*" >&2; exit 64; }
-[ "$(pwd -P)" = "$TERRAFORM_CWD" ] || { echo "unexpected working folder: $(pwd -P)" >&2; exit 65; }
-[ "$TERRAFORM_FAIL" = before ] && { echo "Error: the provider cannot be installed" >&2; exit 1; }
-cd "${1#-chdir=}" || exit 66
-mkdir -p .terraform/modules .terraform/providers
-modules=$(awk '
-/^module "/ { n = $2; gsub(/"/, "", n) }
-/^ *source *=/ && n != "" { split($0, a, "\""); printf ",{\"Key\":\"%s\",\"Source\":\"%s\",\"Dir\":\"../services/tests/flow\"}", n, a[2]; n = "" }
-' *.tf)
-manifest='{"Modules":[{"Key":"","Source":"","Dir":"."}'"$modules"']}'
-[ -z "$TERRAFORM_MANIFEST" ] || manifest=$TERRAFORM_MANIFEST
-printf '%s\n' "$manifest" > .terraform/modules/modules.json
-[ "$TERRAFORM_FAIL" = after_modules ] && { echo "Error: provider installation failed" >&2; exit 1; }
-version=$(sed -n 's/^ *version *= *"\(.*\)"/\1/p' .terraform.lock.hcl | head -n 1)
-plugin=${5#-plugin-dir=}
-for platform in "$plugin"/registry.terraform.io/hashicorp/aws/"$version"/*/; do
-  platform=${platform%/}
-  target=.terraform/providers/registry.terraform.io/hashicorp/aws/$version/$(basename "$platform")
-  mkdir -p "$(dirname "$target")"
-  rm -rf "$target"
-  ln -s "$platform" "$target"
-done
+TERRAFORM = r"""#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import sys
+import time
+from pathlib import Path
+
+args = sys.argv[1:]
+line = " ".join(args)
+with open(os.environ["TERRAFORM_LOG"], "a") as log:
+    log.write(line + "\n")
+command = args[1] if len(args) > 1 else ""
+expected = os.environ["TERRAFORM_EXPECTED_MODULES"] if command == "modules" else os.environ["TERRAFORM_EXPECTED"]
+if line != expected:
+    sys.stderr.write("unexpected terraform arguments: " + line + "\n")
+    sys.exit(64)
+if os.path.realpath(os.getcwd()) != os.environ["TERRAFORM_CWD"]:
+    sys.stderr.write("unexpected working folder: " + os.getcwd() + "\n")
+    sys.exit(65)
+mode = os.environ.get("TERRAFORM_FAIL", "")
+os.chdir(args[0].removeprefix("-chdir="))
+
+
+def declared():
+    given = os.environ.get("TERRAFORM_DECLARED", "")
+    if given:
+        return dict(item.split("=", 1) for item in given.split())
+    found, name = {}, None
+    for path in sorted(Path(".").glob("*.tf")):
+        for text in path.read_text().splitlines():
+            module = re.match(r'module "([^"]+)"', text)
+            source = re.match(r' *source *= *"([^"]*)"', text)
+            if module:
+                name = module.group(1)
+            elif source and name:
+                found[name] = source.group(1)
+                name = None
+    return found
+
+
+manifest_path = Path(".terraform/modules/modules.json")
+if command == "modules":
+    if mode == "modules_hang":
+        time.sleep(60)
+    if mode == "modules":
+        sys.stderr.write("Error: terraform modules failed\n")
+        sys.exit(1)
+    try:
+        listed = {item["Key"]: item for item in json.loads(manifest_path.read_text()).get("Modules", [])}
+    except (OSError, ValueError):
+        listed = {}
+    for key, source in declared().items():
+        if key not in listed:
+            sys.stderr.write("Error: Module not installed: " + key + "\n")
+            sys.exit(1)
+        if listed[key].get("Source") != source:
+            sys.stderr.write("Error: Module source has changed: " + key + "\n")
+            sys.exit(1)
+    shown = [{"key": key, "source": item.get("Source"), "version": ""} for key, item in listed.items() if key]
+    sys.stdout.write(json.dumps({"format_version": "1.0", "modules": shown}) + "\n")
+    sys.exit(0)
+
+if mode == "before":
+    sys.stderr.write("Error: the provider cannot be installed\n")
+    sys.exit(1)
+modules = [{"Key": "", "Source": "", "Dir": "."}] + [{"Key": key, "Source": source, "Dir": "../services/tests/flow"} for key, source in declared().items()]
+os.makedirs(".terraform/modules", exist_ok=True)
+os.makedirs(".terraform/providers", exist_ok=True)
+text = os.environ.get("TERRAFORM_MANIFEST") or json.dumps({"Modules": modules})
+with open(manifest_path, "w") as handle:
+    handle.write(text + "\n")
+if mode == "after_modules":
+    sys.stderr.write("Error: provider installation failed\n")
+    sys.exit(1)
+lock = Path(".terraform.lock.hcl").read_text()
+found = re.search(r'version\s*=\s*"([^"]+)"', lock)
+plugin = args[4].removeprefix("-plugin-dir=")
+if found:
+    base = Path(plugin) / "registry.terraform.io/hashicorp/aws" / found.group(1)
+    for platform in sorted(base.iterdir()) if base.is_dir() else []:
+        target = Path(".terraform/providers/registry.terraform.io/hashicorp/aws") / found.group(1) / platform.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        target.symlink_to(platform)
 """
 
+RECORDER = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$TERRAFORM_LOG"
+exec "$REAL_TERRAFORM" "$@"
+"""
+REAL_TERRAFORM = shutil.which("terraform")
+
 Case = Callable[["Scene"], list[str]]
+
+
+class Skipped(Exception):
+    """A case that cannot run here; the report names it as skipped, never as passed."""
 
 
 class Interrupted(BaseException):
@@ -159,6 +234,8 @@ class Scene:
         interrupted_ok: bool = False,
         expected: str | None = None,
         manifest: str = "",
+        declared: str = "",
+        env: dict[str, str] | None = None,
     ) -> tuple[int, str]:
         """Run the command on the worktree (or ``path``); returns its exit code (-1 after a simulated interruption) and everything it printed."""
         worktree = (path or self.worktree).resolve()
@@ -169,6 +246,9 @@ class Scene:
             "TERRAFORM_CWD": str(worktree),
             "TERRAFORM_EXPECTED": expected or self.vector(worktree),
             "TERRAFORM_MANIFEST": manifest,
+            "TERRAFORM_DECLARED": declared,
+            "TERRAFORM_EXPECTED_MODULES": f"-chdir={worktree}/infra/jobs modules -json",
+            **(env or {}),
         }
         printed = io.StringIO()
         generated = mock.patch.object(worktree_setup, "generated_files", lambda root: self.generated)
@@ -192,8 +272,13 @@ class Scene:
         worktree = (worktree or self.worktree).resolve()
         return f"-chdir={worktree}/infra/jobs init -backend=false -input=false -plugin-dir={worktree}/infra/.terraform/providers"
 
-    def terraform_calls(self) -> list[str]:
+    def terraform_commands(self) -> list[str]:
+        """Every terraform call of the runs so far, init and modules alike."""
         return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def terraform_calls(self) -> list[str]:
+        """The init calls only."""
+        return [line for line in self.terraform_commands() if " init " in f" {line} "]
 
 
 def expect(problems: list[str], condition: bool, text: str) -> None:
@@ -668,7 +753,9 @@ def tracked_path_below_the_jobs_cache_blocks_init(scene: Scene) -> list[str]:
     scene.track_in_index("infra/jobs/.terraform/modules/modules.json", "{}\n")
     code, output = scene.run()
     expect(problems, code == 1 and "infra/jobs/.terraform" in output and "tracked" in output, f"exit {code}: {output}")
-    expect(problems, scene.terraform_calls() == [] and not (scene.worktree / "infra/jobs/.terraform").exists(), "terraform ran or wrote below a tracked path")
+    expect(
+        problems, scene.terraform_commands() == [] and not (scene.worktree / "infra/jobs/.terraform").exists(), "terraform ran or wrote below a tracked path"
+    )
     return problems
 
 
@@ -679,7 +766,7 @@ def link_leaving_the_jobs_cache_blocks_the_init(scene: Scene) -> list[str]:
     (cache / "providers").symlink_to(scene.victim)
     code, output = scene.run()
     expect(problems, code == 1 and "infra/jobs" in output and "providers" in output and "link" in output, f"exit {code}: {output}")
-    expect(problems, scene.terraform_calls() == [] and files_below(scene.victim) == [], "terraform ran or wrote through the link")
+    expect(problems, scene.terraform_commands() == [] and files_below(scene.victim) == [], "terraform ran or wrote through the link")
     return problems
 
 
@@ -732,7 +819,7 @@ def symlinked_manifest_blocks_the_init(scene: Scene) -> list[str]:
     code, output = scene.run()
     expect(problems, code == 1 and "infra/jobs" in output and "modules.json" in output and "link" in output, f"exit {code}: {output}")
     expect(problems, readme.read_bytes() == before, "terraform init wrote through the link into a tracked file")
-    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    expect(problems, scene.terraform_commands() == [], "terraform ran")
     return problems
 
 
@@ -748,7 +835,7 @@ def linked_modules_folder_blocks_the_init(scene: Scene) -> list[str]:
     code, output = scene.run()
     expect(problems, code == 1 and "infra/jobs" in output and "modules" in output and "link" in output, f"exit {code}: {output}")
     expect(problems, protected.read_text() == "{}\n", "terraform init wrote outside the worktree through two links")
-    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    expect(problems, scene.terraform_commands() == [], "terraform ran")
     return problems
 
 
@@ -761,7 +848,7 @@ def hard_linked_manifest_blocks_the_init(scene: Scene) -> list[str]:
     code, output = scene.run()
     expect(problems, code == 1 and "infra/jobs" in output and "modules.json" in output and "hard link" in output, f"exit {code}: {output}")
     expect(problems, protected.read_text() == "{}\n", "terraform init wrote through the hard link")
-    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    expect(problems, scene.terraform_commands() == [], "terraform ran")
     return problems
 
 
@@ -774,7 +861,7 @@ def tracked_lock_file_link_blocks_the_init(scene: Scene) -> list[str]:
     lock.symlink_to(elsewhere)
     code, output = scene.run()
     expect(problems, code == 1 and ".terraform.lock.hcl" in output and "link" in output, f"exit {code}: {output}")
-    expect(problems, scene.terraform_calls() == [] and elsewhere.read_text() == LOCK, "terraform ran or wrote through the lock file link")
+    expect(problems, scene.terraform_commands() == [] and elsewhere.read_text() == LOCK, "terraform ran or wrote through the lock file link")
     return problems
 
 
@@ -834,46 +921,19 @@ def changed_configuration_runs_init_again(scene: Scene) -> list[str]:
     return problems
 
 
-TRICKY = r"""# module "ghost_comment" {
-/* module "ghost_block" {
-   source = "../services/tests/flow"
-} */
-locals {
-  braces = "} module \"ghost_string\" { ${lower("}")}"
-  note   = <<-EOT
-    } module "ghost_heredoc" {
-      source = "../services/tests/flow"
-  EOT
-}
-
-module "flow" {
-  source = "../services/tests/flow"
-}
-
-module "late" {
-  source   = "../services/tests/flow"
-  for_each = { a = 1 }
-  inputs   = { source = "nested" }
-}
-
-module "dynamic" {
-  source = "${var.where}"
-}
-"""
-
-
-def parser_reads_module_calls_only(scene: Scene) -> list[str]:
+def each_declared_module_missing_from_the_manifest_runs_the_init_again(scene: Scene) -> list[str]:
     problems: list[str] = []
-    (scene.worktree / "infra/jobs/main.tf").write_text(TRICKY)
+    block = 'module "{name}" {{\n  source = "{source}"\n}}\n'
+    flow = "../services/tests/flow"
+    config = block.format(name="flow", source=flow) + block.format(name="late", source=flow) + block.format(name="dynamic", source="${var.where}")
+    (scene.worktree / "infra/jobs/main.tf").write_text(config)
     scene.run()
     manifest = scene.worktree / "infra/jobs/.terraform/modules/modules.json"
     keys = sorted(item["Key"] for item in json.loads(manifest.read_text())["Modules"])
     expect(problems, keys == ["", "dynamic", "flow", "late"], f"the stand-in made keys {keys}")
     code, output = scene.run()
     expect(
-        problems,
-        code == 0 and len(scene.terraform_calls()) == 1 and "verified infra/jobs/.terraform" in output,
-        f"text of a comment, a string or a heredoc was read as a module: {output}",
+        problems, code == 0 and len(scene.terraform_calls()) == 1 and "verified infra/jobs/.terraform" in output, f"a complete cache was not accepted: {output}"
     )
     for missing in ("late", "dynamic", "flow"):
         data = json.loads(manifest.read_text())
@@ -892,11 +952,105 @@ def nested_local_module_is_required(scene: Scene) -> list[str]:
     root = '{"Key":"","Source":"","Dir":"."}'
     flow = '{"Key":"flow","Source":"../services/tests/flow","Dir":"../services/tests/flow"}'
     inner = '{"Key":"flow.inner","Source":"./inner","Dir":"../services/tests/flow/inner"}'
-    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow}]}}')
+    declared = "flow=../services/tests/flow flow.inner=./inner"
+    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow}]}}', declared=declared)
     expect(problems, code == 1 and "flow.inner" in output, f"a missing nested module was not noticed: exit {code}: {output}")
-    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow},{inner}]}}')
+    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow},{inner}]}}', declared=declared)
     expect(problems, code == 0 and len(scene.terraform_calls()) == 2, f"the complete manifest was not accepted: exit {code}: {output}")
     return problems
+
+
+def stray_link_blocks_even_the_modules_check(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    scene.run()
+    manifest = scene.worktree / "infra/jobs/.terraform/modules/modules.json"
+    os.link(manifest, scene.victim / "second_name.json")
+    before = len(scene.terraform_commands())
+    code, output = scene.run()
+    expect(problems, code == 1 and "hard link" in output and "verified infra/jobs/.terraform" not in output, f"exit {code}: {output}")
+    expect(problems, len(scene.terraform_commands()) == before, "terraform ran in a cache that holds a hard link")
+    return problems
+
+
+def failing_modules_command_means_init_and_never_ready(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    scene.run()
+    attempts = (("a modules command that exits 1", "modules"), ("a modules command that outlives its deadline", "modules_hang"))
+    for label, mode in attempts:
+        before = len(scene.terraform_calls())
+        with mock.patch.object(worktree_setup, "TERRAFORM_DEADLINE", 2):
+            code, output = scene.run(terraform_mode=mode)
+        expect(problems, len(scene.terraform_calls()) == before + 1, f"{label}: init did not run again")
+        expect(problems, code == 1 and "infra/jobs" in output and not output.strip().endswith(": ready"), f"{label} was taken as ready: exit {code}: {output}")
+    return problems
+
+
+def native_case(scene: Scene, config: str, folders: dict[str, str], tamper: Callable[[Path], None]) -> list[str]:
+    """Real terraform decides: a complete cache is accepted, a cache that terraform finds incomplete makes init run again, and terraform accepts the result."""
+    problems: list[str] = []
+    if REAL_TERRAFORM is None:
+        if os.environ.get("WORKTREE_SETUP_REQUIRE_NATIVE"):
+            return ["terraform is not installed and WORKTREE_SETUP_REQUIRE_NATIVE is set"]
+        raise Skipped("terraform is not installed")
+    write(scene.bin / "terraform", RECORDER, 0o755)
+    jobs = scene.worktree / "infra/jobs"
+    write(jobs / ".terraform.lock.hcl", "")
+    write(jobs / "main.tf", config)
+    for folder, text in folders.items():
+        write(scene.worktree / folder / "main.tf", text)
+    env = {"REAL_TERRAFORM": REAL_TERRAFORM, "CHECKPOINT_DISABLE": "1", "TF_CLI_CONFIG_FILE": os.devnull}
+    code, output = scene.run(env=env)
+    expect(problems, code == 0 and len(scene.terraform_calls()) == 1, f"the first run did not finish: exit {code}: {output}")
+    code, output = scene.run(env=env)
+    expect(
+        problems, code == 0 and len(scene.terraform_calls()) == 1 and "verified infra/jobs/.terraform" in output, f"a complete cache was not accepted: {output}"
+    )
+    tamper(jobs)
+    code, output = scene.run(env=env)
+    expect(problems, code == 0 and len(scene.terraform_calls()) == 2, f"a cache that terraform finds incomplete was taken as ready: exit {code}: {output}")
+    with mock.patch.dict(os.environ, env):
+        result = run_command("terraform", [f"-chdir={jobs}", "modules", "-json"], cwd=scene.worktree, timeout=120)
+    expect(problems, result.returncode == 0, f"terraform still finds the modules incomplete: {result.stderr[-300:]}")
+    return problems
+
+
+def root_only_manifest(jobs: Path) -> None:
+    (jobs / ".terraform/modules/modules.json").write_text('{"Modules":[{"Key":"","Source":"","Dir":"."}]}\n')
+
+
+def native_commented_module_header(scene: Scene) -> list[str]:
+    config = 'module /* a module call */ "flow" {\n  source = "../services/tests/flow"\n}\n'
+    return native_case(scene, config, {}, root_only_manifest)
+
+
+def native_comment_before_the_module_brace(scene: Scene) -> list[str]:
+    config = 'module "flow" /* a module call */ {\n  source = "../services/tests/flow"\n}\n'
+    return native_case(scene, config, {}, root_only_manifest)
+
+
+def native_commented_source_attribute(scene: Scene) -> list[str]:
+    config = 'module "flow" {\n  source /* the local source */ = "../services/tests/flow"\n}\n'
+
+    def change_source(jobs: Path) -> None:
+        write(jobs / "main.tf", 'module "flow" {\n  source /* the local source */ = "./new_flow"\n}\n')
+        write(jobs / "new_flow/main.tf", "# new flow\n")
+
+    return native_case(scene, config, {}, change_source)
+
+
+def native_chain_of_eleven_local_modules(scene: Scene) -> list[str]:
+    folders = {
+        f"infra/services/tests/chain/m{index}": (f'module "child_{index + 1}" {{\n  source = "../m{index + 1}"\n}}\n' if index < 10 else "# leaf\n")
+        for index in range(11)
+    }
+
+    def drop_the_deepest(jobs: Path) -> None:
+        path = jobs / ".terraform/modules/modules.json"
+        data = json.loads(path.read_text())
+        data["Modules"] = data["Modules"][:-2]
+        path.write_text(json.dumps(data))
+
+    return native_case(scene, 'module "child_0" {\n  source = "../services/tests/chain/m0"\n}\n', folders, drop_the_deepest)
 
 
 def terraform_arguments_are_checked(scene: Scene) -> list[str]:
@@ -957,8 +1111,14 @@ CASES: dict[str, tuple[Case, dict[str, Any]]] = {
     "a_terraform_made_provider_link_is_accepted_and_other_links_are_not": (native_provider_link_is_accepted_and_others_are_not, {}),
     "an_empty_or_root_only_or_foreign_manifest_runs_the_init_again": (incomplete_manifest_runs_init_again, {}),
     "a_module_added_to_the_configuration_runs_the_init_again": (changed_configuration_runs_init_again, {}),
-    "text_in_comments_strings_and_heredocs_is_not_a_module_call": (parser_reads_module_calls_only, {}),
+    "each_declared_module_missing_from_the_manifest_runs_the_init_again": (each_declared_module_missing_from_the_manifest_runs_the_init_again, {}),
     "a_nested_local_module_is_required_in_the_manifest": (nested_local_module_is_required, {}),
+    "a_hard_link_blocks_even_the_modules_check": (stray_link_blocks_even_the_modules_check, {}),
+    "a_failing_or_timed_out_modules_command_runs_init_and_is_never_ready": (failing_modules_command_means_init_and_never_ready, {}),
+    "native_a_comment_in_the_module_header_does_not_hide_the_module": (native_commented_module_header, {}),
+    "native_a_comment_before_the_module_brace_does_not_hide_the_module": (native_comment_before_the_module_brace, {}),
+    "native_a_comment_in_the_source_attribute_does_not_hide_a_changed_source": (native_commented_source_attribute, {}),
+    "native_a_chain_of_eleven_local_modules_is_checked_to_the_end": (native_chain_of_eleven_local_modules, {}),
     "a_write_error_is_named_and_leaves_nothing_partial": (write_error_is_named_and_leaves_nothing_partial, {}),
     "the_terraform_stand_in_checks_the_whole_vector": (terraform_arguments_are_checked, {}),
 }
@@ -974,22 +1134,29 @@ def main(argv: list[str] | None = None) -> int:
         if wanted and name not in wanted:
             continue
         top = Path(tempfile.mkdtemp(prefix="worktree_setup_e2e.")).resolve()
+        skipped = ""
         try:
             problems = case(Scene(top, **settings))
+        except Skipped as why:
+            problems, skipped = [], str(why)
         except Exception as error:
             problems = [f"{type(error).__name__}: {error}"]
         finally:
             shutil.rmtree(top, ignore_errors=True)
-        results.append({"case": name, "passed": not problems, "problems": problems})
-    passed = sum(result["passed"] for result in results)
+        results.append({"case": name, "passed": False if problems else (None if skipped else True), "skipped": skipped, "problems": problems})
+    passed = sum(result["passed"] is True for result in results)
+    failed = sum(result["passed"] is False for result in results)
     report = out / "report.json"
-    report.write_text(json.dumps({"pass": passed == len(results), "cases": results}, indent=2) + "\n")
+    report.write_text(json.dumps({"pass": not failed, "cases": results}, indent=2) + "\n")
     for result in results:
-        sys.stdout.write(f"{'PASS' if result['passed'] else 'FAIL'} {result['case']}\n")
+        sys.stdout.write(f"{'PASS' if result['passed'] else 'SKIP' if result['passed'] is None else 'FAIL'} {result['case']}\n")
+        if result["skipped"]:
+            sys.stdout.write(f"  skipped: {result['skipped']}\n")
         for problem in result["problems"]:
             sys.stdout.write(f"  {problem}\n")
-    sys.stdout.write(f"{passed}/{len(results)} passed; report {report}\n")
-    return 0 if passed == len(results) else 1
+    skipped_count = sum(result["passed"] is None for result in results)
+    sys.stdout.write(f"{passed}/{len(results)} passed, {skipped_count} skipped; report {report}\n")
+    return 0 if not failed else 1
 
 
 if __name__ == "__main__":
