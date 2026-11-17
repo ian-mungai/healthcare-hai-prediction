@@ -991,6 +991,8 @@ def seal_descriptor_traversal(env: Env) -> dict[str, bool]:
     run, fakes = prepare(env, builds=[{"mode": "success", "seconds": 0.3}])
     reply = dbt_submit(env, run, "full", ["build"])
     env.wait_ended(reply["attempt_id"], 30)
+    # The launcher's own seal worker writes the same sealed folder after the attempt ends: under load it was still at work while the case removed the folder.
+    env.wait(lambda: run_record(env).get("build_state") == "sealed", 30, "the launcher's seal worker has sealed the run")
     entry = bound(env, run_record(env), reply["attempt_id"])
     folder = run_folder(env)
     with traced_paths(str(folder), str(folder.resolve())) as calls:
