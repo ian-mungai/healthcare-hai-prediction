@@ -10,8 +10,6 @@ SOURCE_PATHS = (
     "orchestration/worker_protocol.py",
     "orchestration/worker_stderr.py",
     "orchestration/worker_recovery.py",
-    "orchestration/catalog_transport.py",
-    "orchestration/catalog_transport_child.py",
     "scripts/process_group.py",
 )
 REAPERS = frozenset({"wait", "waitpid", "waitid", "wait3", "wait4"})
@@ -34,7 +32,7 @@ def _function_name(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str | None
 
 
 def source_checks(root: Path = ROOT) -> dict[str, bool]:
-    """Check source contracts across the worker modules the owner's catalog tools still use."""
+    """Check source contracts across the worker modules that survive the SDK worker plane."""
     checks: dict[str, bool] = {}
     trees = {path: ast.parse((root / path).read_text()) for path in SOURCE_PATHS}
     for path, tree in trees.items():
@@ -55,15 +53,7 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
                 and ast.unparse(call.args[0]) == "handle.pid"
                 and ast.unparse(call.args[1]) == "os.WNOHANG"
             )
-            tunnel_child_reap = (
-                path == "orchestration/catalog_transport_child.py"
-                and enclosing_function == "_tunnel"
-                and name == "os.waitpid"
-                and len(call.args) == 2
-                and ast.unparse(call.args[0]) == "child"
-                and ast.unparse(call.args[1]) == "os.WNOHANG"
-            )
-            allowed_reaps = allowed_reaps and (owned_reap or tunnel_child_reap)
+            allowed_reaps = allowed_reaps and owned_reap
         checks[f"{path}:no_catch_all_reaper"] = allowed_reaps
         checks[f"{path}:signal_imports_closed"] = not any(
             alias.name in SIGNAL_FUNCTIONS and not (path == "scripts/process_group.py" and _function_name(node, parents) == "stop_owned")
@@ -78,11 +68,8 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
                 continue
             signal_enclosing = _function_name(call, parents)
             owned_stop = path == "scripts/process_group.py" and signal_enclosing == "stop_owned"
-            self_monitor = (path == "orchestration/catalog_transport_child.py" and signal_enclosing in {"run", "_monitor", "main"}) and ast.unparse(
-                call
-            ) == "os.killpg(os.getpgrp(), signal.SIGKILL)"
-            signals_allowed = signals_allowed and (owned_stop or self_monitor)
-        checks[f"{path}:signals_only_in_owned_stop_or_self_monitor"] = signals_allowed
+            signals_allowed = signals_allowed and owned_stop
+        checks[f"{path}:signals_only_in_owned_stop"] = signals_allowed
     tree = trees["scripts/process_group.py"]
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
     guarded = True

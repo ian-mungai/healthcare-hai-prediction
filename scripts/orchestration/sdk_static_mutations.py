@@ -32,13 +32,6 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
-        "catalog_relay_sends_self_group_stop",
-        "orchestration/catalog_transport_child.py",
-        "def _relay(target_port: int, listen_port: int, deadline: float) -> None:\n",
-        "def _relay(target_port: int, listen_port: int, deadline: float) -> None:\n    os.killpg(os.getpgrp(), signal.SIGKILL)\n",
-        "orchestration/catalog_transport_child.py:signals_only_in_owned_stop_or_self_monitor",
-    ),
-    Mutation(
         "host_reap_outside_stop",
         "scripts/process_group.py",
         "def group_state(",
@@ -71,14 +64,14 @@ MUTATIONS = (
         "orchestration/worker_recovery.py",
         "def _utc(",
         "def owner_stop_confirmed(record):\n    os.killpg(record['pgid'], 9)\n\ndef _utc(",
-        "orchestration/worker_recovery.py:signals_only_in_owned_stop_or_self_monitor",
+        "orchestration/worker_recovery.py:signals_only_in_owned_stop",
     ),
     Mutation(
         "removed_workers_command_name_sends_signal",
         "orchestration/worker_recovery.py",
         "def _utc(",
         "def workers_command(record):\n    os.killpg(record['pgid'], 9)\n\ndef _utc(",
-        "orchestration/worker_recovery.py:signals_only_in_owned_stop_or_self_monitor",
+        "orchestration/worker_recovery.py:signals_only_in_owned_stop",
     ),
     Mutation(
         "host_signal_outside_lock",

@@ -8,7 +8,6 @@ unused-code scripts/orchestration/airflow_import_probe.py -- importlib calls Fin
 unused-code scripts/acquisition/run_reference_documents_e2e.py -- urllib's OpenerDirector calls https_open by its protocol name, and the sitecustomize text the E2E writes into each download process calls install_stand_in -- permanent
 
 unused-code scripts/orchestration/traffic_probe.py -- http.server dispatches Catalog.do_GET and Catalog.log_message by method name -- permanent
-unused-code scripts/lakehouse/run_bronze_cutover_e2e.py -- http.server dispatches do_GET, do_POST and do_DELETE of the loopback Polaris stand-in by method name -- permanent
 unused-code scripts/lakehouse/run_aws_catalog_setup_e2e.py -- http.server dispatches do_GET, do_POST and do_PUT of the loopback Polaris stand-in by method name and reads its close_connection and daemon_threads; mock reads side_effect -- permanent
 unused-code feature_store/definitions.py -- feast apply scans the module for Entity and FeatureView objects, so each view the generated file assigns to a module-level name is read by Feast, not imported -- permanent
 unused-code scripts/infrastructure/run_openmetadata_e2e.py -- http.server dispatches do_GET and do_PUT of the stand-in OpenMetadata server by method name -- permanent
@@ -46,7 +45,6 @@ airflow scripts/features/feast_materialize.py -- step and catalog_up stay live t
 airflow scripts/features/features_input.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow scripts/features/features_publish.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow scripts/lakehouse/aws_catalog_setup.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
-airflow scripts/lakehouse/bronze_cutover.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow scripts/lakehouse/catalog.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow scripts/lakehouse/catalog_authority_cases.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow scripts/lakehouse/catalog_journal.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
@@ -108,3 +106,4 @@ config scripts/infrastructure/monitoring_cases.py -- the planted defect puts the
 unused-code scripts/infrastructure/host_state_exporter_cases.py -- http.server dispatches do_GET and log_message of the loopback OpenMetadata stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/monitoring_gap_cases.py -- http.server dispatches do_PUT, do_DELETE and log_message of the loopback Pushgateway stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/spark_progress_cases.py -- the fake status tracker answers the Spark StatusTracker methods by their public names (getJobIdsForGroup, getJobInfo, getStageInfo, getActiveStageIds, getActiveJobsIds) and its job and stage records carry the fields that Spark names stageIds, numTasks, numActiveTasks, numCompletedTasks and numFailedTasks -- permanent
+flag scripts/process_group.py -- the worker process marker --hai-worker is read by the process-group scan that worker recovery and the process-group stop cases still use; only the deleted catalog tunnel child set it, and the worker plane cleanup removes the pattern -- expires 2026-11-30

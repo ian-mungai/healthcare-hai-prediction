@@ -1,6 +1,5 @@
 {
   "commands": [
-    "\"$python_bin\" -B -m scripts.orchestration.catalog_transport_cases --mutations --output \"$quality_output/catalog_transport_cases/report.json\"",
     "\"$python_bin\" -B -m scripts.orchestration.sdk_static_mutations --output \"$quality_output/sdk_static_mutations/report.json\"",
     "\"$python_bin\" -B -m scripts.orchestration.sdk_worker_cases --check-fixtures --fixtures \"$repo_root/data_contracts/orchestration/examples/sdk_worker_cases\" --revision \"$(git rev-parse HEAD)\" --output \"$quality_output/sdk_worker_cases/report.json\"",
     "\"$python_bin\" -B -m scripts.orchestration.trigger_dag_cases --output \"$quality_output/trigger_dag_cases/report.json\"",
