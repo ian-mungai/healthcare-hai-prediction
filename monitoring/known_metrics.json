@@ -139,7 +139,42 @@
     "metrics": ["node_vmstat_oom_kill", "node_filesystem_avail_bytes", "node_filesystem_size_bytes", "node_memory_MemAvailable_bytes", "node_load1"]
   },
   "polaris": {
-    "emitted_by": "Polaris (Quarkus) on its management port, scraped as the polaris job",
-    "metrics": []
+    "emitted_by": "Polaris 1.8.0 (Quarkus 3.39.3, Micrometer 1.17.1 with the Prometheus simpleclient registry) on its management port, scraped as the polaris job. Names and labels read from the pinned sources: the HTTP server timer http.server.requests (the quarkus-micrometer HTTP server binder, tags method, uri, outcome and status, plus server.port), the active requests gauge, the JVM memory binder (JvmMemoryMetrics, tags area and id) and the common tag application from polaris.metrics.tags in the runtime defaults. The timer has no _bucket series: Polaris publishes buckets only when polaris.metrics.http-server-requests.histogram-slos is set, and the task does not set it. Non-application paths such as /q are not counted, and Quarkus allows 100 uri values at most.",
+    "metrics": {
+      "http_server_requests_seconds_count": {"type": "counter", "labels": ["method", "uri", "outcome", "status", "server_port", "application"]},
+      "http_server_requests_seconds_sum": {"type": "counter", "labels": ["method", "uri", "outcome", "status", "server_port", "application"]},
+      "http_server_requests_seconds_max": {"type": "gauge", "labels": ["method", "uri", "outcome", "status", "server_port", "application"]},
+      "http_server_active_requests": {"type": "gauge", "labels": ["server_port", "url_scheme", "application"]},
+      "jvm_memory_used_bytes": {"type": "gauge", "labels": ["area", "id", "application"]},
+      "jvm_memory_committed_bytes": {"type": "gauge", "labels": ["area", "id", "application"]},
+      "jvm_memory_max_bytes": {"type": "gauge", "labels": ["area", "id", "application"]}
+    }
+  },
+  "mlflow": {
+    "emitted_by": "MLflow 3.17.2 with prometheus-flask-exporter 0.23.2 and prometheus-client 0.26.0, started with --expose-prometheus and read through the relay of the host state exporter, scraped as the mlflow job. Names and labels read from the pinned sources: mlflow/server/prometheus_exporter.py sets the prefix mlflow, excludes /health and /version and groups the latency by a function named mlflow_version, so the latency has the labels method, mlflow_version and status and no route or endpoint label. The latency uses the prometheus-client default buckets. The metrics endpoint is not counted. Only the Flask routes (the tracking and registry REST calls) are counted.",
+    "metrics": {
+      "mlflow_http_request_total": {"type": "counter", "labels": ["method", "status"]},
+      "mlflow_http_request_exceptions_total": {"type": "counter", "labels": ["method", "status"]},
+      "mlflow_http_request_duration_seconds": {"type": "histogram", "labels": ["method", "mlflow_version", "status"]}
+    }
+  },
+  "grafana": {
+    "emitted_by": "Grafana 13.2.5 on its HTTP port, scraped as the grafana job. Names and labels read from the v13.2.5 source: pkg/services/ngalert/metrics (scheduler.go, multi_org_alertmanager.go) for the alerting series and pkg/infra/httpclient/httpclientprovider/datasource_metrics_middleware.go for the data source series. The notification counters show only series that have counted once, so they are absent until the first notification.",
+    "metrics": {
+      "grafana_alerting_rule_evaluations_total": {"type": "counter", "labels": ["org"]},
+      "grafana_alerting_rule_evaluation_failures_total": {"type": "counter", "labels": ["org"]},
+      "grafana_alerting_rule_evaluation_duration_seconds": {"type": "histogram", "labels": ["org"]},
+      "grafana_alerting_scheduler_behind_seconds": {"type": "gauge", "labels": []},
+      "grafana_alerting_schedule_alert_rules": {"type": "gauge", "labels": []},
+      "grafana_alerting_rule_groups": {"type": "gauge", "labels": ["org"]},
+      "grafana_alerting_schedule_rule_evaluations_missed_total": {"type": "counter", "labels": ["org", "name", "reason"]},
+      "grafana_alerting_alertmanager_alerts": {"type": "gauge", "labels": ["org", "state"]},
+      "grafana_alerting_notifications_total": {"type": "counter", "labels": ["org", "integration"]},
+      "grafana_alerting_notifications_failed_total": {"type": "counter", "labels": ["org", "integration"]},
+      "grafana_alerting_notification_latency_seconds": {"type": "histogram", "labels": []},
+      "grafana_datasource_request_total": {"type": "counter", "labels": ["datasource", "datasource_type", "code", "method", "secure_socks_ds_proxy_enabled"]},
+      "grafana_datasource_request_duration_seconds": {"type": "histogram", "labels": ["datasource", "datasource_type", "code", "method", "secure_socks_ds_proxy_enabled"]},
+      "grafana_datasource_request_in_flight": {"type": "gauge", "labels": ["datasource", "datasource_type", "secure_socks_ds_proxy_enabled"]}
+    }
   }
 }

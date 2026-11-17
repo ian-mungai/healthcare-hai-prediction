@@ -165,6 +165,9 @@ PROMQL_WORDS = frozenset(
 )
 SELECTOR = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)\s*\{([^}]*)\}")
 MATCHER = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~|!~|!=|=)\s*"(?:[^"\\]|\\.)*"')
+BY_CLAUSE = re.compile(r"\bby\s*\(([^)]*)\)")
+# Labels whose value count the metric's source does not bound by itself: a query may group by one only inside topk or bottomk, which limits the series drawn.
+OPEN_LABELS = frozenset({"uri", "path", "url", "rule_group", "folder_uid", "realm_id", "principal", "pid"})
 GROUPING = re.compile(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
 IDENTIFIER = re.compile(r"(?<![0-9A-Za-z_:.])[a-zA-Z_:][a-zA-Z0-9_:]*(?![a-zA-Z0-9_:])")
 HOST_PORT = re.compile(r"hostPort\s*=\s*([0-9]+)")
@@ -296,9 +299,14 @@ def catalog_problems(document: Any) -> list[str]:
 
 
 def expression_problems(where: str, expression: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
-    """Problems with one PromQL expression: a metric that nothing produces, a label the metric lacks or a job nobody scrapes."""
+    """Problems with one PromQL expression: a metric that nothing produces, a label it lacks, a job nobody scrapes or an open label outside topk."""
     problems: list[str] = []
     stripped = expression
+    limited = re.search(r"\b(?:topk|bottomk)\s*\(", expression) is not None
+    for clause in BY_CLAUSE.findall(expression):
+        for label in (part.strip() for part in clause.split(",")):
+            if label in OPEN_LABELS and not limited:
+                problems.append(f"{where}: groups by {label} without topk, so the number of series has no bound")
     for name, body in SELECTOR.findall(expression):
         for label, in_job in ((m.group(1), m.group(0)) for m in MATCHER.finditer(body)):
             if label == "job":

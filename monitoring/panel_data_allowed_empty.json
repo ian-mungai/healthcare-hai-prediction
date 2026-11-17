@@ -169,6 +169,11 @@
       "dashboard": "hai_feature_store.json",
       "panel": "Reload duration, by feature set",
       "reason": "Empty until the first host start has run the reload."
+    },
+    {
+      "dashboard": "hai_grafana.json",
+      "panel": "Notification latency, 95th percentile",
+      "reason": "Empty until Grafana has delivered its first notification: it creates the latency series at the first one."
     }
   ]
 }

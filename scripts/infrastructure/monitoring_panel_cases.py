@@ -100,7 +100,7 @@ def committed_dashboards_pass_except_the_allowed_empty_ones(root: Path) -> dict[
     """Every committed panel target is queried, and the tracked allowance file is valid when the server answers every expression."""
     allowed = {(entry["dashboard"], entry["panel"]) for entry in json.loads((root / monitoring_panels.ALLOWED).read_text(encoding="utf-8"))["allowed"]}
     found = monitoring_panels.panels(root)
-    empty = {target.expression: "empty" for target in found if (target.dashboard, target.title) in allowed}
+    empty = {monitoring_panels.resolved(target.expression): "empty" for target in found if (target.dashboard, target.title) in allowed}
     with StandIn(empty) as stand_in:
         problems = monitoring_panels.check(root, stand_in.url)
     return {
