@@ -61,6 +61,9 @@ if line != expected:
 if os.path.realpath(os.getcwd()) != os.environ["TERRAFORM_CWD"]:
     sys.stderr.write("unexpected working folder: " + os.getcwd() + "\n")
     sys.exit(65)
+if os.environ.get("CHECKPOINT_DISABLE") != "1":
+    sys.stderr.write("terraform called without CHECKPOINT_DISABLE=1, so it would make its update check over the network\n")
+    sys.exit(66)
 mode = os.environ.get("TERRAFORM_FAIL", "")
 os.chdir(args[0].removeprefix("-chdir="))
 
@@ -133,6 +136,10 @@ if found:
 
 RECORDER = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$TERRAFORM_LOG"
+if [ "$CHECKPOINT_DISABLE" != "1" ]; then
+    echo "terraform called without CHECKPOINT_DISABLE=1, so it would make its update check over the network" >&2
+    exit 66
+fi
 exec "$REAL_TERRAFORM" "$@"
 """
 REAL_TERRAFORM = shutil.which("terraform")
@@ -248,6 +255,7 @@ class Scene:
             "TERRAFORM_MANIFEST": manifest,
             "TERRAFORM_DECLARED": declared,
             "TERRAFORM_EXPECTED_MODULES": f"-chdir={worktree}/infra/jobs modules -json",
+            "CHECKPOINT_DISABLE": "",
             **(env or {}),
         }
         printed = io.StringIO()
@@ -998,7 +1006,7 @@ def native_case(scene: Scene, config: str, folders: dict[str, str], tamper: Call
     write(jobs / "main.tf", config)
     for folder, text in folders.items():
         write(scene.worktree / folder / "main.tf", text)
-    env = {"REAL_TERRAFORM": REAL_TERRAFORM, "CHECKPOINT_DISABLE": "1", "TF_CLI_CONFIG_FILE": os.devnull}
+    env = {"REAL_TERRAFORM": REAL_TERRAFORM, "TF_CLI_CONFIG_FILE": os.devnull}
     code, output = scene.run(env=env)
     expect(problems, code == 0 and len(scene.terraform_calls()) == 1, f"the first run did not finish: exit {code}: {output}")
     code, output = scene.run(env=env)

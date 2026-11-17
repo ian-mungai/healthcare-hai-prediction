@@ -133,6 +133,11 @@ class Entry:
     link: str | None = None
 
 
+def terraform_environment() -> dict[str, str]:
+    """The caller's environment with Terraform's Checkpoint update check turned off, so setup never reaches the network."""
+    return {**os.environ, "CHECKPOINT_DISABLE": "1"}
+
+
 def generated_files(root: Path) -> dict[str, str]:
     """Repository path to expected text of every file ``lock_env images`` writes; a seam for the cases, which have no ``uv``."""
     return lock_env.image_files(root)
@@ -680,7 +685,7 @@ def modules_gap(setup: Setup) -> str | None:
     """
     arguments = [f"-chdir={setup.worktree / JOBS}", "modules", "-json"]
     try:
-        result = run_command("terraform", arguments, cwd=setup.worktree, timeout=TERRAFORM_DEADLINE)
+        result = run_command("terraform", arguments, cwd=setup.worktree, timeout=TERRAFORM_DEADLINE, env=terraform_environment())
     except (OSError, SubprocessError) as error:
         return f"terraform modules could not run ({type(error).__name__})"
     if result.returncode:
@@ -788,7 +793,7 @@ def initialise_jobs(setup: Setup) -> None:
         return
     arguments = [f"-chdir={setup.worktree / JOBS}", "init", "-backend=false", "-input=false", f"-plugin-dir={setup.worktree / PROVIDERS}"]
     try:
-        result = run_command("terraform", arguments, cwd=setup.worktree, timeout=TERRAFORM_DEADLINE)
+        result = run_command("terraform", arguments, cwd=setup.worktree, timeout=TERRAFORM_DEADLINE, env=terraform_environment())
     except (OSError, SubprocessError) as error:
         report.problem(JOBS, f"terraform init could not run: {type(error).__name__}")
         return
