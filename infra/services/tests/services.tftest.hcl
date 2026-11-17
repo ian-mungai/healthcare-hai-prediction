@@ -2596,6 +2596,34 @@ run "airflow_names_its_environment_and_mounts_the_schedule_module" {
   }
 }
 
+# The two ingestion schedules name their scheduled DAG runs as their jobs through custom timetables (orchestration/ingestion_timetables.py), which Airflow finds
+# only through a plugin: every Airflow container mounts the module and the plugins folder (airflow_plugins/, mounted read only at /opt/airflow/plugins).
+run "airflow_mounts_the_ingestion_timetables_and_their_plugin" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          length(container.mountPoints) == 0 || (
+            contains([for mount in container.mountPoints : "${mount.containerPath}=${mount.readOnly}"], "/opt/hai/orchestration/ingestion_timetables.py=true")
+            && contains([for mount in container.mountPoints : "${mount.containerPath}=${mount.readOnly}"], "/opt/airflow/plugins=true")
+          )
+        ) if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container mounts orchestration/ingestion_timetables.py and the plugins folder read only, so the scheduler, the DAG processor and the API server can read the timetable of a stored DAG."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] :
+      length([for volume in aws_ecs_task_definition.service[key].volume : volume if volume.name == "code_airflow_plugins" && endswith(volume.host_path, "/airflow_plugins")]) == 1
+    ])
+    error_message = "The plugins mount comes from the airflow_plugins folder of the staged code."
+  }
+}
+
 # A scheduled publisher run takes its code from the code run that CI staged last (owner A, Nov 13 2026): every Airflow container names the one parameter that
 # holds it, and the launch role may read that parameter and nothing else under the project folder (infra/iam).
 run "airflow_names_the_current_code_run_parameter" {

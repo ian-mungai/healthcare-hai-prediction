@@ -211,6 +211,18 @@
     "scripts/quality/run_model_metadata_e2e.py": {
       "runtime": "analytics",
       "reason": "Library stubs not installed for \"yaml\""
+    },
+    "orchestration/ingestion_timetables.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.timetables.trigger\""
+    },
+    "airflow_plugins/hai_timetables.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.plugins_manager\""
+    },
+    "scripts/orchestration/schedule_timetable_cases.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.timetables.base\"; Cannot find implementation or library stub for module named \"airflow.utils.types\"; Cannot find implementation or library stub for module named \"airflow.timetables.trigger\"; Cannot find implementation or library stub for module named \"airflow.serialization.decoders\"; Cannot find implementation or library stub for module named \"airflow.serialization.encoders\"; Cannot find implementation or library stub for module named \"airflow.serialization.serialized_objects\"; Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.models.dagbag\"; Cannot find implementation or library stub for module named \"airflow\""
     }
   }
 }

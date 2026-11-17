@@ -59,7 +59,10 @@ TERMINAL_STATES = frozenset({"success", "failed"})  # the states in which a DAG 
 BAG: dict[str, Any] = {}
 SOURCES = (
     "orchestration/airflow_steps.py",
+    "airflow_plugins/hai_timetables.py",
     "orchestration/dag_runtime.py",
+    "orchestration/ingestion_schedule.py",
+    "orchestration/ingestion_timetables.py",
     "orchestration/ecs_launch.py",
     "orchestration/ecs_launch_operator.py",
     "orchestration/ecs_launch_provider.py",
@@ -70,6 +73,7 @@ SOURCES = (
     "scripts/orchestration/ecs_fake.py",
     "scripts/orchestration/ecs_launch_fake.py",
     "scripts/orchestration/real_image_dags.py",
+    "scripts/orchestration/schedule_timetable_cases.py",
     "scripts/orchestration/in_image_checks.py",
     "scripts/orchestration/run_real_image_dags_e2e.py",
     "services/orchestration/docker-compose.orchestration.yaml",
@@ -1278,7 +1282,19 @@ def cases_catalog() -> dict[str, Scenario]:
     )
     form = Scenario("trigger_forms_validate_in_airflow", (), make_rig, after=form_check)
     conformance = Scenario("bridge_refuses_what_aws_refuses", (), make_rig, after=bridge_conformance)
-    return {item.name: item for item in (pipeline, *research_cases, *serve_cases, *refusals, *planted_cases, form, conformance)}
+    timetables = Scenario("scheduled_ingestion_runs_have_the_run_id_of_their_job", (), make_rig, after=timetable_check)
+    return {item.name: item for item in (pipeline, *research_cases, *serve_cases, *refusals, *planted_cases, form, conformance, timetables)}
+
+
+def timetable_check(_rig: Any) -> None:
+    """Airflow's own timetable classes name the scheduled runs of the two ingestion schedules as their jobs, from November 2026 to April 2028 (day 1, the retry
+    days, a year end and a leap February), and Airflow's DAG parser gives the two production DAG files their timetables (``schedule_timetable_cases``). The
+    plugins folder is the checkout's, as the image mounts it at /opt/airflow/plugins."""
+    from scripts.orchestration import schedule_timetable_cases
+
+    os.environ.setdefault("AIRFLOW__CORE__PLUGINS_FOLDER", str(ROOT / "airflow_plugins"))
+    failed = [f"{item['case']}: {item['evidence']}" for item in schedule_timetable_cases.run_cases() if not item["passed"]]
+    require(not failed, "; ".join(failed))
 
 
 def versions() -> dict[str, str]:

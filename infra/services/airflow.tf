@@ -2,44 +2,45 @@ locals {
   # Every DAG step launches its job through the direct ECS launch library (orchestration/airflow_steps.py). It imports these modules, reads these tables and
   # measures the free space of the scratch volume, so every Airflow container receives them.
   airflow_launch_files = {
-    code_airflow_steps       = "orchestration/airflow_steps.py"
-    code_ecs_preflight       = "orchestration/ecs_preflight.py"
-    code_ecs_adapter         = "orchestration/ecs_adapter.py"
-    code_ecs_launch          = "orchestration/ecs_launch.py"
-    code_ecs_launch_operator = "orchestration/ecs_launch_operator.py"
-    code_ecs_launch_provider = "orchestration/ecs_launch_provider.py"
-    code_promotion_chain     = "orchestration/promotion_chain.py"
-    code_ecs_lineage         = "orchestration/ecs_lineage.py"
-    code_raw_lineage         = "orchestration/raw_lineage.py"
-    code_snapshots           = "orchestration/snapshots.py"
-    code_launch_facet        = "data_contracts/orchestration/launch_lineage_facet.schema.json"
-    code_snapshot_schema     = "data_contracts/orchestration/snapshot_record.schema.json"
-    code_input_schema        = "data_contracts/orchestration/input_snapshot_record.schema.json"
-    code_openlineage_core    = "data_contracts/openlineage/OpenLineage-2-0-2.json"
-    code_openlineage_legacy  = "data_contracts/openlineage/OpenLineage-1-0-2.json"
-    code_openlineage_version = "data_contracts/openlineage/DatasetVersionDatasetFacet-1-0-0.json"
-    code_glue_connector      = "config/metadata/ingestion/glue.json"
-    code_athena_mirror       = "config/lakehouse/athena_mirror.json"
-    code_silver_contract     = "data_contracts/lakehouse/silver_publish.json"
-    code_gold_contract       = "data_contracts/lakehouse/gold_contract.json"
-    code_features_contract   = "data_contracts/lakehouse/features_publish.json"
-    code_feature_schema      = "data_contracts/features/feature_schema.json"
-    code_silver_sources      = "dbt/models/silver/staging/_bronze__sources.yml"
-    code_training_approvals  = "orchestration/training_approvals.py"
-    code_ingestion_schedule  = "orchestration/ingestion_schedule.py"
-    code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
-    code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"
-    code_host_jobs           = "config/orchestration/host_jobs.json"
-    code_direct_jobs         = "config/orchestration/direct_jobs.json"
-    code_launch_config       = "config/orchestration/ecs_launch.json"
-    code_bronze_tables       = "config/lakehouse/bronze_tables.json"
-    code_lakehouse_init      = "scripts/lakehouse/__init__.py"
-    code_bronze_dispatch     = "scripts/lakehouse/bronze_dispatch.py"
-    code_layer_report        = "orchestration/layer_report.py"
-    code_layer_acceptance    = "scripts/lakehouse/layer_acceptance.py"
-    code_lakehouse_pins      = "scripts/lakehouse/pins.py"
-    code_version_listing     = "scripts/lakehouse/version_listing.py"
-    code_process             = "scripts/process.py"
+    code_airflow_steps        = "orchestration/airflow_steps.py"
+    code_ecs_preflight        = "orchestration/ecs_preflight.py"
+    code_ecs_adapter          = "orchestration/ecs_adapter.py"
+    code_ecs_launch           = "orchestration/ecs_launch.py"
+    code_ecs_launch_operator  = "orchestration/ecs_launch_operator.py"
+    code_ecs_launch_provider  = "orchestration/ecs_launch_provider.py"
+    code_promotion_chain      = "orchestration/promotion_chain.py"
+    code_ecs_lineage          = "orchestration/ecs_lineage.py"
+    code_raw_lineage          = "orchestration/raw_lineage.py"
+    code_snapshots            = "orchestration/snapshots.py"
+    code_launch_facet         = "data_contracts/orchestration/launch_lineage_facet.schema.json"
+    code_snapshot_schema      = "data_contracts/orchestration/snapshot_record.schema.json"
+    code_input_schema         = "data_contracts/orchestration/input_snapshot_record.schema.json"
+    code_openlineage_core     = "data_contracts/openlineage/OpenLineage-2-0-2.json"
+    code_openlineage_legacy   = "data_contracts/openlineage/OpenLineage-1-0-2.json"
+    code_openlineage_version  = "data_contracts/openlineage/DatasetVersionDatasetFacet-1-0-0.json"
+    code_glue_connector       = "config/metadata/ingestion/glue.json"
+    code_athena_mirror        = "config/lakehouse/athena_mirror.json"
+    code_silver_contract      = "data_contracts/lakehouse/silver_publish.json"
+    code_gold_contract        = "data_contracts/lakehouse/gold_contract.json"
+    code_features_contract    = "data_contracts/lakehouse/features_publish.json"
+    code_feature_schema       = "data_contracts/features/feature_schema.json"
+    code_silver_sources       = "dbt/models/silver/staging/_bronze__sources.yml"
+    code_training_approvals   = "orchestration/training_approvals.py"
+    code_ingestion_schedule   = "orchestration/ingestion_schedule.py"
+    code_ingestion_timetables = "orchestration/ingestion_timetables.py"
+    code_jobs_table           = "config/orchestration/ecs_broker_jobs.json"
+    code_jobs_schema          = "config/orchestration/ecs_broker_jobs.schema.json"
+    code_host_jobs            = "config/orchestration/host_jobs.json"
+    code_direct_jobs          = "config/orchestration/direct_jobs.json"
+    code_launch_config        = "config/orchestration/ecs_launch.json"
+    code_bronze_tables        = "config/lakehouse/bronze_tables.json"
+    code_lakehouse_init       = "scripts/lakehouse/__init__.py"
+    code_bronze_dispatch      = "scripts/lakehouse/bronze_dispatch.py"
+    code_layer_report         = "orchestration/layer_report.py"
+    code_layer_acceptance     = "scripts/lakehouse/layer_acceptance.py"
+    code_lakehouse_pins       = "scripts/lakehouse/pins.py"
+    code_version_listing      = "scripts/lakehouse/version_listing.py"
+    code_process              = "scripts/process.py"
   }
 
   airflow_launch_volumes = merge({ for name, path in local.airflow_launch_files : name => "${local.code_path}/${path}" }, { job_scratch = var.airflow_launch_scratch_path })
@@ -98,7 +99,9 @@ locals {
   )
 
   airflow_code_volumes = merge({
-    code_dags               = "${local.code_path}/dags"
+    code_dags = "${local.code_path}/dags"
+    # The plugin that registers the ingestion timetables (airflow_plugins/hai_timetables.py): Airflow loads a custom timetable only from its plugins folder.
+    code_airflow_plugins    = "${local.code_path}/airflow_plugins"
     code_orchestration_init = "${local.code_path}/orchestration/__init__.py"
     code_interface          = "${local.code_path}/orchestration/interface.py"
     code_client             = "${local.code_path}/orchestration/client.py"
@@ -113,6 +116,7 @@ locals {
 
   airflow_code_mounts = concat([
     { sourceVolume = "code_dags", containerPath = "/opt/airflow/dags", readOnly = true },
+    { sourceVolume = "code_airflow_plugins", containerPath = "/opt/airflow/plugins", readOnly = true },
     { sourceVolume = "code_orchestration_init", containerPath = "/opt/hai/orchestration/__init__.py", readOnly = true },
     { sourceVolume = "code_interface", containerPath = "/opt/hai/orchestration/interface.py", readOnly = true },
     { sourceVolume = "code_client", containerPath = "/opt/hai/orchestration/client.py", readOnly = true },

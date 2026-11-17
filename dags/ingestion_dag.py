@@ -5,8 +5,9 @@ host through the direct ECS launch library), evidence (its launch record says th
 archive, which carries the tracked inputs. The DAG run names the kind (``bootstrap``, which skips every unit that has a completion record, or ``monthly``)
 and the capture root (``raw/``, or one ``ingestion_test/<run ID>/`` folder for a test) as the launch parameters, and the owner triggers the DAG by hand with
 the run's ``run_id`` (``ingestion_<hex>`` with a fresh random hex). In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on a monthly schedule: a
-scheduled run takes the run ID of its logical date (``ingestion_`` and the first eight hex digits of the digest of that date) and is always the ``monthly``
-kind, and only the hand trigger starts ``bootstrap`` (orchestration/ingestion_schedule.py). Development keeps the hand trigger.
+scheduled run takes the run ID of its logical date (``ingestion_`` and the first eight hex digits of the digest of that date) as its job's run ID and as its
+own Airflow run ID (the monthly timetable of orchestration/ingestion_timetables.py names it), and is always the ``monthly`` kind, and only the hand trigger
+starts ``bootstrap`` (orchestration/ingestion_schedule.py). Development keeps the hand trigger.
 
 A fifth task, ``start_bronze``, starts ``bronze_chain_dag`` under ``bronze_<hex>`` of this run once the run passed, when the owner started it by hand (a
 zero-day retry period). A scheduled run starts none: the last day of its retry period does (``ingestion_retry_dag``). A test capture root starts none.
@@ -16,6 +17,7 @@ The plan rebuilds and holds are a later slice.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from airflow.sdk import DAG, Param
 
@@ -23,6 +25,15 @@ from orchestration.dag_runtime import build_bronze_start, build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RUN, schedule_for
 
 SCHEDULE = schedule_for(os.environ)
+
+
+def timetable() -> Any:
+    """The timetable of the monthly schedule, which names a scheduled DAG run as its job. Only a deployment with the schedule on imports it."""
+    from orchestration.ingestion_timetables import monthly_timetable
+
+    return monthly_timetable()
+
+
 # A scheduled DAG needs a default for every parameter, so the scheduled form's run id defaults to ``scheduled``, which only a scheduled run resolves. The
 # development form has no schedule and keeps its required run id.
 RUN_ID = (
@@ -31,7 +42,7 @@ RUN_ID = (
 
 with DAG(
     dag_id="ingestion_dag",
-    schedule=SCHEDULE,
+    schedule=timetable() if SCHEDULE else None,
     catchup=False,
     max_active_runs=1,
     tags=["orchestration", "ingestion"],

@@ -86,6 +86,36 @@ def resolve_kind(requested: str, context: Mapping[str, Any]) -> str:
     return MONTHLY_KIND if is_scheduled(context) else requested
 
 
+def scheduled_retry_of(logical_date: datetime) -> tuple[str, int]:
+    """The original run and the day of the scheduled retry at ``logical_date``, which must be midnight UTC on day 2 or 3 of a month: the day is the day of the
+    month and the original is the monthly run of day 1 of that month."""
+    if logical_date.tzinfo is None:
+        raise ValueError("a scheduled retry has a logical date with a time zone")
+    utc = logical_date.astimezone(UTC)
+    if (utc.hour, utc.minute, utc.second, utc.microsecond) != (0, 0, 0, 0) or not RETRY_FIRST_DAY <= utc.day <= RETRY_LAST_DAY:
+        raise ValueError("a scheduled retry runs at midnight UTC on day 2 or 3 of the month")
+    return scheduled_run_id(utc.replace(day=1)), utc.day
+
+
+def scheduled_dag_run_id(kind: str, run_after: datetime) -> str:
+    """The run ID that a scheduled run of ``kind`` (``monthly`` or ``retry``) at ``run_after`` has: the Airflow run ID of the DAG run and the run ID of its job.
+
+    The timetables of ``orchestration/ingestion_timetables.py`` give it to the scheduler, and the task derives the same ID from the logical date
+    (``resolve_run_id``, ``resolve_retry``), which is the time of the cron. A time the cron never gives names no run.
+    """
+    if kind == RETRY_KIND:
+        original, day = scheduled_retry_of(run_after)
+        return retry_run_id(original, day)
+    if kind != MONTHLY_KIND:
+        raise ValueError(f"the kind of a scheduled run is {MONTHLY_KIND} or {RETRY_KIND}")
+    if run_after.tzinfo is None:
+        raise ValueError("a scheduled run has a logical date with a time zone")
+    utc = run_after.astimezone(UTC)
+    if (utc.day, utc.hour, utc.minute, utc.second, utc.microsecond) != (1, 0, 0, 0, 0):
+        raise ValueError("a scheduled monthly run runs at midnight UTC on day 1 of the month")
+    return scheduled_run_id(utc)
+
+
 def resolve_retry(original: str, day: int, context: Mapping[str, Any]) -> tuple[str, int]:
     """The original run and the day of the current retry. A hand trigger names both. A scheduled run names neither: its logical date, which must be midnight
     UTC on day 2 or 3 of a month, gives the day (the day of the month) and the monthly run of day 1 as the original. Half a name is refused."""
@@ -95,10 +125,7 @@ def resolve_retry(original: str, day: int, context: Mapping[str, Any]) -> tuple[
         raise ValueError("a retry names both its original run and its day, or neither")
     if not is_scheduled(context):
         raise ValueError("this retry is not scheduled and names no original run and day")
-    utc = context["dag_run"].logical_date.astimezone(UTC)
-    if (utc.hour, utc.minute, utc.second, utc.microsecond) != (0, 0, 0, 0) or not RETRY_FIRST_DAY <= utc.day <= RETRY_LAST_DAY:
-        raise ValueError("a scheduled retry runs at midnight UTC on day 2 or 3 of the month")
-    return scheduled_run_id(utc.replace(day=1)), utc.day
+    return scheduled_retry_of(context["dag_run"].logical_date)
 
 
 def retry_run_id(original_run: str, day: int) -> str:

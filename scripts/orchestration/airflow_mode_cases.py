@@ -468,6 +468,16 @@ class World:
         return dict(self.states)
 
 
+class StockCronTimetable:
+    """Stand-in of Airflow's ``CronTriggerTimetable``: the cron and the time zone it was given, and the name its scheduler gives a run (``<type>__<time>``)."""
+
+    def __init__(self, cron: str, *, timezone: str, **_: Any) -> None:
+        self.cron, self.timezone = cron, timezone
+
+    def generate_run_id(self, *, run_type: Any, run_after: Any, data_interval: Any, **_: Any) -> str:
+        return f"{getattr(run_type, 'value', run_type)}__{run_after.isoformat()}"
+
+
 @contextmanager
 def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
     """``run_step`` of the shipped DAG runtime over the SDK stand-in, with the rig's launch services."""
@@ -486,6 +496,8 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
         name: ModuleType(name) for name in ("airflow", "airflow.providers", "airflow.providers.standard", "airflow.providers.standard.operators")
     }
     modules["airflow.sdk"] = sdk
+    modules["airflow.timetables"] = ModuleType("airflow.timetables")
+    modules["airflow.timetables.trigger"] = SimpleNamespace(CronTriggerTimetable=StockCronTimetable)
     modules["airflow.sdk.exceptions"] = ModuleType("airflow.sdk.exceptions")
     modules["airflow.sdk.exceptions"].__dict__["AirflowSkipException"] = Skipped
     modules[TRIGGER_MODULE] = SimpleNamespace(TriggerDagRunOperator=lambda **settings: Operator(**settings))

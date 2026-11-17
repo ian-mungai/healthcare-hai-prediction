@@ -5,7 +5,8 @@ The DAG carries its run kind as launch parameters: the original run, the retry d
 nothing new. The retry is a new run of the publisher: capture mode skips every unit that has a completion record, so a retry tries exactly the units that have
 none, and nothing is restored or pruned. Nothing is staged for the run but its code, and no step waits for the owner.
 In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on days 2 and 3 of each month at midnight UTC, and a scheduled run takes the monthly run of day 1
-as its original and the day of the month as its day, 2 or 3 (orchestration/ingestion_schedule.py); development keeps the hand trigger.
+as its original and the day of the month as its day, 2 or 3 (orchestration/ingestion_schedule.py). The run's own Airflow run ID is its job's run ID
+(``ingestion_retry_<hex>_<day>``), which the retry timetable of orchestration/ingestion_timetables.py gives the scheduler. Development keeps the hand trigger.
 
 The last retry day ends the retry period: its ``start_bronze`` task starts ``bronze_chain_dag`` under ``bronze_<hex>`` whatever the day's own result, because
 the files still missing then keep their earlier capture. A hand-started retry starts no bronze run.
@@ -14,6 +15,7 @@ the files still missing then keep their earlier capture. A hand-started retry st
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from airflow.sdk import DAG, Param
 
@@ -22,6 +24,15 @@ from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RETRY_DAY
 from orchestration.training_contract import RETRY_FIRST_DAY, RETRY_LAST_DAY
 
 SCHEDULE = retry_schedule_for(os.environ)
+
+
+def timetable() -> Any:
+    """The timetable of the retry schedule, which names a scheduled DAG run as its job. Only a deployment with the schedule on imports it."""
+    from orchestration.ingestion_timetables import retry_timetable
+
+    return retry_timetable()
+
+
 # A scheduled DAG needs a default for every parameter, so the scheduled form carries ``scheduled`` and day 0, which only a scheduled run resolves from its
 # logical date. The development form has no schedule and keeps its required original run and day.
 ORIGINAL_RUN = (
@@ -35,7 +46,7 @@ DAY = (
 
 with DAG(
     dag_id="ingestion_retry_dag",
-    schedule=SCHEDULE,
+    schedule=timetable() if SCHEDULE else None,
     catchup=False,
     max_active_runs=1,
     tags=["orchestration", "ingestion"],

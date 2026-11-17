@@ -33,6 +33,7 @@ PYTHON_SOURCES = {
     "scripts": "imports",
     "orchestration": "imports",
     "dags": "entry",
+    "airflow_plugins": "entry",
     "services/lineage": "entry",
     "services/analytics": "entry",
     "feature_store": "entry",

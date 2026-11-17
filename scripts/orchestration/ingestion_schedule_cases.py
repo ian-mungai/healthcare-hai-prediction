@@ -95,13 +95,24 @@ def scheduled(
             yield current, seen
 
 
+def cron_of(setting: Any) -> str | None:
+    """The cron string of a DAG's schedule: the string itself, or the cron of its timetable."""
+    return setting if setting is None or isinstance(setting, str) else str(setting.cron)
+
+
 def schedule_is_production_only() -> None:
     named = "ingestion_ab12cd34"
     for name, cron in {"prod": schedule.MONTHLY, "dev": None}.items():
         params = {"run_id": named, "mode": "real"}
         with scheduled(Rig(), {schedule.ENVIRONMENT_SETTING: name}, params, "manual") as (current, seen):
             current.run_dag("ingestion_dag.py")
-        require(bool(seen) and seen[0]["schedule"] == cron, f"{name} got the schedule {seen[0]['schedule'] if seen else None}, not {cron}")
+        require(bool(seen) and cron_of(seen[0]["schedule"]) == cron, f"{name} got the schedule {seen[0]['schedule'] if seen else None}, not {cron}")
+        if cron is not None:
+            timetable = seen[0]["schedule"]
+            require(
+                type(timetable).__name__ == "IngestionMonthlyTimetable" and timetable.timezone == "UTC",
+                f"the monthly schedule is {timetable!r}, not the timetable of the ingestion run IDs",
+            )
     with scheduled(Rig(), {}, {"run_id": named, "mode": "real"}, "manual") as (current, seen):
         current.run_dag("ingestion_dag.py")
     require(seen[0]["schedule"] is None, "a deployment that names no environment got a schedule")
@@ -245,7 +256,13 @@ def retry_schedule_is_production_only() -> None:
         params = SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY}
         with scheduled(retry_rig(), {schedule.ENVIRONMENT_SETTING: name}, params, "manual", RETRY_DAG) as (current, seen):
             current.run_dag("ingestion_retry_dag.py")
-        require(bool(seen) and seen[0]["schedule"] == cron, f"{name} got the retry schedule {seen[0]['schedule'] if seen else None}, not {cron}")
+        require(bool(seen) and cron_of(seen[0]["schedule"]) == cron, f"{name} got the retry schedule {seen[0]['schedule'] if seen else None}, not {cron}")
+        if cron is not None:
+            timetable = seen[0]["schedule"]
+            require(
+                type(timetable).__name__ == "IngestionRetryTimetable" and timetable.timezone == "UTC",
+                f"the retry schedule is {timetable!r}, not the retry timetable",
+            )
     with scheduled(retry_rig(), {}, SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY}, "manual", RETRY_DAG) as (current, seen):
         current.run_dag("ingestion_retry_dag.py")
     require(seen[0]["schedule"] is None, "a deployment that names no environment got a retry schedule")
@@ -420,7 +437,35 @@ def production_services_require_the_current_code_run_only_in_production() -> Non
             require(reader() is None, f"{environment} refused a missing parameter")
 
 
+def the_timetables_name_a_scheduled_run_as_its_job_and_leave_a_hand_run_alone() -> None:
+    """The two production DAG files give the scheduler their timetables, and the name a timetable gives a scheduled run is the run ID its job gets. The run
+    types other than scheduled keep Airflow's own name. The real Airflow classes are checked by ``schedule_timetable_cases`` in the image."""
+    environment = {schedule.ENVIRONMENT_SETTING: "prod"}
+    with scheduled(Rig(), environment, {"run_id": "ingestion_ab12cd34", "mode": "real"}, "manual") as (current, seen):
+        current.run_dag("ingestion_dag.py")
+    monthly = seen[0]["schedule"]
+    with scheduled(retry_rig(), environment, SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY}, "manual", RETRY_DAG) as (
+        current,
+        seen,
+    ):
+        current.run_dag("ingestion_retry_dag.py")
+    retry = seen[0]["schedule"]
+    require(
+        monthly.generate_run_id(run_type="scheduled", run_after=LOGICAL_DATE, data_interval=None) == ORIGINAL, "the monthly timetable names the run otherwise"
+    )
+    for day in (schedule.RETRY_FIRST_DAY, schedule.RETRY_LAST_DAY):
+        named = retry.generate_run_id(run_type="scheduled", run_after=LOGICAL_DATE.replace(day=day), data_interval=None)
+        require(named == schedule.retry_run_id(ORIGINAL, day), f"the retry timetable names day {day} {named}")
+    for timetable in (monthly, retry):
+        hand = timetable.generate_run_id(run_type="manual", run_after=LOGICAL_DATE, data_interval=None)
+        require(hand.startswith("manual__"), f"a hand run was named {hand}")
+        refuses(
+            ValueError, lambda timetable=timetable: timetable.generate_run_id(run_type="scheduled", run_after=LOGICAL_DATE.replace(hour=5), data_interval=None)
+        )
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "the_timetables_name_a_scheduled_run_as_its_job_and_leave_a_hand_run_alone": the_timetables_name_a_scheduled_run_as_its_job_and_leave_a_hand_run_alone,
     "schedule_is_production_only": schedule_is_production_only,
     "scheduled_run_launches_the_monthly_kind_once_per_date": scheduled_run_launches_the_monthly_kind_once_per_date,
     "scheduled_run_takes_the_current_code_run_and_keeps_it": scheduled_run_takes_the_current_code_run_and_keeps_it,
