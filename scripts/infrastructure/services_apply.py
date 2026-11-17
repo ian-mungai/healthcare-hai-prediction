@@ -28,9 +28,11 @@ only when the services are stable, the services give the frozen binding and ever
 its job memory. It never takes a later render as the selection: it refuses when the rendered jobs inputs (``infra/jobs/deployment.auto.tfvars.json``, which
 step 5 wrote) disagree with the frozen selection, binding or identity.
 
-Before step 1, save your current reviewed services inputs (the file you pass to ``--preparation-inputs`` today) as ``SERVICES_INPUTS`` below, with
-``"host_job_cap_mib": 22528`` (or your cap) added to its ``variables``; leave the key out to keep the default of 26816. Save your current reviewed jobs
-inputs as ``JOBS_INPUTS``; they list ``host_jobs`` beside ``host_jobs_enabled``, because the contract refuses an omitted list.
+Before step 1, choose the cap. The committed default of ``host_job_cap_mib`` is 22800, the room the services leave with every default service on. To
+change the cap for good, change that default in infra/services/variables.tf and commit it, and save SERVICES_INPUTS with an empty ``variables`` object. To
+try one other cap, save SERVICES_INPUTS as a Git-ignored overrides file with ``"host_job_cap_mib": 22528`` (or your cap) in its ``variables``; an
+overrides file never reaches main. Save the jobs overrides as JOBS_INPUTS, with an empty ``variables`` object when you override nothing: the hold freezes
+the host families they select, which are the committed ``host_jobs`` and the publisher unless the file turns them off or lists others.
 Run every command from the repository root in one shell.
 
     set -euo pipefail
@@ -136,6 +138,7 @@ JOB_MEMORY = re.compile(r"job_memory_mib=([1-9][0-9]*) ")
 # The jobs inputs the last jobs plan and apply rendered (render_jobs_config), and the jobs stack file that defaults the selected host families.
 JOBS_INPUTS_RENDERED = REPO_ROOT / "infra" / "jobs" / "deployment.auto.tfvars.json"
 JOBS_HOST_VARIABLES = REPO_ROOT / "infra" / "jobs" / "host.tf"
+JOBS_PUBLISHER_VARIABLES = REPO_ROOT / "infra" / "jobs" / "publisher.tf"
 # The host table: which families reserve their own size (a model set) instead of the whole job room.
 HOST_TABLE = REPO_ROOT / "config" / "orchestration" / "host_jobs.json"
 FAMILY_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -191,12 +194,20 @@ def registration_problem(definitions: dict[str, dict[str, Any]], binding: str) -
     return None
 
 
+def committed_switch(source: Path, name: str) -> bool:
+    """The committed default of a true or false jobs input, which applies while the jobs overrides do not name it."""
+    match = re.search(rf'variable "{name}" \{{.*?default\s*=\s*(true|false)\b', source.read_text(), re.DOTALL)
+    if match is None:
+        raise ConfigurationError(f"{source.name} has no default for {name}")
+    return match.group(1) == "true"
+
+
 def selected_host_families(values: dict[str, Any], prefix: str) -> list[str]:
-    """The host task definition families that jobs inputs select, each as ``<prefix><family>_host``: ``host_jobs`` (the default of the jobs stack when
-    the inputs do not name it) while ``host_jobs_enabled`` is true, and the publisher while ``publisher_job_enabled`` is true."""
+    """The host task definition families that jobs inputs select, each as ``<prefix><family>_host``: ``host_jobs`` while ``host_jobs_enabled`` is true, and
+    the publisher while ``publisher_job_enabled`` is true. An input that the jobs overrides do not name keeps its committed default in the jobs stack."""
     bad = "the host_jobs of the jobs inputs are not a list of family names"
     names: list[Any] = []
-    if values.get("host_jobs_enabled") is True:
+    if values.get("host_jobs_enabled", committed_switch(JOBS_HOST_VARIABLES, "host_jobs_enabled")) is True:
         selected = values.get("host_jobs")
         if selected is None:
             match = re.search(r'variable "host_jobs" \{.*?default\s*=\s*\[([^\]]*)\]', JOBS_HOST_VARIABLES.read_text(), re.DOTALL)
@@ -206,7 +217,7 @@ def selected_host_families(values: dict[str, Any], prefix: str) -> list[str]:
         if not isinstance(selected, list):
             raise ServicesApplyError(bad)
         names.extend(selected)
-    if values.get("publisher_job_enabled") is True:
+    if values.get("publisher_job_enabled", committed_switch(JOBS_PUBLISHER_VARIABLES, "publisher_job_enabled")) is True:
         names.append("publisher")
     if not all(isinstance(name, str) and FAMILY_NAME.fullmatch(name) for name in names):
         raise ServicesApplyError(bad)

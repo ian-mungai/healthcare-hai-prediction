@@ -1,0 +1,97 @@
+{
+  "alerts_topic_arn": "arn:aws:sns:us-west-2:<account>:healthcare_hai_prediction_alerts_dev",
+  "aws_profile": "healthcare_hai_prediction_dev",
+  "aws_region": "us-west-2",
+  "data_bucket_name": "<bucket>",
+  "drift_enabled": true,
+  "drift_images": {
+    "drift": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_drift_dev@sha256:b74f5fe0a6082f4cb24bf3d2117faeae1c3ece090033a55fc3f1ccab16465520",
+    "feature_store": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_feature_store_dev@sha256:35b02cbb97aef0d50fbc0e2457fac24e9b592a4e3fa19c4c471ce710bd2bd02f",
+    "training": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_training_dev@sha256:62324d75421fa1fd4f8cb45221fe3a48ac46582c261f49bf8d60d0083d5736b6"
+  },
+  "drift_roles": {
+    "drift_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_drift_task_dev",
+    "execution": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_execution_dev"
+  },
+  "environment": "dev",
+  "expected_account_id": "<account>",
+  "host_capacity_binding": "job_memory_mib=22800 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=7920",
+  "host_job_memory_mib": 22800,
+  "host_jobs": [
+    "silver",
+    "gold",
+    "features",
+    "features_m1",
+    "features_m2",
+    "features_m3",
+    "features_m4",
+    "features_m5",
+    "features_m6",
+    "train",
+    "drift",
+    "promote",
+    "serve",
+    "metadata"
+  ],
+  "host_jobs_enabled": true,
+  "host_private_ip": "<host_ip>",
+  "host_repo_path": "/data/repo",
+  "images": {
+    "analytics": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_analytics_dev@sha256:88243fe377164917b522f9d1d606beebd7f6a4c1dc56d662c057d7b0a85f07c1",
+    "quality": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_quality_dev@sha256:77c5c82d3fcca00be3eb520cf2a5b2eda65131de27d122f15e7e6dc42d1561fe",
+    "spark": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_spark_dev@sha256:e02db9a05f04aac58a2720b2ae9af1063649d10a775bba198b399851a85ac9ad"
+  },
+  "job_role_arns": {
+    "execution": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_execution_dev",
+    "publisher_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_publisher_task_dev",
+    "write_features_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_write_features_task_dev",
+    "write_gold_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_write_gold_task_dev",
+    "write_silver_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_write_silver_task_dev"
+  },
+  "layer_jobs": [
+    "features",
+    "gold",
+    "silver"
+  ],
+  "layer_jobs_enabled": true,
+  "log_group_name": "healthcare_hai_prediction_jobs_dev",
+  "openmetadata_images": {
+    "ingestion": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_openmetadata_ingestion_dev@sha256:cd28c0b1f64b9c3581badf996f7fef6ffea3918754d588095b2f04a8c9f3dca4"
+  },
+  "openmetadata_roles": {
+    "execution": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_execution_dev",
+    "openmetadata_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_openmetadata_task_dev"
+  },
+  "project_name": "healthcare_hai_prediction",
+  "promote_enabled": true,
+  "publisher_job_enabled": true,
+  "publisher_keys_enabled": true,
+  "serve_enabled": true,
+  "serve_manifest_prefix": "serving/deployments",
+  "serve_roles": {
+    "serve_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_serve_task_dev"
+  },
+  "train_enabled": true,
+  "train_images": {
+    "feature_store": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_feature_store_dev@sha256:35b02cbb97aef0d50fbc0e2457fac24e9b592a4e3fa19c4c471ce710bd2bd02f",
+    "training": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_training_dev@sha256:62324d75421fa1fd4f8cb45221fe3a48ac46582c261f49bf8d60d0083d5736b6"
+  },
+  "train_roles": {
+    "execution": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_execution_dev",
+    "train_task": "arn:aws:iam::<account>:role/healthcare_hai_prediction_job_train_task_dev"
+  },
+  "writer_parameter_names": {
+    "write_features_task": [
+      "/healthcare_hai_prediction/aws_polaris_features_client_id",
+      "/healthcare_hai_prediction/aws_polaris_features_client_secret"
+    ],
+    "write_gold_task": [
+      "/healthcare_hai_prediction/aws_polaris_gold_client_id",
+      "/healthcare_hai_prediction/aws_polaris_gold_client_secret"
+    ],
+    "write_silver_task": [
+      "/healthcare_hai_prediction/aws_polaris_silver_client_id",
+      "/healthcare_hai_prediction/aws_polaris_silver_client_secret"
+    ]
+  }
+}

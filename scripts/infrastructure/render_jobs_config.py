@@ -36,11 +36,72 @@ BINDING_FORM = re.compile(
     r"service_reservations_mib=(?P<services>[0-9]+)"
 )
 PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/jobs_preparation.schema.json"
+# The pushed image digests that push_images record keeps for the services stack: the one record of what ECR holds.
+IMAGE_RECORD = SERVICES_DIRECTORY / "images.auto.tfvars.json"
+DIGEST_FORM = re.compile(r"sha256:[0-9a-f]{64}")
+# The jobs inputs that hold an account, the project or the environment, so they are built here and never committed. The job switches, the host job families,
+# the host repository path and the serve prefix are the committed Terraform defaults.
+JOB_ROLES = {
+    "job_role_arns": ("execution", "publisher_task", "write_silver_task", "write_gold_task", "write_features_task"),
+    "train_roles": ("execution", "train_task"),
+    "drift_roles": ("execution", "drift_task"),
+    "serve_roles": ("serve_task",),
+    "openmetadata_roles": ("execution", "openmetadata_task"),
+}
+WRITER_LAYERS = ("silver", "gold", "features")
+# Each image input maps its keys to the repository, named <project>_<repository>_<environment>, whose digest the record holds.
+JOB_IMAGES = {
+    "images": {"analytics": "analytics", "quality": "quality", "spark": "spark"},
+    "train_images": {"training": "training", "feature_store": "feature_store"},
+    "drift_images": {"training": "training", "feature_store": "feature_store", "drift": "drift"},
+    "openmetadata_images": {"ingestion": "openmetadata_ingestion"},
+}
 
 
 def jobs_values(storage: dict[str, str]) -> dict[str, str]:
     """Return the six environment-derived base inputs for the jobs root."""
     return {key: storage[key] for key in ("aws_profile", "aws_region", "data_bucket_name", "environment", "expected_account_id", "project_name")}
+
+
+def image_digests(path: Path | None = None) -> dict[str, str]:
+    """The recorded image digests by repository name, or refuse; the record is the one push_images writes after a push."""
+    refusal = ConfigurationError("The image digests could not be read. Record them with push_images record, then render again. No Terraform action was run.")
+    try:
+        record = json.loads((path or IMAGE_RECORD).read_text(encoding="utf-8"))["image_digests"]
+    except (OSError, ValueError, KeyError, TypeError):
+        raise refusal from None
+    if not isinstance(record, dict):
+        raise refusal
+    return {str(name): str(digest) for name, digest in record.items()}
+
+
+def job_images(storage: dict[str, str], digests: dict[str, str]) -> dict[str, dict[str, str]]:
+    """The image inputs of the jobs stack: each repository of the project in the account, pinned by its recorded digest."""
+    registry = f"{storage['expected_account_id']}.dkr.ecr.{storage['aws_region']}.amazonaws.com/{storage['project_name']}"
+    inputs: dict[str, dict[str, str]] = {}
+    for group, members in JOB_IMAGES.items():
+        inputs[group] = {}
+        for key, repository in members.items():
+            digest = digests.get(repository)
+            if digest is None or not DIGEST_FORM.fullmatch(digest):
+                raise ConfigurationError(
+                    f"No valid digest is recorded for the {repository} image. Record it with push_images record, then render again. No Terraform action ran."
+                )
+            inputs[group][key] = f"{registry}_{repository}_{storage['environment']}@{digest}"
+    return inputs
+
+
+def environment_values(storage: dict[str, str], digests: dict[str, str]) -> dict[str, Any]:
+    """The jobs inputs built from .env and the recorded digests: the roles, the log group, the writer parameter names and the images."""
+    account, project, environment = storage["expected_account_id"], storage["project_name"], storage["environment"]
+    values: dict[str, Any] = {
+        group: {name: f"arn:aws:iam::{account}:role/{project}_job_{name}_{environment}" for name in names} for group, names in JOB_ROLES.items()
+    }
+    values["log_group_name"] = f"{project}_jobs_{environment}"
+    values["writer_parameter_names"] = {
+        f"write_{layer}_task": [f"/{project}/aws_polaris_{layer}_client_{part}" for part in ("id", "secret")] for layer in WRITER_LAYERS
+    }
+    return values | job_images(storage, digests)
 
 
 def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
@@ -65,7 +126,7 @@ def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
 
 
 def host_private_ip(directory: Path = PLATFORM_DIRECTORY) -> str:
-    """Return the host's private address from the platform stack output host_private_ip, or refuse; the reviewed file never carries it."""
+    """Return the host's private address from the platform stack output host_private_ip, or refuse; no file carries it."""
     refusal = ConfigurationError(
         "The metadata host job needs the host's private address from the platform stack output host_private_ip "
         "(a private IPv4 address). Apply the platform stack, then render again. No Terraform action was run."
@@ -88,7 +149,7 @@ def host_private_ip(directory: Path = PLATFORM_DIRECTORY) -> str:
 
 
 def alerts_topic_arn(storage: dict[str, str], directory: Path = PLATFORM_DIRECTORY) -> str:
-    """Return the platform alerts topic from the platform stack output alerts_topic_arn, or refuse; the reviewed file never carries it.
+    """Return the platform alerts topic from the platform stack output alerts_topic_arn, or refuse; no file carries it.
 
     Only this project's topic of the environment, region and account is accepted, the same one the alerts and IAM stacks accept.
     """
@@ -110,29 +171,6 @@ def alerts_topic_arn(storage: dict[str, str], directory: Path = PLATFORM_DIRECTO
     return expected
 
 
-def needs_host_address(values: dict[str, Any]) -> bool:
-    """True when the metadata host job is selected: the only job that calls the host's services by address.
-
-    The reviewed file lists the host families whenever host jobs are on, so no default list is read from the Terraform source.
-    An omitted list is refused by name.
-    """
-    host_jobs_on = values.get("host_jobs_enabled") is True
-    if host_jobs_on and "host_jobs" not in values:
-        raise ConfigurationError(
-            "host_jobs_enabled needs host_jobs: list the host job families explicitly in the reviewed jobs preparation file "
-            "(Terraform's default list is not read). No Terraform action was run."
-        )
-    return host_jobs_on and "metadata" in values["host_jobs"]
-
-
-def needs_alerts_topic(values: dict[str, Any]) -> bool:
-    """True when the promote host job is selected: the only job that publishes the owner notice to the alerts topic.
-
-    Call it after needs_host_address, which refuses a missing host_jobs list by name.
-    """
-    return values.get("host_jobs_enabled") is True and "promote" in values.get("host_jobs", [])
-
-
 def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
     """Reject secret resources, incomplete variable sets and values outside the rendered inputs or committed defaults."""
     try:
@@ -146,7 +184,7 @@ def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
 
 
 def preparation_values(path: Path | None, sha256: str | None, root: str) -> dict[str, Any]:
-    """Read nonsecret preparation inputs only when their exact bytes match the reviewed digest."""
+    """Read the one-off nonsecret overrides of the named file only when its exact bytes match the given digest."""
     if path is None and sha256 is None:
         return {}
     if path is None or sha256 is None:
@@ -166,8 +204,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--preparation-inputs", type=Path)
-    parser.add_argument("--preparation-sha256")
+    parser.add_argument("--preparation-inputs", type=Path, help="a named, ignored file of one-off nonsecret overrides, never committed to main")
+    parser.add_argument("--preparation-sha256", help="the SHA-256 of the overrides file")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true")
     arguments = parser.parse_args()
@@ -177,14 +215,11 @@ def main() -> int:
         storage, _ = load_configuration(arguments.env_file)
         values: dict[str, Any] = jobs_values(storage)
         directory = JOBS_DIRECTORY
+        values.update(environment_values(storage, image_digests()))
+        values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
+        values["host_private_ip"] = host_private_ip()
+        values["alerts_topic_arn"] = alerts_topic_arn(storage)
         values.update(prepared)
-        address_needed = root == "jobs" and needs_host_address(values)
-        if root == "jobs" and (values.get("host_jobs_enabled") is True or values.get("publisher_job_enabled") is True):
-            values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
-        if address_needed:
-            values["host_private_ip"] = host_private_ip()
-        if needs_alerts_topic(values):
-            values["alerts_topic_arn"] = alerts_topic_arn(storage)
         if arguments.check_plan:
             try:
                 result = run_command("terraform", [f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], timeout=120)

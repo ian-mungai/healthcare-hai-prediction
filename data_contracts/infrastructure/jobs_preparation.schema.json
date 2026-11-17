@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Reviewed jobs preparation inputs",
-  "description": "Nonsecret prepared inputs bound to a reviewed byte digest and a single disabled-by-default Terraform root.",
+  "title": "Jobs one-off overrides",
+  "description": "Nonsecret one-off overrides of the committed jobs defaults and rendered inputs, bound to a byte digest, for the jobs Terraform root. A file of them is Git-ignored and never reaches main.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -38,21 +38,6 @@
     "read": {
       "type": "object",
       "additionalProperties": false,
-      "if": {
-        "properties": {
-          "host_jobs_enabled": {
-            "const": true
-          }
-        },
-        "required": [
-          "host_jobs_enabled"
-        ]
-      },
-      "then": {
-        "required": [
-          "host_jobs"
-        ]
-      },
       "properties": {
         "images": {
           "type": "object",

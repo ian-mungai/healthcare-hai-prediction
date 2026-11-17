@@ -45,6 +45,20 @@ SERVICES_PLATFORM_KEYS = (
     "data_mount_path",
     "host_private_ip",
 )
+# The services inputs that hold an account, the project, the environment or the data bucket, so they are built here and never committed. The other services
+# settings (the switches, the cap and the loopback addresses) are the committed Terraform defaults.
+SERVICES_ROLE_NAMES = {
+    "airflow_launch_task_role_arn": "airflow_launch_task",
+    "code_fetch_task_role_arn": "host_code_fetch_task",
+    "mlflow_task_role_arn": "mlflow_task",
+    "model_api_task_role_arn": "model_api_task",
+    "openmetadata_task_role_arn": "openmetadata_host_task",
+    "serving_execution_role_arn": "serving_execution",
+    "streamlit_task_role_arn": "streamlit_task",
+}
+SERVICES_BUCKET_INPUTS = ("airflow_launch_bucket_name", "code_bucket_name", "mlflow_artifact_bucket")
+SERVING_MANIFEST_KEY = "serving/deployments"
+FEATURE_REGISTRY_KEY = "lakehouse/feast/registry.pb"
 
 
 def platform_values(storage: dict[str, str]) -> dict[str, str]:
@@ -95,10 +109,26 @@ def alerts_values(storage: dict[str, str], env_file: Path) -> dict[str, Any]:
     return {**platform_values(storage), "alerts_topic_arn": topic["value"], **load_alert_email(env_file)}
 
 
+def services_environment_values(storage: dict[str, str]) -> dict[str, str]:
+    """The services inputs built from .env: the task role ARNs of the project, the data bucket and the model API addresses inside it."""
+    account, project, environment, bucket = (storage[name] for name in ("expected_account_id", "project_name", "environment", "data_bucket_name"))
+    roles = {name: f"arn:aws:iam::{account}:role/{project}_{role}_{environment}" for name, role in SERVICES_ROLE_NAMES.items()}
+    buckets = dict.fromkeys(SERVICES_BUCKET_INPUTS, bucket)
+    return {
+        **roles,
+        **buckets,
+        "model_api_manifest_uri": f"s3://{bucket}/{SERVING_MANIFEST_KEY}",
+        "model_api_registry_uri": f"s3://{bucket}/{FEATURE_REGISTRY_KEY}",
+    }
+
+
 def services_values(storage: dict[str, str]) -> dict[str, Any]:
-    """Combine project inputs with the ten required platform outputs, preserving map values; the host address is one of them, never typed by hand."""
+    """Combine project inputs with the ten required platform outputs, preserving map values; the host address is one of them, never typed by hand.
+
+    The task roles, the data bucket and the model API addresses are built from .env, so no reviewed file carries them.
+    """
     outputs = platform_outputs(storage)
-    values: dict[str, Any] = dict(platform_values(storage))
+    values: dict[str, Any] = {**platform_values(storage), **services_environment_values(storage)}
     for name in SERVICES_PLATFORM_KEYS:
         item = outputs.get(name)
         if not isinstance(item, dict) or item.get("value") is None:
@@ -138,7 +168,7 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
 
 
 def services_preparation(path: Path | None, sha256: str | None) -> dict[str, Any]:
-    """The reviewed services inputs (the switches and addresses of the MLflow, model API, page and monitoring services)."""
+    """The optional one-off overrides of the services inputs, read from the file the command names (the committed defaults and .env hold every other value)."""
     return stack_preparation(path, sha256, "services")
 
 
@@ -179,8 +209,12 @@ def main() -> None:
     parser.add_argument("--stack", choices=("platform", "services", "alerts"), default="platform")
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--preparation-inputs", type=Path, help="the reviewed nonsecret inputs file of the platform or services stack")
-    parser.add_argument("--preparation-sha256", help="the SHA-256 of the reviewed inputs file")
+    parser.add_argument(
+        "--preparation-inputs",
+        type=Path,
+        help="a named, ignored file of one-off nonsecret overrides of the platform or services stack, never committed to main",
+    )
+    parser.add_argument("--preparation-sha256", help="the SHA-256 of the overrides file")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
     arguments = parser.parse_args()

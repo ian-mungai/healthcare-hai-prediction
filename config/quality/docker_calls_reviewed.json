@@ -1404,7 +1404,7 @@
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
-        "scripts/infrastructure/render_platform_config.py": "sha256:7cb59a54d3d8fa2694d7fecc3671f98a03fd7ec132f309371c58d6dbb719a90c",
+        "scripts/infrastructure/render_platform_config.py": "sha256:d384cdc0a5af97af69936b4e6c387205cd143c9428dacb1b346f0db9b0fc61ee",
         "scripts/infrastructure/render_project_config.py": "sha256:777e756619311b3af07665a25c14c579b1f5409498678e223c7eebf4d6a78099",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1620,17 +1620,17 @@
     },
     {
       "path": "scripts/infrastructure/services_apply.py",
-      "line": 668,
+      "line": 679,
       "code_sha256": "3ceba3be999ca17624a8a9c35ccc676a22da14148dbb37ceaaf8f6b46ffa3bf5",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "7f7a09e9389d4d32a75fb92dc3ed0a9894bfc78e5860c7013bbd36365afef8a1",
+      "file_sha256": "6ef04669cf6d08fd4305c55958c4f11c1961917ecb6c1740ca8c2674e7463131",
       "dependencies": {
         "orchestration/ecs_preflight.py": "sha256:8b9f01a1c16d09f8fa4865c6c7fce6fb8f5b88f7be3dbe021842e3d16917732f",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
         "scripts/infrastructure/host_session.py": "sha256:9f32f4a1020f57c00e752f61796af3b2721fd8b79ce22f80b945689ace40a075",
-        "scripts/infrastructure/render_jobs_config.py": "sha256:0b795e1f911173ec53161da198894426fd32603341463b1e4482d2b72d15c160",
+        "scripts/infrastructure/render_jobs_config.py": "sha256:174a79066c14eca78c40c302a03240b2fbd6f2d796ba15392d6917b688592423",
         "scripts/infrastructure/render_project_config.py": "sha256:777e756619311b3af07665a25c14c579b1f5409498678e223c7eebf4d6a78099"
       },
       "reason": "tolerant_runner (imported from host_session) is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",

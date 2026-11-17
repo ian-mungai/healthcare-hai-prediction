@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import render_jobs_config as renderer_module
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +44,76 @@ def _preparation(root: str = "jobs") -> dict[str, Any]:
     }
 
 
+# TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host, the platform outputs and the recorded digests.
+BINDING = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+ADDRESS = "10.40.0.20"
+TOPIC = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+DIGESTS = {
+    "analytics": "a",
+    "quality": "b",
+    "spark": "c",
+    "training": "d",
+    "feature_store": "e",
+    "drift": "f",
+    "openmetadata_ingestion": "1",
+}
+
+
+def _derived() -> dict[str, Any]:
+    """The inputs the renderer builds from .env, the recorded digests and the stack outputs for the synthetic project, written out in full."""
+    account, registry = "111111111111", "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_"
+
+    def role(name: str) -> str:
+        return f"arn:aws:iam::{account}:role/example_project_job_{name}_dev"
+
+    def image(repository: str) -> str:
+        return f"{registry}{repository}_dev@sha256:{DIGESTS[repository] * 64}"
+
+    return {
+        "alerts_topic_arn": TOPIC,
+        "drift_images": {"drift": image("drift"), "feature_store": image("feature_store"), "training": image("training")},
+        "drift_roles": {"drift_task": role("drift_task"), "execution": role("execution")},
+        "host_capacity_binding": BINDING,
+        "host_job_memory_mib": 23552,
+        "host_private_ip": ADDRESS,
+        "images": {"analytics": image("analytics"), "quality": image("quality"), "spark": image("spark")},
+        "job_role_arns": {name: role(name) for name in ("execution", "publisher_task", "write_features_task", "write_gold_task", "write_silver_task")},
+        "log_group_name": "example_project_jobs_dev",
+        "openmetadata_images": {"ingestion": image("openmetadata_ingestion")},
+        "openmetadata_roles": {"execution": role("execution"), "openmetadata_task": role("openmetadata_task")},
+        "serve_roles": {"serve_task": role("serve_task")},
+        "train_images": {"feature_store": image("feature_store"), "training": image("training")},
+        "train_roles": {"execution": role("execution"), "train_task": role("train_task")},
+        "writer_parameter_names": {
+            f"write_{layer}_task": [f"/example_project/aws_polaris_{layer}_client_{part}" for part in ("id", "secret")]
+            for layer in ("features", "gold", "silver")
+        },
+    }
+
+
+def _stand_in(
+    tool: Path,
+    calls: Path,
+    platform_directory: str,
+    binding: tuple[str, int] = (json.dumps(BINDING), 0),
+    address: tuple[str, int] = (json.dumps(ADDRESS), 0),
+    topic: tuple[str, int] = (json.dumps(TOPIC), 0),
+) -> None:
+    """Write an inert terraform: it logs its arguments, prints plan.json for ``show`` and otherwise answers the stack output the renderer asks for."""
+    tool.write_text(
+        f"#!{sys.executable}\nimport json, sys\nfrom pathlib import Path\n"
+        f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "if 'show' in sys.argv[1:]:\n"
+        "    sys.stdout.write((Path(__file__).parent / 'plan.json').read_text())\n    sys.exit(0)\n"
+        f"if sys.argv[1] != {'-chdir=' + platform_directory!r}:\n"
+        f"    sys.stdout.write({binding[0]!r})\n    sys.exit({binding[1]})\n"
+        "if sys.argv[-1] == 'alerts_topic_arn':\n"
+        f"    sys.stdout.write({topic[0]!r})\n    sys.exit({topic[1]})\n"
+        f"sys.stdout.write({address[0]!r})\nsys.exit({address[1]})\n"
+    )
+    tool.chmod(0o700)
+
+
 def _renderer_cases(folder: Path) -> dict[str, bool]:
     workspace = folder / "renderer"
     for name in SOURCES:
@@ -59,6 +128,14 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         "PROJECT_NAME=example_project\nENVIRONMENT=dev\nS3_BUCKET=example-project-data-dev\n"
     )
     prep = workspace / "reviewed_preparation.json"
+    record = workspace / "infra/services/images.auto.tfvars.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"image_digests": {name: "sha256:" + character * 64 for name, character in DIGESTS.items()}}))
+    binary = workspace / "bin"
+    binary.mkdir()
+    (binary / "plan.json").write_text("{}")
+    _stand_in(binary / "terraform", binary / "calls.jsonl", str((workspace / "infra/platform").resolve()))
+    stand_in_environment = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
     values = {
         "aws_region": "us-west-2",
         "aws_profile": "example_project_dev",
@@ -86,12 +163,13 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
                 *extra,
             ],
             cwd=workspace,
-            env=_environment(),
+            env=stand_in_environment,
             timeout=15,
         )
 
     document = _preparation()
     result = invoke(document)
+    values = values | _derived()
     expected = values | document["variables"]
     checks = {"reviewed_preparation_is_rendered": result.returncode == 0 and output.exists() and json.loads(output.read_text()) == expected}
     if not checks["reviewed_preparation_is_rendered"]:
@@ -222,16 +300,11 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
             hashlib.sha256(prep.read_bytes()).hexdigest(),
         ],
         cwd=workspace,
-        env=_environment(),
+        env=stand_in_environment,
         timeout=15,
     )
     checks["duplicate_preparation_field"] = result.returncode == 2 and "duplicate JSON field" in result.stderr and output.read_bytes() == original
-    binary = workspace / "bin"
-    binary.mkdir()
-    executable = binary / "terraform"
-    executable.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nimport sys\nsys.stdout.write((Path(__file__).parent / 'plan.json').read_text())\n")
-    executable.chmod(0o700)
-    env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
+    env = stand_in_environment
     declared: dict[str, Any] = {name: {} for name in expected} | {"optional_setting": {"default": False}}
     plan: dict[str, Any] = {
         "complete": True,
@@ -286,19 +359,15 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
 def _host_room_cases(
     workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any], publisher_variables: dict[str, Any]
 ) -> dict[str, bool]:
-    """Host jobs and the publisher get the job room that the services stack outputs; the renderer refuses a missing or unusable figure and writes nothing."""
+    """Every render gets the job room that the services stack outputs; the renderer refuses a missing or unusable figure and writes nothing."""
     binary = workspace / "host_room_bin"
     binary.mkdir()
     tool = binary / "terraform"
     calls = binary / "calls.jsonl"
+    platform_directory = str((workspace / "infra/platform").resolve())
 
     def answer(text: str, code: int) -> None:
-        tool.write_text(
-            f"#!{sys.executable}\nimport json, sys\n"
-            f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            f"sys.stdout.write({text!r})\nsys.exit({code})\n"
-        )
-        tool.chmod(0o700)
+        _stand_in(tool, calls, platform_directory, binding=(text, code))
 
     env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
 
@@ -325,20 +394,18 @@ def _host_room_cases(
             timeout=15,
         )
 
-    # The job room cases select one family other than metadata, so the platform address is not read.
+    def asked() -> list[list[str]]:
+        return [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+
+    room_ask = ["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]
     host_variables = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["silver"]}
     checks: dict[str, bool] = {}
-    # TEST FIXTURE ONLY, not measured values: the binding the services output host_capacity_binding gives for a 30720 MiB usable host.
-    binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
-    answer(json.dumps(binding), 0)
+    answer(json.dumps(BINDING), 0)
     result = invoke(host_variables)
-    asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
     checks["host_jobs_get_the_services_job_room_and_its_binding"] = (
-        result.returncode == 0
-        and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
-        and asked == [["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]]
+        result.returncode == 0 and json.loads(output.read_text()) == values | host_variables and asked().count(room_ask) == 1
     )
-    lowered = binding.replace("23552", "22528")
+    lowered = BINDING.replace("23552", "22528")
     answer(json.dumps(lowered), 0)
     result = invoke(host_variables)
     checks["host_jobs_get_a_cap_below_the_room"] = result.returncode == 0 and json.loads(output.read_text()) == values | host_variables | {
@@ -346,7 +413,7 @@ def _host_room_cases(
         "host_capacity_binding": lowered,
     }
     sets = [f"features_m{number}" for number in range(1, 7)]
-    answer(json.dumps(binding), 0)
+    answer(json.dumps(BINDING), 0)
     result = invoke(host_variables | {"host_jobs": ["features", "gold", "silver", *sets]})
     checks["host_jobs_accept_the_six_model_set_families"] = result.returncode == 0 and json.loads(output.read_text())["host_jobs"] == [
         "features",
@@ -354,17 +421,17 @@ def _host_room_cases(
         "silver",
         *sets,
     ]
-    answer(json.dumps(binding), 0)
+    answer(json.dumps(BINDING), 0)
     result = invoke(host_variables | {"host_jobs": ["features", "features_m7"]})
     checks["host_jobs_refuse_a_seventh_model_set"] = result.returncode != 0
-    answer(json.dumps(binding), 0)
+    answer(json.dumps(BINDING), 0)
     result = invoke(host_variables)
     rendered = output.read_bytes()
     for name, text, code in (
         ("a_failed_services_output", "", 1),
         ("a_binding_that_is_not_text", "23552", 0),
         ("a_binding_in_another_form", json.dumps("job_memory_mib=23552"), 0),
-        ("a_binding_above_the_room", json.dumps(binding.replace("23552", "24576")), 0),
+        ("a_binding_above_the_room", json.dumps(BINDING.replace("23552", "24576")), 0),
         ("a_job_room_below_one_job", json.dumps("job_memory_mib=2048 usable_memory_mib=9216 system_reserve_mib=2048 service_reservations_mib=5120"), 0),
         ("a_null_binding", "null", 0),
     ):
@@ -375,26 +442,24 @@ def _host_room_cases(
     checks["host_room_refusal_asks_for_a_services_apply_not_the_usable_memory_input"] = (
         "apply the services stack" in result.stderr.lower() and "host_usable_memory_mib" not in result.stderr
     )
-    # The publisher is a host job: its revision carries the binding and its task memory is the job room, so the renderer reads the room for it alone too.
+    # The publisher is a host job: its revision carries the binding and its task memory is the job room.
     calls.unlink(missing_ok=True)
-    answer(json.dumps(binding), 0)
+    answer(json.dumps(BINDING), 0)
     result = invoke(publisher_variables)
-    asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
     checks["publisher_gets_the_services_job_room_and_its_binding"] = (
-        result.returncode == 0
-        and json.loads(output.read_text()) == values | publisher_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
-        and asked == [["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]]
+        result.returncode == 0 and json.loads(output.read_text()) == values | publisher_variables and asked().count(room_ask) == 1
     )
     rendered = output.read_bytes()
     for name, text, code in (("a_failed_services_output", "", 1), ("a_null_binding", "null", 0)):
         answer(text, code)
         result = invoke(publisher_variables)
         checks["publisher_room_refuses_" + name] = result.returncode == 2 and "job room" in result.stderr and output.read_bytes() == rendered
+    # The committed defaults turn host jobs and the publisher on, so a render reads the room even when an override turns both off.
     calls.unlink(missing_ok=True)
-    answer(json.dumps(binding), 0)
-    result = invoke(document["variables"])
-    checks["jobs_without_host_jobs_read_no_services_output"] = (
-        result.returncode == 0 and not calls.exists() and not {"host_job_memory_mib", "host_capacity_binding"} & set(json.loads(output.read_text()))
+    answer(json.dumps(BINDING), 0)
+    result = invoke(document["variables"] | {"host_jobs_enabled": False, "publisher_job_enabled": False})
+    checks["the_job_room_is_read_for_every_render"] = (
+        result.returncode == 0 and asked().count(room_ask) == 1 and json.loads(output.read_text())["host_capacity_binding"] == BINDING
     )
     return checks
 
@@ -428,29 +493,17 @@ def _scan_flags_every_stack_file(folder: Path) -> bool:
 def _host_address_cases(
     workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any], publisher_variables: dict[str, Any]
 ) -> dict[str, bool]:
-    """The metadata host job gets the host address from the platform output host_private_ip; the reviewed file cannot type it."""
+    """Every render gets the host address and the alerts topic from the platform outputs; the override file cannot type either."""
     binary = workspace / "host_address_bin"
     binary.mkdir()
     tool = binary / "terraform"
     calls = binary / "calls.jsonl"
-    # TEST FIXTURE ONLY, not measured values.
-    binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
     platform_directory = str((workspace / "infra/platform").resolve())
 
-    topic = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
-
     def answer(address_text: str, address_code: int, topic_text: str | None = None, topic_code: int = 0) -> None:
-        topic_text = json.dumps(topic) if topic_text is None else topic_text
-        tool.write_text(
-            f"#!{sys.executable}\nimport json, sys\n"
-            f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            f"if sys.argv[1] == {'-chdir=' + platform_directory!r}:\n"
-            f"    if sys.argv[-1] == 'alerts_topic_arn':\n"
-            f"        sys.stdout.write({topic_text!r})\n        sys.exit({topic_code})\n"
-            f"    sys.stdout.write({address_text!r})\n    sys.exit({address_code})\n"
-            f"sys.stdout.write({json.dumps(binding)!r})\n"
+        _stand_in(
+            tool, calls, platform_directory, address=(address_text, address_code), topic=(json.dumps(TOPIC) if topic_text is None else topic_text, topic_code)
         )
-        tool.chmod(0o700)
 
     env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
 
@@ -480,46 +533,24 @@ def _host_address_cases(
     ask = ["-chdir=" + platform_directory, "output", "-json", "host_private_ip"]
     topic_ask = ["-chdir=" + platform_directory, "output", "-json", "alerts_topic_arn"]
     metadata = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["metadata", "silver"]}
-    # The reviewed file lists the host families; the list holding every family is Terraform's default and names metadata.
-    default_families = [
-        *("bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"),
-        *("gold", "metadata", "promote", "serve", "silver", "train"),
-    ]
-    omitted = document["variables"] | {"host_jobs_enabled": True}
-    explicit_default = omitted | {"host_jobs": default_families}
     checks: dict[str, bool] = {}
     answer(json.dumps("10.40.0.20"), 0)
-    for name, variables, asks, with_topic in (
-        ("the_metadata_host_job", metadata, [ask], False),
-        ("the_explicit_default_host_families", explicit_default, [ask, topic_ask], True),
+    for name, variables in (
+        ("an_override_free_render", document["variables"]),
+        ("the_metadata_host_job", metadata),
+        ("host_jobs_turned_off", document["variables"] | {"host_jobs_enabled": False}),
+        ("the_publisher_job_alone", publisher_variables),
     ):
         calls.unlink(missing_ok=True)
         result = invoke(variables)
-        checks[f"{name}_gets_host_private_ip_from_the_platform_output"] = (
+        rendered_inputs = json.loads(output.read_text()) if result.returncode == 0 else {}
+        checks[f"{name}_gets_host_private_ip_and_the_alerts_topic_from_the_platform_outputs"] = (
             result.returncode == 0
-            and platform_asks() == asks
-            and json.loads(output.read_text()).get("host_private_ip") == "10.40.0.20"
+            and platform_asks() == [ask, topic_ask]
+            and rendered_inputs.get("host_private_ip") == "10.40.0.20"
+            and rendered_inputs.get("alerts_topic_arn") == TOPIC
             and "10.40.0.20" not in result.stdout + result.stderr
-        )
-        checks[f"{name}_{'gets' if with_topic else 'does_not_get'}_alerts_topic_arn_from_the_platform_output"] = (
-            result.returncode == 0 and ("alerts_topic_arn" in json.loads(output.read_text())) == with_topic
-        )
-    rendered = output.read_bytes()
-    promote_only = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["promote", "silver"]}
-    metadata_and_promote = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["metadata", "promote"]}
-    for name, variables, asks in (
-        ("the_promote_host_job", promote_only, [topic_ask]),
-        ("the_metadata_and_promote_host_jobs", metadata_and_promote, [ask, topic_ask]),
-    ):
-        calls.unlink(missing_ok=True)
-        result = invoke(variables)
-        rendered_inputs = json.loads(output.read_text())
-        checks[f"{name}_gets_alerts_topic_arn_from_the_platform_output"] = (
-            result.returncode == 0
-            and platform_asks() == asks
-            and rendered_inputs.get("alerts_topic_arn") == topic
-            and ("host_private_ip" in rendered_inputs) == (ask in asks)
-            and topic not in result.stdout + result.stderr
+            and TOPIC not in result.stdout + result.stderr
         )
     rendered = output.read_bytes()
     for name, text, code in (
@@ -533,10 +564,10 @@ def _host_address_cases(
         ("a_topic_of_another_project", json.dumps("arn:aws:sns:us-west-2:111111111111:other_project_alerts_dev"), 0),
         ("a_topic_of_another_environment", json.dumps("arn:aws:sns:us-west-2:111111111111:example_project_alerts_prod"), 0),
         ("the_budget_topic", json.dumps("arn:aws:sns:us-west-2:111111111111:example_project_budget_alerts_dev"), 0),
-        ("a_subscription_arn", json.dumps(topic + ":01234567-89ab-cdef-0123-456789abcdef"), 0),
+        ("a_subscription_arn", json.dumps(TOPIC + ":01234567-89ab-cdef-0123-456789abcdef"), 0),
     ):
         answer(json.dumps("10.40.0.20"), 0, text, code)
-        for label, variables in (("promote", promote_only), ("explicit_default_families", explicit_default)):
+        for label, variables in (("an_override_free_render", document["variables"]), ("the_metadata_host_job", metadata)):
             result = invoke(variables)
             checks[f"alerts_topic_refuses_{name}_for_{label}"] = (
                 result.returncode == 2 and "alerts_topic_arn" in result.stderr and output.read_bytes() == rendered
@@ -555,53 +586,35 @@ def _host_address_cases(
         ("an_address_with_a_port", json.dumps("10.40.0.20:8585"), 0),
     ):
         answer(text, code)
-        for label, variables in (
-            ("metadata", metadata),
-            ("explicit_default_families", explicit_default),
-        ):
+        for label, variables in (("an_override_free_render", document["variables"]), ("the_metadata_host_job", metadata)):
             result = invoke(variables)
             checks[f"host_address_refuses_{name}_for_{label}"] = (
                 result.returncode == 2 and "host_private_ip" in result.stderr and output.read_bytes() == rendered
             )
     checks["host_address_refusal_asks_for_a_platform_apply"] = "apply the platform stack" in result.stderr.lower()
     answer(json.dumps("10.40.0.20"), 0)
+    # The committed host_jobs default is the live family list, so an override that turns host jobs on needs no list of its own.
+    result = invoke(document["variables"] | {"host_jobs_enabled": True})
+    checks["host_jobs_switched_on_without_a_list_renders_and_keeps_the_committed_families"] = (
+        result.returncode == 0 and json.loads(output.read_text()) == values | {"host_jobs_enabled": True} | document["variables"]
+    )
     rendered = output.read_bytes()
     for name, variables in (
-        ("an_omitted_host_jobs_list", omitted),
-        ("a_host_family_nobody_registered", omitted | {"host_jobs": ["fargate"]}),
-        ("a_repeated_host_family", omitted | {"host_jobs": ["silver", "silver"]}),
+        ("a_host_family_nobody_registered", metadata | {"host_jobs": ["fargate"]}),
+        ("a_repeated_host_family", metadata | {"host_jobs": ["silver", "silver"]}),
         ("a_host_jobs_switch_that_is_not_a_boolean", document["variables"] | {"host_jobs_enabled": "true", "host_jobs": ["metadata"]}),
     ):
         calls.unlink(missing_ok=True)
         result = invoke(variables)
         checks[f"{name}_is_refused_before_any_terraform_call"] = result.returncode == 2 and not calls.exists() and output.read_bytes() == rendered
-    try:
-        renderer_module.needs_host_address({"host_jobs_enabled": True})
-        named = False
-    except renderer_module.ConfigurationError as refusal:
-        named = "host_jobs" in str(refusal) and "explicitly" in str(refusal)
-    checks["the_renderer_names_host_jobs_and_asks_for_an_explicit_list_when_it_is_omitted"] = named
-    for name, variables in (
-        ("no_host_job_family_of_metadata", document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["silver"]}),
-        ("an_empty_host_family_list", document["variables"] | {"host_jobs_enabled": True, "host_jobs": []}),
-        ("host_jobs_turned_off_without_a_list", document["variables"] | {"host_jobs_enabled": False}),
-        ("the_publisher_job_alone", publisher_variables),
-        ("jobs_without_a_catalog", document["variables"]),
-    ):
-        calls.unlink(missing_ok=True)
-        result = invoke(variables)
-        checks[f"{name}_reads_no_platform_output"] = (
-            result.returncode == 0 and platform_asks() == [] and not {"host_private_ip", "alerts_topic_arn"} & json.loads(output.read_text()).keys()
-        )
-    rendered = output.read_bytes()
     # The schema refuses every key it does not list, so a made-up key proves the refusal without naming any removed input.
     for label, key, typed in (
         ("host_private_ip", "host_private_ip", "10.40.0.20"),
-        ("alerts_topic_arn", "alerts_topic_arn", topic),
+        ("alerts_topic_arn", "alerts_topic_arn", TOPIC),
         ("any_unknown_key", "zz_unregistered_probe_key", "any value"),
     ):
         result = invoke(metadata | {key: typed})
-        checks[f"the_reviewed_file_may_not_type_{label}"] = (
+        checks[f"the_overrides_file_may_not_type_{label}"] = (
             result.returncode == 2 and "preparation contract is invalid" in result.stderr and output.read_bytes() == rendered
         )
     checks["the_jobs_stack_files_hold_no_hand_written_host_address"] = _hand_written_host_addresses() == []

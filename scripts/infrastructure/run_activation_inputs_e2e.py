@@ -107,6 +107,18 @@ class Row(NamedTuple):
     with_: tuple[tuple[str, Any], ...] = ()
 
 
+def committed_default(row: Row) -> Any:
+    """The committed Terraform default of the row's input: a switch reads it from the stack source, any other input keeps the row's own default."""
+    if not isinstance(row.good, bool):
+        return row.default
+    for path in sorted((ROOT / STACKS[row.stack]).glob("*.tf")):
+        block = re.search(rf'^variable "{row.name}" \{{\n(.*?)^\}}\n', path.read_text(), re.S | re.M)
+        if block is not None:
+            default = re.search(r"^\s+default\s*=\s*(true|false)\b", block.group(1), re.M)
+            return default is not None and default.group(1) == "true"
+    return False
+
+
 def row_variables(row: Row, value: Any) -> dict[str, Any]:
     """The reviewed file of one row: its value and the inputs the contract requires beside it."""
     return {row.name: value, **dict(row.with_)}
@@ -351,6 +363,38 @@ COMMITTED_DEFAULTS = [
     Row("iam", "github_oidc_plan_role_enabled", True, "true", False),
     Row("iam", "github_oidc_deploy_serving_enabled", False, "false", True),
 ]
+# Inputs the renderers build from .env, the stack outputs and the recorded image digests: a render with no overrides holds them, and an overrides file
+# may still replace them. Every other row input is a committed Terraform default, so a render with no overrides leaves it out.
+RENDERED_INPUTS = {
+    "services": {
+        "airflow_launch_bucket_name",
+        "airflow_launch_task_role_arn",
+        "code_bucket_name",
+        "code_fetch_task_role_arn",
+        "mlflow_artifact_bucket",
+        "mlflow_task_role_arn",
+        "model_api_manifest_uri",
+        "model_api_registry_uri",
+        "model_api_task_role_arn",
+        "openmetadata_task_role_arn",
+        "serving_execution_role_arn",
+        "streamlit_task_role_arn",
+    },
+    "jobs": {
+        "drift_images",
+        "drift_roles",
+        "images",
+        "job_role_arns",
+        "log_group_name",
+        "openmetadata_images",
+        "openmetadata_roles",
+        "serve_roles",
+        "train_images",
+        "train_roles",
+        "writer_parameter_names",
+    },
+}
+IMAGE_REPOSITORIES = ("analytics", "quality", "spark", "training", "feature_store", "drift", "openmetadata_ingestion")
 # Inputs that no row needs, with the reason. The storage retention flags have their own wrapper options and cases in run_e2e.
 EXEMPT = {
     "mlflow_retention_enabled": "wrapper option --mlflow-retention, covered by run_e2e",
@@ -395,7 +439,7 @@ def completeness() -> dict[str, bool]:
     cap_contract = json.loads((ROOT / "data_contracts/infrastructure/services_preparation.schema.json").read_text())["properties"]["variables"]["properties"]
     checks["the services contract admits a whole-number host job cap below the nominal host memory"] = (
         cap is not None
-        and int(cap.group(1)) == 26816
+        and int(cap.group(1)) == 22800
         and cap_contract.get("host_job_cap_mib", {}).get("type") == "integer"
         and cap_contract["host_job_cap_mib"].get("maximum", 32768) < 32768
     )
@@ -457,9 +501,9 @@ class Workspace:
                 {name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding, "alerts_topic_arn": ALERTS_TOPIC}.items()}
             )
         )
-        for stack in ("services",):
-            (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
-            (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))
+        record = self.root / STACKS["services"] / "images.auto.tfvars.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"image_digests": {name: "sha256:" + "a" * 64 for name in IMAGE_REPOSITORIES}}))
         shutil.copy2(ROOT / DEFAULT_PREPARATION, self.root / "config/aws/iam_preparation.json")
         self.default_iam = (self.root / "config/aws/iam_preparation.json").read_text()
 
@@ -522,6 +566,10 @@ class Workspace:
         (self.root / "call_wrapper.sh").write_text(f"#!/bin/bash\nexec bash {line}\n")
         return run_command("bash", ["call_wrapper.sh"], cwd=self.root, env=self.environment() | {"PYTHON_BIN": sys.executable}, timeout=60)
 
+    def image_digests(self) -> dict[str, str]:
+        """The recorded digests the services stack reads and the jobs renderer pins its images by."""
+        return dict(json.loads((self.root / STACKS["services"] / "images.auto.tfvars.json").read_text())["image_digests"])
+
     def written(self, stack: str) -> dict[str, Any] | None:
         path = self.root / OUTPUTS[stack]
         return json.loads(path.read_text()) if path.is_file() else None
@@ -566,22 +614,28 @@ def row_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
         checks[f"{label}: a constrained value {index} is refused and nothing is written"] = stray.returncode == 2 and workspace.written(stack) is None
     workspace.clear(stack)
     default = workspace.run(stack, None)
-    checks[f"{label}: a default render leaves it out"] = default.returncode == 0 and name not in (workspace.written(stack) or {})
+    rendered_by_default = name in RENDERED_INPUTS.get(stack, set())
+    checks[f"{label}: a default render {'builds it from .env and the stack outputs' if rendered_by_default else 'leaves it out'}"] = (
+        default.returncode == 0 and ((name in (workspace.written(stack) or {})) == rendered_by_default)
+    )
     return checks
 
 
 def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str, bool]:
-    """The saved-plan check of one row: a plan with the reviewed value passes, and the same plan without the reviewed file is refused."""
+    """The saved-plan check of one row: a plan with the overriding value passes, and the same plan without the overrides file is refused.
+
+    A switch that is on by default is overridden with false. An input the renderer builds is refused when the plan holds another value than the built one.
+    """
     stack, name = row.stack, row.name
     label = f"{stack} {name} plan"
-    off = {
-        sibling.name: (False if isinstance(sibling.good, bool) else sibling.default)
-        for sibling in siblings
-        if isinstance(sibling.good, bool) or sibling.default is not None
-    }
+    built = name in RENDERED_INPUTS.get(stack, set())
+    switched_off = isinstance(row.good, bool) and committed_default(row)
+    override = not row.good if switched_off else row.good
+    other = row.bad if built else override
+    off = {sibling.name: committed_default(sibling) for sibling in siblings if isinstance(sibling.good, bool) or sibling.default is not None}
     checks: dict[str, bool] = {}
     workspace.clear(stack)
-    workspace.run(stack, row_variables(row, row.good))
+    workspace.run(stack, row_variables(row, override))
     rendered = dict(workspace.written(stack) or {})
     extra: dict[str, Any] = {}
     if stack == "iam":
@@ -596,14 +650,15 @@ def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str,
         rendered = {**deployment, **rendered}
         extra = {"admin_profile": ADMIN}
     elif stack == "services":
-        rendered["image_digests"] = {}
+        rendered["image_digests"] = workspace.image_digests()
     workspace.plan.write_text(json.dumps(plan_document(rendered, off, extra)))
-    good = workspace.run(stack, row_variables(row, row.good), "--check-plan", str(workspace.plan))
-    checks[f"{label}: a plan that carries the reviewed value is accepted"] = good.returncode == 0
+    good = workspace.run(stack, row_variables(row, override), "--check-plan", str(workspace.plan))
+    checks[f"{label}: a plan that carries the overriding value is accepted"] = good.returncode == 0
     without = {key: value for key, value in rendered.items() if key != name}
-    workspace.plan.write_text(json.dumps(plan_document(without, off, {**row_variables(row, row.good), **extra})))
+    workspace.plan.write_text(json.dumps(plan_document(without, off, {**row_variables(row, other), **extra})))
     refused = workspace.run(stack, None if stack != "iam" else {}, "--check-plan", str(workspace.plan))
-    checks[f"{label}: a plan that enables it without the reviewed file is refused"] = refused.returncode == 2
+    action = "holds another value than the built one" if built else ("turns it off" if switched_off else "enables it")
+    checks[f"{label}: a plan that {action} without the overrides file is refused"] = refused.returncode == 2
     return checks
 
 
@@ -746,7 +801,7 @@ def scratch_size_cases(workspace: Workspace) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     stack, name = "platform", "scratch_volume_gb"
     siblings = [row for row in ROWS if row.stack == stack]
-    off = {row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None}
+    off = {row.name: committed_default(row) for row in siblings if isinstance(row.good, bool) or row.default is not None}
     for size in (1, 60, 120, 1024):
         workspace.clear(stack)
         result = workspace.run(stack, {name: size})
@@ -789,7 +844,7 @@ def host_job_cap_cases(workspace: Workspace) -> dict[str, bool]:
     stack, name = "services", "host_job_cap_mib"
     directory = f"-chdir={workspace.root / STACKS[stack]}"
     siblings = [row for row in ROWS if row.stack == stack]
-    off = {row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None}
+    off = {row.name: committed_default(row) for row in siblings if isinstance(row.good, bool) or row.default is not None}
     for cap in (1024, 22528, 26816, 32767):
         workspace.clear(stack)
         result = workspace.run(stack, {name: cap})
@@ -810,7 +865,7 @@ def host_job_cap_cases(workspace: Workspace) -> dict[str, bool]:
         )
     workspace.clear(stack)
     workspace.run(stack, {name: 22528})
-    rendered = {**(workspace.written(stack) or {}), "image_digests": {}}
+    rendered = {**(workspace.written(stack) or {}), "image_digests": workspace.image_digests()}
     for planned, accepted in ((22528, True), (26816, False), (21000, False)):
         workspace.plan.write_text(json.dumps(plan_document({**rendered, name: planned}, off)))
         result = workspace.run(stack, {name: 22528}, "--check-plan", str(workspace.plan))
@@ -916,16 +971,18 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
             "JOBS_INPUTS": literals["JOBS_INPUTS"],
         }
         binding = f"job_memory_mib={cap or 23552} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
-        workspace.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding}.items()}))
+        workspace.outputs.write_text(
+            json.dumps(
+                {name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding, "alerts_topic_arn": ALERTS_TOPIC}.items()}
+            )
+        )
         arrays = [line for line in kinds["assignments"] if "=(" in line]
         for line in kinds["wrapper"]:
             stack = next(item for item in ("services", "jobs", "iam") if f"--{item}" in line or f"{item.upper()}_FLAGS" in line)
             applying = " apply " in f" {line} "
             cap_variables = variables if stack == "services" else (PROCEDURE_JOBS_VARIABLES if stack == "jobs" else None)
             siblings = [row for row in ROWS if row.stack == stack]
-            off = {
-                row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None
-            }
+            off = {row.name: committed_default(row) for row in siblings if isinstance(row.good, bool) or row.default is not None}
             workspace.clear(stack)
             workspace.run(stack, cap_variables)
             rendered = dict(workspace.written(stack) or {})
@@ -942,7 +999,7 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
                 }
                 extra = {"admin_profile": ADMIN}
             elif stack == "services":
-                rendered["image_digests"] = {}
+                rendered["image_digests"] = workspace.image_digests()
             workspace.plan.write_text(json.dumps(plan_document(rendered, off, extra)))
             workspace.clear(stack)
             workspace.calls.unlink(missing_ok=True)
