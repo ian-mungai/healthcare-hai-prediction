@@ -10,7 +10,7 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -100,11 +100,13 @@ def test_offline_workflow(suite: str, iteration: int, offline_artifact_root: Pat
     monkeypatch.setattr(s3_store, "load_routes", collection_layout.load_routes)
     module = importlib.import_module(f"scripts.acquisition.run_{suite}_e2e")
     monkeypatch.setattr(sys, "argv", [module.__name__, "--output", str(output)])
+    exit_code: object = None
     try:
         try:
             module.main()
         except SystemExit as exc:
-            check(exc.code in (None, 0), f"Integrated {suite} exited with {exc.code}")
+            # Keep the status: the artifact, which holds the error and the failed cases, is read below on every path.
+            exit_code = exc.code
         finally:
             if scratch and (output / "artifact.json").exists():
                 retained.mkdir(parents=True, exist_ok=False)
@@ -112,20 +114,25 @@ def test_offline_workflow(suite: str, iteration: int, offline_artifact_root: Pat
     finally:
         if scratch:
             shutil.rmtree(scratch)
-    result = read_json(retained / "artifact.json" if suite in DIRECTORY_SUITES else retained)
+    exited_cleanly = exit_code in (None, 0)
+    artifact = retained / "artifact.json" if suite in DIRECTORY_SUITES else retained
+    SECONDS[f"{suite}_{iteration}"] = round(time.monotonic() - began, 1)
+    if not artifact.is_file():
+        check(False, f"Integrated {suite} exited with {exit_code!r} and left no artifact at {artifact}")
+    result = read_json(artifact)
     if "status" in result:
         passed = result["status"] == "passed"
     elif isinstance(result.get("passed"), bool):
         passed = result["passed"]
     else:
         passed = result.get("total") is not None and result.get("passed") == result["total"]
-    SECONDS[f"{suite}_{iteration}"] = round(time.monotonic() - began, 1)
-    check(passed, failure_message(suite, retained, result))
+    check(passed and exited_cleanly, failure_message(suite, retained, result, exit_code))
 
 
-def failure_message(suite: str, retained: Path, result: dict) -> str:
-    """The pytest failure text of a suite that did not pass: where the evidence is."""
-    detail = [f"error: {result['error']}"] if result.get("error") else []
+def failure_message(suite: str, retained: Path, result: dict, exit_code: object = None) -> str:
+    """The pytest failure text of a suite that did not pass: its exit status, the recorded error, the failed cases and where the evidence is."""
+    detail = [] if exit_code in (None, 0) else [f"exit status {exit_code}"]
+    detail += [f"error: {result['error']}"] if result.get("error") else []
     cases = result.get("cases")
     if isinstance(cases, list):
         detail.append(f"{len(cases)} cases ran")
@@ -133,20 +140,48 @@ def failure_message(suite: str, retained: Path, result: dict) -> str:
     return f"Integrated {suite} workflow failed ({'; '.join(detail) or 'no error recorded'}); inspect {retained}"
 
 
-def test_blocked_registry_additions_error_reaches_the_failure_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A run that stops before any case (status blocked, 0 cases) keeps its error in the pytest failure message, as seen under the pre-push gate."""
+def run_planted_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, planted: Callable[[Path], list[dict]]) -> str:
+    """Run ``test_offline_workflow`` itself on the registry additions suite with a planted ``run_cases`` and return the failure message it raises."""
     module = importlib.import_module("scripts.acquisition.run_registry_additions_e2e")
+    monkeypatch.setattr(module, "run_cases", planted)
+    with pytest.raises(AssertionError) as raised:
+        test_offline_workflow("registry_additions", 1, tmp_path, monkeypatch)
+    return str(raised.value)
+
+
+def test_blocked_registry_additions_error_reaches_the_failure_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run that stops before any case (status blocked, 0 cases, exit 1) keeps its error and its exit status in the failure message, as under the gate."""
 
     def stop(_root: Path) -> list[dict]:
         raise OSError("No space left on device: planted by the case")
 
-    monkeypatch.setattr(module, "run_cases", stop)
-    output = tmp_path / "output"
-    monkeypatch.setattr(sys, "argv", [module.__name__, "--output", str(output)])
-    with pytest.raises(SystemExit):
-        module.main()
-    result = read_json(output / "artifact.json")
-    check(result["status"] == "blocked" and result["cases"] == [], f"the planted stop did not block the run: {result['status']}")
-    message = failure_message("registry_additions", output, result)
+    message = run_planted_suite(tmp_path, monkeypatch, stop)
     check("No space left on device: planted by the case" in message, f"the blocked error is missing from the failure message: {message}")
     check("OSError" in message and "stop" in message, f"the error type and the place it was raised are missing from the failure message: {message}")
+    check("exit status 1" in message, f"the exit status is missing from the failure message: {message}")
+
+
+def test_failed_case_names_reach_the_failure_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run in which a case fails (status failed, exit 1) names that case in the failure message."""
+
+    def one_failed_case(_root: Path) -> list[dict]:
+        return [{"case": "synthetic_passed_case", "passed": True}, {"case": "synthetic_failed_case", "passed": False}]
+
+    message = run_planted_suite(tmp_path, monkeypatch, one_failed_case)
+    check("case not passed: synthetic_failed_case" in message, f"the failed case is missing from the failure message: {message}")
+    check("synthetic_passed_case" not in message, f"a passing case is named as failed: {message}")
+    check("2 cases ran" in message and "exit status 1" in message, f"the case count or the exit status is missing: {message}")
+
+
+def test_nonzero_exit_without_an_artifact_is_reported_with_its_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A suite that exits nonzero before it writes its artifact still fails with a message that names the status and the missing artifact."""
+    module = importlib.import_module("scripts.acquisition.run_registry_additions_e2e")
+
+    def exit_early() -> None:
+        raise SystemExit(3)
+
+    monkeypatch.setattr(module, "main", exit_early)
+    with pytest.raises(AssertionError) as raised:
+        test_offline_workflow("registry_additions", 1, tmp_path, monkeypatch)
+    message = str(raised.value)
+    check("exited with 3" in message and "no artifact" in message, f"the exit status or the missing artifact is not named: {message}")

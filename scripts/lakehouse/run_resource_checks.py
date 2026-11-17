@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse.run_launcher_e2e import GIB, Env, creates, host_tools
+from scripts.lakehouse.run_launcher_e2e import GIB, CaseFailure, Env, creates, host_tools
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -77,6 +77,39 @@ def scenario(
     return result, env, command_env
 
 
+def probe_refusal_holds(observed: dict[str, Any], env: Env, wait_seconds: float = 15) -> bool:
+    """A probe that is never acknowledged refuses the plan, and the evidence is what the launcher recorded, not the wording of its message.
+
+    The launcher records each probe as an attempt with a ``probe`` field, and an acknowledged probe carries the ``probe_done`` cancel intent and is followed
+    by a scan (the ``GET /volumes`` call). So the refusal holds when the CLI failed with no plan, a probe attempt exists and none was acknowledged, and no
+    scan ran. The text of the error changes while the launcher closes its own stream (``not acknowledged`` or ``the event stream dropped``), so only its
+    stable prefix is read.
+    """
+
+    def probes() -> list[dict[str, Any]]:
+        return [attempt for attempt in env.state()["attempts"].values() if attempt.get("probe")]
+
+    try:
+        env.wait(probes, wait_seconds, "the probe attempt is recorded")
+    except CaseFailure:
+        return False
+    refused = observed["exit"] != 0 and observed["payload"] is None and observed["error"].startswith("memory budget: degraded:")
+    acknowledged = any((attempt.get("cancel_intent") or {}).get("reason") == "probe_done" for attempt in probes())
+    return refused and not acknowledged and not env.daemon.calls_matching("GET", "/volumes")
+
+
+def probe_refusal_contracts(out: Path) -> dict[str, bool]:
+    """The refusal of an unacknowledged probe holds, and the same check refuses to pass a launcher that serves a plan after an acknowledged probe."""
+    observed, env, _ = scenario(out, "probe_never_acknowledged", never_acknowledge=True, timings={"probe_timeout": 1.5})
+    refused = probe_refusal_holds(observed, env)
+    env.close()
+    # The planted defect: a launcher that serves the plan, as one that ignored the missed probe would.
+    served, served_env, _ = scenario(out, "probe_acknowledged_plan_is_served")
+    caught = served["exit"] == 0 and not probe_refusal_holds(served, served_env, wait_seconds=1)
+    served_env.close()
+    return {"probe_never_acknowledged": refused, "probe_refusal_check_catches_a_served_plan": caught}
+
+
 def main() -> int:
     """Retain repeatable results and return nonzero for any broken launch contract."""
     out = ROOT / "data/e2e/resource_limits" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -116,8 +149,6 @@ def main() -> int:
         "bad_total": ({"total": 0}, "Docker memory"),
         # The probe's acknowledgment arrives 3 s late, as under the gate's parallel load: the Docker memory error must still be the one reported.
         "bad_total_slow_probe": ({"total": 0, "probe_delay": 3.0}, "Docker memory"),
-        # The refusal still fires: a probe that is never acknowledged within its limit is reported, not turned into a plan.
-        "probe_never_acknowledged": ({"never_acknowledge": True, "timings": {"probe_timeout": 1.5}}, "not acknowledged"),
         "zero_docker_cpus": ({"docker_cpus": 0}, "CPU count"),
         "invalid_host_cpus": ({"host_cpus": "invalid"}, "CPU count"),
     }
@@ -125,6 +156,7 @@ def main() -> int:
         observed, env, _ = scenario(out, name, **inputs)
         env.close()
         results[name] = observed["exit"] != 0 and error in observed["error"] and observed["payload"] is None
+    results.update(probe_refusal_contracts(out))
     # PyYAML ships no type hints; this matches the repository's existing safe-loader convention.
     compose = importlib.import_module("yaml").safe_load((ROOT / "docker-compose.yaml").read_text())
     for name in SERVICES:
