@@ -314,7 +314,7 @@ timed "gates: moved dataset folders" "$python_bin" -c 'import json, pathlib, sys
 timed "gates: lint settings" "$python_bin" -m scripts.quality.repo_checks lint-settings
 timed "gates: env example" "$python_bin" -m scripts.quality.repo_checks env-example
 timed "gates: privacy scan" "$python_bin" -m scripts.quality.repo_checks privacy-scan
-timed "gates: writing check" "$python_bin" -m scripts.quality.repo_checks writing-check --block dash --block slash
+timed "gates: writing check" "$python_bin" -m scripts.quality.repo_checks writing-check --block dash --block semicolon --block slash
 timed "gates: credential files" credential_files
 timed "gates: data files" data_files
 timed "gates: markdown lint" markdown_lint

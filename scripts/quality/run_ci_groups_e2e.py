@@ -4939,7 +4939,7 @@ MANUAL_FINGERPRINTS = {
     "orphan-files": "517c80728999",
     "terraform-unused": "a2bc8e9b59b5",
     "privacy-scan": "ce896f9743dd",
-    "writing-check": "107b4e7bb1d7",
+    "writing-check": "6103a7434254",
     "front-matter": "82a03c2777b3",
     "docs-references": "6546547e6ece",
     "markdown-links": "8edd25262d5a",

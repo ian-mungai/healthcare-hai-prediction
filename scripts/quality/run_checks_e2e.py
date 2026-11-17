@@ -95,7 +95,7 @@ EN_DASH = "\u2013"
 CLEAN_WRITING = (
     f"---\nlast_updated: {ISO_DATE}\n---\n\n# Notes\n\n"
     "Keep secrets out of logs or commits and run a privacy scan. Lists read red, green and blue.\n\n"
-    f"Dates read Sep 30 2026; code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n\n"
+    f"Dates read Sep 30 2026. Code keeps `{ISO_DATE}`, `a`, `b` and [the log](https://example.invalid/{ISO_DATE}).\n\n"
     f"An em dash {EM_DASH} allowed outside articles.\n\n```text\nrun {ISO_DATE}, and done\n```\n"
 )
 CLEAN_WRITING_HOOK = CLEAN_WRITING.replace(f"An em dash {EM_DASH} allowed outside articles.\n\n", "")
@@ -3663,7 +3663,7 @@ CASES = [
     Case("writing finding blocked by the hook", "writing-check", False, {"notes.md": SERIAL_COMMA}),
     Case("time-bound word blocked by the hook", "writing-check", False, {"notes.md": "The loader currently reads S3.\n"}),
     Case("procedural soon passes the hook", "writing-check", True, {"notes.md": "Run it as soon as the load ends.\n"}),
-    Case("warn-first kinds warn through the hook", "writing-check", True, {"notes.md": "Rules help; checks enforce them.\n"}),
+    Case("semicolon blocked by the hook", "writing-check", False, {"notes.md": "Rules help; checks enforce them.\n"}),
     Case(
         "history, no longer and wrapped line warn through the hook",
         "writing-check",
@@ -3938,7 +3938,7 @@ BLOCK_REASONS = {
     "allowlist entry with unknown type": ".privacy_allowlist:{line}: allowlist entry with an unknown type",
     "writing finding blocked by the hook": "notes.md:1: comma before a final 'and', 'or' or 'nor'",
     "time-bound word blocked by the hook": "notes.md:1: time-bound word in prose",
-    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
+    "semicolon blocked by the hook": "notes.md:1: semicolon in prose",
     "internal references warn through the hook": "WARN notes.md:1: internal reference (wave)",
     "missing file blocked": "docs/guide.md:3: link target 'absent.md' is not a tracked file",
     "missing anchor blocked": "docs/guide.md:3: link anchor '#no-such-heading' matches no heading in docs/setup.md",
@@ -3976,7 +3976,6 @@ WARNING_HEADERS = {
 }
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",
-    "warn-first kinds warn through the hook": "WARN notes.md:1: semicolon in prose",
     "internal references warn through the hook": "WARN notes.md:1: internal reference (wave)",
 }
 
