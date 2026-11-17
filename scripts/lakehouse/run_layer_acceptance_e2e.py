@@ -389,7 +389,7 @@ def write_describe(env: Env, overrides: dict[str, Any], definition: str | None =
             "tasks": [
                 {
                     "taskArn": task_arn(env),
-                    "taskDefinitionArn": definition or f"arn:aws:ecs:us-west-2:{ACCOUNT}:task-definition/example_project_dev_job_{layer}:7",
+                    "taskDefinitionArn": definition or f"arn:aws:ecs:us-west-2:{ACCOUNT}:task-definition/example_project_dev_job_{layer}_host:7",
                     "createdAt": "2026-10-31T10:00:00.000000-07:00",
                     "lastStatus": "STOPPED",
                     "stopCode": "EssentialContainerExited",
@@ -913,7 +913,9 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
         def apply(env: Env, other: Env) -> None:
             edit(
                 env.root / "describe.json",
-                lambda d: d["tasks"][0].update(taskDefinitionArn=re.sub(r"_job_([a-z]+):[0-9]+$", rf"_job_\1{suffix}:3", d["tasks"][0]["taskDefinitionArn"])),
+                lambda d: d["tasks"][0].update(
+                    taskDefinitionArn=re.sub(r"_job_([a-z]+)(?:_host)?:[0-9]+$", rf"_job_\1{suffix}:3", d["tasks"][0]["taskDefinitionArn"])
+                ),
             )
 
         return apply
@@ -941,6 +943,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
         ("the family index key of the run and job", written("lakehouse/launch_records/families/{layer}/{run}.json")),
     )
     planted = (
+        ("a definition with no host suffix, the retired Fargate family name", definition(""), NAMES["task"]),
         ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
         ("a definition with a suffix after host", definition("_host_x"), NAMES["task"]),
         ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),

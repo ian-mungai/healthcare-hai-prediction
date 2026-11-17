@@ -188,9 +188,9 @@ def task_problems(layer: str, described: Any) -> list[str]:
 
 
 def definition_pattern(layer: str) -> re.Pattern[str]:
-    """The job's task definition: the Fargate family ``<project>_<env>_job_<layer>`` or its host twin ``..._job_<layer>_host`` that the direct ECS launch
-    starts from a DAG step. No other suffix is accepted."""
-    return re.compile(rf"arn:aws:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/[a-z][a-z0-9_]*_job_{layer}(?:_host)?:[0-9]+")
+    """The job's task definition: the host family ``<project>_<env>_job_<layer>_host`` that the direct ECS launch starts from a DAG step. No other suffix
+    is accepted, and the retired family name without the host suffix is not."""
+    return re.compile(rf"arn:aws:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/[a-z][a-z0-9_]*_job_{layer}_host:[0-9]+")
 
 
 def task_is_this_runs(layer: str, run: str, task: Mapping[str, Any], approved_sha: str, code_run: str, input_run: str) -> bool:
