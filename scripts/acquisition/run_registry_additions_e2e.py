@@ -7,6 +7,7 @@ import csv
 import json
 import re
 import sys
+import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -984,7 +985,8 @@ def main() -> None:
         cases = run_cases(root)
         status = "passed" if all(case["passed"] for case in cases) else "failed"
     except (OSError, KeyError, ValueError, StopIteration, SubprocessError) as failure:
-        error = sanitize(f"{type(failure).__name__}: {failure}")
+        frame = traceback.extract_tb(failure.__traceback__)[-1]
+        error = sanitize(f"{type(failure).__name__}: {failure} (raised in {frame.name} at {Path(frame.filename).name}:{frame.lineno})")
     finally:
         implementation = Path(__file__).with_name("registry_additions.py")
         artifact = {

@@ -120,4 +120,33 @@ def test_offline_workflow(suite: str, iteration: int, offline_artifact_root: Pat
     else:
         passed = result.get("total") is not None and result.get("passed") == result["total"]
     SECONDS[f"{suite}_{iteration}"] = round(time.monotonic() - began, 1)
-    check(passed, f"Integrated {suite} workflow failed; inspect {retained}")
+    check(passed, failure_message(suite, retained, result))
+
+
+def failure_message(suite: str, retained: Path, result: dict) -> str:
+    """The pytest failure text of a suite that did not pass: where the evidence is."""
+    detail = [f"error: {result['error']}"] if result.get("error") else []
+    cases = result.get("cases")
+    if isinstance(cases, list):
+        detail.append(f"{len(cases)} cases ran")
+        detail += [f"case not passed: {case.get('name', case.get('case', '?'))}" for case in cases if isinstance(case, dict) and case.get("passed") is False]
+    return f"Integrated {suite} workflow failed ({'; '.join(detail) or 'no error recorded'}); inspect {retained}"
+
+
+def test_blocked_registry_additions_error_reaches_the_failure_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run that stops before any case (status blocked, 0 cases) keeps its error in the pytest failure message, as seen under the pre-push gate."""
+    module = importlib.import_module("scripts.acquisition.run_registry_additions_e2e")
+
+    def stop(_root: Path) -> list[dict]:
+        raise OSError("No space left on device: planted by the case")
+
+    monkeypatch.setattr(module, "run_cases", stop)
+    output = tmp_path / "output"
+    monkeypatch.setattr(sys, "argv", [module.__name__, "--output", str(output)])
+    with pytest.raises(SystemExit):
+        module.main()
+    result = read_json(output / "artifact.json")
+    check(result["status"] == "blocked" and result["cases"] == [], f"the planted stop did not block the run: {result['status']}")
+    message = failure_message("registry_additions", output, result)
+    check("No space left on device: planted by the case" in message, f"the blocked error is missing from the failure message: {message}")
+    check("OSError" in message and "stop" in message, f"the error type and the place it was raised are missing from the failure message: {message}")
