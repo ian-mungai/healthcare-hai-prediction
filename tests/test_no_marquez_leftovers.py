@@ -2,7 +2,9 @@
 
 OpenMetadata alone holds lineage. These checks fail when a Marquez piece comes back: no file Git tracks or would add names Marquez in its path or its
 text, the files that only served it stay deleted, and the stacks take no Marquez input. The scan reads the list of files from Git, so a file is skipped only
-when Git ignores it or when its extension is a saved Terraform state or plan; its name is never a reason to skip it.
+when Git ignores it or when its extension is a saved Terraform state or plan; its name is never a reason to skip it. Git ignores only exact artifact
+names (see .gitignore), so no source file is hidden; the owner's local inputs (*.tfvars and *.tfvars.json) stay ignored, cannot be
+committed and are not judged here.
 """
 
 from __future__ import annotations
@@ -115,11 +117,11 @@ def test_the_openmetadata_comparison_bot_that_only_the_marquez_comparison_used_i
         check('"comparison"' not in (ROOT / stack).read_text(), f"{stack} still names a comparison caller")
 
 
-def scratch_repository(folder: Path) -> Path:
+def scratch_repository(folder: Path, ignore_rules: str = "ignored.tfstate\nbuild/\n") -> Path:
     root = folder / "repository"
     root.mkdir()
     run_command("git", ["init", "-q"], cwd=root, timeout=60, check=True)
-    (root / ".gitignore").write_text("ignored.tfstate\nbuild/\n")
+    (root / ".gitignore").write_text(ignore_rules)
     return root
 
 
@@ -165,3 +167,29 @@ def test_the_scan_skips_only_ignored_files_saved_state_and_plans_and_the_allowed
     (root / "allowed.md").write_text("marquez\n")
     (root / "kept_tfstate.md").write_text("marquez\n")
     check(named_files(root, names_marquez, ["allowed.md"]) == ["kept_tfstate.md"], "only a name that merely contains tfstate must still be scanned")
+
+
+# The cases above use minimal ignore rules. These use this repository's own, so a rule that hides source files cannot pass unseen.
+@pytest.mark.parametrize(
+    ("path", "text"),
+    [
+        ("scripts/restored.tfstate.py", "URL = 'http://Marquez:5000'\n"),
+        ("infra/services/restored.tfstate.tf", "# marquez\n"),
+        ("config/restored.tfstate.json", '{"url": "MARQUEZ"}\n'),
+        ("config/runtime.tfplan.json", '{"url": "MARQUEZ"}\n'),
+        ("scripts/restored.tfstate.1700000000.py", "URL = 'http://marquez:5000'\n"),
+    ],
+)
+def test_the_ignore_rules_of_this_repository_hide_no_source_file_from_the_scan(tmp_path: Path, path: str, text: str) -> None:
+    root = scratch_repository(tmp_path, (ROOT / ".gitignore").read_text())
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    check(named_files(root, names_marquez, ()) == [path], f"the ignore rules of this repository hide {path} from the scan")
+
+
+def test_the_ignore_rules_of_this_repository_still_hide_the_state_and_plan_files(tmp_path: Path) -> None:
+    root = scratch_repository(tmp_path, (ROOT / ".gitignore").read_text())
+    for path in ("terraform.tfstate", "terraform.tfstate.backup", "terraform.tfstate.1700000000.backup", "saved.tfplan"):
+        (root / path).write_text("marquez\n")
+    check(listed_files(root) == [".gitignore"], f"a state or plan file is not ignored: {listed_files(root)}")

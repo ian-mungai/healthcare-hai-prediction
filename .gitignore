@@ -62,11 +62,12 @@ mlruns/
 # collected data stays under the ignored data/ folder.
 
 # Terraform: state and plans stay local; the .terraform.lock.hcl files are committed
+# Only the exact artifact names are ignored. A wildcard after the extension would also hide a source file such as restored.tfstate.py or restored.tfstate.tf.
 .terraform/
 *.tfstate
-*.tfstate.*
+*.tfstate.backup
+*.tfstate.*.backup
 *.tfplan
-*.tfplan.json
 *.tfvars
 *.tfvars.json
 .terraform.tfstate.lock.info
