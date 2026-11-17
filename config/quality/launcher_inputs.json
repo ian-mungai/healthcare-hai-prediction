@@ -1369,6 +1369,7 @@
     "infra/jobs/tests/promote.tftest.hcl",
     "infra/jobs/tests/publisher.tftest.hcl",
     "infra/jobs/tests/publisher_host_definition.json",
+    "infra/jobs/tests/replace_order.tftest.hcl",
     "infra/jobs/tests/serve.tftest.hcl",
     "infra/jobs/tests/train.tftest.hcl",
     "infra/jobs/train.tf",
