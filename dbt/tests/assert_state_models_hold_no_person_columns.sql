@@ -1,6 +1,6 @@
 -- Fails for each column of a published state-source table (staging views included) that is a withheld person, phone or address column of the HCAI
 -- utilization files, or whose name says so, that is a pseudonym column, and for each column of the held rows that could carry rejected text. Bronze
--- redacts the person cells at load; silver never reads them and publishes no pseudonym.
+-- pseudonymizes the person cells at load; silver never reads them and publishes no pseudonym.
 with
 
 withheld as (

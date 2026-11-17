@@ -10,12 +10,12 @@
    ],
    "decisions": [
     "Public-business-data exception for resource 78622c04-a158-4c95-8ea3-7660725e9526 (2012-2017) and the 2018-2025 annual workbooks, as in the earlier records",
-    "Run 3 whole-file intake with bronze pseudonymization (owner decision, Nov 10 2026): bronze protects person fields at load; for HCAI utilization the collector contract redacts the person cells at load ([REDACTED]), which the owner has not yet changed",
+    "Run 3 whole-file intake with bronze pseudonymization (owner decision, Nov 10 2026): bronze protects person fields at load; the HCAI utilization person cells are pseudonymized like CMS owners and ONC (owner decision, Nov 17 2026, loader change on branch feat/hcai-pseudonymize)",
     "HCAI utilization is model-eligible and publishes to silver (owner decision, Nov 17 2026); this record supersedes the scope of the two earlier records"
    ],
-   "hold": "privacy: administrator, report-preparer and contact details in the published files; bronze redacts these cells at load and silver excludes them",
+   "hold": "privacy: administrator, report-preparer and contact details in the published files; bronze pseudonymizes these cells at load and silver excludes them",
    "released": true,
-   "scope": "Whole published workbooks and abstracted sheet CSVs as stored; bronze redacts the person cells at load; silver never reads the administrator, report-preparer, phone, street address or parent corporation columns and silver publishes no pseudonym; publisher documentation stored unchanged as reference documents, never as data; model-eligible and published to silver under the owner decisions of Nov 10 2026 and Nov 17 2026",
+   "scope": "Whole published workbooks and abstracted sheet CSVs as stored; bronze pseudonymizes the HCAI person cells at load; silver never reads the administrator, report-preparer, phone, street address or parent corporation columns and silver publishes no pseudonym; publisher documentation stored unchanged as reference documents, never as data; model-eligible and published to silver under the owner decisions of Nov 10 2026 and Nov 17 2026",
    "source_id": "HCAI_UTIL"
   }
  ]
