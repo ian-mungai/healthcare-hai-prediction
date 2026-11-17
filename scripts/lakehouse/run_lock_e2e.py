@@ -231,6 +231,25 @@ def malformed(sc: Scenario) -> dict[str, bool]:
     }
 
 
+def launcher_path_errors(sc: Scenario) -> dict[str, bool]:
+    """A command that the launcher client serves reads the registry again through ``orchestration.launcher``, which imports ``run_lock`` by its package name.
+
+    ``python -m`` runs the command as ``__main__``, so the ``RegistryError`` that this second read raises belongs to the package copy of the module. The
+    command must still report it as a registry error with exit code 4. A registry whose state file is gone and whose identity file is unreadable passes
+    the schema check of the command (no state file means the launcher's schema) and fails in the launcher's read.
+    """
+    sc.cli("status")
+    sc.env.stop_launcher()
+    (sc.env.registry / "registry.json").unlink()
+    (sc.env.registry / "registry_id").write_text("{not json")
+    result = sc.cli("status")
+    return {
+        "the launcher's read of an unreadable identity is a registry error": refused(result, "registry_id is not valid", REGISTRY_ERROR),
+        "no traceback": "Traceback" not in result.stderr,
+        "file left as found": (sc.env.registry / "registry_id").read_text() == "{not json",
+    }
+
+
 def scratch_repository(folder: Path) -> tuple[Path, Path]:
     """A Git repository with one commit and a linked worktree; returns both checkouts."""
     main = folder / "main"
@@ -301,6 +320,7 @@ SCENARIOS: list[tuple[str, Callable[[Scenario], dict[str, bool]]]] = [
     ("16-process race", race),
     ("stale holder recovery", stale_holder),
     ("malformed registry", malformed),
+    ("registry error in the launcher's read", launcher_path_errors),
     ("worktrees, markers and registry IDs", worktrees),
     ("readers and protected snapshot sets", readers),
 ]

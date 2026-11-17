@@ -12,8 +12,7 @@ A module is flagged when all of these hold:
 3. a module in its import closure (imports inside functions count) imports the module by name and names one of those classes, and
 4. its block does not run the package copy (``from package.module import main as packaged_main``).
 
-The fix is the block of ``scripts/infrastructure/host_session.py``. ``config/quality/entry_copies_reviewed.json`` lists the modules whose finding is known and
-open, with a reason. A listed module that the check no longer flags is a finding too, so the list cannot go stale.
+The fix is the block of ``scripts/infrastructure/host_session.py``. The check has no allowlist: a flagged module is fixed.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ from typing import Any
 
 from scripts.process import run_command
 
-REVIEWED = Path("config/quality/entry_copies_reviewed.json")
 RULE = "scripts/quality/entry_copies.py: a module run with python -m must not catch classes that a second copy of itself defines"
 FIX = "in the __main__ block run the package copy: from <package>.<module> import main as packaged_main, then raise SystemExit(packaged_main())"
 EXCEPTION_SUFFIXES = ("Error", "Exception")
@@ -131,17 +129,10 @@ def flagged(sources: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def reviewed() -> dict[str, str]:
-    return dict(json.loads(REVIEWED.read_text(encoding="utf-8"))) if REVIEWED.exists() else {}
-
-
-def findings(sources: dict[str, str], listed: dict[str, str]) -> list[str]:
-    """The problems of the tree: flagged modules that are not listed, and listed modules that are not flagged."""
-    problems = flagged(sources)
+def findings(sources: dict[str, str]) -> list[str]:
+    """The problems of the tree, one text for each flagged module."""
     paths = {module_name(path): path for path in sources}
-    lines = [f"{paths[name]}:{problem}\n  rule: {RULE}\n  fix: {FIX}" for name, problem in problems.items() if name not in listed]
-    lines += [f"{REVIEWED}:1: {name} is listed but not flagged\n  rule: {RULE}\n  fix: remove the entry" for name in sorted(set(listed) - set(problems))]
-    return lines
+    return [f"{paths[name]}:{problem}\n  rule: {RULE}\n  fix: {FIX}" for name, problem in flagged(sources).items()]
 
 
 PACKAGE = "package/module.py"
@@ -184,12 +175,7 @@ def planted() -> dict[str, bool]:
             False,
         ),
     }
-    return {name: bool(flagged(sources)) is expected for name, (sources, expected) in cases.items()} | {
-        "a listed module that is not flagged is a finding": bool(findings({PACKAGE: "x = 1\n"}, {"package.module": "open"})),
-        "a listed module that is flagged is accepted": not findings(
-            {PACKAGE: MODULE_SOURCE.format(guard=plain) + "import package.importer\n", IMPORTER: RAISES}, {"package.module": "open"}
-        ),
-    }
+    return {name: bool(flagged(sources)) is expected for name, (sources, expected) in cases.items()}
 
 
 def tracked(root: Path) -> dict[str, str]:
@@ -206,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         results: dict[str, Any] = planted()
         sys.stdout.write(json.dumps({"passed": all(results.values()), "results": results}, indent=2, sort_keys=True) + "\n")
         return 0 if all(results.values()) else 1
-    problems = findings(tracked(arguments.root), reviewed())
+    problems = findings(tracked(arguments.root))
     for problem in problems:
         sys.stderr.write(f"FAIL {problem}\n")
     return 1 if problems else 0

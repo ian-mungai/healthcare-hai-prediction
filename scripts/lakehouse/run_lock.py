@@ -656,4 +656,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``orchestration.launcher`` imports the module by its package name: a second copy with ``Refused`` and
+    # ``RegistryError`` classes of its own, so ``main`` would not catch what the launcher client's reads raise. Run the package copy, so that every module
+    # shares one set of classes.
+    from scripts.lakehouse.run_lock import main as packaged_main
+
+    sys.exit(packaged_main())

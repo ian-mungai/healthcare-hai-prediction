@@ -417,7 +417,7 @@
         "scripts/lakehouse/launcher_cleanup.py": "sha256:271cbf7f0a014802fb8d517775b145de61c0a19473c49e6cfde8be0add9bce68",
         "scripts/lakehouse/package_fixture.py": "sha256:8c59389957cc35b8187f70b5de53bd014e706755e3db21693d04b83b070fa223",
         "scripts/lakehouse/pins.py": "sha256:08c91269c689696f9286b87b03c98c0ffb2c2e618a3fc754b633611714640591",
-        "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
+        "scripts/lakehouse/run_lock.py": "sha256:3c2171aeaaec1881b51d482978be4996989bd19c57e0b192ecc903e4540253d6",
         "scripts/lakehouse/run_package_fixture_e2e.py": "sha256:6a84c3114ae00474955712af5821fdf32aae972a6b1671e7033fc9e2992a59f2",
         "scripts/lakehouse/run_silver_e2e.py": "sha256:e68daa9239ecc3d528f8be2efa175a355cce1c3e5f468392075cab4383ef7387",
         "scripts/lakehouse/run_staging_e2e.py": "sha256:3cb9a0ca83c3d9046ba16e83e8fd21e60ebdd6aa7cbe453365363f12a46c88b8",
@@ -439,11 +439,11 @@
       "code_sha256": "1a94bb61e84ef9b7030cd7ba556913a57e44837bac48540cf024960d400e605e",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
+      "file_sha256": "ac3d1e8fb11a07f2486e8883ddf64cf2e73c031b5a2dcaca0b4fa0f30d33ee97",
       "dependencies": {
         "orchestration/launcher.py": "sha256:ed2bbc8ec32f5dc02e640aefab34be327c994aef2685db6ce1e59dee4318d204",
         "scripts/lakehouse/run_launcher_e2e.py": "sha256:26520111b82399b5966f5a878eedf0fed5cc564efb377d7237619494a96890aa",
-        "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
+        "scripts/lakehouse/run_lock.py": "sha256:3c2171aeaaec1881b51d482978be4996989bd19c57e0b192ecc903e4540253d6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "the shell line is the quoted sys.executable and run_lock CLI arguments followed by true, from internal callers only",

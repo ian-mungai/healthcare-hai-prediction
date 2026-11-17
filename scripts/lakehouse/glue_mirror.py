@@ -680,4 +680,9 @@ def main(
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``gold_publish`` imports the module by its package name: a second copy with ``MirrorError`` and
+    # ``MirrorDeadline`` classes of its own, so a caller that catches them would not catch what this copy raises. Run the package copy, so that every module
+    # shares one set of classes.
+    from scripts.lakehouse.glue_mirror import main as packaged_main
+
+    sys.exit(packaged_main())
