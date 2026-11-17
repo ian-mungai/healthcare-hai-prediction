@@ -26,9 +26,31 @@
       "acceptance": [
         "run"
       ]
+    },
+    "bronze_stage": {
+      "deadline_seconds": 3600,
+      "network": "lakehouse",
+      "log_container": "stage",
+      "needs_bronze_code": true,
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_RUN_ID",
+          "CODE_SHA256",
+          "HAI_DEADLINE_UTC"
+        ],
+        "stage": [
+          "RUN_ID",
+          "HAI_DEADLINE_UTC"
+        ]
+      },
+      "acceptance": [
+        "stage"
+      ]
     }
   },
   "steps": {
+    "bronze_stage": "bronze_stage",
     "publisher_run": "publisher"
   }
 }

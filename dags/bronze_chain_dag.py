@@ -2,7 +2,8 @@
 
 ``ingestion_dag`` starts this DAG once the retry period is over (a hand-started ingestion run starts it at once), with ``run_id`` set to ``bronze_<hex>`` of the
 ingestion run (``orchestration/ingestion_schedule.py``); the owner may start it by hand too. The first task binds every layer run of the chain to the bronze
-run's staged code. The bronze job then loads the sources of the staged bronze request under that same run ID (``bronze_load``); a source file that no run of the
+run's staged code. The bronze stage job (``bronze_stage``) then lists the raw sources and stages the run's bronze request and source inventory under the bronze
+task role, and the bronze job loads those sources under that same run ID (``bronze_load``); a source file that no run of the
 ingestion run's retry period captured keeps its earlier capture, and the run record and the owner notice name each such carried-over file.
 Each layer then runs as a triggered DAG run and the chain waits for its success before the next layer, so a failed layer or a failed acceptance check stops
 the chain before the later layers. Every wait has a limit. The features base DAG starts the six model feature DAGs once it published, and each of those runs
@@ -34,7 +35,9 @@ POLL_SECONDS = 60
 # Each layer's wait ends after its own limit (a job's deadline is six hours) and the whole chain ends after the sum plus an hour for the gate.
 LAYER_LIMITS = {"silver": timedelta(hours=8), "gold": timedelta(hours=8), "features": timedelta(hours=8)}
 BRONZE_LIMIT = timedelta(hours=8)
-CHAIN_LIMIT = sum(LAYER_LIMITS.values(), BRONZE_LIMIT + timedelta(hours=1))
+# The stage job lists the raw sources once and writes two objects; its own deadline is one hour (config/orchestration/direct_jobs.json).
+STAGE_LIMIT = timedelta(hours=1)
+CHAIN_LIMIT = sum(LAYER_LIMITS.values(), BRONZE_LIMIT + STAGE_LIMIT + timedelta(hours=1))
 
 
 def chain_run(layer: str, bronze_run: str) -> str:
@@ -95,11 +98,17 @@ with DAG(
     def gate() -> str:
         return run_step("chain_gate")
 
+    # Both jobs run under this DAG run's bronze run ID: a launch is keyed by the run and the job, so the stage job and the bronze job each have their own
+    # launch record. The stage job writes the run's bronze_request.json and bronze_inventory.json (write-once), which the bronze launch preflight then reads.
+    @task(task_id="bronze_stage", retries=0, execution_timeout=STAGE_LIMIT, **pool_settings("bronze_stage"))
+    def bronze_stage() -> str:
+        return run_step("bronze_stage")
+
     @task(task_id="bronze_load", retries=0, execution_timeout=BRONZE_LIMIT, **pool_settings("bronze"))
     def bronze_load() -> str:
         return run_step("bronze_load")
 
-    previous = gate().operator >> bronze_load().operator
+    previous = gate().operator >> bronze_stage().operator >> bronze_load().operator
     for position in range(len(CHAIN)):
         current = trigger_for(position)
         previous >> current

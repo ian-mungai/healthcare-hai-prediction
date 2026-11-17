@@ -92,7 +92,7 @@ run "host_definitions_equal_the_fixture_the_airflow_mode_rig_reads" {
         start_with_scratch_wipe = [for container in jsondecode(task.container_definitions) : container.name if startswith(container.command[0], "find /workspace /tmp -mindepth 1 -delete && ")]
       }
     } == jsondecode(file("${path.module}/tests/host_definitions.json"))
-    error_message = "The containers of the nine host definitions differ from tests/host_definitions.json, which the Airflow mode rig reads. If the change is intended, regenerate it with: .venv/bin/python -m scripts.orchestration.host_definitions_fixture"
+    error_message = "The containers of the ten host definitions differ from tests/host_definitions.json, which the Airflow mode rig reads. If the change is intended, regenerate it with: .venv/bin/python -m scripts.orchestration.host_definitions_fixture"
   }
 }
 
@@ -107,7 +107,7 @@ run "no_host_definition_has_more_containers_than_ecs_allows" {
 
   assert {
     condition = (
-      length(aws_ecs_task_definition.host) == 15 &&
+      length(aws_ecs_task_definition.host) == 16 &&
       alltrue([for family, task in aws_ecs_task_definition.host : length(jsondecode(task.container_definitions)) <= 10])
     )
     error_message = "A host task definition holds more than 10 containers, which ECS refuses at registration (ClientException: Too many containers): ${jsonencode({ for family, task in aws_ecs_task_definition.host : family => length(jsondecode(task.container_definitions)) })}"

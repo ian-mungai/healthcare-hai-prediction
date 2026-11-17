@@ -146,16 +146,18 @@ def preflight_and_dag_derive_the_same_run_ids() -> None:
 def chain_runs_in_order_after_the_gate() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
-    require(list(nodes) == ["chain_gate", "bronze_load", "run_silver", "run_gold", "run_features", "start_metadata"], f"wrong tasks: {list(nodes)}")
-    order = ["chain_gate", "bronze_load", "run_silver", "run_gold", "run_features"]
+    require(
+        list(nodes) == ["chain_gate", "bronze_stage", "bronze_load", "run_silver", "run_gold", "run_features", "start_metadata"], f"wrong tasks: {list(nodes)}"
+    )
+    order = ["chain_gate", "bronze_stage", "bronze_load", "run_silver", "run_gold", "run_features"]
     for before, after in zip(order, order[1:], strict=False):
         require(nodes[after].upstream == [nodes[before]], f"{after} does not follow only {before}")
     require(loaded["dag"].settings["schedule"] is None and loaded["dag"].settings["catchup"] is False, "the chain has a calendar schedule")
     require(
-        [nodes[name].settings["trigger_dag_id"] for name in order[2:]] == ["silver_transform_dag", "gold_transform_dag", "features_base_dag"],
+        [nodes[name].settings["trigger_dag_id"] for name in order[3:]] == ["silver_transform_dag", "gold_transform_dag", "features_base_dag"],
         "wrong DAGs",
     )
-    for name in order[2:]:
+    for name in order[3:]:
         settings = nodes[name].settings
         require(
             settings["wait_for_completion"] is True and settings["allowed_states"] == ["success"] and "failed" in settings["failed_states"],
@@ -199,6 +201,12 @@ def waits_have_explicit_deadlines() -> None:
     require(len(triggers) == 3 and all(isinstance(limit, timedelta) and limit > timedelta(0) for limit in limits), f"a layer wait has no deadline: {limits}")
     run_limit = loaded["dag"].settings.get("dagrun_timeout")
     require(isinstance(run_limit, timedelta) and run_limit >= sum(limits, timedelta(0)), f"the chain run has no deadline that covers its layers: {run_limit}")
+    stage = next(node.settings for node in loaded["operators"] if node.task_id == "bronze_stage")
+    stage_limit = stage.get("execution_timeout")
+    require(
+        isinstance(stage_limit, timedelta) and timedelta(0) < stage_limit <= timedelta(hours=2), f"the bronze stage wait has no short deadline: {stage_limit}"
+    )
+    require(run_limit >= sum(limits, stage_limit + loaded["BRONZE_LIMIT"]), f"the chain run deadline does not cover the stage and bronze jobs: {run_limit}")
     require(loaded["dag"].settings.get("max_active_runs") == 1, "the chain may run twice at once")
 
 

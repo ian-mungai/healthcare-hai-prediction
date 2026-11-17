@@ -8,7 +8,7 @@ variable "host_jobs_enabled" {
 variable "host_jobs" {
   description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its containers: the images, the roles, the parameter names and its own enable flag."
   type        = set(string)
-  default     = ["drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  default     = ["bronze_stage", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   nullable    = false
 
   validation {
@@ -18,12 +18,12 @@ variable "host_jobs" {
 
   validation {
     condition     = length(setsubtract(var.host_jobs, toset(local.host_families))) == 0
-    error_message = "Select only the nine job families (bronze, drift, features, gold, metadata, promote, serve, silver and train) and the six model sets features_m1 to features_m6."
+    error_message = "Select only the ten job families (bronze, bronze_stage, drift, features, gold, metadata, promote, serve, silver and train) and the six model sets features_m1 to features_m6."
   }
 
   validation {
     condition     = !var.host_jobs_enabled || alltrue([for family in var.host_jobs : lookup(local.host_source_ready, lookup(local.host_set_families, family, family), false)])
-    error_message = "Every selected family needs its own enable flag and inputs (layer_jobs_enabled with the layer in layer_jobs, bronze_job_enabled, train_enabled, drift_enabled, promote_enabled or serve_enabled) and, for metadata, the ingestion image, the catalog roles and the jobs log group."
+    error_message = "Every selected family needs its own enable flag and inputs (layer_jobs_enabled with the layer in layer_jobs, bronze_job_enabled (also for bronze_stage), train_enabled, drift_enabled, promote_enabled or serve_enabled) and, for metadata, the ingestion image, the catalog roles and the jobs log group."
   }
 }
 
@@ -103,7 +103,7 @@ variable "host_repo_path" {
 locals {
   # The persistent catalog on the host: always port 8585, path /api, at the address of the platform output.
   host_catalog_api = var.host_private_ip == null ? null : "http://${var.host_private_ip}:8585/api"
-  host_families    = concat(["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
+  host_families    = concat(["bronze", "bronze_stage", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
   # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the host job cap (host_job_memory_mib, from the services stack).
@@ -119,23 +119,26 @@ locals {
     gold     = var.layer_jobs_enabled && contains(var.layer_jobs, "gold")
     features = var.layer_jobs_enabled && contains(var.layer_jobs, "features")
     bronze   = var.bronze_job_enabled
-    train    = var.train_enabled
-    drift    = var.drift_enabled
-    promote  = var.promote_enabled
-    serve    = var.serve_enabled
-    metadata = contains(keys(var.openmetadata_images), "ingestion") && contains(keys(var.openmetadata_roles), "execution") && contains(keys(var.openmetadata_roles), "openmetadata_task") && var.log_group_name != null
+    # The stage job runs the bronze image under the bronze role, so it needs the bronze inputs and no flag of its own.
+    bronze_stage = var.bronze_job_enabled
+    train        = var.train_enabled
+    drift        = var.drift_enabled
+    promote      = var.promote_enabled
+    serve        = var.serve_enabled
+    metadata     = contains(keys(var.openmetadata_images), "ingestion") && contains(keys(var.openmetadata_roles), "execution") && contains(keys(var.openmetadata_roles), "openmetadata_task") && var.log_group_name != null
   }
   # Roles and network class of each host definition (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares).
   host_specs = {
-    silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse" }
-    gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse" }
-    features = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse" }
-    bronze   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse" }
-    train    = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
-    drift    = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training" }
-    promote  = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
-    serve    = { execution = lookup(var.train_roles, "execution", ""), task_key = "serve_task", task = lookup(var.serve_roles, "serve_task", ""), network = "training" }
-    metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse" }
+    silver       = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse" }
+    gold         = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse" }
+    features     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.features, task = lookup(var.job_role_arns, local.layer_roles.features, ""), network = "lakehouse" }
+    bronze       = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse" }
+    bronze_stage = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.bronze_role, task = lookup(var.job_role_arns, local.bronze_role, ""), network = "lakehouse" }
+    train        = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
+    drift        = { execution = lookup(var.drift_roles, "execution", ""), task_key = "drift_task", task = lookup(var.drift_roles, "drift_task", ""), network = "training" }
+    promote      = { execution = lookup(var.train_roles, "execution", ""), task_key = "train_task", task = lookup(var.train_roles, "train_task", ""), network = "training" }
+    serve        = { execution = lookup(var.train_roles, "execution", ""), task_key = "serve_task", task = lookup(var.serve_roles, "serve_task", ""), network = "training" }
+    metadata     = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse" }
   }
   host_selected = {
     for family, spec in merge(local.host_specs, { for family, base in local.host_set_families : family => local.host_specs[base] }) : family => spec
@@ -143,12 +146,13 @@ locals {
   }
   host_layer_containers = { for layer in local.layer_jobs : layer => concat(local.layer_containers[layer], [local.layer_guards[layer]]) }
   host_source_containers = merge(local.host_layer_containers, {
-    bronze   = local.bronze_containers
-    train    = local.train_containers
-    drift    = local.drift_containers
-    promote  = local.promote_containers
-    serve    = local.serve_containers
-    metadata = local.host_metadata_containers
+    bronze       = local.bronze_containers
+    bronze_stage = local.bronze_family_containers["bronze_stage"]
+    train        = local.train_containers
+    drift        = local.drift_containers
+    promote      = local.promote_containers
+    serve        = local.serve_containers
+    metadata     = local.host_metadata_containers
   }, { for family, base in local.host_set_families : family => lookup(local.host_layer_containers, base, []) })
   # The persistent catalog runs as a service on the host. The metadata job is only its client: after the init step, one container sends the Glue mirror and dbt metadata to the catalog API.
   host_repo_mount = "/opt/hai/repo"
@@ -258,15 +262,16 @@ locals {
     }
   }
   host_run_variables = {
-    silver   = local.layer_run_variables.silver
-    gold     = local.layer_run_variables.gold
-    features = local.layer_run_variables.features
-    bronze   = local.bronze_run_variables
-    train    = local.train_run_variables
-    drift    = local.drift_run_variables
-    promote  = { for step in local.promote_steps : step.name => step.variables if length(step.variables) > 0 }
-    serve    = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
-    metadata = { ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] }
+    silver       = local.layer_run_variables.silver
+    gold         = local.layer_run_variables.gold
+    features     = local.layer_run_variables.features
+    bronze       = local.bronze_run_variables
+    bronze_stage = local.bronze_stage_run_variables
+    train        = local.train_run_variables
+    drift        = local.drift_run_variables
+    promote      = { for step in local.promote_steps : step.name => step.variables if length(step.variables) > 0 }
+    serve        = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
+    metadata     = { ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] }
   }
   host_dry_run = {
     silver   = { variable = "LAYER_DRY_RUN", value = "1" }

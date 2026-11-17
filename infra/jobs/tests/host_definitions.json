@@ -11,6 +11,16 @@
       "init"
     ]
   },
+  "bronze_stage": {
+    "containers": [
+      "init",
+      "fetch",
+      "stage"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
   "drift": {
     "containers": [
       "init",

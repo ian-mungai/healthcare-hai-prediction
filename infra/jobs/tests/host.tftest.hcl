@@ -1,6 +1,6 @@
 mock_provider "aws" {}
 
-# Every family has its source switched on, so each run plans the nine host definitions from the same inputs.
+# Every family has its source switched on, so each run plans the ten host definitions from the same inputs.
 variables {
   # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
   # not set a switch tests it off, so the fixture sets each one explicitly.
@@ -96,7 +96,7 @@ run "flag_off" {
   }
 }
 
-run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
+run "flag_on_plans_the_ten_host_definitions_and_the_six_model_sets" {
   command = plan
 
   variables {
@@ -105,10 +105,10 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
 
   assert {
     condition = toset(keys(aws_ecs_task_definition.host)) == toset([
-      "silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata",
+      "silver", "gold", "features", "bronze", "bronze_stage", "train", "drift", "promote", "serve", "metadata",
       "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"
     ])
-    error_message = "The flag plans exactly one host definition for each of the nine families and for each of the six model sets, which are families of their own."
+    error_message = "The flag plans exactly one host definition for each of the ten families (the bronze stage job is the tenth) and for each of the six model sets, which are families of their own."
   }
 
   assert {
@@ -123,7 +123,7 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
   assert {
     condition = alltrue([for family, size in {
       silver   = [3072, 23552], gold = [3072, 23552], features = [3072, 23552], bronze = [3072, 23552], train = [3072, 23552],
-      metadata = [1024, 2048], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
+      metadata = [1024, 2048], bronze_stage = [512, 2048], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
       } : (
       aws_ecs_task_definition.host[family].cpu == tostring(size[0]) && aws_ecs_task_definition.host[family].memory == tostring(size[1])
     )])
@@ -419,14 +419,14 @@ run "run_task_and_dispatch_contract" {
   assert {
     condition = alltrue([for family, task in output.host_run_tasks : (
       task.task_definition == "example_project_dev_job_${family}_host" && task.capacity_provider == "example_project_host_dev" && task.network_mode == "bridge" &&
-      task.propagate_tags == "TASK_DEFINITION" && task.network == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[startswith(family, "features_m") ? "features" : family].network
+      task.propagate_tags == "TASK_DEFINITION" && task.network == merge(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs, jsondecode(file("${path.module}/../../config/orchestration/direct_jobs.json")).jobs)[startswith(family, "features_m") ? "features" : family].network
     )])
     error_message = "Every host run-task entry names its _host definition, the host capacity provider, bridge mode and the network class of the job table."
   }
 
   assert {
     condition = (
-      toset(keys(output.host_run_tasks)) == setunion(toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)), toset(["features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"])) &&
+      toset(keys(output.host_run_tasks)) == setunion(toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)), toset(["bronze_stage", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"])) &&
       alltrue([for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] :
         output.host_run_tasks[family].container_environment == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[family].containers
       ]) &&
@@ -450,7 +450,7 @@ run "run_task_and_dispatch_contract" {
       output.host_dispatch_contract.capacity_provider == "example_project_host_dev" && output.host_dispatch_contract.network_mode == "bridge" &&
       output.host_dispatch_contract.jobs_at_a_time == 1 && output.host_dispatch_contract.cpu_units_cap == 3072 && output.host_dispatch_contract.memory_mib_cap == 23552 &&
       output.host_dispatch_contract.propagate_tags == "TASK_DEFINITION" && toset(output.host_dispatch_contract.families) == toset(keys(aws_ecs_task_definition.host)) &&
-      toset(keys(output.host_dispatch_contract.writers)) == toset(["silver", "gold", "features", "bronze", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"]) &&
+      toset(keys(output.host_dispatch_contract.writers)) == toset(["silver", "gold", "features", "bronze", "bronze_stage", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"]) &&
       output.host_dispatch_contract.writers["features_m4"].parameter_names == output.host_dispatch_contract.writers["features"].parameter_names &&
       jsonencode(output.host_dispatch_contract.writers["gold"].parameter_names) == jsonencode(["/example_project/aws_polaris_gold_client_id", "/example_project/aws_polaris_gold_client_secret"]) &&
       output.host_dispatch_contract.family_networks["silver"] == "lakehouse" && output.host_dispatch_contract.family_networks["train"] == "training"

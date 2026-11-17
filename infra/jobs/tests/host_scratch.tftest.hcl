@@ -1,6 +1,6 @@
 mock_provider "aws" {}
 
-# Every family has its source switched on, so each run plans the nine host definitions from the same inputs.
+# Every family has its source switched on, so each run plans the ten host definitions from the same inputs.
 variables {
   # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
   # not set a switch tests it off, so the fixture sets each one explicitly.

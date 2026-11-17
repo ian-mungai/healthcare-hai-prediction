@@ -38,19 +38,31 @@ locals {
     load  = ["RUN_ID", "POLARIS_URI", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
     check = ["RUN_ID", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
   }
+  # The bronze stage job (scripts.lakehouse.bronze_run stage) runs before the bronze job under the same run ID: it writes the run's request and source inventory
+  # with the bronze task role. It has no catalog, so it holds no pair and no Polaris address. It shares the bronze enable flag, image, role and read environment.
+  bronze_stage_run_variables = {
+    fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
+    stage = ["RUN_ID", "HAI_DEADLINE_UTC"]
+  }
   bronze_driver = "cd /workspace/code && python -m scripts.lakehouse.bronze_run %s --run \"$RUN_ID\""
-  bronze_steps = length(local.bronze_job_enabled) == 0 ? [] : concat(
-    [{ name = "init", script = "chown 10001:10001 /workspace /tmp" }],
-    [for phase in ["fetch", "pin", "load", "check"] : {
-      name   = phase
-      script = phase == "fetch" ? "python -I -c '${local.layer_fetch_python}'" : format(local.bronze_driver, phase)
-    }]
-  )
-  bronze_containers = [
-    for index, step in local.bronze_steps : {
+  bronze_phase_sets = {
+    bronze       = { phases = ["fetch", "pin", "load", "check"], variables = local.bronze_run_variables }
+    bronze_stage = { phases = ["fetch", "stage"], variables = local.bronze_stage_run_variables }
+  }
+  bronze_steps_of = {
+    for family, set in local.bronze_phase_sets : family => length(local.bronze_job_enabled) == 0 ? [] : concat(
+      [{ name = "init", script = "chown 10001:10001 /workspace /tmp" }],
+      [for phase in set.phases : {
+        name   = phase
+        script = phase == "fetch" ? "python -I -c '${local.layer_fetch_python}'" : format(local.bronze_driver, phase)
+      }]
+    )
+  }
+  bronze_family_containers = { for family, steps in local.bronze_steps_of : family => [
+    for index, step in steps : {
       name                   = step.name
       image                  = lookup(var.images, "spark", "invalid")
-      essential              = index == length(local.bronze_steps) - 1
+      essential              = index == length(steps) - 1
       privileged             = false
       readonlyRootFilesystem = true
       user                   = step.name == "init" ? "0:0" : "10001:10001"
@@ -61,7 +73,7 @@ locals {
       stopTimeout     = 90
       linuxParameters = { capabilities = { add = [], drop = step.name == "init" ? local.host_init_drop : ["ALL"] }, initProcessEnabled = true }
       ulimits         = [{ name = "core", softLimit = 0, hardLimit = 0 }]
-      dependsOn       = index == 0 ? [] : [{ containerName = local.bronze_steps[index - 1].name, condition = "SUCCESS" }]
+      dependsOn       = index == 0 ? [] : [{ containerName = steps[index - 1].name, condition = "SUCCESS" }]
       environment = concat(
         [
           { name = "AWS_REGION", value = var.aws_region },
@@ -73,7 +85,7 @@ locals {
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
           { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
         ],
-        [for name in lookup(local.bronze_run_variables, step.name, []) : { name = name, value = "" }],
+        [for name in lookup(local.bronze_phase_sets[family].variables, step.name, []) : { name = name, value = "" }],
         step.name == "init" ? [] : [for name, value in var.bronze_read_environment : { name = name, value = value }],
         # The check phase names the files that no run of the ingestion retry period captured: it reads the run records under the capture root (raw/, only while the
         # raw read is on) and publishes the owner notice to the alerts topic, once the stack is told it (the way the promote task gets it).
@@ -90,11 +102,12 @@ locals {
         options = {
           awslogs-group         = var.log_group_name
           awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "bronze"
+          awslogs-stream-prefix = family
           mode                  = "non-blocking"
           max-buffer-size       = "16m"
         }
       }
     }
-  ]
+  ] }
+  bronze_containers = local.bronze_family_containers["bronze"]
 }

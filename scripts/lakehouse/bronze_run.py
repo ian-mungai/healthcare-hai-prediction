@@ -5,6 +5,10 @@
 Each ECS container of the job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
 ``pin``, ``load`` and ``check``. The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``.
 
+The ``stage`` phase belongs to the small ``bronze_stage`` job that runs before the bronze job under the same run ID. It lists the raw sources with the task
+role and writes the run's ``bronze_inventory.json`` and then its ``bronze_request.json`` (once each, for every table of the table map that has a source object,
+as a real load) to ``lakehouse/run_stage/<run>/inputs/``. The launch preflight of the bronze job reads and checks that request and the pin phase checks both.
+
 Two values change from run to run and arrive at dispatch: the tables (``BRONZE_TABLES``) and the target (``BRONZE_TARGET``). The preflight checks them before it
 starts the task. ``pin`` checks them again against the table map of the unpacked code, and ``load`` and ``check`` refuse values that differ from the pin.
 The target ``real`` writes the namespaces ``bronze`` and ``bronze_dictionary``. The target ``qualify`` writes ``bronze_e2e`` and ``bronze_dictionary_e2e``
@@ -190,6 +194,62 @@ def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: boo
     (out / REQUEST_FILE).write_bytes(request)
     sys.stdout.write(f"staged {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests: inventory {digest}\n")
     return hashlib.sha256(request).hexdigest(), digest
+
+
+def put_stage_object(client: Any, bucket: str, key: str, body: bytes) -> bytes:
+    """Write one staged object once and return the staged bytes: the body when this call wrote it, the object already there when it is a retry.
+
+    The task role cannot list the stage folder, so S3 answers 403 for a key that does not exist. The write therefore comes first and only a key that is
+    there is read.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
+            raise
+        return bytes(client.get_object(Bucket=bucket, Key=key)["Body"].read())
+    return body
+
+
+def stage_run(code: Path, bucket: str, run: str) -> dict[str, str]:
+    """Job side: stage the request and the source inventory of a pipeline run, for every table of the table map that has a source object, as a real load.
+
+    A table with no source object cannot load (the pin refuses an inventory with an empty table), so it is left out and named in the output; with no
+    object for any table the stage fails.
+
+    The sources are read with the task identity (the bronze role). The inventory is written first and the request last, each once, so the request only
+    ever names an inventory that is staged. A retry keeps what is staged: it lists the sources again, but the staged inventory wins over the new one (and is
+    checked as the pin checks it), and a staged request that differs from the one this run would write is refused and never replaced.
+    """
+    config = table_map(code)
+    names = check_dispatch(list(collections_of(config)), "real", collections_of(config))
+    client = storage().client
+    inventory_key, request_key = (STAGE_KEY.format(run=run, name=name) for name in (INVENTORY_FILE, REQUEST_FILE))
+    listed = bronze_pin.build_inventory(storage(), bucket, config, list(names), bronze.load_retired(code / bronze.RETIRED))
+    present = {row[0] for row in listed["objects"]}
+    left_out = [name for name in names if name not in present]
+    if left_out and present:
+        listed = {**listed, "tables": [name for name in listed["tables"] if name in present]}
+    bronze_pin.require_objects(listed)
+    raw = put_stage_object(client, bucket, inventory_key, bronze_pin.inventory_bytes(listed))
+    inventory = bronze_pin.read_inventory(raw)
+    names = tuple(name for name in names if name in inventory["tables"])
+    if not names or inventory["tables"] != sorted(names):
+        raise StepError("the staged inventory covers other tables than the table map")
+    bronze_pin.require_objects(inventory)
+    digest = hashlib.sha256(raw).hexdigest()
+    request = json.dumps({"tables": list(names), "target": "real", "dry_run": False, "inventory_sha256": digest}, sort_keys=True).encode()
+    if put_stage_object(client, bucket, request_key, request) != request:
+        raise StepError(f"{request_key} is staged and differs from the request this stage would write: it is not replaced")
+    request_digest = hashlib.sha256(request).hexdigest()
+    if left_out:
+        sys.stdout.write(f"left out {len(left_out)} tables that have no source object: {','.join(left_out)}\n")
+    sys.stdout.write(
+        f"staged for {run}: {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests, inventory {digest}, request {request_digest}\n"
+    )
+    return {"request_sha256": request_digest, "inventory_sha256": digest}
 
 
 def pinned_inventory(job: Job) -> dict[str, Any]:
@@ -408,7 +468,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("phase", choices=(*PHASES, "inventory"))
+    parser.add_argument("phase", choices=(*PHASES, "inventory", "stage"))
     parser.add_argument("--run", required=True)
     parser.add_argument("--tables", default="", help="comma-separated tables (also BRONZE_TABLES)")
     parser.add_argument("--target", default="", help="real or qualify (also BRONZE_TARGET)")
@@ -428,7 +488,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     folder = work / "state" / args.run
     dry = args.dry_run or os.environ.get("BRONZE_DRY_RUN", "") in DRY_VALUES
     try:
-        startup_check.check_phase("bronze", args.phase)
+        startup_check.check_phase("bronze_stage" if args.phase == "stage" else "bronze", args.phase)
         task_capacity.apply()
         if not args.bucket:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
@@ -436,6 +496,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.out is None:
                 raise StepError("the inventory phase needs --out")
             stage_inputs(args.code, args.bucket, args.tables, args.target, dry, args.out)
+            return 0
+        if args.phase == "stage":
+            stage_run(work / "code", args.bucket, args.run)
             return 0
         if args.phase == "pin":
             (folder / DRY_MARKER).unlink(missing_ok=True)

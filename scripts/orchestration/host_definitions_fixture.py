@@ -1,4 +1,4 @@
-"""Write ``infra/jobs/tests/host_definitions.json``: the containers of the nine host task definitions as Terraform evaluates them.
+"""Write ``infra/jobs/tests/host_definitions.json``: the containers of the ten host task definitions as Terraform evaluates them.
 
 The Airflow mode cases (``airflow_mode_cases``) read that file to know which containers each host definition holds. The file is not typed by hand and not
 read from the Terraform text: this command runs the stack test ``tests/host_definitions.tftest.hcl`` offline and reads the planned ``container_definitions``

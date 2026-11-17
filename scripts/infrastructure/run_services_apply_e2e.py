@@ -550,7 +550,7 @@ BINDING = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 
 PENDING = MIGRATION + " by services_apply at 2026-11-11T00:00:00Z: jobs apply pending"
 PREFIX = "example_project_dev_job_"
 SET_FAMILIES = [f"features_m{number}" for number in range(1, 7)]
-ALL_FAMILIES = ["bronze", "drift", "features", *SET_FAMILIES, "gold", "metadata", "promote", "serve", "silver", "train"]
+ALL_FAMILIES = ["bronze", "bronze_stage", "drift", "features", *SET_FAMILIES, "gold", "metadata", "promote", "serve", "silver", "train"]
 
 
 def set_revision(name: str) -> tuple[str, str] | tuple[()]:
@@ -727,7 +727,7 @@ def finish_over_ecs(
 def finish_needs_every_expected_host_family() -> None:
     """The real finish command binds to the host families of the frozen selection, the publisher too: one that ECS does not list, one whose revision
     is inactive, a missing publisher and a stale family each refuse, name the family and leave the hold and the lock. The complete set clears both. The
-    default selection is the nine families and the six model sets; a family the frozen selection does not hold does not matter; no rendered inputs refuse."""
+    default selection is the ten families and the six model sets; a family the frozen selection does not hold does not matter; no rendered inputs refuse."""
     names = ["gold", "publisher", "silver"]
     selected = rendered_values({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True})
     everything = {

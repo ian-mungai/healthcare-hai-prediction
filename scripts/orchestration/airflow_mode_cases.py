@@ -796,6 +796,37 @@ def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
     )
 
 
+def the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after() -> None:
+    """The owner chose to stage a pipeline run's bronze inputs from Airflow: the chain launches the ``bronze_stage`` job, which writes the request and the
+    source inventory, and then the ``bronze`` job under the same run ID. A launch is keyed by the run and the job, so each job has its own launch record.
+    The stage launch needs no staged request and runs the code of the ingestion run. Airflow writes none of the staged inputs."""
+    pair, _ = table_pair()
+    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    ingestion, bronze = "ingestion_0e0e0e0e", "bronze_0e0e0e0e"
+    rig = Rig()
+    rig.stage_runs(ingestion)
+    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+        require(current.step("bronze_stage") == "succeeded", "the stage job did not launch with no staged request")
+        require(rig.tasks_started() == 1, f"the stage launch started {rig.tasks_started()} tasks")
+        sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"][0]
+        require(sent["taskDefinition"].endswith("_job_bronze_stage_host") or "_job_bronze_stage_host" in sent["taskDefinition"], f"{sent['taskDefinition']}")
+        values = rig.environment()
+        require(set(values) == {"fetch", "stage"}, f"the stage task overrides other containers: {sorted(values)}")
+        require(values["fetch"]["CODE_RUN_ID"] == ingestion, "the stage job does not fetch the code of the ingestion run")
+        require(values["stage"]["RUN_ID"] == bronze and not any(name.startswith("BRONZE_") for name in values["stage"]), f"{values['stage']}")
+        require(
+            not any("bronze_request.json" in str(key) or "bronze_inventory.json" in str(key) for key in rig.stage.objects), "the launch wrote a staged input"
+        )
+        raised = refuses(LaunchUnavailable, lambda: current.step("bronze_load"))
+        require("not_staged" in str(raised) and rig.tasks_started() == 1, f"the bronze job launched before its request was staged: {raised}")
+        rig.stage.stage(bronze, "bronze_request.json", good)
+        require(current.step("bronze_load") == "succeeded" and rig.tasks_started() == 2, "the bronze job did not launch once the request was staged")
+    require((rig.end(bronze, "bronze_stage") or {}).get("outcome") == "succeeded", "the stage job has no success record under the bronze run ID")
+    require((rig.end(bronze, "bronze") or {}).get("outcome") == "succeeded", "the bronze job has no success record under the same run ID")
+    require(rig.preflight.code_runs.stored(bronze) == ingestion, "the run is not bound to the code of its ingestion run")
+
+
 SERVE_BASE = "features_b45e0001"
 SERVE_RESEARCH = research_run_id(SERVE_BASE)
 SERVE_FORM = {"run_id": SERVE_RUN, "mode": "real", "hai_type": "HAI_1", "deploy_mode": "stable", "research_run": "latest"}
@@ -2053,6 +2084,7 @@ OWN_SIZES = {
     "serve": {"cpu_units": 1024, "memory_mib": 4096, "scratch_gib": 21},
     "metadata": {"cpu_units": 1024, "memory_mib": 2048, "scratch_gib": 1},
     "publisher": {"cpu_units": 2048, "memory_mib": 8192, "scratch_gib": 30},
+    "bronze_stage": {"cpu_units": 512, "memory_mib": 2048, "scratch_gib": 4},
 }
 SET_PEAKS_MIB = {"m1": 1348, "m2": 8976, "m3": 1844, "m4": 8969, "m5": 1613, "m6": 2215}
 # The capacity of the r7g.xlarge host as the services stack computes it: 4096 CPU units less the services' 1024 leave 3072 for jobs; 32768 MiB usable less
@@ -2097,7 +2129,7 @@ def model_sets_have_their_own_families() -> None:
         )
     require(
         {name for name, need in host["jobs"].items() if need.get("reserve")} == {f"features_{model}" for model in SET_SIZES} | set(OWN_SIZES),
-        "the families that reserve less than the job room are not the model sets and the five smaller jobs (silver, gold, features, bronze, train: the room)",
+        "the families that reserve less than the job room are not the model sets and the six smaller jobs (silver, gold, features, bronze, train: the room)",
     )
     for name, size in OWN_SIZES.items():
         require({key: host["jobs"][name].get(key) for key in size} == size, f"{name} does not keep its own size: {host['jobs'][name]}")
@@ -2847,8 +2879,9 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
     folders, then the containers of the table row (the host table's where it names them), then the guard for the three layer jobs only."""
     table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
     planned = host_planned_containers()
-    # Nine host twins and the six model sets planned by infra/jobs/host.tf, and the publisher's own host definition (pinned from feat/run3-route-direct's plan).
-    require(set(planned) == set(table["jobs"]) and len(planned) == 16, f"sixteen host families were expected: {sorted(planned)}")
+    # Ten host twins (nine jobs and the bronze stage job) and the six model sets planned by infra/jobs/host.tf, and the publisher's own host definition
+    # (pinned from feat/run3-route-direct's plan).
+    require(set(planned) == set(table["jobs"]) and len(planned) == 17, f"seventeen host families were expected: {sorted(planned)}")
     for job, row in table["jobs"].items():
         expected = [
             "init",
@@ -3262,6 +3295,7 @@ CASES: dict[str, Callable[[], None]] = {
     "training_form_requires_a_model": training_form_requires_a_model,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
     "a_bronze_run_runs_the_code_of_its_ingestion_run": a_bronze_run_runs_the_code_of_its_ingestion_run,
+    "the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after": the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
     "ingestion_dag_form_refuses_a_capture_root_it_does_not_list": ingestion_dag_form_refuses_a_capture_root_it_does_not_list,
     "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,

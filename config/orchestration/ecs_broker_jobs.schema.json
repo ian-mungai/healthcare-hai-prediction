@@ -108,6 +108,10 @@
             "const": true,
             "description": "The run stages bronze_request.json beside its code archive. The broker reads and checks it before it starts the task and passes its values to the containers"
           },
+          "needs_bronze_code": {
+            "const": true,
+            "description": "The run stages nothing and reads no request: it runs the code of its bronze run (the code of its ingestion run, bound once at its launch) and writes the bronze run's request and source inventory itself. The launch preflight binds the run to that code and gives the containers only the run ID and the code values"
+          },
           "needs_publisher_run_request": {
             "const": true,
             "description": "The run names its kind (bootstrap or monthly) and its capture root as launch parameters and stages nothing but its code archive. The direct launch preflight checks them before it starts the Run 3 publisher task, binds every attempt to their digest and passes them to the run container"

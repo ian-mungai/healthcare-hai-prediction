@@ -93,6 +93,7 @@ JOB_PHASES: dict[str, dict[str, tuple[str, ...]]] = {
     "gold": {"pin": ("polaris",)},
     "features": {"pin": ("polaris", "redis"), "feast": ("polaris", "redis")},
     "bronze": {"pin": ("polaris",), "load": ("polaris",)},
+    "bronze_stage": {"stage": ()},
     "train": {"prepare": ("polaris", "mlflow"), "extract": ("polaris",), "train": ("mlflow",)},
     "promote": {"promote": ("mlflow",)},
     "drift": {"baseline": ("mlflow", "polaris"), "current": ("polaris",)},

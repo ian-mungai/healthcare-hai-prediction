@@ -700,7 +700,7 @@ class Preflight:
             research_code = self.drift_code_run(request)
         if research_code is None and row.get("needs_publisher_run_request"):
             research_code, bind = self.publisher_code_run(request)
-        if research_code is None and row.get("needs_bronze_request"):
+        if research_code is None and (row.get("needs_bronze_request") or row.get("needs_bronze_code")):
             research_code, bind = self.bronze_code_run(request.run_id)
         spec = self.spec(request, job, research_code)
         revision, job_memory = self.checked_revision(job, cap)

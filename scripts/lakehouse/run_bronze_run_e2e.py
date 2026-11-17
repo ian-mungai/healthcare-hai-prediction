@@ -283,6 +283,23 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     require("bronze_chain_dag" in case.out and RUN in case.out, "the success line names the chain trigger for this run")
 
 
+def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) -> None:
+    """The stage job writes the request and the inventory under the task role, as a real load: pin, load and check accept them."""
+    require(case.phase("stage", staged=True) == 0, case.err)
+    require("empty_data" in case.out, "the stage did not name the table it left out")
+    stem = f"lakehouse/run_stage/{RUN}/inputs/"
+    puts = STORAGE[0].client.puts
+    require(sorted(puts) == [f"{stem}{bronze_run.INVENTORY_FILE}", f"{stem}{bronze_run.REQUEST_FILE}"], f"the stage wrote {sorted(puts)}")
+    request = json.loads(puts[f"{stem}{bronze_run.REQUEST_FILE}"])
+    tables = [entry["table"] for entry in TABLES if entry["table"] != "empty_data"]  # a table with no source object is left out
+    require(request["tables"] == tables and request["target"] == "real" and request["dry_run"] is False, f"{request}")
+    STAGED[bronze_run.INVENTORY_FILE], STAGED[bronze_run.REQUEST_FILE] = puts[f"{stem}{bronze_run.INVENTORY_FILE}"], puts[f"{stem}{bronze_run.REQUEST_FILE}"]
+    case.shas = (hashlib.sha256(STAGED[bronze_run.REQUEST_FILE]).hexdigest(), hashlib.sha256(STAGED[bronze_run.INVENTORY_FILE]).hexdigest())
+    case.key = (",".join(tables), "real", False)
+    require(case.chain(tables=",".join(tables)) == [0, 0, 0], case.err)
+    require(len(LOADS) == 1 and LOADS[0][LOADS[0].index("--tables") + 1] == ",".join(tables), LOADS)
+
+
 def case_qualification_writes_only_the_twins(case: Case) -> None:
     require(case.chain(target="qualify") == [0, 0, 0], case.err)
     arguments = LOADS[0]
@@ -675,6 +692,7 @@ def case_the_owner_cannot_stage_an_inventory_with_an_empty_table(case: Case) -> 
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
+    "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,
     "a dry run writes nothing shared and prints the checked plan": case_dry_run_writes_nothing,

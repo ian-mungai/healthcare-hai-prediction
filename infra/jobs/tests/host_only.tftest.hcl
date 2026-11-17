@@ -79,7 +79,7 @@ variables {
   serve_enabled                         = true
 }
 
-# Every job runs as an ECS task on the host (owner decisions of Nov 9 and Nov 11 2026). This plan holds the fifteen host definitions (nine jobs and six model sets) and the publisher. Its resources are
+# Every job runs as an ECS task on the host (owner decisions of Nov 9 and Nov 11 2026). This plan holds the sixteen host definitions (ten jobs and six model sets) and the publisher. Its resources are
 # read as plan data by scripts/infrastructure/run_jobs_host_only_e2e.py, which refuses any task definition of the whole plan, child modules included, that is not an
 # EC2 bridge task, and which plants a Fargate task through each way a definition can be written to prove the check catches it.
 run "every_planned_task_definition_is_an_ec2_bridge_task" {
@@ -93,7 +93,7 @@ run "every_planned_task_definition_is_an_ec2_bridge_task" {
     condition = alltrue([
       for task in concat(values(aws_ecs_task_definition.host), aws_ecs_task_definition.publisher_host) :
       toset(task.requires_compatibilities) == toset(["EC2"]) && task.network_mode == "bridge"
-    ]) && length(aws_ecs_task_definition.host) == 15 && length(aws_ecs_task_definition.publisher_host) == 1
-    error_message = "Every planned job definition is an EC2 bridge task: the fifteen host families (nine jobs and six model sets) and the publisher."
+    ]) && length(aws_ecs_task_definition.host) == 16 && length(aws_ecs_task_definition.publisher_host) == 1
+    error_message = "Every planned job definition is an EC2 bridge task: the sixteen host families (ten jobs and six model sets) and the publisher."
   }
 }
