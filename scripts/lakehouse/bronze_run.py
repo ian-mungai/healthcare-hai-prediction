@@ -202,15 +202,9 @@ def put_stage_object(client: Any, bucket: str, key: str, body: bytes) -> bytes:
     The task role cannot list the stage folder, so S3 answers 403 for a key that does not exist. The write therefore comes first and only a key that is
     there is read.
     """
-    from botocore.exceptions import ClientError
-
-    try:
-        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
-    except ClientError as error:
-        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
-            raise
-        return bytes(client.get_object(Bucket=bucket, Key=key)["Body"].read())
-    return body
+    if put_once(client, bucket, key, body):
+        return body
+    return bytes(client.get_object(Bucket=bucket, Key=key)["Body"].read())
 
 
 def stage_run(code: Path, bucket: str, run: str) -> dict[str, str]:
@@ -356,17 +350,8 @@ def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory:
 
 def store_run_record(client: Any, bucket: str, run: str, record: dict[str, Any]) -> str:
     """Write the run record once. A retry of the run finds it and keeps the first one, so the record names the load that made the tables."""
-    from botocore.exceptions import ClientError
-
-    key = f"lakehouse/bronze_runs/{run}/check.json"
-    body = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
-    try:
-        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
-    except ClientError as error:
-        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
-            raise
-        return "kept"
-    return "written"
+    created = put_once(client, bucket, f"lakehouse/bronze_runs/{run}/check.json", json_bytes(record))
+    return "written" if created else "kept"
 
 
 def read_run_record(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
