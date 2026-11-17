@@ -26,6 +26,7 @@ from unittest import mock
 
 from orchestration.training_contract import BASE_RUN, run_id_pattern
 from scripts.infrastructure.openmetadata_bootstrap import ADMIN_EMAIL
+from scripts.infrastructure.openmetadata_mlmodel_cases import CASES as MLMODEL_CASES
 from scripts.process import run_command
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1699,6 +1700,7 @@ CASES: list[Callable[[], None]] = [
     bounded_wrapper_extra_seconds_outlive_the_server_deadline,
     catalog_policy_reads_dbt_artifacts_and_nothing_else,
     dag_runs_one_broker_step_with_bounds_and_no_schedule,
+    *MLMODEL_CASES,
 ]
 
 

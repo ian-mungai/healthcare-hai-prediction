@@ -29,6 +29,7 @@ from scripts.infrastructure import openmetadata_chain as chain
 from scripts.infrastructure import openmetadata_ingest as ingest
 from scripts.infrastructure import startup_check
 
+MLMODEL_EDGES = "mlmodel_edges"  # the last source: the edges from the feature tables to the registered models that the mlflow source ingested
 RAW_FILES = "raw_files"  # the source that writes each bronze table's raw files onto the table (openmetadata_raw_files), after the Glue and dbt sources
 # The catalog is reached over the bridge at the host's address: an http URL whose host is a private IPv4 address, port 8585 and the path /api, and nothing else.
 API_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):8585/api")
@@ -56,7 +57,7 @@ def main(
     http: Callable[[str, str, Mapping[str, str], bytes | None], tuple[int, Any]] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sources", nargs="+", choices=(*ingest.SOURCES, RAW_FILES))
+    parser.add_argument("sources", nargs="+", choices=(*ingest.SOURCES, RAW_FILES, MLMODEL_EDGES))
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     options = parser.parse_args(argv)
@@ -114,6 +115,14 @@ def main(
             from scripts.infrastructure import openmetadata_raw_files as raw_files  # imports this module, so it is loaded here
 
             code = raw_files.write_runs(api, token, client, environment.get("DATA_BUCKET_NAME", ""), [bronze], raw_files.http_request if http is None else http)
+            if code:
+                return code
+            continue
+        if source == MLMODEL_EDGES:
+            from scripts.infrastructure import openmetadata_mlmodel_edges as mlmodel_edges  # imports this module, so it is loaded here
+            from scripts.infrastructure import openmetadata_raw_files as raw_files
+
+            code = mlmodel_edges.run(api, token, environment, raw_files.http_request if http is None else http)
             if code:
                 return code
             continue

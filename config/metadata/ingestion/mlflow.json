@@ -1,0 +1,32 @@
+{
+  "source": {
+    "type": "mlflow",
+    "serviceName": "mlflow_registry",
+    "serviceConnection": {
+      "config": {
+        "type": "Mlflow",
+        "trackingUri": "${MLFLOW_TRACKING_URI}",
+        "registryUri": "${MLFLOW_TRACKING_URI}"
+      }
+    },
+    "sourceConfig": {
+      "config": {
+        "type": "MlModelMetadata"
+      }
+    }
+  },
+  "sink": {
+    "type": "metadata-rest",
+    "config": {}
+  },
+  "workflowConfig": {
+    "loggerLevel": "INFO",
+    "openMetadataServerConfig": {
+      "hostPort": "http://127.0.0.1:8585/api",
+      "authProvider": "openmetadata",
+      "securityConfig": {
+        "jwtToken": "${OM_INGESTION_TOKEN}"
+      }
+    }
+  }
+}

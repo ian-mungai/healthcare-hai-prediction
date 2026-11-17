@@ -1,8 +1,9 @@
 """Run one OpenMetadata ingestion source of the catalog task, after proving its configuration has no profiler and no sampling.
 
-Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt --config-dir D --token-file F --work-dir W``. The persistent catalog
+Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt|mlflow --config-dir D --token-file F --work-dir W``. The persistent catalog
 gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. OpenMetadata 2.0.7 has no Iceberg connector, so the
 ``glue`` source reads the tables of every layer, bronze included, from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The
+``mlflow`` source reads the registered models of the project's MLflow registry with the login in MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD. The
 ``dbt`` source names, in its copy of the manifest, the Glue database of each model and of each bronze source, so that dbt attaches to those tables.
 A saved dbt copy that still names a ``hai_mirror_<layer>`` schema anywhere (a run from before the rename: any text or key of its three files) is refused with
 exit 1 before any workflow starts, and is never translated. It refuses a configuration that profiles, samples or reads rows before it fills any
@@ -31,11 +32,11 @@ from typing import Any
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.infrastructure import openmetadata_metrics
 
-SOURCES = ("glue", "dbt")
-ALLOWED_SOURCE_TYPES = frozenset({"glue", "dbt"})
+SOURCES = ("glue", "dbt", "mlflow")
+ALLOWED_SOURCE_TYPES = frozenset({"glue", "dbt", "mlflow"})
 # The script's own setting in dbt.json: the OpenMetadata database and the Glue schema of each mirrored dbt model folder. It never reaches the workflow.
 MAPPING_KEY = "hai_glue_mapping"
-ALLOWED_PIPELINES = frozenset({"DatabaseMetadata", "DBT"})
+ALLOWED_PIPELINES = frozenset({"DatabaseMetadata", "DBT", "MlModelMetadata"})
 # Normalized key names (lower case, letters and digits only) that start profiling, sampling, classification or row reads.
 BANNED_KEYS = frozenset(
     {
