@@ -126,7 +126,8 @@ class StandInHost:
     ``--service-name`` answers it, scaling the service to zero first leaves it STOPPING (the containers still close their files, ``runningCount`` already 0)
     until it stops, and a forced deployment stops it. The faults ``auto_schedule`` (a named service with a desired count starts on its own once the
     instance is registered, as ECS schedules it) and ``slow_container_stop:<n>`` (the task stays STOPPING n seconds after ``runningCount`` reached 0) act on
-    those services only.
+    those services only. ``omit_service_task_descriptions`` makes describe-tasks leave out the records of those services' tasks (an empty ``tasks`` and
+    no failure) and ``list_service_tasks_twice`` makes list-tasks answer each of their tasks under both desired statuses.
     Every ``prometheus_restore`` launch records what those services looked like in ``restore_snapshots``.
     """
 
@@ -323,6 +324,8 @@ class StandInHost:
             return {"taskArns": []}
         desired = options.get("--desired-status", ["RUNNING"])[0]
         service_name = options.get("--service-name", [None])[0]
+        if service_name in self.service_tasks_for and "list_service_tasks_twice" in self.faults:
+            return {"taskArns": [arn for arn, task in self.tasks.items() if task.get("group") == f"service:{service_name}"]}
         arns = [
             arn
             for arn, task in self.tasks.items()
@@ -511,6 +514,8 @@ class StandInHost:
             task = self.tasks.get(arn)
             if task is None:
                 failures.append({"arn": arn, "reason": "MISSING"})
+                continue
+            if "omit_service_task_descriptions" in self.faults and str(task.get("group", "")).startswith("service:"):
                 continue
             container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
             if task["status"] == "STOPPED" and task.get("unstarted"):

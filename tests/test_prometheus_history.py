@@ -519,15 +519,184 @@ def test_a_replacement_that_fails_verification_stops_the_restore_before_any_pare
     check(not any((tmp_path / "volume" / "prometheus").iterdir()), "no parent is placed behind a replacement that failed")
 
 
-def test_a_block_that_names_another_as_its_parent_without_covering_it_does_not_supersede_it(tmp_path: Path) -> None:
-    data = tmp_path / "source"
+def shipped(tmp_path: Path, blocks: list[tuple[str, int, int, list[tuple[str, int, int]] | None]], name: str = "source") -> Pages:
+    """Ship the given blocks (ulid, start hour, hours, parents or None for a level 1 block) from a fresh folder; the answer is the bucket."""
+    data = tmp_path / name
     data.mkdir()
-    write_block(data, ulid(1), 0)
-    replacement(data, ulid(5), 1, 2, [(ulid(1), 0, 2)])
+    for ident, start, hours, parents in blocks:
+        if parents is None:
+            write_block(data, ident, start, hours)
+        else:
+            replacement(data, ident, start, hours, parents)
     store = Pages("shipper")
     ship(store, data)
+    return store
+
+
+def test_a_replacement_that_covers_only_part_of_a_neighbour_does_not_cost_the_neighbours_tail(tmp_path: Path) -> None:
+    """The reviewer's probe: A [0h,2h) and B [2h,4h) are archived and R [0h,3h) names A and an unarchived source [2h,3h) as parents: [3h,4h) is only in B."""
+    store = shipped(tmp_path, [(ulid(1), 0, 2, None), (ulid(2), 2, 2, None), (ulid(5), 0, 3, [(ulid(1), 0, 2), (ulid(3), 2, 1)])])
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(report.restored == [ulid(1), ulid(2)] and report.overlapping == [ulid(5)], f"A and B return and R is skipped: {report}")
+    check(ranges(tmp_path / "volume" / "prometheus") == [(0, 2), (2, 4)], "the restored history covers [0h,4h) with no gap")
+
+
+def test_a_replacement_inside_two_parents_does_not_cost_their_outer_ends(tmp_path: Path) -> None:
+    store = shipped(tmp_path, [(ulid(1), 0, 2, None), (ulid(2), 2, 2, None), (ulid(5), 1, 2, [(ulid(1), 0, 2), (ulid(2), 2, 2)])])
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(report.restored == [ulid(1), ulid(2)] and report.overlapping == [ulid(5)], f"the parents return and the narrower block is skipped: {report}")
+    check(ranges(tmp_path / "volume" / "prometheus") == [(0, 2), (2, 4)], "the restored history covers [0h,4h)")
+
+
+def test_a_replacement_of_one_parent_leaves_the_neighbour_alone(tmp_path: Path) -> None:
+    store = shipped(tmp_path, [(ulid(1), 0, 2, None), (ulid(2), 2, 2, None), (ulid(5), 0, 2, [(ulid(1), 0, 2)])])
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(report.restored == [ulid(2), ulid(5)] and report.superseded == [ulid(1)], f"the replacement of A returns with B: {report}")
+    check(ranges(tmp_path / "volume" / "prometheus") == [(0, 2), (2, 4)], "the restored history covers [0h,4h)")
+
+
+def test_archived_blocks_that_no_set_of_blocks_can_cover_stop_the_restore_before_any_is_placed(tmp_path: Path) -> None:
+    store = shipped(tmp_path, [(ulid(1), 0, 3, None), (ulid(2), 2, 3, None)])
+    with pytest.raises(history.HistoryError, match="cover"):
+        restore(Pages("restore", store.objects), tmp_path)
+    check(not any((tmp_path / "volume" / "prometheus").iterdir()), "nothing is placed when the archive cannot be covered")
+
+
+def test_a_block_that_names_another_as_its_parent_without_covering_it_cannot_hide_it(tmp_path: Path) -> None:
+    store = shipped(tmp_path, [(ulid(1), 0, 2, None), (ulid(5), 1, 2, [(ulid(1), 0, 2)])])
+    with pytest.raises(history.HistoryError, match="cover"):
+        restore(Pages("restore", store.objects), tmp_path)
+
+
+def test_a_local_block_that_blocks_a_replacement_is_reported_as_uncovered_history(tmp_path: Path) -> None:
+    store = shipped(tmp_path, [(ulid(5), 0, 6, [(ulid(1), 0, 2), (ulid(2), 2, 2), (ulid(3), 4, 2)])])
+    local = tmp_path / "volume" / "prometheus"
+    write_block(local, ulid(1), 0)
     report = restore(Pages("restore", store.objects), tmp_path)
     check(
-        report.superseded == [] and sorted(report.overlapping + report.restored) == [ulid(1), ulid(5)] and len(report.restored) == 1,
-        f"a block that does not cover its parent supersedes nothing: {report}",
+        report.restored == [] and report.overlapping == [ulid(5)] and report.uncovered == [[2 * HOUR, 6 * HOUR]],
+        f"the shortfall that the local block causes is reported: {report}",
+    )
+    check(ranges(local) == [(0, 2)], "the local block is unchanged")
+
+
+def spans(items: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The union of ranges as sorted, disjoint ranges."""
+    merged: list[tuple[int, int]] = []
+    for low, high in sorted(items):
+        if merged and low <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], high))
+        else:
+            merged.append((low, high))
+    return merged
+
+
+class Dice:
+    """A small seeded generator, so every generated archive can be replayed from its seed."""
+
+    def __init__(self, seed: int) -> None:
+        self.state = (seed * 2654435761 + 12345) % 2**32
+
+    def next(self) -> int:
+        self.state = (self.state * 1103515245 + 12345) % 2**31
+        return self.state >> 8
+
+    def randint(self, low: int, high: int) -> int:
+        return low + self.next() % (high - low + 1)
+
+    def random(self) -> float:
+        return self.next() % 1000 / 1000
+
+    def sample(self, items: list[Any], count: int) -> list[Any]:
+        pool, picked = list(items), []
+        for _ in range(count):
+            picked.append(pool.pop(self.randint(0, len(pool) - 1)))
+        return picked
+
+
+def history_of(rng: Dice, tmp_path: Path) -> tuple[Pages, list[tuple[str, int, int, list[tuple[str, int, int]] | None]], list[tuple[str, int, int]]]:
+    """A random compaction history of 2 to 10 blocks of 2h: each round replaces a run of 2 or 3 neighbouring top blocks by one block that lists them as parents.
+
+    Every block is archived with probability 3 in 4. The answer is the bucket, the archived blocks and the top blocks (the ones no later block replaced)."""
+    count, number = rng.randint(2, 10), 100
+    top = [(ulid(number + index), 2 * index, 2) for index in range(count)]
+    everything: list[tuple[str, int, int, list[tuple[str, int, int]] | None]] = [(name, start, hours, None) for name, start, hours in top]
+    for _ in range(rng.randint(0, 5)):
+        if len(top) < 2:
+            break
+        size = min(len(top), rng.randint(2, 3))
+        first = rng.randint(0, len(top) - size)
+        run = top[first : first + size]
+        number += 50
+        merged = (ulid(number), run[0][1], run[-1][1] + run[-1][2] - run[0][1])
+        everything.append((*merged, run))
+        top[first : first + size] = [merged]
+    chosen = [item for item in everything if rng.random() < 0.75] or everything[:1]
+    return shipped(tmp_path, chosen), chosen, top
+
+
+@pytest.mark.parametrize("seed", range(120))
+def test_over_generated_archives_the_restore_never_covers_less_than_the_archive_and_never_overlaps(tmp_path: Path, seed: int) -> None:
+    rng = Dice(seed)
+    store, archived, top = history_of(rng, tmp_path)
+    local = tmp_path / "volume" / "prometheus"
+    local.mkdir(parents=True)
+    for name, start, hours in rng.sample(top, rng.randint(0, min(2, len(top)))) if rng.random() < 0.5 else []:
+        write_block(local, name, start, hours)
+    before = {path.name for path in local.iterdir()}
+    own = spans([(low, high) for low, high in ranges(local)])
+    report = restore(Pages("restore", store.objects), tmp_path)
+    final = ranges(local)
+    check(
+        all(final[index][1] <= final[index + 1][0] for index in range(len(final) - 1)) and len(final) == len(set(final)),
+        f"no two blocks overlap: {final} {report}",
+    )
+    free = [(start, start + hours) for _, start, hours, _ in archived if not any(start < high and low < start + hours for low, high in own)]
+    covered = spans(final)
+    check(
+        all(any(low <= start and end <= high for low, high in covered) for start, end in free),
+        f"every archived range outside the local blocks is covered: {covered} {report}",
+    )
+    check(before <= {path.name for path in local.iterdir()}, "no local block was removed")
+
+
+def archive_of(rng: Dice, tmp_path: Path) -> tuple[Pages, list[tuple[str, int, int]]]:
+    """Two to six blocks with random ranges (whole hours, 1 to 4 hours long, from hour 0 to 8) and random compaction records: each block names a random set
+    of the others as parents, whatever their ranges. Most of these archives are not a compaction history; the restore must still never cover less than a
+    covering set of blocks does."""
+    count = rng.randint(2, 6)
+    specs = [(ulid(300 + index), rng.randint(0, 8), rng.randint(1, 4)) for index in range(count)]
+    blocks: list[tuple[str, int, int, list[tuple[str, int, int]] | None]] = []
+    for index, (name, start, hours) in enumerate(specs):
+        others = [item for other, item in enumerate(specs) if other != index]
+        parents = rng.sample(others, rng.randint(0, min(2, len(others))))
+        blocks.append((name, start, hours, parents or None))
+    return shipped(tmp_path, blocks), specs
+
+
+def has_covering_set(specs: list[tuple[str, int, int]]) -> bool:
+    """True when some set of pairwise disjoint blocks covers every hour that any block covers (brute force over the subsets)."""
+    target = spans([(start, start + hours) for _, start, hours in specs])
+    for mask in range(1, 2 ** len(specs)):
+        chosen = [item for index, item in enumerate(specs) if mask >> index & 1]
+        chosen_spans = sorted((start, start + hours) for _, start, hours in chosen)
+        if all(chosen_spans[index][1] <= chosen_spans[index + 1][0] for index in range(len(chosen_spans) - 1)) and spans(chosen_spans) == target:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("seed", range(150))
+def test_over_random_archives_the_restore_covers_everything_or_fails_only_when_no_covering_set_exists(tmp_path: Path, seed: int) -> None:
+    store, specs = archive_of(Dice(1000 + seed), tmp_path)
+    local = tmp_path / "volume" / "prometheus"
+    try:
+        report = restore(Pages("restore", store.objects), tmp_path)
+    except history.HistoryError:
+        check(not has_covering_set(specs), f"the restore refused an archive that a set of blocks covers: {specs}")
+        check(not local.exists() or not any(local.iterdir()), "nothing is placed when the restore refuses")
+        return
+    final = ranges(local)
+    check(all(final[index][1] <= final[index + 1][0] for index in range(len(final) - 1)), f"no two blocks overlap: {final} {report}")
+    check(
+        spans(final) == spans([(start, start + hours) for _, start, hours in specs]), f"the restored blocks cover the whole archive: {final} {specs} {report}"
     )

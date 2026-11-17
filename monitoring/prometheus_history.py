@@ -24,6 +24,7 @@ Prometheus is stopped (scripts/infrastructure/host_session.py holds its service 
 from __future__ import annotations
 
 import argparse
+import bisect
 import contextlib
 import hashlib
 import json
@@ -79,6 +80,7 @@ class RestoreReport:
     superseded: list[str] = field(default_factory=list)
     incomplete: list[str] = field(default_factory=list)
     unfinished: list[str] = field(default_factory=list)
+    uncovered: list[list[int]] = field(default_factory=list)
 
 
 class Vanished(Exception):
@@ -394,21 +396,18 @@ def candidate(client: Any, bucket: str, name: str, group: dict[str, int]) -> Can
     return Candidate(name, group, manifest, low, high, level_of(meta), covered_by(name, meta))
 
 
-def place(client: Any, bucket: str, found: Candidate, data: Path, partial: Path, owner: tuple[int, int] | None) -> bool:
-    """Download, verify and move one block into place. ``False``: an object expired during the download and the block is incomplete."""
+def prepare(client: Any, bucket: str, found: Candidate, partial: Path, owner: tuple[int, int] | None) -> bool:
+    """Download and verify one block into ``partial``. ``False``: an object expired during the download and the block is incomplete."""
     shutil.rmtree(partial, ignore_errors=True)
     try:
         for file, expected in found.manifest.items():
             download(client, bucket, found.name, file, expected, partial / file)
     except Gone:
+        shutil.rmtree(partial, ignore_errors=True)
         return False
     verify_block(found.name, partial, found.manifest)
     if owner is not None:
         hand_over(partial, owner)
-    try:
-        os.rename(partial, data / found.name)
-    except OSError as problem:
-        raise HistoryError(f"{found.name}: the block could not move into place: {problem}") from problem
     return True
 
 
@@ -418,13 +417,62 @@ def covering(held: list[Held], found: Candidate) -> tuple[bool, bool]:
     return bool(overlapped), any(found.name in item.covered and item.low <= found.low and item.high >= found.high for item in overlapped)
 
 
+def union(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The ranges as sorted, disjoint ranges."""
+    merged: list[tuple[int, int]] = []
+    for low, high in sorted(ranges):
+        if merged and low <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], high))
+        else:
+            merged.append((low, high))
+    return merged
+
+
+def minus(ranges: list[tuple[int, int]], holes: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The parts of the disjoint ``ranges`` that no range of ``holes`` covers."""
+    left = list(ranges)
+    for hole_low, hole_high in union(holes):
+        left = [piece for low, high in left for piece in ((low, min(high, hole_low)), (max(low, hole_high), high)) if piece[0] < piece[1]]
+    return left
+
+
+def choose(blocks: list[Candidate]) -> list[Candidate]:
+    """The set of pairwise disjoint blocks that covers the most time; among equal sets the one with fewer blocks, then with higher compaction levels.
+
+    This is weighted interval scheduling over the blocks by end time. A replacement that covers more than its parents wins, parents win over a replacement
+    that leaves part of them or of a neighbour uncovered, and no two chosen blocks overlap.
+    """
+    ordered = sorted(blocks, key=lambda item: (item.high, item.low, item.name))
+    ends = [item.high for item in ordered]
+    best: list[tuple[int, int, int]] = [(0, 0, 0)]
+    before: list[int] = [0]
+    took: list[bool] = [False]
+    for block in ordered:
+        last = bisect.bisect_right(ends, block.low)
+        base = best[last]
+        with_block = (base[0] + block.high - block.low, base[1] - 1, base[2] + block.level)
+        before.append(last)
+        took.append(with_block > best[-1])
+        best.append(with_block if took[-1] else best[-1])
+    chosen: list[Candidate] = []
+    index = len(ordered)
+    while index > 0:
+        if took[index]:
+            chosen.append(ordered[index - 1])
+            index = before[index]
+        else:
+            index -= 1
+    return sorted(chosen, key=lambda item: (item.low, item.name))
+
+
 def restore(client: Any, bucket: str, data: Path, scratch: Path, owner: tuple[int, int] | None = None, until: float | None = None) -> RestoreReport:
     """Bring the verified blocks of S3 back into ``data`` that it lacks, and no block over one that is there.
 
-    A compacted block that replaced archived blocks (its compaction record names them as parents or sources) and covers their ranges is placed instead of them,
-    so no range is lost; a block that overlaps one of the data folder is skipped, never replaced. Blocks are tried from the highest compaction level and the
-    widest range down, which puts a replacement before its parents, and what a replacement stands for includes what the blocks it replaced stood for.
-    A block that lacks an object in S3 (the lifecycle cut it) is skipped and reported.
+    Blocks that overlap a block of the data folder are skipped, never replaced. Of the others the restore places the set of pairwise disjoint blocks that covers
+    the most time (``choose``), so a compacted block that replaced archived blocks wins over them only when it covers at least what they cover, and a block that
+    covers less than its parents or cuts into a neighbour loses to them. When no set of disjoint blocks covers everything the archive covers, the restore stops
+    before it places any block. What the local blocks keep from being restored is listed in ``uncovered``. A block that lacks an object in S3 (the lifecycle cut
+    it) is skipped and reported, and the choice is made again without it.
     """
     data.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
@@ -446,24 +494,52 @@ def restore(client: Any, bucket: str, data: Path, scratch: Path, owner: tuple[in
         else:
             found.append(block)
     known = {block.name: block for block in found}
-    for block in sorted(found, key=lambda item: (-item.level, item.low - item.high, item.name)):
-        check_deadline(until, f"restoring {block.name}")
+    pool: list[Candidate] = []
+    for block in found:
         overlapped, replaced = covering(held, block)
         if replaced:
             report.superseded.append(block.name)
         elif overlapped:
             report.overlapping.append(block.name)
         else:
-            partial = scratch / f"{block.name}{PARTIAL_SUFFIX}"
+            pool.append(block)
+    prepared: set[str] = set()
+    try:
+        while True:
+            chosen = choose(pool)
+            gaps = minus(union([(block.low, block.high) for block in pool]), [(block.low, block.high) for block in chosen])
+            if gaps:
+                raise HistoryError(f"no set of archived blocks without overlap covers the whole archive (missing {gaps}); nothing was restored")
+            lost = None
+            for block in chosen:
+                check_deadline(until, f"restoring {block.name}")
+                if block.name not in prepared:
+                    if prepare(client, bucket, block, scratch / f"{block.name}{PARTIAL_SUFFIX}", owner):
+                        prepared.add(block.name)
+                    else:
+                        lost = block
+                        break
+            if lost is None:
+                break
+            pool.remove(lost)
+            report.incomplete.append(lost.name)
+        for block in chosen:
             try:
-                placed = place(client, bucket, block, data, partial, owner)
-            finally:
-                shutil.rmtree(partial, ignore_errors=True)
-            if placed:
-                held.append(Held(block.low, block.high, block.covered.union(*(known[name].covered for name in block.covered if name in known))))
-                report.restored.append(block.name)
-            else:
-                report.incomplete.append(block.name)
+                os.rename(scratch / f"{block.name}{PARTIAL_SUFFIX}", data / block.name)
+            except OSError as problem:
+                raise HistoryError(f"{block.name}: the block could not move into place: {problem}") from problem
+            prepared.discard(block.name)
+            report.restored.append(block.name)
+    finally:
+        for name in prepared:
+            shutil.rmtree(scratch / f"{name}{PARTIAL_SUFFIX}", ignore_errors=True)
+    standing = [(item.low, item.high, item.covered.union(*(known[name].covered for name in item.covered if name in known))) for item in chosen]
+    for block in pool:
+        if block not in chosen:
+            replaced = any(block.name in covered and low <= block.low and block.high <= high for low, high, covered in standing)
+            (report.superseded if replaced else report.overlapping).append(block.name)
+    placed = [(block.low, block.high) for block in chosen] + [(item.low, item.high) for item in held]
+    report.uncovered = [[low, high] for low, high in minus(union([(block.low, block.high) for block in found if block.name not in report.incomplete]), placed)]
     for names in (report.restored, report.present, report.overlapping, report.superseded, report.incomplete, report.unfinished):
         names.sort()
     return report

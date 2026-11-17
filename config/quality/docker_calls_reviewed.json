@@ -1397,11 +1397,11 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 1172,
+      "line": 1171,
       "code_sha256": "6eabf6922d0dcfc0c6ab8a78c4a8b071ea00cebd9a4df97104af549b56640e4f",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "b8e967d3a8a843448029af7244e1c8548bddd419e7422659e2293d09d18ed7a5",
+      "file_sha256": "33a332bc3719ecf0ff5e338df62c2da0d5590d4e36cbc77dc8f625686b8d532b",
       "dependencies": {
         "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
@@ -1632,7 +1632,7 @@
         "orchestration/ecs_preflight.py": "sha256:8dd62d7936aff8650dd6af638f1819a44f0d7550776001686d3f108a61dbc416",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:b8e967d3a8a843448029af7244e1c8548bddd419e7422659e2293d09d18ed7a5",
+        "scripts/infrastructure/host_session.py": "sha256:33a332bc3719ecf0ff5e338df62c2da0d5590d4e36cbc77dc8f625686b8d532b",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7b3526a3ea78ffb4bc77e11c8ef67784396524e0cba1bbb072d7d673c5ed2893",
         "scripts/infrastructure/render_project_config.py": "sha256:5435b910f3738f275487ae3f2e090d036a0f32f993128017be8636a442ac7941",
         "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b"

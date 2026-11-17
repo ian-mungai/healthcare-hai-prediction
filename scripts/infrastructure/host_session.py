@@ -831,18 +831,17 @@ class Session:
         """True when every task ECS lists for the service, wanted RUNNING or STOPPED, has reached the status STOPPED.
 
         ``runningCount`` is 0 as soon as a task leaves RUNNING, while its containers still close their files in STOPPING, so the count alone does not show that
-        Prometheus has let go of its data folder. A task that DescribeTasks cannot show raises: the state is then in doubt.
+        Prometheus has let go of its data folder. Every listed task needs a description (``described``): an answer that omits a task, a failure entry or a
+        description for another task raises, because the state is then in doubt and the restore must not run.
         """
         arns: list[str] = []
         for status in ("RUNNING", "STOPPED"):
             arns += self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--service-name", name, "--desired-status", status]).get("taskArns", [])
-        for index in range(0, len(arns), DESCRIBE_TASKS_LIMIT):
-            described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *arns[index : index + DESCRIBE_TASKS_LIMIT]])
-            if described.get("failures"):
-                raise HostSessionError("describe-tasks reported failures")
-            if any(task.get("lastStatus") != "STOPPED" for task in described.get("tasks", [])):
-                return False
-        return True
+        arns = list(dict.fromkeys(arns))
+        tasks = self.described(f"{name} stop", arns)
+        if {task.get("taskArn") for task in tasks} != set(arns):
+            raise HostSessionError(f"{name} stop describe-tasks answered other tasks than the ones listed")
+        return all(task.get("lastStatus") == "STOPPED" for task in tasks)
 
     def hold_prometheus_services(self) -> list[str]:
         """Scale the services that open the Prometheus data folder to zero and wait until ECS shows no running or pending task and every task STOPPED.

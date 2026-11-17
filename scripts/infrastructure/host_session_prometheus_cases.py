@@ -205,6 +205,27 @@ def refresh_sets_the_held_services_back_to_one() -> dict[str, bool]:
     return {"a refresh after a held start brings both services back to desired 1": all(host.services[name]["desired"] == 1 for name in HELD.values())}
 
 
+def a_describe_answer_that_omits_the_service_tasks_does_not_prove_they_stopped() -> dict[str, bool]:
+    host, session, lines = build({"auto_schedule", "slow_container_stop:40", "omit_service_task_descriptions"})
+    message = failure(session.start)
+    return {
+        "start fails because the tasks cannot be shown": message is not None and "describe-tasks" in message,
+        "the restore never ran": RESTORE_FAMILY not in families_run(host.log),
+        "the hold ended on the failed polls, not on a timeout": message is not None and "failed polls in a row" in message,
+        "the host is turned off": host.desired == 0,
+        "the failure is reported": any(line.startswith("start_failed") for line in lines),
+    }
+
+
+def a_task_listed_under_both_desired_statuses_is_described_once() -> dict[str, bool]:
+    host, session, _ = build({"auto_schedule", "slow_container_stop:40", "list_service_tasks_twice"})
+    session.start()
+    return {
+        "the restore ran with both services stopped": quiet(held_state(host)),
+        "the start finished with both services running": all(item["running"] == 1 for item in host.service_snapshot().values()),
+    }
+
+
 def the_restore_is_one_shot_of_the_session_deadline() -> dict[str, bool]:
     session_module = importlib.import_module("scripts.infrastructure.host_session")
     return {
@@ -227,5 +248,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "prometheus_restore_without_monitoring_service_fails_closed": a_stack_with_the_one_shot_but_no_monitoring_service_fails_closed,
     "prometheus_restore_failed_restore_services_released_by_next_start": a_failed_restore_leaves_the_services_for_the_next_start_to_release,
     "prometheus_restore_refresh_releases_the_held_services": refresh_sets_the_held_services_back_to_one,
+    "prometheus_restore_omitted_task_descriptions_do_not_prove_a_stop": a_describe_answer_that_omits_the_service_tasks_does_not_prove_they_stopped,
+    "prometheus_restore_task_listed_twice_is_described_once": a_task_listed_under_both_desired_statuses_is_described_once,
     "prometheus_restore_limits_and_key": the_restore_is_one_shot_of_the_session_deadline,
 }
