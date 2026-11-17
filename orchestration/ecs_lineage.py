@@ -885,10 +885,13 @@ class LineageSource:
 
 
 class Cancellation:
-    """A stop that a sender checks before it writes and that aborts the send in flight. ``stop`` (from any thread) refuses every later send, and shuts down
-    the connection that a send is using, which ends its blocked connect, write or read at once. A send registers its connection under the lock (``begin``) and
-    checks again after connecting (``check``), so a stop is never missed between the last check and the write: either the check sees it, or the stop closes
-    the socket the write is about to use."""
+    """A stop that a sender checks before it writes and that aborts a write or read in flight. ``stop`` (from any thread) refuses every later send and shuts
+    down the connection that a send has registered. That ends a write or a read that is blocked on an existing socket: the shutdown wakes it. It does not
+    end a connect that is in progress: the connection has no socket until the connect returns, and a DNS lookup inside it cannot be interrupted. That worker
+    returns from the connect by itself (or by its timeout), finds the stop at the check that follows and writes nothing, so a stop never lets a late send
+    through, though the thread can outlive the caller until its connect returns. A send registers its connection under the lock (``begin``) and checks
+    before and after connecting (``check``), so a stop is never missed between the last check and the write: either a check sees it, or the stop has
+    already closed the connection that the write is about to use, which then fails (the connection does not reconnect by itself)."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -923,9 +926,10 @@ class Cancellation:
 
 def post_event(url: str, payload: bytes, credential: str, timeout: float = DELIVERY_SECONDS, cancel: Cancellation | None = None) -> int:
     """POST one event to ``<url>/api/v1/openlineage/lineage`` with the bearer credential. Each connect, send and read waits at most ``timeout`` seconds.
-    With ``cancel`` the send is refused once it is stopped, even after the connection is made and before the first byte is written, and is aborted when the
-    stop comes while it runs. Every failure is a ``DeliveryFailed`` that names the kind of failure and never the credential: the HTTP client puts a header
-    value it refuses (a key with a trailing newline, a character outside Latin-1) into its own error text, so that text is never shown."""
+    With ``cancel`` the send is refused once it is stopped, even after the connection is made and before the first byte is written, and a write or read in
+    flight is aborted when the stop comes (a connect in progress is not: see ``Cancellation``). Every failure is a ``DeliveryFailed`` that names the kind of
+    failure and never the credential: the HTTP client puts a header value it refuses (a key with a trailing newline, a character outside Latin-1) into its
+    own error text, so that text is never shown."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.path not in ("", "/") or parts.query or parts.username:
         raise DeliveryFailed("the receiver must be an http or https address with no path, query or user")

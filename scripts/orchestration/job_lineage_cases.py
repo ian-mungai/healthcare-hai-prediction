@@ -9,6 +9,7 @@ lineage route, which accepts only the event time form production sends. The job 
 from __future__ import annotations
 
 import contextlib
+import http.client
 import importlib
 import inspect
 import io
@@ -735,17 +736,28 @@ def untraced(frame: Any, event: str, arg: Any) -> Any:
 
 
 class Pause:
-    """Holds the delivery worker of ``job_lineage.emit`` at the line where it hands its built events to the sender, through a line trace, so a case can make
-    the caller's deadline pass in exactly that gap and release the worker afterwards. Neither the sender nor the HTTP transport is replaced."""
+    """Holds a worker at one line of a function through a line trace, so a case can make the caller's deadline pass in exactly that gap and release the worker
+    afterwards. Neither the sender nor the HTTP transport is replaced. ``before_send`` holds the delivery worker of ``job_lineage.emit`` where it hands its
+    built events to the sender; ``before_write`` holds the transport's ``post_event`` after its connection is made and its last cancellation check passed, one
+    line before the first HTTP write."""
 
-    def __init__(self) -> None:
-        source, first = inspect.getsourcelines(job_lineage.emit)
-        self.line = first + next(index for index, text in enumerate(source) if "(lines" in text and "send" in text)
+    def __init__(self, function: Callable[..., Any], needle: str, name: str, file: str) -> None:
+        source, first = inspect.getsourcelines(function)
+        self.line = first + next(index for index, text in enumerate(source) if all(part in text for part in needle.split("&")))
+        self.name, self.file = name, file
         self.paused, self.release, self.ended = threading.Event(), threading.Event(), threading.Event()
         self.workers: list[threading.Thread] = []
 
+    @classmethod
+    def before_send(cls) -> Pause:
+        return cls(job_lineage.emit, "(lines&send", "work", job_lineage.__file__)
+
+    @classmethod
+    def before_write(cls) -> Pause:
+        return cls(ecs_lineage.post_event, 'connection.request("POST"', "post_event", ecs_lineage.__file__)
+
     def trace(self, frame: Any, event: str, arg: Any) -> Any:
-        if frame.f_code.co_filename == job_lineage.__file__ and frame.f_code.co_name == "work":
+        if frame.f_code.co_filename == self.file and frame.f_code.co_name == self.name:
             if event == "line" and frame.f_lineno == self.line:
                 self.workers.append(threading.current_thread())
                 self.paused.set()
@@ -770,7 +782,7 @@ def no_event_is_sent_after_the_deadline() -> None:
     its first send, and resumes after the caller returned (the review's race: the worker took a fresh relative budget and sent all 142 events after the driver's
     exit 0), sends nothing."""
     text = text_of(request_of("silver"))
-    with base.receiving() as receiver, Pause().holding() as pause:
+    with base.receiving() as receiver, Pause.before_send().holding() as pause:
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             sent = job_lineage.emit("race", lambda: ["{}", "{}"], environ_for(receiver.url, text), 0.05)
@@ -786,7 +798,11 @@ def no_event_is_sent_after_the_deadline() -> None:
 def no_event_follows_the_drivers_exit() -> None:
     """The same race through the real upload driver: its table events are built, the worker is held before its first send, the budget passes, the driver
     returns exit 0 and only then is the worker released. Nothing is sent."""
-    with base.receiving(catalogue=base.catalogue_of_the_mirror()) as receiver, Pause().holding() as pause, mock.patch.object(job_lineage, "TABLE_SECONDS", 0.3):
+    with (
+        base.receiving(catalogue=base.catalogue_of_the_mirror()) as receiver,
+        Pause.before_send().holding() as pause,
+        mock.patch.object(job_lineage, "TABLE_SECONDS", 0.3),
+    ):
         driver = Phase("gold", "upload", receiver.url)
         code = driver.run()
         require(
@@ -800,10 +816,16 @@ def no_event_follows_the_drivers_exit() -> None:
 
 
 def a_send_in_flight_is_aborted_at_the_deadline() -> None:
-    """A send that is waiting for a receiver that does not answer when the deadline passes is aborted (its connection is shut down), and the delivery worker
-    and its sender are gone within the stop grace, before the caller returns."""
+    """A send that is waiting for a receiver that does not answer when the deadline passes is aborted by the stop (its connection is shut down), and the
+    delivery worker is gone within the stop grace, before the caller returns. The transport's own socket timeout is set far above the budget here, so only the
+    cancellation can end the send in time: a timeout that equalled the budget would end it with no cancellation at all."""
     text = text_of(request_of("silver"))
-    with base.receiving(delay=30.0) as stalled:
+    real = ecs_lineage.post_event
+
+    def patient(url: str, payload: bytes, credential: str, timeout: float = 0.0, cancel: ecs_lineage.Cancellation | None = None) -> int:
+        return real(url, payload, credential, timeout=30.0, cancel=cancel)
+
+    with base.receiving(delay=30.0) as stalled, mock.patch.object(ecs_lineage, "post_event", patient):
         began = time.monotonic()
         with contextlib.redirect_stderr(io.StringIO()):
             sent = job_lineage.emit("stalled", lambda: ["{}"], environ_for(stalled.url, text), 0.3)
@@ -812,8 +834,93 @@ def a_send_in_flight_is_aborted_at_the_deadline() -> None:
             thread.name for thread in threading.enumerate() if thread.name.endswith(("(work)", "(run)"))
         ]  # the delivery worker and the sender thread of send_within
         require(sent == 0 and spent < 1.8, f"a send in flight at the deadline: {sent} after {spent:.2f} s")
-        require(not alive, f"the worker of a send in flight is still running after the caller returned: {alive}")
+        require(not alive, f"the worker of a send in flight, whose own timeout is 30 s, is still running after the caller returned: {alive}")
         require(job_lineage.STOP_GRACE_SECONDS <= 1.0, "the wait for a worker to stop is bounded at one second")
+
+
+def no_event_is_written_after_the_last_cancellation_check() -> None:
+    """The transport has made its connection and passed its last cancellation check, and is held one line before its first HTTP write. The deadline passes,
+    the caller stops the sending and returns (through ``emit`` and through the real upload driver, which exits 0), and only then is the sender released. The
+    stop has shut the connection down, so its write fails: no request completes at the receiver. Neither the deadline nor a check can help here, because both
+    were passed before the pause: only the stop can."""
+    text = text_of(request_of("silver"))
+    with base.receiving() as receiver, Pause.before_write().holding() as pause:
+        with contextlib.redirect_stderr(io.StringIO()):
+            sent = job_lineage.emit("write", lambda: ["{}", "{}"], environ_for(receiver.url, text), 0.3)
+        require(pause.paused.is_set() and sent == 0, f"the case did not reach its pause: sent {sent}, paused {pause.paused.is_set()}")
+        pause.release.set()
+        require(pause.ended.wait(3), "the sender never ended")
+        time.sleep(0.3)
+        require(receiver.requests == [], f"{len(receiver.requests)} requests completed after emit returned")
+    with (
+        base.receiving(catalogue=base.catalogue_of_the_mirror()) as receiver,
+        Pause.before_write().holding() as pause,
+        mock.patch.object(job_lineage, "TABLE_SECONDS", 0.3),
+    ):
+        code = Phase("gold", "upload", receiver.url).run()
+        require(
+            pause.paused.is_set() and code == 0 and receiver.requests == [],
+            f"the driver case did not reach its pause: exit {code}, {len(receiver.requests)} requests",
+        )
+        pause.release.set()
+        require(pause.ended.wait(3), "the driver's sender never ended")
+        time.sleep(0.3)
+        require(receiver.requests == [], f"{len(receiver.requests)} requests completed after the driver returned exit 0")
+
+
+def an_expired_deadline_sends_nothing() -> None:
+    """At the send boundary an absolute deadline that has already passed refuses the send before any HTTP work, with a cancellation that has not been stopped,
+    so the deadline guards the sender on its own. A deadline that has not passed still sends (the control)."""
+    with base.receiving() as receiver:
+        cancel = ecs_lineage.Cancellation()
+        refused = refuses(ecs_lineage.DeliveryFailed, partial(job_lineage.send_until, ["{}", "{}"], receiver.url, CREDENTIAL, time.monotonic() - 1.0, cancel))
+        require("deadline" in str(refused) and receiver.requests == [], f"an expired deadline: {refused}, {len(receiver.requests)} requests")
+        job_lineage.send_until(["{}", "{}"], receiver.url, CREDENTIAL, time.monotonic() + 5.0, ecs_lineage.Cancellation())
+        require(len(receiver.requests) == 2, f"a deadline that has not passed sent {len(receiver.requests)} of 2")
+        stopped = ecs_lineage.Cancellation()
+        stopped.stop()
+        refuses(ecs_lineage.DeliveryFailed, partial(job_lineage.send_until, ["{}"], receiver.url, CREDENTIAL, time.monotonic() + 5.0, stopped))
+        require(len(receiver.requests) == 2, "a stopped cancellation sent")
+
+
+def the_cancellation_orders_its_checks_with_the_stop() -> None:
+    """``begin``, ``check``, ``end`` and ``stop`` each take the cancellation's lock, so a check or a registration and a stop never interleave: the stop that
+    shuts a connection down and the send that registers it, or that checks before its write, are ordered. While another thread holds the lock none of them
+    completes, and each completes once it is released."""
+    cancel = ecs_lineage.Cancellation()
+    done: dict[str, threading.Event] = {name: threading.Event() for name in ("begin", "check", "end", "stop")}
+    calls: dict[str, Callable[[], None]] = {
+        "begin": lambda: cancel.begin(http.client.HTTPConnection("127.0.0.1")),
+        "check": cancel.check,
+        "end": cancel.end,
+        "stop": cancel.stop,
+    }
+    threads = []
+
+    def run(name: str) -> None:
+        calls[name]()
+        done[name].set()
+
+    with cancel.lock:
+        for name in ("begin", "check", "end"):
+            thread = threading.Thread(target=run, args=(name,), daemon=True)
+            thread.start()
+            threads.append(thread)
+        time.sleep(0.3)
+        require(
+            not any(done[name].is_set() for name in ("begin", "check", "end")),
+            f"a call completed while another thread held the lock: {[n for n, e in done.items() if e.is_set()]}",
+        )
+    for thread in threads:
+        thread.join(2)
+    require(all(done[name].is_set() for name in ("begin", "check", "end")), "a call never completed after the lock was released")
+    with cancel.lock:
+        stopper = threading.Thread(target=run, args=("stop",), daemon=True)
+        stopper.start()
+        time.sleep(0.3)
+        require(not done["stop"].is_set(), "stop completed while another thread held the lock")
+    stopper.join(2)
+    require(done["stop"].is_set() and cancel.stopped, "stop never completed after the lock was released")
 
 
 class FlakyBucket:
@@ -888,10 +995,10 @@ def only_a_missing_times_record_is_absent() -> None:
         contextlib.redirect_stdout(io.StringIO()),
         mock.patch.object(ecs_lineage, "declared_lineage", lambda job: base.DECLARED[job]),
     ):
-        code = ecs_lineage.main(arguments, client_factory=lambda: rig.bucket)
+        replayed = ecs_lineage.main(arguments, client_factory=lambda: rig.bucket)
     require(
-        code == 1 and "replay refused" in err.getvalue() and ecs_lineage.TIMES_FILE in err.getvalue(),
-        f"the replay of a denied record: exit {code}, {err.getvalue()!r}",
+        replayed == 1 and "replay refused" in err.getvalue() and ecs_lineage.TIMES_FILE in err.getvalue(),
+        f"the replay of a denied record: exit {replayed}, {err.getvalue()!r}",
     )
 
 
@@ -975,6 +1082,9 @@ CASES: dict[str, Callable[[], None]] = {
     "no_event_is_sent_after_the_deadline": no_event_is_sent_after_the_deadline,
     "no_event_follows_the_drivers_exit": no_event_follows_the_drivers_exit,
     "a_send_in_flight_is_aborted_at_the_deadline": a_send_in_flight_is_aborted_at_the_deadline,
+    "no_event_is_written_after_the_last_cancellation_check": no_event_is_written_after_the_last_cancellation_check,
+    "an_expired_deadline_sends_nothing": an_expired_deadline_sends_nothing,
+    "the_cancellation_orders_its_checks_with_the_stop": the_cancellation_orders_its_checks_with_the_stop,
     "only_a_missing_times_record_is_absent": only_a_missing_times_record_is_absent,
     "the_job_skips_and_says_why_when_its_own_records_fail": the_job_skips_and_says_why_when_its_own_records_fail,
 }
