@@ -33,6 +33,12 @@ mappings:
       task_id: "$2"
       state: "$3"
 
+  - match: "hai.lineage.events.*"
+    name: "hai_lineage_events_total"
+    match_metric_type: counter
+    labels:
+      result: "$1"
+
   - match: "airflow.scheduler_heartbeat"
     name: "airflow_scheduler_heartbeat_total"
     match_metric_type: counter

@@ -11,6 +11,7 @@ import calendar
 import json
 import os
 import re
+import socket
 import sys
 import tempfile
 import threading
@@ -291,13 +292,56 @@ def error_cases(server: StandIn, failures: list[str]) -> int:
     return len(cases)
 
 
+def delivery_count_cases(server: StandIn, failures: list[str]) -> int:
+    """Each send counts once by its result on the StatsD exporter's port: sent, refused (400 and 500), timed out and failed."""
+    from hai_lineage import http_transport
+
+    event = run_event(RunState.COMPLETE, "2026-11-16T19:31:22+00:00")
+    closed = StandIn()
+    dead_url = closed.url
+    closed.server_close()
+    exporter = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    exporter.bind(("127.0.0.1", 0))
+    exporter.settimeout(1.0)
+    settings = {"type": TRANSPORT_TYPE, "endpoint": ENDPOINT, "timeout": 0.5, "auth": {"type": "api_key", "api_key": API_KEY}, "retry": FAST_FAIL}
+    cases = (
+        ("sent", server.url, 200),
+        ("refused", server.url, 400),
+        ("refused", server.url, 500),
+        ("timed_out", server.url, "slow"),
+        ("failed", dead_url, 200),
+    )
+    saved = {name: os.environ.get(name) for name in ("AIRFLOW__METRICS__STATSD_HOST", "AIRFLOW__METRICS__STATSD_PORT")}
+    os.environ["AIRFLOW__METRICS__STATSD_HOST"], os.environ["AIRFLOW__METRICS__STATSD_PORT"] = "127.0.0.1", str(exporter.getsockname()[1])
+    try:
+        for expected, url, mode in cases:
+            server.mode = mode
+            project = http_transport.UtcHttpTransport(http_transport.UtcHttpTransport.config_class.from_dict({**settings, "url": url}))
+            failure_type(project, event)
+            try:
+                got = exporter.recv(512).decode()
+            except OSError:
+                got = "nothing"
+            if got != f"hai.lineage.events.{expected}:1|c":
+                failures.append(f"delivery count {expected} ({mode}): the exporter received {got}")
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        exporter.close()
+        server.mode = 200
+    return len(cases)
+
+
 def run() -> dict[str, Any]:
     """Every case; ``ok`` is true only when no case failed."""
     failures: list[str] = []
     with stand_in() as server:
         resolved = resolution(server, failures)
         posts = time_cases(server, failures)
-        others = helper_cases(failures) + error_cases(server, failures)
+        others = helper_cases(failures) + error_cases(server, failures) + delivery_count_cases(server, failures)
     return {"ok": not failures, "resolved": resolved, "posts": posts, "other_cases": others, "failures": failures[:20], "network": "loopback stand-in only"}
 
 

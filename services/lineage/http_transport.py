@@ -1,4 +1,6 @@
-"""OpenLineage HTTP transport that sends eventTime in UTC with a trailing Z, because OpenMetadata 2.0.7 refuses a numeric offset such as +00:00."""
+"""OpenLineage HTTP transport that sends eventTime in UTC with a trailing Z, because OpenMetadata 2.0.7 refuses a numeric offset such as +00:00.
+
+Each send is also counted by its result (``delivery_counts``), which never changes what the send returns or raises."""
 
 from __future__ import annotations
 
@@ -7,6 +9,8 @@ from typing import Any
 
 import attr
 from openlineage.client.transport.http import HttpTransport
+
+from . import delivery_counts
 
 
 def utc_time(value: Any) -> Any:
@@ -52,4 +56,10 @@ class UtcHttpTransport(HttpTransport):
 
     def emit(self, event: Any) -> Any:
         """Send the event with its time rewritten; every send failure is the HTTP transport's own, which the provider logs without failing the task."""
-        return super().emit(utc_event(event))
+        try:
+            reply = super().emit(utc_event(event))
+        except Exception as error:
+            delivery_counts.count(delivery_counts.result_of(error))
+            raise
+        delivery_counts.count(delivery_counts.result_of(None))
+        return reply

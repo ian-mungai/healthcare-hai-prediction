@@ -84,6 +84,16 @@
       "dashboard": "hai_data_quality.json",
       "panel": "Age of the newest publish, by layer",
       "reason": "Empty until a layer job publishes with the publish counts."
+    },
+    {
+      "dashboard": "hai_openmetadata.json",
+      "panel": "Lineage events in the last hour, by result",
+      "reason": "Empty until the scheduler sends a lineage event after the delivery counts are deployed."
+    },
+    {
+      "dashboard": "hai_openmetadata.json",
+      "panel": "Lineage events not delivered in the last 15 minutes",
+      "reason": "Empty until the scheduler sends a lineage event after the delivery counts are deployed."
     }
   ]
 }
