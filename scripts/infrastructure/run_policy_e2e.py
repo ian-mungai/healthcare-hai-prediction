@@ -444,7 +444,7 @@ def render_task_execution(directory: Path, names: dict[str, Any] | None = None, 
     """The task execution policy with monitoring on: the base template plus the one Grafana statement, joined under ``InjectNamedParameters``.
 
     The IAM stack attaches the Grafana statement as a separate policy and only while monitoring is on. The cases evaluate the largest grant, so the
-    parameter checks cover all nine names. ``check_monitoring_gate`` holds the base template to eight names and the monitoring template to one.
+    parameter checks cover all eleven names. ``check_monitoring_gate`` holds the base template to eight names and the monitoring template to three.
     """
     values = values or policy_cases.VALUES
     document = render_template((directory / "task_execution.json").read_text(encoding="utf-8"), values, names)
@@ -462,16 +462,19 @@ def with_task_execution(documents: dict[str, dict[str, Any]], names: dict[str, A
 
 
 def check_monitoring_gate(directory: Path = OWNER_DIRECTORY) -> list[str]:
-    """The base task execution template names no Grafana parameter, and the monitoring template names exactly that one."""
+    """The base task execution template names no Grafana parameter, and the monitoring template names exactly the Grafana and the two exporter ones."""
     base = (directory / "task_execution.json").read_text(encoding="utf-8")
     monitoring = render_template((directory / "task_execution_monitoring.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     problems = []
     if "GRAFANA" in base.upper():
         problems.append("the base task execution template names the Grafana parameter, so the IAM stack changes while monitoring is off")
     granted = {resource for statement in monitoring["Statement"] for resource in as_list(statement["Resource"])}
-    wanted = {f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter/{policy_cases.PARAMETER_FOLDER}/grafana_admin_password"}
+    wanted = {
+        f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter/{policy_cases.PARAMETER_FOLDER}/{name}"
+        for name in ("grafana_admin_password", "redis_exporter_password", "postgres_exporter_password")
+    }
     if granted != wanted:
-        problems.append(f"the monitoring template grants {sorted(granted)}, not exactly the Grafana parameter")
+        problems.append(f"the monitoring template grants {sorted(granted)}, not exactly the Grafana and the two exporter parameters")
     if any(as_list(statement["Action"]) != ["ssm:GetParameters"] for statement in monitoring["Statement"]):
         problems.append("the monitoring template grants an action other than ssm:GetParameters")
     return problems

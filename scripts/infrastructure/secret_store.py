@@ -43,6 +43,8 @@ REDIS_PASSWORD = PREFIX + "redis_password"
 MLFLOW_DB_PASSWORD = PREFIX + "mlflow_db_password"
 MLFLOW_ADMIN_PASSWORD = PREFIX + "mlflow_admin_password"
 GRAFANA_ADMIN_PASSWORD = PREFIX + "grafana_admin_password"
+REDIS_EXPORTER_PASSWORD = PREFIX + "redis_exporter_password"
+POSTGRES_EXPORTER_PASSWORD = PREFIX + "postgres_exporter_password"
 MODEL_API_KEY_HASHES = PREFIX + "model_api_key_hashes"
 MODEL_API_MLFLOW_USER = PREFIX + "model_api_mlflow_user"
 MODEL_API_MLFLOW_CREDENTIAL = PREFIX + "model_api_mlflow_credential"
@@ -65,6 +67,8 @@ MANAGED = (
     MLFLOW_DB_PASSWORD,
     MLFLOW_ADMIN_PASSWORD,
     GRAFANA_ADMIN_PASSWORD,
+    REDIS_EXPORTER_PASSWORD,
+    POSTGRES_EXPORTER_PASSWORD,
     MODEL_API_KEY_HASHES,
     MODEL_API_MLFLOW_USER,
     MODEL_API_MLFLOW_CREDENTIAL,

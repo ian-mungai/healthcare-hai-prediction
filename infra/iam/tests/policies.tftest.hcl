@@ -1354,7 +1354,7 @@ run "monitoring_off_leaves_the_iam_stack_unchanged" {
   }
 }
 
-run "monitoring_on_adds_only_the_grafana_parameter" {
+run "monitoring_on_adds_only_the_grafana_and_the_two_exporter_parameters" {
   command = plan
 
   variables {
@@ -1367,23 +1367,39 @@ run "monitoring_on_adds_only_the_grafana_parameter" {
       aws_iam_role_policy.task_execution_monitoring[0].role == "example_project_task_execution_dev" &&
       jsondecode(aws_iam_role_policy.task_execution_monitoring[0].policy) == {
         Version = "2012-10-17"
-        Statement = [{
-          Sid      = "InjectGrafanaAdminPassword"
-          Effect   = "Allow"
-          Action   = "ssm:GetParameters"
-          Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/grafana_admin_password"]
-        }]
+        Statement = [
+          {
+            Sid      = "InjectGrafanaAdminPassword"
+            Effect   = "Allow"
+            Action   = "ssm:GetParameters"
+            Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/grafana_admin_password"]
+          },
+          {
+            Sid      = "InjectRedisExporterPassword"
+            Effect   = "Allow"
+            Action   = "ssm:GetParameters"
+            Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/redis_exporter_password"]
+          },
+          {
+            Sid      = "InjectPostgresExporterPassword"
+            Effect   = "Allow"
+            Action   = "ssm:GetParameters"
+            Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/postgres_exporter_password"]
+          },
+        ]
       }
     )
-    error_message = "With monitoring on, the execution role gains a separate policy that injects the one Grafana parameter and nothing else."
+    error_message = "With monitoring on, the execution role gains a separate policy that injects the Grafana password and the two exporter passwords and nothing else."
   }
 
   assert {
     condition = (
       !strcontains(aws_iam_role_policy.task_execution.policy, "grafana") &&
-      length(output.project_secret_names.managed_parameters) == 16 &&
-      contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/grafana_admin_password")
+      length(output.project_secret_names.managed_parameters) == 18 &&
+      contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/grafana_admin_password") &&
+      contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/redis_exporter_password") &&
+      contains(output.project_secret_names.managed_parameters, "/healthcare_hai_prediction/postgres_exporter_password")
     )
-    error_message = "The base task execution policy is the same in both states. The inventory gains the Grafana name only while monitoring is on."
+    error_message = "The base task execution policy is the same in both states. The inventory gains the Grafana and the two exporter names only while monitoring is on."
   }
 }

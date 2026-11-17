@@ -239,6 +239,9 @@ mlflow = [
   "mlflow[auth]==3.17.2; sys_platform == 'linux'",
   "psycopg2-binary==2.9.13; sys_platform == 'linux'",
   "boto3==1.43.123; sys_platform == 'linux'",
+  # MLflow's own request metrics (--expose-prometheus), read through the host state exporter's relay (owner decision of Nov 17 2026). mlflow exits without them.
+  "prometheus-flask-exporter==0.23.2; sys_platform == 'linux'",
+  "prometheus-client==0.26.0; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
   "anyio==4.15.1; sys_platform == 'linux'",
   "botocore==1.43.123; sys_platform == 'linux'",

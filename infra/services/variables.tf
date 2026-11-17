@@ -167,7 +167,7 @@ variable "ecr_repository_urls" {
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs, the monitoring images included when monitoring_enabled is true."
@@ -204,8 +204,8 @@ variable "image_digests" {
   }
 
   validation {
-    condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter", "pushgateway"] : contains(keys(var.image_digests), image)])
-    error_message = "Supply a digest for prometheus, grafana, statsd_exporter and pushgateway, or set monitoring_enabled to false."
+    condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : contains(keys(var.image_digests), image)])
+    error_message = "Supply a digest for prometheus, grafana, statsd_exporter, pushgateway, redis_exporter, postgres_exporter and node_exporter, or set monitoring_enabled to false."
   }
 
   validation {
@@ -501,6 +501,28 @@ variable "grafana_admin_password_name" {
   }
 }
 
+variable "redis_exporter_password_name" {
+  description = "Parameter Store SecureString name of the password of the Redis user exporter, which the Redis exporter logs in with (created by an owner script, never by Terraform). Only the Redis task and the Redis exporter container read it, through the task execution role."
+  type        = string
+  default     = "/healthcare_hai_prediction/redis_exporter_password"
+
+  validation {
+    condition     = length(var.redis_exporter_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.redis_exporter_password_name)) && !can(regex("^/(?i:aws|ssm)", var.redis_exporter_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "postgres_exporter_password_name" {
+  description = "Parameter Store SecureString name of the password of the Postgres role postgres_exporter, which the Postgres exporter logs in with (created by an owner script, never by Terraform). Only the Postgres database task and the Postgres exporter container read it, through the task execution role."
+  type        = string
+  default     = "/healthcare_hai_prediction/postgres_exporter_password"
+
+  validation {
+    condition     = length(var.postgres_exporter_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.postgres_exporter_password_name)) && !can(regex("^/(?i:aws|ssm)", var.postgres_exporter_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "alerts_topic_arn" {
   description = "ARN of the platform alerts topic (the alerts_topic_arn output of infra/platform). Grafana sends its alert notifications to this one topic through the Amazon SNS contact point in monitoring/grafana/provisioning/alerting, which reads the ARN from the container environment ALERTS_TOPIC_ARN. The task role (control_plane_task) needs sns:Publish and sns:GetTopicAttributes on it (infra/iam). Required while monitoring_enabled is true, because Grafana refuses to provision a contact point without a topic."
   type        = string
@@ -518,13 +540,16 @@ variable "alerts_topic_arn" {
 }
 
 variable "monitoring_memory_mib" {
-  description = "Hard limit and reservation in MiB of each monitoring container. The reservations sum to 392 MiB (owner decision B, Nov 17 2026: the Pushgateway 32 and the host exporter 56 on top of 304), which makes the job cap at most 22712 MiB with every service on. These are estimates, not measurements: replace them after the chain run shows the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana, 64 MiB for the host exporter and 32 MiB for the StatsD exporter and the Pushgateway, and at least its reservation."
+  description = "Hard limit and reservation in MiB of each monitoring container. The reservations sum to 464 MiB (Prometheus, Grafana, the StatsD exporter and the preparation container 304, the Pushgateway 32, the host state exporter 56 and the Redis, Postgres and node exporters 24 each, owner decisions of Nov 17 2026), which makes the job cap at most 22640 MiB with every service on. These are estimates, not measurements: replace them after the chain run shows the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana, 64 MiB for the host state exporter and the three exporters, and 32 MiB for the StatsD exporter and the Pushgateway, and at least its reservation."
   type = object({
     prometheus          = object({ limit = number, reservation = number })
     grafana             = object({ limit = number, reservation = number })
     statsd_exporter     = object({ limit = number, reservation = number })
     pushgateway         = object({ limit = number, reservation = number })
     host_state_exporter = object({ limit = number, reservation = number })
+    redis_exporter      = object({ limit = number, reservation = number })
+    postgres_exporter   = object({ limit = number, reservation = number })
+    node_exporter       = object({ limit = number, reservation = number })
   })
   default = {
     prometheus          = { limit = 256, reservation = 128 }
@@ -532,6 +557,9 @@ variable "monitoring_memory_mib" {
     statsd_exporter     = { limit = 64, reservation = 32 }
     pushgateway         = { limit = 96, reservation = 32 }
     host_state_exporter = { limit = 128, reservation = 56 }
+    redis_exporter      = { limit = 64, reservation = 24 }
+    postgres_exporter   = { limit = 64, reservation = 24 }
+    node_exporter       = { limit = 64, reservation = 24 }
   }
   nullable = false
 
@@ -539,9 +567,10 @@ variable "monitoring_memory_mib" {
     condition = (
       var.monitoring_memory_mib.prometheus.limit >= 128 && var.monitoring_memory_mib.grafana.limit >= 128 && var.monitoring_memory_mib.statsd_exporter.limit >= 32
       && var.monitoring_memory_mib.pushgateway.limit >= 32 && var.monitoring_memory_mib.host_state_exporter.limit >= 64
+      && var.monitoring_memory_mib.redis_exporter.limit >= 64 && var.monitoring_memory_mib.postgres_exporter.limit >= 64 && var.monitoring_memory_mib.node_exporter.limit >= 64
       && alltrue([for memory in values(var.monitoring_memory_mib) : memory.reservation >= 1 && memory.reservation <= memory.limit])
     )
-    error_message = "Each limit needs at least 128 MiB (Prometheus, Grafana), 64 MiB (the host exporter) or 32 MiB (the StatsD exporter, the Pushgateway), and each reservation at least 1 MiB and at most its limit."
+    error_message = "Each limit needs at least 128 MiB (Prometheus, Grafana), 64 MiB (the host state exporter and the three exporters) or 32 MiB (the StatsD exporter, the Pushgateway), and each reservation at least 1 MiB and at most its limit."
   }
 }
 

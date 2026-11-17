@@ -58,6 +58,9 @@ variables {
     grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
     pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
     training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
   }
 
@@ -75,6 +78,9 @@ variables {
     grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
     pushgateway            = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    redis_exporter         = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    postgres_exporter      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    node_exporter          = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     training               = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
   }
 }

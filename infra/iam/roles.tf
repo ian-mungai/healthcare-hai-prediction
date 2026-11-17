@@ -15,18 +15,20 @@ locals {
   # administrator password is not injected (the Simple auth manager runs with all users as administrators), so it has no
   # grant. The stack holds no parameter value. The same files are evaluated by scripts/infrastructure/run_policy_e2e.py.
   owner_policy_values = {
-    AWS_REGION                  = var.aws_region
-    AWS_ACCOUNT_ID              = var.expected_account_id
-    PROJECT_NAME                = var.project_name
-    ENVIRONMENT                 = var.environment
-    POSTGRES_PASSWORD_NAME      = var.postgres_password_name
-    AIRFLOW_DB_PASSWORD_NAME    = var.airflow_db_password_name
-    AIRFLOW_FERNET_KEY_NAME     = var.airflow_fernet_key_name
-    AIRFLOW_JWT_SECRET_NAME     = var.airflow_jwt_secret_name
-    AIRFLOW_API_SECRET_KEY_NAME = var.airflow_api_secret_key_name
-    REDIS_PASSWORD_NAME         = var.redis_password_name
-    POLARIS_ROOT_SECRET_NAME    = var.polaris_root_secret_name
-    GRAFANA_ADMIN_PASSWORD_NAME = var.grafana_admin_password_name
+    AWS_REGION                      = var.aws_region
+    AWS_ACCOUNT_ID                  = var.expected_account_id
+    PROJECT_NAME                    = var.project_name
+    ENVIRONMENT                     = var.environment
+    POSTGRES_PASSWORD_NAME          = var.postgres_password_name
+    AIRFLOW_DB_PASSWORD_NAME        = var.airflow_db_password_name
+    AIRFLOW_FERNET_KEY_NAME         = var.airflow_fernet_key_name
+    AIRFLOW_JWT_SECRET_NAME         = var.airflow_jwt_secret_name
+    AIRFLOW_API_SECRET_KEY_NAME     = var.airflow_api_secret_key_name
+    REDIS_PASSWORD_NAME             = var.redis_password_name
+    POLARIS_ROOT_SECRET_NAME        = var.polaris_root_secret_name
+    GRAFANA_ADMIN_PASSWORD_NAME     = var.grafana_admin_password_name
+    REDIS_EXPORTER_PASSWORD_NAME    = var.redis_exporter_password_name
+    POSTGRES_EXPORTER_PASSWORD_NAME = var.postgres_exporter_password_name
   }
 
   # The platform stack builds these names and the Project tag the same way; both stacks' tests pin them.

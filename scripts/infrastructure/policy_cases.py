@@ -134,14 +134,16 @@ PARAMETERS = (
     "polaris_root_secret",
     "polaris_silver_client_id",
     "polaris_silver_client_secret",
+    "postgres_exporter_password",
     "postgres_password",
+    "redis_exporter_password",
     "redis_password",
     "streamlit_model_api_key",
 )
 READ_ONLY_PARAMETERS = ("airflow_admin",)
 # The old hand-made Secrets Manager copy of the Airflow administrator password; no policy grants it since the one-time copy was done.
 LEGACY_AIRFLOW_ADMIN = "healthcare-hai-prediction/airflow-admin"
-# The eight control-plane parameters the task execution role injects; each is one of PARAMETERS.
+# The ten control-plane parameters the task execution role injects (seven in the base policy and three while monitoring is on); each is one of PARAMETERS.
 EXECUTION_PARAMETERS = (
     "postgres_password",
     "airflow_db_password",
@@ -151,6 +153,8 @@ EXECUTION_PARAMETERS = (
     "redis_password",
     "polaris_root_secret",
     "grafana_admin_password",
+    "redis_exporter_password",
+    "postgres_exporter_password",
 )
 SHARED_KEYS = ("bls_api_key", "census_api_key", "hud_api_key", "jev_api_key")
 AWS_READER_PARAMETERS = ("aws_polaris_reader_client_id", "aws_polaris_reader_client_secret")

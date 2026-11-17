@@ -8,6 +8,22 @@
       "Resource": [
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${GRAFANA_ADMIN_PASSWORD_NAME}"
       ]
+    },
+    {
+      "Sid": "InjectRedisExporterPassword",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${REDIS_EXPORTER_PASSWORD_NAME}"
+      ]
+    },
+    {
+      "Sid": "InjectPostgresExporterPassword",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${POSTGRES_EXPORTER_PASSWORD_NAME}"
+      ]
     }
   ]
 }

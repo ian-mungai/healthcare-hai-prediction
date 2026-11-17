@@ -65,9 +65,12 @@ locals {
     opensearch            = 16
     prometheus            = 8
     grafana               = 8
-    statsd_exporter       = 4
-    pushgateway           = 4
-    host_state_exporter   = 4
+    statsd_exporter       = 2
+    pushgateway           = 2
+    host_state_exporter   = 2
+    redis_exporter        = 2
+    postgres_exporter     = 2
+    node_exporter         = 2
   }
 
   service_containers = {

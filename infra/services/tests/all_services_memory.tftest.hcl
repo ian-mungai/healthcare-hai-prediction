@@ -4,8 +4,8 @@ mock_provider "aws" {
 
 # The memory rule with every service on (owner decision B, Nov 17 2026): the host job cap plus the service reservations plus the 2048 MiB system reserve must fit the
 # 32768 MiB host. The monitoring task reserves 392 MiB (the preparation container 16, Prometheus 128, Grafana 128, the StatsD exporter 32, the Pushgateway 32 and the host
-# exporter 56), so the reservations of the full stack are 8008 MiB and the cap is at most 22712 MiB. The live cap of 22800 MiB fits only the stack without the Pushgateway
-# and the host exporter. These cases read the plan only: no image runs and nothing reaches AWS. The cap value itself is set where the settings live, not here.
+# exporter 56), so the reservations of the full stack are 8080 MiB and the cap is at most 22640 MiB. The live cap of 22800 MiB fits only the stack without the Pushgateway,
+# the host state exporter and the three exporters. These cases read the plan only: no image runs and nothing reaches AWS. The cap value itself is set where the settings live, not here.
 variables {
   aws_profile                     = "example_project_dev"
   environment                     = "dev"
@@ -36,7 +36,7 @@ variables {
   model_api_mlflow_uri            = "http://127.0.0.1:5100"
   host_private_ip                 = "10.0.1.20"
   mlflow_artifact_bucket          = "example-project-data-dev"
-  host_job_cap_mib                = 22712
+  host_job_cap_mib                = 22640
 
   log_group_names = {
     postgres   = "/example/postgres"
@@ -64,6 +64,9 @@ variables {
     grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
     pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
   }
 
   image_digests = {
@@ -82,20 +85,23 @@ variables {
     grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
     pushgateway            = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    redis_exporter         = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    postgres_exporter      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    node_exporter          = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   }
 }
 
-run "the_full_stack_reserves_8008_mib_and_a_cap_of_22712_fits" {
+run "the_full_stack_reserves_8080_mib_and_a_cap_of_22640_fits" {
   command = plan
 
   assert {
-    condition     = output.reserved_memory_mib == 8008
-    error_message = "With every service on the reservations are 8008 MiB: the monitoring task reserves 392 MiB, 88 more than before the Pushgateway and the host exporter."
+    condition     = output.reserved_memory_mib == 8080
+    error_message = "With every service on the reservations are 8080 MiB: the monitoring task reserves 464 MiB, 160 more than before the Pushgateway, the host state exporter and the three exporters."
   }
 
   assert {
-    condition     = output.host_job_memory_mib == 22712 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == 32768
-    error_message = "The cap of 22712 MiB plus the reservations plus the 2048 MiB system reserve fills the 32768 MiB host exactly."
+    condition     = output.host_job_memory_mib == 22640 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == 32768
+    error_message = "The cap of 22640 MiB plus the reservations plus the 2048 MiB system reserve fills the 32768 MiB host exactly."
   }
 }
 
@@ -113,8 +119,61 @@ run "a_cap_one_mib_over_the_room_is_refused" {
   command = plan
 
   variables {
-    host_job_cap_mib = 22713
+    host_job_cap_mib = 22641
   }
 
   expect_failures = [output.host_job_memory_mib]
+}
+
+run "mlflow_exposes_its_request_metrics_to_a_temporary_folder_while_monitoring_is_on" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command, "--expose-prometheus")
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command, "/tmp/mlflow_metrics")
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command, "--workers")
+      && contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command, "1")
+    )
+    error_message = "With monitoring on, MLflow runs one worker and writes its Prometheus request counters to /tmp, which is a 256 MiB temporary file system."
+  }
+}
+
+run "without_monitoring_mlflow_keeps_its_command" {
+  command = plan
+
+  variables {
+    monitoring_enabled = false
+    alerts_topic_arn   = null
+  }
+
+  assert {
+    condition     = !contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command, "--expose-prometheus")
+    error_message = "With monitoring off MLflow's definition carries no metrics flag, so a stack without the rebuilt image still starts."
+  }
+}
+
+run "only_the_host_state_exporter_gets_the_mlflow_admin_credential_for_the_relay" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].secrets, { name = "MLFLOW_ADMIN_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/mlflow_admin_password" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "MLFLOW_METRICS_URL", value = "http://127.0.0.1:5100/metrics" })
+    )
+    error_message = "The host state exporter reads the MLflow admin password from Parameter Store at start, and reaches MLflow's metrics path on loopback."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) :
+      contains([for secret in lookup(container, "secrets", []) : secret.name], "MLFLOW_ADMIN_PASSWORD") == (container.name == "host_state_exporter")
+    ])
+    error_message = "No other monitoring container holds the MLflow admin credential."
+  }
+
+  assert {
+    condition     = !can(regex("mlflow_admin_password", jsonencode([for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : [container.command, container.environment]])))
+    error_message = "The credential is injected as a secret and named nowhere in a command or an environment value."
+  }
 }

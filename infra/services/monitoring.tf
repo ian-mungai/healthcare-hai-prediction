@@ -9,6 +9,8 @@ locals {
     code_monitoring_package              = "${local.code_path}/monitoring"
     grafana_data                         = "${var.data_mount_path}/grafana"
     host_data                            = var.data_mount_path
+    node_data                            = var.data_mount_path
+    node_scratch                         = "${var.data_mount_path}/${var.host_scratch_folder}"
     prometheus_data                      = "${var.data_mount_path}/prometheus"
     pushgateway_data                     = "${var.data_mount_path}/pushgateway"
   }
@@ -204,9 +206,13 @@ locals {
         { name = "ECS_SERVICE_PREFIX", value = "${local.name_prefix}_" },
         { name = "HOST_DATA_PATH", value = "/host/data" },
         { name = "HOST_SCRATCH_PATH", value = "/host/data/${var.host_scratch_folder}" },
+        { name = "MLFLOW_METRICS_URL", value = "http://127.0.0.1:${local.mlflow_port}/metrics" },
         { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         { name = "HOME", value = "/tmp" },
       ]
+      # MLflow answers /metrics to its admin user only, so the exporter relays that one path with the admin credential, which it reads from Parameter Store at
+      # start and keeps in memory. Only this container of the monitoring task holds it; the MLflow service holds it already.
+      secrets = var.mlflow_enabled ? [{ name = "MLFLOW_ADMIN_PASSWORD", valueFrom = local.secret_arn["mlflow_admin_password"] }] : []
       mountPoints = [
         { sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true },
         { sourceVolume = "host_data", containerPath = "/host/data", readOnly = true },
@@ -225,6 +231,96 @@ locals {
       }
       restartPolicy    = local.restart_policy
       logConfiguration = lookup(local.log_configuration, "host_state_exporter", null)
+    }),
+    # The three exporters of the services that have no metrics endpoint of their own. Each is optional (a failure never stops the task), restarts and listens on
+    # loopback. The Redis and Postgres exporters log in with their own users, and the password comes from Parameter Store at start. The images have no shell, so
+    # none has a container health check. Verified Nov 17 2026 (data/local_keep/builds_20261117/verification_child).
+    merge(local.container_defaults, {
+      name                   = "redis_exporter"
+      image                  = lookup(local.image, "redis_exporter", "")
+      essential              = false
+      user                   = "65534:65534"
+      readonlyRootFilesystem = true
+      memory                 = var.monitoring_memory_mib.redis_exporter.limit
+      memoryReservation      = var.monitoring_memory_mib.redis_exporter.reservation
+      stopTimeout            = 30
+      command                = ["--web.listen-address=127.0.0.1:9121"]
+      environment = [
+        { name = "GOMEMLIMIT", value = local.monitoring_gomemlimit.redis_exporter },
+        { name = "REDIS_ADDR", value = "redis://127.0.0.1:6379" },
+        { name = "REDIS_USER", value = "exporter" },
+      ]
+      secrets          = [{ name = "REDIS_PASSWORD", valueFrom = local.secret_arn["redis_exporter_password"] }]
+      portMappings     = [{ containerPort = 9121, hostPort = 9121, protocol = "tcp" }]
+      restartPolicy    = local.restart_policy
+      logConfiguration = lookup(local.log_configuration, "redis_exporter", null)
+    }),
+    merge(local.container_defaults, {
+      name                   = "postgres_exporter"
+      image                  = lookup(local.image, "postgres_exporter", "")
+      essential              = false
+      user                   = "65534:65534"
+      readonlyRootFilesystem = true
+      memory                 = var.monitoring_memory_mib.postgres_exporter.limit
+      memoryReservation      = var.monitoring_memory_mib.postgres_exporter.reservation
+      stopTimeout            = 30
+      command = [
+        "--web.listen-address=127.0.0.1:9187",
+        "--no-collector.settings",
+        "--no-collector.stat_user_tables",
+        "--no-collector.statio_user_tables",
+        "--no-collector.replication",
+        "--no-collector.replication_slots",
+        "--no-collector.stat_replication",
+        "--no-collector.stat_archiver",
+        "--no-collector.stat_progress_vacuum",
+        "--no-collector.roles",
+        "--collector.database_wraparound",
+        "--collector.long_running_transactions",
+        "--collector.postmaster",
+      ]
+      environment = [
+        { name = "GOMEMLIMIT", value = local.monitoring_gomemlimit.postgres_exporter },
+        { name = "DATA_SOURCE_URI", value = "127.0.0.1:5432/polaris?sslmode=disable" },
+        { name = "DATA_SOURCE_USER", value = "postgres_exporter" },
+      ]
+      secrets          = [{ name = "DATA_SOURCE_PASS", valueFrom = local.secret_arn["postgres_exporter_password"] }]
+      portMappings     = [{ containerPort = 9187, hostPort = 9187, protocol = "tcp" }]
+      restartPolicy    = local.restart_policy
+      logConfiguration = lookup(local.log_configuration, "postgres_exporter", null)
+    }),
+    merge(local.container_defaults, {
+      name                   = "node_exporter"
+      image                  = lookup(local.image, "node_exporter", "")
+      essential              = false
+      user                   = "65534:65534"
+      readonlyRootFilesystem = true
+      memory                 = var.monitoring_memory_mib.node_exporter.limit
+      memoryReservation      = var.monitoring_memory_mib.node_exporter.reservation
+      stopTimeout            = 30
+      command = [
+        "--web.listen-address=127.0.0.1:9100",
+        "--path.rootfs=/host",
+        "--collector.disable-defaults",
+        "--collector.cpu",
+        "--collector.meminfo",
+        "--collector.loadavg",
+        "--collector.diskstats",
+        "--collector.filesystem",
+        "--collector.vmstat",
+        "--collector.vmstat.fields=^(oom_kill|pgmajfault|pswpin|pswpout)$",
+        "--collector.filesystem.mount-points-include=^/(data|scratch)$",
+        "--collector.diskstats.device-include=^(nvme[0-9]+n[0-9]+|xvd[a-z]+)$",
+      ]
+      environment = [{ name = "GOMEMLIMIT", value = local.monitoring_gomemlimit.node_exporter }]
+      mountPoints = [
+        { sourceVolume = "node_data", containerPath = "/host/data", readOnly = true },
+        { sourceVolume = "node_scratch", containerPath = "/host/scratch", readOnly = true },
+      ]
+      portMappings     = [{ containerPort = 9100, hostPort = 9100, protocol = "tcp" }]
+      linuxParameters  = { capabilities = { drop = ["ALL"] } }
+      restartPolicy    = local.restart_policy
+      logConfiguration = lookup(local.log_configuration, "node_exporter", null)
     }),
   ] : container if var.monitoring_enabled]
 }

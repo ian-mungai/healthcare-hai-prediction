@@ -320,9 +320,9 @@ def terraform_names(root: Path) -> dict[str, bool]:
         "the source check matches every kind of block of the Secrets Manager and Parameter Store types": all(
             SECRET_RESOURCE.search(f'{kind} "{name}" "x" {{}}') for kind in ("resource", "data", "ephemeral") for name in (*family, *parameters)
         ),
-        "the 21 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
-        "the 21 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 22,
-        "the policy files grant the module's names: four shared keys read only, 22 parameters read and the 21 managed ones written": secret_store.policy_names(
+        "the 23 variable defaults equal the module's managed names in order": declared == list(secret_store.MANAGED),
+        "the 23 managed names and the read-only name are all different": len(set(ordered)) == len(ordered) == 24,
+        "the policy files grant the module's names: four shared keys read only, 24 parameters read and the 23 managed ones written": secret_store.policy_names(
             root / secret_store.VARIABLES
         )
         == {
@@ -557,6 +557,55 @@ def model_api_redis_password(root: Path) -> dict[str, bool]:
     }
 
 
+def password_tool(root: Path, tool: Any, name: str) -> dict[str, bool]:
+    """The tool for one service password writes it once into Parameter Store, prints and keeps it nowhere, and never overwrites it."""
+
+    began = time.time() - 1
+    first, second, denied_text = io.StringIO(), io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory(prefix="password_tool_cases_") as scratch, StandIn(shared={}) as stand_in:
+        with contextlib.redirect_stdout(first), contextlib.redirect_stderr(first):
+            code_first = tool.run(root, stand_in.endpoint)
+        stored = stand_in.values.get(name, "")
+        writes_first = stand_in.writes()
+        with contextlib.redirect_stdout(second), contextlib.redirect_stderr(second):
+            code_second = tool.run(root, stand_in.endpoint)
+        stand_in.values[name] = "kept-" + os.urandom(4).hex()
+        kept = stand_in.values[name]
+        with contextlib.redirect_stdout(second), contextlib.redirect_stderr(second):
+            tool.run(root, stand_in.endpoint)
+        unchanged_after_rerun = stand_in.values[name] == kept and stand_in.writes() == writes_first
+        del stand_in.values[name]
+        stand_in.denied.add("CreateParameter")
+        with contextlib.redirect_stdout(denied_text), contextlib.redirect_stderr(denied_text):
+            code_denied = tool.run(root, stand_in.endpoint)
+        stand_in.denied.clear()
+        written_types = {(item["type"], item["tier"]) for item in stand_in.writes_seen}
+        leaked_files = files_holding([stored], [Path(scratch), root / "data"], began) if stored else ["unchecked"]
+    printed = first.getvalue() + second.getvalue() + denied_text.getvalue()
+    return {
+        "the first run creates the parameter and exits 0": code_first == 0 and bool(stored) and writes_first == 1,
+        "the generated password is long and random": len(stored) >= 32 and stored == stored.strip() and tool.secret_store.is_fernet_key(stored) is False,
+        "it is a SecureString on the standard tier": written_types == {("SecureString", "Standard")},
+        "a second run exits 0, changes nothing and says so": code_second == 0 and "already exists" in second.getvalue() and unchanged_after_rerun,
+        "a denied create exits 1 and names the secret": code_denied == 1 and name in denied_text.getvalue(),
+        "no output holds the value": bool(stored) and stored not in printed and kept not in printed,
+        "no file written since the run holds the value": leaked_files == [],
+        "the tool names exactly its one parameter": name == tool.NAME and name.startswith(secret_store.PREFIX) and name in secret_store.MANAGED,
+    }
+
+
+def redis_exporter_password(root: Path) -> dict[str, bool]:
+    from scripts.infrastructure import create_redis_exporter_password as tool
+
+    return password_tool(root, tool, secret_store.REDIS_EXPORTER_PASSWORD)
+
+
+def postgres_exporter_password(root: Path) -> dict[str, bool]:
+    from scripts.infrastructure import create_postgres_exporter_password as tool
+
+    return password_tool(root, tool, secret_store.POSTGRES_EXPORTER_PASSWORD)
+
+
 def release_pipe(pipe: Path, seconds: float = 5.0) -> None:
     """Open the write end of a pipe so that a reader blocked on it returns; give up after ``seconds`` when no reader is waiting."""
     end = time.monotonic() + seconds
@@ -598,6 +647,8 @@ CASES: dict[str, Case] = {
     "saved_plan": saved_plan,
     "openmetadata_passwords": openmetadata_passwords,
     "model_api_redis_password": model_api_redis_password,
+    "redis_exporter_password": redis_exporter_password,
+    "postgres_exporter_password": postgres_exporter_password,
     "scan_with_pipe": scan_with_pipe,
 }
 

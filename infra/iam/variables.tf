@@ -302,6 +302,28 @@ variable "grafana_admin_password_name" {
   }
 }
 
+variable "redis_exporter_password_name" {
+  description = "Parameter Store SecureString name of the password of the Redis exporter, which logs in as the Redis user exporter; the project may read, create and put it, and the task execution role injects it into the Redis or Postgres task and the exporter container while monitoring is on."
+  type        = string
+  default     = "/healthcare_hai_prediction/redis_exporter_password"
+
+  validation {
+    condition     = length(var.redis_exporter_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.redis_exporter_password_name)) && !can(regex("^/(?i:aws|ssm)", var.redis_exporter_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
+variable "postgres_exporter_password_name" {
+  description = "Parameter Store SecureString name of the password of the Postgres exporter, which logs in as the Postgres role postgres_exporter; the project may read, create and put it, and the task execution role injects it into the Redis or Postgres task and the exporter container while monitoring is on."
+  type        = string
+  default     = "/healthcare_hai_prediction/postgres_exporter_password"
+
+  validation {
+    condition     = length(var.postgres_exporter_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.postgres_exporter_password_name)) && !can(regex("^/(?i:aws|ssm)", var.postgres_exporter_password_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores; dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "aws_polaris_serving_client_id_name" {
   description = "Name of the AWS serving writer client ID parameter, which the model API appends predictions with. The owner issues its value through the catalog setup."
   type        = string

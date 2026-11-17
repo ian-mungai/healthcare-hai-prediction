@@ -14,14 +14,16 @@ locals {
       memoryReservation = 2048
       stopTimeout       = 60
       entryPoint        = ["python", "-I", "/opt/mlflow/start_server.py"]
-      command = [
+      # While monitoring is on, MLflow also writes its own request counters (prometheus-flask-exporter, in the rebuilt image) to a folder in /tmp, which is a
+      # 256 MiB temporary file system; one worker keeps the counters in one process. The host state exporter relays them to Prometheus with the admin credential.
+      command = concat([
         "--host", "0.0.0.0",
         "--port", tostring(local.mlflow_port),
         "--workers", "1",
         "--serve-artifacts",
         "--artifacts-destination", "s3://${coalesce(var.mlflow_artifact_bucket, "unset")}/mlflow/",
         "--allowed-hosts", "127.0.0.1:${local.mlflow_port},localhost:${local.mlflow_port},${coalesce(var.host_private_ip, "unset")}:${local.mlflow_port}",
-      ]
+      ], var.monitoring_enabled ? ["--expose-prometheus", "/tmp/mlflow_metrics"] : [])
       environment = [
         { name = "AWS_REGION", value = var.aws_region },
         { name = "DO_NOT_TRACK", value = "true" },
