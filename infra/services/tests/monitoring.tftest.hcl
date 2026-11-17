@@ -959,11 +959,21 @@ run "redis_gets_the_exporter_user_with_the_verified_rules_and_the_password_from_
 
   assert {
     condition = (
-      strcontains(jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0], "resetkeys resetchannels -@all +info +ping +config|get +client|list +client|setname +slowlog|get +slowlog|len +latency|latest +latency|histogram +command|info +dbsize")
+      strcontains(jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0], "resetkeys resetchannels -@all +info +ping +client|list +client|setname +slowlog|get +slowlog|len +latency|latest +latency|histogram +command|info +dbsize")
       && contains(jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].secrets, { name = "EXPORTER_REDIS_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/redis_exporter_password" })
       && !can(regex("redis_exporter_password", jsondecode(aws_ecs_task_definition.service["redis"].container_definitions)[0].command[0]))
     )
     error_message = "Redis creates the user exporter with exactly the verified command list, from a password that comes from the secret store and is named by the secret, not by the script."
+  }
+
+  # CONFIG GET returns requirepass in clear text, and the default user's password writes every key, so the exporter user never gets it (review round 2).
+  assert {
+    condition = (
+      !can(regex("config", lower(local.redis_exporter_rules)))
+      && !can(regex("[+]@|allkeys|~[*]|[+]set|[+]del|[+]flush|[+]eval|[+]acl", local.redis_exporter_rules))
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[6].command, "--config-command=-")
+    )
+    error_message = "The exporter user has no CONFIG command and no write, script or ACL command, and the exporter is told not to collect config."
   }
 }
 

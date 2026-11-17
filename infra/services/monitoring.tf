@@ -244,7 +244,7 @@ locals {
       memory                 = var.monitoring_memory_mib.redis_exporter.limit
       memoryReservation      = var.monitoring_memory_mib.redis_exporter.reservation
       stopTimeout            = 30
-      command                = ["--web.listen-address=127.0.0.1:9121"]
+      command                = ["--web.listen-address=127.0.0.1:9121", "--config-command=-"]
       environment = [
         { name = "GOMEMLIMIT", value = local.monitoring_gomemlimit.redis_exporter },
         { name = "REDIS_ADDR", value = "redis://127.0.0.1:6379" },

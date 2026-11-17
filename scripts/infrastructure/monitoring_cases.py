@@ -18,6 +18,7 @@ from scripts.infrastructure.layer_publish_cases import CASES as PUBLISH_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 from scripts.infrastructure.publisher_metrics_cases import CASES as PUBLISHER_CASES
+from scripts.infrastructure.redis_acl_cases import CASES as REDIS_CASES
 from scripts.infrastructure.spark_progress_cases import CASES as SPARK_CASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -477,3 +478,4 @@ CASES |= EXPORTER_CASES
 CASES |= SPARK_CASES
 CASES |= PUBLISHER_CASES
 CASES |= PUBLISH_CASES
+CASES |= REDIS_CASES

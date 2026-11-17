@@ -28,9 +28,9 @@ locals {
   EOT
 
   # While monitoring is on, the Redis task also creates the user exporter of the Redis exporter, from its own password. It may run only what the exporter
-  # needs (verified Nov 17 2026: info, ping, config get, client list and setname, slowlog, latency, command info and dbsize) and no key or channel. The script
+  # needs (verified Nov 17 2026: info, ping, client list and setname, slowlog, latency, command info and dbsize) and no key or channel. It has no CONFIG command, because CONFIG GET returns the requirepass of the default user in clear text; the exporter collects no config (--config-command=-), and redis_memory_max_bytes still comes from INFO. The script
   # is written for each of the two cases of the model API user, so the definitions without monitoring stay as they were.
-  redis_exporter_rules = "resetkeys resetchannels -@all +info +ping +config|get +client|list +client|setname +slowlog|get +slowlog|len +latency|latest +latency|histogram +command|info +dbsize"
+  redis_exporter_rules = "resetkeys resetchannels -@all +info +ping +client|list +client|setname +slowlog|get +slowlog|len +latency|latest +latency|histogram +command|info +dbsize"
 
   redis_script_with_exporter_user = <<-EOT
     pw=$${REDIS_PASSWORD//\\/\\\\}
