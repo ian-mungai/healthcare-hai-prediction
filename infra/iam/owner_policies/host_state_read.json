@@ -33,7 +33,12 @@
       "Sid": "ListClusterServices",
       "Effect": "Allow",
       "Action": "ecs:ListServices",
-      "Resource": "${CLUSTER_ARN}"
+      "Resource": "*",
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "${CLUSTER_ARN}"
+        }
+      }
     },
     {
       "Sid": "DescribeClusterServices",

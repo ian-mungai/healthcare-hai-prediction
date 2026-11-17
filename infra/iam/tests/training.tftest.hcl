@@ -358,10 +358,11 @@ run "the_host_state_exporter_reads_the_cluster_and_nothing_else_when_the_alerts_
           Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
         },
         {
-          Sid      = "ListClusterServices"
-          Effect   = "Allow"
-          Action   = "ecs:ListServices"
-          Resource = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev"
+          Sid       = "ListClusterServices"
+          Effect    = "Allow"
+          Action    = "ecs:ListServices"
+          Resource  = "*"
+          Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
         },
         {
           Sid       = "DescribeClusterServices"
