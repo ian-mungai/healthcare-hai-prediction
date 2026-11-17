@@ -67,6 +67,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -883,10 +884,48 @@ class LineageSource:
         return {"inputs": inputs, "outputs": lineage.outputs if complete else [], "run_facets": {"haiLaunch": lineage.launch}}
 
 
-def post_event(url: str, payload: bytes, credential: str, timeout: float = DELIVERY_SECONDS) -> int:
+class Cancellation:
+    """A stop that a sender checks before it writes and that aborts the send in flight. ``stop`` (from any thread) refuses every later send, and shuts down
+    the connection that a send is using, which ends its blocked connect, write or read at once. A send registers its connection under the lock (``begin``) and
+    checks again after connecting (``check``), so a stop is never missed between the last check and the write: either the check sees it, or the stop closes
+    the socket the write is about to use."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.stopped = False
+        self.connection: http.client.HTTPConnection | None = None
+
+    def begin(self, connection: http.client.HTTPConnection) -> None:
+        with self.lock:
+            if self.stopped:
+                raise DeliveryFailed("the send was cancelled")
+            self.connection = connection
+
+    def check(self) -> None:
+        with self.lock:
+            if self.stopped:
+                raise DeliveryFailed("the send was cancelled")
+
+    def end(self) -> None:
+        with self.lock:
+            self.connection = None
+
+    def stop(self) -> None:
+        with self.lock:
+            self.stopped = True
+            connection, self.connection = self.connection, None
+        if connection is not None:
+            with contextlib.suppress(OSError):
+                if connection.sock is not None:
+                    connection.sock.shutdown(socket.SHUT_RDWR)  # wakes a read that is blocked on the connection
+            connection.close()
+
+
+def post_event(url: str, payload: bytes, credential: str, timeout: float = DELIVERY_SECONDS, cancel: Cancellation | None = None) -> int:
     """POST one event to ``<url>/api/v1/openlineage/lineage`` with the bearer credential. Each connect, send and read waits at most ``timeout`` seconds.
-    Every failure is a ``DeliveryFailed`` that names the kind of failure and never the credential: the HTTP client puts a header value it refuses (a key with
-    a trailing newline, a character outside Latin-1) into its own error text, so that text is never shown."""
+    With ``cancel`` the send is refused once it is stopped, even after the connection is made and before the first byte is written, and is aborted when the
+    stop comes while it runs. Every failure is a ``DeliveryFailed`` that names the kind of failure and never the credential: the HTTP client puts a header
+    value it refuses (a key with a trailing newline, a character outside Latin-1) into its own error text, so that text is never shown."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.path not in ("", "/") or parts.query or parts.username:
         raise DeliveryFailed("the receiver must be an http or https address with no path, query or user")
@@ -896,14 +935,24 @@ def post_event(url: str, payload: bytes, credential: str, timeout: float = DELIV
     except ValueError:
         raise DeliveryFailed("the receiver address has an invalid port") from None
     try:
+        if cancel is not None:
+            connection.auto_open = 0  # a connection that a stop closed never reconnects by itself
+            cancel.begin(connection)
+            cancel.check()
+            connection.connect()
+            cancel.check()
         connection.request("POST", ROUTE, body=payload, headers={"Content-Type": "application/json", "Authorization": f"Bearer {credential}"})
         response = connection.getresponse()
         response.read(65536)
     except ValueError as error:  # includes UnicodeError: the request was refused before it was sent
         raise DeliveryFailed(f"the request was refused before it was sent: {type(error).__name__}; check the credential's characters") from None
     except (OSError, http.client.HTTPException) as error:
+        if cancel is not None and cancel.stopped:
+            raise DeliveryFailed("the send was cancelled") from None
         raise DeliveryFailed(f"the receiver did not answer within {timeout:g} s: {type(error).__name__}") from None
     finally:
+        if cancel is not None:
+            cancel.end()
         connection.close()
     if not 200 <= response.status < 300:
         raise DeliveryFailed(f"the receiver answered HTTP {response.status}")

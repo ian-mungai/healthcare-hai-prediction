@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import inspect
 import io
 import json
 import sys
@@ -729,6 +730,92 @@ def a_slow_builder_cannot_outlast_the_delivery_budget() -> None:
         require("deadline" in phase.err.getvalue(), f"the stall is not recorded: {phase.err.getvalue()!r}")
 
 
+def untraced(frame: Any, event: str, arg: Any) -> Any:
+    return None
+
+
+class Pause:
+    """Holds the delivery worker of ``job_lineage.emit`` at the line where it hands its built events to the sender, through a line trace, so a case can make
+    the caller's deadline pass in exactly that gap and release the worker afterwards. Neither the sender nor the HTTP transport is replaced."""
+
+    def __init__(self) -> None:
+        source, first = inspect.getsourcelines(job_lineage.emit)
+        self.line = first + next(index for index, text in enumerate(source) if "(lines" in text and "send" in text)
+        self.paused, self.release, self.ended = threading.Event(), threading.Event(), threading.Event()
+        self.workers: list[threading.Thread] = []
+
+    def trace(self, frame: Any, event: str, arg: Any) -> Any:
+        if frame.f_code.co_filename == job_lineage.__file__ and frame.f_code.co_name == "work":
+            if event == "line" and frame.f_lineno == self.line:
+                self.workers.append(threading.current_thread())
+                self.paused.set()
+                if not self.release.wait(5):
+                    raise RuntimeError("the case never released the worker")
+            if event == "return":
+                self.ended.set()
+        return self.trace
+
+    @contextmanager
+    def holding(self) -> Iterator[Pause]:
+        threading.settrace(self.trace)
+        try:
+            yield self
+        finally:
+            self.release.set()
+            threading.settrace(untraced)
+
+
+def no_event_is_sent_after_the_deadline() -> None:
+    """The delivery has one absolute deadline and one cancellation that the caller sets before it returns. A worker that is paused between its last check and
+    its first send, and resumes after the caller returned (the review's race: the worker took a fresh relative budget and sent all 142 events after the driver's
+    exit 0), sends nothing."""
+    text = text_of(request_of("silver"))
+    with base.receiving() as receiver, Pause().holding() as pause:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            sent = job_lineage.emit("race", lambda: ["{}", "{}"], environ_for(receiver.url, text), 0.05)
+        require(pause.paused.is_set() and sent == 0 and receiver.requests == [], f"the case did not reach its pause: {sent} {len(receiver.requests)}")
+        pause.release.set()
+        require(pause.ended.wait(3), "the worker never ended")
+        for worker in pause.workers:
+            worker.join(2)
+        require(receiver.requests == [], f"{len(receiver.requests)} events were sent after the caller returned")
+        require("not sent" in err.getvalue() and CREDENTIAL not in err.getvalue(), f"standard error: {err.getvalue()!r}")
+
+
+def no_event_follows_the_drivers_exit() -> None:
+    """The same race through the real upload driver: its table events are built, the worker is held before its first send, the budget passes, the driver
+    returns exit 0 and only then is the worker released. Nothing is sent."""
+    with base.receiving(catalogue=base.catalogue_of_the_mirror()) as receiver, Pause().holding() as pause, mock.patch.object(job_lineage, "TABLE_SECONDS", 0.3):
+        driver = Phase("gold", "upload", receiver.url)
+        code = driver.run()
+        require(
+            pause.paused.is_set() and code == 0 and receiver.requests == [],
+            f"the driver case did not reach its pause: exit {code}, {len(receiver.requests)} requests",
+        )
+        pause.release.set()
+        require(pause.ended.wait(3), "the driver's worker never ended")
+        time.sleep(0.3)
+        require(receiver.requests == [], f"{len(receiver.requests)} events were sent after the driver returned exit 0")
+
+
+def a_send_in_flight_is_aborted_at_the_deadline() -> None:
+    """A send that is waiting for a receiver that does not answer when the deadline passes is aborted (its connection is shut down), and the delivery worker
+    and its sender are gone within the stop grace, before the caller returns."""
+    text = text_of(request_of("silver"))
+    with base.receiving(delay=30.0) as stalled:
+        began = time.monotonic()
+        with contextlib.redirect_stderr(io.StringIO()):
+            sent = job_lineage.emit("stalled", lambda: ["{}"], environ_for(stalled.url, text), 0.3)
+        spent = time.monotonic() - began
+        alive = [
+            thread.name for thread in threading.enumerate() if thread.name.endswith(("(work)", "(run)"))
+        ]  # the delivery worker and the sender thread of send_within
+        require(sent == 0 and spent < 1.8, f"a send in flight at the deadline: {sent} after {spent:.2f} s")
+        require(not alive, f"the worker of a send in flight is still running after the caller returned: {alive}")
+        require(job_lineage.STOP_GRACE_SECONDS <= 1.0, "the wait for a worker to stop is bounded at one second")
+
+
 class FlakyBucket:
     """The evidence bucket with one key that answers every read with the given error code."""
 
@@ -885,6 +972,9 @@ CASES: dict[str, Callable[[], None]] = {
     "the_replay_task_start_shares_the_job_start": the_replay_task_start_shares_the_job_start,
     "any_ordinary_exception_sends_the_fail_and_propagates": any_ordinary_exception_sends_the_fail_and_propagates,
     "a_slow_builder_cannot_outlast_the_delivery_budget": a_slow_builder_cannot_outlast_the_delivery_budget,
+    "no_event_is_sent_after_the_deadline": no_event_is_sent_after_the_deadline,
+    "no_event_follows_the_drivers_exit": no_event_follows_the_drivers_exit,
+    "a_send_in_flight_is_aborted_at_the_deadline": a_send_in_flight_is_aborted_at_the_deadline,
     "only_a_missing_times_record_is_absent": only_a_missing_times_record_is_absent,
     "the_job_skips_and_says_why_when_its_own_records_fail": the_job_skips_and_says_why_when_its_own_records_fail,
 }

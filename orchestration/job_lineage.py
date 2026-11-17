@@ -53,6 +53,7 @@ from orchestration.snapshots import SnapshotError, checked_input_record, checked
 INVOCATION_VARIABLE = "LINEAGE_INVOCATION"
 START_SECONDS = 10.0  # the whole send of the task's START or FAIL, builder included
 TABLE_SECONDS = 120.0  # the whole send of a layer's per-table events, builder included: about 140 events at 0.22 s each
+STOP_GRACE_SECONDS = 1.0  # how long the caller waits, after it stopped the sending, for a send in flight to end
 RESERVE_SECONDS = 1800.0  # time a send never uses: the phases after the upload (gold maintenance, features Feast), the scratch wipe, the launcher's poll
 JOB_CHECKS = ecs_lineage.Checks(inputs=checked_input_record, outputs=checked_snapshot_record, frozen=False)
 DAG_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,249}")  # the patterns of data_contracts/orchestration/submission_request.schema.json
@@ -247,35 +248,51 @@ def explain(error: Exception) -> str:
     return type(error).__name__  # the text of an unexpected error can hold a header
 
 
+def send_until(lines: list[str], url: str, credential: str, deadline: float, cancel: ecs_lineage.Cancellation) -> None:
+    """Send each line in order, every one only before the absolute ``deadline`` (a ``time.monotonic`` time, never a budget that starts when the send does) and
+    only while ``cancel`` has not stopped the sending. Raises ``DeliveryFailed`` for the first failure, the deadline and a stop."""
+    for line in lines:
+        cancel.check()
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise DeliveryFailed("the deadline passed with events unsent")
+        ecs_lineage.post_event(url, line.encode(), credential, timeout=min(ecs_lineage.DELIVERY_SECONDS, left), cancel=cancel)
+
+
 def emit(what: str, build: Callable[[], list[str]], environ: Mapping[str, str], seconds: float) -> int:
     """Build the events and send them, all inside one absolute deadline of ``seconds``, and return how many were sent. Nothing is built or sent unless the
-    settings are all there. The building (the manifest read, the evidence reads, the events) and the sending run together in a worker that the caller stops
-    waiting for at the deadline: a thread cannot be stopped, so one that is still building then sends nothing (it finds the deadline passed before its first
-    send, and each send waits only for the time left), and the process ends it when the phase ends. Any failure (the receiver, the evidence, a bug, the
-    deadline) is one line on standard error and a count of 0; nothing is raised, so the job's exit code never changes."""
+    settings are all there. The building (the manifest read, the evidence reads, the events) and the sending run together in a worker, and the deadline is a
+    ``time.monotonic`` time that the worker keeps from its start to every send. At the deadline the caller stops the sending (``ecs_lineage.Cancellation``)
+    before it returns: a worker that is still building, or was paused after its last check, finds the stop at its next send and sends nothing, and a send in
+    flight is aborted, with ``STOP_GRACE_SECONDS`` to end. A thread cannot be stopped while it builds, so the caller does not wait for that and the process
+    ends the worker when the phase ends. No event is sent after the caller returns. Any failure (the receiver, the evidence, a bug, the deadline) is one line on
+    standard error and a count of 0; nothing is raised, so the job's exit code never changes."""
     target = settings(environ)
     if target is None or seconds <= 0:
         return 0
     deadline = time.monotonic() + seconds
+    cancel = ecs_lineage.Cancellation()
     outcome: dict[str, Any] = {}
 
     def work() -> None:
         try:
             lines = build()
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise DeliveryFailed(f"the deadline of {seconds:g} s passed before any event was sent")
-            ecs_lineage.send_within(lines, target[0], target[1], left)
+            outcome["sending"] = True
+            send_until(lines, target[0], target[1], deadline, cancel)
             outcome["sent"] = len(lines)
         except Exception as error:  # nothing of the worker may reach standard error on its own
             outcome["error"] = error
 
     worker = threading.Thread(target=work, daemon=True)
     worker.start()
-    worker.join(seconds)
+    worker.join(max(deadline - time.monotonic(), 0.0))
     if worker.is_alive():
+        cancel.stop()
+        if outcome.get("sending"):
+            worker.join(STOP_GRACE_SECONDS)
         note(what, f"not sent: the deadline of {seconds:g} s passed while the events were built or sent")
         return 0
+    cancel.stop()
     if "error" in outcome:
         note(what, f"not sent: {explain(outcome['error'])}")
         return 0
