@@ -958,6 +958,29 @@ def host_ingest_ingests_the_three_recorded_layers() -> None:
     require(not [key for key in s3.requested if key.endswith("metadata/dbt/manifest.json")], f"a fixed key was read: {s3.requested}")
 
 
+def host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas() -> None:
+    """A chain run saved before the mirror rename fails the dbt step like a missing manifest does: exit 1, no dbt workflow, the earlier Glue step kept."""
+    stale = json.dumps(
+        {
+            "nodes": {
+                "model.hai.int_x": {
+                    "resource_type": "model",
+                    "schema": "hai_mirror_silver",
+                    "compiled_code": 'select * from "hai_lakehouse"."hai_mirror_silver"."t"',
+                }
+            }
+        }
+    ).encode()
+    seen: list[dict[str, Any]] = []
+    s3 = FakeS3(chain_keys(**{f"metadata/dbt/silver/{SILVER_RUN}/manifest.json": stale}))
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        code, _, err = run_host_ingest(args, env, seen.append, s3_client=s3)
+    types = [config["source"]["sourceConfig"]["config"]["type"] for config in seen]
+    require(code == 1 and types == ["DatabaseMetadata"], f"glue ran, dbt did not: code {code}, workflows {types}")
+    require(f"silver/{SILVER_RUN}" in err and "model.hai.int_x" in err and "hai_mirror_silver" in err, err)
+
+
 def host_ingest_never_falls_back_to_latest() -> None:
     """Without FEATURES_RUN, with one that is not a run ID, or with a chain that does not hold, the dbt source stops before any workflow runs."""
     for label, changes, expected in (
@@ -1513,6 +1536,7 @@ CASES: list[Callable[[], None]] = [
     host_ingest_skips_the_bronze_files_when_silver_ran_on_latest,
     chain_refuses_a_missing_or_mismatched_pin,
     host_ingest_ingests_the_three_recorded_layers,
+    host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas,
     host_ingest_never_falls_back_to_latest,
     host_ingest_aims_both_sources_at_the_persistent_catalog,
     host_ingest_refuses_an_unusable_catalog_address,

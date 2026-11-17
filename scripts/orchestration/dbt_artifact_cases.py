@@ -581,6 +581,84 @@ def ingestion_fails_on_an_unreadable_artifact() -> None:
     require(code == 0 and "dbtCatalogFilePath" not in settings and "dbtManifestFilePath" in settings, "a missing catalog.json is left out and the run goes on")
 
 
+def ingest_saved_runs(bucket: WriteOnceBucket) -> tuple[int, str, list[dict[str, Any]]]:
+    """Run the dbt ingestion over the three layer runs in ``bucket`` with the repository config; return its exit code, stderr and workflows."""
+    import contextlib
+    import io
+    import tempfile
+
+    from scripts.infrastructure import openmetadata_ingest
+
+    environment = {"OM_TOKEN": "synthetic-ingestion-credential", "DATA_BUCKET_NAME": "example-private-bucket", "AWS_REGION": "us-west-2"}
+    seen: list[dict[str, Any]] = []
+    errors = io.StringIO()
+    with tempfile.TemporaryDirectory() as folder:
+        layers = [item for layer, run in RUNS.items() for item in ("--dbt-run", f"{layer}={run}")]
+        arguments = ["dbt", "--config-dir", str(ROOT_CONFIG.parent), "--token-env", "OM_TOKEN", "--work-dir", folder, *layers]
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+            code = openmetadata_ingest.main(arguments, environment, seen.append, s3_client=bucket)
+    return code, errors.getvalue(), seen
+
+
+def saved_runs(old_names: bool) -> WriteOnceBucket:
+    """A bucket that holds the three layer runs as a build wrote them: before the mirror databases took plain layer names (``hai_mirror_<layer>``) or after."""
+    import contextlib
+    from unittest.mock import patch
+
+    bucket = WriteOnceBucket()
+    old = {layer: f"hai_mirror_{layer}" for layer in ("bronze", "silver", "gold", "features")}
+    for layer, run in RUNS.items():
+        with patch.object(artifacts, "mirror_schemas", return_value=old) if old_names else contextlib.nullcontext():
+            prefix = f"metadata/dbt/{layer}/{run}/"
+            bucket.objects[prefix + "manifest.json"] = artifacts.encoded(artifacts.rewrite_manifest(manifest(layer), TABLES))
+            bucket.objects[prefix + "catalog.json"] = artifacts.encoded(artifacts.rewrite_catalog(catalog(layer), TABLES))
+    return bucket
+
+
+def ingestion_refuses_artifacts_that_name_the_old_mirror_schemas() -> None:
+    """A saved run from before the rename names ``hai_mirror_<layer>`` in its SQL and relation names. The ingestion refuses it, with a failure exit and before
+    any workflow starts, and names the run and its first node; a run built after the rename still ingests. The stored objects stay as they were."""
+    fresh = saved_runs(old_names=False)
+    before = dict(fresh.objects)
+    code, err, seen = ingest_saved_runs(fresh)
+    require(code == 0 and len(seen) == 3 and fresh.objects == before and not fresh.puts, f"a run built after the rename ingests: code {code}, {err}")
+    old = saved_runs(old_names=True)
+    before = dict(old.objects)
+    code, err, seen = ingest_saved_runs(old)
+    first = f"metadata/dbt/silver/{RUNS['silver']}/"
+    require(code == 1 and not seen, f"a run built before the rename is refused before any workflow: code {code}, {len(seen)} workflows")
+    require(
+        first in err and "model.hai.int_county_values" in err and "hai_mirror_silver" in err,
+        f"the refusal names the run, the first node and the schema: {err!r}",
+    )
+    require(old.objects == before and not old.puts, "the stored objects are never changed")
+    stale = {
+        "node schema": lambda node: node.update(schema="hai_mirror_silver"),
+        "relation name": lambda node: node.update(relation_name='"hai_lakehouse"."hai_mirror_silver"."int_county_values"'),
+        "compiled code": lambda node: node.update(compiled_code='select * from "hai_lakehouse"."hai_mirror_silver"."int_hospital_windows"'),
+        "compiled sql": lambda node: node.update(compiled_sql="select * from hai_lakehouse.hai_mirror_gold.fact_hai_measure"),
+        "unknown schema of the database": lambda node: node.update(compiled_code="select * from hai_lakehouse.old_silver.int_hospital_windows"),
+    }
+    for label, damage in stale.items():
+        bucket = saved_runs(old_names=False)
+        key = f"metadata/dbt/gold/{RUNS['gold']}/manifest.json"
+        document = json.loads(bucket.objects[key])
+        damage(document["nodes"]["model.hai.dim_hospital"])
+        bucket.objects[key] = json.dumps(document).encode()
+        code, err, seen = ingest_saved_runs(bucket)
+        require(
+            code == 1 and not seen and "model.hai.dim_hospital" in err and RUNS["gold"] in err,
+            f"{label}: refused and named: code {code}, {len(seen)} workflows, {err!r}",
+        )
+    bucket = saved_runs(old_names=False)
+    key = f"metadata/dbt/features/{RUNS['features']}/catalog.json"
+    document = json.loads(bucket.objects[key])
+    document["nodes"]["model.hai.feature_matrix_hospital"]["metadata"]["schema"] = "hai_mirror_features"
+    bucket.objects[key] = json.dumps(document).encode()
+    code, err, seen = ingest_saved_runs(bucket)
+    require(code == 1 and not seen and "model.hai.feature_matrix_hospital" in err, f"a stale catalog.json is refused too: code {code}, {err!r}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "every_layer_maps_every_model": every_layer_maps_every_model,
     "rewritten_sql_names_only_published_tables": rewritten_sql_names_only_published_tables,
@@ -599,4 +677,5 @@ CASES: dict[str, Callable[[], None]] = {
     "table_inputs_follow_manifest_dependencies": table_inputs_follow_manifest_dependencies,
     "ingestion_runs_once_per_layer": ingestion_runs_once_per_layer,
     "ingestion_fails_on_an_unreadable_artifact": ingestion_fails_on_an_unreadable_artifact,
+    "ingestion_refuses_artifacts_that_name_the_old_mirror_schemas": ingestion_refuses_artifacts_that_name_the_old_mirror_schemas,
 }

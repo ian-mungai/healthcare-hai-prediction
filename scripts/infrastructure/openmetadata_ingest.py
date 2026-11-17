@@ -4,9 +4,10 @@ Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt --co
 gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. OpenMetadata 2.0.7 has no Iceberg connector, so the
 ``glue`` source reads the tables of every layer, bronze included, from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The
 ``dbt`` source names, in its copy of the manifest, the Glue database of each model and of each bronze source, so that dbt attaches to those tables.
-It refuses a configuration that profiles, samples
-or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside
-the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
+A saved dbt copy that still names a ``hai_mirror_<layer>`` schema (a run from before the rename) is refused with exit 1 before any workflow starts, and is
+never translated. It refuses a configuration that profiles, samples or reads rows before it fills any placeholder, so a value from the environment can never
+switch one on. Some tables can hold personal fields outside the Public research-data scope, which is why this guard exists beside the read-only role and the
+server setting that disables ingestion pipelines.
 Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
 """
 
@@ -63,6 +64,7 @@ DBT_PATH_KEYS = {"catalog.json": "dbtCatalogFilePath", "run_results.json": "dbtR
 SQL_RELATION = re.compile(r'(?<![\w."])"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?')  # a three-part relation of compiled SQL
 DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, in chain order
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
+OLD_MIRROR_PREFIX = "hai_mirror_"  # the Glue databases of the mirror before the rename of Nov 17 2026 (hai_mirror_<layer>)
 DBT_RUN = re.compile(r"^(silver|gold|features)=([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")
 
 
@@ -142,6 +144,59 @@ def fetch_dbt(s3: Any, bucket: str, folder: Path, prefix: str = DBT_PREFIX) -> l
             (folder / name).unlink(missing_ok=True)
             raise FetchFailed(f"{prefix}{name} cannot be read: {type(error).__name__}") from None
     return absent
+
+
+class StaleArtifacts(ValueError):
+    """A downloaded dbt copy names a Glue schema that the mirror config no longer has, so it comes from a run before a rename."""
+
+
+def stale_relation(text: Any, mapping: Mapping[str, Any]) -> str:
+    """The first three-part relation in ``text`` whose schema is a ``hai_mirror_`` one, or is of the mirror's database and not a mirror schema; else ``""``."""
+    schemas = set(mapping["schemas"].values())
+    for match in SQL_RELATION.finditer(text) if isinstance(text, str) else ():
+        database, schema, table = match.groups()
+        if schema.startswith(OLD_MIRROR_PREFIX) or (database == mapping["database"] and schema not in schemas):
+            return f"{database}.{schema}.{table}"
+    return ""
+
+
+def stale_place(database: Any, schema: Any, mapping: Mapping[str, Any]) -> str:
+    """``database.schema`` when a node placed there names a schema the mirror config no longer has; else ``""``."""
+    if isinstance(schema, str) and (
+        schema.startswith(OLD_MIRROR_PREFIX) or (database == mapping["database"] and schema not in set(mapping["schemas"].values()))
+    ):
+        return f"{database}.{schema}"
+    return ""
+
+
+def check_current_names(folder: Path, mapping: Mapping[str, Any]) -> None:
+    """Raise ``StaleArtifacts`` for the first node (in key order) of the downloaded copy that still names a Glue schema outside the mirror config.
+
+    A copy written before the mirror databases took the plain layer names carries ``hai_lakehouse.hai_mirror_<layer>.<table>`` in node placements, relation
+    names and compiled SQL. The connector would parse that SQL for lineage and name deleted entities, so the copy is refused and never translated: only runs
+    built after the rename are valid (owner decision of Nov 17 2026). It reads the manifest, then ``catalog.json`` and ``run_results.json`` when present."""
+    manifest = json.loads((folder / "manifest.json").read_text())
+    for section in ("nodes", "sources"):
+        for key in sorted(manifest.get(section) or {}):
+            node = manifest[section][key]
+            found = stale_place(node.get("database"), node.get("schema"), mapping)
+            for field in ("relation_name", "compiled_code", "compiled_sql"):
+                found = found or stale_relation(node.get(field), mapping)
+            if found:
+                raise StaleArtifacts(f"manifest.json node {key} names {found}")
+    if (folder / "catalog.json").is_file():
+        catalog = json.loads((folder / "catalog.json").read_text())
+        for section in ("nodes", "sources"):
+            for key in sorted(catalog.get(section) or {}):
+                metadata = (catalog[section][key] or {}).get("metadata") or {}
+                found = stale_place(metadata.get("database"), metadata.get("schema"), mapping)
+                if found:
+                    raise StaleArtifacts(f"catalog.json node {key} names {found}")
+    if (folder / "run_results.json").is_file():
+        for item in json.loads((folder / "run_results.json").read_text()).get("results") or []:
+            found = stale_relation(item.get("relation_name"), mapping)
+            if found:
+                raise StaleArtifacts(f"run_results.json node {item.get('unique_id')} names {found}")
 
 
 def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
@@ -276,6 +331,17 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
                 sys.stderr.write(f"openmetadata_ingest: manifest.json is missing from the dbt artifacts of {label} ({prefix})\n")
                 return 1
             if mapping is not None:
+                try:
+                    check_current_names(folder, mapping)
+                except StaleArtifacts as error:
+                    sys.stderr.write(
+                        f"openmetadata_ingest: the dbt artifacts of {label} ({prefix}) are from a run before the mirror rename and are refused, "
+                        f"nothing was sent: {error}. Ingest the dbt artifacts of a run built after the rename.\n"
+                    )
+                    return 1
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                    sys.stderr.write(f"openmetadata_ingest: the dbt artifacts of {label} cannot be read: {type(error).__name__}\n")
+                    return 1
                 try:
                     moved = place_models(folder, mapping)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
