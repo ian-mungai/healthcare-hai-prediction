@@ -53,27 +53,6 @@ MUTATIONS = (
         "portable_helper_names_closed",
     ),
     Mutation(
-        "recovery_sends_signal",
-        "orchestration/worker_recovery.py",
-        "def _utc(",
-        "def recovered_signal(record):\n    os.killpg(record['pgid'], signal.SIGKILL)\n\ndef _utc(",
-        "recovery:recovered_signal:no_signal_or_reap",
-    ),
-    Mutation(
-        "removed_owner_stop_name_sends_signal",
-        "orchestration/worker_recovery.py",
-        "def _utc(",
-        "def owner_stop_confirmed(record):\n    os.killpg(record['pgid'], 9)\n\ndef _utc(",
-        "orchestration/worker_recovery.py:signals_only_in_owned_stop",
-    ),
-    Mutation(
-        "removed_workers_command_name_sends_signal",
-        "orchestration/worker_recovery.py",
-        "def _utc(",
-        "def workers_command(record):\n    os.killpg(record['pgid'], 9)\n\ndef _utc(",
-        "orchestration/worker_recovery.py:signals_only_in_owned_stop",
-    ),
-    Mutation(
         "host_signal_outside_lock",
         "scripts/process_group.py",
         "def group_state(",
@@ -86,36 +65,6 @@ MUTATIONS = (
         'if handle.state == "read_only":',
         'if handle.state == "unreachable_state":',
         "scripts/process_group.py:reaped_state_refuses_signals",
-    ),
-    Mutation(
-        "sweep_sends_signal",
-        "orchestration/worker_recovery.py",
-        "            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "            os.killpg(1, 9)\n            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "recovery:sweep:no_signal_or_reap",
-    ),
-    Mutation(
-        "recovery_bare_killpg",
-        "orchestration/worker_recovery.py",
-        "            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "            from os import killpg as stop_group\n"
-        "            stop_group(1, 9)\n            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "recovery:sweep:no_signal_or_reap",
-    ),
-    Mutation(
-        "recovery_imported_signal_group",
-        "orchestration/worker_recovery.py",
-        "            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "            from scripts.process_group import signal_group\n"
-        "            signal_group(1, 9)\n            _, observations = self.inspect(deadline=deadline, discover=True)",
-        "recovery:sweep:no_signal_or_reap",
-    ),
-    Mutation(
-        "recovery_unused_signal_import",
-        "orchestration/worker_recovery.py",
-        "import os",
-        "import os\nfrom os import killpg as unused_stop",
-        "recovery:signal_imports_closed",
     ),
     Mutation(
         "host_bare_signal_before_lock",
@@ -295,9 +244,9 @@ def run(output: Path) -> dict[str, Any]:
         raise RuntimeError("static_case_loader_unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    bad_subject = run_folder / "recovery_unused_signal_import"
-    normal_rejects = source_checks(bad_subject)["recovery:signal_imports_closed"] is False
-    mutant_accepts = module.source_checks(bad_subject)["recovery:signal_imports_closed"] is True
+    bad_subject = run_folder / "host_catch_all_reaper"
+    normal_rejects = source_checks(bad_subject)["scripts/process_group.py:no_catch_all_reaper"] is False
+    mutant_accepts = module.source_checks(bad_subject)["scripts/process_group.py:no_catch_all_reaper"] is True
     rows.append(
         {
             "name": "test_discards_failures",

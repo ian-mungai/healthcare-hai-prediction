@@ -1276,9 +1276,9 @@ DELETED_MODULE_ROUND_THREE += [
         "deleted module, command in an alert record remains",
         "removed-names",
         False,
-        committed={**DEAD_MODULE, "orchestration/worker_recovery.py": f'ALERT = {{"kind": "unproven", "command": "python -m {DEAD_PATH} workers"}}\n'},
+        committed={**DEAD_MODULE, "orchestration/example_alert.py": f'ALERT = {{"kind": "unproven", "command": "python -m {DEAD_PATH} workers"}}\n'},
         delete=[DEAD_FILE],
-        reason=f"orchestration/worker_recovery.py:1: {DEAD_PATH} {LEFTOVER}",
+        reason=f"orchestration/example_alert.py:1: {DEAD_PATH} {LEFTOVER}",
     ),
     Case(
         "deleted module, command in an f-string remains",

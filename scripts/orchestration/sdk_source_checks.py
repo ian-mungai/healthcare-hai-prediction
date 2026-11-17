@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATHS = (
     "orchestration/worker_protocol.py",
     "orchestration/worker_stderr.py",
-    "orchestration/worker_recovery.py",
     "scripts/process_group.py",
 )
 REAPERS = frozenset({"wait", "waitpid", "waitid", "wait3", "wait4"})
@@ -94,17 +93,4 @@ def source_checks(root: Path = ROOT) -> dict[str, bool]:
     checks["scripts/process_group.py:only_guarded_stop_reaps"] = set(reapers) <= {"stop_owned"}
     helpers = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "_portable"}
     checks["portable_helper_names_closed"] = helpers == {"group_state", "signal_group", "wait_group_gone"}
-    recovery = trees["orchestration/worker_recovery.py"]
-    recovery_aliases = {alias.asname or alias.name: alias.name for node in ast.walk(recovery) if isinstance(node, ast.ImportFrom) for alias in node.names}
-    checks["recovery:signal_imports_closed"] = not any(
-        alias.name in SIGNAL_FUNCTIONS for node in ast.walk(recovery) if isinstance(node, ast.ImportFrom) for alias in node.names
-    )
-    checks["recovery:no_spawner_pid_read"] = not any(
-        (isinstance(node, ast.Attribute) and node.attr in {"marker_parent", "getpid", "getppid"}) or (isinstance(node, ast.Name) and node.id == "marker_parent")
-        for node in ast.walk(recovery)
-    )
-    for function in (node for node in ast.walk(recovery) if isinstance(node, ast.FunctionDef)):
-        checks[f"recovery:{function.name}:no_signal_or_reap"] = not any(
-            isinstance(node, ast.Call) and _call_name(node, recovery_aliases) in SIGNAL_FUNCTIONS for node in ast.walk(function)
-        )
     return checks

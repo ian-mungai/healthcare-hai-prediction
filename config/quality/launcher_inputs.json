@@ -1488,7 +1488,6 @@
     "orchestration/training_contract.py",
     "orchestration/training_render.py",
     "orchestration/worker_protocol.py",
-    "orchestration/worker_recovery.py",
     "orchestration/worker_stderr.py",
     "pyproject.toml",
     "scripts/acquisition/add_reference_plan_version.py",
