@@ -7,9 +7,13 @@ from __future__ import annotations
 import hashlib
 import io
 import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError, ReadTimeoutError
+
+from scripts.lakehouse.catalog_setup_state import client_options
 
 # A synthetic account ID, built at run time so no file holds a twelve-digit number.
 ACCOUNT = "".join(["1"] * 12)
@@ -78,6 +82,7 @@ class FakeHold:
         self.values: dict[str, str] = {}
         self.calls: list[tuple[str, str]] = []
         self.fail_delete = False
+        self.drop_reply = False
 
     def put_parameter(self, **kwargs: Any) -> dict[str, Any]:
         name = kwargs["Name"]
@@ -87,6 +92,8 @@ class FakeHold:
         if name in self.values:
             raise refusal("ParameterAlreadyExists", "PutParameter")
         self.values[name] = kwargs["Value"]
+        if self.drop_reply:
+            raise ConnectionClosedError(endpoint_url="stand-in")
         return {"Version": 1}
 
     def get_parameter(self, **kwargs: Any) -> dict[str, Any]:
@@ -105,6 +112,61 @@ class FakeHold:
         return {}
 
 
+class FakeClock:
+    """A clock that moves only when something sleeps, and runs the events that fall due while it moves."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.events: list[tuple[float, Callable[[], None]]] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def at(self, seconds: float, action: Callable[[], None]) -> None:
+        """Run ``action`` once the clock has moved ``seconds`` from now."""
+        self.events.append((self.now + seconds, action))
+
+    def sleep(self, seconds: float) -> None:
+        target = self.now + seconds
+        for due, action in sorted(self.events, key=lambda item: item[0]):
+            if due <= target:
+                self.now = max(self.now, due)
+                self.events.remove((due, action))
+                action()
+        self.now = target
+
+
+class TimedClients:
+    """The ``clients(service, seconds_left)`` factory of the state code: it records each call with the time left it was given and the read limit that
+    ``client_options`` derives from it and, for a service with a latency above that limit, waits the limit (``block``) and answers with a read timeout."""
+
+    def __init__(self, **services: Any) -> None:
+        self.services = services
+        self.calls: list[tuple[str, str, float, float]] = []
+        self.latency: dict[str, float] = {}
+        self.block = True
+
+    def __call__(self, service: str, left: float) -> Any:
+        owner = self
+
+        class Client:
+            def __getattr__(self, operation: str) -> Callable[..., Any]:
+                target = getattr(owner.services[service], operation)
+
+                def call(**arguments: Any) -> Any:
+                    read = float(client_options(left)["read_timeout"])
+                    owner.calls.append((service, operation, left, read))
+                    if owner.latency.get(service, 0.0) > read:
+                        if owner.block:
+                            time.sleep(read)
+                        raise ReadTimeoutError(endpoint_url="stand-in")
+                    return target(**arguments)
+
+                return call
+
+        return Client()
+
+
 class FakeEcs:
     """The tasks of one cluster. ``tasks`` are task dicts as DescribeTasks answers them; ``fail`` makes the listing fail."""
 
@@ -112,18 +174,24 @@ class FakeEcs:
         self.tasks: list[dict[str, Any]] = []
         self.fail = False
         self.calls: list[str] = []
+        self.missing: set[str] = set()
+        self.silent: set[str] = set()
+        self.lag: dict[str, int] = {}
 
-    def add(self, family: str, last_status: str, desired: str = "RUNNING") -> None:
+    def add(self, family: str, last_status: str, desired: str = "RUNNING") -> str:
+        """Add a task of ``family`` and answer its ARN."""
         number = len(self.tasks) + 1
+        arn = f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/cluster/{number:032x}"
         self.tasks.append(
             {
-                "taskArn": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/cluster/{number:032x}",
+                "taskArn": arn,
                 "group": f"family:{family}",
                 "taskDefinitionArn": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task-definition/{family}:1",
                 "lastStatus": last_status,
                 "desiredStatus": desired,
             }
         )
+        return arn
 
     def list_tasks(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append("list")
@@ -132,6 +200,17 @@ class FakeEcs:
         return {"taskArns": [task["taskArn"] for task in self.tasks if task["desiredStatus"] == kwargs["desiredStatus"]]}
 
     def describe_tasks(self, **kwargs: Any) -> dict[str, Any]:
+        """Tasks as DescribeTasks answers them. An ARN in ``missing`` is answered as a MISSING failure, one in ``silent`` is left out of both lists, and one
+        in ``lag`` is a MISSING failure for that many calls before it is described."""
         self.calls.append("describe")
-        wanted = set(kwargs["tasks"])
-        return {"tasks": [task for task in self.tasks if task["taskArn"] in wanted], "failures": []}
+        found, failures = [], []
+        for task in self.tasks:
+            arn = task["taskArn"]
+            if arn not in kwargs["tasks"] or arn in self.silent:
+                continue
+            if arn in self.missing or self.lag.get(arn, 0) > 0:
+                self.lag[arn] = max(self.lag.get(arn, 0) - 1, 0)
+                failures.append({"arn": arn, "reason": "MISSING"})
+            else:
+                found.append(task)
+        return {"tasks": found, "failures": failures}

@@ -29,7 +29,10 @@ record, for that identity and its exact namespace set before it creates anything
 or duplicate grant stops it before the catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store
 (``principal_credentials``), so a stored pair that Polaris accepts is kept, and a missing, half-written or refused pair is reset (P3 to P5). Updates of
 one principal run one at a time under a leased lock in S3 (P11, ``catalog_setup_state``), taken within the step's deadline before any change. A pair
-reset runs only under the host launch hold, with no job task of the project live (P5).
+reset runs only under the host launch hold (P5): after taking it the task waits the longest time a launch admitted before it can still need to reach
+RunTask, then proves that every job task of the project is confirmed ended, and a task ECS cannot describe counts as unknown and stops the reset. The
+credential deadline starts after that wait. Every S3, ECS, hold and identity call is built with limits no longer than the time left of the step. A pair
+write that may still commit keeps the hold; ``services_apply resolve`` with the token in the failure message clears it.
 """
 
 from __future__ import annotations
@@ -51,11 +54,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_writer, polaris_writer, principal_credentials
-from scripts.lakehouse.catalog_setup_state import CatalogState, LaunchGuard, LaunchSpec, PendingMark, StateError, error_code
+from scripts.lakehouse.catalog_setup_state import RESOLVE, CatalogState, Deadline, LaunchGuard, LaunchSpec, PendingMark, StateError, client_options, error_code
 
 CATALOG = "hai_lakehouse"
 POLARIS_HOST = "127.0.0.1"
@@ -142,6 +146,10 @@ def writable_names() -> frozenset[str]:
     return frozenset(name for pair in configured_pairs().values() for name in pair)
 
 
+class UnconfirmedWrite(secret_store.SecretStoreError):
+    """A pair write that may still commit after the step gave up on it; the launch hold stays until the owner clears it."""
+
+
 class PairVault(secret_store.SecretStore):
     """Parameter Store through the project profile: writes only the fourteen AWS Polaris pair names and reads those and the Polaris root secret."""
 
@@ -197,9 +205,12 @@ class PairVault(secret_store.SecretStore):
             done.wait(WRITE_SETTLE_SECONDS)
         with guard:
             if not done.is_set():
-                self.pending.set()
+                try:
+                    self.pending.set()
+                except StateError as error:
+                    raise UnconfirmedWrite(f"{what} did not finish within its deadline and may still commit; {error}") from None
                 abandoned.append(self.pending)
-                raise secret_store.SecretStoreError(f"{what} did not finish within its deadline and may still commit; reruns refuse until it ends")
+                raise UnconfirmedWrite(f"{what} did not finish within its deadline and may still commit; reruns refuse until it ends")
         if failure:
             raise failure[0]
 
@@ -404,7 +415,7 @@ class Services(Protocol):
     @property
     def guard(self) -> LaunchGuard: ...
 
-    def verify_identity(self) -> None: ...
+    def verify_identity(self, deadline: Deadline) -> None: ...
 
     def root_secret(self) -> str: ...
 
@@ -446,7 +457,7 @@ def step_inspect(services: Services, seconds: float, clock: Clock = time.monoton
     access = root_token(request, secret)
     result: dict[str, Any] = {"catalog": verify_catalog(request, access, services.bucket)}
     if result["catalog"] == "present":
-        result["principals"] = check_principals(request, access, services.state)
+        result["principals"] = check_principals(request, access, services.state.bounded(Deadline(deadline, clock)))
         result["causes"] = stored_pair_causes(request, vault, result["principals"])
     return result
 
@@ -606,6 +617,7 @@ def ensure_principal(
     bucket: str,
     state: CatalogState,
     guard: LaunchGuard,
+    deadline: Deadline,
 ) -> dict[str, Any]:
     """Set up one identity in order: namespaces, roles, grants, grant comparison, role assignment, credentials, principal assignment."""
     role = PRINCIPALS[identity]
@@ -641,18 +653,24 @@ def ensure_principal(
     def check(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 204)) -> None:
         ensure_status(status, action, allowed)
 
-    hold = min(request.deadline, request.clock() + HOLD_SECONDS)
     try:
-        with guard.no_live_writer_try():
-            outcome = principal_credentials.ensure_credentials(
-                principal=role,
-                names=configured_pairs()[identity],
-                vault=vault.bounded(hold, request.clock, pending=state.pending(role)),
-                request=request.bounded(hold),
-                access=access,
-                check=check,
-                lock=contextlib.nullcontext(),
-            )
+        with guard.no_live_writer_try(deadline) as hold:
+            until = min(request.deadline, request.clock() + HOLD_SECONDS)
+            try:
+                outcome = principal_credentials.ensure_credentials(
+                    principal=role,
+                    names=configured_pairs()[identity],
+                    vault=vault.bounded(until, request.clock, pending=state.pending(role)),
+                    request=request.bounded(until),
+                    access=access,
+                    check=check,
+                    lock=contextlib.nullcontext(),
+                )
+            except UnconfirmedWrite as error:
+                hold.keep()
+                raise UnconfirmedWrite(
+                    f"{error}; the host launch hold stays so no job starts on an unknown pair: clear it with {RESOLVE} {hold.token}"
+                ) from None
     except principal_credentials.CredentialError as error:
         raise SetupError("credentials", str(error)) from None
     status, _ = request("PUT", f"{MANAGEMENT}/principals/{role}/principal-roles", access, body={"principalRole": {"name": role}})
@@ -677,7 +695,9 @@ def step_principal(services: Services, identity: str, approval_id: str | None, s
     if identity not in PRINCIPALS:
         raise SetupError("principal", f"unknown identity {identity}")
     deadline = clock() + seconds
-    state = services.state
+    bound = Deadline(deadline, clock)
+    state = services.state.bounded(bound)
+    services.guard.require_room(bound)
     approval = approval_for(state, identity, approval_id)
     role = PRINCIPALS[identity]
     wait = min(principal_credentials.LOCK_WAIT_SECONDS, check_deadline(deadline, clock))
@@ -688,7 +708,7 @@ def step_principal(services: Services, identity: str, approval_id: str | None, s
         secret = services.root_secret()
         request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
         access = root_token(request, secret)
-        return ensure_principal(request, access, identity, approval, vault, bucket=services.bucket, state=state, guard=services.guard)
+        return ensure_principal(request, access, identity, approval, vault, bucket=services.bucket, state=state, guard=services.guard, deadline=bound)
 
 
 def check_principals(request: Request, access: str, state: CatalogState) -> dict[str, str]:
@@ -756,6 +776,10 @@ class HostServices:
     def client(self, name: str) -> Any:
         return self.session.client(name, config=secret_store.client_config())
 
+    def bounded_client(self, name: str, left: float) -> Any:
+        """A client whose connect and read limits are no longer than the seconds left of the step."""
+        return self.session.client(name, config=Config(**client_options(left)))
+
     @property
     def bucket(self) -> str:
         return self.settings["DATA_BUCKET_NAME"]
@@ -770,17 +794,20 @@ class HostServices:
 
     @functools.cached_property
     def state(self) -> CatalogState:
-        return CatalogState(self.client("s3"), self.bucket)
+        return CatalogState(self.bounded_client, self.bucket)
 
     @functools.cached_property
     def guard(self) -> LaunchGuard:
         spec = LaunchSpec(self.settings["CATALOG_SETUP_LOCK_PARAMETER"], self.settings["CATALOG_SETUP_CLUSTER"], self.settings["CATALOG_SETUP_FAMILY_PREFIX"])
-        return LaunchGuard(self.client("ssm"), self.client("ecs"), spec)
+        return LaunchGuard(self.bounded_client, spec)
 
-    def verify_identity(self) -> None:
+    def verify_identity(self, deadline: Deadline) -> None:
         """Any caller that is not the task's own role stops the task before a Parameter Store, S3 or catalog call (P2)."""
         try:
-            arn = str(self.client("sts").get_caller_identity()["Arn"])
+            left = deadline.left("the caller identity")
+            arn = str(self.bounded_client("sts", left).get_caller_identity()["Arn"])
+        except StateError as error:
+            raise SetupError("deadline", str(error)) from None
         except (ClientError, BotoCoreError, KeyError) as error:
             raise SetupError(
                 "identity", f"the caller identity could not be read ({error_code(error) if isinstance(error, ClientError | BotoCoreError) else 'KeyError'})"
@@ -813,14 +840,16 @@ def parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
     if args.seconds <= 0:
         raise SetupError("deadline", "--seconds must be positive")
-    services.verify_identity()
+    deadline = Deadline.after(args.seconds)
+    services.verify_identity(deadline)
+    left = deadline.left("the step")
     if args.step == "catalog":
-        return step_catalog(services, args.seconds)
+        return step_catalog(services, left)
     if args.step == "principal":
-        return step_principal(services, args.identity, args.namespace_approval, args.seconds)
+        return step_principal(services, args.identity, args.namespace_approval, left)
     if args.step == "inspect":
-        return step_inspect(services, args.seconds)
-    return step_check(services, args.seconds)
+        return step_inspect(services, left)
+    return step_check(services, left)
 
 
 def main(argv: list[str] | None = None, services: Services | None = None) -> int:

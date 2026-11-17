@@ -32,9 +32,10 @@ from botocore.exceptions import ClientError
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
+from scripts.lakehouse import catalog_setup_state as state_module
 from scripts.lakehouse import polaris_writer, principal_credentials
-from scripts.lakehouse.catalog_setup_stand_in import ACCOUNT, FakeEcs, FakeHold, FakeS3
-from scripts.lakehouse.catalog_setup_state import CatalogState, LaunchGuard, LaunchSpec
+from scripts.lakehouse.catalog_setup_stand_in import ACCOUNT, FakeClock, FakeEcs, FakeHold, FakeS3, TimedClients
+from scripts.lakehouse.catalog_setup_state import CatalogState, Deadline, LaunchGuard, LaunchSpec, StateError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -239,11 +240,15 @@ class Services:
     bucket = BUCKET
     region = REGION
 
-    def __init__(self, ssm: StandIn, polaris: Polaris, denied: frozenset[str] = frozenset()) -> None:
+    def __init__(self, ssm: StandIn, polaris: Polaris, denied: frozenset[str] = frozenset(), drain: float = 0.0) -> None:
+        """``drain`` is the wait after the hold is taken; most cases use none, and the cases of the launch race use the real one on a clock that moves only
+        when something sleeps."""
         self.ssm, self.polaris, self.denied = ssm, polaris, denied
         self.s3, self.hold, self.ecs = FakeS3(), FakeHold(), FakeEcs()
-        self.state = CatalogState(self.s3, BUCKET)
-        self.guard = LaunchGuard(self.hold, self.ecs, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX))
+        self.time = FakeClock()
+        self.clients = TimedClients(s3=self.s3, ssm=self.hold, ecs=self.ecs)
+        self.state = CatalogState(self.clients, BUCKET)
+        self.guard = LaunchGuard(self.clients, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX), drain=drain, clock=self.time, sleep=self.time.sleep)
         self.decryption: list[bool] = []
         self.refused: list[str] = []
         self.verified: list[bool] = []
@@ -252,7 +257,7 @@ class Services:
     def polaris_port(self) -> int:
         return self.polaris.port
 
-    def verify_identity(self) -> None:
+    def verify_identity(self, deadline: Deadline) -> None:
         self.verified.append(True)
 
     def root_secret(self) -> str:
@@ -407,9 +412,9 @@ def case_stalled_catalog(_: Path) -> dict[str, bool]:
         }
 
 
-def case_identity_refused(_: Path) -> dict[str, bool]:
-    """P2: a caller that is not the task's own role stops the task before any Parameter Store, S3, ECS or catalog call; missing settings stop it first."""
-    environment = {
+def host_environment() -> dict[str, str]:
+    """The environment of the catalog setup task, as its task definition sets it."""
+    return {
         "DATA_BUCKET_NAME": BUCKET,
         "AWS_REGION": REGION,
         "CATALOG_SETUP_ROLE_ARN": ROLE_ARN,
@@ -418,10 +423,15 @@ def case_identity_refused(_: Path) -> dict[str, bool]:
         "CATALOG_SETUP_FAMILY_PREFIX": FAMILY_PREFIX,
         "POLARIS_ROOT_SECRET": "root-" + secrets.token_hex(8),
     }
+
+
+def case_identity_refused(_: Path) -> dict[str, bool]:
+    """P2: a caller that is not the task's own role stops the task before any Parameter Store, S3, ECS or catalog call; missing settings stop it first."""
+    environment = host_environment()
     made: list[str] = []
 
-    def client_of(caller: str) -> Callable[[Any, str], Any]:
-        def client(_services: Any, name: str) -> Any:
+    def client_of(caller: str) -> Callable[[Any, str, float], Any]:
+        def client(_services: Any, name: str, _left: float) -> Any:
             made.append(name)
             return mock.Mock(get_caller_identity=lambda: {"Arn": caller})
 
@@ -430,28 +440,28 @@ def case_identity_refused(_: Path) -> dict[str, bool]:
     other = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_admin_dev/session"
     own = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_catalog_setup_task_dev/0123456789abcdef"
     checks: dict[str, bool] = {}
-    with mock.patch.object(setup.HostServices, "client", client_of(other)):
+    with mock.patch.object(setup.HostServices, "bounded_client", client_of(other)):
         services = setup.HostServices(environment)
         code, out, err = run_main(["check"], services)
         OUTPUTS.append(out + err)
         checks["another role stops the task"] = code == 1 and "(identity)" in err
         checks["only the identity call was made"] = made == ["sts"]
     made.clear()
-    with mock.patch.object(setup.HostServices, "client", client_of(own)):
-        setup.HostServices(environment).verify_identity()
+    with mock.patch.object(setup.HostServices, "bounded_client", client_of(own)):
+        setup.HostServices(environment).verify_identity(Deadline.after(30))
         checks["the task's own role passes"] = made == ["sts"]
-    with mock.patch.object(setup.HostServices, "client", client_of(own[:-1] + "x/")):
+    with mock.patch.object(setup.HostServices, "bounded_client", client_of(own[:-1] + "x/")):
         look_alike = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_catalog_setup_task_dev_extra/session"
-        with mock.patch.object(setup.HostServices, "client", client_of(look_alike)):
+        with mock.patch.object(setup.HostServices, "bounded_client", client_of(look_alike)):
             try:
-                setup.HostServices(environment).verify_identity()
+                setup.HostServices(environment).verify_identity(Deadline.after(30))
                 checks["a role with the same prefix is refused"] = False
             except setup.SetupError as error:
                 checks["a role with the same prefix is refused"] = error.code == "identity"
     for name in ("CATALOG_SETUP_LOCK_PARAMETER", "POLARIS_ROOT_SECRET"):
         trimmed = {key: value for key, value in environment.items() if key != name}
         try:
-            setup.HostServices(trimmed).verify_identity() if name != "POLARIS_ROOT_SECRET" else setup.HostServices(trimmed).root_secret()
+            setup.HostServices(trimmed).verify_identity(Deadline.after(30)) if name != "POLARIS_ROOT_SECRET" else setup.HostServices(trimmed).root_secret()
             checks[f"a missing {name} is refused"] = False
         except setup.SetupError as error:
             checks[f"a missing {name} is refused"] = error.code in ("settings", "authentication")
@@ -592,6 +602,14 @@ def principal(services: Services, root: str, identity: str, approval: str | None
     return result
 
 
+def principal_seconds(services: Services, root: str, identity: str, seconds: float) -> tuple[int, str, str]:
+    """One principal step with its own step deadline."""
+    SECRETS_SEEN.append(root)
+    code, out, err = run_main(["--seconds", str(seconds), "principal", "--identity", identity], services)
+    OUTPUTS.append(out + err)
+    return code, out, err
+
+
 def stored_pair(ssm: StandIn, identity: str) -> tuple[str | None, str | None]:
     names = setup.configured_pairs()[identity]
     return ssm.values.get(names[0]), ssm.values.get(names[1])
@@ -649,6 +667,7 @@ def case_put_fails(_: Path) -> dict[str, bool]:
         second = principal(services, root, "reader")
         return {
             "the first run fails": first[0] == 1,
+            "a failed write that is confirmed releases the hold": LOCK_PARAMETER not in services.hold.values,
             "a pair had been issued": lost[1] is not None,
             "the rerun resets the credentials": second[0] == 0 and (outcome(second[1]) or {}).get("credentials") == "credentials reset",
             "the stored pair is the live pair": stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
@@ -791,7 +810,10 @@ def case_principal_lock(_: Path) -> dict[str, bool]:
     """P11: a second update of the same principal waits for the lease at most its bound, then stops without issuing or writing a pair."""
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        with services.state.lease(setup.PRINCIPALS["reader"], wait=1.0, hold=600.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
+        with (
+            services.state.bounded(Deadline.after(60)).lease(setup.PRINCIPALS["reader"], wait=1.0, hold=600.0),
+            mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3),
+        ):
             began = time.monotonic()
             code, _out, err = principal(services, root, "reader")
             took = time.monotonic() - began
@@ -970,9 +992,14 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
     write can never overwrite the pair a later run stored."""
     role = setup.PRINCIPALS["reader"]
     secret_name = setup.configured_pairs()["reader"][1]
-    args = ["--seconds", "1", "principal", "--identity", "reader"]
+    args = ["principal", "--identity", "reader"]
     checks: dict[str, bool] = {}
-    with catalog_world() as (ssm, polaris, root), mock.patch.object(setup, "WRITE_SETTLE_SECONDS", STALL_SECONDS * 2, create=True):
+    # The write deadline is the credential phase's own window, which these cases shorten; the step deadline stays long, so a loaded machine cannot cut it.
+    with (
+        catalog_world() as (ssm, polaris, root),
+        mock.patch.object(setup, "WRITE_SETTLE_SECONDS", STALL_SECONDS * 2, create=True),
+        mock.patch.object(setup, "HOLD_SECONDS", 1.0),
+    ):
         services = Services(ssm, polaris)
         principal(services, root, "reader")
         del ssm.values[secret_name]
@@ -988,9 +1015,15 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
             release.set()
             first.join(STALL_SECONDS * 3)
         rerun = principal(services, root, "reader")
-        checks["the confirmed late write fails its run"] = bool(result) and result[0][0] == 1
+        checks["a late write that is confirmed finished leaves a pair Polaris accepts"] = (
+            bool(result) and result[0][0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
+        )
         checks["a rerun after a confirmed write succeeds with a working pair"] = rerun[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
-    with catalog_world() as (ssm, polaris, root), mock.patch.object(setup, "WRITE_SETTLE_SECONDS", 0.3, create=True):
+    with (
+        catalog_world() as (ssm, polaris, root),
+        mock.patch.object(setup, "WRITE_SETTLE_SECONDS", 0.3, create=True),
+        mock.patch.object(setup, "HOLD_SECONDS", 1.0),
+    ):
         services = Services(ssm, polaris)
         principal(services, root, "reader")
         del ssm.values[secret_name]
@@ -1000,12 +1033,17 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
             refused = principal(services, root, "reader")
             checks["an unconfirmed write fails its run"] = first_run[0] == 1 and not finished.is_set()
             checks["the unconfirmed write left a pending mark"] = services.state.key("pending", role) in services.s3.objects
+            checks["the hold stays after a write that may still commit"] = LOCK_PARAMETER in services.hold.values
+            checks["the failure names the command that clears the hold"] = (
+                "services_apply resolve" in first_run[2] and services.hold.values.get(LOCK_PARAMETER, "?") in first_run[2]
+            )
             checks["a rerun while the write may commit is refused before any reset"] = (
                 refused[0] == 1 and "(credentials)" in refused[2] and len(polaris.issued) == issued
             )
             release.set()
             finished.wait(STALL_SECONDS)
             time.sleep(0.2)
+        resolve_hold(services)
         ended = principal(services, root, "reader")
         checks["the ended write cleared its mark"] = services.state.key("pending", role) not in services.s3.objects
         checks["once the write has ended a rerun succeeds with a working pair"] = ended[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
@@ -1165,7 +1203,7 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
         held, release = threading.Event(), threading.Event()
 
         def hold() -> None:
-            with services.state.lease(setup.PRINCIPALS["reader"], wait=5.0, hold=600.0):
+            with services.state.bounded(Deadline.after(60)).lease(setup.PRINCIPALS["reader"], wait=5.0, hold=600.0):
                 held.set()
                 release.wait(0.7)
 
@@ -1196,11 +1234,11 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
 def case_lease_takeover(_: Path) -> dict[str, bool]:
     """P11: a lease is created once, refuses a second holder until its own expiry, is replaced only after that expiry and only at the version that was read,
     and is released only at the version its holder created; nothing is ever deleted."""
-    from scripts.lakehouse.catalog_setup_state import CatalogState, StateError
-
     clock = [1000.0]
     s3 = FakeS3()
-    state = CatalogState(s3, BUCKET, clock=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    state = CatalogState(
+        TimedClients(s3=s3), BUCKET, deadline=Deadline.after(3600), clock=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
     key = state.key("locks", "r")
     checks: dict[str, bool] = {}
     with state.lease("r", wait=1.0, hold=10.0):
@@ -1233,30 +1271,254 @@ def case_lease_takeover(_: Path) -> dict[str, bool]:
 
 
 def case_launch_hold(_: Path) -> dict[str, bool]:
-    """P5: the hold is created without overwrite with the setup's own token, is deleted only while it still holds that token, and a hold that cannot be
-    released is reported with the command that clears it."""
-    from scripts.lakehouse.catalog_setup_state import LaunchGuard, LaunchSpec, StateError
+    """P5: the hold is created without overwrite with a token that services_apply resolve accepts, is deleted only while it still holds that token, stays
+    when the caller keeps it, and a hold that cannot be released is reported with the command that clears it."""
+    from scripts.infrastructure import services_apply
 
-    hold, ecs = FakeHold(), FakeEcs()
-    guard = LaunchGuard(hold, ecs, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX))
+    hold, ecs, clock = FakeHold(), FakeEcs(), FakeClock()
+    guard = LaunchGuard(TimedClients(ssm=hold, ecs=ecs), LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX), drain=0.0, clock=clock, sleep=clock.sleep)
+    deadline = Deadline.after(600)
     checks: dict[str, bool] = {}
-    with guard.no_live_writer_try():
+    with guard.no_live_writer_try(deadline) as held:
         token = hold.values.get(LOCK_PARAMETER, "")
-        checks["the hold holds a setup token while the step runs"] = token.startswith("catalog_setup-") and len(token) > 20
+        checks["the hold token is one that services_apply resolve accepts"] = token == held.token and services_apply.TOKEN.fullmatch(token) is not None
         hold.values[LOCK_PARAMETER] = "apply-token"
     checks["a hold that another party replaced is left alone"] = hold.values.get(LOCK_PARAMETER) == "apply-token"
     hold.values.clear()
-    with guard.no_live_writer_try():
+    with guard.no_live_writer_try(deadline):
         pass
     checks["a held run deletes its own hold"] = LOCK_PARAMETER not in hold.values and ("delete", LOCK_PARAMETER) in hold.calls
+    with guard.no_live_writer_try(deadline) as kept:
+        kept.keep()
+    checks["a kept hold stays after the step"] = LOCK_PARAMETER in hold.values
+    hold.values.clear()
+    hold.drop_reply = True
+    try:
+        with guard.no_live_writer_try(deadline):
+            pass
+        checks["a hold created without an answer is released by its token"] = False
+    except StateError as error:
+        checks["a hold created without an answer is released by its token"] = error.unconfirmed and LOCK_PARAMETER not in hold.values
+    hold.drop_reply = False
     hold.fail_delete = True
     try:
-        with guard.no_live_writer_try():
+        with guard.no_live_writer_try(deadline):
             pass
-        checks["a hold that cannot be released is reported"] = False
+        checks["a hold that cannot be released is reported with its clearing command"] = False
     except StateError as error:
-        checks["a hold that cannot be released is reported"] = error.code == "writer_try" and "services_apply resolve" in str(error)
+        checks["a hold that cannot be released is reported with its clearing command"] = (
+            error.code == "writer_try" and "services_apply resolve" in str(error) and hold.values.get(LOCK_PARAMETER, "?") in str(error)
+        )
     return checks
+
+
+def launcher_window() -> float:
+    """The longest time from the start of a launch's hold read to the answer of its RunTask, read from the launcher's own constants: the send boundary's
+    authorization window plus the RunTask client's connect and read limits."""
+    from orchestration import ecs_adapter, ecs_preflight
+
+    config: Any = ecs_adapter.send_config()
+    return float(ecs_preflight.SEND_AUTHORIZATION_SECONDS + config.connect_timeout + config.read_timeout)
+
+
+def force_reset(ssm: StandIn, identity: str = "bronze") -> None:
+    """Remove the stored client secret, so the next run of the identity must reset the pair."""
+    ssm.values.pop(setup.configured_pairs()[identity][1], None)
+
+
+def resolve_hold(services: Services) -> None:
+    """Clear the launch hold, when there is one, with the real ``services_apply resolve`` and the token the hold holds, as the owner does."""
+    from scripts.infrastructure import services_apply
+
+    parameter = {"value": services_apply.LAUNCH_HOLD_CLEAR}
+
+    def delete() -> None:
+        services.hold.values.pop(LOCK_PARAMETER, None)
+
+    store = services_apply.LockStore(
+        create=lambda value: services.hold.values.__setitem__(LOCK_PARAMETER, value),
+        get=lambda: services.hold.values.get(LOCK_PARAMETER),
+        delete=delete,
+    )
+    steps = services_apply.Steps(
+        put=lambda value: parameter.update(value=value), get=lambda: parameter["value"], stable=lambda: True, lock=store, report=lambda line: None
+    )
+    if LOCK_PARAMETER in services.hold.values:
+        steps.resolve("checked that no catalog setup task runs", services.hold.values[LOCK_PARAMETER])
+
+
+def case_launch_race(_: Path) -> dict[str, bool]:
+    """P5: a launch that read the hold as clear just before it was set can still send RunTask afterwards. The reset waits the launcher's whole window after
+    the hold, a task that appears in that window stops the reset, and the reset never starts sooner than the window after the hold."""
+    window = launcher_window()
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        services = Services(ssm, polaris, drain=state_module.DRAIN_SECONDS)
+        first = principal(services, root, "bronze")
+        held = live_pair(polaris, "bronze")
+        seen: dict[str, float] = {}
+        real_put, real_ensure = services.hold.put_parameter, principal_credentials.ensure_credentials
+
+        def note_put(**arguments: Any) -> Any:
+            seen["hold"] = services.time.now
+            return real_put(**arguments)
+
+        def note_ensure(**arguments: Any) -> Any:
+            seen["reset"] = services.time.now
+            return real_ensure(**arguments)
+
+        force_reset(ssm)
+
+        def launch_appears() -> None:
+            services.ecs.add(FAMILY_PREFIX + "bronze_host", "RUNNING")
+
+        services.time.at(10.0, launch_appears)
+        with mock.patch.object(principal_credentials, "ensure_credentials", note_ensure), mock.patch.object(services.hold, "put_parameter", note_put):
+            racing = principal(services, root, "bronze")
+        entered = "reset" in seen
+        kept = live_pair(polaris, "bronze") == held
+        released = LOCK_PARAMETER not in services.hold.values
+        services.ecs.tasks.clear()
+        seen.clear()
+        with mock.patch.object(principal_credentials, "ensure_credentials", note_ensure), mock.patch.object(services.hold, "put_parameter", note_put):
+            ended = principal(services, root, "bronze")
+        return {
+            "the first run succeeds": first[0] == 0,
+            "a launch admitted before the hold appears during the wait and stops the run": racing[0] == 1
+            and "(writer_try)" in racing[2]
+            and "no confirmed end" in racing[2],
+            "the reset region was never entered": not entered,
+            "the live pair was not reset": kept,
+            "the hold was released": released,
+            "the reset starts only after the launcher's whole window past the hold": ended[0] == 0 and seen.get("reset", 0.0) - seen.get("hold", 0.0) >= window,
+        }
+
+
+def case_unconfirmed_describe(_: Path) -> dict[str, bool]:
+    """P5: a job task that ECS lists but cannot describe, answers with no state or names no family is unknown, and unknown is never safe: the step waits a
+    bound for it and then stops before any reset. A task that is described as ended, or that becomes describable, lets the reset go ahead."""
+    family = FAMILY_PREFIX + "bronze_host"
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        services = Services(ssm, polaris, drain=0.0)
+        principal(services, root, "bronze")
+        held = live_pair(polaris, "bronze")
+        force_reset(ssm)
+        arn = services.ecs.add(family, "STOPPED", desired="STOPPED")
+        services.ecs.missing.add(arn)
+        began = services.time.now
+        missing = principal(services, root, "bronze")
+        waited = services.time.now - began
+        services.ecs.missing.clear()
+        services.ecs.silent.add(arn)
+        silent = principal(services, root, "bronze")
+        services.ecs.silent.clear()
+        services.ecs.tasks.append({"taskArn": arn + "x", "lastStatus": "RUNNING", "desiredStatus": "RUNNING"})
+        nameless = principal(services, root, "bronze")
+        services.ecs.tasks.pop()
+        kept = live_pair(polaris, "bronze") == held
+        services.ecs.lag[arn] = 2
+        lagging = principal(services, root, "bronze")
+        force_reset(ssm)
+        services.ecs.tasks.clear()
+        services.ecs.add(family, "DELETED", desired="STOPPED")
+        deleted = principal(services, root, "bronze")
+        return {
+            "a task described as MISSING stops the reset": missing[0] == 1 and "(writer_try)" in missing[2] and "could not be confirmed ended" in missing[2],
+            "the step waited its bound for the task": waited >= state_module.UNKNOWN_WAIT_SECONDS,
+            "a listed task that the description leaves out stops the reset": silent[0] == 1 and "could not be confirmed ended" in silent[2],
+            "a task that names no family and no group stops the reset": nameless[0] == 1 and "could not be confirmed ended" in nameless[2],
+            "the live pair was never reset by an unknown": kept,
+            "a task that becomes describable inside the bound lets the reset go ahead": lagging[0] == 0
+            and (outcome(lagging[1]) or {}).get("credentials") == "credentials reset",
+            "a DELETED task is ended": deleted[0] == 0,
+            "the hold is released after each stopped run": LOCK_PARAMETER not in services.hold.values,
+        }
+
+
+def case_hold_recovery(_: Path) -> dict[str, bool]:
+    """A setup that dies with the hold taken leaves a token that services_apply resolve accepts. A rerun names the holder and the command, leaves the hold
+    alone, and after the real resolve with that token the setup works again."""
+    from scripts.infrastructure import services_apply
+
+    with catalog_world() as (ssm, polaris, root):
+        polaris.namespaces |= set(setup.namespace_set("bronze"))
+        services = Services(ssm, polaris)
+        force_reset(ssm)
+        with mock.patch.object(LaunchGuard, "release", lambda self, token: None):
+            crashed = principal(services, root, "bronze")
+        leftover = services.hold.values.get(LOCK_PARAMETER, "")
+        blocked = principal(services, root, "bronze")
+        unchanged = services.hold.values.get(LOCK_PARAMETER) == leftover
+        services.hold.values[LOCK_PARAMETER] = "other.host:42:20261117T200000Z:0123abcd"
+        applying = principal(services, root, "bronze")
+        services.hold.values[LOCK_PARAMETER] = leftover
+        resolve_hold(services)
+        cleared = LOCK_PARAMETER not in services.hold.values
+        again = principal(services, root, "bronze")
+        return {
+            "the run that died left its token": crashed[0] == 0
+            and services_apply.TOKEN.fullmatch(leftover) is not None
+            and leftover.startswith("catalog-setup:"),
+            "a rerun is refused and names the leftover holder": blocked[0] == 1 and "(writer_try)" in blocked[2] and leftover in blocked[2],
+            "the refusal gives the clearing command with the token": "services_apply resolve" in blocked[2] and f"--token {leftover}" in blocked[2],
+            "the leftover hold is not touched by the refused rerun": unchanged,
+            "a hold of a services apply is named as such": applying[0] == 1 and "a services apply holds" in applying[2],
+            "the real resolve clears the leftover hold": cleared,
+            "the setup works again after the resolve": again[0] == 0 and LOCK_PARAMETER not in services.hold.values,
+        }
+
+
+def case_state_deadline(_: Path) -> dict[str, bool]:
+    """Every wait has a deadline: the S3, hold and ECS calls are built with limits no longer than the time left and none starts after it. A stalled S3 stops
+    a one-second step at about one second, a stalled ECS listing stops the reset and frees the hold, and a step with no room for the launch wait changes
+    nothing."""
+    with catalog_world() as (ssm, polaris, root):
+        stalled = Services(ssm, polaris)
+        stalled.clients.latency["s3"] = 30.0
+        began = time.monotonic()
+        code, out, err = run_main(["--seconds", "1", "principal", "--identity", "reader"], stalled)
+        took = time.monotonic() - began
+        OUTPUTS.append(out + err)
+        SECRETS_SEEN.append(root)
+        s3_calls = [call for call in stalled.clients.calls if call[0] == "s3"]
+        checks = {
+            "a stalled S3 stops the step on its deadline": code == 1 and "(deadline)" in err,
+            "it stops within a quarter of a second of the deadline": took < 1.25,
+            "every S3 call was limited to the time left": bool(s3_calls) and all(0 < call[3] <= 1.0 for call in s3_calls),
+            "nothing was written": not stalled.s3.objects and ssm.writes() == 0 and not polaris.principal_roles,
+        }
+        scan = Services(ssm, polaris)
+        scan.clients.latency["ecs"] = 30.0
+        scan.clients.block = False
+        scanned = principal(scan, root, "reader")
+        checks["a stalled ECS listing stops the reset"] = scanned[0] == 1 and "(writer_try)" in scanned[2] and "no answer" in scanned[2]
+        checks["the hold is released after the stalled listing"] = LOCK_PARAMETER not in scan.hold.values
+        checks["no pair was issued under the stalled listing"] = not polaris.issued
+        checks["every ECS and hold call was limited to its bound"] = all(
+            call[3] <= state_module.READ_SECONDS for call in scan.clients.calls if call[0] in ("ecs", "ssm")
+        )
+        short = Services(ssm, polaris, drain=state_module.DRAIN_SECONDS)
+        roles = len(polaris.principal_roles)
+        calls = len(polaris.calls)
+        tight = principal_seconds(short, root, "reader", 5)
+        checks["a step with no room for the launch wait is refused"] = tight[0] == 1 and "(writer_try)" in tight[2] and "no time to wait" in tight[2]
+        checks["it changed nothing and took no hold"] = len(polaris.principal_roles) == roles and len(polaris.calls) == calls and not short.hold.calls
+        return checks
+
+
+def case_drain_matches_launcher(_: Path) -> dict[str, bool]:
+    """The wait after the hold is read from the launcher: at least its send authorization window plus the RunTask connect and read limits, the same
+    30 seconds the services apply waits, and the wait the task's guard uses."""
+    from scripts.infrastructure import services_apply
+
+    window = launcher_window()
+    guard = setup.HostServices(host_environment()).guard
+    return {
+        "the wait is longer than the launcher's time from admission to RunTask": window < state_module.DRAIN_SECONDS,
+        "the wait equals the services apply settle window": state_module.DRAIN_SECONDS == services_apply.HOLD_SETTLE_SECONDS,
+        "the task's guard uses that wait": guard.drain == state_module.DRAIN_SECONDS,
+    }
 
 
 def case_import_closure(_: Path) -> dict[str, bool]:
@@ -1362,6 +1624,11 @@ CASES: dict[str, Case] = {
     "check_never_decrypts": case_check_never_decrypts,
     "lease_takeover": case_lease_takeover,
     "launch_hold": case_launch_hold,
+    "launch_race": case_launch_race,
+    "unconfirmed_describe": case_unconfirmed_describe,
+    "hold_recovery": case_hold_recovery,
+    "state_deadline": case_state_deadline,
+    "drain_matches_launcher": case_drain_matches_launcher,
     "import_closure": case_import_closure,
 }
 
@@ -1388,6 +1655,7 @@ def run_cases(out: Path, deadline: float) -> dict[str, dict[str, bool]]:
 
 
 ORIGINAL_READ = CatalogState.read
+ORIGINAL_SCAN = LaunchGuard.scan
 
 
 def expired_read(self: CatalogState, key: str) -> Any:
@@ -1396,84 +1664,192 @@ def expired_read(self: CatalogState, key: str) -> Any:
     return None if found is None else ({**found[0], "expires_at": 0}, found[1])
 
 
-def unversioned_replace(self: CatalogState, key: str, document: dict[str, Any], version: str) -> str:
+def unversioned_replace(self: CatalogState, key: str, document: dict[str, Any], version: str, *, window: Deadline | None = None) -> str:
     """A replace that ignores the version it is given."""
-    return str(self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(document).encode())["ETag"])
+    return str(self.call("put_object", window=window, Key=key, Body=json.dumps(document).encode())["ETag"])
 
 
-# Each planted defect and the case that must fail when it is in place.
-MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[Any]]]] = {
-    "the location check accepts any catalog": ("catalog_differs", lambda: mock.patch.object(setup, "matches", lambda body, bucket: True)),
+def unconditional_release(self: LaunchGuard, token: str) -> None:
+    """A release that deletes the hold whoever holds it, with the error translation of the real one."""
+    window = Deadline.after(state_module.RELEASE_SECONDS, self.clock)
+    try:
+        self.call("ssm", "delete_parameter", window, Name=self.spec.lock_parameter)
+    except (ClientError, StateError):
+        raise StateError("writer_try", f"the host launch hold stays; clear it with {state_module.RESOLVE} {token}") from None
+
+
+def scan_without_unknown(self: LaunchGuard, deadline: Deadline) -> tuple[int, int]:
+    """A scan that counts only the tasks it could describe."""
+    return ORIGINAL_SCAN(self, deadline)[0], 0
+
+
+def unlimited_left(self: Deadline, what: str) -> float:
+    """A deadline that never runs out and gives every call the full limits."""
+    return 1000.0
+
+
+def keep_nothing(self: state_module.Hold) -> None:
+    """A hold that is released whatever the caller asked."""
+
+
+# Each planted defect: the case that must fail, the check of that case that must be the one that fails, and the plant. The case must end without an error,
+# so a defect that breaks the call it plants into is not counted as caught.
+Plant = Callable[[], contextlib.AbstractContextManager[Any]]
+MUTATIONS: dict[str, tuple[str, str, Plant]] = {
+    "the location check accepts any catalog": (
+        "catalog_differs",
+        "the error names the location check",
+        lambda: mock.patch.object(setup, "matches", lambda body, bucket: True),
+    ),
     "the check reads with decryption": (
         "check_metadata",
+        "no read asked for decryption",
         lambda: mock.patch.object(
             setup.PairVault, "describe", lambda self, name: {"name": name, "present": self.find(name) is not None, "type": "SecureString", "version": 1}
         ),
     ),
-    "the vault writes any name": ("vault_scope", lambda: mock.patch.object(setup.PairVault, "check", staticmethod(lambda name, write=False: None))),
-    "the identity is not verified": ("identity_refused", lambda: mock.patch.object(setup.HostServices, "verify_identity", lambda self: None)),
-    "a conflict is a failure": ("create_conflict", lambda: mock.patch.object(setup, "verify_catalog", lambda *a: "absent")),
-    "the grant comparison is skipped": ("extra_grant", lambda: mock.patch.object(setup, "compare_grants", lambda *a: None)),
+    "the vault writes any name": (
+        "vault_scope",
+        "the Mac, root and other names are refused",
+        lambda: mock.patch.object(setup.PairVault, "check", staticmethod(lambda name, write=False: None)),
+    ),
+    "the identity is not verified": (
+        "identity_refused",
+        "another role stops the task",
+        lambda: mock.patch.object(setup.HostServices, "verify_identity", lambda self, deadline: None),
+    ),
+    "a conflict is a failure": (
+        "create_conflict",
+        "the outcome is already present",
+        lambda: mock.patch.object(setup, "verify_catalog", lambda request, access, bucket: "absent"),
+    ),
+    "the grant comparison is skipped": (
+        "extra_grant",
+        "the step fails on the grants",
+        lambda: mock.patch.object(setup, "compare_grants", lambda request, access, role, expected: None),
+    ),
     "absent namespaces need no approval": (
         "namespace_needs_approval",
+        "the step fails on the approval",
         lambda: mock.patch.object(setup, "approval_for", lambda state, identity, approval_id: setup.Approval("any", identity, setup.namespace_set(identity))),
     ),
-    "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(CatalogState, "record_approval", lambda self, identity, document: None)),
+    "the approval is not recorded": (
+        "namespace_approval",
+        "the record names the approval and the exact set",
+        lambda: mock.patch.object(CatalogState, "record_approval", lambda self, identity, document: None),
+    ),
     "the approval may be replaced": (
         "namespace_approval",
+        "every write of the record is a create only",
         lambda: mock.patch.object(
-            CatalogState, "create", lambda self, key, document: self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(document).encode())["ETag"]
+            CatalogState, "create", lambda self, key, document: self.call("put_object", Key=key, Body=json.dumps(document).encode())["ETag"]
         ),
     ),
-    "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
+    "a working pair is always reset": (
+        "rerun_keeps_pair",
+        "the rerun keeps the pair",
+        lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda request, principal, client_id, client_secret: False),
+    ),
     "the request read has no absolute expiry": (
         "request_expiry",
+        "the trickling peer fails the request on its deadline",
         lambda: mock.patch.object(setup, "threading", mock.Mock(Event=threading.Event, Timer=lambda *a, **k: mock.Mock())),
     ),
     "the principal lock is not taken first": (
         "lock_before_changes",
-        lambda: mock.patch.object(CatalogState, "lease", lambda *a, **k: contextlib.nullcontext()),
+        "the refusal identifies the principal lock",
+        lambda: mock.patch.object(CatalogState, "lease", lambda self, role, *, wait, hold: contextlib.nullcontext()),
     ),
-    "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
+    "role memberships are not checked": (
+        "extra_role_membership",
+        "an extra catalog role stops the reader",
+        lambda: mock.patch.object(setup, "verify_memberships", lambda request, access, identity, exact=False: None),
+    ),
     "missing role assignments are accepted": (
         "missing_role_assignment",
+        "a missing principal role assignment is reported as differing",
         lambda: mock.patch.object(setup, "verify_memberships", lambda request, access, identity, exact=False: None),
     ),
     "a late credential write is abandoned": (
         "late_credential_write",
+        "the run waits for its write to be confirmed",
         lambda: mock.patch.object(
             setup.PairVault, "put", lambda self, name, value: self.within_deadline(lambda: secret_store.SecretStore.put(self, name, value), name)
         ),
     ),
     "the stored pair is not verified": (
         "stored_pair_mismatch",
-        lambda: mock.patch.multiple(setup, verify_stored_pair=lambda *a, **k: None, stored_pair_causes=lambda *a, **k: {}),
+        "a late write inside a run fails it with the named cause",
+        lambda: mock.patch.multiple(
+            setup,
+            verify_stored_pair=lambda request, vault, identity: None,
+            stored_pair_causes=lambda request, vault, principals: {},
+        ),
     ),
     "live writer tries are not checked": (
         "live_writer_try",
-        lambda: mock.patch.object(LaunchGuard, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext()),
+        "a live job task stops the rerun",
+        lambda: mock.patch.object(LaunchGuard, "no_live_writer_try", lambda self, deadline: contextlib.nullcontext(state_module.Hold("x"))),
     ),
-    "a live lease is taken over": ("lease_takeover", lambda: mock.patch.object(CatalogState, "read", expired_read)),
-    "a lease is replaced without its version": ("lease_takeover", lambda: mock.patch.object(CatalogState, "replace", unversioned_replace)),
+    "a live lease is taken over": ("lease_takeover", "a live lease refuses a second holder", lambda: mock.patch.object(CatalogState, "read", expired_read)),
+    "a lease is replaced without its version": (
+        "lease_takeover",
+        "of two takers of the same version only one wins",
+        lambda: mock.patch.object(CatalogState, "replace", unversioned_replace),
+    ),
     "the hold is released without its token": (
         "launch_hold",
-        lambda: mock.patch.object(LaunchGuard, "release", lambda self, token: self.ssm.delete_parameter(Name=self.spec.lock_parameter)),
+        "a hold that another party replaced is left alone",
+        lambda: mock.patch.object(LaunchGuard, "release", unconditional_release),
+    ),
+    "no wait follows the hold": (
+        "launch_race",
+        "a launch admitted before the hold appears during the wait and stops the run",
+        lambda: mock.patch.object(state_module, "DRAIN_SECONDS", 0.0),
+    ),
+    "the wait is shorter than the launcher's window": (
+        "drain_matches_launcher",
+        "the wait is longer than the launcher's time from admission to RunTask",
+        lambda: mock.patch.object(state_module, "DRAIN_SECONDS", 10.0),
+    ),
+    "a task ECS cannot describe is safe": (
+        "unconfirmed_describe",
+        "a task described as MISSING stops the reset",
+        lambda: mock.patch.object(LaunchGuard, "scan", scan_without_unknown),
+    ),
+    "a hold with a malformed token": (
+        "launch_hold",
+        "the hold token is one that services_apply resolve accepts",
+        lambda: mock.patch.object(state_module, "new_token", lambda: "catalog_setup-0123456789abcdef0123456789abcdef"),
+    ),
+    "the hold is released after a write that may still commit": (
+        "late_credential_write",
+        "the hold stays after a write that may still commit",
+        lambda: mock.patch.object(state_module.Hold, "keep", keep_nothing),
+    ),
+    "calls ignore the time left": ("state_deadline", "every S3 call was limited to the time left", lambda: mock.patch.object(Deadline, "left", unlimited_left)),
+    "a leftover hold is not named": (
+        "hold_recovery",
+        "a rerun is refused and names the leftover holder",
+        lambda: mock.patch.object(LaunchGuard, "held_by_another", lambda self, deadline: "the host launch hold is held"),
     ),
 }
 
 
 def run_mutations(out: Path, deadline: float) -> dict[str, dict[str, Any]]:
+    """Plant each defect and run its case. A defect is caught only when the case ends without an error and the intended check is among the failed ones."""
     found: dict[str, dict[str, Any]] = {}
-    for label, (intended, plant) in MUTATIONS.items():
+    for label, (intended, check, plant) in MUTATIONS.items():
         folder = out / f"mutation_{len(found)}"
         folder.mkdir(mode=0o700)
+        error = ""
         with plant():
-            case = CASES[intended]
             try:
-                checks = case(folder)
-            except Exception as error:
-                checks = {f"ended with {type(error).__name__}": False}
-        found[label] = {"intended_case": intended, "caught": not all(checks.values()), "failed_checks": [name for name, ok in checks.items() if not ok]}
+                checks = CASES[intended](folder)
+            except Exception as raised:
+                checks, error = {}, type(raised).__name__
+        failed = [name for name, ok in checks.items() if not ok]
+        found[label] = {"intended_case": intended, "intended_check": check, "caught": not error and check in failed, "failed_checks": failed, "error": error}
         if time.monotonic() >= deadline:
             break
     return found
@@ -1515,7 +1891,7 @@ def main() -> int:
         for check, ok in checks.items():
             sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}: {check}\n")
     for label, item in mutations.items():
-        sys.stdout.write(f"{'CAUGHT' if item['caught'] else 'MISSED'} {label} (case {item['intended_case']})\n")
+        sys.stdout.write(f"{'CAUGHT' if item['caught'] else 'MISSED'} {label} (case {item['intended_case']}: {item['intended_check']})\n")
     sys.stdout.write(f"aws catalog setup e2e: {'passed' if passed else 'failed'}; report {out / 'report.json'}\n")
     return 0 if passed else 1
 
