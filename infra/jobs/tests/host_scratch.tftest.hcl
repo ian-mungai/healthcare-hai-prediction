@@ -70,6 +70,7 @@ variables {
   serve_manifest_prefix                 = "serving/deployments"
   layer_feast_redis_host                = "10.0.1.20"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
+  mlflow_metadata_reader_password_name  = "/example_project/mlflow_metadata_reader_password"
   host_private_ip                       = "10.0.1.20"
   host_repo_path                        = "/data/repo"
   layer_jobs_enabled                    = true
@@ -274,7 +275,7 @@ run "the_cleanup_keeps_the_phase_command_and_follows_only_its_success" {
   assert {
     condition = (
       jsondecode(output.host_container_definitions["metadata"])[1].name == "ingest" &&
-      jsondecode(output.host_container_definitions["metadata"])[1].command[0] == "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt raw_files) && find /workspace /tmp -mindepth 1 -delete" &&
+      jsondecode(output.host_container_definitions["metadata"])[1].command[0] == "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt raw_files mlflow mlmodel_edges) && find /workspace /tmp -mindepth 1 -delete" &&
       jsondecode(output.host_container_definitions["metadata"])[1].dependsOn == [{ containerName = "init", condition = "SUCCESS" }]
     )
     error_message = "The metadata ingestion command is unchanged inside the group, joined to the cleanup with &&, and it waits for the init step."

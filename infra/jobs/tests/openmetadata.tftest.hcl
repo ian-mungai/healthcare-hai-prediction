@@ -23,12 +23,13 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   host_job_memory_mib                   = 23552
   # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
-  host_capacity_binding             = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
-  host_jobs_enabled                 = true
-  host_jobs                         = ["metadata"]
-  host_private_ip                   = "10.0.1.20"
-  host_repo_path                    = "/data/repo"
-  openmetadata_ingestion_token_name = "/example_project/openmetadata_bot_ingestion"
+  host_capacity_binding                = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  host_jobs_enabled                    = true
+  host_jobs                            = ["metadata"]
+  host_private_ip                      = "10.0.1.20"
+  host_repo_path                       = "/data/repo"
+  openmetadata_ingestion_token_name    = "/example_project/openmetadata_bot_ingestion"
+  mlflow_metadata_reader_password_name = "/example_project/mlflow_metadata_reader_password"
   openmetadata_images = {
     ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   }

@@ -275,7 +275,8 @@
         "ingest": [
           "RUN_ID",
           "POLARIS_URI",
-          "FEATURES_RUN"
+          "FEATURES_RUN",
+          "MLFLOW_TRACKING_URI"
         ]
       },
       "chain": true

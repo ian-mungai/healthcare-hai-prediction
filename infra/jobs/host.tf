@@ -200,7 +200,7 @@ locals {
       user                   = "10001:0" # group 0 reads the image's Python environment, which the airflow user's home folder keeps at mode 770 airflow:root; boto3 and the metadata command are there
       workingDirectory       = local.host_repo_mount
       entryPoint             = ["sh", "-c"]
-      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt raw_files"]
+      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt raw_files mlflow mlmodel_edges"]
       stopTimeout            = 60
       linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
@@ -212,9 +212,14 @@ locals {
         # The ID of the features run whose chain the dbt source ingests. The launch fills it from the metadata DAG's required features_run parameter; the task
         # refuses an empty value and never falls back to a latest run (scripts/infrastructure/openmetadata_host_ingest.py).
         { name = "FEATURES_RUN", value = "" },
+        # The MLflow source and the model edge step read the registry as the read-only metadata_reader: the launch fills the registry address (the host's private
+        # address on port 5100), the user name is fixed here and the password is the secret below (scripts/infrastructure/mlflow_reader_setup.py creates both).
+        { name = "MLFLOW_TRACKING_URI", value = "" },
+        { name = "MLFLOW_TRACKING_USERNAME", value = "metadata_reader" },
       ])
       secrets = [
         { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
+        { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_metadata_reader_password_name}" },
       ]
       mountPoints      = concat(local.host_metadata_mounts, [{ sourceVolume = "repo", containerPath = local.host_repo_mount, readOnly = true }])
       logConfiguration = local.host_metadata_log
@@ -283,7 +288,7 @@ locals {
     drift        = local.drift_run_variables
     promote      = { for step in local.promote_steps : step.name => step.variables if length(step.variables) > 0 }
     serve        = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
-    metadata     = { ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] }
+    metadata     = { ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN", "MLFLOW_TRACKING_URI"] }
   }
   host_dry_run = {
     silver   = { variable = "LAYER_DRY_RUN", value = "1" }

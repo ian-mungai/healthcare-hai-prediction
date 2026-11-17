@@ -95,7 +95,8 @@
         "ingest": [
           "RUN_ID",
           "POLARIS_URI",
-          "FEATURES_RUN"
+          "FEATURES_RUN",
+          "MLFLOW_TRACKING_URI"
         ]
       },
       "log_container": "ingest",

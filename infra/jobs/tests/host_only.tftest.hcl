@@ -69,6 +69,7 @@ variables {
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
+  mlflow_metadata_reader_password_name  = "/example_project/mlflow_metadata_reader_password"
   host_private_ip                       = "10.0.1.20"
   host_repo_path                        = "/data/repo"
   layer_jobs_enabled                    = true

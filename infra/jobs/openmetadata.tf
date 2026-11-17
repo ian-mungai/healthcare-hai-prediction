@@ -10,6 +10,18 @@ variable "openmetadata_ingestion_token_name" {
   }
 }
 
+variable "mlflow_metadata_reader_password_name" {
+  description = "Parameter Store SecureString name of the password of the read-only MLflow user metadata_reader, which the MLflow source and the model edge step of the metadata host task read the registry with. The execution role injects it. The owner step scripts/infrastructure/mlflow_reader_setup.py writes it. Terraform references the name and never reads a value."
+  type        = string
+  default     = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
+  nullable    = false
+
+  validation {
+    condition     = !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) || var.mlflow_metadata_reader_password_name == "/${var.project_name}/mlflow_metadata_reader_password"
+    error_message = "Inject only the project metadata reader password parameter."
+  }
+}
+
 variable "openmetadata_images" {
   description = "Ingestion image URI from the project ECR repository <project>_openmetadata_ingestion_<environment>, pinned by digest. The metadata host task needs only this image. The ARM64 host runs it, so it must list linux/arm64."
   type        = map(string)

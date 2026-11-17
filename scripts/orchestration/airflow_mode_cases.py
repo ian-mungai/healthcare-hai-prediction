@@ -2840,7 +2840,7 @@ def metadata_uses_the_host_containers() -> None:
         require(current.step("metadata_run") == "succeeded", "the metadata job did not pass")
     values = rig.environment()
     require(
-        values == {"ingest": {"RUN_ID": run, "POLARIS_URI": POLARIS, "FEATURES_RUN": features_run}},
+        values == {"ingest": {"RUN_ID": run, "POLARIS_URI": POLARIS, "FEATURES_RUN": features_run, "MLFLOW_TRACKING_URI": MLFLOW}},
         f"the metadata overrides are not the host container's, with the features run of the form: {values}",
     )
     for missing in (None, "latest", "", "20261104T120000Z-feed0001"):

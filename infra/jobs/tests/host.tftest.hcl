@@ -69,6 +69,7 @@ variables {
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
+  mlflow_metadata_reader_password_name  = "/example_project/mlflow_metadata_reader_password"
   host_private_ip                       = "10.0.1.20"
   host_repo_path                        = "/data/repo"
   layer_jobs_enabled                    = true
@@ -430,7 +431,7 @@ run "run_task_and_dispatch_contract" {
       alltrue([for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] :
         output.host_run_tasks[family].container_environment == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[family].containers
       ]) &&
-      jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] })
+      jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN", "MLFLOW_TRACKING_URI"] })
     )
     error_message = "The host entries cover exactly the families of the job table and name the container variables of that table."
   }
@@ -588,7 +589,7 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
   assert {
     condition = (
       one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://10.0.1.20:8585/api" &&
-      toset([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.name]) == toset(["OM_INGESTION_TOKEN"]) &&
+      toset([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.name]) == toset(["OM_INGESTION_TOKEN", "MLFLOW_TRACKING_PASSWORD"]) &&
       one([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.valueFrom if item.name == "OM_INGESTION_TOKEN"]) ==
       "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_ingestion"
     )
@@ -597,11 +598,22 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[1].secrets : item.valueFrom if item.name == "MLFLOW_TRACKING_PASSWORD"]) ==
+      "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/mlflow_metadata_reader_password" &&
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "MLFLOW_TRACKING_USERNAME"]) == "metadata_reader" &&
+      one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "MLFLOW_TRACKING_URI"]) == "" &&
+      !anytrue([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.name == "MLFLOW_TRACKING_PASSWORD"])
+    )
+    error_message = "The ingestion container reads the registry as the read-only metadata_reader: the password is a Parameter Store secret, never a plain variable, and the launch fills the registry address."
+  }
+
+  assert {
+    condition = (
       jsondecode(output.host_container_definitions["metadata"])[1].entryPoint == ["sh", "-c"] &&
-      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt raw_files)") &&
+      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt raw_files mlflow mlmodel_edges)") &&
       jsondecode(output.host_container_definitions["metadata"])[1].workingDirectory == "/opt/hai/repo"
     )
-    error_message = "The container runs the host ingestion script from the mounted checkout for the Glue mirror and dbt sources."
+    error_message = "The container runs the host ingestion script from the mounted checkout for the Glue mirror, dbt, raw files, MLflow and model edge sources."
   }
 
   assert {
@@ -696,6 +708,18 @@ run "the_repository_path_is_absolute_and_clean" {
   }
 
   expect_failures = [var.host_repo_path]
+}
+
+run "the_registry_reader_password_is_the_project_reader_parameter" {
+  command = plan
+
+  variables {
+    host_jobs_enabled                    = true
+    host_jobs                            = ["metadata"]
+    mlflow_metadata_reader_password_name = "/example_project/mlflow_admin_password"
+  }
+
+  expect_failures = [var.mlflow_metadata_reader_password_name]
 }
 
 run "the_ingestion_token_is_the_project_bot_parameter" {
