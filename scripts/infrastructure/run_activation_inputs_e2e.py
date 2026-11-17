@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from scripts.infrastructure.run_e2e import SERVICES_FOUNDATION
+from scripts.infrastructure.synthetic_workspace import add_repository_files
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,8 @@ SOURCES = (
     "scripts/infrastructure/terraform.sh",
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/capture_reader.py",
+    "scripts/infrastructure/stack_settings.py",
+    "scripts/infrastructure/synthetic_workspace.py",
     "scripts/infrastructure/render_jobs_config.py",
     "scripts/infrastructure/render_platform_config.py",
     "data_contracts/infrastructure/jobs_preparation.schema.json",
@@ -381,6 +384,11 @@ RENDERED_INPUTS = {
         "streamlit_task_role_arn",
     },
     "jobs": {
+        "aws_polaris_reader_client_id_name",
+        "aws_polaris_reader_client_secret_name",
+        "drift_mlflow_password_name",
+        "mlflow_admin_password_name",
+        "openmetadata_ingestion_token_name",
         "drift_images",
         "drift_roles",
         "images",
@@ -474,6 +482,7 @@ class Workspace:
                 target = self.root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
+        add_repository_files(self.root)
         self.environment_file = self.root / "synthetic_environment.txt"
         self.environment_file.write_text(
             "AWS_REGION=us-west-2\nAWS_PROFILE=example_project_dev\nAWS_ACCOUNT_ID=111111111111\n"
@@ -488,6 +497,7 @@ class Workspace:
             'sys.stdout.write(json.dumps({"Account": "111111111111", "Arn": "arn:aws:iam::111111111111:user/example_project_dev"}))\n'
         )
         (self.tools / "aws").chmod(0o700)
+        (self.tools / "git").symlink_to(shutil.which("git") or "/usr/bin/git")
         (self.tools / "dirname").symlink_to("/usr/bin/dirname")
         (self.tools / "bash").symlink_to("/bin/bash")
         self.plan = self.root / "standin_plan.json"

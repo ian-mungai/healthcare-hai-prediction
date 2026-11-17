@@ -10,7 +10,8 @@ One services apply runs at a time, across machines: ``lock`` creates the apply l
 stack, default ``/healthcare_hai_prediction/services_apply_lock``) without overwrite, valued with a unique token, before the hold. While another apply
 holds it AWS refuses the create and the apply does not start. ``settle`` and ``resolve`` delete the lock only with its own token.
 
-The hold is one Parameter Store value, ``host_launch_hold_parameter_name`` of the services stack (default ``/healthcare_hai_prediction/host_launch_hold``).
+The hold is one Parameter Store value, ``host_launch_hold_parameter_name`` of the services stack (default ``/healthcare_hai_prediction/host_launch_hold``,
+and ``/<PROJECT_NAME>/host_launch_hold`` for another project, which the renderers also put into that stack's inputs).
 It is not managed by Terraform, so no apply can clear it. ``clear`` lets host launches run; any other value, or no parameter, holds them: the launch
 preflight refuses every host launch, and the fit probe rereads the hold before every RunTask. This command writes any other value as one JSON object with
 separate fields (``state``, ``by``, ``at``, ``reason`` and, for a host job cap change, ``frozen``), so the preflight needs no parser and reason text is only
@@ -119,6 +120,7 @@ from orchestration.ecs_preflight import LAUNCH_HOLD_CLEAR
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure.host_session import tolerant_runner
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
+from scripts.infrastructure.stack_settings import parameter_name
 
 SERVICES_VARIABLES = REPO_ROOT / "infra" / "services" / "variables.tf"
 IAM_LAUNCH_VARIABLES = REPO_ROOT / "infra" / "iam" / "airflow_launch.tf"
@@ -369,22 +371,16 @@ class HoldStoreError(Exception):
         super().__init__(f"Parameter Store: {code}")
 
 
-def hold_parameter_name() -> str:
-    """The launch hold parameter name: the default of ``host_launch_hold_parameter_name`` in the services stack, which also renders it into the
-    Airflow environment."""
-    match = re.search(r'variable "host_launch_hold_parameter_name" \{.*?default\s*=\s*"([^"]+)"', SERVICES_VARIABLES.read_text(), re.DOTALL)
-    if match is None:
-        raise ConfigurationError(f"{SERVICES_VARIABLES.name} has no default for host_launch_hold_parameter_name")
-    return match.group(1)
+def hold_parameter_name(project: str) -> str:
+    """The launch hold parameter name of the project: the default of ``host_launch_hold_parameter_name`` in the services stack in the project's namespace,
+    the name the services render also puts into the Airflow environment."""
+    return parameter_name(SERVICES_VARIABLES, "host_launch_hold_parameter_name", project)
 
 
-def lock_parameter_name() -> str:
-    """The apply lock parameter name: the default of ``services_apply_lock_parameter_name`` in the IAM stack, which grants the project user its
-    create, read and delete."""
-    match = re.search(r'variable "services_apply_lock_parameter_name" \{.*?default\s*=\s*"([^"]+)"', IAM_LAUNCH_VARIABLES.read_text(), re.DOTALL)
-    if match is None:
-        raise ConfigurationError(f"{IAM_LAUNCH_VARIABLES.name} has no default for services_apply_lock_parameter_name")
-    return match.group(1)
+def lock_parameter_name(project: str) -> str:
+    """The apply lock parameter name of the project: the default of ``services_apply_lock_parameter_name`` in the IAM stack in the project's namespace,
+    which the IAM stack grants the project user to create, read and delete."""
+    return parameter_name(IAM_LAUNCH_VARIABLES, "services_apply_lock_parameter_name", project)
 
 
 def new_token() -> str:
@@ -677,7 +673,7 @@ def open_steps() -> Steps:
     outputs, only when ``settle`` or ``resolve`` first calls it."""
     settings, _ = load_configuration(REPO_ROOT / ".env")
     cli = AwsCli(settings, tolerant_runner)
-    name = hold_parameter_name()
+    name = hold_parameter_name(settings["project_name"])
 
     def call(operation: str, arguments: list[str]) -> dict[str, Any]:
         try:
@@ -696,7 +692,7 @@ def open_steps() -> Steps:
                 return None
             raise
 
-    lock_name = lock_parameter_name()
+    lock_name = lock_parameter_name(settings["project_name"])
 
     def lock_call(operation: str, arguments: list[str]) -> dict[str, Any]:
         try:

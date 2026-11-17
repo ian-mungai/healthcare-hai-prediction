@@ -1973,15 +1973,16 @@ OWN_SIZES = {
 }
 SET_PEAKS_MIB = {"m1": 1348, "m2": 8976, "m3": 1844, "m4": 8969, "m5": 1613, "m6": 2215}
 # The capacity of the r7g.xlarge host as the services stack computes it: 4096 CPU units less the services' 1024 leave 3072 for jobs; 32768 MiB usable less
-# the 2048 system reserve and the 3904 service reservations leave the 26816 MiB job cap. A pool slot is 128 CPU units, so the pool has 24 slots.
+# the 2048 system reserve and the 7920 service reservations (every default service on) leave the 22800 MiB job cap. A pool slot is 128 CPU units, so the
+# pool has 24 slots.
 POOL_ENVIRONMENT = {
     "HAI_LAUNCH_POOL": "host_jobs",
     "HAI_LAUNCH_POOL_SLOTS": "24",
     "HAI_LAUNCH_POOL_SLOT_CPU_UNITS": "128",
-    "HAI_LAUNCH_HOST_JOB_CAP_MIB": "26816",
+    "HAI_LAUNCH_HOST_JOB_CAP_MIB": "22800",
 }
 JOB_ROOM_CPU = 3072
-JOB_ROOM_MIB = 26816
+JOB_ROOM_MIB = 22800
 
 
 def model_sets_have_their_own_families() -> None:

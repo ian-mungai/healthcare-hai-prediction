@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import systemd_model
+from scripts.infrastructure.stack_settings import INFRA, project_parameter_values
+from scripts.infrastructure.synthetic_workspace import add_repository_files
 from scripts.process import LaunchPool, TimeoutExpired, run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +37,8 @@ SOURCE_PATHS = (
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/render_platform_config.py",
     "scripts/infrastructure/capture_reader.py",
+    "scripts/infrastructure/stack_settings.py",
+    "scripts/infrastructure/synthetic_workspace.py",
     "scripts/infrastructure/render_project_config.sh",
     "scripts/infrastructure/terraform.sh",
     "config/aws/iam_preparation.json",
@@ -1604,9 +1608,32 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
     )
 
 
+def services_environment_inputs() -> dict[str, Any]:
+    """The services inputs the renderer builds from the fixture .env for the synthetic project: its task roles, its buckets, the model API addresses and its
+    Parameter Store names."""
+    account, project, bucket = FIXTURE["AWS_ACCOUNT_ID"], FIXTURE["PROJECT_NAME"], FIXTURE["S3_BUCKET"]
+    roles = {
+        "airflow_launch_task_role_arn": "airflow_launch_task",
+        "code_fetch_task_role_arn": "host_code_fetch_task",
+        "mlflow_task_role_arn": "mlflow_task",
+        "model_api_task_role_arn": "model_api_task",
+        "openmetadata_task_role_arn": "openmetadata_host_task",
+        "serving_execution_role_arn": "serving_execution",
+        "streamlit_task_role_arn": "streamlit_task",
+    }
+    return {
+        **{name: f"arn:aws:iam::{account}:role/{project}_{role}_dev" for name, role in roles.items()},
+        **dict.fromkeys(("airflow_launch_bucket_name", "code_bucket_name", "mlflow_artifact_bucket"), bucket),
+        "model_api_manifest_uri": f"s3://{bucket}/serving/deployments",
+        "model_api_registry_uri": f"s3://{bucket}/lakehouse/feast/registry.pb",
+        **project_parameter_values(INFRA / "services", project),
+    }
+
+
 def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str) -> None:
     """Exercise services rendering and the actual wrapper with synthetic platform outputs and command stand-ins."""
     workspace = copied_workspace(evidence.temporary, "services", sources, FIXTURE).resolve()
+    add_repository_files(workspace)
     # The launch hold steps that terraform.sh runs around a services apply: a stand-in that records them and makes no AWS call
     # (scripts/infrastructure/run_services_apply_e2e.py checks the real steps).
     (workspace / "scripts/infrastructure/services_apply.py").write_text(
@@ -1623,6 +1650,7 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         (tools / name).write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
         (tools / name).chmod(0o700)
     (tools / "dirname").symlink_to("/usr/bin/dirname")
+    (tools / "git").symlink_to(shutil.which("git") or "/usr/bin/git")
     environment = {
         "PATH": str(tools),
         "AWS_ACCESS_KEY_ID": DISCLOSURE_SENTINEL,
@@ -1640,6 +1668,7 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         "expected_account_id": "111111111111",
         "project_name": "example_project",
         **SERVICES_FOUNDATION,
+        **services_environment_inputs(),
     }
     renderer = [sys.executable, "-m", "scripts.infrastructure.render_platform_config", "--stack", "services"]
     wrapper = [bash, "scripts/infrastructure/terraform.sh", "--services"]

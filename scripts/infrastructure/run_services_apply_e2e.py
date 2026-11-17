@@ -30,8 +30,10 @@ from unittest import mock
 from scripts.process import CompletedProcess
 
 ROOT = Path(__file__).resolve().parents[2]
-HOLD = "/healthcare_hai_prediction/host_launch_hold"
-LOCK = "/healthcare_hai_prediction/services_apply_lock"
+DEFAULT_HOLD = "/healthcare_hai_prediction/host_launch_hold"
+DEFAULT_LOCK = "/healthcare_hai_prediction/services_apply_lock"
+HOLD = "/example_project/host_launch_hold"
+LOCK = "/example_project/services_apply_lock"
 OWN_LOCK = "this-host:1:20261110T221000Z:12345678"  # an apply lock value in the token shape, not a credential
 TOKEN = re.compile(r"[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}")
 
@@ -189,8 +191,9 @@ def the_hold_name_is_the_terraform_default() -> None:
     pattern = r'variable "host_launch_hold_parameter_name" \{.*?default\s*=\s*"([^"]+)"'
     for path in ("infra/services/variables.tf", "infra/iam/airflow_launch.tf"):
         match = re.search(pattern, (ROOT / path).read_text(), re.DOTALL)
-        require(match is not None and match.group(1) == HOLD, f"{path} does not default the hold name to {HOLD}")
-    require(module.hold_parameter_name() == HOLD, f"the command writes {module.hold_parameter_name()}, not {HOLD}")
+        require(match is not None and match.group(1) == DEFAULT_HOLD, f"{path} does not default the hold name to {DEFAULT_HOLD}")
+    require(module.hold_parameter_name("healthcare_hai_prediction") == DEFAULT_HOLD, "the command does not write the committed default for the default project")
+    require(module.hold_parameter_name("example_project") == HOLD, f"the command writes {module.hold_parameter_name('example_project')}, not {HOLD}")
 
 
 SETTINGS = {
@@ -1276,8 +1279,9 @@ def the_lock_name_is_the_terraform_default() -> None:
     match = re.search(
         r'variable "services_apply_lock_parameter_name" \{.*?default\s*=\s*"([^"]+)"', (ROOT / "infra/iam/airflow_launch.tf").read_text(), re.DOTALL
     )
-    require(match is not None and match.group(1) == LOCK, f"infra/iam/airflow_launch.tf does not default the lock name to {LOCK}")
-    require(getattr(module, "lock_parameter_name", lambda: None)() == LOCK, "the command does not create the lock the IAM stack grants")
+    require(match is not None and match.group(1) == DEFAULT_LOCK, f"infra/iam/airflow_launch.tf does not default the lock name to {DEFAULT_LOCK}")
+    require(module.lock_parameter_name("healthcare_hai_prediction") == DEFAULT_LOCK, "the command does not create the lock the IAM stack grants")
+    require(module.lock_parameter_name("example_project") == LOCK, "the command does not create the lock of another project")
 
 
 def settle_requires_and_checks_its_token() -> None:

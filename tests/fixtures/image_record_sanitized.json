@@ -1,0 +1,11 @@
+{
+  "image_digests": {
+    "analytics": "sha256:88243fe377164917b522f9d1d606beebd7f6a4c1dc56d662c057d7b0a85f07c1",
+    "drift": "sha256:b74f5fe0a6082f4cb24bf3d2117faeae1c3ece090033a55fc3f1ccab16465520",
+    "feature_store": "sha256:35b02cbb97aef0d50fbc0e2457fac24e9b592a4e3fa19c4c471ce710bd2bd02f",
+    "openmetadata_ingestion": "sha256:cd28c0b1f64b9c3581badf996f7fef6ffea3918754d588095b2f04a8c9f3dca4",
+    "quality": "sha256:77c5c82d3fcca00be3eb520cf2a5b2eda65131de27d122f15e7e6dc42d1561fe",
+    "spark": "sha256:e02db9a05f04aac58a2720b2ae9af1063649d10a775bba198b399851a85ac9ad",
+    "training": "sha256:62324d75421fa1fd4f8cb45221fe3a48ac46582c261f49bf8d60d0083d5736b6"
+  }
+}

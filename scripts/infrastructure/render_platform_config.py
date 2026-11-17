@@ -22,6 +22,7 @@ from scripts.infrastructure.render_project_config import (
     verify_project_identity,
     write_or_check,
 )
+from scripts.infrastructure.stack_settings import INFRA, project_parameter_values, require_local_override
 from scripts.process import TimeoutExpired, run_command
 
 PLATFORM_DIRECTORY = REPO_ROOT / "infra" / "platform"
@@ -109,14 +110,15 @@ def alerts_values(storage: dict[str, str], env_file: Path) -> dict[str, Any]:
     return {**platform_values(storage), "alerts_topic_arn": topic["value"], **load_alert_email(env_file)}
 
 
-def services_environment_values(storage: dict[str, str]) -> dict[str, str]:
-    """The services inputs built from .env: the task role ARNs of the project, the data bucket and the model API addresses inside it."""
+def services_environment_values(storage: dict[str, str]) -> dict[str, Any]:
+    """The services inputs built from .env: the task role ARNs of the project, the data bucket, the model API addresses inside it and every parameter name."""
     account, project, environment, bucket = (storage[name] for name in ("expected_account_id", "project_name", "environment", "data_bucket_name"))
     roles = {name: f"arn:aws:iam::{account}:role/{project}_{role}_{environment}" for name, role in SERVICES_ROLE_NAMES.items()}
     buckets = dict.fromkeys(SERVICES_BUCKET_INPUTS, bucket)
     return {
         **roles,
         **buckets,
+        **project_parameter_values(INFRA / "services", project),
         "model_api_manifest_uri": f"s3://{bucket}/{SERVING_MANIFEST_KEY}",
         "model_api_registry_uri": f"s3://{bucket}/{FEATURE_REGISTRY_KEY}",
     }
@@ -152,6 +154,7 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
         raise ConfigurationError(f"The {stack} root takes no preparation inputs. No Terraform action was run.")
     if path is None or sha256 is None:
         raise ConfigurationError("Supply both the preparation input path and preparation SHA-256.")
+    require_local_override(path, REPO_ROOT)
     try:
         document, actual = read_capture_with_digest(path)
     except CaptureError as error:

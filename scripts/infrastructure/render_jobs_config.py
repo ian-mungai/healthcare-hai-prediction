@@ -22,9 +22,11 @@ from scripts.infrastructure.render_project_config import (
     verify_project_identity,
     write_or_check,
 )
+from scripts.infrastructure.stack_settings import project_parameter_values, require_local_override, terraform_default
 from scripts.process import TimeoutExpired, run_command
 
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
+JOBS_SOURCE = Path(__file__).resolve().parents[2] / "infra/jobs"
 SERVICES_DIRECTORY = REPO_ROOT / "infra/services"
 PLATFORM_DIRECTORY = REPO_ROOT / "infra/platform"
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(block) for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
@@ -39,6 +41,17 @@ PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/jobs_preparation
 # The pushed image digests that push_images record keeps for the services stack: the one record of what ECR holds.
 IMAGE_RECORD = SERVICES_DIRECTORY / "images.auto.tfvars.json"
 DIGEST_FORM = re.compile(r"sha256:[0-9a-f]{64}")
+# The committed defaults of these switches and lists, with the overrides on top, are the selection that decides which images and stack outputs are needed.
+SELECTION_SETTINGS = (
+    "bronze_job_enabled",
+    "drift_enabled",
+    "host_jobs",
+    "host_jobs_enabled",
+    "layer_jobs",
+    "layer_jobs_enabled",
+    "publisher_job_enabled",
+    "train_enabled",
+)
 # The jobs inputs that hold an account, the project or the environment, so they are built here and never committed. The job switches, the host job families,
 # the host repository path and the serve prefix are the committed Terraform defaults.
 JOB_ROLES = {
@@ -75,24 +88,56 @@ def image_digests(path: Path | None = None) -> dict[str, str]:
     return {str(name): str(digest) for name, digest in record.items()}
 
 
-def job_images(storage: dict[str, str], digests: dict[str, str]) -> dict[str, dict[str, str]]:
-    """The image inputs of the jobs stack: each repository of the project in the account, pinned by its recorded digest."""
+def effective_selection(prepared: dict[str, Any]) -> dict[str, Any]:
+    """The job switches and lists the jobs stack will run with: the committed default of each, or the value the overrides give."""
+    return {name: prepared[name] if name in prepared else terraform_default(JOBS_SOURCE, name) for name in SELECTION_SETTINGS}
+
+
+def needed_images(selection: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    """The image keys of each image input that the effective selection needs, named as the jobs stack validates them."""
+    layers, trains = selection["layer_jobs_enabled"] is True, selection["train_enabled"] is True
+    families = set(selection["host_jobs"]) if selection["host_jobs_enabled"] is True else set()
+    wanted = {
+        "images": {
+            *(("analytics",) if selection["publisher_job_enabled"] is True or layers else ()),
+            *(("quality",) if layers else ()),
+            *(("spark",) if layers or selection["bronze_job_enabled"] is True else ()),
+        },
+        "train_images": {
+            *(("training", "feature_store") if trains else ()),
+            *(("feature_store",) if layers and "features" in selection["layer_jobs"] else ()),
+        },
+        "drift_images": {"training", "feature_store", "drift"} if selection["drift_enabled"] is True else set(),
+        "openmetadata_images": {"ingestion"} if "metadata" in families else set(),
+    }
+    return {group: tuple(key for key in JOB_IMAGES[group] if key in keys) for group, keys in wanted.items() if keys}
+
+
+def job_images(storage: dict[str, str], digests: dict[str, str], needed: dict[str, tuple[str, ...]]) -> dict[str, dict[str, str]]:
+    """The image inputs the effective selection needs: each repository of the project in the account, pinned by its recorded digest.
+
+    Every missing or malformed digest is named in one refusal, so one run shows all the images the record must still receive.
+    """
     registry = f"{storage['expected_account_id']}.dkr.ecr.{storage['aws_region']}.amazonaws.com/{storage['project_name']}"
-    inputs: dict[str, dict[str, str]] = {}
-    for group, members in JOB_IMAGES.items():
-        inputs[group] = {}
-        for key, repository in members.items():
-            digest = digests.get(repository)
-            if digest is None or not DIGEST_FORM.fullmatch(digest):
-                raise ConfigurationError(
-                    f"No valid digest is recorded for the {repository} image. Record it with push_images record, then render again. No Terraform action ran."
-                )
-            inputs[group][key] = f"{registry}_{repository}_{storage['environment']}@{digest}"
-    return inputs
+    repositories = {JOB_IMAGES[group][key] for group, keys in needed.items() for key in keys}
+    problems = [
+        f"{repository} ({'missing' if repository not in digests else 'malformed'})"
+        for repository in sorted(repositories)
+        if not DIGEST_FORM.fullmatch(digests.get(repository, ""))
+    ]
+    if problems:
+        raise ConfigurationError(
+            f"The image record lacks a valid digest for: {', '.join(problems)}. Record them with push_images record, then render again. "
+            "No Terraform action ran."
+        )
+    return {
+        group: {key: f"{registry}_{JOB_IMAGES[group][key]}_{storage['environment']}@{digests[JOB_IMAGES[group][key]]}" for key in keys}
+        for group, keys in needed.items()
+    }
 
 
-def environment_values(storage: dict[str, str], digests: dict[str, str]) -> dict[str, Any]:
-    """The jobs inputs built from .env and the recorded digests: the roles, the log group, the writer parameter names and the images."""
+def environment_values(storage: dict[str, str], digests: dict[str, str], needed: dict[str, tuple[str, ...]]) -> dict[str, Any]:
+    """The jobs inputs built from .env and the recorded digests: the roles, the log group, every project-bound parameter name and the needed images."""
     account, project, environment = storage["expected_account_id"], storage["project_name"], storage["environment"]
     values: dict[str, Any] = {
         group: {name: f"arn:aws:iam::{account}:role/{project}_job_{name}_{environment}" for name in names} for group, names in JOB_ROLES.items()
@@ -101,7 +146,7 @@ def environment_values(storage: dict[str, str], digests: dict[str, str]) -> dict
     values["writer_parameter_names"] = {
         f"write_{layer}_task": [f"/{project}/aws_polaris_{layer}_client_{part}" for part in ("id", "secret")] for layer in WRITER_LAYERS
     }
-    return values | job_images(storage, digests)
+    return values | project_parameter_values(JOBS_SOURCE, project) | job_images(storage, digests, needed)
 
 
 def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
@@ -189,6 +234,7 @@ def preparation_values(path: Path | None, sha256: str | None, root: str) -> dict
         return {}
     if path is None or sha256 is None:
         raise ConfigurationError("Supply both the preparation input path and preparation SHA-256.")
+    require_local_override(path, REPO_ROOT)
     document, actual_sha256 = read_capture_with_digest(path)
     if sha256 != actual_sha256:
         raise ConfigurationError("The preparation SHA-256 differs from the reviewed bytes. No Terraform action was run.")
@@ -215,10 +261,15 @@ def main() -> int:
         storage, _ = load_configuration(arguments.env_file)
         values: dict[str, Any] = jobs_values(storage)
         directory = JOBS_DIRECTORY
-        values.update(environment_values(storage, image_digests()))
-        values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
-        values["host_private_ip"] = host_private_ip()
-        values["alerts_topic_arn"] = alerts_topic_arn(storage)
+        selection = effective_selection(prepared)
+        families = set(selection["host_jobs"]) if selection["host_jobs_enabled"] is True else set()
+        values.update(environment_values(storage, image_digests(), needed_images(selection)))
+        if selection["host_jobs_enabled"] is True or selection["publisher_job_enabled"] is True:
+            values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
+        if "metadata" in families:
+            values["host_private_ip"] = host_private_ip()
+        if "promote" in families:
+            values["alerts_topic_arn"] = alerts_topic_arn(storage)
         values.update(prepared)
         if arguments.check_plan:
             try:
