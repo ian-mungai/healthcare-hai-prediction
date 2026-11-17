@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 from orchestration import ecs_lineage, job_lineage, snapshots
 from scripts.lakehouse import layer_run
 from scripts.orchestration import ecs_lineage_cases as base
@@ -415,9 +417,11 @@ class Phase:
         left: float = 6 * 3600,
         init_age: float = 120.0,
         ws: Workspace | None = None,
+        inputs_delay: float = 0.0,
+        inputs_error: Exception | None = None,
     ) -> None:
         self.layer, self.phase, self.url, self.fails, self.error, self.extra = layer, phase, url, fails, error, extra or {}
-        self.left, self.init_age, self.ws = left, init_age, ws
+        self.left, self.init_age, self.ws, self.inputs_delay, self.inputs_error = left, init_age, ws, inputs_delay, inputs_error
         self.err = io.StringIO()
 
     def run(self) -> int:
@@ -448,6 +452,12 @@ class Phase:
             input_run,
         ]
 
+        def slow_inputs(job: Any, manifest: Any, tables: Any) -> bytes | None:
+            time.sleep(self.inputs_delay)  # the manifest read and parse of the upload hook, as slow as the case says
+            if self.inputs_error is not None:
+                raise self.inputs_error
+            return ws.inputs
+
         def dispatch(job: Any, phase: str, args: Any) -> None:
             if self.error is not None:
                 raise self.error
@@ -461,7 +471,7 @@ class Phase:
             mock.patch.object(layer_run, "check_code_run"),
             mock.patch.object(layer_run, "check_feature_set"),
             mock.patch.object(layer_run.task_capacity, "apply"),
-            mock.patch.object(layer_run, "inputs_record", lambda job, manifest, tables: ws.inputs),
+            mock.patch.object(layer_run, "inputs_record", slow_inputs),
             contextlib.redirect_stderr(self.err),
         ):
             return int(layer_run.main(arguments))
@@ -544,7 +554,7 @@ def the_two_senders_share_one_set_of_event_times() -> None:
     """The job and the Airflow evidence step send the same table events for one run, byte for byte, with the times of one record that the job writes beside
     its other run records (``lineage_times.json``: the init container's task start, written once by the pin, and the time the upload began, written once
     by it), which the upload copies to S3 where the evidence step reads it. Launch, init, upload and task-end times all differ here, and the events carry
-    only the record's. A run with no complete record keeps the launch records' times."""
+    only the record's. A run whose record is not found keeps the launch records' times; a record without the upload time is refused."""
     wanted = base.catalogue_of_the_mirror()
     launch_times = {"2026-11-04T10:00:00Z", "2026-11-04T10:30:00Z"}
     for layer in ("silver", "gold", "features"):
@@ -570,7 +580,7 @@ def the_two_senders_share_one_set_of_event_times() -> None:
             base.put(
                 unfinished, f"{ecs_lineage.EVIDENCE_PREFIX}/{layer}/{run}/{ecs_lineage.TIMES_FILE}", {k: v for k, v in record.items() if k != "completed_at"}
             )
-            incomplete = airflow_lines(layer, unfinished, declared)
+            incomplete: list[str] = []
         require(
             set(record) == {"schema", "run_id", "started_at", "completed_at"} and record["started_at"] != record["completed_at"], f"{layer}: record {record}"
         )
@@ -582,9 +592,13 @@ def the_two_senders_share_one_set_of_event_times() -> None:
         require(times == {"START": {started}, "COMPLETE": {completed}}, f"{layer}: event times {times}, the record has {started} and {completed}")
         require(not ({started, completed} & launch_times), f"{layer}: the case does not tell the record's times from the launch's")
         require(started_event["eventTime"] == started, f"{layer}: the task START carries the record's start")
-        for label, lines in (("no record", absent), ("a record without the upload time", incomplete)):
-            found = {json.loads(line)["eventTime"] for line in lines}
-            require(found == launch_times, f"{layer}, {label}: the evidence step's times are {found}, not the launch records'")
+        found = {json.loads(line)["eventTime"] for line in absent}
+        require(found == launch_times, f"{layer}, no record: the evidence step's times are {found}, not the launch records'")
+        refused = refuses(ecs_lineage.LineageRefused, partial(airflow_lines, layer, unfinished, declared))
+        require(
+            ecs_lineage.TIMES_FILE in str(refused) and incomplete == [],
+            f"{layer}: a succeeded job's record without its upload time is not read as absent: {refused}",
+        )
 
 
 def the_replay_task_start_shares_the_job_start() -> None:
@@ -666,6 +680,196 @@ def any_ordinary_exception_sends_the_fail_and_propagates() -> None:
         require(receiver.requests == [], "a phase that sends no lineage sends no FAIL for an ordinary exception either")
 
 
+def a_slow_builder_cannot_outlast_the_delivery_budget() -> None:
+    """One absolute deadline covers building the events and sending them. A builder that is slower than the budget (the manifest read and the event build)
+    makes ``emit`` return at the budget, with nothing sent, nothing sent later by the builder that is left running, and the job's outcome untouched. The
+    driver case stalls the upload hook's manifest read."""
+    text = text_of(request_of("silver"))
+    with base.receiving() as receiver:
+        late = threading.Event()
+
+        def slow() -> list[str]:
+            time.sleep(0.35)
+            late.set()
+            return ["{}"]
+
+        err = io.StringIO()
+        began = time.monotonic()
+        with contextlib.redirect_stderr(err):
+            sent = job_lineage.emit("table events", slow, environ_for(receiver.url, text), 0.1)
+        spent = time.monotonic() - began
+        require(sent == 0 and spent < 0.25, f"a builder of 0.35 s under a budget of 0.1 s: sent {sent} after {spent:.3f} s")
+        require("deadline" in err.getvalue() and err.getvalue().count("\n") == 1 and CREDENTIAL not in err.getvalue(), f"standard error: {err.getvalue()!r}")
+        require(late.wait(2.0), "the builder never finished: the case does not test a late builder")
+        time.sleep(0.3)
+        require(receiver.requests == [], f"a builder that finished after the deadline sent {len(receiver.requests)} events")
+        failing = io.StringIO()
+
+        def broken() -> list[str]:
+            time.sleep(0.2)
+            raise RuntimeError(CREDENTIAL)
+
+        with contextlib.redirect_stderr(failing):
+            require(job_lineage.emit("table events", broken, environ_for(receiver.url, text), 0.05) == 0, "a builder that fails after the deadline")
+        time.sleep(0.3)
+        require(CREDENTIAL not in failing.getvalue(), f"a late failure leaks: {failing.getvalue()!r}")
+        within = io.StringIO()
+        with contextlib.redirect_stderr(within):
+            require(job_lineage.emit("table events", lambda: ["{}"], environ_for(receiver.url, text), 5.0) == 1, "a fast builder inside the budget still sends")
+    with base.receiving() as receiver, mock.patch.object(job_lineage, "TABLE_SECONDS", 0.1):
+        phase = Phase("gold", "upload", receiver.url, inputs_delay=0.35)
+        began = time.monotonic()
+        code = phase.run()
+        spent = time.monotonic() - began
+        time.sleep(0.4)
+        require(
+            code == 0 and receiver.requests == [] and spent < 0.3,
+            f"the upload hook with a stalled manifest read: exit {code}, {len(receiver.requests)} requests, {spent:.3f} s",
+        )
+        require("deadline" in phase.err.getvalue(), f"the stall is not recorded: {phase.err.getvalue()!r}")
+
+
+class FlakyBucket:
+    """The evidence bucket with one key that answers every read with the given error code."""
+
+    def __init__(self, bucket: Any, key: str, code: str) -> None:
+        self.bucket, self.key, self.code = bucket, key, code
+
+    def get_object(self, **arguments: Any) -> Any:
+        if arguments["Key"] == self.key:
+            raise ClientError({"Error": {"Code": self.code, "Message": "synthetic"}}, "GetObject")
+        return self.bucket.get_object(**arguments)
+
+
+def only_a_missing_times_record_is_absent() -> None:
+    """Only a key that is not found is read as absent (the launch records' times then stand). Every other error of the read, a denial included, propagates
+    and no event is built from it: it would carry the launch times where the job sent the record's, so every table event of the run would differ. In
+    production an absent key also answers AccessDenied (the launch role cannot list the bucket), so a run whose record cannot be told from a denied one has no
+    Airflow-side events, visibly. The Airflow step logs it and goes on, the replay command fails with its reason, and the job's own send skips and says why."""
+    layer = "gold"
+    run = TEXT_FOR[layer][0]
+    key = f"{ecs_lineage.EVIDENCE_PREFIX}/{layer}/{run}/{ecs_lineage.TIMES_FILE}"
+    record = {"schema": 1, "run_id": run, "started_at": "2026-11-04T10:00:30+00:00", "completed_at": "2026-11-04T10:29:00+00:00"}
+    declared = ecs_lineage.declared_lineage(layer)
+
+    def build(bucket: Any) -> list[str]:
+        return airflow_lines(layer, bucket, declared)
+
+    readable = base.template_bucket()
+    base.put(readable, key, record)
+    require({json.loads(line)["eventTime"] for line in build(readable)} == {"2026-11-04T10:00:30Z", "2026-11-04T10:29:00Z"}, "a readable record sets the times")
+    missing = base.template_bucket()
+    require(
+        {json.loads(line)["eventTime"] for line in build(missing)} == {"2026-11-04T10:00:00Z", "2026-11-04T10:30:00Z"},
+        "a key that is not found leaves the launch times",
+    )
+    denied = base.template_bucket()
+    base.put(denied, key, record)
+    denied.deny_keys.add(key)
+    error = refuses(ecs_lineage.EvidenceDenied, partial(build, denied))
+    require(key in str(error) and "AccessDenied" in str(error), f"a denied read of an existing record is not named: {error}")
+    cannot_list = base.template_bucket()
+    cannot_list.absent_reads_denied = True
+    refuses(ecs_lineage.EvidenceDenied, partial(build, cannot_list))  # production: absent and denied answer alike, so neither is read as absent
+    for code in ("InternalError", "SlowDown", "RequestTimeout", "NoSuchBucket"):
+        flaky = base.template_bucket()
+        base.put(flaky, key, record)
+        evidence = ecs_lineage.S3Evidence(FlakyBucket(flaky, key, code), BUCKET)
+        error = refuses(
+            ecs_lineage.EvidenceUnavailable,
+            lambda evidence=evidence: ecs_lineage.layer_table_events(
+                evidence, declared, ecs_lineage.step_invocation(request_of(layer, TEXT_FOR[layer][1])), base.facts(layer)
+            ),
+        )
+        require(key in str(error) and code in str(error), f"{code}: {error}")
+    require(issubclass(ecs_lineage.EvidenceDenied, ecs_lineage.EvidenceUnavailable), "the callers' handlers cover a denial")
+    steps = (ROOT / "orchestration/airflow_steps.py").read_text()
+    require("except (DeliveryFailed, LineageRefused, EvidenceUnavailable)" in steps, "the Airflow step no longer logs an unavailable record and goes on")
+    # the replay command fails with its reason
+    rig = base.Rig()
+    base.evidence_bucket(rig)
+    base.operator(rig, None).execute(base.context())
+    rig.bucket.objects[f"{ecs_lineage.EVIDENCE_PREFIX}/gold/{base.RUN_OF['gold']}/{ecs_lineage.TIMES_FILE}"] = json.dumps(
+        {**record, "run_id": base.RUN_OF["gold"]}
+    ).encode()
+    rig.bucket.deny_keys.add(f"{ecs_lineage.EVIDENCE_PREFIX}/gold/{base.RUN_OF['gold']}/{ecs_lineage.TIMES_FILE}")
+    arguments = ["replay", "--bucket", BUCKET, "--job", "gold", "--run-id", base.RUN_OF["gold"], "--attempt", "1", "--template", "gold_build"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "job", "--dag-run-id", f"manual__{base.RUN_OF['gold']}"]
+    err = io.StringIO()
+    with (
+        contextlib.redirect_stderr(err),
+        contextlib.redirect_stdout(io.StringIO()),
+        mock.patch.object(ecs_lineage, "declared_lineage", lambda job: base.DECLARED[job]),
+    ):
+        code = ecs_lineage.main(arguments, client_factory=lambda: rig.bucket)
+    require(
+        code == 1 and "replay refused" in err.getvalue() and ecs_lineage.TIMES_FILE in err.getvalue(),
+        f"the replay of a denied record: exit {code}, {err.getvalue()!r}",
+    )
+
+
+def the_job_skips_and_says_why_when_its_own_records_fail() -> None:
+    """The job reads its own records from its run folder. A times record it cannot read (a permission error, a directory in its place) or that lacks the
+    upload time (the stamp failed) is an error and not an absent record: the send is skipped with the key named, the phase's exit code stays 0 and nothing
+    is sent from launch times. A record that is simply not there is the one case that is absent."""
+    for label, damage in (
+        ("an unreadable record", lambda path: (path.write_text("{}"), path.chmod(0))),
+        ("a directory in its place", lambda path: path.mkdir()),
+        (
+            "a record without the upload time",
+            lambda path: path.write_text(json.dumps({"schema": 1, "run_id": TEXT_FOR["gold"][0], "started_at": "2026-11-04T10:00:30+00:00"})),
+        ),
+    ):
+        with workspace("gold") as ws, base.receiving() as receiver:
+            require(Phase("gold", "pin", receiver.url, ws=ws).run() == 0, "pin")
+            before = len(receiver.requests)
+            path = ws.folder / ecs_lineage.TIMES_FILE
+            path.unlink()
+            damage(path)
+            phase = Phase("gold", "upload", receiver.url, ws=ws)
+            stamp = mock.patch.object(layer_run, "stamp_upload_time", lambda *args, **kwargs: None) if "without" in label else contextlib.nullcontext()
+            try:  # a record without the upload time is what a failed stamp leaves, so that case turns the stamp off
+                with stamp:
+                    code = phase.run()
+            finally:
+                if path.is_file():
+                    path.chmod(0o600)
+            require(code == 0 and len(receiver.requests) == before, f"{label}: exit {code}, {len(receiver.requests) - before} events sent")
+            require(
+                "not sent" in phase.err.getvalue() and ecs_lineage.TIMES_FILE in phase.err.getvalue(),
+                f"{label}: the skip is not recorded: {phase.err.getvalue()!r}",
+            )
+    with workspace("gold") as ws:
+        run = job_of("gold", ws.folder)
+        evidence = job_lineage.FolderEvidence(run, None)
+        key = f"{ecs_lineage.EVIDENCE_PREFIX}/gold/{TEXT_FOR['gold'][0]}/silver_pins.json"
+        require(
+            evidence.read(key) is not None and evidence.read(key.replace("silver_pins", "not_there")) is None,
+            "a file is read, a file that is not there is absent",
+        )
+        locked = ws.folder / "silver_pins.json"
+        locked.chmod(0)
+        try:
+            error = refuses(ecs_lineage.EvidenceUnavailable, partial(evidence.read, key))
+        finally:
+            locked.chmod(0o600)
+        require("PermissionError" in str(error), f"an unreadable record is not read as absent: {error}")
+        folder_key = key.replace("silver_pins.json", "a_directory")
+        (ws.folder / "a_directory").mkdir()
+        refuses(ecs_lineage.EvidenceUnavailable, partial(evidence.read, folder_key))
+        refuses(
+            ecs_lineage.EvidenceUnavailable, partial(evidence.read, key.replace(str(TEXT_FOR["gold"][0]), "20261104T100000Z-00000000"))
+        )  # another run's key is not the job's to read
+    with workspace("gold") as ws, base.receiving() as receiver:
+        broken = Phase("gold", "upload", receiver.url, ws=ws, inputs_error=PermissionError(CREDENTIAL))
+        code = broken.run()
+        require(code == 0 and receiver.requests == [], f"a manifest that cannot be read: exit {code}, {len(receiver.requests)} events")
+        require(
+            "not sent" in broken.err.getvalue() and "PermissionError" in broken.err.getvalue() and CREDENTIAL not in broken.err.getvalue(),
+            f"{broken.err.getvalue()!r}",
+        )
+
+
 CASES: dict[str, Callable[[], None]] = {
     "job_events_equal_the_airflow_side_events": job_events_equal_the_airflow_side_events,
     "job_events_resolve_in_the_stand_in_receiver": job_events_resolve_in_the_stand_in_receiver,
@@ -680,4 +884,7 @@ CASES: dict[str, Callable[[], None]] = {
     "the_two_senders_share_one_set_of_event_times": the_two_senders_share_one_set_of_event_times,
     "the_replay_task_start_shares_the_job_start": the_replay_task_start_shares_the_job_start,
     "any_ordinary_exception_sends_the_fail_and_propagates": any_ordinary_exception_sends_the_fail_and_propagates,
+    "a_slow_builder_cannot_outlast_the_delivery_budget": a_slow_builder_cannot_outlast_the_delivery_budget,
+    "only_a_missing_times_record_is_absent": only_a_missing_times_record_is_absent,
+    "the_job_skips_and_says_why_when_its_own_records_fail": the_job_skips_and_says_why_when_its_own_records_fail,
 }

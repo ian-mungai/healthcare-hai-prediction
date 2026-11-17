@@ -98,6 +98,7 @@ RELOAD_PHASE = "reload"  # the launch name that makes the last container (feast)
 RELEASE_RUNNER = "feast"  # the container of the features task that runs a release or reload launch
 PHASE_VARIABLE, MODEL_VARIABLE, FEATURES_RUN_VARIABLE = "LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN"
 LINEAGE_VARIABLE = "LINEAGE_INVOCATION"  # filled by the launch in the pin and upload containers only (orchestration/job_lineage.py)
+LINEAGE_NAMED_ERRORS = ("LineageRefused", "EvidenceUnavailable", "EvidenceDenied")  # lineage errors whose texts name a record and a rule, never a credential
 LINEAGE_PHASES = (
     "pin",
     "upload",
@@ -1220,11 +1221,16 @@ def send_lineage(job: Job, phase: str, *, failed: bool, dry: bool) -> None:
             manifest = job.folder / DBT_TARGET.get(job.layer, Path("target")) / "manifest.json"
 
             def build() -> list[str]:  # inside the send's budget: reading the manifest is part of it
-                return job_lineage.table_lines(run, ended, inputs_record(job, manifest, None) if manifest.is_file() else None)
+                try:
+                    inputs = inputs_record(job, manifest, None)
+                except FileNotFoundError:  # the only absence: no manifest was built. Any other failure of the read ends the send with its kind named
+                    inputs = None
+                return job_lineage.table_lines(run, ended, inputs)
 
             job_lineage.emit(what, build, os.environ, seconds)
     except Exception as error:  # the job's work is done or has already failed: no lineage may change its exit code
-        sys.stderr.write(f"layer_run: lineage of the {phase} phase was not sent: {type(error).__name__}\n")
+        shown = f"{type(error).__name__}: {error}" if type(error).__name__ in LINEAGE_NAMED_ERRORS else type(error).__name__
+        sys.stderr.write(f"layer_run: lineage of the {phase} phase was not sent: {' '.join(shown.split())[:300]}\n")
 
 
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:

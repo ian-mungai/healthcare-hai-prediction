@@ -49,6 +49,9 @@ Recorded limits:
 - A table event that is not sent in time or at all (a stalled or refused receiver, a credential the HTTP client refuses, the deadline) is logged, without the
   credential, and never fails the evidence step or the task; ``replay`` rebuilds it. The table events name the job task and the launch attempt of the claim.
 - Silver's frozen pins are its own pin file under the run's one claim, not a value known at launch: a weaker check than gold and features get.
+- The job's times record (``TIMES_FILE``, see ``job_times``) is absent only when the key is not found. In production a missing key answers AccessDenied too (the
+  launch role cannot list the bucket), and that answer, like any other error of the read, propagates: such a run (one of an earlier code revision, say) gets no
+  Airflow-side table events, with a warning in the step's log and a refusal from ``replay``, and never events with other times than the job's.
 - A replayed event has its own stable run ID (``run_uuid``), not the run ID the provider gave the live event. OpenMetadata keys lineage edges on the
   datasets, so a replay adds the same edges.
 
@@ -328,16 +331,16 @@ def invocation_text(request: Mapping[str, Any], deadline: int) -> str:
     return canonical(body | {"deadline_epoch": int(deadline)})
 
 
-def job_times(evidence: S3Evidence, layer: str, run_id: str) -> tuple[str, str] | None:
-    """The two times that a job which sent lineage wrote for its run (``TIMES_FILE``): the task start and the time its upload began. Both senders of the run's
-    per-table events use them, so one run's events have one set of times. None when the job wrote no record, or one without its upload time (a job that died
-    before the upload, a job of an earlier code revision, or a role that is denied the key, which is read as absent like the output record): the launch
-    records' times then stand. A record that breaks a rule is refused with its key."""
+def job_times(evidence: S3Evidence, layer: str, run_id: str, *, complete: bool) -> tuple[str, str | None] | None:
+    """The times that a layer job wrote for its run (``TIMES_FILE``): the task start and the time its upload began. Both senders of the run's per-table events
+    use them, so one run's events have one set of times. Only a record that is not found is absent (None: the launch records' times then stand). Every other
+    outcome of the read propagates, a denial included, because an event built from the launch times where the job sent the record's would make every table
+    event of the run differ: the job's own send skips and says why, the Airflow step logs it and goes on, and the replay command fails with the reason.
+    In production a missing key also answers AccessDenied (the launch role cannot list the bucket), so such a run has no Airflow-side table events, visibly.
+    ``complete`` says the caller needs the upload time too (the table events of a succeeded job): a record without it is refused. A record that breaks a rule
+    is refused with its key."""
     key = f"{EVIDENCE_PREFIX}/{layer}/{run_id}/{TIMES_FILE}"
-    try:
-        record = evidence.read(key)
-    except EvidenceDenied:
-        return None
+    record = evidence.read(key)
     if record is None:
         return None
     if not isinstance(record, dict) or not {"schema", "run_id", "started_at"} <= set(record) <= TIMES_KEYS or record["schema"] != 1:
@@ -346,7 +349,9 @@ def job_times(evidence: S3Evidence, layer: str, run_id: str) -> tuple[str, str] 
         raise LineageRefused(f"{key}: belongs to another run ({record['run_id']})")
     started = timestamp_text(record["started_at"], f"{key} started_at")
     if "completed_at" not in record:
-        return None
+        if complete:
+            raise LineageRefused(f"{key}: has no upload time, so the table events of a succeeded job have no second time")
+        return started, None
     return started, timestamp_text(record["completed_at"], f"{key} completed_at")
 
 
@@ -698,8 +703,8 @@ def layer_table_events(
     if facts.outcome != "succeeded":
         return []
     layer = facts.job
-    times = job_times(evidence, layer, facts.run_id)
-    if times is not None:  # the job's own times, which it sends with: one run, one set of event times
+    times = job_times(evidence, layer, facts.run_id, complete=True)
+    if times is not None and times[1] is not None:  # the job's own times, which it sends with: one run, one set of event times
         facts = replace(facts, started_at=times[0], ended_at=times[1])
     full = job_lineage(layer, invocation, declared, evidence, facts, checks)
     versioned = {(item["namespace"], item["name"]): item for item in [*full.inputs, *full.outputs]}
@@ -819,9 +824,6 @@ class LineageSource:
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
         if self.layer == BRONZE_JOB:
             return JobLineage([], [], launch_facet(self.invocation, facts, "not_applicable", [])), facts
-        if self.layer in TABLE_EVENT_JOBS:  # the task's START carries the start the job sent its own START with
-            times = job_times(self.evidence, self.layer, self.run_id)
-            facts = facts if times is None else replace(facts, started_at=times[0])
         full = job_lineage(self.layer, self.invocation, self.declared, self.evidence, facts)
         return (JobLineage([], [], full.launch) if self.layer in TABLE_EVENT_JOBS else full), facts
 
@@ -851,6 +853,9 @@ class LineageSource:
 
     def events(self) -> list[dict[str, Any]]:
         lineage, facts = self.lineage()
+        if self.layer in TABLE_EVENT_JOBS:  # the task's START carries the start the job sent its own START with (the provider's facets do not read the record)
+            times = job_times(self.evidence, self.layer, self.run_id, complete=False)
+            facts = facts if times is None else replace(facts, started_at=times[0])
         found = events(lineage, self.invocation, facts)
         if self.layer in TABLE_EVENT_JOBS:
             found += self.table_events(facts)

@@ -18,6 +18,9 @@ any of them missing nothing is read or sent.
   launch records. OpenMetadata 2.0.7 writes nothing for an event without both inputs and outputs, so START and FAIL say what happened and draw no edge;
   only a table's COMPLETE does.
 
+The job reads only its own run folder: a record that is not there is absent, and any other failure of a read (permissions, a directory in its place) skips
+the send with the reason on standard error. ``emit`` runs the building and the sending of the events inside one absolute deadline.
+
 Sending is bounded and never fails the job (``emit``): every failure, including a bug of this module, is one line on standard error without the credential.
 It also never makes a succeeding job late: ``LINEAGE_INVOCATION`` carries the absolute launch deadline, and a send happens only when it can use its whole
 budget and ``RESERVE_SECONDS`` remain after it (``delivery_budget``); otherwise nothing is sent and the line on standard error says why. The Airflow side
@@ -36,6 +39,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -149,8 +153,14 @@ def stamp_times(folder: Path, run_id: str, *, started_at: str | None = None, com
     evidence step reads the same two times that the job sends its events with."""
     path = folder / ecs_lineage.TIMES_FILE
     record: dict[str, Any] = {"schema": 1, "run_id": run_id}
-    if path.is_file():
-        record = ecs_lineage.parse_record(str(path), path.read_bytes())
+    try:
+        stored = path.read_bytes()
+    except FileNotFoundError:
+        stored = None
+    except OSError as error:
+        raise EvidenceUnavailable(f"{path.name}: {type(error).__name__}") from None
+    if stored is not None:
+        record = ecs_lineage.parse_record(path.name, stored)
         if not isinstance(record, dict) or record.get("schema") != 1 or record.get("run_id") != run_id:
             raise LineageRefused(f"{path.name}: is not the record of run {run_id}")
     for name, value in (("started_at", started_at), ("completed_at", completed_at)):
@@ -184,12 +194,11 @@ class FolderEvidence(S3Evidence):
         relative = Path(key.removeprefix(self.prefix))
         if not key.startswith(self.prefix) or relative.is_absolute() or ".." in relative.parts:
             raise EvidenceUnavailable(f"{key}: a job reads only the records of its own run")
-        path = self.folder / relative
         try:
-            if not path.is_file():
-                return None
-            with path.open("rb") as handle:
+            with (self.folder / relative).open("rb") as handle:
                 body = handle.read(EVIDENCE_BYTES + 1)
+        except FileNotFoundError:
+            return None  # the only absence: a file that is not there. A permission error, a directory or any other failure is an error, never an absent record
         except OSError as error:
             raise EvidenceUnavailable(f"{key}: {type(error).__name__}") from None
         return ecs_lineage.parse_record(key, body)
@@ -231,29 +240,44 @@ def note(what: str, message: str) -> None:
     sys.stderr.write(f"job_lineage: {what}: {' '.join(message.split())[:300]}\n")
 
 
+def explain(error: Exception) -> str:
+    """The one line for a failed send. Only the kinds of failure whose texts name a key, a rule or a kind of failure show their text, never the credential's."""
+    if isinstance(error, (DeliveryFailed, LineageRefused, EvidenceUnavailable, SnapshotError)):
+        return f"{type(error).__name__}: {error}"
+    return type(error).__name__  # the text of an unexpected error can hold a header
+
+
 def emit(what: str, build: Callable[[], list[str]], environ: Mapping[str, str], seconds: float) -> int:
-    """Build the events and send them, all inside ``seconds``, and return how many were sent. Nothing is built or sent unless the settings are all there. Any
-    failure (the receiver, the evidence, a bug) is one line on standard error and a count of 0; nothing is raised, so the job's exit code never changes."""
+    """Build the events and send them, all inside one absolute deadline of ``seconds``, and return how many were sent. Nothing is built or sent unless the
+    settings are all there. The building (the manifest read, the evidence reads, the events) and the sending run together in a worker that the caller stops
+    waiting for at the deadline: a thread cannot be stopped, so one that is still building then sends nothing (it finds the deadline passed before its first
+    send, and each send waits only for the time left), and the process ends it when the phase ends. Any failure (the receiver, the evidence, a bug, the
+    deadline) is one line on standard error and a count of 0; nothing is raised, so the job's exit code never changes."""
     target = settings(environ)
     if target is None or seconds <= 0:
         return 0
-    began = time.monotonic()
-    try:
-        lines = build()
-        left = seconds - (time.monotonic() - began)
-        if left <= 0:
-            raise DeliveryFailed(f"the deadline of {seconds:g} s passed before any event was sent")
-        ecs_lineage.send_within(lines, target[0], target[1], left)
-    except (
-        DeliveryFailed,
-        LineageRefused,
-        EvidenceUnavailable,
-        SnapshotError,
-    ) as error:  # their texts name a key, a rule or a kind of failure, never the credential
-        note(what, f"not sent: {type(error).__name__}: {error}")
+    deadline = time.monotonic() + seconds
+    outcome: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            lines = build()
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise DeliveryFailed(f"the deadline of {seconds:g} s passed before any event was sent")
+            ecs_lineage.send_within(lines, target[0], target[1], left)
+            outcome["sent"] = len(lines)
+        except Exception as error:  # nothing of the worker may reach standard error on its own
+            outcome["error"] = error
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        note(what, f"not sent: the deadline of {seconds:g} s passed while the events were built or sent")
         return 0
-    except Exception as error:  # nothing of the job's lineage may fail the job; the text of an unexpected error can hold a header
-        note(what, f"not sent: {type(error).__name__}")
+    if "error" in outcome:
+        note(what, f"not sent: {explain(outcome['error'])}")
         return 0
-    note(what, f"sent {len(lines)} events")
-    return len(lines)
+    note(what, f"sent {outcome['sent']} events")
+    return int(outcome["sent"])
