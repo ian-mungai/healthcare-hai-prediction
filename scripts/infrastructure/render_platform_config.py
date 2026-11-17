@@ -125,9 +125,10 @@ def services_environment_values(storage: dict[str, str]) -> dict[str, Any]:
 
 
 def services_values(storage: dict[str, str]) -> dict[str, Any]:
-    """Combine project inputs with the ten required platform outputs, preserving map values; the host address is one of them, never typed by hand.
+    """Combine project inputs with the ten required platform outputs and the alerts topic when the platform has one, preserving map values.
 
-    The task roles, the data bucket and the model API addresses are built from .env, so no reviewed file carries them.
+    The host address and the topic are never typed by hand. The task roles, the data bucket and the model API addresses are built from .env,
+    so no reviewed file carries them.
     """
     outputs = platform_outputs(storage)
     values: dict[str, Any] = {**platform_values(storage), **services_environment_values(storage)}
@@ -143,6 +144,12 @@ def services_values(storage: dict[str, str]) -> dict[str, Any]:
         if isinstance(item["value"], dict) and not all(isinstance(value, str) for value in item["value"].values()):
             raise ConfigurationError(f"Invalid platform output type: {name}. Supply an object with string values.")
         values[name] = item["value"]
+    topic = outputs.get("alerts_topic_arn")
+    if topic is not None:
+        if not isinstance(topic, dict) or not isinstance(topic.get("value"), str) or not topic["value"]:
+            raise ConfigurationError("Invalid platform output type: alerts_topic_arn. Supply a nonempty string.")
+        # Grafana's SNS contact point publishes to this one topic; the platform without the output renders none, and the services plan refuses monitoring then.
+        values["alerts_topic_arn"] = topic["value"]
     return values
 
 

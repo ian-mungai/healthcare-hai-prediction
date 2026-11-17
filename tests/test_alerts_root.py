@@ -67,8 +67,38 @@ def test_no_other_stack_receives_the_alert_address(tmp_path: Path, monkeypatch: 
     outputs["ecr_repository_urls"] = {"value": {"airflow": "x"}}
     platform_outputs(monkeypatch, **outputs)
     values = render(tmp_path, monkeypatch, stack, ALERT_EMAIL=ADDRESS)
-    check("alert_email" not in values and "alerts_topic_arn" not in values, f"the {stack} inputs hold no alert address and no alerts topic")
+    check("alert_email" not in values, f"the {stack} inputs hold no alert address")
+    check(("alerts_topic_arn" in values) == (stack == "services"), "only the services inputs hold the alerts topic, which Grafana's contact point publishes to")
+    check(values.get("alerts_topic_arn", TOPIC) == TOPIC, "the services topic is the platform output, never typed by hand")
     check(ADDRESS not in json.dumps(values), f"the {stack} inputs never hold the address")
+
+
+def test_services_inputs_without_the_topic_output_hold_no_topic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    outputs: dict[str, Any] = {name: {"value": "x"} for name in renderer.SERVICES_PLATFORM_KEYS}
+    outputs["log_group_names"] = {"value": {"jobs": "x"}}
+    outputs["ecr_repository_urls"] = {"value": {"airflow": "x"}}
+    monkeypatch.setattr(renderer, "terraform_document", lambda *arguments, **keywords: outputs)
+    values = render(tmp_path, monkeypatch, "services")
+    check(
+        "alerts_topic_arn" not in values, "an older platform without the output renders no topic, and the services plan refuses monitoring without one by name"
+    )
+
+
+@pytest.mark.parametrize("value", [3, "", ["arn"]])
+def test_an_invalid_topic_output_is_refused_for_the_services_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], value: Any
+) -> None:
+    outputs: dict[str, Any] = {name: {"value": "x"} for name in renderer.SERVICES_PLATFORM_KEYS}
+    outputs["log_group_names"] = {"value": {"jobs": "x"}}
+    outputs["ecr_repository_urls"] = {"value": {"airflow": "x"}}
+    outputs["alerts_topic_arn"] = {"value": value}
+    monkeypatch.setattr(renderer, "terraform_document", lambda *arguments, **keywords: outputs)
+    monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["renderer", "--stack", "services", "--env-file", str(env_file(tmp_path))])
+    with pytest.raises(SystemExit):
+        renderer.main()
+    check("alerts_topic_arn" in capsys.readouterr().err, "the error names the output")
+    check(not (tmp_path / "infra").exists(), "nothing is rendered")
 
 
 @pytest.mark.parametrize("output", [{}, {"alerts_topic_arn": {"value": None}}, {"alerts_topic_arn": {"value": ""}}, {"alerts_topic_arn": {"value": 3}}])
