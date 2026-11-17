@@ -22,7 +22,7 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
@@ -43,7 +43,7 @@ locals {
     "host_prepare"                          = "airflow"
     "polaris_bootstrap"                     = "polaris"
     }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
-    for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"] : name => "monitoring" if var.monitoring_enabled
+    for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter", "pushgateway", "host_state_exporter"] : name => "monitoring" if var.monitoring_enabled
   })
 
   log_configuration = {

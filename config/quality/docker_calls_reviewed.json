@@ -1407,7 +1407,7 @@
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
-        "scripts/infrastructure/render_platform_config.py": "sha256:fa221eba256b3d1e9ebf8e03e31274f90b9aab01f7ea0023c43e7c8c7dbf8c9e",
+        "scripts/infrastructure/render_platform_config.py": "sha256:f005cf2b9ee54712cd873b1897080c7fe9166ca4baa86d436f342f670bf0f79d",
         "scripts/infrastructure/render_project_config.py": "sha256:4d8d9e3c2c388d8c9490c5e33602aed978cf0cc80bf9486ad231470b5bf17f60",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },

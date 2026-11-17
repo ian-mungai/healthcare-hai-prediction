@@ -18,7 +18,7 @@ variables {
   data_mount_path                 = "/mnt/example-data"
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
-  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+  alerts_topic_arn                = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
   mlflow_enabled                  = true
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   host_private_ip                 = "10.0.1.20"
@@ -31,8 +31,8 @@ variables {
   # TEST FIXTURE ONLY, not a measured value: an explicit override of the 32768 MiB default, as the owner sets it from the ECS registered memory of the host.
   host_usable_memory_mib = 30720
   # TEST FIXTURE ONLY, not a measured value: the cap the owner sets (host_job_cap_mib). Here it equals the job room of this fixture (30720 usable MiB less the
-  # 2048 MiB system reserve and the 7632 MiB the four optional services and Airflow reserve).
-  host_job_cap_mib = 21040
+  # 2048 MiB system reserve and the 7720 MiB the four optional services and Airflow reserve, 88 MiB more since the Pushgateway and the host exporter).
+  host_job_cap_mib = 20952
 
   # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
   # that does not set a switch tests it off, so the fixture sets each one explicitly.
@@ -66,6 +66,7 @@ variables {
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
     model_api              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
     streamlit              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
   }
 
   image_digests = {
@@ -83,6 +84,7 @@ variables {
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
     model_api              = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
     streamlit              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc"
+    pushgateway            = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
   }
 }
 
@@ -198,7 +200,7 @@ run "a_larger_system_reserve_that_removes_the_room_for_the_cap_is_refused" {
     host_system_reserve_mib = 4096
   }
 
-  # The cap (21040) no longer fits: 30720 less 4096 less 7024 leaves 19600 MiB. The owner lowers host_job_cap_mib in the same change.
+  # The cap (20952) no longer fits: 30720 less 4096 less 7112 leaves 19512 MiB. The owner lowers host_job_cap_mib in the same change.
   expect_failures = [output.host_job_memory_mib]
 }
 
@@ -207,7 +209,7 @@ run "a_larger_system_reserve_with_a_lowered_cap_is_accepted" {
 
   variables {
     host_system_reserve_mib = 4096
-    host_job_cap_mib        = 19600
+    host_job_cap_mib        = 19512
   }
 
   assert {
@@ -364,7 +366,7 @@ run "the_host_job_cap_is_rendered_into_every_airflow_container" {
     condition = alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=21040") &&
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=20952") &&
         contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_HOLD_PARAMETER=/healthcare_hai_prediction/host_launch_hold") &&
         contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_APPLY_LOCK_PARAMETER=/healthcare_hai_prediction/services_apply_lock") if startswith(container.name, "airflow")
       ])
@@ -450,7 +452,7 @@ run "a_cap_that_is_not_a_whole_number_is_refused" {
   command = plan
 
   variables {
-    host_job_cap_mib = 21040.5
+    host_job_cap_mib = 20952.5
   }
 
   expect_failures = [var.host_job_cap_mib]

@@ -235,10 +235,19 @@ locals {
     for family in keys(local.host_selected) : family => [for container in lookup(local.host_source_containers, family, []) : container.name if container.name != "guard"]
   }
   host_last_phase = { for family, names in local.host_phase_names : family => length(names) > 0 ? names[length(names) - 1] : "" }
+  # The job code pushes its own metrics to the Pushgateway on the host (scripts/metrics_push.py): the address is the host private IP and port 9091, and the job
+  # family is the family name, or the features family for a model set. No address leaves the containers as they were. The environment adds no container.
+  host_metrics_environment = {
+    for family in keys(local.host_selected) : family => var.host_private_ip == null ? [] : [
+      { name = "PUSHGATEWAY_URL", value = "http://${var.host_private_ip}:9091" },
+      { name = "HAI_JOB", value = lookup(local.host_set_families, family, family) },
+    ]
+  }
   host_containers = {
     for family in keys(local.host_selected) : family => [
       for container in lookup(local.host_source_containers, family, []) : merge(
         container,
+        { environment = concat(lookup(container, "environment", []), local.host_metrics_environment[family]) },
         { for key, value in {
           command      = [format("%s%s", local.host_init_wipe, container.command[0])]
           dockerLabels = { (local.host_capacity_label) = local.host_family_binding[family] }

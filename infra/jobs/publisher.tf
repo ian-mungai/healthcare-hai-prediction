@@ -72,7 +72,9 @@ locals {
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         ],
         step.name == "run" ? local.publisher_settings : [],
-        [for name in lookup(local.publisher_run_variables, step.name, []) : { name = name, value = name == "HAI_CAPTURE_ROOT" ? "raw/" : "" }]
+        [for name in lookup(local.publisher_run_variables, step.name, []) : { name = name, value = name == "HAI_CAPTURE_ROOT" ? "raw/" : "" }],
+        # The publisher pushes its own metrics like every host job (scripts/metrics_push.py); without the host address it pushes nothing.
+        var.host_private_ip == null ? [] : [{ name = "PUSHGATEWAY_URL", value = "http://${var.host_private_ip}:9091" }, { name = "HAI_JOB", value = "publisher" }]
       )
       secrets = []
       mountPoints = [

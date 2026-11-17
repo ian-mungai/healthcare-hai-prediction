@@ -150,11 +150,11 @@ run "monitoring_flag_adds_its_foundation" {
 
   assert {
     condition = (
-      length(setintersection(toset(["prometheus", "grafana", "statsd_exporter"]), toset(keys(aws_ecr_repository.image)))) == 3 &&
+      length(setintersection(toset(["prometheus", "grafana", "statsd_exporter", "pushgateway"]), toset(keys(aws_ecr_repository.image)))) == 4 &&
       contains(keys(output.log_group_names), "monitoring") &&
-      length(aws_ecr_repository.image) == 12 && length(aws_cloudwatch_log_group.platform) == 7
+      length(aws_ecr_repository.image) == 13 && length(aws_cloudwatch_log_group.platform) == 7
     )
-    error_message = "The monitoring flag adds three repositories and one log group, and nothing else."
+    error_message = "The monitoring flag adds four repositories (Prometheus, Grafana, the StatsD exporter and the Pushgateway) and one log group, and nothing else."
   }
 }
 

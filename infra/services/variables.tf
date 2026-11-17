@@ -167,7 +167,7 @@ variable "ecr_repository_urls" {
 
   validation {
     condition = alltrue([
-      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
+      for image in concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway"] : [], var.openmetadata_persistent_enabled ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : []) :
       can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+$", lookup(var.ecr_repository_urls, image, "")))
     ])
     error_message = "Name an ECR repository URL (without a tag or digest) for each image that runs, the monitoring images included when monitoring_enabled is true."
@@ -204,8 +204,8 @@ variable "image_digests" {
   }
 
   validation {
-    condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter"] : contains(keys(var.image_digests), image)])
-    error_message = "Supply a digest for prometheus, grafana and statsd_exporter, or set monitoring_enabled to false."
+    condition     = !var.monitoring_enabled || alltrue([for image in ["prometheus", "grafana", "statsd_exporter", "pushgateway"] : contains(keys(var.image_digests), image)])
+    error_message = "Supply a digest for prometheus, grafana, statsd_exporter and pushgateway, or set monitoring_enabled to false."
   }
 
   validation {
@@ -518,28 +518,30 @@ variable "alerts_topic_arn" {
 }
 
 variable "monitoring_memory_mib" {
-  description = "Hard limit and reservation in MiB of each monitoring container. These are estimates for a few hundred series and one dashboard, not measurements: replace them after the silver and gold runs show the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana and 32 MiB for the exporter, and at least its reservation."
+  description = "Hard limit and reservation in MiB of each monitoring container. The reservations sum to 392 MiB (owner decision B, Nov 17 2026: the Pushgateway 32 and the host exporter 56 on top of 304), which makes the job cap at most 22712 MiB with every service on. These are estimates, not measurements: replace them after the chain run shows the real peak (ECS reports task memory, and docker stats shows each container). Each limit must be at least 128 MiB for Prometheus and Grafana, 64 MiB for the host exporter and 32 MiB for the StatsD exporter and the Pushgateway, and at least its reservation."
   type = object({
-    prometheus      = object({ limit = number, reservation = number })
-    grafana         = object({ limit = number, reservation = number })
-    statsd_exporter = object({ limit = number, reservation = number })
+    prometheus          = object({ limit = number, reservation = number })
+    grafana             = object({ limit = number, reservation = number })
+    statsd_exporter     = object({ limit = number, reservation = number })
+    pushgateway         = object({ limit = number, reservation = number })
+    host_state_exporter = object({ limit = number, reservation = number })
   })
   default = {
-    prometheus      = { limit = 256, reservation = 128 }
-    grafana         = { limit = 256, reservation = 128 }
-    statsd_exporter = { limit = 64, reservation = 32 }
+    prometheus          = { limit = 256, reservation = 128 }
+    grafana             = { limit = 256, reservation = 128 }
+    statsd_exporter     = { limit = 64, reservation = 32 }
+    pushgateway         = { limit = 96, reservation = 32 }
+    host_state_exporter = { limit = 128, reservation = 56 }
   }
   nullable = false
 
   validation {
     condition = (
       var.monitoring_memory_mib.prometheus.limit >= 128 && var.monitoring_memory_mib.grafana.limit >= 128 && var.monitoring_memory_mib.statsd_exporter.limit >= 32
-      && var.monitoring_memory_mib.prometheus.reservation >= 1 && var.monitoring_memory_mib.grafana.reservation >= 1 && var.monitoring_memory_mib.statsd_exporter.reservation >= 1
-      && var.monitoring_memory_mib.prometheus.reservation <= var.monitoring_memory_mib.prometheus.limit
-      && var.monitoring_memory_mib.grafana.reservation <= var.monitoring_memory_mib.grafana.limit
-      && var.monitoring_memory_mib.statsd_exporter.reservation <= var.monitoring_memory_mib.statsd_exporter.limit
+      && var.monitoring_memory_mib.pushgateway.limit >= 32 && var.monitoring_memory_mib.host_state_exporter.limit >= 64
+      && alltrue([for memory in values(var.monitoring_memory_mib) : memory.reservation >= 1 && memory.reservation <= memory.limit])
     )
-    error_message = "Each limit needs at least 128 MiB (Prometheus, Grafana) or 32 MiB (the exporter), and each reservation at least 1 MiB and at most its limit."
+    error_message = "Each limit needs at least 128 MiB (Prometheus, Grafana), 64 MiB (the host exporter) or 32 MiB (the StatsD exporter, the Pushgateway), and each reservation at least 1 MiB and at most its limit."
   }
 }
 

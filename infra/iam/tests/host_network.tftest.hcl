@@ -155,7 +155,7 @@ run "job_firewall_rules_cover_the_bridge_and_nothing_else" {
           "iifname \"docker0\" tcp dport 53 accept",
           "iifname \"docker0\" ip daddr 169.254.170.2 tcp dport 80 accept",
           "iifname \"docker0\" ip daddr 127.0.0.1 tcp dport 51679 accept",
-          "iifname \"docker0\" fib daddr type local tcp dport { 5100, 6379, 8181, 8585 } accept",
+          "iifname \"docker0\" fib daddr type local tcp dport { 5100, 6379, 8181, 8585, 9091 } accept",
           "iifname \"docker0\" tcp dport 443 accept",
           "iifname \"docker0\" drop"
         ] : strcontains(split("\nRULES\n", split("<<'RULES'\n", local.host_user_data)[1])[0], text)

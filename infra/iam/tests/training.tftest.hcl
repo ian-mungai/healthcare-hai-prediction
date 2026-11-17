@@ -325,3 +325,49 @@ run "the_control_plane_role_gets_two_sns_actions_on_the_one_alerts_topic" {
     error_message = "Grafana's contact point publishes with the control plane role: sns:Publish and sns:GetTopicAttributes on the one alerts topic, no subscribe, create or change action and no other topic."
   }
 }
+
+run "the_host_state_exporter_reads_the_cluster_and_nothing_else_when_the_alerts_topic_is_set" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.host_state_read[0].role == aws_iam_role.control_plane_task.name &&
+      jsondecode(aws_iam_role_policy.host_state_read[0].policy).Statement == [
+        {
+          Sid       = "ListClusterTasks"
+          Effect    = "Allow"
+          Action    = "ecs:ListTasks"
+          Resource  = "*"
+          Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
+        },
+        {
+          Sid      = "ListClusterContainerInstances"
+          Effect   = "Allow"
+          Action   = "ecs:ListContainerInstances"
+          Resource = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev"
+        },
+        {
+          Sid       = "DescribeClusterContainerInstances"
+          Effect    = "Allow"
+          Action    = "ecs:DescribeContainerInstances"
+          Resource  = "arn:aws:ecs:eu-west-1:111111111111:container-instance/example_project_cluster_dev/*"
+          Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
+        },
+      ]
+    )
+    error_message = "The host state exporter lists the tasks and container instances of the one cluster and describes its container instances. It cannot run, stop or change a task."
+  }
+}
+
+run "without_the_alerts_topic_the_control_plane_role_gets_no_host_read" {
+  command = plan
+
+  assert {
+    condition     = length(aws_iam_role_policy.host_state_read) == 0
+    error_message = "The host read follows the same switch as the alert grant."
+  }
+}

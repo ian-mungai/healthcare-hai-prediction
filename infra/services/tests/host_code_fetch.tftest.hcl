@@ -21,7 +21,7 @@ variables {
   data_mount_path                 = "/mnt/example-data"
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
-  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+  alerts_topic_arn                = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
   mlflow_enabled                  = true
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   host_private_ip                 = "10.0.1.20"
@@ -57,6 +57,7 @@ variables {
     prometheus             = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
     grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
     training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
   }
 
@@ -73,6 +74,7 @@ variables {
     prometheus             = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    pushgateway            = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     training               = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
   }
 }

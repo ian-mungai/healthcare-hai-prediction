@@ -11,7 +11,7 @@ provider "aws" {
 locals {
   # The monitoring foundation exists only while its flag is true, so a false flag leaves the stack as it was.
   # The serving flag adds the model API and page repositories the same way, and nothing else.
-  monitoring_repositories = var.monitoring_enabled ? setunion(var.ecr_repositories, ["prometheus", "grafana", "statsd_exporter"]) : var.ecr_repositories
+  monitoring_repositories = var.monitoring_enabled ? setunion(var.ecr_repositories, ["prometheus", "grafana", "statsd_exporter", "pushgateway"]) : var.ecr_repositories
   ecr_repositories        = var.serving_enabled ? setunion(local.monitoring_repositories, ["model_api", "streamlit"]) : local.monitoring_repositories
   log_groups              = var.monitoring_enabled ? setunion(var.log_groups, ["monitoring"]) : var.log_groups
 

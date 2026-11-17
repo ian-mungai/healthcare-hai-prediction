@@ -66,6 +66,8 @@ locals {
     prometheus            = 8
     grafana               = 8
     statsd_exporter       = 4
+    pushgateway           = 4
+    host_state_exporter   = 4
   }
 
   service_containers = {

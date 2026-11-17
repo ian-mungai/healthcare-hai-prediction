@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListClusterTasks",
+      "Effect": "Allow",
+      "Action": "ecs:ListTasks",
+      "Resource": "*",
+      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+    },
+    {
+      "Sid": "ListClusterContainerInstances",
+      "Effect": "Allow",
+      "Action": "ecs:ListContainerInstances",
+      "Resource": "${CLUSTER_ARN}"
+    },
+    {
+      "Sid": "DescribeClusterContainerInstances",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeContainerInstances",
+      "Resource": "${CONTAINER_INSTANCE_ARN_PATTERN}",
+      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+    }
+  ]
+}

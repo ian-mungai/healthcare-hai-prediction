@@ -1078,3 +1078,56 @@ run "a_model_set_needs_the_features_family" {
 
   expect_failures = [var.host_jobs]
 }
+
+run "every_host_container_pushes_its_metrics_to_the_pushgateway_with_its_family_name" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for family, definition in aws_ecs_task_definition.host : [
+        for container in jsondecode(definition.container_definitions) : (
+          contains(container.environment, { name = "PUSHGATEWAY_URL", value = "http://10.0.1.20:9091" })
+          && contains(container.environment, { name = "HAI_JOB", value = startswith(family, "features_m") ? "features" : family })
+        )
+      ]
+    ]))
+    error_message = "Every container of every host family gets the Pushgateway address on the host private IP (port 9091) and its job family name, which a model set family takes from the features family. The job code pushes its own metrics there."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for family, definition in aws_ecs_task_definition.host : [
+        for container in jsondecode(definition.container_definitions) : length([for entry in container.environment : entry if entry.name == "HAI_JOB"]) == 1
+      ]
+    ]))
+    error_message = "A container names its job family once."
+  }
+
+  assert {
+    condition     = alltrue([for definition in aws_ecs_task_definition.host : length(jsondecode(definition.container_definitions)) <= 10])
+    error_message = "The environment adds no container: no family passes the ECS limit of 10 containers per task definition."
+  }
+}
+
+run "without_the_host_address_no_container_names_a_pushgateway" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_jobs         = ["silver"]
+    host_private_ip   = null
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for definition in aws_ecs_task_definition.host : [
+        for container in jsondecode(definition.container_definitions) : length([for entry in container.environment : entry if entry.name == "PUSHGATEWAY_URL" || entry.name == "HAI_JOB"]) == 0
+      ]
+    ]))
+    error_message = "With no host address the jobs push nothing and carry neither variable, so the definitions stay as they were."
+  }
+}

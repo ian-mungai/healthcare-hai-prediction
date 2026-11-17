@@ -20,7 +20,7 @@ variables {
   control_plane_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
   data_mount_path             = "/mnt/example-data"
   monitoring_enabled          = true
-  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+  alerts_topic_arn            = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 
   # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
   # that does not set a switch tests it off, so the fixture sets each one explicitly.
@@ -49,6 +49,7 @@ variables {
     prometheus      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
     grafana         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
+    pushgateway     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
   }
 
   image_digests = {
@@ -60,6 +61,7 @@ variables {
     prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     grafana         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    pushgateway     = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
   }
 }
 
@@ -111,7 +113,7 @@ run "flag_off_plans_no_monitoring_and_no_statsd" {
   }
 }
 
-run "flag_on_adds_one_service_with_four_containers" {
+run "flag_on_adds_one_service_with_six_containers" {
   command = plan
 
   assert {
@@ -120,8 +122,8 @@ run "flag_on_adds_one_service_with_four_containers" {
   }
 
   assert {
-    condition     = [for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container.name] == ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"]
-    error_message = "The monitoring task is the preparation container, Prometheus, Grafana and the StatsD exporter, in that order."
+    condition     = [for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container.name] == ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter", "pushgateway", "host_state_exporter"]
+    error_message = "The monitoring task is the preparation container, Prometheus, Grafana, the StatsD exporter, the Pushgateway and the host exporter, in that order."
   }
 
   assert {
@@ -136,8 +138,8 @@ run "every_monitoring_listener_binds_loopback" {
   assert {
     condition = sort(flatten([
       for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : [for mapping in lookup(container, "portMappings", []) : "${mapping.hostPort}/${mapping.protocol}"]
-    ])) == sort(["3001/tcp", "9090/tcp", "9102/tcp", "9125/udp"])
-    error_message = "The monitoring ports are Grafana 3001, Prometheus 9090, the exporter 9102 and the StatsD UDP port 9125 and nothing else."
+    ])) == sort(["3001/tcp", "9090/tcp", "9091/tcp", "9102/tcp", "9103/tcp", "9125/udp"])
+    error_message = "The monitoring ports are Grafana 3001, Prometheus 9090, the Pushgateway 9091, the StatsD exporter 9102, the host exporter 9103 and the StatsD UDP port 9125 and nothing else."
   }
 
   assert {
@@ -154,13 +156,26 @@ run "every_monitoring_listener_binds_loopback" {
   }
 
   assert {
-    condition     = !can(regex("0\\.0\\.0\\.0|\\[::\\]", aws_ecs_task_definition.service["monitoring"].container_definitions))
-    error_message = "No monitoring container names a wildcard address."
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) :
+      container.name == "pushgateway" || !can(regex("0\\.0\\.0\\.0|\\[::\\]", jsonencode(container)))
+    ])
+    error_message = "No monitoring container but the Pushgateway names a wildcard address."
   }
 
   assert {
-    condition     = output.host_ports_reachable_from_jobs == { polaris = 8181, redis = 6379 }
-    error_message = "The monitoring ports stay off the list of ports the job tasks may reach."
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[4].command, "--web.listen-address=0.0.0.0:9091")
+    error_message = "The Pushgateway listens on all interfaces so a bridge job reaches it at the host private address; the job firewall and the closed security group bound who can."
+  }
+
+  assert {
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].command, "127.0.0.1:9103")
+    error_message = "The host exporter listens on loopback."
+  }
+
+  assert {
+    condition     = output.host_ports_reachable_from_jobs == { polaris = 8181, redis = 6379, pushgateway = 9091 }
+    error_message = "Of the monitoring ports only the Pushgateway's 9091 is on the list of ports the job tasks may reach."
   }
 }
 
@@ -173,8 +188,10 @@ run "monitoring_images_run_by_digest_from_ecr" {
       "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus@sha256:2222222222222222222222222222222222222222222222222222222222222222",
       "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana@sha256:3333333333333333333333333333333333333333333333333333333333333333",
       "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway@sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     ]
-    error_message = "Each monitoring container runs its image from the project ECR repository by digest. The preparation container reuses the Prometheus image."
+    error_message = "Each monitoring container runs its image from the project ECR repository by digest. The preparation container reuses the Prometheus image and the host exporter reuses the Airflow image."
   }
 }
 
@@ -191,6 +208,7 @@ run "tag_instead_of_digest_for_grafana_is_refused" {
       prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       grafana         = "13.2.5-ubuntu"
       statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      pushgateway     = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     }
   }
 
@@ -324,27 +342,27 @@ run "memory_limits_are_small_and_stated" {
   assert {
     condition = {
       for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container.name => "${container.memoryReservation}/${container.memory}"
-    } == { monitoring_prepare = "16/32", prometheus = "128/256", grafana = "128/256", statsd_exporter = "32/64" }
-    error_message = "The default monitoring memory is Prometheus 256 MiB, Grafana 256 MiB, the exporter 64 MiB and the preparation container 32 MiB, reserving about half of each."
+    } == { monitoring_prepare = "16/32", prometheus = "128/256", grafana = "128/256", statsd_exporter = "32/64", pushgateway = "32/96", host_state_exporter = "56/128" }
+    error_message = "The default monitoring memory reserves 392 MiB (owner decision B): Prometheus 128, Grafana 128, the StatsD exporter 32, the Pushgateway 32, the host exporter 56 and the preparation container 16."
   }
 
   assert {
-    condition     = output.monitoring.memory_mib == { grafana = { limit = 256, reservation = 128 }, prometheus = { limit = 256, reservation = 128 }, statsd_exporter = { limit = 64, reservation = 32 } }
+    condition     = output.monitoring.memory_mib == { grafana = { limit = 256, reservation = 128 }, host_state_exporter = { limit = 128, reservation = 56 }, prometheus = { limit = 256, reservation = 128 }, pushgateway = { limit = 96, reservation = 32 }, statsd_exporter = { limit = 64, reservation = 32 } }
     error_message = "The monitoring output states the limits, so a measurement can be compared with them."
   }
 
   assert {
     condition = alltrue([
       for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) :
-      container.name == "monitoring_prepare" || can(regex("^[0-9]+MiB$", one([for entry in container.environment : entry.value if entry.name == "GOMEMLIMIT"])))
+      contains(["monitoring_prepare", "host_state_exporter"], container.name) || can(regex("^[0-9]+MiB$", one([for entry in container.environment : entry.value if entry.name == "GOMEMLIMIT"])))
     ])
-    error_message = "Each Go container gets a soft memory limit (GOMEMLIMIT), so the runtime collects garbage before the container limit."
+    error_message = "Each Go container gets a soft memory limit (GOMEMLIMIT), so the runtime collects garbage before the container limit. The host exporter is Python and has none."
   }
 
   assert {
     condition = alltrue([
       for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) :
-      container.name == "monitoring_prepare" || tonumber(trimsuffix(one([for entry in container.environment : entry.value if entry.name == "GOMEMLIMIT"]), "MiB")) < container.memory
+      contains(["monitoring_prepare", "host_state_exporter"], container.name) || tonumber(trimsuffix(one([for entry in container.environment : entry.value if entry.name == "GOMEMLIMIT"]), "MiB")) < container.memory
     ])
     error_message = "The soft limit lies below the hard limit."
   }
@@ -371,9 +389,11 @@ run "limits_change_in_one_place" {
 
   variables {
     monitoring_memory_mib = {
-      prometheus      = { limit = 512, reservation = 256 }
-      grafana         = { limit = 384, reservation = 192 }
-      statsd_exporter = { limit = 64, reservation = 32 }
+      prometheus          = { limit = 512, reservation = 256 }
+      grafana             = { limit = 384, reservation = 192 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 96, reservation = 32 }
+      host_state_exporter = { limit = 128, reservation = 56 }
     }
     ecr_repository_urls = {
       postgres        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres"
@@ -384,6 +404,7 @@ run "limits_change_in_one_place" {
       prometheus      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
       grafana         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
       statsd_exporter = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
+      pushgateway     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
     }
     image_digests = {
       postgres        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -394,13 +415,14 @@ run "limits_change_in_one_place" {
       prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       grafana         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      pushgateway     = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     }
   }
 
   assert {
     condition = {
       for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container.name => "${container.memoryReservation}/${container.memory}"
-    } == { monitoring_prepare = "16/32", prometheus = "256/512", grafana = "192/384", statsd_exporter = "32/64" }
+    } == { monitoring_prepare = "16/32", prometheus = "256/512", grafana = "192/384", statsd_exporter = "32/64", pushgateway = "32/96", host_state_exporter = "56/128" }
     error_message = "monitoring_memory_mib alone sets the monitoring limits and reservations."
   }
 
@@ -415,9 +437,11 @@ run "reservation_above_limit_is_refused" {
 
   variables {
     monitoring_memory_mib = {
-      prometheus      = { limit = 128, reservation = 256 }
-      grafana         = { limit = 256, reservation = 128 }
-      statsd_exporter = { limit = 64, reservation = 32 }
+      prometheus          = { limit = 128, reservation = 256 }
+      grafana             = { limit = 256, reservation = 128 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 96, reservation = 32 }
+      host_state_exporter = { limit = 128, reservation = 56 }
     }
   }
 
@@ -429,9 +453,11 @@ run "limit_below_the_working_floor_is_refused" {
 
   variables {
     monitoring_memory_mib = {
-      prometheus      = { limit = 64, reservation = 32 }
-      grafana         = { limit = 256, reservation = 128 }
-      statsd_exporter = { limit = 64, reservation = 32 }
+      prometheus          = { limit = 64, reservation = 32 }
+      grafana             = { limit = 256, reservation = 128 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 96, reservation = 32 }
+      host_state_exporter = { limit = 128, reservation = 56 }
     }
   }
 
@@ -445,9 +471,11 @@ run "monitoring_that_overruns_the_host_is_refused" {
     host_memory_mib        = 16384 # the r7g.large size this refusal is about
     host_usable_memory_mib = 16384 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
     monitoring_memory_mib = {
-      prometheus      = { limit = 1024, reservation = 512 }
-      grafana         = { limit = 1024, reservation = 512 }
-      statsd_exporter = { limit = 64, reservation = 32 }
+      prometheus          = { limit = 1024, reservation = 512 }
+      grafana             = { limit = 1024, reservation = 512 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 96, reservation = 32 }
+      host_state_exporter = { limit = 128, reservation = 56 }
     }
   }
 
@@ -592,12 +620,14 @@ run "state_and_configuration_mounts" {
       } == {
       code_monitoring_grafana_dashboards   = "/mnt/example-data/repo/monitoring/grafana/dashboards"
       code_monitoring_grafana_provisioning = "/mnt/example-data/repo/monitoring/grafana/provisioning"
+      code_monitoring_package              = "/mnt/example-data/repo/monitoring"
       code_monitoring_prometheus           = "/mnt/example-data/repo/monitoring/prometheus"
       code_monitoring_statsd               = "/mnt/example-data/repo/monitoring/statsd"
       grafana_data                         = "/mnt/example-data/grafana"
       prometheus_data                      = "/mnt/example-data/prometheus"
+      pushgateway_data                     = "/mnt/example-data/pushgateway"
     }
-    error_message = "Configuration comes from the repository checkout below the data mount and the two state folders lie on the data volume."
+    error_message = "Configuration comes from the repository checkout below the data mount and the three state folders lie on the data volume."
   }
 
   assert {
@@ -613,8 +643,9 @@ run "state_and_configuration_mounts" {
     condition = (
       strcontains(one([for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container if container.name == "monitoring_prepare"]).command[0], "chown 65534:65534 /prometheus")
       && strcontains(one([for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container if container.name == "monitoring_prepare"]).command[0], "chown 472:0 /grafana")
+      && strcontains(one([for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container if container.name == "monitoring_prepare"]).command[0], "chown 65534:65534 /pushgateway")
     )
-    error_message = "The preparation container hands the Prometheus folder to 65534 and the Grafana folder to 472."
+    error_message = "The preparation container hands the Prometheus and Pushgateway folders to 65534 and the Grafana folder to 472."
   }
 }
 
@@ -676,4 +707,97 @@ run "a_topic_arn_with_a_wildcard_is_refused" {
   }
 
   expect_failures = [var.alerts_topic_arn]
+}
+
+run "the_pushgateway_keeps_its_last_values_on_the_data_volume" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[4].command, "--persistence.file=/pushgateway/pushgateway.db")
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[4].command, "--persistence.interval=1m")
+      && jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[4].mountPoints == [{ sourceVolume = "pushgateway_data", containerPath = "/pushgateway", readOnly = false }]
+    )
+    error_message = "The Pushgateway writes its persistence file on the data volume, so a service restart or a host stop and start keeps the last value of every job."
+  }
+
+  assert {
+    condition     = !can(regex("web\\.enable-admin-api|web\\.enable-lifecycle", aws_ecs_task_definition.service["monitoring"].container_definitions))
+    error_message = "The Pushgateway admin API and lifecycle endpoints stay off."
+  }
+}
+
+run "the_host_exporter_gets_the_cluster_the_region_and_the_job_cap_and_no_credential" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "ECS_CLUSTER", value = "example-project-dev" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "AWS_REGION", value = "us-west-2" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "HAI_LAUNCH_HOST_JOB_CAP_MIB", value = tostring(var.host_job_cap_mib) })
+    )
+    error_message = "The host exporter reads the cluster, the region and the host job cap that the launch preflight reads, from the stack's own values."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].readonlyRootFilesystem
+      && jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].mountPoints == [{ sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true }]
+      && jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].linuxParameters.capabilities.drop == ["ALL"]
+    )
+    error_message = "The host exporter has a read-only root file system, a read-only code mount and no capability."
+  }
+}
+
+run "the_pushgateway_limit_below_its_floor_is_refused" {
+  command = plan
+
+  variables {
+    monitoring_memory_mib = {
+      prometheus          = { limit = 256, reservation = 128 }
+      grafana             = { limit = 256, reservation = 128 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 16, reservation = 8 }
+      host_state_exporter = { limit = 128, reservation = 56 }
+    }
+  }
+
+  expect_failures = [var.monitoring_memory_mib]
+}
+
+run "the_host_exporter_limit_below_its_floor_is_refused" {
+  command = plan
+
+  variables {
+    monitoring_memory_mib = {
+      prometheus          = { limit = 256, reservation = 128 }
+      grafana             = { limit = 256, reservation = 128 }
+      statsd_exporter     = { limit = 64, reservation = 32 }
+      pushgateway         = { limit = 96, reservation = 32 }
+      host_state_exporter = { limit = 32, reservation = 16 }
+    }
+  }
+
+  expect_failures = [var.monitoring_memory_mib]
+}
+
+run "a_missing_pushgateway_digest_is_refused" {
+  command = plan
+
+  variables {
+    image_digests = {
+      postgres        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      redis           = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      polaris         = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      polaris_admin   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      airflow         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      marquez         = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      marquez_web     = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      grafana         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  }
+
+  expect_failures = [var.image_digests]
 }
