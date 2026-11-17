@@ -17,7 +17,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: 'max by (job, phase, outcome) (hai_spark_tasks_failed) > bool 0'
+              expr: 'max by (job, phase, model_set, job_type, outcome) (hai_spark_tasks_failed) > bool 0'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200

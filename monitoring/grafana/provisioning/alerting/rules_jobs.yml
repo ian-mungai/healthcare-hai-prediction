@@ -17,7 +17,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: 'max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) > bool on (job, phase) (max by (job, phase) (hai_job_finish_timestamp_seconds{outcome="succeeded"}) or on (job, phase) max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) * 0)'
+              expr: 'max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) > bool on (job, phase, model_set, job_type) (max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds{outcome="succeeded"}) or on (job, phase, model_set, job_type) max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) * 0)'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -53,7 +53,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: '(time() - hai_job_heartbeat_timestamp_seconds{outcome="running"} > bool 180) * on (job, phase) (hai_job_start_timestamp_seconds{outcome="running"} > bool on (job, phase) (max by (job, phase) (hai_job_finish_timestamp_seconds) or on (job, phase) hai_job_start_timestamp_seconds{outcome="running"} * 0))'
+              expr: '(time() - hai_job_heartbeat_timestamp_seconds{outcome="running"} > bool 180) * on (job, phase, model_set, job_type) (hai_job_start_timestamp_seconds{outcome="running"} > bool on (job, phase, model_set, job_type) (max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds) or on (job, phase, model_set, job_type) hai_job_start_timestamp_seconds{outcome="running"} * 0))'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -89,7 +89,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: '(max by (job, phase) (hai_job_peak_memory_bytes or hai_job_memory_peak_bytes) / scalar(hai_host_job_cap_mib * 1048576)) > bool 0.9'
+              expr: '(max by (job, phase, model_set, job_type) (hai_job_peak_memory_bytes or hai_job_memory_peak_bytes) / scalar(hai_host_job_cap_mib * 1048576)) > bool 0.9'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200

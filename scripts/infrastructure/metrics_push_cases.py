@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +34,7 @@ from scripts.process import run_command
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYTHON = str(REPO_ROOT / ".venv/bin/python")
 LINE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})? (\S+)$")
-Key = tuple[str, str, str]
+Key = tuple[str, ...]
 
 
 def valid_exposition(body: str) -> bool:
@@ -66,9 +67,12 @@ class StandIn:
         class Handler(BaseHTTPRequestHandler):
             def key(self) -> Key | None:
                 parts = [unquote(part) for part in urlparse(self.path).path.strip("/").split("/")]
-                if len(parts) != 7 or parts[0] != "metrics" or parts[1] != "job" or parts[3] != "phase" or parts[5] != "outcome":
+                if len(parts) < 7 or len(parts) % 2 == 0 or parts[0] != "metrics" or parts[1] != "job" or parts[3] != "phase" or parts[5] != "outcome":
                     return None
-                return parts[2], parts[4], parts[6]
+                extra = parts[7:]
+                if any(name not in ("model_set", "job_type") for name in extra[0::2]):
+                    return None
+                return (parts[2], parts[4], parts[6], *extra[1::2])
 
             def reply(self, status: int) -> None:
                 self.send_response(status)
@@ -369,6 +373,65 @@ def a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete(root: Path) -> d
             quiet(call)
             results[name] = time.monotonic() - started
     return {f"a {name} ends within its request timeout": elapsed < 1.3 for name, elapsed in results.items()}
+
+
+def each_model_set_keeps_its_own_group(root: Path) -> dict[str, bool]:
+    """The six model sets share the features family, so the set is a grouping key of its own (review round 2, finding 6). Without it a PUT of m2 replaces
+    the group of m1, and a later success hides an earlier set's failure."""
+    with StandIn() as stand_in:
+        for model_set in ("m1", "m2"):
+            target = pusher(stand_in.url, "features", "build", instance={"model_set": model_set})
+            finish_ok(target, "succeeded" if model_set == "m1" else "failed")
+        other = pusher(stand_in.url, "features", "build")
+        finish_ok(other)
+        keys = set(stand_in.groups)
+        paths = [path for _, path in stand_in.requests]
+    settings = {"PUSHGATEWAY_URL": "http://127.0.0.1:9091", "HAI_JOB": "features"}
+    built = metrics_push.Pusher.create({**settings, "HAI_JOB_SET": "m4"}, ["x", "build"])
+
+    def with_set(value: str) -> tuple[Any, str]:
+        return quiet(partial(metrics_push.Pusher.create, {**settings, "HAI_JOB_SET": value}, ["x", "build"]))
+
+    refused = [with_set(value) for value in ("m9", "m 1", "M1", "../x")]
+    wrong_job = quiet(lambda: metrics_push.Pusher.create({"PUSHGATEWAY_URL": "http://127.0.0.1:9091", "HAI_JOB": "drift", "HAI_JOB_SET": "m1"}, ["x", "check"]))
+    return {
+        "the groups of two sets and of the family itself all stay": keys
+        == {("features", "build", "succeeded", "m1"), ("features", "build", "failed", "m2"), ("features", "build", "succeeded")},
+        "the set is a path segment after the outcome": any(path.endswith("/outcome/succeeded/model_set/m1") for path in paths),
+        "the pusher of the process takes the set from HAI_JOB_SET": built is not None and built.instance == {"model_set": "m4"},
+        "a set outside m1 to m6 or in an odd form is skipped and named, never raised": all(item[0] is None and "HAI_JOB_SET" in item[1] for item in refused),
+        "a set on another family is skipped and named": wrong_job[0] is None and "HAI_JOB_SET" in wrong_job[1],
+    }
+
+
+def a_task_names_its_model_or_its_type_as_a_grouping_key(root: Path) -> dict[str, bool]:
+    """The tasks of the train family run once per model and the tasks of the promote and serve families once per HAI type, each with its own parameters, so
+    the model or the type from those parameters is a grouping key too, with the same reason as the model set of the features family."""
+    url = {"PUSHGATEWAY_URL": "http://127.0.0.1:9091"}
+
+    def made(job: str, argv: list[str], **environment: str) -> metrics_push.Pusher | None:
+        return metrics_push.Pusher.create({**url, "HAI_JOB": job, **environment}, argv)
+
+    train = made("train", ["x", "train"], TRAINING_PARAMETERS=json.dumps({"model": "m2", "hai_types": ["HAI_1"]}))
+    promote = made("promote", ["x", "canary"], TRAINING_PARAMETERS=json.dumps({"hai_type": "HAI_3", "research_run": "20261117T120000Z-0a1b2c3d"}))
+    serve = made("serve", ["x", "serve"], SERVING_REQUEST=json.dumps({"hai_type": "HAI_5", "deploy_mode": "promote"}))
+    odd = [
+        made("train", ["x", "train"], TRAINING_PARAMETERS=json.dumps({"model": "m9"})),
+        made("promote", ["x", "canary"], TRAINING_PARAMETERS="not json"),
+        made("promote", ["x", "canary"], TRAINING_PARAMETERS=json.dumps({"hai_type": "HAI_9"})),
+        made("serve", ["x", "serve"]),
+    ]
+    other = made("gold", ["x", "build"], TRAINING_PARAMETERS=json.dumps({"model": "m2", "hai_type": "HAI_1"}))
+    return {
+        "a train task is grouped by its model": train is not None and train.instance == {"model_set": "m2"},
+        "a promote task is grouped by its HAI type": promote is not None and promote.instance == {"job_type": "HAI_3"},
+        "a serve task is grouped by its HAI type": serve is not None and serve.instance == {"job_type": "HAI_5"},
+        "the path carries the keys after the outcome": promote is not None and promote.path("failed").endswith("/outcome/failed/job_type/HAI_3"),
+        "a model or type outside the closed sets, unreadable parameters or no parameters add no key and never raise": all(
+            item is not None and item.instance == {} for item in odd
+        ),
+        "a family with no per-task parameters ignores them": other is not None and other.instance == {},
+    }
 
 
 def unreachable_is_reported_not_raised(root: Path) -> dict[str, bool]:
@@ -941,6 +1004,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_total_deadline_covers_both_requests": total_deadline_covers_both_requests,
     "push_a_slow_answer_that_never_pauses_still_ends_at_the_deadline": a_slow_answer_that_never_pauses_still_ends_at_the_deadline,
     "push_a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete": a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete,
+    "push_each_model_set_keeps_its_own_group": each_model_set_keeps_its_own_group,
+    "push_a_task_names_its_model_or_its_type_as_a_grouping_key": a_task_names_its_model_or_its_type_as_a_grouping_key,
     "push_unreachable_is_reported_not_raised": unreachable_is_reported_not_raised,
     "push_dropped_connection_is_reported_not_raised": dropped_connection_is_reported_not_raised,
     "push_never_raises_into_the_job": never_raises_into_the_job,

@@ -56,8 +56,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "time() - max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=\"succeeded\"})",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "time() - max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds{outcome=\"succeeded\"})",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -89,8 +89,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "time() - max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=~\"failed|interrupted\"})",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "time() - max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds{outcome=~\"failed|interrupted\"})",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -168,8 +168,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, phase) (hai_job_duration_seconds{outcome=\"succeeded\"})",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "max by (job, phase, model_set, job_type) (hai_job_duration_seconds{outcome=\"succeeded\"})",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -201,8 +201,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, phase) (hai_job_peak_memory_bytes)",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "max by (job, phase, model_set, job_type) (hai_job_peak_memory_bytes)",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -234,8 +234,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, phase) (hai_job_peak_memory_bytes) / scalar(hai_host_job_cap_mib * 1048576)",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "max by (job, phase, model_set, job_type) (hai_job_peak_memory_bytes) / scalar(hai_host_job_cap_mib * 1048576)",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -267,8 +267,8 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, phase) (hai_job_peak_scratch_bytes)",
-          "legendFormat": "{{job}} {{phase}}"
+          "expr": "max by (job, phase, model_set, job_type) (hai_job_peak_scratch_bytes)",
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -314,7 +314,7 @@
             "uid": "hai_prometheus"
           },
           "expr": "time() - hai_job_heartbeat_timestamp_seconds{outcome=\"running\"}",
-          "legendFormat": "{{job}} {{phase}}"
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -347,7 +347,7 @@
             "uid": "hai_prometheus"
           },
           "expr": "hai_job_memory_current_bytes{outcome=\"running\"}",
-          "legendFormat": "{{job}} {{phase}}"
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {
@@ -380,7 +380,7 @@
             "uid": "hai_prometheus"
           },
           "expr": "hai_job_scratch_peak_bytes{outcome=\"running\"}",
-          "legendFormat": "{{job}} {{phase}}"
+          "legendFormat": "{{job}} {{model_set}}{{job_type}} {{phase}}"
         }
       ],
       "fieldConfig": {

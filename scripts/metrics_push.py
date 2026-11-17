@@ -5,6 +5,9 @@ every ``HEARTBEAT_SECONDS`` while it runs (group outcome ``running``), and an ex
 deletes the running group. A job killed hard never reaches its exit push: its running group keeps the last heartbeat, which the alert rules read.
 
 - The address is ``PUSHGATEWAY_URL`` (plain http, the host's private address) and the job family is ``HAI_JOB``. Without the address nothing is sent.
+- Tasks of one family that run more than once would replace each other's group, so the instance is a grouping key too: ``model_set`` (m1 to m6) for a features
+  task of a set (``HAI_JOB_SET``) and a train task (the ``model`` of its ``TRAINING_PARAMETERS``), and ``job_type`` (a HAI type) for a promote task (its
+  ``TRAINING_PARAMETERS``) and a serve task (its ``SERVING_REQUEST``). A value outside its closed set adds no key.
 - The grouping keys come from closed sets: ``job`` (``JOB_PHASES``), ``phase`` (the phase word of the command line) and ``outcome`` (``OUTCOMES``). A run ID,
   a hospital or a key is never a label: a sample whose metric or label is not in ``CATALOG`` is dropped and named on standard error.
 - Every request has one absolute deadline, enforced through the connect, the send and every read of the answer (an inactivity timeout alone lets a slow peer
@@ -14,6 +17,7 @@ deletes the running group. A job killed hard never reaches its exit push: its ru
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import socket
@@ -26,6 +30,17 @@ from urllib.parse import quote, urlparse
 
 URL_VARIABLE = "PUSHGATEWAY_URL"
 JOB_VARIABLE = "HAI_JOB"
+JOB_SET_VARIABLE = "HAI_JOB_SET"
+MODEL_SETS = ("m1", "m2", "m3", "m4", "m5", "m6")
+JOB_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
+# The families whose tasks run once per model set, per model or per HAI type take that value as one more grouping key. Each entry: the variable that holds the
+# task's JSON parameters, the field of that JSON and the grouping key.
+INSTANCE_PARAMETERS = {
+    "train": ("TRAINING_PARAMETERS", "model", "model_set"),
+    "promote": ("TRAINING_PARAMETERS", "hai_type", "job_type"),
+    "serve": ("SERVING_REQUEST", "hai_type", "job_type"),
+}
+INSTANCE_VALUES = {"model_set": MODEL_SETS, "job_type": JOB_TYPES}
 REQUEST_TIMEOUT = 3.0
 TOTAL_TIMEOUT = 5.0
 STATUS_LINE_LIMIT = 8192
@@ -225,6 +240,26 @@ def phase_of(job: str, argv: Sequence[str]) -> str | None:
     return first if first in phases else None
 
 
+def instance_of(job: str, environ: Mapping[str, str]) -> dict[str, str]:
+    """The instance keys of this task: the set of a features task from ``HAI_JOB_SET`` (an explicit setting, so a bad value raises ValueError and the push is
+    skipped by name), and the model or HAI type that the task's own parameters name for the train, promote and serve families. Parameters that cannot be read,
+    or whose value is outside its closed set, add no key."""
+    explicit = environ.get(JOB_SET_VARIABLE)
+    if explicit:
+        if job != "features" or explicit not in MODEL_SETS:
+            raise ValueError(f"{JOB_SET_VARIABLE} is allowed only for the features family and must be one of m1 to m6")
+        return {"model_set": explicit}
+    source = INSTANCE_PARAMETERS.get(job)
+    if source is None:
+        return {}
+    variable, field_name, key = source
+    try:
+        value = json.loads(environ.get(variable, "")).get(field_name)
+    except (ValueError, AttributeError):
+        return {}
+    return {key: value} if isinstance(value, str) and value in INSTANCE_VALUES[key] else {}
+
+
 def exchange(host: str, port: int, request: bytes, deadline: float) -> int:
     """Send one HTTP request and return the status of the answer, with one absolute monotonic deadline over the connect, the send and every read. Each
     socket operation gets only the time that is left, so a peer that answers one byte at a time ends at the deadline like a silent one. Only the status line
@@ -257,12 +292,24 @@ def exchange(host: str, port: int, request: bytes, deadline: float) -> int:
 class Pusher:
     """The pushes of one job process."""
 
-    def __init__(self, url: str, job: str, phase: str, *, request_timeout: float | None = None, total_timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        job: str,
+        phase: str,
+        *,
+        request_timeout: float | None = None,
+        total_timeout: float | None = None,
+        instance: Mapping[str, str] | None = None,
+    ) -> None:
         parsed = urlparse(url)
         if parsed.scheme != "http" or not parsed.hostname:
             raise ValueError("the address must be a plain http address with a host")
         if phase not in JOB_PHASES.get(job, ()):
             raise ValueError("the job or phase is not in the closed table")
+        self.instance = dict(instance or {})
+        if any(value not in INSTANCE_VALUES.get(key, ()) for key, value in self.instance.items()):
+            raise ValueError("an instance key must be model_set (m1 to m6) or job_type (HAI_1 to HAI_6)")
         self.host, self.port, self.job, self.phase = parsed.hostname, parsed.port or 80, job, phase
         self.request_timeout, self.total_timeout = request_timeout, total_timeout
         self.started_at = time.time()
@@ -290,13 +337,14 @@ class Pusher:
             line("metrics_push_skipped", reason="the command has no known phase of this family")
             return None
         try:
-            return cls(url, job, phase)
+            return cls(url, job, phase, instance=instance_of(job, environ))
         except ValueError as error:
             line("metrics_push_skipped", reason=str(error))
             return None
 
     def path(self, outcome: str) -> str:
-        return f"/metrics/job/{quote(self.job, safe='')}/phase/{quote(self.phase, safe='')}/outcome/{quote(outcome, safe='')}"
+        base = f"/metrics/job/{quote(self.job, safe='')}/phase/{quote(self.phase, safe='')}/outcome/{quote(outcome, safe='')}"
+        return base + "".join(f"/{key}/{quote(value, safe='')}" for key, value in sorted(self.instance.items()))
 
     def send(self, method: str, outcome: str, body: str, timeout: float, *, quiet: bool = False) -> bool:
         """One request; False and one named line on any failure, unless ``quiet``."""

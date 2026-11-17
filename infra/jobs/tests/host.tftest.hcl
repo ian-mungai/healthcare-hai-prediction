@@ -1098,6 +1098,21 @@ run "every_host_container_pushes_its_metrics_to_the_pushgateway_with_its_family_
     error_message = "Every container of every host family gets the Pushgateway address on the host private IP (port 9091) and its job family name, which a model set family takes from the features family. The job code pushes its own metrics there."
   }
 
+  # The six model sets share the features family, so each set pushes under its own grouping key HAI_JOB_SET (m1 to m6): a later set no longer replaces the
+  # group of an earlier one in the Pushgateway, and a later success cannot hide an earlier set's failure (review round 2, finding 6). No other family has it.
+  assert {
+    condition = alltrue(flatten([
+      for family, definition in aws_ecs_task_definition.host : [
+        for container in jsondecode(definition.container_definitions) : (
+          startswith(family, "features_m")
+          ? [for entry in container.environment : entry.value if entry.name == "HAI_JOB_SET"] == [trimprefix(family, "features_")]
+          : length([for entry in container.environment : entry if entry.name == "HAI_JOB_SET"]) == 0
+        )
+      ]
+    ]))
+    error_message = "A model set family names its set in HAI_JOB_SET in every container, and no other family sets it."
+  }
+
   assert {
     condition = alltrue(flatten([
       for family, definition in aws_ecs_task_definition.host : [

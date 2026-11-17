@@ -236,12 +236,15 @@ locals {
   }
   host_last_phase = { for family, names in local.host_phase_names : family => length(names) > 0 ? names[length(names) - 1] : "" }
   # The job code pushes its own metrics to the Pushgateway on the host (scripts/metrics_push.py): the address is the host private IP and port 9091, and the job
-  # family is the family name, or the features family for a model set. No address leaves the containers as they were. The environment adds no container.
+  # family is the family name, or the features family for a model set, which also names its set (m1 to m6) so each set has its own Pushgateway group. No address leaves the containers as they were. The environment adds no container.
   host_metrics_environment = {
-    for family in keys(local.host_selected) : family => var.host_private_ip == null ? [] : [
-      { name = "PUSHGATEWAY_URL", value = "http://${var.host_private_ip}:9091" },
-      { name = "HAI_JOB", value = lookup(local.host_set_families, family, family) },
-    ]
+    for family in keys(local.host_selected) : family => var.host_private_ip == null ? [] : concat(
+      [
+        { name = "PUSHGATEWAY_URL", value = "http://${var.host_private_ip}:9091" },
+        { name = "HAI_JOB", value = lookup(local.host_set_families, family, family) },
+      ],
+      contains(keys(local.host_set_families), family) ? [{ name = "HAI_JOB_SET", value = trimprefix(family, "features_") }] : []
+    )
   }
   host_containers = {
     for family in keys(local.host_selected) : family => [

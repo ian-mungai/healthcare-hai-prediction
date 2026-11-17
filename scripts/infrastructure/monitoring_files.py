@@ -84,7 +84,7 @@ TERRAFORM_JOBS = (
     "node_exporter",
 )
 OVERVIEW = "hai_overview"
-PUSH_GROUPING = ("job", "phase", "outcome")
+PUSH_GROUPING = ("job", "phase", "outcome", "model_set", "job_type")
 SCHEDULER_ALERT = "AirflowSchedulerSilent"
 SCHEDULER_ABSENT = "absent(airflow_scheduler_heartbeat_total)"
 REQUIRED_ROWS = {"DAG": 3, "Jobs": 2, "API": 3}  # the rows of the overview dashboard only

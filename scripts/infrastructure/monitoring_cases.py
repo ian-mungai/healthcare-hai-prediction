@@ -15,6 +15,7 @@ from pathlib import Path
 from scripts.infrastructure import monitoring_files
 from scripts.infrastructure.host_state_exporter_cases import CASES as EXPORTER_CASES
 from scripts.infrastructure.host_state_policy_cases import CASES as HOST_POLICY_CASES
+from scripts.infrastructure.job_identity_cases import CASES as JOB_IDENTITY_CASES
 from scripts.infrastructure.layer_publish_cases import CASES as PUBLISH_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
@@ -326,8 +327,8 @@ def known_list_gives_a_pushed_metric_another_label_set(root: Path) -> dict[str, 
         lambda tree: edit(
             tree,
             KNOWN,
-            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]}',
-            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome"]}',
+            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type", "hai_type"]}',
+            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome", "model_set", "job_type"]}',
         ),
         "hai_drift_share",
     )
@@ -483,3 +484,4 @@ CASES |= PUBLISH_CASES
 CASES |= REDIS_CASES
 CASES |= POSTGRES_CASES
 CASES |= HOST_POLICY_CASES
+CASES |= JOB_IDENTITY_CASES
