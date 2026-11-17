@@ -94,3 +94,10 @@ config scripts/lakehouse/run_launcher_e2e.py -- clientId and clientSecret are fi
 script tests/test_no_fargate_leftovers.py -- the test requires the removed config/orchestration/ecs_jobs.json and ecs_jobs.schema.json to stay gone -- expires-when path-absent:tests/test_no_fargate_leftovers.py
 flag orchestration/ecs_lineage.py -- --dag-id, --task-id and --dag-run-id are the replay command's own argparse flags; they are unrelated to the same-named flags of the deleted broker command -- permanent
 flag scripts/orchestration/ecs_lineage_cases.py -- the cases call the replay command with its own flags --dag-id, --task-id and --dag-run-id; they are unrelated to the same-named flags of the deleted broker command -- permanent
+flag infra/services/airflow.tf -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag infra/services/mlflow.tf -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag infra/services/tests/services.tftest.hcl -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag orchestration/mlflow_service.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag scripts/infrastructure/owner_list_host_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag scripts/training/aws_run_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
+flag services/mlflow/docker-compose.mlflow.yaml -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent

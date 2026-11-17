@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import os
-import socket
 import sqlite3
 import stat
 import sys
@@ -247,7 +246,7 @@ def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = N
 
 
 class Outbox:
-    """Persist immutable event bytes and acknowledgments under bounded SQLite transactions."""
+    """Persist immutable event bytes under bounded SQLite transactions."""
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -283,9 +282,7 @@ class Outbox:
         if not self.connection.in_transaction:
             raise LineageError("outbox schema upgrade did not open its transaction")
         try:
-            self.connection.execute(
-                "CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL, acked INTEGER NOT NULL DEFAULT 0)"
-            )
+            self.connection.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL, sequence INTEGER NOT NULL)")
             columns = self._event_columns()
             if "om_state" not in columns:
                 self.connection.execute("ALTER TABLE events ADD COLUMN om_state INTEGER NOT NULL DEFAULT 0")
@@ -368,81 +365,6 @@ class Outbox:
         row = self.connection.execute("SELECT link FROM provider_runs WHERE caller=?", (provider_events.caller_key(request),)).fetchone()
         return json.loads(row[0]) if row is not None else None
 
-    def pending(self, limit: int) -> list[tuple[str, str]]:
-        """Return at most limit event identities and immutable JSON payloads that Marquez has not acknowledged."""
-        return self._pending("marquez", limit)
-
-    def _pending(self, receiver: str, limit: int) -> list[tuple[str, str]]:
-        """Select the events one receiver has not answered, in event order, holding back events whose native callbacks are still deferred."""
-        if not 1 <= limit <= MAX_RECORDS:
-            raise LineageError("outbox limit must be between 1 and 10000")
-        return list(
-            self.connection.execute(
-                "SELECT e.id,e.payload FROM events e WHERE (CASE ? WHEN 'marquez' THEN e.acked ELSE e.om_state END)=0 AND NOT EXISTS "
-                "(SELECT 1 FROM provider_events p WHERE p.flushed=0 "
-                "AND json_extract(p.envelope,'$.event.run.runId')=json_extract(e.payload,'$.run.runId')) "
-                "ORDER BY julianday(json_extract(e.payload,'$.eventTime')), "
-                "CASE json_extract(e.payload,'$.eventType') WHEN 'START' THEN 0 WHEN 'RUNNING' THEN 1 ELSE 2 END, e.rowid LIMIT ?",
-                (receiver, limit),
-            )
-        )
-
-    def deliver(self, host: str, port: int, *, timeout: float = 3, limit: int = 100, deadline_seconds: float = 30) -> dict[str, int]:
-        """Send pending events to a loopback Marquez API and retain every unacknowledged payload."""
-        if host not in ("127.0.0.1", "::1") or not 1 <= port <= 65535 or not 0 < timeout <= 30 or not 0 < deadline_seconds <= 300:
-            raise LineageError("delivery needs loopback, a valid port and bounded positive timeouts")
-        deadline = time.monotonic() + deadline_seconds
-        with self.queries_until(deadline):
-            return self._deliver_pending(host, port, timeout, limit, deadline)
-
-    def _deliver_pending(self, host: str, port: int, timeout: float, limit: int, deadline: float) -> dict[str, int]:
-        """Deliver a selected batch within the caller's already active connection and transport deadlines."""
-        delivered = 0
-        for event_id, payload in self.pending(limit):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            with self.connection:
-                self.connection.execute("BEGIN IMMEDIATE")
-                row = self.connection.execute("SELECT acked FROM events WHERE id=?", (event_id,)).fetchone()
-                if row[0]:
-                    continue
-                try:
-                    accepted = post_event(host, port, payload, min(deadline, time.monotonic() + timeout))
-                except OSError:
-                    break
-                if accepted:
-                    self.connection.execute("UPDATE events SET acked=1 WHERE id=?", (event_id,))
-                    delivered += 1
-                else:
-                    break
-        pending = self.connection.execute("SELECT COUNT(*) FROM events WHERE acked=0").fetchone()[0]
-        return {"delivered": delivered, "pending": pending}
-
-
-def post_event(host: str, port: int, payload: str, deadline: float) -> bool:
-    data = payload.encode()
-    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-    header = f"POST /api/v1/lineage HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n"
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("lineage delivery deadline passed")
-    with socket.create_connection((host, port), timeout=remaining) as connection:
-        connection.settimeout(max(0.001, deadline - time.monotonic()))
-        connection.sendall(header.encode() + data)
-        response = b""
-        while b"\r\n\r\n" not in response:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or len(response) >= 8192:
-                return False
-            connection.settimeout(remaining)
-            chunk = connection.recv(min(8192 - len(response), 4096))
-            if not chunk:
-                return False
-            response += chunk
-    status = response.split(b"\r\n", 1)[0].split(b" ")
-    return len(status) >= 2 and status[0] in (b"HTTP/1.0", b"HTTP/1.1") and status[1].isdigit() and 200 <= int(status[1]) < 300
-
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -524,24 +446,20 @@ def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: f
 
 
 def main() -> int:
-    """Sweep explicit record and outbox paths, with optional bounded loopback delivery."""
+    """Sweep explicit record and outbox paths."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", type=Path, required=True)
     parser.add_argument("--outbox", type=Path, required=True)
-    parser.add_argument("--port", type=int)
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--deadline-seconds", type=float, default=30)
     args = parser.parse_args()
     try:
         result = sweep(args.records, args.outbox, limit=args.limit, deadline_seconds=args.deadline_seconds)
-        if args.port is not None:
-            with Outbox(args.outbox) as box:
-                result.update(box.deliver("127.0.0.1", args.port, limit=args.limit, deadline_seconds=args.deadline_seconds))
     except LineageError as error:
         sys.stderr.write(f"lineage: {error}\n")
         return 1
     except (OSError, ValueError, sqlite3.Error) as error:
-        sys.stderr.write(f"lineage: collection or delivery failed ({type(error).__name__}), inspect local storage and input contracts\n")
+        sys.stderr.write(f"lineage: collection failed ({type(error).__name__}), inspect local storage and input contracts\n")
         return 1
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0
