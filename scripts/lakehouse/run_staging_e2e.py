@@ -718,7 +718,7 @@ def macro_list(macro: str) -> tuple[str, ...]:
 
 
 # The bronze columns of the state sources (group E): HCAI financial disclosure (a long table; the first layout has a leading _id column),
-# HCAI utilization (one 354-column layout whose person columns bronze pseudonymizes) and the Illinois Hospital Report Card.
+# HCAI utilization (one 354-column layout whose person columns bronze redacts) and the Illinois Hospital Report Card.
 HCAI_FINANCE_COLUMNS = ("u_id", "oshpd_id", "rpe", "pagecolumnline", "values")
 HCAI_UTIL_COLUMNS = (
     "description",
@@ -2189,10 +2189,10 @@ GROUP_B5B = (
 # redacted cell, a value in parentheses, a four-component code, and rows the silver models hold without echoing them (free text that could name a
 # person, a facility, period or line that cannot be keyed). HCAI utilization: a facility with a full-year and a part-year report, Excel serial dates, a
 # missing-value token, a spreadsheet error, a county no list names, a blank county, a reversed period, numbers that do not type, a description row that
-# is no facility and a non-respondent; the person cells (pseudonym-shaped, as bronze pseudonymizes them), the phone and address cells and every rejected
-# text carry sentinel text that no silver column may keep. Illinois: two releases of one entity, measure and period, a county written De Kalb, a blank
-# value, a missing token and rows the model holds (entity or measure that is no number, reversed period, value that is no number, counties no list
-# names).
+# is no facility and a non-respondent; the person cells (pseudonym-shaped, so the check also covers pseudonymized sources), the phone and address cells
+# and every rejected text carry sentinel text that no silver column may keep. Illinois: two releases of one entity, measure and period, a county written
+# De Kalb, a blank value, a missing token and rows the model holds (entity or measure that is no number, reversed period, value that is no number,
+# counties no list names).
 SENTINEL_TEXT = ("SENTINEL_PSEUDONYM_ADMIN", "SENTINEL_PSEUDONYM_PREPARER", "SENTINEL_PHONE", "SENTINEL_STREET", "SENTINEL_PARENT")
 
 

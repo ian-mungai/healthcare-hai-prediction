@@ -219,7 +219,7 @@
 {% endmacro %}
 
 {% macro hcai_util_withheld_columns() %}
-{#- The HCAI utilization columns silver never carries: administrator and report preparer names, the facility phone and street address, and the parent corporation's name and address. Bronze pseudonymizes them; silver leaves them out and publishes no pseudonym as well, and assert_state_models_hold_no_person_columns names them. -#}
+{#- The HCAI utilization columns silver never carries: administrator and report preparer names, the facility phone and street address, and the parent corporation's name and address. Bronze redacts them at load; silver leaves them out and publishes no pseudonym as well, and assert_state_models_hold_no_person_columns names them. -#}
 {{ return([
     'fac_str_addr',
     'fac_phone',
