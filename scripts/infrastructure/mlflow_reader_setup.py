@@ -2,8 +2,9 @@
 
 The registry grants nothing by default (``default_permission`` NO_PERMISSIONS), so the OpenMetadata MLflow connector needs a login of its own. This step makes
 one: the user ``metadata_reader`` with READ on every registered model, experiment and logged model (the ``*`` pattern, so a model registered later needs no new
-grant, which MLflow 3.17.2 accepts). Its password is a generated SecureString parameter that only this step writes, with ``Overwrite`` off, so a rerun never
-replaces it. The parameter is the source of truth: a user that carries another password is set back to the stored value.
+grant, which MLflow 3.17.2 accepts) and nothing more. A user that is an administrator or holds an EDIT or MANAGE grant of its own is brought back to READ.
+A write grant from a shared role stops the step with the role named. The password is a generated SecureString parameter that only this step writes, with
+``Overwrite`` off, so a rerun never replaces it. The parameter is the source of truth: a user that carries another password is set back to the stored value.
 No password is printed or written to a file.
 
 Run by the owner with the administrator profile, after the IAM apply that lets the metadata job's execution role inject the parameter and with the registry
@@ -29,13 +30,23 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from scripts.infrastructure.openmetadata_mlmodel_edges import DEADLINE_SECONDS, GRANT_KINDS, READER, Client, StepFailed, reader_may_read
+from scripts.infrastructure.openmetadata_mlmodel_edges import (
+    DEADLINE_SECONDS,
+    GRANT_KINDS,
+    READ_LEVELS,
+    READER,
+    WRITE_LEVELS,
+    Client,
+    StepFailed,
+    reader_problem,
+)
 from scripts.infrastructure.openmetadata_raw_files import Http, http_request
 
 READER_PARAMETER = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
 ADMIN_PARAMETER = "/healthcare_hai_prediction/mlflow_admin_password"
 LOOPBACK_REGISTRY = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}")
 ADMIN_USER = "admin"
+SYNTHETIC_ROLE = "__user_"  # the role MLflow makes for one user's own grants: the only role this step may change
 
 
 def basic(user: str, secret: str) -> dict[str, str]:
@@ -74,20 +85,43 @@ def stored_reader_login(ssm: Any, name: str) -> tuple[str, bool]:
     return value, True
 
 
-def reader_grants(client: Client, registry: str, reader: Mapping[str, str]) -> tuple[int, set[str]]:
+def reader_permissions(client: Client, registry: str, reader: Mapping[str, str]) -> Mapping[str, Any]:
     status, permissions = client.call("GET", f"{registry}/api/3.0/mlflow/users/current/permissions", reader)
-    granted: set[str] = set()
-    if status == 200 and isinstance(permissions, dict):
-        granted = {
-            str(item.get("resource_type"))
-            for item in permissions.get("permissions") or []
-            if isinstance(item, dict) and item.get("resource_pattern") == "*" and item.get("permission") in ("READ", "USE", "EDIT", "MANAGE")
-        }
-    return status, granted
+    if status != 200 or not isinstance(permissions, dict):
+        raise StepFailed(f"the registry answered HTTP {status} to the login of {READER}")
+    return permissions
+
+
+def downgrade(client: Client, registry: str, admin: Mapping[str, str], permissions: Mapping[str, Any]) -> list[str]:
+    """Take administrator rights and every EDIT or MANAGE grant away from the reader. A write grant that comes from a role other than the user's own cannot be
+    revoked here, so it stops the step with the role named."""
+    changed: list[str] = []
+    if permissions.get("is_admin") is True:
+        status, _ = client.call("PATCH", f"{registry}/api/2.0/mlflow/users/update-admin", admin, {"username": READER, "is_admin": False})
+        if status != 200:
+            raise StepFailed(f"the registry answered HTTP {status} when the administrator rights of {READER} were removed")
+        changed.append("administrator rights removed")
+    for item in permissions.get("permissions") or []:
+        if not isinstance(item, dict) or item.get("permission") not in WRITE_LEVELS:
+            continue
+        label = f"{item.get('permission')} on {item.get('resource_type')} {item.get('resource_pattern')}"
+        role = str(item.get("role_name", ""))
+        if not role.startswith(SYNTHETIC_ROLE):
+            raise StepFailed(f"the grant {label} of {READER} comes from the role {role}, which this step does not change: remove it there")
+        status, _ = client.call(
+            "POST",
+            f"{registry}/api/3.0/mlflow/users/permissions/revoke",
+            admin,
+            {"username": READER, "resource_type": item["resource_type"], "resource_id": item["resource_pattern"]},
+        )
+        if status != 200:
+            raise StepFailed(f"the registry answered HTTP {status} when the grant {label} of {READER} was revoked")
+        changed.append(f"{label} revoked")
+    return changed
 
 
 def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], stored: str) -> list[str]:
-    """Bring the user and its grants to the wanted state and return what changed."""
+    """Bring the user to the read-only state (no administrator, no write grant, READ on all models, experiments and logged models); return what changed."""
     changed: list[str] = []
     reader = basic(READER, stored)
     status, _ = client.call("GET", f"{registry}/api/2.0/mlflow/users/get?{urllib.parse.urlencode({'username': READER})}", admin)
@@ -96,7 +130,7 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
         status, _ = client.call("POST", f"{registry}/api/2.0/mlflow/users/create", admin, body)
         changed.append("user created")
     elif status == 200:
-        status, _ = reader_grants(client, registry, reader)
+        status, _ = client.call("GET", f"{registry}/api/3.0/mlflow/users/current/permissions", reader)
         if status == 401:
             status, _ = client.call("PATCH", f"{registry}/api/2.0/mlflow/users/update-password", admin, body)
             changed.append("password set to the stored value")
@@ -104,9 +138,16 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
             status = 200
     if status != 200:
         raise StepFailed(f"the registry answered HTTP {status} while the user {READER} was read, created or updated (an administrator login is needed)")
-    status, granted = reader_grants(client, registry, reader)
-    if status != 200:
-        raise StepFailed(f"the registry answered HTTP {status} to the login of {READER}")
+    permissions = reader_permissions(client, registry, reader)
+    lowered = downgrade(client, registry, admin, permissions)
+    if lowered:
+        changed.extend(lowered)
+        permissions = reader_permissions(client, registry, reader)
+    granted = {
+        item.get("resource_type")
+        for item in permissions.get("permissions") or []
+        if isinstance(item, dict) and item.get("resource_pattern") == "*" and item.get("permission") in READ_LEVELS
+    }
     for kind in GRANT_KINDS:
         if kind not in granted:
             status, _ = client.call(
@@ -118,9 +159,9 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
             if status != 200:
                 raise StepFailed(f"the registry answered HTTP {status} when READ on every {kind} was granted")
             changed.append(f"READ on every {kind}")
-    status, final = client.call("GET", f"{registry}/api/3.0/mlflow/users/current/permissions", reader)
-    if status != 200 or not reader_may_read(final):
-        raise StepFailed(f"the login of {READER} does not read every registered model, experiment and logged model after the setup (HTTP {status})")
+    problem = reader_problem(reader_permissions(client, registry, reader))
+    if problem:
+        raise StepFailed(f"the login of {READER} is not read-only after the setup: {problem}")
     return changed
 
 

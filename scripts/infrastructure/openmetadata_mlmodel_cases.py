@@ -60,11 +60,17 @@ class World:
         models: tuple[str, ...] | Mapping[str, list[dict[str, str]]] = (),
         ingested: tuple[str, ...] | None = None,
         grants: str = "reader",
+        others: tuple[str, ...] = (),
     ) -> None:
         # Each registered model with its versions in order (version 1 first), each version as its tags. A plain name list gives one version of set m2.
         self.versions: dict[str, list[dict[str, str]]] = dict(models) if isinstance(models, Mapping) else {name: [set_tags("m2")] for name in models}
         self.mlflow_models = set(self.versions)
-        self.grants = grants  # reader: wildcard READ on models, experiments and logged models; none: no grant at all; model_only: one model name only
+        self.others = set(others)  # registered models outside the model contract
+        self.page_size = 200  # versions and models per page of the registry's search answers
+        self.indirect_edges: set[tuple[str, str]] = set()  # edges between other entities, which a deeper lineage read shows beside the model's own
+        # reader: wildcard READ on models, experiments and logged models; none: no grant at all; model_only: one model name only; use: USE on all three;
+        # edit, manage_named and admin: an elevated login (write privilege on every model, MANAGE on one experiment, an administrator)
+        self.grants = grants
         self.mlmodels = {f"{SERVICE}.{name}": f"model-{index}" for index, name in enumerate(sorted(self.mlflow_models if ingested is None else ingested))}
         self.tables: dict[str, str] = {}
         self.edge_set: set[tuple[str, str]] = set()
@@ -129,10 +135,12 @@ class World:
         if method == "GET" and path.startswith("/api/v1/lineage/mlmodel/name/"):
             fqn = path.rsplit("/", 1)[1]
             model = self.mlmodels[fqn]
+            shown = self.edge_set | self.foreign_edges
             upstream = (
                 []
                 if self.hide_edges
-                else [{"fromEntity": source, "toEntity": target} for source, target in sorted(self.edge_set | self.foreign_edges) if target == model]
+                else [{"fromEntity": source, "toEntity": target} for source, target in sorted(shown) if target == model]
+                + [{"fromEntity": source, "toEntity": target} for source, target in sorted(self.indirect_edges)]
             )
             return 200, {"entity": {"id": model, "type": "mlmodel", "fullyQualifiedName": fqn}, "nodes": [], "upstreamEdges": upstream, "downstreamEdges": []}
         return 404, {"code": 404, "message": f"no route {method} {path}"}
@@ -141,22 +149,36 @@ class World:
         if headers.get("Authorization") != "Basic " + base64.b64encode(":".join(READER).encode()).decode():
             return 401, None
         if method == "GET" and path == "/api/3.0/mlflow/users/current/permissions":
-            wildcard = [
-                {"permission": "READ", "resource_pattern": "*", "resource_type": kind, "role_id": 2, "role_name": "__user_2__", "workspace": "default"}
-                for kind in ("registered_model", "experiment", "logged_model")
-            ]
-            named = [
-                {
-                    "permission": "READ",
-                    "resource_pattern": "synthetic",
-                    "resource_type": "registered_model",
+
+            def item(kind: str, permission: str = "READ", pattern: str = "*") -> dict[str, Any]:
+                return {
+                    "permission": permission,
+                    "resource_pattern": pattern,
+                    "resource_type": kind,
                     "role_id": 2,
                     "role_name": "__user_2__",
                     "workspace": "default",
                 }
-            ]
-            grants = {"reader": wildcard, "none": [], "model_only": named, "no_experiment": wildcard[:1] + wildcard[2:]}[self.grants]
-            return 200, {"is_admin": False, "permissions": grants}
+
+            kinds = ("registered_model", "experiment", "logged_model")
+            wildcard = [item(kind) for kind in kinds]
+            grants = {
+                "reader": wildcard,
+                "none": [],
+                "model_only": [item("registered_model", pattern="synthetic")],
+                "no_experiment": wildcard[:1] + wildcard[2:],
+                "use": [item(kind, "USE") for kind in kinds],
+                "edit": [item("registered_model", "EDIT"), *wildcard[1:]],
+                "manage_named": [*wildcard, item("experiment", "MANAGE", "1")],
+                "admin": [],
+            }[self.grants]
+            return 200, {"is_admin": self.grants == "admin", "permissions": grants}
+        if method == "GET" and path == "/api/2.0/mlflow/registered-models/search":
+            names = sorted(self.mlflow_models | self.others)
+            start = int(query.get("page_token", ["0"])[0])
+            page = names[start : start + self.page_size]
+            more = start + self.page_size < len(names)
+            return 200, {"registered_models": [{"name": name} for name in page], **({"next_page_token": str(start + self.page_size)} if more else {})}
         if method == "GET" and path == "/api/2.0/mlflow/registered-models/get":
             name = query["name"][0]
             if name in self.mlflow_models:
@@ -164,6 +186,8 @@ class World:
             return 404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": f"Registered Model with name={name} not found"}
         if method == "GET" and path == "/api/2.0/mlflow/model-versions/search":
             name = query["filter"][0].removeprefix("name='").removesuffix("'")
+            ordered = sorted(enumerate(self.versions.get(name, []), start=1))  # oldest first: the newest version of many is on the last page
+            start = int(query.get("page_token", ["0"])[0])
             found = [
                 {
                     "name": name,
@@ -172,8 +196,11 @@ class World:
                     "status": "READY",
                     **({"tags": [{"key": k, "value": v} for k, v in tags.items()]} if tags else {}),
                 }
-                for number, tags in sorted(enumerate(self.versions.get(name, []), start=1), reverse=True)
+                for number, tags in ordered[start : start + self.page_size]
             ]
+            more = start + self.page_size < len(ordered)
+            if more:
+                return 200, {"model_versions": found, "next_page_token": str(start + self.page_size)}
             return 200, ({"model_versions": found} if found else {})
         return 404, {"error_code": "ENDPOINT_NOT_FOUND", "message": path}
 
@@ -335,7 +362,77 @@ def a_rerun_and_a_second_ingest_keep_the_same_edges() -> None:
     require(all(call[0] != "PATCH" for call in world.calls), "a repeat must not patch")
 
 
-def a_reader_without_the_wildcard_grants_fails_visibly() -> None:
+def an_indirect_upstream_edge_is_not_a_stale_edge_of_the_model() -> None:
+    """With ``m1 -> foreign table -> model`` beside ``m2 -> model``, a lineage read also shows ``m1 -> foreign``, which is not an edge into the model."""
+    require = base().require
+    world = World(models=("hai_model_HAI_1",))
+    world.catalog_all_tables()
+    first = model_sets()["m1"]["table"]
+    world.foreign_edges.add(("table-foreign", "model-0"))
+    world.indirect_edges.add((f"table-{first}", "table-foreign"))
+    code, out, err = run(world)
+    require(code == 0, (code, out, err))
+    require(not any(call[0] == "DELETE" for call in world.calls), f"an edge that does not exist was deleted: {[c for c in world.calls if c[0] == 'DELETE']}")
+    require(world.edge_set == {(f"table-{model_sets()['m2']['table']}", "model-0")} and ("table-foreign", "model-0") in world.foreign_edges, world.edge_set)
+    lineage_reads = [url for method, url in world.calls if method == "GET" and "/api/v1/lineage/" in url]
+    require(lineage_reads and all("upstreamDepth=1&" in url for url in lineage_reads), f"the step asks for the direct edges only: {lineage_reads}")
+    # The same holds when a model's own stale edge and an indirect edge are both there.
+    world.versions["hai_model_HAI_1"].append(set_tags("m1"))
+    code, out, err = run(world)
+    require(
+        code == 0 and world.edge_set == {(f"table-{first}", "model-0")}, f"the stale edge of the model goes and nothing else: {(code, err, world.edge_set)}"
+    )
+
+
+def the_newest_of_many_versions_decides_across_pages_and_past_nine() -> None:
+    """Versions 1 to 8 are of set m2, version 9 of m4 and version 10 of m1, on pages of four. The newest is 10 (not "9" by text order) on the last page."""
+    require = base().require
+    versions = [set_tags("m2")] * 8 + [set_tags("m4"), set_tags("m1")]
+    world = World(models={"hai_model_HAI_1": versions})
+    world.page_size = 4
+    world.catalog_all_tables()
+    code, out, err = run(world)
+    require(code == 0, (code, out, err))
+    require(
+        world.edge_set == {(f"table-{model_sets()['m1']['table']}", "model-0")}, f"the newest version, number 10 on the third page, decides: {world.edge_set}"
+    )
+    pages = [url for method, url in world.calls if method == "GET" and "model-versions/search" in url]
+    require(len(pages) == 3, f"every page of versions is read: {pages}")
+    short = World(models={"hai_model_HAI_1": [set_tags("m2"), set_tags("m4")]})
+    short.catalog_all_tables()
+    code, out, err = run(short)
+    require(code == 0 and short.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, (code, err))
+    endless = World(models={"hai_model_HAI_1": [set_tags("m2")] * 30})
+    endless.page_size = 1
+    endless.catalog_all_tables()
+    code, out, err = run(endless)
+    require(code == 1 and "pages" in err and not endless.edge_set, f"a listing that never ends fails at its bound: {(code, err)}")
+
+
+def models_outside_the_contract_get_no_edges_and_are_reported_by_name() -> None:
+    require = base().require
+    world = World(models=("hai_model_HAI_1",), others=("scratch_model_b", "scratch_model_a", "scratch_model_c"))
+    world.page_size = 2
+    world.catalog_all_tables()
+    code, out, err = run(world)
+    require(code == 0 and len(world.edge_set) == 1, (code, out, err))
+    require(
+        "outside the model contract, no lineage: scratch_model_a, scratch_model_b, scratch_model_c" in out, f"the models outside the contract are named: {out}"
+    )
+    require(
+        "no registered model yet" in out and "scratch_model" not in out.split("outside the model contract")[0],
+        f"they are not reported as 'no registered model yet': {out}",
+    )
+    touched = [url for _, url in world.calls if "scratch_model" in urllib.parse.unquote(url)]
+    require(not touched, f"nothing is read or drawn for them: {touched}")
+    only = World(others=("scratch_model_a",))
+    only.catalog_all_tables()
+    code, out, err = run(only)
+    require(code == 0 and not only.edge_set and "outside the model contract, no lineage: scratch_model_a" in out, (code, out, err))
+    require(not any(call[0] in ("PUT", "DELETE") for call in only.calls), "no edge for a registry that holds only other models")
+
+
+def a_reader_without_the_wildcard_grants_or_with_write_privilege_fails_visibly() -> None:
     require = base().require
     for grants in ("none", "model_only", "no_experiment"):
         world = World(models=("hai_model_HAI_1",), grants=grants)
@@ -344,16 +441,17 @@ def a_reader_without_the_wildcard_grants_fails_visibly() -> None:
         require(code == 1 and "metadata_reader" in err and "READ" in err, (grants, code, err))
         require(not world.edge_set and not any(call[0] == "PUT" for call in world.calls), "no edge may be drawn on an unreadable registry")
         secrets_absent(out, err)
-    admin = World(models=("hai_model_HAI_1",))
-
-    def as_admin(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
-        if url.endswith("/api/3.0/mlflow/users/current/permissions"):
-            return 200, {"is_admin": True, "permissions": []}
-        return admin(method, url, headers, body)
-
-    admin.catalog_all_tables()
-    code, out, err = run(as_admin)
-    require(code == 0, f"an administrator login reads everything: {(code, err)}")
+    for grants, named in (("edit", "EDIT"), ("manage_named", "MANAGE"), ("admin", "administrator")):
+        elevated = World(models=("hai_model_HAI_1",), grants=grants)
+        elevated.catalog_all_tables()
+        code, out, err = run(elevated)
+        require(code == 1 and "metadata_reader" in err and named in err, (grants, code, err))
+        require(len(elevated.calls) == 1 and not elevated.edge_set, f"an elevated login stops the run before any other call: {elevated.calls}")
+        secrets_absent(out, err)
+    use = World(models=("hai_model_HAI_1",), grants="use")
+    use.catalog_all_tables()
+    code, out, err = run(use)
+    require(code == 0 and len(use.edge_set) == 1, f"USE reads without writing: {(code, err)}")
 
 
 def a_missing_login_or_a_server_refusal_fails_without_edges() -> None:
@@ -523,13 +621,29 @@ class FakeParameters:
 
 
 class Registry:
-    """The user and permission calls of MLflow's basic-auth app that the setup makes, shaped on MLflow 3.17.2 (checked live in the probe)."""
+    """The user and permission calls of MLflow's basic-auth app that the setup makes, shaped on MLflow 3.17.2 (checked live in the probe).
 
-    def __init__(self, reader_login: str | None = None, grants: tuple[str, ...] = ()) -> None:
+    A grant is ``(resource type, pattern)`` to ``(level, role name)``. A grant row that exists is refused on a second grant, as MLflow does."""
+
+    def __init__(
+        self,
+        reader_login: str | None = None,
+        grants: tuple[str, ...] = (),
+        extra: Mapping[tuple[str, str], tuple[str, str]] | None = None,
+        administrator: bool = False,
+    ) -> None:
         self.reader_login = reader_login
-        self.granted = set(grants)
+        self.rows: dict[tuple[str, str], tuple[str, str]] = {(kind, "*"): ("READ", "__user_2__") for kind in grants}
+        self.rows.update(extra or {})
+        self.administrator = administrator
         self.calls: list[tuple[str, str]] = []
         self.fail_grant = False
+        self.fail_revoke = False
+        self.ignore_revoke = False  # answers 200 and keeps the grant
+
+    @property
+    def granted(self) -> set[str]:
+        return {kind for (kind, pattern), (level, _) in self.rows.items() if pattern == "*" and level == "READ"}
 
     def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
         parts = urllib.parse.urlsplit(url)
@@ -542,14 +656,19 @@ class Registry:
         if not (as_admin or as_reader):
             return 401, None
         if method == "GET" and path == "/api/3.0/mlflow/users/current/permissions":
-            items = [{"permission": "READ", "resource_pattern": "*", "resource_type": kind} for kind in sorted(self.granted)]
-            return 200, {"is_admin": as_admin, "permissions": [] if as_admin else items}
+            items = [
+                {"permission": level, "resource_pattern": pattern, "resource_type": kind, "role_name": role}
+                for (kind, pattern), (level, role) in sorted(self.rows.items())
+            ]
+            return 200, {"is_admin": as_admin or self.administrator, "permissions": [] if as_admin else items}
         if not as_admin:
             return 403, None
         if method == "GET" and path == "/api/2.0/mlflow/users/get":
             found = parse_user(parts.query) == READER[0] and self.reader_login is not None
             return (
-                (200, {"user": {"username": READER[0], "is_admin": False}}) if found else (404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no user"})
+                (200, {"user": {"username": READER[0], "is_admin": self.administrator}})
+                if found
+                else (404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no user"})
             )
         if method == "POST" and path == "/api/2.0/mlflow/users/create":
             self.reader_login = document["password"]
@@ -557,12 +676,24 @@ class Registry:
         if method == "PATCH" and path == "/api/2.0/mlflow/users/update-password":
             self.reader_login = document["password"]
             return 200, {}
+        if method == "PATCH" and path == "/api/2.0/mlflow/users/update-admin":
+            self.administrator = bool(document["is_admin"])
+            return 200, {}
+        if method == "POST" and path == "/api/3.0/mlflow/users/permissions/revoke":
+            if self.fail_revoke:
+                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
+            if self.ignore_revoke:
+                return 200, {}
+            self.rows.pop((document["resource_type"], document["resource_id"]), None)
+            return 200, {}
         if method == "POST" and path == "/api/3.0/mlflow/users/permissions/grant":
             if self.fail_grant:
                 return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
             if (document["permission"], document["resource_id"]) != ("READ", "*"):
                 return 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "the setup grants READ on every name only"}
-            self.granted.add(document["resource_type"])
+            if (document["resource_type"], "*") in self.rows:
+                return 409, {"error_code": "RESOURCE_ALREADY_EXISTS", "message": "Permission already exists."}
+            self.rows[(document["resource_type"], "*")] = ("READ", "__user_2__")
             return 200, {}
         return 404, {"error_code": "ENDPOINT_NOT_FOUND", "message": path}
 
@@ -674,14 +805,55 @@ def the_setup_talks_only_to_a_loopback_registry() -> None:
     require(code == 0, f"the owner's port forward answers on localhost: {(code, err)}")
 
 
+def the_setup_downgrades_an_elevated_reader_or_fails_naming_why() -> None:
+    require = base().require
+    for label, kwargs, said in (
+        ("edit on every model", {"extra": {("registered_model", "*"): ("EDIT", "__user_2__")}}, "EDIT on registered_model *"),
+        (
+            "manage on one experiment",
+            {"extra": {("experiment", "1"): ("MANAGE", "__user_2__")}, "grants": ("registered_model", "experiment", "logged_model")},
+            "MANAGE on experiment 1",
+        ),
+        ("administrator", {"administrator": True, "grants": ("registered_model", "experiment", "logged_model")}, "administrator rights removed"),
+    ):
+        registry, ssm = Registry(reader_login="Synthetic-Stored-1!", **kwargs), FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+        code, out, err = run_setup(registry, ssm)
+        require(code == 0 and said in out, (label, code, out, err))
+        levels = {level for level, _ in registry.rows.values()}
+        require(
+            levels == {"READ"} and not registry.administrator and registry.granted == {"registered_model", "experiment", "logged_model"},
+            (label, registry.rows, registry.administrator),
+        )
+        again = len(writes(registry))
+        code, out, err = run_setup(registry, ssm)
+        require(code == 0 and "unchanged" in out and len(writes(registry)) == again, f"{label}: a rerun changes nothing: {(code, out)}")
+        values_absent(ssm, out, err)
+    shared = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("registered_model", "*"): ("EDIT", "team_editors")})
+    code, out, err = run_setup(shared, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 1 and "team_editors" in err and "EDIT" in err, f"a write grant from a shared role cannot be revoked here: {(code, err)}")
+    silent = Registry(
+        reader_login="Synthetic-Stored-1!", grants=("registered_model", "experiment", "logged_model"), extra={("experiment", "1"): ("MANAGE", "__user_2__")}
+    )
+    silent.ignore_revoke = True
+    code, out, err = run_setup(silent, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 1 and "not read-only after the setup" in err, f"a revoke that changed nothing is caught by the final check: {(code, err)}")
+    refused = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("registered_model", "*"): ("MANAGE", "__user_2__")})
+    refused.fail_revoke = True
+    code, out, err = run_setup(refused, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 1 and "500" in err and refused.rows[("registered_model", "*")][0] == "MANAGE", (code, err))
+
+
 CASES = [
     tables_are_named_by_the_mirror_config,
     each_model_gets_edges_only_from_the_table_of_its_own_model_set,
     a_model_whose_set_cannot_be_resolved_fails_naming_it,
     the_newest_version_decides_the_set_and_a_changed_set_replaces_the_edge,
+    an_indirect_upstream_edge_is_not_a_stale_edge_of_the_model,
+    the_newest_of_many_versions_decides_across_pages_and_past_nine,
+    models_outside_the_contract_get_no_edges_and_are_reported_by_name,
     the_edge_request_is_the_probed_one_and_never_a_patch,
     a_rerun_and_a_second_ingest_keep_the_same_edges,
-    a_reader_without_the_wildcard_grants_fails_visibly,
+    a_reader_without_the_wildcard_grants_or_with_write_privilege_fails_visibly,
     a_missing_login_or_a_server_refusal_fails_without_edges,
     a_registered_model_that_the_catalog_lacks_stops_the_run,
     no_registered_model_yet_is_reported_and_draws_nothing,
@@ -697,4 +869,5 @@ CASES = [
     a_user_without_a_stored_value_is_given_a_new_stored_value,
     an_unreadable_admin_login_or_a_refused_grant_stops_with_a_cause,
     the_setup_talks_only_to_a_loopback_registry,
+    the_setup_downgrades_an_elevated_reader_or_fails_naming_why,
 ]
