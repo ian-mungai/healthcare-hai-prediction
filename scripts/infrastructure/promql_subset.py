@@ -214,12 +214,19 @@ class Parser:
         return self.selector()
 
     def arguments(self) -> list[Kind]:
+        """The arguments of a call: expressions separated by single commas, with no empty, leading or trailing one."""
         self.take("op", "(")
         found: list[Kind] = []
-        while self.operator_of(")") is None:
+        if self.operator_of(")") is not None:
+            return found
+        while True:
+            if self.peek() in (("op", ","), ("op", ")")):
+                raise Unsupported("expected an argument, found a comma or a closing bracket between call arguments")
             found.append(self.expression())
-            self.operator_of(",")
-        return found
+            if self.operator_of(")") is not None:
+                return found
+            if self.operator_of(",") is None:
+                raise Unsupported(f"expected a comma between call arguments, found {self.peek()[1] or 'the end of the text'}")
 
     def call(self, name: str) -> Kind:
         grouped = self.word("by", "without") is not None

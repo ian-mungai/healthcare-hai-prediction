@@ -193,6 +193,10 @@ def shape_check_rejects_invalid_calls(root: Path) -> dict[str, bool]:
         "a comparison of two numbers without bool": rejected("1 > 2", "needs bool"),
         "a set operator with a number": rejected("rate(x[5m]) or 1", "set operators need vectors"),
         "an aggregation without its argument": rejected("sum by (a)", "expected"),
+        "two arguments with no comma between them": rejected("topk(5 x)", "between call arguments"),
+        "a trailing comma after the last argument": rejected("topk(5, x,)", "between call arguments"),
+        "an empty argument between two commas": rejected("topk(5,, x)", "between call arguments"),
+        "a call that opens with a comma": rejected("sum(, x)", "between call arguments"),
         "a query that ends in a range vector": rejected("x[5m]", "range vector"),
         "a subquery": rejected("x[5m:1m]", "expected"),
     }
