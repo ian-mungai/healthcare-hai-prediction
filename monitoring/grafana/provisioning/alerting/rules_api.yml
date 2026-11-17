@@ -118,3 +118,40 @@ groups:
           severity: warning
         annotations:
           summary: The 95th percentile API latency exceeded 1 second for 10 minutes.
+
+      - uid: api_online_store_not_ready
+        title: ApiOnlineStoreNotReady
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'max by (feature_set) (hai_api_marker_state{state="ready"}) == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: The model API read an online feature store that is not ready (loading, absent or unreadable) for 10 minutes, so it refuses predictions of that feature set.

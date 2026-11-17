@@ -4,6 +4,11 @@
   "port": 8000,
   "metrics": {
     "hai_api_requests_total": {"type": "counter", "labels": ["route", "method", "status"]},
-    "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]}
+    "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]},
+    "hai_api_marker_state": {"type": "gauge", "labels": ["feature_set", "state"]},
+    "hai_api_marker_materialized_timestamp_seconds": {"type": "gauge", "labels": ["feature_set"]},
+    "hai_api_marker_entities": {"type": "gauge", "labels": ["feature_set"]},
+    "hai_api_marker_read_timestamp_seconds": {"type": "gauge", "labels": ["feature_set"]},
+    "hai_api_feature_refusals_total": {"type": "counter", "labels": ["reason"]}
   }
 }

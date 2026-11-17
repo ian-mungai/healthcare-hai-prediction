@@ -23,6 +23,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -2788,6 +2789,77 @@ def case_loader_reads_the_feature_set(c: Checker) -> None:
         c.check("a version with a set tag that is not text of a set name does not load", loaded({**both, "feature_set": "M 2/x"}) is None)
 
 
+def case_marker_metrics(c: Checker) -> None:
+    """The model API reports what its marker reads show (the state of each feature set's online store, when it was materialized, how many entities it holds,
+    when the API last read it) and counts each features refusal by one closed reason. A set name and a state are the only labels besides the reason."""
+
+    def unreachable(inner: Any) -> Any:
+        def read() -> Mapping[str, str]:
+            raise online.OnlineError("Redis failed at marker read (ConnectionError)")
+
+        return read
+
+    with world() as w:
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        marker = w.server.marker()
+        c.check("a ready marker shows its state as 1 and no other state", series(samples, "hai_api_marker_state", feature_set="single", state="ready") == [1.0])
+        c.check(
+            "the states that are not current are 0",
+            all(value == 0.0 for value in series(samples, "hai_api_marker_state", feature_set="single", state="loading")),
+        )
+        c.check(
+            "the materialization time is the marker's",
+            series(samples, "hai_api_marker_materialized_timestamp_seconds", feature_set="single")
+            == [datetime.fromisoformat(marker["materialized_at"]).timestamp()],
+        )
+        c.check("the entity count is the marker's", series(samples, "hai_api_marker_entities", feature_set="single") == [float(marker["entity_count"])])
+        c.check("the read time is the service clock's", series(samples, "hai_api_marker_read_timestamp_seconds", feature_set="single") == [w.wall.now])
+        c.check("a request that was served counts no refusal", not series(samples, "hai_api_feature_refusals_total"))
+        ask(w, "ZZZ999:2022")
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "an unknown hospital-window is a refusal of its own reason",
+            series(samples, "hai_api_feature_refusals_total", reason="hospital_window_not_found") == [1.0],
+        )
+        w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"state": "loading"})
+        ask(w)
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("a loading marker is the current state", series(samples, "hai_api_marker_state", feature_set="single", state="loading") == [1.0])
+        c.check("and the ready state is 0 again", series(samples, "hai_api_marker_state", feature_set="single", state="ready") == [0.0])
+        c.check("each refused request counts its reason", series(samples, "hai_api_feature_refusals_total", reason="marker_loading") == [2.0])
+        w.server.restart()
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("a store with no marker is the absent state", series(samples, "hai_api_marker_state", feature_set="single", state="absent") == [1.0])
+        c.check("and its refusal reason is marker_absent", series(samples, "hai_api_feature_refusals_total", reason="marker_absent") == [1.0])
+    with world(wrap_marker=unreachable) as w:
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("a marker read that raises is the unreadable state", series(samples, "hai_api_marker_state", feature_set="single", state="unreadable") == [1.0])
+        c.check("and its refusal reason is marker_read_failed", series(samples, "hai_api_feature_refusals_total", reason="marker_read_failed") == [1.0])
+        c.check("an unreadable marker leaves no materialization time", not series(samples, "hai_api_marker_materialized_timestamp_seconds"))
+    with world(single=False, sets=("m2",), configure=on_set("m2")) as w:
+        ask(w)
+        _, samples = scrape(w.api.metrics.render())
+        c.check("a model set reports its own marker under its name", series(samples, "hai_api_marker_state", feature_set="m2", state="ready") == [1.0])
+        c.check("and the single path reports nothing when it is not read", not series(samples, "hai_api_marker_state", feature_set="single"))
+    fresh = metrics.Metrics()
+    for number in range(1000):
+        fresh.refusal(f"reason-{number}<script>")
+        fresh.marker_read(f"set{number}", f"state{number}", 1.0, number, 2.0)
+    text = fresh.render()
+    _, samples = scrape(text)
+    c.check("an unknown reason becomes other and adds one series", series(samples, "hai_api_feature_refusals_total", reason="other") == [1000.0])
+    c.check(
+        "a set name or state that is not closed adds nothing beyond the bound",
+        len({labels.get("feature_set") for _, labels, _ in samples if "feature_set" in labels}) <= metrics.MAX_SETS,
+    )
+    c.check("the series stay bounded", len(text.splitlines()) < 400)
+    c.check("the text holds no key, hospital or load ID", KEY_A not in text and "AAA001" not in text and "load_id" not in text)
+
+
 def case_metrics(c: Checker) -> None:
     """The /metrics text has the names, types and labels of the monitoring contract, counts every answer, bounds its series and holds no key or hospital."""
     contract = json.loads((ROOT / "data_contracts/serving/metrics.json").read_text())["metrics"]
@@ -2839,7 +2911,7 @@ def case_metrics(c: Checker) -> None:
             "only metrics of the contract are emitted",
             {name for name, _, _ in samples if name.startswith("hai_api")}
             <= {
-                "hai_api_requests_total",
+                *contract,
                 "hai_api_request_duration_seconds_bucket",
                 "hai_api_request_duration_seconds_sum",
                 "hai_api_request_duration_seconds_count",
@@ -2938,5 +3010,6 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "loader_reads_the_feature_set": (case_loader_reads_the_feature_set, "api mlflow feast"),
     "set_model_served": (case_set_model_served, "feast api"),
     "metrics": (case_metrics, "monitoring"),
+    "marker_metrics": (case_marker_metrics, "monitoring feast"),
     "dag_contract": (case_dag, "dag"),
 }

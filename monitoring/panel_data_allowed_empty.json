@@ -109,6 +109,31 @@
       "dashboard": "hai_jobs.json",
       "panel": "Launches that did not succeed in the last 24 hours",
       "reason": "Empty until the launcher counts a launch after the launch counts are deployed, and empty while no launch was refused."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Marker state, by feature set",
+      "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Seconds since the store was materialized, by feature set",
+      "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Entities in the store, by feature set",
+      "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Seconds since the API last read the marker, by feature set",
+      "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Features refusals in the last hour, by reason",
+      "reason": "Empty until the rebuilt model API serves a request that reads the marker, and empty while no request was refused."
     }
   ]
 }

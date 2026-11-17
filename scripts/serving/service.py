@@ -281,8 +281,10 @@ class ModelService:
                 slot, fallback = active.stable, True
                 answered = self._answer(slot, ccn, window_year)
         except contract.NotFound:
+            self.metrics.refusal("hospital_window_not_found")
             return refusal(404, "hospital_window_not_found", request_id=rid), None
         except contract.ServingError as error:
+            self.metrics.refusal(error.reason)
             LOG.warning("request %s: features unavailable for %s (reason=%s%s)", rid, hai_type, error.reason, describe(error))
             return refusal(503, "features_unavailable", request_id=rid), None
         if answered is None:
@@ -360,10 +362,34 @@ class ModelService:
     def _readers(self, feature_set: str) -> tuple[contract.MarkerReader, contract.FeatureReader]:
         """The readers of the model's layout: the single path's with no feature set, else the set's."""
         if not feature_set:
-            return self._read_marker, self._read_features
+            return self._watched(feature_set, self._read_marker), self._read_features
         if self._set_readers is None:
             raise contract.Unavailable("the service has no readers for model sets", reason="set_readers_missing")
-        return self._set_readers(feature_set)
+        read_marker, read_features = self._set_readers(feature_set)
+        return self._watched(feature_set, read_marker), read_features
+
+    def _watched(self, feature_set: str, read_marker: contract.MarkerReader) -> contract.MarkerReader:
+        """The marker reader that also keeps what each read shows (state, materialization time, entities, read time) for the metrics. A read that raises is the
+        ``unreadable`` state and raises again unchanged, and a problem in the bookkeeping never changes the answer."""
+
+        def read() -> Mapping[str, str]:
+            try:
+                marker = read_marker()
+            except Exception:
+                self._keep_marker(feature_set, "unreadable", {})
+                raise
+            self._keep_marker(feature_set, str(marker.get("state") or "absent"), marker)
+            return marker
+
+        return read
+
+    def _keep_marker(self, feature_set: str, state: str, marker: Mapping[str, str]) -> None:
+        try:
+            stamp = datetime.fromisoformat(marker["materialized_at"]).timestamp() if "materialized_at" in marker else None
+            entities = int(marker["entity_count"]) if str(marker.get("entity_count", "")).isdecimal() else None
+            self.metrics.marker_read(feature_set, state, stamp, entities, self._wall())
+        except Exception:
+            return
 
     def _failed(self, slot: Slot, error: Exception) -> None:
         with self._lock:

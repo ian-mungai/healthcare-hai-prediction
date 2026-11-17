@@ -12,7 +12,12 @@
     "emitted_by": "the model API, scraped as the hai_api job on 127.0.0.1:8000. It must expose these names and labels, or the contract here changes.",
     "metrics": {
       "hai_api_requests_total": {"type": "counter", "labels": ["route", "method", "status"]},
-      "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]}
+      "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]},
+      "hai_api_marker_state": {"type": "gauge", "labels": ["feature_set", "state"]},
+      "hai_api_marker_materialized_timestamp_seconds": {"type": "gauge", "labels": ["feature_set"]},
+      "hai_api_marker_entities": {"type": "gauge", "labels": ["feature_set"]},
+      "hai_api_marker_read_timestamp_seconds": {"type": "gauge", "labels": ["feature_set"]},
+      "hai_api_feature_refusals_total": {"type": "counter", "labels": ["reason"]}
     }
   },
   "pushgateway": {
