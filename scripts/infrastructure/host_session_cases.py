@@ -1092,7 +1092,7 @@ def a_reload_result_is_one_complete_line_across_every_log_page() -> dict[str, bo
     """The log of a reload is read to its end, page by page (CloudWatch ``nextForwardToken`` until it repeats): a complete result on a page that is not
     the first still counts, a second complete result on any page leaves the outcome unknown whatever the first page holds, an empty page does not end
     the log, and a log that never ends is unknown at the deadline, never a reload."""
-    paged = {"reload_forged_first_page:m2", "reload_empty_middle_page:m4", "reload_late_result:m1"}
+    paged = {"reload_forged_first_page:m2", "reload_skipped:m2", "reload_empty_middle_page:m4", "reload_skipped:m4", "reload_late_result:m1"}
     host, session, lines = build(paged)
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
     unknown = step_lines(lines, "online_store_reload_outcome_unknown")
