@@ -264,8 +264,8 @@ class Probe:
 PROBES: dict[str, Probe] = {
     "polaris": Probe("polaris", "http://127.0.0.1:8182/q/health"),
     "mlflow": Probe("mlflow", "http://127.0.0.1:5100/health", (200, 401)),
-    "airflow_api": Probe("airflow", "http://127.0.0.1:8080/api/v2/version"),
-    "airflow_scheduler": Probe("airflow", "http://127.0.0.1:8974/health"),
+    "airflow_api": Probe("airflow_apiserver", "http://127.0.0.1:8080/api/v2/version"),
+    "airflow_scheduler": Probe("airflow_scheduler", "http://127.0.0.1:8974/health"),
     "model_api": Probe("model_api", "http://127.0.0.1:8000/v1/live"),
     "streamlit": Probe("streamlit", "http://127.0.0.1:8501/_stcore/health"),
     "opensearch": Probe("openmetadata", "http://127.0.0.1:9200/_cluster/health"),

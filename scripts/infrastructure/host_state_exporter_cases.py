@@ -550,7 +550,7 @@ def a_probe_that_cannot_connect_or_is_slow_is_down_and_never_raises(root: Path) 
             host_state_exporter.probe_samples(
                 {
                     "model_api": host_state_exporter.Probe("model_api", url + "/v1/live", (200,)),
-                    "airflow_api": host_state_exporter.Probe("airflow", slow.url.replace("/healthcheck", "") + "/api/v2/version", (200,)),
+                    "airflow_api": host_state_exporter.Probe("airflow_apiserver", slow.url.replace("/healthcheck", "") + "/api/v2/version", (200,)),
                 },
                 0.4,
             )
@@ -558,7 +558,7 @@ def a_probe_that_cannot_connect_or_is_slow_is_down_and_never_raises(root: Path) 
         elapsed = time.monotonic() - started
     return {
         "a closed port is down": found[("hai_service_probe_up", (("probe", "model_api"), ("service", "model_api")))] == 0,
-        "a slow answer is down": found[("hai_service_probe_up", (("probe", "airflow_api"), ("service", "airflow")))] == 0,
+        "a slow answer is down": found[("hai_service_probe_up", (("probe", "airflow_api"), ("service", "airflow_apiserver")))] == 0,
         "the wait is bounded by the timeout for each probe": elapsed < 2.5,
     }
 
@@ -567,7 +567,7 @@ def the_default_probes_are_the_health_checks_the_services_already_use(root: Path
     probes = host_state_exporter.PROBES
     return {
         "the probes cover Polaris, MLflow, Airflow, the model API, Streamlit and OpenSearch": {probe.service for probe in probes.values()}
-        >= {"polaris", "mlflow", "airflow", "model_api", "streamlit", "openmetadata"},
+        >= {"polaris", "mlflow", "airflow_apiserver", "airflow_scheduler", "model_api", "streamlit", "openmetadata"},
         "every address is plain http on loopback": all(host_state_exporter.PROBE_URL.fullmatch(probe.url) for probe in probes.values()),
         "the paths match the container health checks": probes["polaris"].url.endswith(":8182/q/health")
         and probes["mlflow"].url.endswith(":5100/health")
