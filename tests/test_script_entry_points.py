@@ -123,3 +123,36 @@ def test_run_ci_sets_its_own_plugin_cache_for_a_local_run_and_keeps_a_caller_val
     check("export TF_PLUGIN_CACHE_DIR=" not in run_ci_trace({"GITHUB_ACTIONS": "true"}), "hosted CI must keep its own plugin cache choice")
     check(f"python_bin={sys.executable}" in run_ci_trace({"PYTHON_BIN": sys.executable}), "a caller's PYTHON_BIN must stay as it is")
     check(f"python_bin={ROOT}/.venv/bin/python" in run_ci_trace({}), "an unset PYTHON_BIN must default to the checkout's .venv")
+
+
+def link_command(cwd: Path) -> CompletedProcess[str]:
+    """Run ``./link`` (a symbolic link to a wrapper) from ``cwd`` with the tricky arguments; the Docker-call guard needs the one literal command."""
+    environment = {"PATH": "/usr/bin:/bin", "STAND_IN_LOG": str(cwd / "calls.log"), "STAND_IN_EXIT": "0"}
+    return run_command(
+        "/bin/bash", ["./link", "start", "--flag", "a value with spaces", "", "--local-port=8081", "*", "$HOME", "it's"], cwd=cwd, env=environment, timeout=60
+    )
+
+
+def test_a_wrapper_reached_through_a_symbolic_link_uses_the_repository_of_its_target(tmp_path: Path) -> None:
+    for name, module in WRAPPERS.items():
+        for kind in ("absolute", "relative", "chained"):
+            folder = tmp_path / f"{name}_{kind}"
+            folder.mkdir()
+            root = fake_checkout(folder, name)
+            tools = folder / "tools"
+            tools.mkdir()
+            target = root / "scripts" / name
+            if kind == "absolute":
+                (tools / "link").symlink_to(target)
+            elif kind == "relative":
+                (tools / "link").symlink_to(Path("..") / "checkout" / "scripts" / name)
+            else:
+                (tools / "hop").symlink_to(Path("..") / "checkout" / "scripts" / name)
+                (tools / "link").symlink_to("hop")
+            result = link_command(tools)
+            case = f"{name} through a {kind} link"
+            check(result.returncode == 0, f"{case}: exit {result.returncode}: {result.stderr}")
+            lines = (tools / "calls.log").read_text().split("\n")
+            check(lines[0] == str(root.resolve()), f"{case}: it must run in the repository of its target, ran in {lines[0]}")
+            check(lines[1:3] == ["-m", module], f"{case}: it must run the module {module}, ran {lines[1:3]}")
+            check(lines[3:-1] == ARGUMENTS, f"{case}: the arguments must pass unchanged: {lines[3:-1]}")

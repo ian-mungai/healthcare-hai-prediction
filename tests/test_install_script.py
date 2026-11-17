@@ -33,7 +33,16 @@ exit 0
 """
 TERRAFORM_STAND_IN = '#!/bin/bash\nprintf "Terraform v%s\\non darwin_arm64\\n" "$TERRAFORM_VERSION"\n'
 NODE_STAND_IN = '#!/bin/bash\nprintf "v%s\\n" "$NODE_VERSION"\n'
-PLAIN_STAND_IN = "#!/bin/bash\nexit 0\n"
+
+
+def printing(text: str, exit_code: int = 0) -> str:
+    """A stand-in tool that prints ``text`` and exits with ``exit_code``."""
+    return f"#!/bin/bash\nprintf '%s\\n' '{text}'\nexit {exit_code}\n"
+
+
+GIT = "git version 2.54.0"
+AWS = "aws-cli/2.37.10 Python/3.13.9 Darwin/27.2.0 source/arm64"
+PLUGIN = "1.2.707.0"
 EXPECTED_STEPS = (
     "scripts/quality/install_tools.py",
     "-m scripts.quality.lock_env export host --output",
@@ -64,8 +73,8 @@ class Checkout:
         self.temporary.mkdir()
         for name, text in {"python3.12": PYTHON312_STAND_IN, "terraform": TERRAFORM_STAND_IN, "node": NODE_STAND_IN}.items():
             self.tool(name, text)
-        for name in ("git", "aws"):
-            self.tool(name, PLAIN_STAND_IN)
+        for name, text in {"git": GIT, "aws": AWS, "session-manager-plugin": PLUGIN}.items():
+            self.tool(name, printing(text))
         self.docker_app = folder / "Docker.app"
         self.docker_app.mkdir()
         (folder / "python_stand_in").write_text(PYTHON_STAND_IN)
@@ -176,3 +185,124 @@ def test_another_terraform_version_is_refused_and_named(tmp_path: Path) -> None:
     output = result.stdout + result.stderr
     check(result.returncode == 1 and "terraform 1.16.1" in output, f"an older Terraform must be named: {result.returncode} {output}")
     check(checkout.calls() == [], "no step may run with the wrong Terraform")
+
+
+PROBLEMS = {
+    "no session-manager-plugin": ("session-manager-plugin", None, "session-manager-plugin"),
+    "a failing session-manager-plugin": ("session-manager-plugin", printing(PLUGIN, 42), "session-manager-plugin"),
+    "AWS CLI v1": ("aws", printing("aws-cli/1.27.0 Python/3.9.6 Darwin/23.0.0 botocore/1.29.0"), "AWS CLI v2"),
+    "a failing aws": ("aws", printing(AWS, 42), "aws"),
+    "an old Git": ("git", printing("git version 2.53.9"), "Git 2.54"),
+    "a failing Git": ("git", printing(GIT, 42), "git"),
+    "an unreadable Git": ("git", printing("not a version"), "git"),
+    "a failing Terraform": ("terraform", printing("Terraform v1.16.1", 42), "terraform"),
+    "a failing Node": ("node", printing("v22.3.0", 42), "node"),
+    "an old Python": ("python3.12", printing("Python 3.11.9"), "python3.12"),
+    "a failing Python": ("python3.12", printing("Python 3.12.7", 42), "python3.12"),
+}
+
+
+def test_each_prerequisite_problem_is_named_before_any_step(tmp_path: Path) -> None:
+    for number, (case, (tool, stand_in, named)) in enumerate(PROBLEMS.items()):
+        folder = tmp_path / f"case{number}"
+        folder.mkdir()
+        checkout = Checkout(folder)
+        if stand_in is None:
+            checkout.remove_tool(tool)
+        else:
+            checkout.tool(tool, stand_in)
+        result = checkout.run()
+        output = result.stdout + result.stderr
+        check(result.returncode == 1, f"{case}: it must exit 1: {result.returncode} {output!r}")
+        check("missing prerequisites" in output and named in output, f"{case}: the message must name {named!r}: {output!r}")
+        check(checkout.calls() == [], f"{case}: no step may run: {checkout.calls()}")
+        check(not (checkout.root / ".env").exists() and not any(checkout.temporary.iterdir()), f"{case}: nothing may be created")
+
+
+def test_several_prerequisite_problems_are_all_named_at_once(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    checkout.remove_tool("session-manager-plugin")
+    checkout.tool("git", printing("git version 2.40.0"))
+    checkout.tool("aws", printing("aws-cli/1.2.3"))
+    checkout.tool("terraform", printing("Terraform v1.16.1", 42))
+    result = checkout.run()
+    output = result.stdout + result.stderr
+    for named in ("session-manager-plugin", "Git 2.54", "AWS CLI v2", "terraform"):
+        check(named in output, f"{named!r} must be named in one message: {output!r}")
+
+
+def test_newer_and_vendor_versions_pass(tmp_path: Path) -> None:
+    for number, git in enumerate(("git version 2.54.0", "git version 2.54.1 (Apple Git-155)", "git version 2.100.0", "git version 3.0.0")):
+        folder = tmp_path / f"git{number}"
+        folder.mkdir()
+        checkout = Checkout(folder)
+        checkout.tool("git", printing(git))
+        result = checkout.run()
+        check(result.returncode == 0, f"{git!r} must pass: {result.returncode} {result.stdout + result.stderr}")
+
+
+def test_the_git_minimum_is_the_one_the_push_gate_requires() -> None:
+    gate = re.search(r"^MINIMUM_GIT = \((\d+), (\d+)\)", (ROOT / "scripts" / "quality" / "pre_push.py").read_text(), re.MULTILINE)
+    script = re.search(r'^git_minimum="(\d+)\.(\d+)"', SCRIPT.read_text(), re.MULTILINE)
+    check(gate is not None and script is not None, "both files must name the Git minimum")
+    check(gate is not None and script is not None and gate.groups() == script.groups(), f"the install script and pre_push.py must agree: {script} {gate}")
+
+
+def test_the_readme_prerequisites_name_what_the_script_checks() -> None:
+    line = next(line for line in (ROOT / "README.md").read_text().splitlines() if line.startswith("Prerequisites:"))
+    for named in ("Git 2.54 or later", "AWS CLI v2", "Session Manager plugin", "Terraform 1.16.1", "Node.js 22 or later", "Docker Desktop", "Python 3.12"):
+        check(named in line, f"the README prerequisites must name {named!r}: {line}")
+
+
+def test_the_dbt_archive_is_fetched_only_when_its_verification_fails(tmp_path: Path) -> None:
+    (tmp_path / "ok").mkdir()
+    first = Checkout(tmp_path / "ok")
+    check(first.run().returncode == 0, "the first install must succeed")
+    check(not any("dbt_package_archive fetch" in call for call in first.calls()), "a verified archive must not be fetched again")
+
+    folder = tmp_path / "fetch"
+    folder.mkdir()
+    checkout = Checkout(folder)
+    result = checkout.run(fail_on="dbt_package_archive verify")
+    check(result.returncode == 0, f"a failed verification followed by a good fetch must succeed: {result.returncode} {result.stdout + result.stderr}")
+    calls = checkout.calls()
+    verify = next(index for index, call in enumerate(calls) if "dbt_package_archive verify" in call)
+    fetch = next(index for index, call in enumerate(calls) if "dbt_package_archive fetch" in call)
+    check(verify < fetch, f"the fetch must follow the failed verification: {calls}")
+    check(
+        any("pre_commit install" in call for call in calls[fetch:]) and any("install-shim" in call for call in calls[fetch:]),
+        "the steps after the fetch must run",
+    )
+
+    folder = tmp_path / "both"
+    folder.mkdir()
+    checkout = Checkout(folder)
+    result = checkout.run(fail_on="dbt_package_archive")
+    output = result.stdout + result.stderr
+    check(result.returncode == 1, f"a failed verification and a failed fetch must exit 1: {result.returncode}")
+    check("FAILED at step 10 of 13 (dbt package archive)" in output, f"the failure must name the archive step: {output}")
+    calls = checkout.calls()
+    check(any("dbt_package_archive fetch" in call for call in calls), f"the fetch must have run: {calls}")
+    check(not any("pre_commit" in call or "install-shim" in call for call in calls), f"no later step may run: {calls}")
+    check(not any(checkout.temporary.iterdir()), "the temporary folder must be removed")
+
+
+def test_the_install_script_reached_through_a_symbolic_link_installs_its_own_checkout(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "link").symlink_to(Path("..") / "checkout" / "scripts" / "install.sh")
+    environment = {
+        "PATH": f"{checkout.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "TMPDIR": str(checkout.temporary),
+        "STAND_IN_LOG": str(checkout.log),
+        "STAND_IN_PYTHON": str(checkout.python_stand_in),
+        "FAIL_ON": "",
+        "TERRAFORM_VERSION": "1.16.1",
+        "NODE_VERSION": "22.3.0",
+        "HAI_DOCKER_APP": str(checkout.docker_app),
+    }
+    result = run_command("/bin/bash", ["./link"], cwd=tools, env=environment, timeout=60)
+    check(result.returncode == 0, f"a linked install must succeed: {result.returncode} {result.stdout + result.stderr}")
+    check((checkout.root / ".venv" / "bin" / "python").exists() and (checkout.root / ".env").exists(), "the target checkout must be the one installed")
+    check(not (tools / ".venv").exists() and not (tools / ".env").exists() and not (tmp_path / ".venv").exists(), "nothing may be installed beside the link")

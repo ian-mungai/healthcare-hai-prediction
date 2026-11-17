@@ -38,6 +38,21 @@ if [ "$1 $2" = "ssm start-session" ]; then
     echo "An error occurred ($STAND_IN_SESSION_ERROR) when calling StartSession: arn:aws:ssm:us-west-2:111111111111:x" >&2
     exit 254
   fi
+  if [ -z "$STAND_IN_SESSION_MODE" ]; then exit 0; fi
+  echo "$$" > "$STAND_IN_PIDFILE"
+  sleep 60 &
+  sleeper=$!
+  case "$STAND_IN_SESSION_MODE" in
+    interrupt | hang) trap 'echo int >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT ;;
+    *) trap 'echo int >> "$STAND_IN_MARK"' INT ;;
+  esac
+  case "$STAND_IN_SESSION_MODE" in
+    ignore_all) trap 'echo term >> "$STAND_IN_MARK"' TERM ;;
+    *) trap 'echo term >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' TERM ;;
+  esac
+  if [ "$STAND_IN_SESSION_MODE" != hang ]; then kill -INT "$PPID"; fi
+  while [ "$STAND_IN_SESSION_MODE" = ignore_all ]; do sleep 1; done
+  while kill -0 "$sleeper" 2>/dev/null; do wait "$sleeper"; done
   exit 0
 fi
 exit 3
@@ -63,12 +78,15 @@ class Workspace:
         self.env_file = folder / ".env"
         self.env_file.write_text("".join(f"{key}={value}\n" for key, value in (ENV_VALUES if values is None else values).items()))
 
-    def run(self, *arguments: str, env_file: Path | None = None, session_error: str = "") -> CompletedProcess[str]:
+    def run(self, *arguments: str, env_file: Path | None = None, session_error: str = "", extra: dict[str, str] | None = None) -> CompletedProcess[str]:
         environment = {
             "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
             "STAND_IN_LOG": str(self.log),
             "STAND_IN_INSTANCES": str(self.answer),
             "STAND_IN_SESSION_ERROR": session_error,
+            "STAND_IN_MARK": str(self.folder / "marks.log"),
+            "STAND_IN_PIDFILE": str(self.folder / "child.pid"),
+            **(extra or {}),
             "AWS_PROFILE": "an_inherited_profile",
             "AWS_REGION": "eu-west-1",
         }
@@ -262,3 +280,87 @@ def test_list_refuses_a_name_a_local_port_and_a_missing_name(tmp_path: Path) -> 
         )
     result = list_run(cwd=tmp_path)
     check(result.returncode == 2 and "use --list" in result.stderr, f"no name and no --list must exit 2: {result.returncode} {result.stderr}")
+
+
+def test_a_refused_input_is_never_echoed(tmp_path: Path) -> None:
+    arn = "arn:aws:ssm:us-west-2:111111111111:document/example_project_airflow_forward_dev"
+    account = "111111111111"
+    inputs = {
+        "an ARN as the name": [arn],
+        "an account ID as the name": [account],
+        "an ARN as an extra name": ["airflow", arn],
+        "an unknown option with an ARN": [f"--document={arn}", "airflow"],
+        "an account ID as an unknown option": [f"--{account}", "airflow"],
+        "an ARN as the local port": ["airflow", "--local-port", arn],
+        "an account ID as the local port": ["airflow", "--local-port", account + "1"],
+    }
+    for number, (case, arguments) in enumerate(inputs.items()):
+        folder = tmp_path / f"case{number}"
+        folder.mkdir()
+        workspace = Workspace(folder, instances(INSTANCE))
+        result = workspace.run(*arguments)
+        output = result.stdout + result.stderr
+        check(result.returncode == 2, f"{case}: it must exit 2: {result.returncode} {output}")
+        check(arn not in output and account not in output and "arn:aws" not in output, f"{case}: the output must not echo any input: {output}")
+        check(workspace.calls() == [], f"{case}: it must make no AWS call: {workspace.calls()}")
+    folder = tmp_path / "names"
+    folder.mkdir()
+    refused = Workspace(folder, instances(INSTANCE)).run(arn)
+    check(all(name in refused.stderr for name in web_ui_terraform.forward_documents()), f"a refused name must list every accepted name: {refused.stderr}")
+
+
+def marks(workspace: Workspace) -> list[str]:
+    """The signals the stand-in Session Manager child recorded, in order."""
+    path = workspace.folder / "marks.log"
+    return path.read_text().split() if path.exists() else []
+
+
+def test_ctrl_c_sends_the_interrupt_to_the_aws_child_and_lets_it_close_the_session(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "interrupt", "HAI_OPEN_UI_STOP_SECONDS": "20"})
+    check(result.returncode == 0, f"a Ctrl+C that the child handles must end with exit 0: {result.returncode} {result.stderr}")
+    check(marks(workspace) == ["int"], f"the child must get SIGINT only, nothing stronger: {marks(workspace)}")
+    check("the session is closed" in result.stdout, f"the script must say the session is closed: {result.stdout}")
+    check("cannot confirm" in result.stdout, f"the script must state that it cannot confirm the AWS side: {result.stdout}")
+
+
+def test_a_child_that_ignores_the_interrupt_gets_term_only_after_the_bounded_wait(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "HAI_OPEN_UI_STOP_SECONDS": "1"})
+    check(result.returncode == 0, f"a child that ends on TERM must end with exit 0: {result.returncode} {result.stderr}")
+    check(marks(workspace) == ["int", "term"], f"the child must get SIGINT, then SIGTERM: {marks(workspace)}")
+
+
+def test_a_child_that_ignores_the_interrupt_and_term_is_killed_last_and_reported(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_all", "HAI_OPEN_UI_STOP_SECONDS": "1"})
+    check(result.returncode == 1, f"a killed child must end with exit 1: {result.returncode} {result.stdout} {result.stderr}")
+    check(marks(workspace) == ["int", "term"], f"the child must get SIGINT, then SIGTERM, then the kill: {marks(workspace)}")
+    check("did not close" in result.stderr and "idle timeout" in result.stderr, f"the message must say the AWS session may stay open: {result.stderr}")
+    pid = int((workspace.folder / "child.pid").read_text())
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError(f"the child {pid} must not be left running")
+
+
+def test_the_session_deadline_stops_the_child_by_the_same_graceful_steps(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "hang", "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "20"})
+    check(result.returncode == 1, f"the deadline must end with exit 1: {result.returncode} {result.stdout} {result.stderr}")
+    check("deadline" in result.stderr, f"the message must name the deadline: {result.stderr}")
+    check(marks(workspace) == ["int"], f"the child must get SIGINT first and only: {marks(workspace)}")
+
+
+def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> None:
+    for name in ("HAI_OPEN_UI_STOP_SECONDS", "HAI_OPEN_UI_SESSION_SECONDS"):
+        for value in ("abc", "0", "-5", "nan"):
+            folder = tmp_path / f"{name}{value}"
+            folder.mkdir()
+            workspace = Workspace(folder, instances(INSTANCE))
+            result = workspace.run("airflow", extra={name: value})
+            check(result.returncode == 2 and name in result.stderr, f"{name}={value} must exit 2 and name the setting: {result.returncode} {result.stderr}")
+            check(value not in result.stderr.replace(name, ""), f"{name}={value}: the value must not be echoed: {result.stderr}")
+            check(workspace.calls() == [], f"{name}={value}: no AWS call may happen")

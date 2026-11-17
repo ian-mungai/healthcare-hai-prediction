@@ -6,7 +6,7 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 ## Install
 
-Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS CLI v2, Node.js 22 or later and Docker Desktop.
+Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform 1.16.1, AWS CLI v2, the AWS Session Manager plugin (it opens the web interfaces), Node.js 22 or later and Docker Desktop.
 
 1. Create the environment and install the pinned tools, the hash-locked host dependencies, the hooks and the push gate. The script also copies `.env.example` to `.env`. It checks the prerequisites first and names any that is missing. A rerun on an installed checkout changes nothing and never overwrites `.env`:
 
