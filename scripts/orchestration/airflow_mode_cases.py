@@ -2934,8 +2934,7 @@ def metadata_uses_the_host_containers() -> None:
     )
 
 
-RUNTIME_MODULES = ("orchestration.client",)
-RUNTIME_NAMES = ("BrokerClient", "submit_and_wait", "from_session", "hai_job_launch_mode")
+RUNTIME_NAMES = ("submit_and_wait", "from_session", "hai_job_launch_mode")
 
 
 def dags_hold_no_broker_client() -> None:
@@ -2943,10 +2942,8 @@ def dags_hold_no_broker_client() -> None:
     for path in [ROOT / "orchestration/dag_runtime.py", *sorted((ROOT / "dags").glob("*.py"))]:
         text = path.read_text()
         tree = ast.parse(text)
-        imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
-        imported |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
         named = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-        reached = sorted((imported & set(RUNTIME_MODULES)) | (named & set(RUNTIME_NAMES)) | {name for name in RUNTIME_NAMES if f'"{name}"' in text})
+        reached = sorted((named & set(RUNTIME_NAMES)) | {name for name in RUNTIME_NAMES if f'"{name}"' in text})
         require(not reached, f"{path.relative_to(ROOT)} reaches the broker: {reached}")
     rig = Rig()
     sent: list[tuple[str, str]] = []

@@ -1479,7 +1479,6 @@
     "orchestration/__init__.py",
     "orchestration/airflow_steps.py",
     "orchestration/catalog_authority.py",
-    "orchestration/client.py",
     "orchestration/code_digest.py",
     "orchestration/dag_runtime.py",
     "orchestration/dbt_lineage.py",

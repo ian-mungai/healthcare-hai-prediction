@@ -24,6 +24,5 @@ def prepare_checkout(folder: Path) -> None:
     platform = json.loads(PLATFORM_FILE.read_text())
     shutil.copy2(ROOT / platform["compose"]["file"], folder / platform["compose"]["file"])
     shutil.copy2(ROOT / "scripts" / "orchestration" / "xcom_dump.py", folder / "scripts" / "orchestration" / "xcom_dump.py")
-    for name in ("__init__.py", "interface.py", "client.py", "dag_runtime.py", "training_contract.py"):
+    for name in ("__init__.py", "interface.py", "dag_runtime.py", "training_contract.py"):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
-    shutil.copy2(ROOT / "tests/orchestration/fixtures/combined_dag.py", folder / "dags" / "transform_dag.py")

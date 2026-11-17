@@ -104,8 +104,7 @@
         "scripts/orchestration/real_image_dags.py",
         "scripts/orchestration/xcom_dump.py",
         "services/lineage/http_transport.py",
-        "scripts/orchestration/lineage_http_cases.py",
-        "tests/orchestration/fixtures/combined_dag.py"
+        "scripts/orchestration/lineage_http_cases.py"
       ],
       "provided": {
         "airflow": "the official Airflow image pinned by digest in services/orchestration/Dockerfile",

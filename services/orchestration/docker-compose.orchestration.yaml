@@ -41,7 +41,6 @@ x-airflow: &airflow
     - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro
     - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
     - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
-    - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
     - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
     - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
     - ${HAI_ORCH_REPO}/orchestration/ingestion_schedule.py:/opt/hai/orchestration/ingestion_schedule.py:ro
@@ -89,7 +88,6 @@ services:
       - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro
       - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
       - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
-      - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/orchestration/ingestion_schedule.py:/opt/hai/orchestration/ingestion_schedule.py:ro
@@ -115,7 +113,6 @@ services:
       - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro
       - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
       - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
-      - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/orchestration/ingestion_schedule.py:/opt/hai/orchestration/ingestion_schedule.py:ro
@@ -123,8 +120,6 @@ services:
       - ${HAI_ORCH_REPO}/airflow_plugins:/opt/airflow/plugins:ro
       - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
-      # The broker URL and this session's token; only the scheduler runs tasks, so only it receives them.
-      - ${HAI_ORCH_STATE}/session:/opt/hai/broker:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8974/health"]
       interval: 10s
@@ -174,7 +169,6 @@ services:
       - ${HAI_ORCH_REPO}/dags:/opt/hai/dags:ro
       - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
       - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
-      - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
       - ${HAI_ORCH_REPO}/orchestration/graph.py:/opt/hai/orchestration/graph.py:ro
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro

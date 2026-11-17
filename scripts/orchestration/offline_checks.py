@@ -7,8 +7,8 @@ checks make no Docker call: the image checks are launcher requests (``image``, `
 1. The Compose file pins PostgreSQL by digest and the Airflow image by the ``hai-`` tag of ``services/orchestration/Dockerfile``, publishes only
    loopback ports and mounts no socket, AWS folder or lakehouse secret; the Dockerfile builds on the recorded digests, installs nothing and adds only
    the entrypoint and the two labels; the constraints file has its recorded SHA-256. Each check also refuses a mutated input.
-2. The interface-only import check: DAG files import only Airflow, the standard library (never ``subprocess``), ``orchestration.interface`` and
-   ``orchestration.client``; the client only the standard library and the interface.
+2. The interface-only import check: DAG files import only Airflow, the standard library (never ``subprocess``) and the mounted ``orchestration`` modules;
+   the interface only the standard library.
 3. The ``transform_dag`` graph validator on plain graphs: the required graph passes and each mutation fails.
 4. The Docker-call check over every orchestration source file.
 5. With the built image, through the launcher: the image's labels, user and last layers; every DAG file imports in the image with no error or
@@ -57,7 +57,6 @@ IN_IMAGE = "scripts/orchestration/in_image_checks.py"
 FORBIDDEN_MOUNT_MARKERS = (".aws", "lakehouse/secrets", "${HOME}")
 DAG_MODULES = {
     "orchestration.interface",
-    "orchestration.client",
     "orchestration.dag_runtime",
     "orchestration.ingestion_schedule",
     "orchestration.training_contract",
@@ -70,7 +69,6 @@ A1_FILES = (
     "scripts/orchestration/in_image_checks.py",
     "scripts/orchestration/xcom_dump.py",
     "scripts/orchestration/sentinel.py",
-    "orchestration/client.py",
     "orchestration/graph.py",
 )
 
@@ -181,13 +179,13 @@ def dag_import_problems(name: str, source: str) -> list[str]:
 
 
 def interface_problems() -> list[str]:
-    """The client imports only the standard library and the interface; the interface only the standard library."""
+    """The interface imports only the standard library."""
     problems = []
-    for path, allowed in (("orchestration/client.py", {"orchestration.interface"}), ("orchestration/interface.py", set())):
-        for module in sorted(imported((ROOT / path).read_text())):
-            root = module.split(".")[0]
-            if module not in allowed and (root not in sys.stdlib_module_names or root == "subprocess") and root != "__future__":
-                problems.append(f"{path} imports {module}")
+    path = "orchestration/interface.py"
+    for module in sorted(imported((ROOT / path).read_text())):
+        root = module.split(".")[0]
+        if (root not in sys.stdlib_module_names or root == "subprocess") and root != "__future__":
+            problems.append(f"{path} imports {module}")
     runtime = ROOT / "orchestration/dag_runtime.py"
     if runtime.is_file():
         problems.extend(dag_import_problems("orchestration/dag_runtime.py", runtime.read_text()))

@@ -190,7 +190,6 @@ COPIED = (
     "scripts/orchestration/traffic_probe.py",
     "scripts/orchestration/transform_fixtures.py",
     "scripts/quality/run_ci_groups_e2e.py",
-    "tests/orchestration/fixtures/combined_dag.py",
     RUNNER,
     "scripts/quality/scratch_worktree.py",
     "scripts/quality/run_scratch_worktree_e2e.py",
@@ -1063,7 +1062,6 @@ LAUNCHER_IMPORTED = (
     "scripts/quality/lint_sources.py",
     "scripts/quality/ci_hooks.py",
     "dags/gold_transform_dag.py",
-    "tests/orchestration/fixtures/combined_dag.py",
     "scripts/quality/future_probe.py",
 )
 # Paths outside every pattern of the launcher group: no import, read or reviewed inventory_reads pattern of the suite reaches them, so a change to one skips

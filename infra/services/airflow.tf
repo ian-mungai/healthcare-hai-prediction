@@ -104,7 +104,6 @@ locals {
     code_airflow_plugins    = "${local.code_path}/airflow_plugins"
     code_orchestration_init = "${local.code_path}/orchestration/__init__.py"
     code_interface          = "${local.code_path}/orchestration/interface.py"
-    code_client             = "${local.code_path}/orchestration/client.py"
     code_dag_runtime        = "${local.code_path}/orchestration/dag_runtime.py"
     code_training_contract  = "${local.code_path}/orchestration/training_contract.py"
     code_lineage            = "${local.code_path}/services/lineage"
@@ -119,7 +118,6 @@ locals {
     { sourceVolume = "code_airflow_plugins", containerPath = "/opt/airflow/plugins", readOnly = true },
     { sourceVolume = "code_orchestration_init", containerPath = "/opt/hai/orchestration/__init__.py", readOnly = true },
     { sourceVolume = "code_interface", containerPath = "/opt/hai/orchestration/interface.py", readOnly = true },
-    { sourceVolume = "code_client", containerPath = "/opt/hai/orchestration/client.py", readOnly = true },
     { sourceVolume = "code_dag_runtime", containerPath = "/opt/hai/orchestration/dag_runtime.py", readOnly = true },
     { sourceVolume = "code_training_contract", containerPath = "/opt/hai/orchestration/training_contract.py", readOnly = true },
     { sourceVolume = "code_lineage", containerPath = "/opt/hai/hai_lineage", readOnly = true },
