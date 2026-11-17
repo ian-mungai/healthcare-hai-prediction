@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 from orchestration import raw_lineage
 from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
 from scripts.quality import lock_env
@@ -181,6 +183,7 @@ class Case:
         CATALOG[0].mkdir()
         DEFECTS.clear()
         LOADS.clear()
+        STAGED.clear()  # what an earlier case staged is not the staging of this one
         self.storage = FakeStorage()
         STORAGE[:] = [self.storage]
         self.archive, self.digest = archive(root)
@@ -257,13 +260,20 @@ class Case:
         return codes
 
 
+def staged_object(run: str, bucket: str, name: str) -> bytes:
+    """One staged input as the task role reads it: a key that was never staged answers 403, because the role cannot list the folder."""
+    if name not in STAGED:
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no such staged input"}}, "GetObject")
+    return STAGED[name]
+
+
 @contextlib.contextmanager
 def patched(root: Path) -> Iterator[Case]:
     with (
         mock.patch.object(bronze_run, "run_module", loader),
         mock.patch.object(bronze_run, "storage", lambda: STORAGE[0]),
         mock.patch.object(bronze_run, "owner_storage", lambda: STORAGE[0]),
-        mock.patch.object(bronze_run, "read_staged", lambda run, bucket, name: STAGED[name]),
+        mock.patch.object(bronze_run, "read_staged", staged_object),
         mock.patch.dict(
             os.environ, {"BRONZE_DRY_RUN": "", "BRONZE_TABLES": "", "BRONZE_TARGET": "", "BRONZE_REQUEST_SHA256": "", "BRONZE_INVENTORY_SHA256": ""}
         ),
@@ -289,15 +299,22 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     require("empty_data" in case.out, "the stage did not name the table it left out")
     stem = f"lakehouse/run_stage/{RUN}/inputs/"
     puts = STORAGE[0].client.puts
-    require(sorted(puts) == [f"{stem}{bronze_run.INVENTORY_FILE}", f"{stem}{bronze_run.REQUEST_FILE}"], f"the stage wrote {sorted(puts)}")
+    wanted = [f"{stem}{name}" for name in (bronze_run.INVENTORY_FILE, bronze_run.REQUEST_FILE, bronze_run.STAGE_REPORT_FILE)]
+    require(sorted(puts) == sorted(wanted), f"the stage wrote {sorted(puts)}")
+    report = json.loads(puts[f"{stem}{bronze_run.STAGE_REPORT_FILE}"])
+    require(report["skipped_tables"] == [{"table": "empty_data", "reason": bronze_run.SKIPPED_REASON}] and report["skipped_count"] == 1, f"{report}")
+    require("skipped_tables 1: empty_data" in case.out, "the stage output does not count the skipped table")
     request = json.loads(puts[f"{stem}{bronze_run.REQUEST_FILE}"])
     tables = [entry["table"] for entry in TABLES if entry["table"] != "empty_data"]  # a table with no source object is left out
     require(request["tables"] == tables and request["target"] == "real" and request["dry_run"] is False, f"{request}")
     STAGED[bronze_run.INVENTORY_FILE], STAGED[bronze_run.REQUEST_FILE] = puts[f"{stem}{bronze_run.INVENTORY_FILE}"], puts[f"{stem}{bronze_run.REQUEST_FILE}"]
+    STAGED[bronze_run.STAGE_REPORT_FILE] = puts[f"{stem}{bronze_run.STAGE_REPORT_FILE}"]
     case.shas = (hashlib.sha256(STAGED[bronze_run.REQUEST_FILE]).hexdigest(), hashlib.sha256(STAGED[bronze_run.INVENTORY_FILE]).hexdigest())
     case.key = (",".join(tables), "real", False)
     require(case.chain(tables=",".join(tables)) == [0, 0, 0], case.err)
     require(len(LOADS) == 1 and LOADS[0][LOADS[0].index("--tables") + 1] == ",".join(tables), LOADS)
+    record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
+    require(record["skipped_tables"] == report["skipped_tables"], f"the check record does not name the skipped table: {record['skipped_tables']}")
 
 
 def case_qualification_writes_only_the_twins(case: Case) -> None:

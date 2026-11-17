@@ -36,10 +36,13 @@ def job(target: str = "real") -> bronze_run.Job:
     return bronze_run.Job(RUN, Path("/workspace"), BUCKET, ("alpha_data", "beta_data"), target)
 
 
+SKIPPED = [{"table": "gamma_data", "reason": "no source object"}]
+
+
 def record(**changes: Any) -> dict[str, Any]:
     report = REPORT | changes.pop("report", {})
     body = json.dumps(report, sort_keys=True).encode()
-    return bronze_run.run_record(job(), report, body, changes.pop("inventory", INVENTORY))
+    return bronze_run.run_record(job(), report, body, changes.pop("inventory", INVENTORY), changes.pop("skipped", []))
 
 
 def test_the_record_has_the_keys_the_lineage_reader_demands_and_names_the_loaded_objects() -> None:
@@ -95,3 +98,76 @@ def test_the_record_is_written_once_and_a_retry_keeps_the_first() -> None:
     check(json.loads(put["Body"])["run_id"] == RUN, "the stored body is not the record")
     again = Client(existing=b"{}")
     check(bronze_run.store_run_record(again, BUCKET, RUN, record()) == "kept", "a retry replaced the first record")
+
+
+def test_the_record_names_the_tables_the_stage_left_out_with_their_reason_and_the_lineage_reader_accepts_it() -> None:
+    document = record(skipped=SKIPPED)
+    check(document["skipped_tables"] == SKIPPED, f"{document.get('skipped_tables')}")
+    check(record()["skipped_tables"] == [], "a run with no report has no skipped table")
+    raw_lineage.loaded_objects(document, "check.json", RUN)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "gamma_data",
+        [{"table": "gamma_data"}],
+        [{"table": "gamma_data", "reason": 3}],
+        [{"table": "gamma_data", "reason": "x", "extra": 1}],
+        [{"table": "alpha_data", "reason": "no source object"}],
+        [{"table": "gamma_data", "reason": "no source object"}, {"table": "gamma_data", "reason": "no source object"}],
+    ],
+)
+def test_a_record_with_a_malformed_or_requested_skipped_table_is_refused_by_the_lineage_reader(bad: Any) -> None:
+    document = record()
+    document["skipped_tables"] = bad
+    with pytest.raises(LineageRefused):
+        raw_lineage.loaded_objects(document, "check.json", RUN)
+
+
+def staged_report(**changes: Any) -> bytes:
+    body = {"schema": 1, "bronze_run": RUN, "requested_tables": ["alpha_data", "beta_data"], "skipped_tables": SKIPPED, "skipped_count": 1} | changes
+    return json.dumps(body).encode()
+
+
+def test_the_check_phase_reads_the_skipped_tables_from_the_stage_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bronze_run, "read_staged", lambda run, bucket, name: staged_report())
+    check(bronze_run.staged_skipped(job()) == SKIPPED, "the skipped tables were not read")
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "NoSuchKey", "404", "403"])
+def test_a_run_with_no_stage_report_has_no_skipped_table(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
+    from botocore.exceptions import ClientError
+
+    def missing(run: str, bucket: str, name: str) -> bytes:
+        raise ClientError({"Error": {"Code": code, "Message": "x"}}, "GetObject")
+
+    monkeypatch.setattr(bronze_run, "read_staged", missing)
+    check(bronze_run.staged_skipped(job()) == [], "a hand-staged run reported a skipped table")
+
+
+def test_another_failure_reading_the_stage_report_is_raised_and_never_read_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    from botocore.exceptions import ClientError
+
+    def broken(run: str, bucket: str, name: str) -> bytes:
+        raise ClientError({"Error": {"Code": "SlowDown", "Message": "x"}}, "GetObject")
+
+    monkeypatch.setattr(bronze_run, "read_staged", broken)
+    with pytest.raises(ClientError):
+        bronze_run.staged_skipped(job())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not json",
+        staged_report(bronze_run="bronze_aaaaaaaa"),
+        staged_report(skipped_count=2),
+        staged_report(skipped_tables=[{"table": "alpha_data", "reason": "no source object"}], skipped_count=1),
+        staged_report(skipped_tables="x"),
+    ],
+)
+def test_a_stage_report_of_another_run_or_with_a_wrong_count_or_naming_a_requested_table_is_refused(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    monkeypatch.setattr(bronze_run, "read_staged", lambda run, bucket, name: body)
+    with pytest.raises(bronze_run.StepError):
+        bronze_run.staged_skipped(job())

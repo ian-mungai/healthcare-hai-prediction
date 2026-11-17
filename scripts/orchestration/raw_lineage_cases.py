@@ -185,6 +185,7 @@ def check_record(**change: Any) -> dict[str, Any]:
         "metadata_generation": "generation-0001",
         "snapshots": {"cms_hai_hospital": 51},
         "objects": [{"table": "cms_hai_hospital", **item, "sha256": str(index) * 64, "byte_count": 10 + index} for index, item in enumerate(OBJECTS, 1)],
+        "skipped_tables": [{"table": "empty_table", "reason": "no source object"}],
     }
     record.update(change)
     return record

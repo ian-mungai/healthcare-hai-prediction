@@ -26,7 +26,7 @@ locals {
   # switch is on), the two records of its own run (create-only by the check phase, never any other key of bronze_runs) and the owner notice of the carried-over
   # files, once the stack is told the alerts topic. Every write is create-only (s3:if-none-match "*"): a record or staged input that exists is never replaced.
   # The stage job of a pipeline run (scripts.lakehouse.bronze_run stage) writes the run's request and source
-  # inventory under lakehouse/run_stage/<bronze run>/inputs/, create-only by the task, and nothing else of that folder.
+  # inventory and the report of the tables it left out under lakehouse/run_stage/<bronze run>/inputs/, create-only by the task, and nothing else of that folder.
   bronze_run_record_policies = merge(
     var.source_raw_root_enabled ? {
       run_records_read = {
@@ -40,7 +40,7 @@ locals {
     } : {},
     {
       run_record_writes = {
-        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request and source inventory of a bronze run, and read the two carried-over records back. No other key."
+        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key."
         document = templatefile("${path.module}/owner_policies/bronze_writer_run_record_writes.json", {
           BRONZE_RUN_RECORD_ARNS = jsonencode([
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json",
@@ -48,6 +48,7 @@ locals {
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over_notice.json",
             "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
             "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+            "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
           ])
           BRONZE_RUN_RECORD_READ_ARNS = jsonencode([
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json",

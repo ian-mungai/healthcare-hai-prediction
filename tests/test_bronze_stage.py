@@ -19,6 +19,7 @@ RUN = "bronze_3f9a1c07"
 BUCKET = "example-bucket"
 REQUEST_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_request.json"
 INVENTORY_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_inventory.json"
+REPORT_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_stage_report.json"
 CONFIG = {"tables": [{"table": "alpha_data", "collection": "first"}, {"table": "beta_data", "collection": "second"}]}
 SOURCES = {
     "version": 1,
@@ -84,12 +85,17 @@ def stage(store: Store) -> dict[str, str]:
     return bronze_run.stage_run(Path("/workspace/code"), BUCKET, RUN)
 
 
-def test_the_stage_reads_the_sources_with_the_task_identity_for_every_table_and_writes_exactly_two_keys_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_stage_reads_the_sources_with_the_task_identity_for_every_table_and_writes_exactly_three_keys_once(monkeypatch: pytest.MonkeyPatch) -> None:
     store = Store()
     setup = Setup(monkeypatch, store)
     done = stage(store)
     check(len(setup.builds) == 1 and setup.builds[0] == (setup.task_storage, BUCKET, ["alpha_data", "beta_data"]), f"{setup.builds}")
-    check([put["Key"] for put in store.puts] == [INVENTORY_KEY, REQUEST_KEY], "the inventory is written first and the request last, and nothing else")
+    check(
+        [put["Key"] for put in store.puts] == [INVENTORY_KEY, REPORT_KEY, REQUEST_KEY],
+        "the inventory, then the report, then the request last, and nothing else",
+    )
+    report = json.loads(store.objects[REPORT_KEY])
+    check(report["skipped_tables"] == [] and report["skipped_count"] == 0 and report["bronze_run"] == RUN, f"{report}")
     check(all(put["IfNoneMatch"] == "*" and put["ServerSideEncryption"] == "AES256" for put in store.puts), f"{store.puts}")
     request = json.loads(store.objects[REQUEST_KEY])
     inventory_digest = hashlib.sha256(store.objects[INVENTORY_KEY]).hexdigest()
@@ -130,7 +136,7 @@ def test_a_retry_after_the_inventory_alone_keeps_that_inventory_and_writes_only_
     monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: MOVED)
     done = stage(store)
     check(done["inventory_sha256"] == hashlib.sha256(first_inventory).hexdigest(), "the retry replaced the staged inventory")
-    check([put["Key"] for put in store.puts] == [REQUEST_KEY], f"{store.puts}")
+    check([put["Key"] for put in store.puts] == [REPORT_KEY, REQUEST_KEY], f"{store.puts}")
     request = json.loads(store.objects[REQUEST_KEY])
     check(request["inventory_sha256"] == done["inventory_sha256"], "the request names an inventory that is not the staged one")
 
@@ -152,18 +158,43 @@ def test_a_staged_request_that_differs_is_refused_and_never_replaced(monkeypatch
     check(store.objects[REQUEST_KEY] == other, "the staged request was replaced")
 
 
-def test_a_table_with_no_source_object_is_left_out_and_named_and_the_request_lists_the_others(
+ONE_TABLE = SOURCES | {"objects": SOURCES["objects"][:1], "manifests": [["alpha_data", "m/a", "v1"], ["beta_data", "m/b", "v2"]]}
+
+
+def test_a_table_with_no_source_object_is_left_out_named_with_its_reason_in_the_report_and_counted(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     store = Store()
     Setup(monkeypatch, store)
-    one = SOURCES | {"objects": SOURCES["objects"][:1], "manifests": [["alpha_data", "m/a", "v1"], ["beta_data", "m/b", "v2"]]}
-    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: one)
-    stage(store)
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: ONE_TABLE)
+    done = stage(store)
     request = json.loads(store.objects[REQUEST_KEY])
     staged = json.loads(store.objects[INVENTORY_KEY])
     check(request["tables"] == ["alpha_data"] and staged["tables"] == ["alpha_data"], f"{request} {staged['tables']}")
-    check("beta_data" in capsys.readouterr().out, "the output does not name the table that was left out")
+    report = json.loads(store.objects[REPORT_KEY])
+    check(report["skipped_tables"] == [{"table": "beta_data", "reason": "no source object"}] and report["skipped_count"] == 1, f"{report}")
+    check(report["requested_tables"] == ["alpha_data"] and done["skipped_count"] == 1, f"{report} {done}")
+    check("skipped_tables 1: beta_data" in capsys.readouterr().out, "the output does not count and name the table that was left out")
+
+
+def test_a_retry_reports_the_skipped_tables_of_the_staged_inventory_not_of_a_later_listing(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = Store()
+    Setup(monkeypatch, store)
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: ONE_TABLE)
+    first = stage(store)
+    written = len(store.puts)
+    report = store.objects[REPORT_KEY]
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: SOURCES)
+    check(stage(store) == first and len(store.puts) == written and store.objects[REPORT_KEY] == report, "a retry changed what the first stage reported")
+
+
+def test_a_report_that_differs_from_the_inventory_it_describes_is_refused_and_never_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    other = json.dumps({"schema": 1, "bronze_run": RUN, "requested_tables": ["alpha_data"], "skipped_tables": [], "skipped_count": 0}).encode()
+    store = Store({REPORT_KEY: other})
+    Setup(monkeypatch, store)
+    with pytest.raises(bronze_run.StepError, match="differs"):
+        stage(store)
+    check(store.objects[REPORT_KEY] == other and REQUEST_KEY not in store.objects, "the staged report was replaced or a request followed it")
 
 
 def test_sources_with_no_object_at_all_stage_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

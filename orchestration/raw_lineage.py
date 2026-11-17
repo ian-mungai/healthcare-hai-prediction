@@ -66,7 +66,18 @@ def versioned_file(stored: Mapping[str, Any], where: str) -> dict[str, Any]:
 
 
 BRONZE_RECORD = "lakehouse/bronze_runs/{run}/check.json"
-BRONZE_RECORD_KEYS = {"schema_version", "run_id", "target", "namespaces", "tables", "report_sha256", "metadata_generation", "snapshots", "objects"}
+BRONZE_RECORD_KEYS = {
+    "schema_version",
+    "run_id",
+    "target",
+    "namespaces",
+    "tables",
+    "report_sha256",
+    "metadata_generation",
+    "snapshots",
+    "objects",
+    "skipped_tables",
+}
 BRONZE_OBJECT_KEYS = {"table", "bucket", "key", "version_id", "sha256", "byte_count"}
 BRONZE_NAMESPACES = ["bronze", "bronze_dictionary"]
 SHA256 = re.compile(r"[a-f0-9]{64}")
@@ -80,6 +91,14 @@ def loaded_objects(record: Any, key: str, run_id: str) -> tuple[list[dict[str, A
         raise LineageRefused(f"{key}: belongs to another run ({record['run_id']})")
     if record["target"] != "real" or record["namespaces"] != BRONZE_NAMESPACES:
         raise LineageRefused(f"{key}: is not a real target record of the namespaces {BRONZE_NAMESPACES}")
+    skipped = record["skipped_tables"]
+    names = (
+        [item.get("table") if isinstance(item, dict) and set(item) == {"table", "reason"} and isinstance(item["reason"], str) else None for item in skipped]
+        if isinstance(skipped, list)
+        else [None]
+    )
+    if None in names or len(set(names)) != len(names) or set(names) & set(record["tables"]):
+        raise LineageRefused(f"{key}: the skipped tables are not a list of distinct tables outside the requested ones, each with a reason")
     tables, snapshots = record["tables"], record["snapshots"]
     if not isinstance(tables, list) or not all(isinstance(name, str) for name in tables) or not isinstance(snapshots, dict) or set(snapshots) != set(tables):
         raise LineageRefused(f"{key}: the tables and their snapshots do not match")

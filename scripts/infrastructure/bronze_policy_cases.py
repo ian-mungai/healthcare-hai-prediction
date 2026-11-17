@@ -82,6 +82,7 @@ def render(
                     f"{bucket}/lakehouse/bronze_runs/*/carried_over_notice.json",
                     f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
                     f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+                    f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
                 ]
             ),
             "BRONZE_RUN_RECORD_READ_ARNS": json.dumps(
@@ -175,7 +176,9 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     stage = f"{BUCKET}/lakehouse/run_stage"
     written = [f"{runs}/{record}" for record in ("check.json", "carried_over.json", "carried_over_notice.json")]
     written += [
-        f"{stage}/{run}/inputs/{staged}" for run in ("bronze_ab12cd34", "bronze_ab12cd34_2") for staged in ("bronze_request.json", "bronze_inventory.json")
+        f"{stage}/{run}/inputs/{staged}"
+        for run in ("bronze_ab12cd34", "bronze_ab12cd34_2")
+        for staged in ("bronze_request.json", "bronze_inventory.json", "bronze_stage_report.json")
     ]
     for key in written:
         check("s3:PutObject", key, True, once="*")
@@ -196,6 +199,7 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
         "bronze_runs/bronze_ab12cd34/check.json",
         "lakehouse/run_stage/silver_ab12cd34/inputs/bronze_request.json",
         "lakehouse/run_stage/silver_ab12cd34/inputs/bronze_inventory.json",
+        "lakehouse/run_stage/silver_ab12cd34/inputs/bronze_stage_report.json",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code.tar.gz",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code.sha256",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code_run.json",

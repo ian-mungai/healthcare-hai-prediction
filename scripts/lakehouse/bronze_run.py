@@ -48,6 +48,9 @@ from scripts.process import TimeoutExpired, run_command
 PHASES = ("pin", "load", "check")
 REQUEST_FILE = "bronze_request.json"
 INVENTORY_FILE = "bronze_inventory.json"
+STAGE_REPORT_FILE = "bronze_stage_report.json"
+SKIPPED_REASON = "no source object"
+ABSENT_CODES = ("NoSuchKey", "404", "AccessDenied", "403")
 STAGE_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
@@ -207,7 +210,7 @@ def put_stage_object(client: Any, bucket: str, key: str, body: bytes) -> bytes:
     return bytes(client.get_object(Bucket=bucket, Key=key)["Body"].read())
 
 
-def stage_run(code: Path, bucket: str, run: str) -> dict[str, str]:
+def stage_run(code: Path, bucket: str, run: str) -> dict[str, Any]:
     """Job side: stage the request and the source inventory of a pipeline run, for every table of the table map that has a source object, as a real load.
 
     A table with no source object cannot load (the pin refuses an inventory with an empty table), so it is left out and named in the output; with no
@@ -234,16 +237,20 @@ def stage_run(code: Path, bucket: str, run: str) -> dict[str, str]:
         raise StepError("the staged inventory covers other tables than the table map")
     bronze_pin.require_objects(inventory)
     digest = hashlib.sha256(raw).hexdigest()
+    skipped = [{"table": name, "reason": SKIPPED_REASON} for name in collections_of(config) if name not in names]
+    report = {"schema": 1, "bronze_run": run, "requested_tables": list(names), "skipped_tables": skipped, "skipped_count": len(skipped)}
+    report_bytes = json_bytes(report)
+    if put_stage_object(client, bucket, STAGE_KEY.format(run=run, name=STAGE_REPORT_FILE), report_bytes) != report_bytes:
+        raise StepError(f"{STAGE_REPORT_FILE} is staged and differs from the report of the staged inventory: it is not replaced")
     request = json.dumps({"tables": list(names), "target": "real", "dry_run": False, "inventory_sha256": digest}, sort_keys=True).encode()
     if put_stage_object(client, bucket, request_key, request) != request:
         raise StepError(f"{request_key} is staged and differs from the request this stage would write: it is not replaced")
     request_digest = hashlib.sha256(request).hexdigest()
-    if left_out:
-        sys.stdout.write(f"left out {len(left_out)} tables that have no source object: {','.join(left_out)}\n")
+    sys.stdout.write(f"skipped_tables {len(skipped)}{': ' + ','.join(item['table'] for item in skipped) if skipped else ''}\n")
     sys.stdout.write(
         f"staged for {run}: {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests, inventory {digest}, request {request_digest}\n"
     )
-    return {"request_sha256": request_digest, "inventory_sha256": digest}
+    return {"request_sha256": request_digest, "inventory_sha256": digest, "skipped_count": len(skipped)}
 
 
 def pinned_inventory(job: Job) -> dict[str, Any]:
@@ -319,7 +326,34 @@ def accept_report(job: Job) -> tuple[dict[str, Any], bytes]:
     return report, body
 
 
-def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory: dict[str, Any]) -> dict[str, Any]:
+def staged_skipped(job: Job) -> list[dict[str, str]]:
+    """The tables the stage job left out of this run's request, each with its reason, from the stage report the stage job wrote beside the request. A run
+    with no stage report (staged by hand) left none out. A report of another run, with a wrong count or naming a requested table is refused."""
+    from botocore.exceptions import ClientError
+
+    try:
+        raw = read_staged(job.run, job.bucket, STAGE_REPORT_FILE)
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) in ABSENT_CODES:
+            return []
+        raise
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        raise StepError("the stage report is not JSON") from None
+    keys = {"schema", "bronze_run", "requested_tables", "skipped_tables", "skipped_count"}
+    skipped = report.get("skipped_tables") if isinstance(report, dict) else None
+    if not isinstance(report, dict) or set(report) != keys or report["schema"] != 1 or report["bronze_run"] != job.run or not isinstance(skipped, list):
+        raise StepError("the stage report is not the report of this run")
+    names = [item.get("table") if isinstance(item, dict) and set(item) == {"table", "reason"} and isinstance(item["reason"], str) else None for item in skipped]
+    if None in names or len(set(names)) != len(names) or report["skipped_count"] != len(skipped) or set(names) & set(job.tables):
+        raise StepError("the stage report names a table twice, a table of the request, or the wrong number of tables")
+    if report["requested_tables"] != list(job.tables):
+        raise StepError("the stage report describes another request than the one this run loads")
+    return [{"table": item["table"], "reason": item["reason"]} for item in skipped]
+
+
+def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory: dict[str, Any], skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:
     """The run record ``lakehouse/bronze_runs/<run>/check.json`` of a passed real run, in the shape ``orchestration.raw_lineage.loaded_objects`` reads: the
     tables, the snapshot of each (which the loader read from the catalog), the generation of the metadata it published, the digest of the loader report
     and every object the run loaded with its version, SHA-256 and size (from the pinned inventory). A report without them gives no record."""
@@ -345,6 +379,7 @@ def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory:
         "metadata_generation": index["generation"],
         "snapshots": snapshots,
         "objects": objects,
+        "skipped_tables": list(skipped),
     }
 
 
@@ -466,8 +501,9 @@ def check(job: Job) -> None:
     report, body = accept_report(job)
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
     if job.target == "real":
-        stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job)))
-        sys.stdout.write(f"run record {stored}\n")
+        skipped = staged_skipped(job)
+        stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job), skipped))
+        sys.stdout.write(f"run record {stored}; skipped_tables {len(skipped)}\n")
         topic = os.environ.get("ALERTS_TOPIC_ARN", "")
         notify = None
         if topic:
