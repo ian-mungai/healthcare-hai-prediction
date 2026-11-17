@@ -809,6 +809,58 @@ def layer_run_hands_its_dbt_and_quality_results_to_the_exit_push(root: Path) -> 
     }
 
 
+def layer_run_collects_the_failure_counts_of_a_failing_dbt_or_quality_command(root: Path) -> dict[str, bool]:
+    """A failed dbt test or quality gate writes its result file and then exits non-zero, so ``run_module`` raises before a call that follows it can read the
+    file (review round 2, finding 5). The case runs the real ``build`` and ``validate`` with the child command replaced by one that writes a result file with
+    one failure and raises ``StepError``, and judges the counts and the error that reach the caller."""
+    from scripts.lakehouse import layer_run
+
+    def child(kind: str) -> Callable[..., None]:
+        def run(job: Any, module: str, arguments: Any, environment: Any = None) -> None:
+            if kind == "dbt":
+                (job.folder / "target").mkdir(parents=True, exist_ok=True)
+                results = [{"unique_id": "model.hai.a", "status": "error"}, {"unique_id": "test.hai.b", "status": "fail"}]
+                (job.folder / "target/run_results.json").write_text(json.dumps({"results": results}), encoding="utf-8")
+            else:
+                (job.folder / "quality_gold").mkdir(parents=True, exist_ok=True)
+                (job.folder / "quality_gold/result.json").write_text(json.dumps({"counts": {"pass": 4, "fail": 1, "warn": 0}}), encoding="utf-8")
+            raise layer_run.StepError("the command exited with 1")
+
+        return run
+
+    with tempfile.TemporaryDirectory(prefix="layer_run_metrics_") as scratch:
+        job = layer_run.Job(layer="gold", run="20261117T120000Z-0a1b2c3d", mode="real", code=Path(scratch) / "code")
+        job.folder.mkdir(parents=True)
+        metrics_push.drain()
+        with (
+            mock.patch.object(layer_run, "link_profile_folder", lambda _job: None),
+            mock.patch.object(layer_run, "source_digest", lambda _job: "0" * 64),
+            mock.patch.object(layer_run, "input_digests", lambda _job: ("1" * 64, "")),
+            mock.patch.object(layer_run, "run_module", child("dbt")),
+        ):
+            try:
+                layer_run.build(job)
+                build_error = ""
+            except layer_run.StepError as error:
+                build_error = str(error)
+        built = pending()
+        with mock.patch.object(layer_run, "run_module", child("quality")):
+            try:
+                layer_run.validate(job)
+                validate_error = ""
+            except layer_run.StepError as error:
+                validate_error = str(error)
+        validated = pending()
+    return {
+        "the build still raises the error of its failed command": build_error == "the command exited with 1",
+        "the failed dbt model is counted": built.get(("hai_dbt_models", (("status", "error"),))) == 1,
+        "the failed dbt test is counted": built.get(("hai_dbt_tests", (("status", "fail"),))) == 1,
+        "validate still raises the error of its failed command": validate_error == "the command exited with 1",
+        "the failed quality check is counted": validated.get(("hai_quality_checks_failed", (("kind", "gold"),))) == 1,
+        "the checks that ran are counted": validated.get(("hai_quality_checks_run", (("kind", "gold"),))) == 5,
+    }
+
+
 class FakeStatus:
     def __init__(self, records: int, failures: int) -> None:
         self.records, self.failures = [f"entity_{index}" for index in range(records)], [f"failure_{index}" for index in range(failures)]
@@ -912,6 +964,7 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_quality_results_become_counts_by_kind": quality_results_become_counts_by_kind,
     "push_unreadable_dbt_and_quality_files_add_nothing": unreadable_dbt_and_quality_files_add_nothing,
     "push_layer_run_hands_its_dbt_and_quality_results_to_the_exit_push": layer_run_hands_its_dbt_and_quality_results_to_the_exit_push,
+    "push_layer_run_collects_the_failure_counts_of_a_failing_dbt_or_quality_command": layer_run_collects_the_failure_counts_of_a_failing_dbt_or_quality_command,
     "push_openmetadata_ingest_counts_entities_and_failures_by_source": openmetadata_ingest_counts_entities_and_failures_by_source,
     "push_run_workflow_records_its_status_before_it_can_raise": run_workflow_records_its_status_before_it_can_raise,
 }

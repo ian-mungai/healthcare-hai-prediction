@@ -601,11 +601,13 @@ def build(job: Job) -> None:
     project = job.code / "dbt" if job.layer == "features" else snapshot / "project"
     arguments: list[str | Path] = ["--mode", job.mode, "--run", job.run, "--folder", job.folder, "--project", project]
     arguments += ["--source-sha256", source, "--input-sha256", input_sha, *(["--extract-sha256", extract] if extract else [])]
-    if job.layer == "features":
-        run_module(job, "scripts.features.features_build", [*arguments, *job.set_flags], environment | phase_deadline_environment(job))
-    else:
-        run_module(job, "scripts.lakehouse.pipeline_build", ["--layer", job.layer, *arguments], environment)
-    push_dbt_results(job)
+    try:
+        if job.layer == "features":
+            run_module(job, "scripts.features.features_build", [*arguments, *job.set_flags], environment | phase_deadline_environment(job))
+        else:
+            run_module(job, "scripts.lakehouse.pipeline_build", ["--layer", job.layer, *arguments], environment)
+    finally:
+        push_dbt_results(job)
 
 
 def push_dbt_results(job: Job) -> None:
@@ -622,25 +624,27 @@ def push_quality_results(job: Job) -> None:
 def validate(job: Job) -> None:
     """Run the layer's quality gates and require every expectation to pass on the same build bytes."""
     baselines = "fixture_baselines.json" if job.mode == "publish_fixture" else "baselines.json"
-    for kind in QUALITY[job.layer]:
-        output = job.folder / f"quality_{kind}"
-        output.mkdir(exist_ok=True)
-        suites = {"silver": ["suites"], "gold": ["gold"], "cross": ["suites", "gold"], "features": ["features"]}[kind]
-        arguments: list[str | Path] = [
-            "--database",
-            job.folder / "staging.duckdb",
-            "--suites",
-            *(Path(SUITES) / name for name in suites),
-            "--output",
-            output / "result.json",
-        ]
-        if kind == "features":
-            run_module(job, "scripts.features.feature_validation", [*arguments, *FEATURE_FILES, *job.set_flags])
-        elif kind == "cross":
-            run_module(job, "scripts.lakehouse.gold_reconcile", [*arguments, "--baselines", Path(SUITES) / baselines])
-        else:
-            run_module(job, "scripts.lakehouse.silver_quality", [*arguments, "--baselines", Path(SUITES) / baselines])
-    push_quality_results(job)
+    try:
+        for kind in QUALITY[job.layer]:
+            output = job.folder / f"quality_{kind}"
+            output.mkdir(exist_ok=True)
+            suites = {"silver": ["suites"], "gold": ["gold"], "cross": ["suites", "gold"], "features": ["features"]}[kind]
+            arguments: list[str | Path] = [
+                "--database",
+                job.folder / "staging.duckdb",
+                "--suites",
+                *(Path(SUITES) / name for name in suites),
+                "--output",
+                output / "result.json",
+            ]
+            if kind == "features":
+                run_module(job, "scripts.features.feature_validation", [*arguments, *FEATURE_FILES, *job.set_flags])
+            elif kind == "cross":
+                run_module(job, "scripts.lakehouse.gold_reconcile", [*arguments, "--baselines", Path(SUITES) / baselines])
+            else:
+                run_module(job, "scripts.lakehouse.silver_quality", [*arguments, "--baselines", Path(SUITES) / baselines])
+    finally:
+        push_quality_results(job)
     validated_sha(job)
 
 
