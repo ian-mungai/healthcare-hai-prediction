@@ -1016,7 +1016,7 @@ def native_case(scene: Scene, config: str, folders: dict[str, str], tamper: Call
     tamper(jobs)
     code, output = scene.run(env=env)
     expect(problems, code == 0 and len(scene.terraform_calls()) == 2, f"a cache that terraform finds incomplete was taken as ready: exit {code}: {output}")
-    with mock.patch.dict(os.environ, env):
+    with mock.patch.dict(os.environ, {**env, "CHECKPOINT_DISABLE": "1"}):
         result = run_command("terraform", [f"-chdir={jobs}", "modules", "-json"], cwd=scene.worktree, timeout=120)
     expect(problems, result.returncode == 0, f"terraform still finds the modules incomplete: {result.stderr[-300:]}")
     return problems
