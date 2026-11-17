@@ -53,6 +53,7 @@ OTHER = "/healthcare_hai_prediction/other_record"
 Case = tuple[str, str, str, bool, dict[str, tuple[str, ...]]]
 FAMILIES = ["bronze", "gold", "promote", "serve", "silver", "train"]
 DRIFT_FAMILIES = sorted([*FAMILIES, "drift"])
+STAGE_FAMILIES = ["bronze_stage", "train"]
 RECORD_PREFIX = "lakehouse/launch_records/"
 INLINE_LIMIT = 10240
 ECS_TASKS = "ecs-tasks.amazonaws.com"
@@ -66,6 +67,7 @@ FAMILY_ROLES = {
     "train": "job_train_task",
     "serve": "job_serve_task",
     "bronze": "job_write_bronze_task",
+    "bronze_stage": "job_write_bronze_task",
     "silver": "job_write_silver_task",
     "gold": "job_write_gold_task",
     "features": "job_write_features_task",
@@ -724,6 +726,29 @@ def train_only_cases() -> list[Case]:
     ]
 
 
+def stage_only_cases() -> list[Case]:
+    """A role that may start the bronze stage family (with train) runs its host definition and passes the bronze writer role its task runs under.
+
+    It holds no read of the staged request, no write of the request or the inventory (the stage task writes them under the bronze writer role) and no bronze
+    run record."""
+    pass_context: Context = {"iam:PassedToService": (ECS_TASKS,)}
+    return [
+        ("stage named: run the bronze stage host definition", "ecs:RunTask", definition("bronze_stage"), True, run_context("bronze_stage")),
+        ("stage named: run the bronze host definition", "ecs:RunTask", definition("bronze"), False, run_context("bronze_stage")),
+        ("stage named: run the stage definition with the bronze tag", "ecs:RunTask", definition("bronze_stage"), False, run_context("bronze")),
+        ("stage named: pass the bronze writer role", "iam:PassRole", role("job_write_bronze_task"), True, pass_context),
+        ("stage named: pass the gold role", "iam:PassRole", role("job_write_gold_task"), False, pass_context),
+        ("stage named: read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", False, {}),
+        ("stage named: read the staged bronze inventory", "s3:GetObject", f"{STAGE}/bronze_inventory.json", False, {}),
+        ("stage named: write the staged bronze request", "s3:PutObject", f"{STAGE}/bronze_request.json", False, ONCE),
+        ("stage named: write the staged bronze inventory", "s3:PutObject", f"{STAGE}/bronze_inventory.json", False, ONCE),
+        ("stage named: read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, False, {}),
+        ("stage named: create a launch record", "s3:PutObject", RECORD, True, ONCE),
+        ("stage named: read the code run binding", "s3:GetObject", CODE_RUN, True, {}),
+        ("stage named: create the code run binding", "s3:PutObject", CODE_RUN, True, ONCE),
+    ]
+
+
 def condition_drops(statement: dict[str, Any]) -> list[tuple[str, dict[str, Any] | None]]:
     """One variant per condition key: that key alone removed, and the whole Condition when it was the last one."""
     variants: list[tuple[str, dict[str, Any] | None]] = []
@@ -1183,13 +1208,16 @@ def verify(output: Path, directory: Path = JOBS_TEMPLATE.parent) -> int:
     documents = role_documents(directory, FAMILIES)
     train_only = role_documents(directory, ["train"])
     drift = role_documents(directory, DRIFT_FAMILIES)
+    stage_only = role_documents(directory, STAGE_FAMILIES)
     rows = with_empty_context(job_cases() + record_cases() + request_cases() + bronze_record_cases() + code_run_cases()) + matrix_cases()
     checks = allowlist_checks("six family", documents, FAMILIES) + allowlist_checks("train only", train_only, ["train"])
     checks += allowlist_checks("six family and drift", drift, DRIFT_FAMILIES)
+    checks += allowlist_checks("bronze stage and train", stage_only, STAGE_FAMILIES)
     checks += evaluate_role(documents, rows)
     checks += evaluate_role(train_only, train_only_cases())
     checks += evaluate_role(drift, drift_record_cases())
-    checks += size_checks("six family", documents) + size_checks("nine family", role_documents(directory, ALL_FAMILIES))
+    checks += evaluate_role(stage_only, stage_only_cases())
+    checks += size_checks("six family", documents) + size_checks("ten family", role_documents(directory, ALL_FAMILIES))
     defects = []
     drift_widenings = [item for item in widenings(drift) if item[0] == "drift_records"] + planted_drift(drift["drift_records"])
     plans = [(documents, FAMILIES, rows, item) for item in widenings(documents) + planted(documents)]

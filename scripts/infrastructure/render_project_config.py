@@ -58,8 +58,8 @@ OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "mod
 # Lists that may be left out: the job families the Airflow launch role may start.
 OPTIONAL_PREPARATION_LISTS = ("airflow_launch_families",)
 HOST_JOB_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
-# The families the Airflow launch role may start: the host job families and the Run 3 publisher (infra/iam/airflow_launch.tf).
-LAUNCH_FAMILIES = (*HOST_JOB_FAMILIES, "publisher")
+# The families the Airflow launch role may start: the host job families, the bronze stage job and the Run 3 publisher (infra/iam/airflow_launch.tf).
+LAUNCH_FAMILIES = (*HOST_JOB_FAMILIES, "bronze_stage", "publisher")
 # The ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value. Secrets Manager appends six random characters
 # to a secret name as part of its ARN, so the ARN ends in the six-character wildcard "-??????" (AWS IAM policy examples, "Example: Wildcards"; never "-*").
 # A secret that is deleted and created again under the same name keeps the access, because the wildcard still matches. The same rule as job_publisher.tf.

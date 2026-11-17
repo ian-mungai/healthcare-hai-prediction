@@ -312,9 +312,11 @@ run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_o
       toset(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[0].Resource) == toset([
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/check.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
       ])
     )
-    error_message = "The bronze role must write exactly the run record and the carried-over record of a run, and no other key."
+    error_message = "The bronze role must write exactly the run record and the carried-over record of a run and the staged request and inventory of a bronze run, and no other key."
   }
 
   assert {

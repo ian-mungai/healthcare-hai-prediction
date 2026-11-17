@@ -24,7 +24,8 @@ locals {
   # the bucket name length and the raw root, so they live in managed policies, one object policy per root. Table statements stay inline.
   # What the check phase reads and writes for its run records: the ingestion run records of the capture root (by exact version, only while the raw root
   # switch is on), the two records of its own run (create-only by the check phase, never any other key of bronze_runs) and the owner notice of the carried-over
-  # files, once the stack is told the alerts topic.
+  # files, once the stack is told the alerts topic. The stage job of a pipeline run (scripts.lakehouse.bronze_run stage) writes the run's request and source
+  # inventory under lakehouse/run_stage/<bronze run>/inputs/, create-only by the task, and nothing else of that folder.
   bronze_run_record_policies = merge(
     var.source_raw_root_enabled ? {
       run_records_read = {
@@ -38,9 +39,14 @@ locals {
     } : {},
     {
       run_record_writes = {
-        description = "Write the run record and the carried-over record of a bronze run, and no other key."
+        description = "Write the run record and the carried-over record of a bronze run and the staged request and source inventory of a bronze run, and no other key."
         document = templatefile("${path.module}/owner_policies/bronze_writer_run_record_writes.json", {
-          BRONZE_RUN_RECORD_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json", "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json"])
+          BRONZE_RUN_RECORD_ARNS = jsonencode([
+            "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json",
+            "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json",
+            "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
+            "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+          ])
         })
       }
     },

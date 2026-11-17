@@ -74,7 +74,16 @@ def render(
     }
     documents["run_record_writes"] = load(
         "bronze_writer_run_record_writes",
-        {"BRONZE_RUN_RECORD_ARNS": json.dumps([f"{bucket}/lakehouse/bronze_runs/*/check.json", f"{bucket}/lakehouse/bronze_runs/*/carried_over.json"])},
+        {
+            "BRONZE_RUN_RECORD_ARNS": json.dumps(
+                [
+                    f"{bucket}/lakehouse/bronze_runs/*/check.json",
+                    f"{bucket}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
+                    f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+                ]
+            )
+        },
         defect,
     )
     documents["owner_notice"] = load("owner_notice", {"ALERTS_TOPIC_ARN": ALERTS_TOPIC}, defect)
@@ -165,6 +174,22 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
         "bronze_runs/bronze_ab12cd34/check.json",
     ):
         check("s3:PutObject", f"{BUCKET}/{other}", False)
+    for staged in ("bronze_request.json", "bronze_inventory.json"):
+        for run in ("bronze_ab12cd34", "bronze_ab12cd34_2"):
+            check("s3:PutObject", f"{BUCKET}/lakehouse/run_stage/{run}/inputs/{staged}", True)
+        for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
+            check(action, f"{BUCKET}/lakehouse/run_stage/bronze_ab12cd34/inputs/{staged}", False)
+        check("s3:PutObject", f"{BUCKET}/lakehouse/run_stage/silver_ab12cd34/inputs/{staged}", False)
+    for other in (
+        "lakehouse/run_stage/bronze_ab12cd34/inputs/code.tar.gz",
+        "lakehouse/run_stage/bronze_ab12cd34/inputs/code.sha256",
+        "lakehouse/run_stage/bronze_ab12cd34/inputs/code_run.json",
+        "lakehouse/run_stage/bronze_ab12cd34/inputs/publisher_request.json",
+        "lakehouse/run_stage/bronze_ab12cd34/tries/bronze_request.json",
+        "lakehouse/run_stage/bronze_ab12cd34/grants/bronze_request.json",
+        "run_stage/bronze_ab12cd34/inputs/bronze_request.json",
+    ):
+        check("s3:PutObject", f"{BUCKET}/{other}", False)
     run_record = f"{BUCKET}/raw/ingestion_runs/ingestion_ab12cd34/run.json"
     check("s3:GetObjectVersion", run_record, raw)
     check("s3:GetObjectVersion", f"{BUCKET}/raw/ingestion_runs/ingestion_retry_ab12cd34_2/run.json", raw)
@@ -252,6 +277,24 @@ def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
             ),
         ),
         ("run_record_write_widened", ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"]))),
+        (
+            "stage_write_widened",
+            (
+                "bronze_writer_run_record_writes",
+                "${BRONZE_RUN_RECORD_ARNS}",
+                json.dumps(
+                    [f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/run_stage/*"]
+                ),
+            ),
+        ),
+        (
+            "stage_request_not_writable",
+            (
+                "bronze_writer_run_record_writes",
+                "${BRONZE_RUN_RECORD_ARNS}",
+                json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json"]),
+            ),
+        ),
         ("run_record_delete_allowed", ("bronze_writer_run_record_writes", '"s3:PutObject"', '"s3:PutObject", "s3:DeleteObject"')),
         ("run_record_read_widened", ("bronze_writer_run_records", "${RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/raw/ingestion_runs/*"]))),
         ("run_record_current_read_allowed", ("bronze_writer_run_records", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:GetObject"')),

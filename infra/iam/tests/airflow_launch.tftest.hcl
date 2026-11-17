@@ -582,6 +582,38 @@ run "the_publisher_family_starts_its_host_task_and_reads_its_staged_request" {
   }
 }
 
+run "the_bronze_stage_family_starts_its_host_task_and_adds_no_object_grant" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["bronze_stage", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_bronze_stage_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train_host:*",
+      ] &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_write_bronze_task_dev",
+      ]
+    )
+    error_message = "The bronze stage family runs only its own host definition and passes the bronze writer role, which its task runs under."
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.airflow_launch_requests) == 0 && length(aws_iam_role_policy.airflow_launch_bronze_record) == 0 &&
+      !strcontains(jsonencode([for policy in [aws_iam_role_policy.airflow_launch_jobs[0], aws_iam_role_policy.airflow_launch_records[0], aws_iam_role_policy.airflow_launch_code_runs[0], aws_iam_role_policy.airflow_launch_lineage[0]] : jsondecode(policy.policy)]), "bronze_inventory.json") &&
+      !strcontains(jsonencode([for policy in [aws_iam_role_policy.airflow_launch_jobs[0], aws_iam_role_policy.airflow_launch_records[0], aws_iam_role_policy.airflow_launch_code_runs[0], aws_iam_role_policy.airflow_launch_lineage[0]] : jsondecode(policy.policy)]), "bronze_request.json")
+    )
+    error_message = "The bronze stage family adds no read or write of the staged request or the inventory to the launch role: the stage job writes them under the bronze writer role, and only the bronze family reads the request."
+  }
+}
+
 run "no_bronze_record_grant_without_the_bronze_family" {
   command = plan
 
