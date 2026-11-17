@@ -103,6 +103,8 @@ variable "host_repo_path" {
 locals {
   # The persistent catalog on the host: always port 8585, path /api, at the address of the platform output.
   host_catalog_api = var.host_private_ip == null ? null : "http://${var.host_private_ip}:8585/api"
+  # The same catalog without the path: the lineage events of the layer jobs go to its OpenLineage route, which the sender appends.
+  host_lineage_url = var.host_private_ip == null ? null : "http://${var.host_private_ip}:8585"
   host_families    = concat(["bronze", "bronze_stage", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"

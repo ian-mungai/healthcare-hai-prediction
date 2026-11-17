@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import cache
 from pathlib import Path
 from typing import Any
-
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_SCHEMA = "data_contracts/orchestration/snapshot_record.schema.json"
@@ -19,9 +17,16 @@ class SnapshotError(ValueError):
     """Snapshot metadata cannot prove its declared output or producer identity."""
 
 
+ICEBERG_ID = re.compile(r"[1-9][0-9]{0,18}")  # the closed schemas' pattern of an Iceberg snapshot ID
+
+
 @cache
-def schema_validator(relative: str) -> Draft202012Validator:
-    """Compile one closed snapshot contract once for this host process."""
+def schema_validator(relative: str) -> Any:
+    """Compile one closed snapshot contract once for this host process. ``jsonschema`` is imported here: the layer jobs run ``checked_snapshot_record`` and
+    ``checked_input_record`` (every rule but the closed schema) in an image that has none."""
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
+
     try:
         schema = json.loads((ROOT / relative).read_text())
         Draft202012Validator.check_schema(schema)
@@ -32,6 +37,8 @@ def schema_validator(relative: str) -> Draft202012Validator:
 
 def check_identity(identity: dict[str, str]) -> None:
     """Apply the identity bounds a JSON Schema pattern cannot express."""
+    if identity["kind"] == "iceberg_snapshot" and not ICEBERG_ID.fullmatch(str(identity["id"])):
+        raise SnapshotError("Iceberg snapshot ID is not a plain decimal number")
     if identity["kind"] == "iceberg_snapshot" and int(identity["id"]) > 2**63 - 1:
         raise SnapshotError("Iceberg snapshot ID exceeds the signed 64-bit range")
     if identity["kind"] == "s3_object_version":
@@ -47,6 +54,11 @@ def validate_snapshot_record(value: Any, invocation: dict[str, Any], outputs: li
     """Return a private validated record; never infer snapshots from paths or environment."""
     if list(schema_validator(SNAPSHOT_SCHEMA).iter_errors(value)):
         raise SnapshotError("snapshot record violates its closed schema")
+    return checked_snapshot_record(value, invocation, outputs, succeeded=succeeded)
+
+
+def checked_snapshot_record(value: Any, invocation: dict[str, Any], outputs: list[dict[str, str]], *, succeeded: bool) -> dict[str, Any]:
+    """Every rule of ``validate_snapshot_record`` except the closed schema, for a record of the caller's own making in an image without ``jsonschema``."""
     if value["invocation"] != invocation:
         raise SnapshotError("snapshot record belongs to another broker invocation")
     if not succeeded:
@@ -70,6 +82,13 @@ def validate_input_record(
     """Return a private validated input record that covers every declared input and equals the pins frozen at intent."""
     if list(schema_validator(INPUT_SCHEMA).iter_errors(value)):
         raise SnapshotError("input snapshot record violates its closed schema")
+    return checked_input_record(value, invocation, inputs, succeeded=succeeded, pinned=pinned)
+
+
+def checked_input_record(
+    value: Any, invocation: dict[str, Any], inputs: list[dict[str, str]], *, succeeded: bool, pinned: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Every rule of ``validate_input_record`` except the closed schema, for a record of the caller's own making in an image without ``jsonschema``."""
     if value["invocation"] != invocation:
         raise SnapshotError("input snapshot record belongs to another broker invocation")
     if not succeeded:

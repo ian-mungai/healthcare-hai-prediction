@@ -75,6 +75,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,12 @@ RELEASE_PHASE = "release"  # the launch name that makes the last container (feas
 RELOAD_PHASE = "reload"  # the launch name that makes the last container (feast) reload the online store of a model set instead
 RELEASE_RUNNER = "feast"  # the container of the features task that runs a release or reload launch
 PHASE_VARIABLE, MODEL_VARIABLE, FEATURES_RUN_VARIABLE = "LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN"
+LINEAGE_VARIABLE = "LINEAGE_INVOCATION"  # filled by the launch in the pin and upload containers only (orchestration/job_lineage.py)
+LINEAGE_PHASES = (
+    "pin",
+    "upload",
+)  # the phases that send lineage events: a START after the pin, the per-table events after the upload and a FAIL after either failed
+LINEAGE_MARGIN_SECONDS = 30.0  # the task time that is kept for the phase's own end after the lineage send
 STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
@@ -1154,6 +1161,37 @@ def launch_phase() -> str:
     return selected if selected in (RELEASE_PHASE, RELOAD_PHASE) else ""
 
 
+def lineage_time(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, UTC).isoformat()
+
+
+def send_lineage(job: Job, phase: str, *, failed: bool, dry: bool) -> None:
+    """Send the lineage events of a finished ``pin`` or ``upload`` phase (``orchestration/job_lineage.py``): the task's START after a pin, a START and a
+    COMPLETE per published table after an upload, the task's FAIL after either failed. Nothing happens unless the launch gave the phase its lineage
+    settings, and nothing here can fail the phase or change its exit code: the send is bounded by ``job_lineage.emit`` and by what is left of the task, and
+    any error of this function is one line on standard error. The module is imported only when the settings are there, because the other images do not
+    hold what it imports."""
+    try:
+        if phase not in LINEAGE_PHASES or dry or job.mode != "real" or job.local is not None or launch_phase() or not os.environ.get(LINEAGE_VARIABLE):
+            return
+        from orchestration import job_lineage
+
+        left = task_seconds_left(job) - LINEAGE_MARGIN_SECONDS
+        started = (job.code.parent / STARTED_FILE).read_text().strip()
+        run = job_lineage.job_run(os.environ[LINEAGE_VARIABLE], job.layer, job.run, job.feature_set, job.folder, lineage_time(float(started)))
+        ended = lineage_time(time.time())
+        if failed:
+            job_lineage.emit("failure", lambda: job_lineage.failure_lines(run, phase, ended), os.environ, min(job_lineage.START_SECONDS, left))
+        elif phase == "pin":
+            job_lineage.emit("start", lambda: job_lineage.start_lines(run), os.environ, min(job_lineage.START_SECONDS, left))
+        else:
+            manifest = job.folder / DBT_TARGET.get(job.layer, Path("target")) / "manifest.json"
+            inputs = inputs_record(job, manifest, None) if manifest.is_file() else None
+            job_lineage.emit("table events", lambda: job_lineage.table_lines(run, ended, inputs), os.environ, min(job_lineage.TABLE_SECONDS, left))
+    except Exception as error:  # the job's work is done or has already failed: no lineage may change its exit code
+        sys.stderr.write(f"layer_run: lineage of the {phase} phase was not sent: {type(error).__name__}\n")
+
+
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     if phase == "pin":
         check_input_run(job)
@@ -1290,7 +1328,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         tarfile.TarError,
     ) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
+        send_lineage(job, args.phase, failed=True, dry=dry)
         return 1
+    send_lineage(job, args.phase, failed=False, dry=dry)
     return 0
 
 

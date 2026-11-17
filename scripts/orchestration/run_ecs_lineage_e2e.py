@@ -15,14 +15,17 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import ecs_lineage_cases, raw_lineage_cases
+from scripts.orchestration import ecs_lineage_cases, job_lineage_cases, raw_lineage_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
     "orchestration/ecs_lineage.py",
     "orchestration/raw_lineage.py",
+    "orchestration/job_lineage.py",
+    "scripts/lakehouse/layer_run.py",
     "scripts/orchestration/raw_lineage_cases.py",
+    "scripts/orchestration/job_lineage_cases.py",
     "orchestration/snapshots.py",
     "orchestration/ecs_launch_operator.py",
     "data_contracts/orchestration/launch_lineage_facet.schema.json",
@@ -50,7 +53,7 @@ def main() -> int:
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []
-    for name, case in {**ecs_lineage_cases.CASES, **raw_lineage_cases.CASES}.items():
+    for name, case in {**ecs_lineage_cases.CASES, **raw_lineage_cases.CASES, **job_lineage_cases.CASES}.items():
         if args.case and args.case != name:
             continue
         try:

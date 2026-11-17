@@ -28,6 +28,7 @@ from jsonschema import Draft202012Validator
 
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
+from orchestration.ecs_lineage import invocation_text
 from orchestration.ingestion_schedule import RETRY_FIRST_DAY, RETRY_KIND, RETRY_LAST_DAY, retry_run_id
 from orchestration.ingestion_schedule import RUN_ID_PATTERN as INGESTION_RUN_PATTERN
 from orchestration.interface import SubmissionRequest
@@ -984,6 +985,7 @@ class Preflight:
             "LAYER_PHASE": lambda: LAYER_PHASES.get(request.template, ""),
             "RELEASE_MODEL": lambda: release_model_of(request) if releasing else "",
             "PHASE": lambda: phase_of(request.template),
+            "LINEAGE_INVOCATION": lambda: invocation_text(request.as_dict()),
             **{
                 name: partial(fixed.__getitem__, name)
                 for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, *RETRY_VARIABLES, DEADLINE_VARIABLE)

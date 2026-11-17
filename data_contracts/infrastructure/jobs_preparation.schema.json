@@ -377,6 +377,13 @@
           "type": "string",
           "pattern": "^/[a-z][a-z0-9_]+/openmetadata_bot_ingestion$"
         },
+        "openmetadata_lineage_token_name": {
+          "type": "string",
+          "pattern": "^/[a-z][a-z0-9_]+/openmetadata_bot_lineage$"
+        },
+        "job_lineage_enabled": {
+          "type": "boolean"
+        },
         "bronze_read_environment": {
           "type": "object",
           "additionalProperties": false,

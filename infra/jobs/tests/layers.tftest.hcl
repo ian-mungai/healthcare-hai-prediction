@@ -373,9 +373,9 @@ run "run_task_contract" {
       output.host_run_tasks["gold"].task_definition == "example_project_dev_job_gold_host" && output.host_run_tasks["gold"].task_role_key == "write_gold_task" &&
       output.host_run_tasks["gold"].capacity_provider == "example_project_host_dev" && output.host_run_tasks["gold"].network_mode == "bridge" &&
       output.host_run_tasks["gold"].network == "lakehouse" && output.host_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
-      output.host_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
+      output.host_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION"] &&
       output.host_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"] &&
-      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE"] &&
+      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"] &&
       output.host_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"] &&
       !contains(keys(output.host_run_tasks["features"].container_environment), "release")
     )
@@ -507,4 +507,101 @@ run "host_jobs_need_the_merged_jobs_log_group" {
   }
 
   expect_failures = [var.log_group_name]
+}
+
+# The lineage events of a layer job (orchestration/job_lineage.py) leave from the pin and upload containers only. With job_lineage_enabled false no container has a
+# lineage setting or secret (the secrets test above holds that); with it true these two containers of the silver, gold and features definitions and of every model
+# set family hold the HTTP transport settings at the host address and the lineage bot token as an ECS secret, and no other container does.
+run "lineage_settings_reach_only_the_pin_and_upload_containers" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled  = true
+    job_lineage_enabled = true
+    host_private_ip     = "10.0.1.5"
+    host_jobs           = ["silver", "gold", "features", "features_m1", "features_m6"]
+
+    openmetadata_lineage_token_name = "/example_project/openmetadata_bot_lineage"
+  }
+
+  assert {
+    condition = alltrue([for family in ["silver", "gold", "features", "features_m1", "features_m6"] : alltrue([
+      for container in [for entry in jsondecode(output.host_container_definitions[family]) : entry if entry.name != "guard"] : (
+        contains(["pin", "upload"], container.name) ? (
+          [for variable in container.environment : variable.value if startswith(variable.name, "OPENLINEAGE__")] == ["hai_lineage.http_transport.UtcHttpTransport", "http://10.0.1.5:8585"] &&
+          [for secret in container.secrets : secret.valueFrom if secret.name == "OPENLINEAGE__TRANSPORT__AUTH__API_KEY"] == ["arn:aws:ssm:us-west-2:111111111111:parameter/example_project/openmetadata_bot_lineage"]
+          ) : (
+          length([for variable in container.environment : variable if startswith(variable.name, "OPENLINEAGE__")]) == 0 &&
+          length([for secret in container.secrets : secret if startswith(secret.name, "OPENLINEAGE__")]) == 0
+        )
+      )
+    ])])
+    error_message = "The lineage transport settings and the lineage bot token reach exactly the pin and upload containers of every layer and model set family, and the URL is the catalog's host address without a path."
+  }
+
+  assert {
+    condition = alltrue([for family in ["silver", "gold", "features", "features_m1", "features_m6"] : (
+      [for container in jsondecode(output.host_container_definitions[family]) : container.name if length([for secret in container.secrets : secret if startswith(secret.name, "OPENLINEAGE__")]) > 0] == ["pin", "upload"] &&
+      [for container in jsondecode(output.host_container_definitions[family]) : length(container.secrets) if container.name == "pin"][0] == 3 &&
+      [for container in jsondecode(output.host_container_definitions[family]) : length(container.secrets) if container.name == "upload"][0] == 1
+    )])
+    error_message = "The pin keeps its two reader secrets and gains only the lineage token, and the upload holds only the lineage token."
+  }
+
+  assert {
+    condition     = length(output.host_secret_flow.violations) == 0 && length(output.host_secret_flow.mutation_mismatches) == 0 && alltrue([for family in ["silver", "gold", "features"] : contains(output.host_secret_flow.containers_checked, "host_${family}/upload")])
+    error_message = "The shared secret-flow check follows the upload containers that now hold the lineage token and finds no leak."
+  }
+
+  assert {
+    condition     = alltrue([for family, task in output.host_container_definitions : length(jsondecode(task)) == 10 if contains(["silver", "gold", "features", "features_m1", "features_m6"], family)])
+    error_message = "Each layer and model set definition holds exactly 10 containers (init, eight phases and the guard) with lineage on: the settings are variables and secrets of existing containers, never a container of their own (ECS refuses an 11th)."
+  }
+}
+
+run "lineage_off_leaves_every_layer_container_as_before" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
+      for container in jsondecode(output.host_container_definitions[layer]) :
+      length([for variable in container.environment : variable if startswith(variable.name, "OPENLINEAGE__")]) == 0 && length([for secret in container.secrets : secret if startswith(secret.name, "OPENLINEAGE__")]) == 0
+    ])])
+    error_message = "With job_lineage_enabled false no layer container holds a lineage transport setting or the lineage token."
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
+      for container in jsondecode(output.host_container_definitions[layer]) : [for variable in container.environment : variable.name if variable.value == "" && variable.name == "LINEAGE_INVOCATION"] == [] || contains(["pin", "upload"], container.name)
+    ])])
+    error_message = "Only the pin and upload containers declare LINEAGE_INVOCATION for the launch to fill."
+  }
+}
+
+run "job_lineage_needs_the_host_address" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled  = true
+    job_lineage_enabled = true
+  }
+
+  expect_failures = [var.job_lineage_enabled]
+}
+
+run "job_lineage_takes_only_the_project_lineage_token" {
+  command = plan
+
+  variables {
+    layer_jobs_enabled              = true
+    job_lineage_enabled             = true
+    host_private_ip                 = "10.0.1.5"
+    openmetadata_lineage_token_name = "/example_project/openmetadata_bot_ingestion"
+  }
+
+  expect_failures = [var.openmetadata_lineage_token_name]
 }

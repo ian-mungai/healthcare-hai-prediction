@@ -83,7 +83,8 @@
                   "PUBLISHER_RETRY_DAY",
                   "PHASE",
                   "LAYER_PHASE",
-                  "RELEASE_MODEL"
+                  "RELEASE_MODEL",
+                  "LINEAGE_INVOCATION"
                 ]
               }
             }

@@ -43,7 +43,8 @@
           "RUN_ID",
           "CODE_RUN_ID",
           "CODE_SHA256",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "LINEAGE_INVOCATION"
         ],
         "build": [
           "RUN_ID",
@@ -70,7 +71,8 @@
         ],
         "upload": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "LINEAGE_INVOCATION"
         ]
       },
       "chain": true,
@@ -94,7 +96,8 @@
           "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI",
-          "INPUT_RUN_ID"
+          "INPUT_RUN_ID",
+          "LINEAGE_INVOCATION"
         ],
         "build": [
           "RUN_ID",
@@ -116,7 +119,8 @@
         ],
         "upload": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "LINEAGE_INVOCATION"
         ],
         "maintain": [
           "RUN_ID",
@@ -147,7 +151,8 @@
           "POLARIS_URI",
           "INPUT_RUN_ID",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "LINEAGE_INVOCATION"
         ],
         "build": [
           "RUN_ID",
@@ -179,7 +184,8 @@
           "RUN_ID",
           "CODE_RUN_ID",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "LINEAGE_INVOCATION"
         ],
         "feast": [
           "RUN_ID",

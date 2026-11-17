@@ -39,22 +39,22 @@ locals {
   layer_run_variables = {
     silver = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "LINEAGE_INVOCATION"]
       build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
       validate = ["RUN_ID", "CODE_RUN_ID"]
       verify   = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
       export   = ["RUN_ID", "CODE_RUN_ID"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      upload   = ["RUN_ID", "CODE_RUN_ID"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION"]
     }
     gold = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION"]
       build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
       validate = ["RUN_ID", "CODE_RUN_ID"]
       export   = ["RUN_ID", "CODE_RUN_ID"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      upload   = ["RUN_ID", "CODE_RUN_ID"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION"]
       maintain = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
     }
     # LAYER_PHASE tells a phase which one phase the launch runs: empty for a features build; release or reload for a launch whose only work is the last container,
@@ -63,15 +63,27 @@ locals {
     # (RELEASE_MODEL) and, for a release, the features run (FEATURES_RUN) whose held online load it releases.
     features = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"]
       build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
       validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
       export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
-      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"]
       feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"]
     }
   }
+  # The lineage events of a layer job (orchestration/job_lineage.py) leave from two containers only: the pin (the task's START, and its FAIL) and the upload (one
+  # START and one COMPLETE per published table, and its FAIL). They hold the HTTP transport settings of the scheduler (the type value only tells the job that
+  # they are HTTP settings, it imports no transport) at the host address, and the lineage bot token as an ECS secret of the shared job execution role. With
+  # job_lineage_enabled false they hold neither, so the job sends nothing; the launch fills LINEAGE_INVOCATION either way, like every variable of the catalog.
+  layer_lineage_phases = ["pin", "upload"]
+  layer_lineage_environment = var.job_lineage_enabled ? [
+    { name = "OPENLINEAGE__TRANSPORT__TYPE", value = "hai_lineage.http_transport.UtcHttpTransport" },
+    { name = "OPENLINEAGE__TRANSPORT__URL", value = local.host_lineage_url },
+  ] : []
+  layer_lineage_secrets = var.job_lineage_enabled ? [
+    { name = "OPENLINEAGE__TRANSPORT__AUTH__API_KEY", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_lineage_token_name}" },
+  ] : []
   layer_driver = "cd /workspace/code && python -m scripts.lakehouse.layer_run %s --layer %s --run \"$RUN_ID\""
   # The task has no code before the first step. It downloads the staged archive, checks it against CODE_SHA256 and unpacks it; the pin phase checks it again.
   layer_fetch_python = trimspace(<<-EOT
@@ -137,9 +149,13 @@ locals {
           step.name == "feast" ? [
             { name = "FEAST_PROFILE", value = "aws" },
             { name = "FEAST_REGISTRY_BUCKET", value = var.data_bucket_name },
-          ] : []
+          ] : [],
+          contains(local.layer_lineage_phases, step.name) ? local.layer_lineage_environment : []
         )
-        secrets = layer == "silver" && step.name == "build" ? local.layer_build_secrets : (lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : []))
+        secrets = concat(
+          layer == "silver" && step.name == "build" ? local.layer_build_secrets : (lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : [])),
+          contains(local.layer_lineage_phases, step.name) ? local.layer_lineage_secrets : []
+        )
         mountPoints = [
           { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
           { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }

@@ -32,6 +32,7 @@ from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_lineage import (
+    JOB_TASK,
     TABLE_EVENT_JOBS,
     DeliveryFailed,
     EvidenceUnavailable,
@@ -64,7 +65,6 @@ from orchestration.interface import SubmissionRequest
 LOG = logging.getLogger(__name__)
 UNAVAILABLE_SECONDS = 600.0
 UNAVAILABLE_POLL_SECONDS = 15.0
-JOB_TASK = "job"  # the task of a one-job chain that launches (``dag_runtime.CHAIN_TASKS``); its identity is what the bronze table events name
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = (
     "AWS_REGION",

@@ -1,7 +1,9 @@
 """Lineage of a job that the direct ECS launch library ran: OpenLineage datasets and facets rebuilt from declared lineage and durable S3 evidence.
 
 The launch operator (``orchestration/ecs_launch_operator.py``) returns the facets of ``LineageSource.facets`` to Airflow's OpenLineage provider, which sends
-them over HTTP to OpenMetadata's lineage route with the lineage bot credential and a 5 second limit. Nothing is spooled and the job itself sends nothing.
+them over HTTP to OpenMetadata's lineage route with the lineage bot credential and a 5 second limit. Nothing is spooled. A layer job also sends its own
+per-table events from inside its pin and upload phases (``orchestration/job_lineage.py``, owner decision Nov 16 2026): the same events as the evidence
+step's, built by the same code with the same identity (``invocation_text``), so a table's event sent from both places is one event and one edge.
 A missed event is rebuilt by ``replay`` from the same evidence by the same builder, so a replay gives the same bytes every time:
 
     python -m orchestration.ecs_lineage replay --bucket <bucket> --job gold --run-id <run> --attempt 1 --template gold_build \
@@ -75,8 +77,6 @@ from pathlib import Path
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from jsonschema import Draft202012Validator
-from referencing import Registry, Resource
 
 from orchestration.ecs_launch import LaunchError, LaunchStore, S3LaunchStore, launch_record_prefix
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
@@ -127,6 +127,8 @@ RUN_ID = re.compile(RUN_ID_PATTERN)
 BRONZE_JOB = "bronze"  # the one job whose lineage comes from its run record (raw_lineage.bronze_run_events)
 PIN_TEMPLATES = ("pin_silver", "pin_gold")  # the only templates whose invocation names an input run (submission_request.schema.json)
 TERMINAL = {"succeeded": "COMPLETE", "cancelled": "ABORT"}  # every other outcome is FAIL
+JOB_TASK = "job"  # the task of a one-job chain that launches (``dag_runtime.CHAIN_TASKS``); its identity is what the table events of a job name
+INVOCATION_FIELDS = ("template", "dag_id", "task_id", "dag_run_id", "attempt")
 
 
 class LineageRefused(ValueError):
@@ -166,6 +168,21 @@ LAYERS = {
 
 # A model set's features run pins the domain matrices of a base run (the base pins file, with the digest of the base run's ledger row) and publishes its table
 MODEL_LAYER = Layer("base_pins.json", "features", "features_snapshot.json", "features", ("features", "features_snapshot.json"))
+
+
+@dataclass(frozen=True)
+class Checks:
+    """The record rules ``job_lineage`` applies: the validators of an input record and of an output record, and whether the pins are compared with what the
+    input run published. The Airflow side checks everything against the closed schemas and the launch records. A layer job (``orchestration/job_lineage.py``)
+    has no ``jsonschema`` in its image and has already compared its pins with the input run's record in its pin phase (``scripts/lakehouse/layer_run.py``
+    ``check_input_versions``), so it runs every rule but the closed schema and does not read the input run's evidence again."""
+
+    inputs: Callable[..., dict[str, Any]] = validate_input_record
+    outputs: Callable[..., dict[str, Any]] = validate_snapshot_record
+    frozen: bool = True
+
+
+SCHEMA_CHECKS = Checks()
 
 TABLE_EVENT_JOBS = tuple(LAYERS)  # the jobs whose datasets travel in one event per table, never in the task's own event
 
@@ -296,6 +313,15 @@ def step_invocation(request: Mapping[str, Any]) -> dict[str, Any]:
     return body
 
 
+def invocation_text(request: Mapping[str, Any]) -> str:
+    """The lineage identity that the launch gives a job's phases (``LINEAGE_INVOCATION``): the five fields of the launching step's request that name its
+    events, with the task of the one-job chain (``JOB_TASK``, the task the evidence step's per-table events name) and the input run bound at launch. The job
+    rebuilds from it the same run IDs, job names and run facet that the evidence step builds, so an event sent from the job and one sent from Airflow for the
+    same table are the same event."""
+    body = {name: request[name] for name in INVOCATION_FIELDS} | {"task_id": JOB_TASK, "input_run": request.get("input_run_id") or "latest"}
+    return canonical(body)
+
+
 def timestamp_text(value: Any, where: str) -> str:
     """A bounded ISO 8601 UTC time as given; anything else is refused."""
     try:
@@ -339,6 +365,18 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def parse_record(key: str, body: bytes) -> Any:
+    """An evidence record of at most ``EVIDENCE_BYTES`` bytes as JSON with no duplicate key; anything else is refused with its key."""
+    if len(body) > EVIDENCE_BYTES:
+        raise LineageRefused(f"{key}: larger than {EVIDENCE_BYTES} bytes")
+    try:
+        return json.loads(body, object_pairs_hook=unique_object)
+    except LineageRefused as error:
+        raise LineageRefused(f"{key}: {error}") from None
+    except ValueError:
+        raise LineageRefused(f"{key}: is not JSON") from None
+
+
 class S3Evidence:
     """Bounded reads of evidence objects of the project bucket. A missing object is None; any other failure raises ``EvidenceUnavailable``."""
 
@@ -356,14 +394,7 @@ class S3Evidence:
             raise (EvidenceDenied if code == "AccessDenied" else EvidenceUnavailable)(f"{key}: {code or 'ClientError'}") from None
         except BotoCoreError as error:
             raise EvidenceUnavailable(f"{key}: {type(error).__name__}") from None
-        if len(body) > EVIDENCE_BYTES:
-            raise LineageRefused(f"{key}: larger than {EVIDENCE_BYTES} bytes")
-        try:
-            return json.loads(body, object_pairs_hook=unique_object)
-        except LineageRefused as error:
-            raise LineageRefused(f"{key}: {error}") from None
-        except ValueError:
-            raise LineageRefused(f"{key}: is not JSON") from None
+        return parse_record(key, body)
 
 
 @dataclass(frozen=True)
@@ -509,7 +540,9 @@ def base_row(evidence: S3Evidence, source: str) -> dict[str, Any]:
     return {"run_id": source, "committed_at": timestamp_text(publication.get("committed_at"), apply_key), "snapshot_set": snapshots, "base_run": None}
 
 
-def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str | None]:
+def input_pins(
+    evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, Any], checks: Checks = SCHEMA_CHECKS
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str | None]:
     """The pins of the job's pin file and the frozen pins they must equal, with the key of the pin file and the input run the file names. A model set's
     pin file pins the domain matrices of its base run, so the pins it must equal are those tables of the base run's record."""
     layer = MODEL_LAYER if facts.model else LAYERS[facts.job]
@@ -518,7 +551,7 @@ def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, 
     record = evidence.read(key)
     if layer.frozen is None:
         claim_key = f"{folder}/state/pinned.json"
-        claim = evidence.read(claim_key)
+        claim = evidence.read(claim_key) if checks.frozen else {"layer": facts.job, "mode": MODE, "run_id": facts.run_id}
         if claim != {"layer": facts.job, "mode": MODE, "run_id": facts.run_id}:
             raise LineageRefused(f"{claim_key}: the run's one pin claim is missing or names another run, so its pins are not frozen")
         if record is None:
@@ -533,16 +566,21 @@ def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, 
         raise LineageRefused(f"{key}: the input run {source!r} is not a run ID")
     if facts.input_run != "latest" and source != facts.input_run:
         raise LineageRefused(f"{key}: pins run {source}, not the input run {facts.input_run} bound at launch")
+    pins = snapshot_items(layer.input_schema, record["snapshot_set"], key)
+    if not checks.frozen:
+        return pins, pins, key, source
     frozen, _ = output_set(evidence, layer.frozen[0], source, required=True)
     if facts.model:
         if base_row_digest(base_row(evidence, source)) != record["base_row_sha256"]:
             raise LineageRefused(f"{key}: base_row_sha256 is not the digest of the row of base run {source} that its own evidence gives")
         pinned = {(item["namespace"], item["name"]) for item in declared["inputs"]}
         frozen = [item for item in frozen or [] if (item["namespace"], item["name"]) in pinned]
-    return snapshot_items(layer.input_schema, record["snapshot_set"], key), frozen or [], key, source
+    return pins, frozen or [], key, source
 
 
-def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, Any], evidence: S3Evidence, facts: LaunchFacts) -> JobLineage:
+def job_lineage(
+    job: str, invocation: Mapping[str, Any], declared: Mapping[str, Any], evidence: S3Evidence, facts: LaunchFacts, checks: Checks = SCHEMA_CHECKS
+) -> JobLineage:
     """The datasets of one ended attempt with the versions its evidence proves. Raises ``LineageRefused`` or ``EvidenceUnavailable``."""
     succeeded = facts.outcome == "succeeded"
     inputs = [dict(item) for item in declared["inputs"]]
@@ -551,10 +589,10 @@ def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, 
     unreadable = ""
     source = None
     if succeeded and job in LAYERS and inputs:
-        pins, frozen, key, source = input_pins(evidence, facts, declared)
+        pins, frozen, key, source = input_pins(evidence, facts, declared, checks)
         record = {"version": 1, "invocation": dict(invocation), "inputs": pins}
         try:
-            checked = validate_input_record(record, dict(invocation), inputs, succeeded=True, pinned=frozen)
+            checked = checks.inputs(record, dict(invocation), inputs, succeeded=True, pinned=frozen)
         except SnapshotError as error:
             raise LineageRefused(f"{key}: {error}") from None
         versions |= {(item["namespace"], item["name"]): item["snapshot"] for item in checked["inputs"]}
@@ -567,7 +605,7 @@ def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, 
         if found is not None:
             record = {"version": 1, "invocation": dict(invocation), "outputs": found}
             try:
-                checked = validate_snapshot_record(record, dict(invocation), outputs, succeeded=True)
+                checked = checks.outputs(record, dict(invocation), outputs, succeeded=True)
             except SnapshotError as error:
                 raise LineageRefused(f"{key}: {error}") from None
             versions |= {(item["namespace"], item["name"]): item["snapshot"] for item in checked["outputs"]}
@@ -623,14 +661,16 @@ def table_inputs(evidence: S3Evidence, layer: str, run_id: str, declared: Mappin
     return found
 
 
-def layer_table_events(evidence: S3Evidence, declared: Mapping[str, Any], invocation: Mapping[str, Any], facts: LaunchFacts) -> list[dict[str, Any]]:
+def layer_table_events(
+    evidence: S3Evidence, declared: Mapping[str, Any], invocation: Mapping[str, Any], facts: LaunchFacts, checks: Checks = SCHEMA_CHECKS
+) -> list[dict[str, Any]]:
     """The events of a layer job's published tables. Each table is its own run, a child of the step's run: the tables its own model reads in (as the run's
     record beside its dbt copy lists them) and itself out, each with the version the layer's evidence proves, so the receiver's pairing of the inputs of an
     event with its outputs gives the tables' real edges, not every input with every output of the layer. A job that did not succeed claims no table."""
     if facts.outcome != "succeeded":
         return []
     layer = facts.job
-    full = job_lineage(layer, invocation, declared, evidence, facts)
+    full = job_lineage(layer, invocation, declared, evidence, facts, checks)
     versioned = {(item["namespace"], item["name"]): item for item in [*full.inputs, *full.outputs]}
     reads = table_inputs(evidence, layer, facts.run_id, declared)
     parent = {
@@ -699,7 +739,12 @@ def events(lineage: JobLineage, invocation: Mapping[str, Any], facts: LaunchFact
 
 
 @cache
-def validators() -> tuple[Draft202012Validator, Draft202012Validator]:
+def validators() -> tuple[Any, Any]:
+    """The event schema check and the facet schema check. ``jsonschema`` and ``referencing`` are imported here, not at the top, because the layer jobs run
+    this module in images that hold neither (the job builds events and never checks them against the spec)."""
+    from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+
     resources = []
     for name, digest in sorted(SPEC_FILES.items()):
         raw = (ROOT / SPEC_FOLDER / name).read_bytes()

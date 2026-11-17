@@ -268,6 +268,7 @@ ROWS: list[Row] = [
         "jobs",
         "train_enabled",
         "layer_jobs_enabled",
+        "job_lineage_enabled",
         "drift_enabled",
         "bronze_job_enabled",
         "publisher_job_enabled",
@@ -355,6 +356,20 @@ ROWS: list[Row] = [
             "/example_project/nested/openmetadata_bot_ingestion",
             "/Example_Project/openmetadata_bot_ingestion",
             "/example_project/openmetadata_bot_ingestion/",
+        ),
+    ),
+    Row(
+        "jobs",
+        "openmetadata_lineage_token_name",
+        "/example_project/openmetadata_bot_lineage",
+        5,
+        "/healthcare_hai_prediction/openmetadata_bot_lineage",
+        (
+            "openmetadata_bot_lineage",
+            "/example_project/openmetadata_bot_other",
+            "/example_project/nested/openmetadata_bot_lineage",
+            "/Example_Project/openmetadata_bot_lineage",
+            "/example_project/openmetadata_bot_lineage/",
         ),
     ),
 ]

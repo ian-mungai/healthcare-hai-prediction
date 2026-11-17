@@ -655,6 +655,20 @@ def after_needs_the_previous_job_to_pass() -> None:
     with world(passed, "gold_transform_dag", GOLD) as current:
         require(current.step("pin_silver") == "succeeded", "gold did not run after a passed silver")
         require(passed.environment(1)["pin"]["INPUT_RUN_ID"] == SILVER_RUN, "the gold pin container lacks the input run")
+        lineage = {name: values["LINEAGE_INVOCATION"] for name, values in passed.environment(1).items() if "LINEAGE_INVOCATION" in values}
+        require(
+            set(lineage) == {"pin", "upload"} and lineage["pin"] == lineage["upload"],
+            f"only the gold pin and upload containers get the lineage identity: {sorted(lineage)}",
+        )
+        wanted = {
+            "template": "pin_silver",
+            "dag_id": "gold_transform_dag",
+            "task_id": "job",
+            "dag_run_id": "manual__test",
+            "attempt": 1,
+            "input_run": SILVER_RUN,
+        }
+        require(json.loads(lineage["pin"]) == wanted, f"the lineage identity is {lineage['pin']}")
         current.step("gold_build")
         require(passed.tasks_started() == 2, "a later gold step launched again")
 

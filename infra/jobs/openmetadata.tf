@@ -22,6 +22,30 @@ variable "mlflow_metadata_reader_password_name" {
   }
 }
 
+variable "openmetadata_lineage_token_name" {
+  description = "Parameter Store SecureString name of the lineage bot token of the persistent catalog, the one Airflow's scheduler sends with. The execution role injects it into the pin and upload containers of the layer jobs while job_lineage_enabled is true. The persistent catalog bootstrap writes it. Terraform references the name and never reads the value."
+  type        = string
+  default     = "/healthcare_hai_prediction/openmetadata_bot_lineage"
+  nullable    = false
+
+  validation {
+    condition     = !var.job_lineage_enabled || var.openmetadata_lineage_token_name == "/${var.project_name}/openmetadata_bot_lineage"
+    error_message = "Inject only the project lineage bot token parameter."
+  }
+}
+
+variable "job_lineage_enabled" {
+  description = "Send the lineage events of the silver, gold and features host jobs (and the six model sets) from their pin and upload containers (orchestration/job_lineage.py): the HTTP transport settings at the host address and the lineage bot token as an ECS secret. Needs host_private_ip, and the shared job execution role must hold the lineage token grant (IAM input job_lineage_prepared) before the first launch of a revision that has it, or ECS cannot start the task. False adds no lineage setting and no lineage secret to any container."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.job_lineage_enabled || var.host_private_ip != null
+    error_message = "Job lineage goes to the persistent catalog on the host: supply host_private_ip first."
+  }
+}
+
 variable "openmetadata_images" {
   description = "Ingestion image URI from the project ECR repository <project>_openmetadata_ingestion_<environment>, pinned by digest. The metadata host task needs only this image. The ARM64 host runs it, so it must list linux/arm64."
   type        = map(string)
