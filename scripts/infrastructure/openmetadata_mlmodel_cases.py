@@ -409,6 +409,189 @@ def the_host_ingest_runs_the_mlflow_source_and_then_the_edges() -> None:
     require(code == 1, f"a failing edge step fails the job: {code}")
 
 
+ADMIN = ("admin", "Synthetic-Admin-2!")
+ADMIN_PARAMETER = "/example/mlflow_admin_password"
+READER_PARAMETER = "/example/mlflow_metadata_reader_login"
+LOOPBACK = "http://127.0.0.1:5100"
+
+
+class FakeParameters:
+    """The two Parameter Store calls of the setup, in memory. A put without Overwrite refuses an existing name, as the service does."""
+
+    def __init__(self, **values: str) -> None:
+        self.values = {ADMIN_PARAMETER: ADMIN[1], **{name: value for name, value in values.items()}}
+        self.puts: list[dict[str, Any]] = []
+
+    def get_parameter(self, **kwargs: Any) -> dict[str, Any]:
+        from botocore.exceptions import ClientError
+
+        base().require(kwargs.get("WithDecryption") is True, "a SecureString was read without decryption")
+        if kwargs["Name"] not in self.values:
+            raise ClientError({"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
+        return {"Parameter": {"Name": kwargs["Name"], "Value": self.values[kwargs["Name"]]}}
+
+    def put_parameter(self, **kwargs: Any) -> dict[str, Any]:
+        from botocore.exceptions import ClientError
+
+        self.puts.append({key: value for key, value in kwargs.items() if key != "Value"})
+        if kwargs["Name"] in self.values and not kwargs.get("Overwrite"):
+            raise ClientError({"Error": {"Code": "ParameterAlreadyExists", "Message": "exists"}}, "PutParameter")
+        self.values[kwargs["Name"]] = kwargs["Value"]
+        return {"Version": 1}
+
+
+class Registry:
+    """The user and permission calls of MLflow's basic-auth app that the setup makes, shaped on MLflow 3.17.2 (checked live in the probe)."""
+
+    def __init__(self, reader_login: str | None = None, grants: tuple[str, ...] = ()) -> None:
+        self.reader_login = reader_login
+        self.granted = set(grants)
+        self.calls: list[tuple[str, str]] = []
+        self.fail_grant = False
+
+    def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
+        parts = urllib.parse.urlsplit(url)
+        path = parts.path
+        self.calls.append((method, path))
+        document = json.loads(body) if body else {}
+        sent = headers.get("Authorization", "")
+        as_admin = sent == "Basic " + base64.b64encode(":".join(ADMIN).encode()).decode()
+        as_reader = self.reader_login is not None and sent == "Basic " + base64.b64encode(f"{READER[0]}:{self.reader_login}".encode()).decode()
+        if not (as_admin or as_reader):
+            return 401, None
+        if method == "GET" and path == "/api/3.0/mlflow/users/current/permissions":
+            items = [{"permission": "READ", "resource_pattern": "*", "resource_type": kind} for kind in sorted(self.granted)]
+            return 200, {"is_admin": as_admin, "permissions": [] if as_admin else items}
+        if not as_admin:
+            return 403, None
+        if method == "GET" and path == "/api/2.0/mlflow/users/get":
+            found = parse_user(parts.query) == READER[0] and self.reader_login is not None
+            return (
+                (200, {"user": {"username": READER[0], "is_admin": False}}) if found else (404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no user"})
+            )
+        if method == "POST" and path == "/api/2.0/mlflow/users/create":
+            self.reader_login = document["password"]
+            return 200, {"user": {"username": document["username"]}}
+        if method == "PATCH" and path == "/api/2.0/mlflow/users/update-password":
+            self.reader_login = document["password"]
+            return 200, {}
+        if method == "POST" and path == "/api/3.0/mlflow/users/permissions/grant":
+            if self.fail_grant:
+                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
+            if (document["permission"], document["resource_id"]) != ("READ", "*"):
+                return 400, {"error_code": "INVALID_PARAMETER_VALUE", "message": "the setup grants READ on every name only"}
+            self.granted.add(document["resource_type"])
+            return 200, {}
+        return 404, {"error_code": "ENDPOINT_NOT_FOUND", "message": path}
+
+
+def parse_user(query: str) -> str:
+    return urllib.parse.parse_qs(query).get("username", [""])[0]
+
+
+def setup() -> Any:
+    from scripts.infrastructure import mlflow_reader_setup
+
+    return mlflow_reader_setup
+
+
+def run_setup(registry: Callable[..., tuple[int, Any]], ssm: FakeParameters, **changes: str | None) -> tuple[int, str, str]:
+    env = {"MLFLOW_TRACKING_URI": LOOPBACK, "READER_PARAMETER": READER_PARAMETER, "ADMIN_PARAMETER": ADMIN_PARAMETER}
+    for name, value in changes.items():
+        env.pop(name, None) if value is None else env.update({name: value})
+    with base().quiet() as (out, err):
+        code = setup().main([], env=env, http=registry, ssm=ssm)
+    return code, out.getvalue(), err.getvalue()
+
+
+def writes(registry: Registry) -> list[tuple[str, str]]:
+    return [call for call in registry.calls if call[0] in ("POST", "PATCH")]
+
+
+def values_absent(ssm: FakeParameters, *texts: str) -> None:
+    for text in texts:
+        base().require(not any(value in text for value in (ADMIN[1], ssm.values.get(READER_PARAMETER, "\0"))), "a password reached the output")
+
+
+def the_setup_creates_the_reader_once_with_a_stored_password_and_wildcard_grants() -> None:
+    require = base().require
+    registry, ssm = Registry(), FakeParameters()
+    code, out, err = run_setup(registry, ssm)
+    require(code == 0, (code, out, err))
+    stored = ssm.values[READER_PARAMETER]
+    require(len(stored) >= 32 and registry.reader_login == stored, "the MLflow user must carry the stored value")
+    require(
+        ssm.puts == [{"Name": READER_PARAMETER, "Type": "SecureString", "Overwrite": False}], f"the parameter is created once and never overwritten: {ssm.puts}"
+    )
+    require(registry.granted == {"registered_model", "experiment", "logged_model"}, registry.granted)
+    values_absent(ssm, out, err)
+
+
+def a_second_setup_changes_nothing() -> None:
+    require = base().require
+    registry, ssm = Registry(), FakeParameters()
+    require(run_setup(registry, ssm)[0] == 0, "first run")
+    before, calls = dict(ssm.values), len(registry.calls)
+    code, out, err = run_setup(registry, ssm)
+    require(code == 0 and "unchanged" in out, (code, out, err))
+    require(ssm.values == before and len(ssm.puts) == 1, "a rerun must not touch the parameter")
+    require(len(writes(registry)) == 4 and len(registry.calls) > calls, f"only reads on the rerun: {registry.calls[calls:]}")
+
+
+def a_user_with_another_password_is_set_to_the_stored_value() -> None:
+    require = base().require
+    registry, ssm = Registry(reader_login="Synthetic-Old-1!", grants=("registered_model",)), FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+    code, out, err = run_setup(registry, ssm)
+    require(code == 0, (code, err))
+    require(
+        registry.reader_login == "Synthetic-Stored-1!" and ssm.values[READER_PARAMETER] == "Synthetic-Stored-1!" and not ssm.puts,
+        "the parameter is the source of truth",
+    )
+    require(registry.granted == {"registered_model", "experiment", "logged_model"}, "only the missing grants are added")
+    require(sum(1 for call in registry.calls if call[1].endswith("/permissions/grant")) == 2, registry.calls)
+    values_absent(ssm, out, err)
+
+
+def a_stored_value_without_a_user_creates_the_user_after_an_interrupted_run() -> None:
+    require = base().require
+    registry, ssm = Registry(), FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+    code, out, err = run_setup(registry, ssm)
+    require(code == 0 and registry.reader_login == "Synthetic-Stored-1!" and not ssm.puts, (code, err))
+
+
+def a_user_without_a_stored_value_is_given_a_new_stored_value() -> None:
+    require = base().require
+    registry, ssm = Registry(reader_login="Synthetic-Old-1!"), FakeParameters()
+    code, out, err = run_setup(registry, ssm)
+    require(code == 0 and registry.reader_login == ssm.values[READER_PARAMETER] != "Synthetic-Old-1!", (code, err))
+    require(any(call[0] == "PATCH" for call in registry.calls), "an existing user's password is replaced with the new stored value")
+
+
+def an_unreadable_admin_login_or_a_refused_grant_stops_with_a_cause() -> None:
+    require = base().require
+    registry, ssm = Registry(), FakeParameters()
+    del ssm.values[ADMIN_PARAMETER]
+    code, out, err = run_setup(registry, ssm)
+    require(code == 1 and "administrator password" in err and not registry.calls and not ssm.puts, (code, err))
+    wrong = Registry()
+    code, out, err = run_setup(wrong, FakeParameters(**{ADMIN_PARAMETER: "Synthetic-Wrong-1!"}))
+    require(code == 1 and "401" in err and not writes(wrong), (code, err))
+    refused = Registry()
+    refused.fail_grant = True
+    code, out, err = run_setup(refused, FakeParameters())
+    require(code == 1 and "500" in err, (code, err))
+
+
+def the_setup_talks_only_to_a_loopback_registry() -> None:
+    require = base().require
+    for uri in ("http://10.0.1.20:5100", "https://127.0.0.1:5100", "http://203.0.113.5:5100", "http://127.0.0.1"):
+        registry, ssm = Registry(), FakeParameters()
+        code, out, err = run_setup(registry, ssm, MLFLOW_TRACKING_URI=uri)
+        require(code == 2 and not registry.calls and not ssm.puts, (uri, code, err))
+    code, out, err = run_setup(Registry(), FakeParameters(), MLFLOW_TRACKING_URI="http://localhost:5100")
+    require(code == 0, f"the owner's port forward answers on localhost: {(code, err)}")
+
+
 CASES = [
     tables_are_named_by_the_mirror_config,
     one_edge_is_drawn_from_each_feature_table_to_each_registered_model,
@@ -423,4 +606,11 @@ CASES = [
     the_catalog_and_registry_addresses_are_checked_before_any_call,
     the_mlflow_source_config_is_metadata_only_and_holds_no_login,
     the_host_ingest_runs_the_mlflow_source_and_then_the_edges,
+    the_setup_creates_the_reader_once_with_a_stored_password_and_wildcard_grants,
+    a_second_setup_changes_nothing,
+    a_user_with_another_password_is_set_to_the_stored_value,
+    a_stored_value_without_a_user_creates_the_user_after_an_interrupted_run,
+    a_user_without_a_stored_value_is_given_a_new_stored_value,
+    an_unreadable_admin_login_or_a_refused_grant_stops_with_a_cause,
+    the_setup_talks_only_to_a_loopback_registry,
 ]
