@@ -528,6 +528,118 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "row",
+      "title": "Launcher",
+      "id": 18,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Launches ended in the last 24 hours, by family and outcome",
+      "description": "Counted by the launcher when it records the end of a launch: succeeded, failed, timeout, cancelled or failed_closed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (family, outcome) (increase(hai_launch_outcomes_total[24h]))",
+          "legendFormat": "{{family}} {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Launch calls refused in the last 24 hours, by family and kind",
+      "description": "Counted when a launch call raises: refused, family_busy, unavailable, record_store_unavailable, stop_failed or error.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (family, refusal) (increase(hai_launch_refusals_total[24h]))",
+          "legendFormat": "{{family}} {{refusal}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Launches that did not succeed in the last 24 hours",
+      "description": "Failed, timeout, cancelled and failed_closed launches together.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "sum by (family) (increase(hai_launch_outcomes_total{outcome!=\"succeeded\"}[24h]))",
+          "legendFormat": "{{family}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     }
   ]
 }

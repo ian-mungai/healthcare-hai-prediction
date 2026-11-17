@@ -3,7 +3,7 @@ the Run 3 publisher job cases.
 
 No AWS call, no Docker and no credential is used. Each run writes ``data/e2e/direct_ecs_launch_core/<timestamp>.json`` (ignored by Git) with the revision,
 the changed files, the substitutions and one line per case. Run from the repository root:
-``.venv/bin/python -m scripts.orchestration.run_ecs_launch_e2e [--only core|operator|publisher] [--case NAME]``.
+``.venv/bin/python -m scripts.orchestration.run_ecs_launch_e2e [--only core|operator|publisher|counts] [--case NAME]``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import ecs_launch_cases, ecs_launch_operator_cases, ecs_launch_publisher_cases
+from scripts.orchestration import ecs_launch_cases, ecs_launch_operator_cases, ecs_launch_publisher_cases, launch_counts_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +25,7 @@ SOURCES = (
     "orchestration/ecs_adapter.py",
     "orchestration/ecs_launch.py",
     "orchestration/ecs_launch_operator.py",
+    "scripts/orchestration/launch_counts_cases.py",
     "orchestration/ecs_launch_provider.py",
     "scripts/orchestration/ecs_launch_cases.py",
     "scripts/orchestration/ecs_launch_operator_cases.py",
@@ -40,6 +41,7 @@ SUITES: dict[str, dict[str, Callable[[], None]]] = {
     "core": ecs_launch_cases.CASES,
     "operator": ecs_launch_operator_cases.CASES,
     "publisher": ecs_launch_publisher_cases.CASES,
+    "counts": launch_counts_cases.CASES,
 }
 SUBSTITUTIONS = [
     "fake ECS, Logs and write-once S3 clients",

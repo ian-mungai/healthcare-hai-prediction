@@ -94,6 +94,21 @@
       "dashboard": "hai_openmetadata.json",
       "panel": "Lineage events not delivered in the last 15 minutes",
       "reason": "Empty until the scheduler sends a lineage event after the delivery counts are deployed."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Launches ended in the last 24 hours, by family and outcome",
+      "reason": "Empty until the launcher counts a launch after the launch counts are deployed, and empty while no launch was refused."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Launch calls refused in the last 24 hours, by family and kind",
+      "reason": "Empty until the launcher counts a launch after the launch counts are deployed, and empty while no launch was refused."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Launches that did not succeed in the last 24 hours",
+      "reason": "Empty until the launcher counts a launch after the launch counts are deployed, and empty while no launch was refused."
     }
   ]
 }

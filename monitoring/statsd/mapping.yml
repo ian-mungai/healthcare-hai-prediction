@@ -39,6 +39,20 @@ mappings:
     labels:
       result: "$1"
 
+  - match: "hai.launch.outcome.*.*"
+    name: "hai_launch_outcomes_total"
+    match_metric_type: counter
+    labels:
+      family: "$1"
+      outcome: "$2"
+
+  - match: "hai.launch.refusal.*.*"
+    name: "hai_launch_refusals_total"
+    match_metric_type: counter
+    labels:
+      family: "$1"
+      refusal: "$2"
+
   - match: "airflow.scheduler_heartbeat"
     name: "airflow_scheduler_heartbeat_total"
     match_metric_type: counter

@@ -53,13 +53,15 @@ Every wait has a deadline. The library calls no process and starts no thread.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -132,6 +134,68 @@ class StopFailed(LaunchError):
 
 class CleanupFailed(Exception):
     """A cleanup hook could not finish. The job outcome stays as recorded."""
+
+
+OUTCOME_COUNT = "hai.launch.outcome.{family}.{result}"
+REFUSAL_COUNT = "hai.launch.refusal.{family}.{kind}"
+REFUSAL_KINDS = ("refused", "family_busy", "unavailable", "record_store_unavailable", "stop_failed", "error")
+FAMILY = re.compile(r"[a-z][a-z0-9_]{0,31}")
+STATSD_HOST, STATSD_PORT = "AIRFLOW__METRICS__STATSD_HOST", "AIRFLOW__METRICS__STATSD_PORT"
+
+
+def send_count(name: str, environment: Mapping[str, str] | None = None) -> None:
+    """Send one StatsD counter datagram to the exporter on this host, named by the scheduler's own metric settings (set only while monitoring is on). Nothing
+    is sent without them, and a problem here never raises or waits, so counting cannot change what the launcher returns or raises."""
+    try:
+        env = os.environ if environment is None else environment
+        host, port = env.get(STATSD_HOST, ""), env.get(STATSD_PORT, "")
+        if not host or not port.isdecimal() or not 0 < int(port) < 65536:
+            return
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.settimeout(0.05)
+            sender.sendto(f"{name}:1|c".encode(), (host, int(port)))
+    except Exception:
+        return
+
+
+def count_outcome(family: str, result: str, environment: Mapping[str, str] | None = None) -> None:
+    """Count one ended launch of the family by its outcome. No run ID, task ARN or error text is part of the name."""
+    if FAMILY.fullmatch(family) and result in OUTCOMES:
+        send_count(OUTCOME_COUNT.format(family=family, result=result), environment)
+
+
+def count_refusal_kind(family: str, kind: str, environment: Mapping[str, str] | None = None) -> None:
+    """Count one refused launch call of the family by the kind of its refusal."""
+    if FAMILY.fullmatch(family) and kind in REFUSAL_KINDS:
+        send_count(REFUSAL_COUNT.format(family=family, kind=kind), environment)
+
+
+KINDS = (
+    (FamilyBusy, "family_busy"),
+    (RecordStoreUnavailable, "record_store_unavailable"),
+    (LaunchUnavailable, "unavailable"),
+    (LaunchRefused, "refused"),
+    (StopFailed, "stop_failed"),
+)
+
+
+def refusal_kind(error: LaunchError) -> str:
+    """The closed kind of a refusal: its most specific class, or ``error`` for any other launch error."""
+    return next((kind for cls, kind in KINDS if isinstance(error, cls)), "error")
+
+
+def counted[Result](method: Callable[[Any, Any], Result]) -> Callable[[Any, Any], Result]:
+    """Count a launch error that the method raises, by the family of its subject and the kind of the error, and raise it again unchanged."""
+
+    @wraps(method)
+    def wrapper(self: Any, subject: Any) -> Result:
+        try:
+            return method(self, subject)
+        except LaunchError as error:
+            self.count_refusal(subject, error)
+            raise
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -535,6 +599,12 @@ class Launcher:
         # Run at the send boundary with the claim's needs, after the cancel and window checks; it raises SendWithheld to withhold the RunTask.
         self.send_check = send_check
 
+    def count_refusal(self, subject: Any, error: LaunchError) -> None:
+        """Count a refused call of a family the launcher knows; the subject is the request or the launch that the call was given."""
+        family = getattr(getattr(subject, "spec", subject), "job", "")
+        if isinstance(family, str) and family in self.adapter.settings.families:
+            count_refusal_kind(family, refusal_kind(error))
+
     def validate(self, spec: JobSpec) -> None:
         """Refuse a malformed request before any record or cloud call."""
         problems = []
@@ -609,6 +679,7 @@ class Launcher:
             return "succeeded", 0, report.reason
         return "failed", int(report.exit_code or CLOSED_EXIT), report.reason
 
+    @counted
     def attach(self, spec: JobSpec) -> Launch:
         """Validate the request and reconcile it with the records and the cloud: an ended attempt, the recorded outcome of the run and job's one launch, the
         live task of that launch, an unresolved launch, or nothing yet. Nothing is launched here."""
@@ -760,6 +831,7 @@ class Launcher:
         launch.claim = stored
         return True
 
+    @counted
     def start(self, launch: Launch) -> None:
         """Claim the launch, record the intent, check that the job fits, run the task once and record it. When another caller holds the claim, its launch is
         settled instead: the task of an unresolved launch is looked up by its identity and, if none exists, started under that identity, so a second task
@@ -961,6 +1033,8 @@ class Launcher:
         records and reports whatever is stored there, even when it judged the task differently."""
         first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn)
         if mine == owner:
+            if base["job"] in self.adapter.settings.families:
+                count_outcome(base["job"], first["outcome"])
             return first
         return self.put("end", mine, base, outcome=first["outcome"], exit_code=first["exit_code"], reason=first["reason"], task_arn=first.get("task_arn", ""))
 
@@ -971,6 +1045,7 @@ class Launcher:
         end = self.finalize({"run_id": spec.run_id, "job": spec.job}, owner, spec.attempt, outcome, code, reason, launch.arn or "")
         launch.outcome = outcome_of(end)
 
+    @counted
     def wait(self, launch: Launch) -> None:
         """Poll the task until it is shown STOPPED or its recorded deadline passes. Past the deadline the task is stopped, with the stop confirmed. A reply
         that describes no task counts as a failed read: it says nothing about how the task ended."""
@@ -1012,6 +1087,7 @@ class Launcher:
                 raise StopFailed(f"the task is still stopping after {STOP_WAIT_SECONDS:g} seconds. Nothing was recorded, so the stop can be repeated")
             self.clock.sleep(STOP_POLL_SECONDS)
 
+    @counted
     def conclude(self, launch: Launch) -> Outcome:
         """Record how the attempt ended, tail the logs of a failure and clean up after a success. An attempt that already has an outcome returns it."""
         if launch.outcome is not None:
