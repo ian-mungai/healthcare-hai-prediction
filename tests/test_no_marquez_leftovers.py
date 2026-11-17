@@ -176,7 +176,6 @@ def test_the_scan_skips_only_ignored_files_saved_state_and_plans_and_the_allowed
         ("scripts/restored.tfstate.py", "URL = 'http://Marquez:5000'\n"),
         ("infra/services/restored.tfstate.tf", "# marquez\n"),
         ("config/restored.tfstate.json", '{"url": "MARQUEZ"}\n'),
-        ("config/runtime.tfplan.json", '{"url": "MARQUEZ"}\n'),
         ("scripts/restored.tfstate.1700000000.py", "URL = 'http://marquez:5000'\n"),
     ],
 )
@@ -190,6 +189,19 @@ def test_the_ignore_rules_of_this_repository_hide_no_source_file_from_the_scan(t
 
 def test_the_ignore_rules_of_this_repository_still_hide_the_state_and_plan_files(tmp_path: Path) -> None:
     root = scratch_repository(tmp_path, (ROOT / ".gitignore").read_text())
-    for path in ("terraform.tfstate", "terraform.tfstate.backup", "terraform.tfstate.1700000000.backup", "saved.tfplan"):
+    for path in ("terraform.tfstate", "terraform.tfstate.backup", "terraform.tfstate.1700000000.backup", "saved.tfplan", "reviewed.tfplan.json"):
         (root / path).write_text("marquez\n")
     check(listed_files(root) == [".gitignore"], f"a state or plan file is not ignored: {listed_files(root)}")
+
+
+def test_a_plan_export_stays_ignored_while_the_look_alike_source_files_stay_visible_to_both_guards(tmp_path: Path) -> None:
+    root = scratch_repository(tmp_path, (ROOT / ".gitignore").read_text())
+    text = "marquez comparison-bot\n"
+    sources = ("scripts/restored.tfstate.py", "infra/services/restored.tfstate.tf")
+    for path in ("reviewed.tfplan.json", *sources):
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    check(listed_files(root) == [".gitignore", *sorted(sources)], f"the listed files are not the two sources and the ignore file: {listed_files(root)}")
+    check(named_files(root, names_marquez, ()) == sorted(sources), "the Marquez scan must see both source files and not the plan export")
+    check(named_files(root, names_comparison_bot, ()) == sorted(sources), "the comparison bot scan must see both source files and not the plan export")

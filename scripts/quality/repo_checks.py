@@ -40,7 +40,21 @@ from scripts.quality.markdown_links import check_links
 POLICY = "scripts/quality/repo_checks.py"
 ASK = "if the rule seems wrong here, stop and ask the repository owner. There are no bypasses (no SKIP= or --no-verify)"
 
-CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
+CREDENTIAL_NAMES = (
+    "*.tfstate",
+    "*.tfstate.backup",
+    "*.tfstate.*.backup",
+    "*.tfplan",
+    "*.tfplan.json",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "credentials",
+)
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
 # Folders declared for data files: synthetic test fixtures and the reviewed dbt seeds (which include the formula recipes of the feature
 # phase), which hold file labels and checksums from the S3 manifests and rule definitions, never source data values.
