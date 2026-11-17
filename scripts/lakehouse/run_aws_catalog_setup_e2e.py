@@ -21,7 +21,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -29,16 +29,19 @@ from unittest import mock
 
 from botocore.exceptions import ClientError
 
+from orchestration.ecs_adapter import EcsAdapter
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
 from scripts.lakehouse import catalog_setup_state as state_module
 from scripts.lakehouse import polaris_writer, principal_credentials
 from scripts.lakehouse.catalog_setup_stand_in import ACCOUNT, FakeClock, FakeEcs, FakeHold, FakeS3, TimedClients
-from scripts.lakehouse.catalog_setup_state import CatalogState, Deadline, LaunchGuard, LaunchSpec, StateError
+from scripts.lakehouse.catalog_setup_state import CatalogState, Deadline, LaunchGuard, LaunchSpec, StateError, client_options
+from scripts.loopback_trickle import trickling_server
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
+STAND_IN_CREDENTIAL = "stand-in"
 REGION = "us-west-2"
 RUN_SECONDS = 120.0
 CASE_SECONDS = 60.0
@@ -1521,6 +1524,165 @@ def case_drain_matches_launcher(_: Path) -> dict[str, bool]:
     }
 
 
+def case_absolute_deadline(_: Path) -> dict[str, bool]:
+    """Every wait has an absolute deadline: a peer that trickles a body inside every read timeout, work that no socket timeout bounds (client setup,
+    credential refresh) and a stalled undo all end at the deadline, not at the pace of the peer. A hold whose creation got no answer and lands later is
+    named by the failure and clears with its command."""
+    import botocore.session
+    from botocore.config import Config
+
+    checks: dict[str, bool] = {}
+    with trickling_server(b"{}", pad=40, interval=0.2) as server:
+
+        def real_clients(service: str, left: float) -> Any:
+            session = botocore.session.get_session()
+            return session.create_client(
+                service,
+                region_name=REGION,
+                endpoint_url=server.url,
+                aws_access_key_id=STAND_IN_CREDENTIAL,
+                aws_secret_access_key=STAND_IN_CREDENTIAL,
+                config=Config(**client_options(left), s3={"addressing_style": "path"}),
+            )
+
+        state = CatalogState(real_clients, BUCKET, deadline=Deadline.after(0.3))
+        began = time.monotonic()
+        try:
+            state.read(state.key("approvals", "bronze"))
+            trickled = ""
+        except StateError as error:
+            trickled = error.code
+        took = time.monotonic() - began
+        checks["a trickling body ends the read at the deadline"] = trickled == "deadline" and took < 0.8
+        checks["the trickle was real: the server had sent the request"] = server.started.is_set()
+    slow = TimedClients(s3=FakeS3())
+    slow.hang["s3"] = 3.0
+    began = time.monotonic()
+    try:
+        CatalogState(slow, BUCKET, deadline=Deadline.after(0.3)).read("k")
+        stalled = ""
+    except StateError as error:
+        stalled = error.code
+    checks["work that no socket timeout bounds ends at the deadline"] = stalled == "deadline" and time.monotonic() - began < 0.8
+    hold, ecs, clock = FakeHold(), FakeEcs(), FakeClock()
+    clients = TimedClients(ssm=hold, ecs=ecs)
+    guard = LaunchGuard(clients, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX), drain=0.0, clock=time.monotonic, sleep=clock.sleep)
+    hold.values[LOCK_PARAMETER] = "catalog-setup:1:20261117T200000Z:0123abcd"
+    clients.hang["ssm"] = 3.0
+    began = time.monotonic()
+    with mock.patch.object(state_module, "RELEASE_SECONDS", 0.3):
+        try:
+            guard.release("catalog-setup:1:20261117T200000Z:0123abcd")
+            undone = ""
+        except StateError as error:
+            undone = str(error)
+    checks["a stalled undo ends in its own window and keeps the hold"] = (
+        "services_apply resolve" in undone and time.monotonic() - began < 0.8 and LOCK_PARAMETER in hold.values
+    )
+    hold.values.clear()
+    began = time.monotonic()
+    try:
+        with mock.patch.object(state_module, "RELEASE_SECONDS", 0.3):
+            guard.take("catalog-setup:2:20261117T200001Z:feedbeef", Deadline.after(0.3))
+        taken = None
+    except StateError as error:
+        taken = error
+    checks["a hold whose creation got no answer fails at the deadline and names its command"] = (
+        taken is not None and taken.unconfirmed and time.monotonic() - began < 0.8 and "feedbeef" in str(taken) and "services_apply resolve" in str(taken)
+    )
+    time.sleep(3.6)
+    checks["the hold that lands later is the one the failure names"] = hold.values.get(LOCK_PARAMETER) == "catalog-setup:2:20261117T200001Z:feedbeef"
+    return checks
+
+
+def case_launch_refresh_race(_: Path) -> dict[str, bool]:
+    """P5 with the launcher: the review's race with the SDK's real container metadata fetcher. The launch passes its guard, the credential response then
+    trickles in for seconds, and the setup takes the hold and opens its reset region meanwhile. The launcher reads the hold again at the SDK's send
+    boundary, so the RunTask is withheld and never goes out while the hold is set."""
+    import botocore.session
+    from botocore.awsrequest import AWSResponse
+    from botocore.compat import HTTPHeaders
+    from botocore.credentials import ContainerMetadataFetcher, RefreshableCredentials
+
+    from orchestration.ecs_adapter import EcsSettings, send_config
+    from orchestration.ecs_launch import Resources
+    from orchestration.ecs_preflight import HeldCapProbe, ssm_launch_hold_reader
+
+    class ListsNothing:
+        def list_tasks(self, **arguments: Any) -> dict[str, Any]:
+            return {"taskArns": []}
+
+    class Body(io.BytesIO):
+        def stream(self, amt: int = 1024, decode_content: bool = False) -> Iterator[bytes]:
+            yield self.read()
+
+    def expiry(seconds: int) -> str:
+        return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
+
+    credentials = json.dumps({"AccessKeyId": "stand-in", "SecretAccessKey": "stand-in", "Token": "stand-in", "Expiration": expiry(3600)}).encode()
+    hold, ecs = FakeHold(), FakeEcs()
+    hold.values["launch_hold"] = "clear"
+    guard = LaunchGuard(TimedClients(ssm=hold, ecs=ecs), LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX), drain=1.0)
+    probe = HeldCapProbe(None, ssm_launch_hold_reader(hold, "launch_hold", LOCK_PARAMETER), lambda: "4096")
+    observed: dict[str, Any] = {"hold_at_send": [], "region_open": threading.Event()}
+    done = threading.Event()
+    with trickling_server(credentials, pad=8, interval=0.4) as server:
+
+        def setup_run() -> None:
+            if not server.started.wait(10):
+                return
+            with contextlib.suppress(StateError), guard.no_live_writer_try(Deadline.after(30)):
+                observed["region_open"].set()
+                done.wait(10)
+
+        fetcher = ContainerMetadataFetcher()
+
+        def refresh() -> dict[str, str]:
+            found = fetcher.retrieve_full_uri(f"{server.url}/credentials")
+            return {"access_key": found["AccessKeyId"], "secret_key": found["SecretAccessKey"], "token": found["Token"], "expiry_time": found["Expiration"]}
+
+        session = botocore.session.get_session()
+        sender: Any = session.create_client(
+            "ecs",
+            region_name=REGION,
+            endpoint_url="http://127.0.0.1:1",
+            aws_access_key_id=STAND_IN_CREDENTIAL,
+            aws_secret_access_key=STAND_IN_CREDENTIAL,
+            config=send_config(),
+        )
+        expired = {"access_key": "stand-in", "secret_key": "stand-in", "token": "stand-in", "expiry_time": expiry(-1)}
+        sender._request_signer._credentials = RefreshableCredentials.create_from_metadata(expired, refresh, "case")
+
+        def sends(request: Any, **arguments: Any) -> Any:
+            observed["hold_at_send"].append(LOCK_PARAMETER in hold.values)
+            payload = json.dumps({"tasks": [{"taskArn": "stand-in-task"}], "failures": []}).encode()
+            headers = HTTPHeaders()
+            headers["Content-Type"] = "application/x-amz-json-1.1"
+            return AWSResponse(request.url, 200, headers, Body(payload))
+
+        sender.meta.events.register("before-send.ecs.RunTask", sends)
+        settings = EcsSettings(CLUSTER, FAMILY_PREFIX, "example_project", "example_log", frozenset({"train"}), "stand-in_host")
+        lists: Any = ListsNothing()
+        adapter = EcsAdapter(lists, lists, settings, sender=sender)
+        worker = threading.Thread(target=setup_run, name="setup-reset", daemon=True)
+        worker.start()
+        refused = ""
+        try:
+            adapter.start("train", "20261030T100000Z-abcdef01:train:1", {"train": {"RUN_ID": "x"}}, guard=lambda: probe.authorize(Resources(1, 1, 1)))
+        except Exception as error:
+            refused = type(error).__name__
+        finally:
+            done.set()
+            worker.join(timeout=15)
+            sender.close()
+    return {
+        "the setup opened its reset region during the slow refresh": observed["region_open"].is_set(),
+        "the launch is refused at the send boundary": refused == "SendWithheld",
+        "no RunTask went out while the hold was set": True not in observed["hold_at_send"],
+        "the hold is released after the reset region": LOCK_PARAMETER not in hold.values,
+    }
+
+
 def case_import_closure(_: Path) -> dict[str, bool]:
     """The task runs in the Airflow image from the repository checkout: the setup module reaches, by the imports that run when it loads, no project module
     outside the few it names and no third-party package but botocore and boto3, so it needs nothing the image lacks."""
@@ -1629,6 +1791,8 @@ CASES: dict[str, Case] = {
     "hold_recovery": case_hold_recovery,
     "state_deadline": case_state_deadline,
     "drain_matches_launcher": case_drain_matches_launcher,
+    "absolute_deadline": case_absolute_deadline,
+    "launch_refresh_race": case_launch_refresh_race,
     "import_closure": case_import_closure,
 }
 
@@ -1828,6 +1992,16 @@ MUTATIONS: dict[str, tuple[str, str, Plant]] = {
         lambda: mock.patch.object(state_module.Hold, "keep", keep_nothing),
     ),
     "calls ignore the time left": ("state_deadline", "every S3 call was limited to the time left", lambda: mock.patch.object(Deadline, "left", unlimited_left)),
+    "the send boundary does not read the hold again": (
+        "launch_refresh_race",
+        "the launch is refused at the send boundary",
+        lambda: mock.patch.object(EcsAdapter, "check_at_send", lambda self, **kwargs: None),
+    ),
+    "calls wait for the SDK with no deadline of their own": (
+        "absolute_deadline",
+        "a trickling body ends the read at the deadline",
+        lambda: mock.patch.object(state_module, "run_bounded", lambda call, window, what, *, abort=None: call()),
+    ),
     "a leftover hold is not named": (
         "hold_recovery",
         "a rerun is refused and names the leftover holder",

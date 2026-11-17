@@ -59,7 +59,18 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_writer, polaris_writer, principal_credentials
-from scripts.lakehouse.catalog_setup_state import RESOLVE, CatalogState, Deadline, LaunchGuard, LaunchSpec, PendingMark, StateError, client_options, error_code
+from scripts.lakehouse.catalog_setup_state import (
+    RESOLVE,
+    CatalogState,
+    Deadline,
+    LaunchGuard,
+    LaunchSpec,
+    PendingMark,
+    StateError,
+    client_options,
+    error_code,
+    run_bounded,
+)
 
 CATALOG = "hai_lakehouse"
 POLARIS_HOST = "127.0.0.1"
@@ -764,6 +775,7 @@ class HostServices:
         if found is None:
             raise SetupError("settings", "CATALOG_SETUP_ROLE_ARN is not a role ARN")
         self.expected_identity = f"arn:aws:sts::{found.group(1)}:assumed-role/{found.group(2)}/"
+        self.creating = threading.Lock()
         # The root secret is read once from the environment the execution role filled; it stays in memory only.
         self.root = environ.get("POLARIS_ROOT_SECRET", "")
 
@@ -777,8 +789,10 @@ class HostServices:
         return self.session.client(name, config=secret_store.client_config())
 
     def bounded_client(self, name: str, left: float) -> Any:
-        """A client whose connect and read limits are no longer than the seconds left of the step."""
-        return self.session.client(name, config=Config(**client_options(left)))
+        """A client whose connect and read limits are no longer than the seconds left of the step. Clients are made one at a time: a session is not safe
+        to share between threads, and a call that gave up on its deadline can still be making its client."""
+        with self.creating:
+            return self.session.client(name, config=Config(**client_options(left)))
 
     @property
     def bucket(self) -> str:
@@ -805,7 +819,8 @@ class HostServices:
         """Any caller that is not the task's own role stops the task before a Parameter Store, S3 or catalog call (P2)."""
         try:
             left = deadline.left("the caller identity")
-            arn = str(self.bounded_client("sts", left).get_caller_identity()["Arn"])
+            reply = run_bounded(lambda: self.bounded_client("sts", left).get_caller_identity(), deadline, "the caller identity")
+            arn = str(reply["Arn"])
         except StateError as error:
             raise SetupError("deadline", str(error)) from None
         except (ClientError, BotoCoreError, KeyError) as error:

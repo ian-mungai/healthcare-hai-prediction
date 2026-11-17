@@ -26,7 +26,9 @@ import contextlib
 import json
 import os
 import secrets
+import socket
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -108,6 +110,43 @@ class Deadline:
         return left
 
 
+def hang_up(body: Any) -> None:
+    """Interrupt a read that is blocked on a response body. ``close`` waits for the blocked read, so the socket under the body is shut first (the path
+    through the SDK's streaming body and urllib3 is the only way to reach it), and the body is then closed without waiting."""
+    with contextlib.suppress(Exception):
+        body._raw_stream._fp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+    threading.Thread(target=body.close, name="body-close", daemon=True).start()
+
+
+def run_bounded[T](call: Callable[[], T], window: Deadline, what: str, *, abort: Callable[[], None] | None = None) -> T:
+    """Run ``call`` and return when it ends or when ``window`` ends, whichever comes first. A socket timeout bounds one read, not the whole exchange: a peer
+    that sends a few bytes inside every read timeout, a client that is still being set up and a credential refresh all outlast it. At the deadline ``abort``
+    (the close of a body) is run and the call raises with ``unconfirmed`` set, because the work may still finish; the abandoned thread ends with its own
+    socket timeouts."""
+    left = window.left(what)
+    results: list[T] = []
+    failures: list[BaseException] = []
+    finished = threading.Event()
+
+    def work() -> None:
+        try:
+            results.append(call())
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            finished.set()
+
+    threading.Thread(target=work, name="bounded-call", daemon=True).start()
+    if not finished.wait(left):
+        if abort is not None:
+            with contextlib.suppress(Exception):
+                abort()
+        raise StateError("deadline", f"{what} got no answer before the deadline", unconfirmed=True)
+    if failures:
+        raise failures[0]
+    return results[0]
+
+
 class CatalogState:
     """The S3 records of the setup. ``clients(service, seconds_left)`` gives an S3 client of the job's task role whose timeouts fit the time left;
     ``clock`` is wall-clock seconds and ``monotonic`` the clock of the deadlines."""
@@ -131,15 +170,19 @@ class CatalogState:
     def own_window(self) -> Deadline:
         return Deadline.after(RELEASE_SECONDS, self.monotonic)
 
+    def bound(self, window: Deadline | None = None) -> Deadline:
+        found = window or self.deadline
+        if found is None:
+            raise StateError("deadline", "the state was used without a step deadline")
+        return found
+
     def call(self, operation: str, *, window: Deadline | None = None, **arguments: Any) -> Any:
         """One S3 call within the step deadline, or within ``window`` for a write that undoes or marks something. A call that gets no answer in time
         raises with ``unconfirmed`` set."""
-        bound = window or self.deadline
-        if bound is None:
-            raise StateError("deadline", "the state was used without a step deadline")
+        bound = self.bound(window)
         left = bound.left(operation)
         try:
-            return getattr(self.clients("s3", left), operation)(Bucket=self.bucket, **arguments)
+            return run_bounded(lambda: getattr(self.clients("s3", left), operation)(Bucket=self.bucket, **arguments), bound, operation)
         except TIMEOUTS:
             raise StateError("deadline", f"{operation} got no answer before the step deadline", unconfirmed=True) from None
 
@@ -150,7 +193,8 @@ class CatalogState:
         """The record and its version, or None when S3 answers that the key is absent. A denied or failed read is never read as absent."""
         try:
             reply = self.call("get_object", Key=key)
-            document = json.loads(reply["Body"].read())
+            body = reply["Body"]
+            document = json.loads(run_bounded(body.read, self.bound(), f"reading {key}", abort=lambda: hang_up(body)))
         except (ClientError, BotoCoreError) as error:
             if error_code(error) in MISSING_CODES:
                 return None
@@ -314,7 +358,7 @@ class LaunchGuard:
     def call(self, service: str, operation: str, window: Deadline, **arguments: Any) -> Any:
         left = window.left(f"{service} {operation}")
         try:
-            return getattr(self.clients(service, left), operation)(**arguments)
+            return run_bounded(lambda: getattr(self.clients(service, left), operation)(**arguments), window, f"{service} {operation}")
         except TIMEOUTS:
             raise StateError("writer_try", f"{service} {operation} got no answer before its bound", unconfirmed=True) from None
 

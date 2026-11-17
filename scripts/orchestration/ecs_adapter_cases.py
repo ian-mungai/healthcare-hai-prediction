@@ -22,8 +22,8 @@ from botocore.exceptions import ClientError, ReadTimeoutError
 
 from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
+from scripts.loopback_trickle import trickling_server
 from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
-from scripts.orchestration.loopback_trickle import trickling_server
 
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"
 SETTINGS = EcsSettings(

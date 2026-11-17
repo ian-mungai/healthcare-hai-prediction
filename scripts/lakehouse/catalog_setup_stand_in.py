@@ -138,12 +138,14 @@ class FakeClock:
 
 class TimedClients:
     """The ``clients(service, seconds_left)`` factory of the state code: it records each call with the time left it was given and the read limit that
-    ``client_options`` derives from it and, for a service with a latency above that limit, waits the limit (``block``) and answers with a read timeout."""
+    ``client_options`` derives from it and, for a service with a latency above that limit, waits the limit (``block``) and answers with a read timeout. ``hang``
+    makes every call of a service wait that long first, whatever the limits."""
 
     def __init__(self, **services: Any) -> None:
         self.services = services
         self.calls: list[tuple[str, str, float, float]] = []
         self.latency: dict[str, float] = {}
+        self.hang: dict[str, float] = {}
         self.block = True
 
     def __call__(self, service: str, left: float) -> Any:
@@ -154,6 +156,8 @@ class TimedClients:
                 target = getattr(owner.services[service], operation)
 
                 def call(**arguments: Any) -> Any:
+                    # Work that no socket timeout bounds, such as a credential refresh or a name lookup, before the request is made.
+                    time.sleep(owner.hang.get(service, 0.0))
                     read = float(client_options(left)["read_timeout"])
                     owner.calls.append((service, operation, left, read))
                     if owner.latency.get(service, 0.0) > read:
