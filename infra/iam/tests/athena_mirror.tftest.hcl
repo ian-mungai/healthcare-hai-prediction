@@ -88,10 +88,10 @@ run "prepared_mirror_has_silver_gold_and_features_databases_and_a_limited_workgr
   assert {
     condition = (
       toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features", "bronze"]) &&
-      aws_glue_catalog_database.athena_mirror["silver"].name == "hai_mirror_silver" &&
-      aws_glue_catalog_database.athena_mirror["gold"].name == "hai_mirror_gold" &&
-      aws_glue_catalog_database.athena_mirror["features"].name == "hai_mirror_features" &&
-      aws_glue_catalog_database.athena_mirror["bronze"].name == "hai_mirror_bronze" &&
+      aws_glue_catalog_database.athena_mirror["silver"].name == "silver" &&
+      aws_glue_catalog_database.athena_mirror["gold"].name == "gold" &&
+      aws_glue_catalog_database.athena_mirror["features"].name == "features" &&
+      aws_glue_catalog_database.athena_mirror["bronze"].name == "bronze" &&
       alltrue([for database in aws_glue_catalog_database.athena_mirror : database.tags.DataClassification == "Public"])
     )
     error_message = "One Glue database each for the bronze, silver, gold and features layers, named by the tracked config and tagged Public like the collected research data they list."
@@ -132,8 +132,8 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
       aws_iam_role_policy.athena_mirror_writer["silver"].role == aws_iam_role.job_write_layer_task["silver"].name &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["silver"].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/silver/*",
       ])
     )
     error_message = "The silver writer may register tables in the silver mirror database only."
@@ -146,8 +146,8 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
       toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["gold"].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
       ])
     )
     error_message = "The gold writer may read its database and read, create and update tables in it only, with no delete and no other database."
@@ -160,8 +160,8 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
       toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["features"].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/features",
+        "arn:aws:glue:eu-west-1:111111111111:table/features/*",
       ])
     )
     error_message = "The features writer may read its database and read, create and update tables in it only, with no delete and no other database."
@@ -206,14 +206,14 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
   assert {
     condition = (
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:glue:") && !endswith(r, ":catalog")]])) == toset([
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/silver/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/features",
+        "arn:aws:glue:eu-west-1:111111111111:table/features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
       ])
     )
     error_message = "Glue reads reach the silver, gold, features and bronze mirror databases and their tables, and no other database."
@@ -266,14 +266,14 @@ run "reader_policy_names_no_principal_and_no_wider_resource" {
     condition = toset([for r in flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]) : r]) == toset([
       "arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror",
       "arn:aws:glue:eu-west-1:111111111111:catalog",
-      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
-      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
-      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
-      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
-      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
-      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
-      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/silver",
+      "arn:aws:glue:eu-west-1:111111111111:table/silver/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/gold",
+      "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/features",
+      "arn:aws:glue:eu-west-1:111111111111:table/features/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/bronze",
+      "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
       "arn:aws:s3:::example-project-ci-bucket",
       "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
@@ -458,12 +458,12 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
       toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Action])) == toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
       toset(flatten([for s in jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/silver/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/features",
+        "arn:aws:glue:eu-west-1:111111111111:table/features/*",
       ])
     )
     error_message = "Without the catalog the endpoint policy allows the four mirror actions on the three mirror databases and their tables only, nothing else of Glue."
@@ -504,14 +504,14 @@ run "catalog_reads_the_mirror_through_the_endpoint" {
       toset(["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Resource])) == toset([
         "arn:aws:glue:eu-west-1:111111111111:catalog",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
-        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
-        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/silver/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/gold",
+        "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/features",
+        "arn:aws:glue:eu-west-1:111111111111:table/features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
       ]) &&
       alltrue([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Effect == "Allow"])
     )

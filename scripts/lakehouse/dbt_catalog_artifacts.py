@@ -3,7 +3,7 @@
 A layer build writes every model into a DuckDB build file as ``<build database>.main.<model>``: ``staging`` for silver and gold, ``features`` for the base
 feature build (``features_work/features.duckdb``) and ``model_set`` for a model set (``features_work/model_set.duckdb``), the names dbt-duckdb derives from
 the file names. The publish step writes each published model to its Iceberg table, which the read-only Glue mirror registers in the Glue database of its layer
-(``config/lakehouse/athena_mirror.json``). OpenMetadata's Glue connector creates that table as ``glue_mirror.hai_lakehouse.hai_mirror_<layer>.<model>``. The
+(``config/lakehouse/athena_mirror.json``). OpenMetadata's Glue connector creates that table as ``glue_mirror.hai_lakehouse.<layer>.<model>``. The
 pinned OpenMetadata 2.0.7 dbt connector links a manifest node to the table named by the node's database, schema and alias (or name), and parses the model's
 compiled SQL for table and column lineage. Without this rewrite no model is linked, and no dbt lineage reaches the catalog.
 
@@ -12,7 +12,7 @@ The rewrite moves each published model to that table, using the table sets the p
 compiled SQL (quoted or not), the ``catalog.json`` metadata and the ``run_results.json`` relation names. A manifest holds every enabled model of the project,
 selected or not, so a model with no published table (the model-set matrices, the cost-report domain check) stays exactly as dbt built it and is named by
 ``unpublished``; it is never a reason to refuse the file. A published model built anywhere but ``<build database>.main`` is refused by name. The places are the
-same names whether the mirror is switched on or not. The source nodes stay as dbt wrote them, and the ingestion places them in ``hai_mirror_bronze``; the
+same names whether the mirror is switched on or not. The source nodes stay as dbt wrote them, and the ingestion places them in ``bronze``; the
 compiled SQL of every node that reads a declared source names its mirror table (``rewrite_source_sql``), so the query lineage of OpenMetadata, which looks
 an explicit database and schema up first, finds it. The ingestion (``openmetadata_ingest.place_models``) puts the models in the same places too, so a copy
 that this rewrite made is not moved again. The output is canonical JSON, so the same input gives the same bytes.

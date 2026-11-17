@@ -44,7 +44,7 @@ class FakeGlue:
 
     def __init__(
         self,
-        databases: Sequence[str] = ("hai_mirror_gold", "hai_mirror_features", "hai_mirror_silver", "hai_mirror_bronze"),
+        databases: Sequence[str] = ("gold", "features", "silver", "bronze"),
         fail: dict[str, str] | None = None,
     ) -> None:
         self.databases = set(databases)
@@ -127,16 +127,16 @@ def enabled() -> glue_mirror.MirrorConfig:
 
 
 def table_of(glue: FakeGlue, name: str = PILOT) -> dict[str, Any]:
-    return glue.tables[("hai_mirror_gold", name)]
+    return glue.tables[("gold", name)]
 
 
 def case_first_publish_registers() -> Check:
     glue = FakeGlue()
     report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT, SECOND_TABLE]), FakeSource({PILOT: FIRST, SECOND_TABLE: FIRST}), glue)
-    table = glue.tables.get(("hai_mirror_gold", PILOT), {})
+    table = glue.tables.get(("gold", PILOT), {})
     parameters = table.get("Parameters", {})
     return {
-        "every_published_table_created": glue.writes() == [("create_table", "hai_mirror_gold", PILOT), ("create_table", "hai_mirror_gold", SECOND_TABLE)],
+        "every_published_table_created": glue.writes() == [("create_table", "gold", PILOT), ("create_table", "gold", SECOND_TABLE)],
         "reported_ok": report.get("status") == "ok" and report.get("tables") == {PILOT: "created", SECOND_TABLE: "created"},
         "points_at_polaris_file": parameters.get("metadata_location") == FIRST,
         "marked_iceberg_and_mirror": parameters.get("table_type") == "ICEBERG" and parameters.get("hai_mirror") == "true",
@@ -155,7 +155,7 @@ def case_repeat_is_a_no_op() -> Check:
     report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), source, glue)
     return {
         "no_write_call": glue.writes() == [],
-        "read_once": glue.calls == [("get_table", "hai_mirror_gold", PILOT)],
+        "read_once": glue.calls == [("get_table", "gold", PILOT)],
         "reported_unchanged": report.get("status") == "unchanged" and report.get("tables") == {PILOT: "unchanged"},
         "table_identical": repr(sorted(glue.tables.items())) == before,
     }
@@ -168,7 +168,7 @@ def case_new_commit_moves_the_pointer() -> Check:
     report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: SECOND}), glue)
     parameters = table_of(glue).get("Parameters", {})
     return {
-        "one_update": glue.writes() == [("update_table", "hai_mirror_gold", PILOT)],
+        "one_update": glue.writes() == [("update_table", "gold", PILOT)],
         "reported_updated": report.get("tables") == {PILOT: "updated"},
         "new_pointer": parameters.get("metadata_location") == SECOND,
         "previous_pointer_kept": parameters.get("previous_metadata_location") == FIRST,
@@ -195,7 +195,7 @@ def case_glue_error_is_reported_not_raised() -> Check:
 def case_missing_database_says_so() -> Check:
     glue = FakeGlue(databases=())
     report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
-    return {"status_failed": report.get("status") == "failed", "names_database": "hai_mirror_gold" in json.dumps(report)}
+    return {"status_failed": report.get("status") == "failed", "names_database": "gold" in json.dumps(report)}
 
 
 def context(directory: Path, namespace: str = "gold", mode: str = "real") -> gold_publish.Context:
@@ -256,7 +256,7 @@ def case_committed_retry_mirrors_the_committed_set() -> Check:
     source = later_failed_publish_source()
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
         report = hook(context(Path(directory)), source, glue)
-    held = {name: glue.tables[("hai_mirror_gold", name)]["Parameters"] for name in FIRST_OF}
+    held = {name: glue.tables[("gold", name)]["Parameters"] for name in FIRST_OF}
     return {
         "mirrored_ok": report.get("status") == "ok",
         "points_at_the_committed_snapshot_not_the_live_main": all(held[name]["metadata_location"] == FIRST_OF[name] for name in held),
@@ -271,7 +271,7 @@ def case_check_is_bound_to_the_committed_set() -> Check:
     glue_mirror.mirror(enabled(), "gold", "real", ids(list(FIRST_OF)), source, glue, RUN_ID)
     committed = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
     for name in SECOND_OF:
-        glue.tables[("hai_mirror_gold", name)]["Parameters"]["metadata_location"] = SECOND_OF[name]
+        glue.tables[("gold", name)]["Parameters"]["metadata_location"] = SECOND_OF[name]
     ahead = glue_mirror.check(enabled(), "gold", ids(list(FIRST_OF)), source, glue, RUN_ID)
     return {
         "mirror_at_the_committed_set_passes": committed["ok"] is True,
@@ -393,7 +393,7 @@ def case_later_tables_are_not_attempted_after_the_deadline() -> Check:
     time.sleep(0.8)
     return {
         "reported_failed_with_the_deadline": report.get("status") == "failed" and "deadline" in report.get("reason", ""),
-        "the_last_table_was_not_written": ("hai_mirror_gold", "dim_hospital") not in glue.tables,
+        "the_last_table_was_not_written": ("gold", "dim_hospital") not in glue.tables,
     }
 
 
@@ -493,7 +493,7 @@ def case_bronze_dictionary_and_other_layers_touch_nothing() -> Check:
     return {
         "no_call": glue.calls == [],
         "bronze_dictionary_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
-        "runs_table_never_listed": "publish_runs" not in json.dumps(runs) and ("create_table", "hai_mirror_gold", "publish_runs") not in glue.calls,
+        "runs_table_never_listed": "publish_runs" not in json.dumps(runs) and ("create_table", "gold", "publish_runs") not in glue.calls,
     }
 
 
@@ -503,7 +503,7 @@ def case_second_gold_table_is_mirrored() -> Check:
     report = glue_mirror.mirror(enabled(), "gold", "real", ids(published), FakeSource({name: FIRST for name in published}), glue)
     return {
         "all_three_created": sorted(table for (_, table) in glue.tables) == sorted(published),
-        "second_dimension_created": ("create_table", "hai_mirror_gold", SECOND_TABLE) in glue.calls,
+        "second_dimension_created": ("create_table", "gold", SECOND_TABLE) in glue.calls,
         "reported_ok": report.get("status") == "ok",
     }
 
@@ -530,8 +530,8 @@ def case_silver_layer_is_mirrored() -> Check:
     report = glue_mirror.mirror(enabled(), "silver", "real", ids([SILVER]), FakeSource({SILVER: SILVER_FILE}), glue, RUN_ID)
     fixture = glue_mirror.mirror(enabled(), "silver", "publish_fixture", ids([SILVER]), FakeSource({SILVER: SILVER_FILE}), FakeGlue())
     return {
-        "created_in_the_silver_database": glue.writes() == [("create_table", "hai_mirror_silver", SILVER)],
-        "points_at_the_committed_file": glue.tables.get(("hai_mirror_silver", SILVER), {}).get("Parameters", {}).get("metadata_location") == SILVER_FILE,
+        "created_in_the_silver_database": glue.writes() == [("create_table", "silver", SILVER)],
+        "points_at_the_committed_file": glue.tables.get(("silver", SILVER), {}).get("Parameters", {}).get("metadata_location") == SILVER_FILE,
         "reported_ok": report.get("status") == "ok",
         "fixture_mode_skipped": fixture.get("status") == "skipped",
     }
@@ -544,7 +544,7 @@ def case_silver_publish_hook_mirrors_silver() -> Check:
         fixture = hook(context(Path(directory), namespace="silver", mode="publish_fixture"), FakeSource({SILVER: SILVER_FILE}), FakeGlue(), names=(SILVER,))
         broken = hook(context(Path(directory), namespace="silver"), FakeSource({}, error=RuntimeError("catalog unreachable")), FakeGlue(), names=(SILVER,))
     return {
-        "hook_created_the_silver_table": glue.writes() == [("create_table", "hai_mirror_silver", SILVER)],
+        "hook_created_the_silver_table": glue.writes() == [("create_table", "silver", SILVER)],
         "hook_reported_ok": report.get("status") == "ok",
         "fixture_hook_skipped": fixture.get("status") == "skipped",
         "a_failure_is_reported_not_raised": broken.get("status") == "failed",
@@ -560,7 +560,7 @@ def case_silver_publish_plan_reaches_the_hook() -> Check:
     return {
         "silver_commit_is_the_gold_engine": silver_publish.commit_publish is gold_publish.commit_publish,
         "real_layer_is_silver": plan.namespaces["real"] == "silver",
-        "silver_layer_is_configured": "silver" in config.layers and config.layers["silver"].database == "hai_mirror_silver",
+        "silver_layer_is_configured": "silver" in config.layers and config.layers["silver"].database == "silver",
         "contract_tables_are_listed": glue_mirror.tables_to_mirror(replace(config, enabled=True), "silver", "real", list(plan.tables))[0] == list(plan.tables),
         "silver_plan_is_read": glue_mirror.layer_plan("silver").namespaces["real"] == "silver",
     }
@@ -573,11 +573,11 @@ FEATURE_FILE = f"s3://{BUCKET}/lakehouse/features/{FEATURE}/metadata/00001-cccc.
 def case_features_layer_is_mirrored() -> Check:
     glue = FakeGlue()
     report = glue_mirror.mirror(enabled(), "features", "real", ids([FEATURE]), FakeSource({FEATURE: FEATURE_FILE}), glue, RUN_ID)
-    table = glue.tables.get(("hai_mirror_features", FEATURE), {})
+    table = glue.tables.get(("features", FEATURE), {})
     fixture = glue_mirror.mirror(enabled(), "features", "publish_fixture", ids([FEATURE]), FakeSource({FEATURE: FEATURE_FILE}), FakeGlue())
     return {
-        "created_in_the_features_database": glue.writes() == [("create_table", "hai_mirror_features", FEATURE)],
-        "nothing_in_the_gold_database": not any(database == "hai_mirror_gold" for (database, _) in glue.tables),
+        "created_in_the_features_database": glue.writes() == [("create_table", "features", FEATURE)],
+        "nothing_in_the_gold_database": not any(database == "gold" for (database, _) in glue.tables),
         "points_at_the_committed_file": table.get("Parameters", {}).get("metadata_location") == FEATURE_FILE,
         "reported_ok": report.get("status") == "ok",
         "fixture_mode_skipped": fixture.get("status") == "skipped",
@@ -593,7 +593,7 @@ def case_features_publish_hook_mirrors_features() -> Check:
         )
         record = json.loads((Path(directory) / "mirror.json").read_text()) if (Path(directory) / "mirror.json").is_file() else {}
     return {
-        "hook_created_the_features_table": glue.writes() == [("create_table", "hai_mirror_features", FEATURE)],
+        "hook_created_the_features_table": glue.writes() == [("create_table", "features", FEATURE)],
         "hook_reported_ok": report.get("status") == "ok" and record.get("status") == "ok",
         "fixture_hook_skipped": fixture.get("status") == "skipped",
     }
@@ -607,7 +607,7 @@ def case_features_publish_plan_reaches_the_hook() -> Check:
     return {
         "features_commit_is_the_gold_engine": features_publish.commit_publish is gold_publish.commit_publish,
         "real_layer_is_features": plan.namespaces["real"] == "features",
-        "features_layer_is_configured": "features" in config.layers and config.layers["features"].database == "hai_mirror_features",
+        "features_layer_is_configured": "features" in config.layers and config.layers["features"].database == "features",
         "contract_tables_are_listed": glue_mirror.tables_to_mirror(replace(config, enabled=True), "features", "real", list(plan.tables))[0]
         == list(plan.tables),
     }
@@ -615,9 +615,31 @@ def case_features_publish_plan_reaches_the_hook() -> Check:
 
 def case_foreign_table_is_refused() -> Check:
     glue = FakeGlue()
-    glue.tables[("hai_mirror_gold", PILOT)] = {"Name": PILOT, "Parameters": {"owner": "someone"}, "VersionId": "1"}
+    glue.tables[("gold", PILOT)] = {"Name": PILOT, "Parameters": {"owner": "someone"}, "VersionId": "1"}
     report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
     return {"no_write": glue.writes() == [], "failed_and_says_why": report.get("status") == "failed" and "not a mirror" in json.dumps(report)}
+
+
+def case_plain_named_database_keeps_a_table_the_mirror_did_not_write() -> Check:
+    """The databases are named bronze, silver, gold and features, plain names another tool in the account could also use: a table of a published name that
+    has no ``hai_mirror`` marker, or a marker that is not ``true``, is never changed, by a publish or by the S3 registration."""
+    checks: Check = {}
+    for label, parameters in (("no_marker", {"owner": "someone"}), ("marker_not_true", {"hai_mirror": "false", "owner": "someone"})):
+        foreign = {"Name": PILOT, "Parameters": dict(parameters), "VersionId": "1"}
+        publish_glue = FakeGlue()
+        publish_glue.tables[("gold", PILOT)] = dict(foreign)
+        report = glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), publish_glue)
+        checks[f"{label}_publish_writes_nothing"] = publish_glue.writes() == [] and publish_glue.tables[("gold", PILOT)] == foreign
+        checks[f"{label}_publish_says_why"] = report.get("status") == "failed" and "not a mirror" in json.dumps(report)
+        s3 = FakeS3()
+        s3.put(metadata_key(PILOT, 1), metadata_document(PILOT, 10))
+        register_glue = FakeGlue()
+        register_glue.tables[("gold", PILOT)] = dict(foreign)
+        registered = register(s3, register_glue, [PILOT])
+        checks[f"{label}_register_writes_nothing"] = register_glue.writes() == [] and register_glue.tables[("gold", PILOT)] == foreign
+        checks[f"{label}_register_fails_for_the_table"] = registered["status"] == "failed" and registered["tables"][PILOT].startswith("failed")
+    checks["the_marker_is_still_hai_mirror"] = enabled().marker == "hai_mirror"
+    return checks
 
 
 def case_other_pointers_are_refused() -> Check:
@@ -640,7 +662,7 @@ def case_config_scope_is_silver_gold_and_features_only() -> Check:
     return {
         "only_the_four_layers_are_configured_bronze_first": list(config.layers) == ["bronze", "silver", "gold", "features"]
         and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features", "bronze"))
-        and config.layers["bronze"].database == "hai_mirror_bronze",
+        and config.layers["bronze"].database == "bronze",
         "real_config_has_no_violation": glue_mirror.violations(config) == [],
         "silver_is_allowed": glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver")})) == [],
         "silver_test_namespace_is_flagged": any(
@@ -900,7 +922,7 @@ def case_s3_register_refuses_a_table_it_cannot_resolve() -> Check:
     return {
         "every_unresolvable_table_failed": all(outcomes[name].startswith("failed") for name in names),
         "the_resolvable_table_is_still_registered": outcomes["good"] == "created",
-        "only_the_good_table_was_written": glue.writes() == [("create_table", "hai_mirror_gold", "good")],
+        "only_the_good_table_was_written": glue.writes() == [("create_table", "gold", "good")],
         "duplicate_version_is_named": "same version" in outcomes["dup"],
         "report_is_failed": report["status"] == "failed",
     }
@@ -972,7 +994,7 @@ def case_s3_register_stays_inside_the_layer_folder() -> Check:
     listed = [prefix for call, prefix in s3.calls if call == "list_objects_v2"]
     return {
         "lists_only_the_gold_table_folder": listed == [f"lakehouse/gold/{PILOT}/metadata/"],
-        "unlisted_table_is_not_registered": ("hai_mirror_gold", "dim_unlisted") not in glue.tables,
+        "unlisted_table_is_not_registered": ("gold", "dim_unlisted") not in glue.tables,
         "test_namespace_is_never_read": table_of(glue)["Parameters"]["hai_snapshot_id"] == "10",
         "bad_table_name_is_refused": register(s3, FakeGlue(), ["../gold_e2e/x"])["tables"]["../gold_e2e/x"].startswith("failed"),
     }
@@ -1093,14 +1115,12 @@ def case_s3_register_registers_bronze_in_its_own_database() -> Check:
     s3.put(metadata_key(second, 2, layer="bronze"), metadata_document(second, 20, {"audit": 22}, layer="bronze"))
     glue = FakeGlue()
     report = register(s3, glue, [first, second], layer="bronze")
-    held = glue.tables[("hai_mirror_bronze", second)]["Parameters"]
+    held = glue.tables[("bronze", second)]["Parameters"]
     again = register(s3, glue, [first, second], layer="bronze")
     return {
-        "both_created_in_the_bronze_database": report["tables"] == {first: "created", second: "created"}
-        and {db for db, _ in glue.tables} == {"hai_mirror_bronze"},
+        "both_created_in_the_bronze_database": report["tables"] == {first: "created", second: "created"} and {db for db, _ in glue.tables} == {"bronze"},
         "main_snapshot_and_newest_file_with_it": held["hai_snapshot_id"] == "20" and held["metadata_location"].endswith(metadata_name(2)),
-        "location_is_the_bronze_folder": glue.tables[("hai_mirror_bronze", first)]["StorageDescriptor"]["Location"]
-        == f"s3://{BUCKET}/lakehouse/bronze/{first}",
+        "location_is_the_bronze_folder": glue.tables[("bronze", first)]["StorageDescriptor"]["Location"] == f"s3://{BUCKET}/lakehouse/bronze/{first}",
         "only_the_bronze_folders_are_listed": {prefix for call, prefix in s3.calls if call == "list_objects_v2"}
         == {f"lakehouse/bronze/{first}/metadata/", f"lakehouse/bronze/{second}/metadata/"},
         "rerun_changes_nothing": again["status"] == "unchanged" and len(glue.writes()) == 2,
@@ -1187,7 +1207,7 @@ class PublishDuringRead(FakeS3):
         return response
 
 
-def held_registration(glue: FakeGlue, table: str, snapshot: str, run: str = glue_mirror.S3_RUN_ID, layer_database: str = "hai_mirror_gold") -> None:
+def held_registration(glue: FakeGlue, table: str, snapshot: str, run: str = glue_mirror.S3_RUN_ID, layer_database: str = "gold") -> None:
     pointer = f"s3://{BUCKET}/{metadata_key(table, 1)}"
     parameters = {"table_type": "ICEBERG", "metadata_location": pointer, "hai_mirror": "true", "hai_snapshot_id": snapshot, "hai_run_id": run}
     glue.tables[(layer_database, table)] = {"Name": table, "Parameters": parameters, "VersionId": "1"}
@@ -1252,10 +1272,10 @@ def case_s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing(
     glue = FakeGlue()
     for table, snapshot in (("older", "20"), ("newer", "30"), ("divergent", "15"), ("unreadable", "abc")):
         held_registration(glue, table, snapshot)
-    before = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in ("older", "newer", "divergent", "unreadable")}
+    before = {table: json.dumps(glue.tables[("gold", table)], sort_keys=True) for table in ("older", "newer", "divergent", "unreadable")}
     report = register(s3, glue, ["older", "newer", "divergent", "unreadable", "good"])
     outcomes = report["tables"]
-    after = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in before}
+    after = {table: json.dumps(glue.tables[("gold", table)], sort_keys=True) for table in before}
     return {
         "nothing_changed_for_the_four": before == after and not [w for w in glue.writes() if w[2] != "good"],
         "older_is_refused_as_not_listed": outcomes["older"].startswith("failed")
@@ -1279,11 +1299,10 @@ def case_s3_register_identical_writes_nothing_and_an_ancestor_moves_up() -> Chec
     held_registration(glue, "published", "10", run=RUN_ID)
     held_registration(glue, "climb", "10")
     report = register(s3, glue, ["same", "published", "climb"])
-    held = glue.tables[("hai_mirror_gold", "climb")]["Parameters"]
+    held = glue.tables[("gold", "climb")]["Parameters"]
     return {
-        "identical_snapshot_writes_nothing": report["tables"]["same"] == "unchanged" and ("update_table", "hai_mirror_gold", "same") not in glue.calls,
-        "identical_snapshot_of_a_publish_is_kept": report["tables"]["published"].startswith("kept")
-        and ("update_table", "hai_mirror_gold", "published") not in glue.calls,
+        "identical_snapshot_writes_nothing": report["tables"]["same"] == "unchanged" and ("update_table", "gold", "same") not in glue.calls,
+        "identical_snapshot_of_a_publish_is_kept": report["tables"]["published"].startswith("kept") and ("update_table", "gold", "published") not in glue.calls,
         "an_ancestor_registration_moves_up": report["tables"]["climb"] == "updated" and held["hai_snapshot_id"] == "20",
         "the_run_stays_a_registration_run": held["hai_run_id"] == glue_mirror.S3_RUN_ID,
     }
@@ -1315,13 +1334,13 @@ def case_s3_register_refuses_a_parent_that_the_metadata_does_not_list() -> Check
     glue = FakeGlue()
     for table in ("direct", "indirect", "listed"):
         held_registration(glue, table, "10")
-    before = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in ("direct", "indirect")}
+    before = {table: json.dumps(glue.tables[("gold", table)], sort_keys=True) for table in ("direct", "indirect")}
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = glue_mirror.main(
             ["register", "--source", "s3", "--layer", "gold", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled(), tables=["direct", "indirect", "listed"]
         )
-    after = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in before}
+    after = {table: json.dumps(glue.tables[("gold", table)], sort_keys=True) for table in before}
     text = out.getvalue()
     return {
         "nothing_changed_for_the_two_unlisted": before == after and not [w for w in glue.writes() if w[2] in before],
@@ -1354,6 +1373,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "features_publish_plan_reaches_the_hook": case_features_publish_plan_reaches_the_hook,
     "check_accepts_the_features_layer": case_check_accepts_the_features_layer,
     "foreign_table_is_refused": case_foreign_table_is_refused,
+    "plain_named_database_keeps_a_table_the_mirror_did_not_write": case_plain_named_database_keeps_a_table_the_mirror_did_not_write,
     "other_pointers_are_refused": case_other_pointers_are_refused,
     "committed_retry_mirrors_the_committed_set": case_committed_retry_mirrors_the_committed_set,
     "check_is_bound_to_the_committed_set": case_check_is_bound_to_the_committed_set,

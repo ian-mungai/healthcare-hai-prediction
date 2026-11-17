@@ -37,6 +37,7 @@ from typing import Any
 
 from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+from scripts.lakehouse.dbt_catalog_artifacts import mirror_schemas
 
 START = "<!-- hai-raw-files:start -->"
 END = "<!-- hai-raw-files:end -->"
@@ -45,7 +46,8 @@ MAX_UNITS = 20  # acquisition lines of one table; more are counted
 MAX_RECORDS = 20_000  # unit completion records read for one run
 RECORD_BYTES = 2 * 1024**2
 CAPTURE_ROOTS = (RAW_ROOT,)  # the deployed capture root (infra/jobs/publisher.tf capture_root): the only place this writer looks for completion records
-SERVICE, DATABASE, SCHEMA = "glue_mirror", "hai_lakehouse", "hai_mirror_bronze"
+SERVICE, DATABASE = "glue_mirror", "hai_lakehouse"
+SCHEMA = mirror_schemas()["bronze"]  # the Glue database of the bronze layer in config/lakehouse/athena_mirror.json
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 RECORD_KEY = "lakehouse/bronze_runs/{run}/check.json"
 TIMEOUT_SECONDS = 20.0

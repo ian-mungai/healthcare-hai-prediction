@@ -17,7 +17,7 @@ Where the parts come from:
   Iceberg tables, and the snapshot record schemas allow that form) and name ``<OpenMetadata database>.<Glue database>.<table>``, from
   ``config/metadata/ingestion/glue.json`` and ``config/lakehouse/athena_mirror.json``. The names come from those files, never from the live mirror, so
   they are the same while the mirror's ``enabled`` is false; OpenMetadata resolves them once the mirror is on and ingested (it creates no unresolved
-  entity). Bronze is a mirror layer like the others (``hai_mirror_bronze``), so a bronze table is named the same way and resolves once the mirror holds it.
+  entity). Bronze is a mirror layer like the others (``bronze``), so a bronze table is named the same way and resolves once the mirror holds it.
 - The launch identity, the times, the outcome and the input run bound at launch come from the launch records (``orchestration/ecs_launch.py``).
 - The versions come from the job's evidence under ``lakehouse/layer_runs/<layer>/<run>/``: the pin file (the input snapshots) and the output record.
   The input snapshot record is checked by ``snapshots.validate_input_record``: it names exactly the declared inputs, and its pins equal the frozen pins.

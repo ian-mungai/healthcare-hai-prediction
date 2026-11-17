@@ -6,19 +6,19 @@
   "layers": {
     "bronze": {
       "namespace": "bronze",
-      "database": "hai_mirror_bronze"
+      "database": "bronze"
     },
     "silver": {
       "namespace": "silver",
-      "database": "hai_mirror_silver"
+      "database": "silver"
     },
     "gold": {
       "namespace": "gold",
-      "database": "hai_mirror_gold"
+      "database": "gold"
     },
     "features": {
       "namespace": "features",
-      "database": "hai_mirror_features"
+      "database": "features"
     }
   },
   "workgroup": {

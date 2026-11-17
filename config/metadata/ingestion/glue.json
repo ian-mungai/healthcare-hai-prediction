@@ -18,10 +18,10 @@
         "includeViews": false,
         "schemaFilterPattern": {
           "includes": [
-            "^hai_mirror_bronze$",
-            "^hai_mirror_silver$",
-            "^hai_mirror_gold$",
-            "^hai_mirror_features$"
+            "^bronze$",
+            "^silver$",
+            "^gold$",
+            "^features$"
           ]
         }
       }

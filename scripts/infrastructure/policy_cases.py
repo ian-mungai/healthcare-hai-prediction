@@ -1130,12 +1130,12 @@ def pass_role_cases() -> Iterator[Case]:
     ):
         yield Case(f"AssumeRole {label}", request("sts:AssumeRole", target, region=None), False)
     athena_workgroup = arn("athena", "workgroup/hai_mirror")
-    glue_table = arn("glue", "table/hai_mirror_gold/dim_state")
+    glue_table = arn("glue", "table/gold/dim_state")
     for action, target in (
         ("athena:StartQueryExecution", athena_workgroup),
         ("athena:GetQueryResults", athena_workgroup),
         ("athena:GetWorkGroup", athena_workgroup),
-        ("glue:GetDatabase", arn("glue", "database/hai_mirror_gold")),
+        ("glue:GetDatabase", arn("glue", "database/gold")),
         ("glue:GetTable", glue_table),
         ("glue:CreateTable", glue_table),
         ("s3:GetObject", f"{BUCKET}/athena/results/query.csv"),
@@ -1143,7 +1143,7 @@ def pass_role_cases() -> Iterator[Case]:
         service = action.split(":")[0]
         if service != "s3":
             yield Case(f"the project user has no direct {action}", request(action, target), False)
-    bronze_database, bronze_table = arn("glue", "database/hai_mirror_bronze"), arn("glue", "table/hai_mirror_bronze/acs_api_detailed")
+    bronze_database, bronze_table = arn("glue", "database/bronze"), arn("glue", "table/bronze/acs_api_detailed")
     for action, target in (
         ("glue:GetDatabase", bronze_database),
         ("glue:GetTable", bronze_table),
@@ -2898,7 +2898,7 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "Sid": "PlantedDirectBronzeGlue",
                 "Effect": "Allow",
                 "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables"],
-                "Resource": [arn("glue", "database/hai_mirror_bronze"), arn("glue", "table/hai_mirror_bronze/*")],
+                "Resource": [arn("glue", "database/bronze"), arn("glue", "table/bronze/*")],
             }
         )
 

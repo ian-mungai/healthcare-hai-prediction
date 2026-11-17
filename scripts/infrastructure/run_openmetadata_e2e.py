@@ -357,24 +357,24 @@ def ingest_dbt_points_gold_and_features_models_at_the_glue_tables() -> None:
     require("hai_glue_mapping" not in json.dumps(seen[0]), "the mapping is the script's setting and must not reach the workflow")
     nodes, cat = read["manifest"]["nodes"], read["catalog"]["nodes"]
     place = {key: (node["database"], node["schema"]) for key, node in nodes.items()}
-    require(place["model.hai.dim_state"] == ("hai_lakehouse", "hai_mirror_gold"), place)
-    require(place["model.hai.feature_matrix_hospital"] == ("hai_lakehouse", "hai_mirror_features"), place)
-    require(place["model.hai.stg_measure"] == ("hai_lakehouse", "hai_mirror_silver"), place)
+    require(place["model.hai.dim_state"] == ("hai_lakehouse", "gold"), place)
+    require(place["model.hai.feature_matrix_hospital"] == ("hai_lakehouse", "features"), place)
+    require(place["model.hai.stg_measure"] == ("hai_lakehouse", "silver"), place)
     require(
         place["test.hai.not_null_dim_state"] == ("staging", "main") and place["model.dbt_project_evaluator.fct_check"] == ("staging", "main"),
         "tests and models of other folders or packages stay as dbt wrote them",
     )
     source = read["manifest"]["sources"]["source.hai.bronze.measure"]
     require(
-        (source["database"], source["schema"], source["name"]) == ("hai_lakehouse", "hai_mirror_bronze", "measure"),
-        f"a bronze source is a table of hai_mirror_bronze: {source}",
+        (source["database"], source["schema"], source["name"]) == ("hai_lakehouse", "bronze", "measure"),
+        f"a bronze source is a table of bronze: {source}",
     )
     require(
-        read["catalog"]["sources"]["source.hai.bronze.measure"]["metadata"]["schema"] == "hai_mirror_bronze",
+        read["catalog"]["sources"]["source.hai.bronze.measure"]["metadata"]["schema"] == "bronze",
         "the catalog entry of a bronze source moves with it",
     )
-    require((cat["model.hai.dim_state"]["metadata"]["database"], cat["model.hai.dim_state"]["metadata"]["schema"]) == ("hai_lakehouse", "hai_mirror_gold"), cat)
-    require(cat["model.hai.stg_measure"]["metadata"]["schema"] == "hai_mirror_silver", "the catalog entry of a silver model moves with it")
+    require((cat["model.hai.dim_state"]["metadata"]["database"], cat["model.hai.dim_state"]["metadata"]["schema"]) == ("hai_lakehouse", "gold"), cat)
+    require(cat["model.hai.stg_measure"]["metadata"]["schema"] == "silver", "the catalog entry of a silver model moves with it")
     require(cat["model.dbt_project_evaluator.fct_check"]["metadata"]["schema"] == "main", "the catalog entry of a package model stays")
 
 
@@ -460,7 +460,7 @@ class FakeCatalog:
     """A stand-in of OpenMetadata's table API: a lookup by name and a JSON patch of the description, with every call kept."""
 
     def __init__(self, descriptions: dict[str, str]) -> None:
-        self.tables = {f"glue_mirror.hai_lakehouse.hai_mirror_bronze.{name}": {"id": f"id-{name}", "description": text} for name, text in descriptions.items()}
+        self.tables = {f"glue_mirror.hai_lakehouse.bronze.{name}": {"id": f"id-{name}", "description": text} for name, text in descriptions.items()}
         self.calls: list[tuple[str, str, dict[str, str], bytes | None]] = []
         self.fail_patch = False
 
@@ -502,7 +502,7 @@ def raw_files_are_written_onto_each_bronze_table() -> None:
     catalog = FakeCatalog({"cms_hai_hospital": "", "cms_hai_state": ""})
     code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
     require(code == 0 and "2 written" in out, (code, out, err))
-    hospital = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    hospital = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     for needle in (BRONZE_RUN, "s3://example-acquisition-bucket/cms/cms_hai_hospital/file_000.csv", "version v1-1", f"sha256 {1:064x}", "bytes 11", "2 files"):
         require(needle in hospital, f"the description lacks {needle!r}: {hospital}")
     require(hospital.startswith("<!-- hai-raw-files:start -->") and hospital.endswith("<!-- hai-raw-files:end -->"), "the block is marked")
@@ -558,7 +558,7 @@ def raw_files_name_their_receipt_and_acquisition_run() -> None:
     with quiet() as (out, err):
         code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=s3, http=catalog)
     require(code == 0, (code, err.getvalue()))
-    hospital = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    hospital = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     unit_a = records.unit_key({"unit": "alpha"})
     for needle in (
         f"acquisition run {ACQ_RUN_A}",
@@ -571,7 +571,7 @@ def raw_files_name_their_receipt_and_acquisition_run() -> None:
     ):
         require(needle in hospital, f"the description lacks {needle!r}: {hospital}")
     require("2 of 2 files have an acquisition record" in hospital, hospital)
-    state = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_state"]["description"]
+    state = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_state"]["description"]
     require(f"acquisition run {ACQ_RUN_B}" in state and f"unit {records.unit_key({'unit': 'beta'})}" in state, state)
     require(s3.listings and all(item.endswith("/raw/ingestion_units/") for item in s3.listings), f"only the capture root raw/ is listed: {s3.listings}")
     again = FakeS3(keys, page=1)
@@ -589,7 +589,7 @@ def raw_files_without_a_completion_record_say_so() -> None:
     keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode(), key_a: body_a, other_version[0]: other_version[1]}
     catalog = FakeCatalog({"cms_hai_hospital": ""})
     code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
-    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    text = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(code == 0 and "1 of 2 files have an acquisition record" in text, (code, err, text))
     require(text.count("no completion record names this file version") == 1 and f"acquisition run {ACQ_RUN_B}" not in text, text)
 
@@ -639,7 +639,7 @@ def an_object_named_by_two_records_takes_the_earliest_capture() -> None:
     for extra in ({}, {later[0]: later[1]}):
         catalog = FakeCatalog({"cms_hai_hospital": ""})
         run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), base | extra, catalog)
-        texts.append(catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"])
+        texts.append(catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"])
     require(texts[0] == texts[1] and f"acquisition run {ACQ_RUN_A}" in texts[0] and ACQ_RUN_B not in texts[0], texts)
 
 
@@ -657,7 +657,7 @@ def a_bucket_root_completion_record_is_not_read() -> None:
     s3 = FakeS3(keys)
     with quiet() as (_, err):
         code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=s3, http=catalog)
-    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    text = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(code == 0, (code, err.getvalue()))
     require(
         not [item for item in s3.requested if "/ingestion_units/" in item and "/raw/ingestion_units/" not in item],
@@ -672,7 +672,7 @@ def description_after(files: dict[str, bytes]) -> str:
     catalog = FakeCatalog({"cms_hai_hospital": ""})
     code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), files, catalog)
     require(code == 0, (code, err))
-    return catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    return catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
 
 
 def sub_second_capture_times_are_compared_as_instants() -> None:
@@ -728,14 +728,14 @@ def raw_files_write_is_idempotent_and_keeps_other_text() -> None:
     keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode()}
     catalog = FakeCatalog({"cms_hai_hospital": "Hospital measures from CMS."})
     require(run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)[0] == 0 and catalog.patches() == 1, "the first run writes")
-    first = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    first = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(first.startswith("Hospital measures from CMS.\n\n<!-- hai-raw-files:start -->"), f"the existing text is kept: {first[:80]}")
     code, out, _ = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
     require(code == 0 and catalog.patches() == 1 and "1 unchanged" in out, f"a repeat wrote again: {catalog.patches()} patches, {out}")
     later = "20261105T100000Z-abcdef02"
     keys[f"lakehouse/bronze_runs/{later}/check.json"] = json.dumps(bronze_record({"cms_hai_hospital": 3}, later, "w")).encode()
     require(run_raw_files(["--bronze-run", later], raw_files_environment(), keys, catalog)[0] == 0 and catalog.patches() == 2, "a later run writes once")
-    second = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    second = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(
         second.count("hai-raw-files:start") == 1 and later in second and BRONZE_RUN not in second and second.startswith("Hospital measures from CMS."), second
     )
@@ -746,7 +746,7 @@ def raw_files_list_is_capped() -> None:
     keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 60})).encode()}
     catalog = FakeCatalog({"cms_hai_hospital": ""})
     require(run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)[0] == 0, "written")
-    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    text = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(text.count("- s3://") == 50 and "and 10 more files" in text and BRONZE_KEY in text and "60 files" in text, text[-300:])
 
 
@@ -911,7 +911,7 @@ def host_ingest_writes_the_bronze_files_after_the_dbt_layers() -> None:
             code = host_ingest.main([*args, "raw_files"], env=env, workflow=workflow, s3_client=FakeS3(keys), http=catalog)
     require(code == 0, (code, err.getvalue()))
     require(seen == ["glue", "dbt", "dbt", "dbt"], f"the catalog sources ran first: {seen}")
-    description = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    description = catalog.tables["glue_mirror.hai_lakehouse.bronze.cms_hai_hospital"]["description"]
     require(BRONZE_RUN in description and "2 files" in description and catalog.patches() == 1, description[:200])
     require(BEARER_VALUE not in out.getvalue() + err.getvalue(), "the token reached the output")
 

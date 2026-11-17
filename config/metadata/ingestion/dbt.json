@@ -2,10 +2,10 @@
   "hai_glue_mapping": {
     "database": "hai_lakehouse",
     "schemas": {
-      "bronze": "hai_mirror_bronze",
-      "silver": "hai_mirror_silver",
-      "gold": "hai_mirror_gold",
-      "features": "hai_mirror_features"
+      "bronze": "bronze",
+      "silver": "silver",
+      "gold": "gold",
+      "features": "features"
     }
   },
   "source": {

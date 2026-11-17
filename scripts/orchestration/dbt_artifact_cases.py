@@ -3,7 +3,7 @@
 The pinned OpenMetadata 2.0.7 connector (``ingestion/src/metadata/ingestion/source/database/dbt/metadata.py``) links a manifest node to the table
 ``<service>.<database>.<schema>.<alias or name>`` and parses each model's compiled SQL for column lineage. A layer build writes every model to
 ``staging.main`` (the DuckDB build file), while OpenMetadata's Glue connector creates the published tables as
-``glue_mirror.hai_lakehouse.hai_mirror_<layer>.<model>``. The rewrite moves each model to that table, using the table sets the publish steps use. The manifests
+``glue_mirror.hai_lakehouse.<layer>.<model>``. The rewrite moves each model to that table, using the table sets the publish steps use. The manifests
 here are stand-ins with the fields the connector and the rewrite read; no dbt runs.
 """
 
@@ -23,8 +23,8 @@ ROOT_CONFIG = Path(__file__).resolve().parents[2] / "config/metadata/ingestion/d
 LAYER_MODELS = {"silver": ("int_hospital_windows", "int_county_values"), "gold": ("fact_hai_measure", "dim_hospital"), "features": ("feature_matrix_hospital",)}
 TABLES = {model: layer for layer, models in LAYER_MODELS.items() for model in models}
 # The Glue database of each layer, written out here and not read from config/lakehouse/athena_mirror.json, so a changed config or module fails a case.
-MIRROR = {"silver": "hai_mirror_silver", "gold": "hai_mirror_gold", "features": "hai_mirror_features"}
-PLACES = {**MIRROR, "bronze": "hai_mirror_bronze"}  # the ingestion also places the bronze sources, which have no model
+MIRROR = {"silver": "silver", "gold": "gold", "features": "features"}
+PLACES = {**MIRROR, "bronze": "bronze"}  # the ingestion also places the bronze sources, which have no model
 RELATION = re.compile(r'"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?')
 
 
@@ -103,7 +103,7 @@ def rewritten_sql_names_only_published_tables() -> None:
         for key, node in rewritten["nodes"].items():
             for database, schema, table in RELATION.findall(node.get("compiled_code", "")):
                 published = (database, schema) == ("hai_lakehouse", MIRROR.get(TABLES.get(table, "")))
-                source = (database, schema, table) == ("hai_lakehouse", "hai_mirror_bronze", "cms_hai_hospital")
+                source = (database, schema, table) == ("hai_lakehouse", "bronze", "cms_hai_hospital")
                 require(published or source, f"{layer} {key}: compiled SQL names {database}.{schema}.{table}")
 
 
@@ -134,7 +134,7 @@ def bronze_source_sql_follows_its_source() -> None:
     base["sources"]["source.hai.bronze.cms_hai_state"] = {"resource_type": "source", "name": "cms_hai_state", "database": "lakehouse", "schema": "bronze"}
     tables = {**TABLES, "stg_cms_hai_hospital": "silver", "stg_cms_hai_state": "silver", "stg_bronze__files": "silver"}
     mapping = json.loads(ROOT_CONFIG.read_text())[MAPPING_KEY]
-    old = re.compile(r'"?lakehouse"?\s*\.\s*"?bronze"?\s*\.')
+    old = re.compile(r'(?<!\w)"?lakehouse"?\s*\.\s*"?bronze"?\s*\.')  # the dbt build's lakehouse catalog, not hai_lakehouse
 
     def after_placement(document: dict[str, Any]) -> dict[str, Any]:
         with tempfile.TemporaryDirectory() as folder:
@@ -148,11 +148,11 @@ def bronze_source_sql_follows_its_source() -> None:
             sql = document["nodes"][f"model.hai.{name}"]["compiled_code"]
             require(not old.search(sql), f"{label}: {name} still reads the old bronze identity: {sql[:200]}")
             require(
-                "hai_lakehouse" in sql and "hai_mirror_bronze" in sql and name.removeprefix("stg_") in sql,
+                "hai_lakehouse" in sql and "bronze" in sql and name.removeprefix("stg_") in sql,
                 f"{label}: {name} does not read the mirror table: {sql[:200]}",
             )
         if label != "placement alone":
-            require('"hai_lakehouse"."hai_mirror_silver"."stg_bronze__files"' in document["nodes"]["model.hai.stg_cms_hai_hospital"]["compiled_code"], label)
+            require('"hai_lakehouse"."silver"."stg_bronze__files"' in document["nodes"]["model.hai.stg_cms_hai_hospital"]["compiled_code"], label)
     require(
         rewritten["sources"]["source.hai.bronze.cms_hai_hospital"] == base["sources"]["source.hai.bronze.cms_hai_hospital"], "the rewrite moves models only"
     )
@@ -241,19 +241,18 @@ def feature_targets_are_placed() -> None:
         tables = {**TABLES, "int_hospital_spine": "features"}
         rewritten = artifacts.rewrite_manifest(built, tables)
         moved = rewritten["nodes"][f"model.hai.{name}"]
+        require((moved["database"], moved["schema"]) == ("hai_lakehouse", "features"), f"{build}: manifest node {moved['database']}.{moved['schema']}")
+        require(moved["relation_name"] == '"hai_lakehouse"."features"."feature_matrix_hospital"', f"{build}: relation {moved['relation_name']}")
         require(
-            (moved["database"], moved["schema"]) == ("hai_lakehouse", "hai_mirror_features"), f"{build}: manifest node {moved['database']}.{moved['schema']}"
-        )
-        require(moved["relation_name"] == '"hai_lakehouse"."hai_mirror_features"."feature_matrix_hospital"', f"{build}: relation {moved['relation_name']}")
-        require(
-            f'"{build}"' not in moved["compiled_code"] and "hai_mirror_features" in moved["compiled_code"], f"{build}: compiled SQL {moved['compiled_code']}"
+            f'"{build}"."main"' not in moved["compiled_code"] and '"hai_lakehouse"."features"."int_hospital_spine"' in moved["compiled_code"],
+            f"{build}: compiled SQL {moved['compiled_code']}",
         )
         tracked = {"nodes": {f"model.hai.{name}": {"metadata": {"database": build, "schema": "main", "name": name}, "columns": {}}}, "sources": {}}
         metadata = artifacts.rewrite_catalog(tracked, tables)["nodes"][f"model.hai.{name}"]["metadata"]
-        require((metadata["database"], metadata["schema"]) == ("hai_lakehouse", "hai_mirror_features"), f"{build}: catalog {metadata}")
+        require((metadata["database"], metadata["schema"]) == ("hai_lakehouse", "features"), f"{build}: catalog {metadata}")
         results = {"results": [{"unique_id": f"model.hai.{name}", "relation_name": f'"{build}"."main"."{name}"', "status": "success"}]}
         require(
-            artifacts.rewrite_run_results(results, tables)["results"][0]["relation_name"] == '"hai_lakehouse"."hai_mirror_features"."feature_matrix_hospital"',
+            artifacts.rewrite_run_results(results, tables)["results"][0]["relation_name"] == '"hai_lakehouse"."features"."feature_matrix_hospital"',
             f"{build}: run result",
         )
 
@@ -273,10 +272,10 @@ def catalog_and_results_follow() -> None:
     rewritten = artifacts.rewrite_catalog(catalog("silver"), TABLES)
     for name in LAYER_MODELS["silver"]:
         metadata = rewritten["nodes"][f"model.hai.{name}"]["metadata"]
-        require((metadata["database"], metadata["schema"], metadata["name"]) == ("hai_lakehouse", "hai_mirror_silver", name), f"catalog {metadata}")
+        require((metadata["database"], metadata["schema"], metadata["name"]) == ("hai_lakehouse", "silver", name), f"catalog {metadata}")
     results = {"results": [{"unique_id": "model.hai.dim_hospital", "relation_name": '"staging"."main"."dim_hospital"', "status": "success"}]}
     moved = artifacts.rewrite_run_results(results, TABLES)
-    require(moved["results"][0]["relation_name"] == '"hai_lakehouse"."hai_mirror_gold"."dim_hospital"', f"run results {moved}")
+    require(moved["results"][0]["relation_name"] == '"hai_lakehouse"."gold"."dim_hospital"', f"run results {moved}")
     unknown = catalog("silver")
     unknown["nodes"]["model.hai.stg_unpublished"] = {"metadata": {"database": "staging", "schema": "main", "name": "stg_unpublished"}, "columns": {}}
     require(
@@ -332,8 +331,8 @@ def rewrite_and_placement_agree() -> None:
                 )
         source = placed["sources"]["source.hai.bronze.cms_hai_hospital"]
         require(
-            (source["database"], source["schema"]) == ("hai_lakehouse", "hai_mirror_bronze"),
-            f"{layer}: a bronze source is placed in hai_mirror_bronze: {source}",
+            (source["database"], source["schema"]) == ("hai_lakehouse", "bronze"),
+            f"{layer}: a bronze source is placed in bronze: {source}",
         )
 
 
@@ -450,7 +449,7 @@ def copies_name_the_published_tables() -> None:
                 require(layer_run.upload_dbt_artifacts(job, "example-private-bucket", uploads, TABLES) == ["manifest.json", "catalog.json"], "gold fixed keys")
                 stored = uploads.objects["metadata/dbt/manifest.json"]
                 require(
-                    b'"main"' not in stored and json.loads(stored)["nodes"]["model.hai.fact_hai_measure"]["schema"] == "hai_mirror_gold",
+                    b'"main"' not in stored and json.loads(stored)["nodes"]["model.hai.fact_hai_measure"]["schema"] == "gold",
                     "the fixed-key copy is rewritten",
                 )
             unmapped = {name: value for name, value in TABLES.items() if name != LAYER_MODELS[layer][0]}
