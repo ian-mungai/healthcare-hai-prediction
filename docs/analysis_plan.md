@@ -1,35 +1,35 @@
 ---
 title: Analysis plan
 description: The outcome, predictors, six models, evaluation and promotion rules used by every training run.
-last_updated: 2026-11-08
+last_updated: 2026-11-17
 ---
 
 # Analysis plan
 
-Every training run follows this plan. The plan changes during development, so each run records the plan's SHA-256 and the Git commit in MLflow. A result therefore always names the plan version of its run.
+Every training run follows this plan. The plan changes during development, so each run records the plan's Secure Hash Algorithm 256 (SHA-256) and the Git commit in MLflow. A result therefore always names the plan version of its run.
 
 ## Unit, populations and timing
 
-- The unit of analysis is the hospital-window: one CMS Certification Number (CCN) and one calendar-year healthcare-associated infection (HAI) window, keyed by `spine_key`. The spine keeps the calendar-year windows from the reviewed `first_window_year` (2018, `dbt/dbt_project.yml`) on. Earlier windows stay in the gold HAI fact and feed only the history features.
+- The unit of analysis is the hospital-window: one Centers for Medicare & Medicaid Services (CMS) Certification Number (CCN) and one calendar-year healthcare-associated infection (HAI) window, keyed by `spine_key`. The spine keeps the calendar-year windows from the reviewed `first_window_year` (2018, `dbt/dbt_project.yml`) on. Earlier windows stay in the gold HAI fact and feed only the history features.
 - The primary population is `is_primary_population`. Sensitivity analyses repeat every test on `is_sensitivity_population` and are marked exploratory.
 - Every predictor takes the latest source period that ends before the window starts. The rule uses the measured period, not the publication date.
 - The design is same-period: the model predicts the window's standardized infection ratio (SIR) from the information available at the window start. Forecasting later windows is a separate extension that adds the earlier-outcome candidates C275 to C280.
 
 ## Outcome
 
-- The outcome is the published SIR of one HAI type, controls C269 to C274: HAI_1 CLABSI, HAI_2 CAUTI, HAI_3 SSI colon, HAI_4 SSI hysterectomy, HAI_5 MRSA and HAI_6 C. difficile. No SIR is computed from counts.
+- The outcome is the published SIR of one HAI type, controls C269 to C274: HAI_1 central line-associated bloodstream infection (CLABSI), HAI_2 catheter-associated urinary tract infection (CAUTI), HAI_3 surgical site infection (SSI) colon, HAI_4 SSI hysterectomy, HAI_5 methicillin-resistant Staphylococcus aureus (MRSA) and HAI_6 C. difficile. No SIR is computed from counts.
 - A window without a published SIR for the type is left out of that type's analysis and counted in the run record. This covers an `alignment_status` other than aligned and tokens such as "Not Available".
 - Each of the six types is a separate primary analysis with the same specification. Every research question and the six-model comparison are reported per type.
 
 ## Predictors
 
-- The predictor families are Care Compare process and structure measures (RQ1), hospital characteristics and operations, HCRIS cost-report ratios and the Case Mix Index (CMI) (RQ4 additions) and county context (RQ4 additions). County context covers SVI, ACS, SAIPE, SAHIE, BLS, PLACES, Medicare geographic variation, CDC WONDER, the Mapping Medicare Disparities data, HPSA and MUA designations, RUCC and RUCA.
+- The predictor families are Care Compare process and structure measures (RQ1), hospital characteristics and operations, Healthcare Cost Report Information System (HCRIS) cost-report ratios and the Case Mix Index (CMI) (RQ4 additions) and county context (RQ4 additions). County context covers Social Vulnerability Index (SVI), American Community Survey (ACS), Small Area Income and Poverty Estimates (SAIPE), Small Area Health Insurance Estimates (SAHIE), Bureau of Labor Statistics (BLS), PLACES, Medicare geographic variation, Centers for Disease Control and Prevention (CDC) Wide-ranging Online Data for Epidemiologic Research (WONDER), the Mapping Medicare Disparities data, Health Professional Shortage Area (HPSA) and Medically Underserved Area (MUA) designations, Rural-Urban Continuum Code (RUCC) and Rural-Urban Commuting Area (RUCA).
 - CMI is a covariate in every model from Elastic Net on.
-- C154 (influenza vaccination of healthcare personnel) is one measure under two published IDs, IMM_3_OP_27_FAC_ADHPCT up to the July 2019 release and IMM_3 after it. It takes the latest period of either ID that ends before the window starts.
+- C154 (influenza vaccination of healthcare personnel) is one measure under two published identifiers (IDs), IMM_3_OP_27_FAC_ADHPCT up to the July 2019 release and IMM_3 after it. It takes the latest period of either ID that ends before the window starts.
 - C141 (emergency department volume) and C167 (SM_7, the maternal morbidity structural measure) are categories. For C167, Yes, No and Not Applicable are categories and Not Available stays missing. It has values only for the 2022 and 2023 windows and the holdout, so the missing-share rule can drop it.
-- These are never predictors: the parts of the outcome itself, the HAC Reduction Program and VBP scores, readmissions, complications and deaths. PSI-90 and PSI-13 enter only as the RQ3 mediator.
+- These are never predictors: the parts of the outcome itself, the Hospital-Acquired Condition (HAC) Reduction Program and value-based purchasing (VBP) scores, readmissions, complications and deaths. PSI-90 and PSI-13 enter only as the RQ3 mediator.
 - A source field that two controls carry appears once in the feature lists. A column that is a fixed sum or midpoint of kept columns is left out: the BLS labor force, ACS occupied housing units and the SAIPE estimates between their 90 percent bounds. `config/training/redundant_features.json` lists each removed reference, the references kept in its place and the reason.
-- The OLS, mixed effects, spatial and fixed-effects models drop any remaining column that is an exact linear combination of the others, found by QR decomposition on the fitting rows only. The full side of the RQ4 test does the same. Value columns are kept before missing-value indicators and category levels. CMI is never dropped. The RQ4 test keeps its CMS-only columns. The same columns are dropped from the holdout and prediction rows. Every fold and final fit records the dropped columns.
+- The ordinary least squares (OLS), mixed effects, spatial and fixed-effects models drop any remaining column that is an exact linear combination of the others, found by QR decomposition on the fitting rows only. The full side of the RQ4 test does the same. Value columns are kept before missing-value indicators and category levels. CMI is never dropped. The RQ4 test keeps its CMS-only columns. The same columns are dropped from the holdout and prediction rows. Every fold and final fit records the dropped columns.
 
 ## Missing values
 
@@ -43,14 +43,14 @@ Every training run follows this plan. The plan changes during development, so ea
 - The newest window year with published SIRs is the holdout. All earlier years are training data.
 - Tuning uses cross-validation inside the training years, grouped by hospital: all windows of one CCN fall in one fold. The panel model uses time-ordered folds, each with at least three fitting years.
 - All learned preprocessing (imputation, scaling, encoding and selection) is fitted inside the training folds only.
-- Holdout metrics are RMSE (primary), MAE and R². The likelihood models also report AIC and BIC.
+- Holdout metrics are root mean square error (RMSE) as the primary metric, mean absolute error (MAE) and R². The likelihood models also report Akaike information criterion (AIC) and Bayesian information criterion (BIC).
 
 ## The six models
 
 1. **OLS:** the original capstone specification on the CMS-only predictors, as the baseline.
 2. **Elastic Net:** all predictor families with CMI forced in. The grouped cross-validation tunes alpha and the L1 ratio.
 3. **Mixed effects (RQ2):** a random intercept per ownership group, taken from the ownership history as of the window start. The model reports the intraclass correlation (ICC) and a likelihood-ratio test against the fixed-only model (H2).
-4. **Tree model with SHAP:** gradient boosting (XGBoost) is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
+4. **Tree model with SHapley Additive exPlanations (SHAP):** gradient boosting (XGBoost) is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
 5. **Spatial (RQ5):** Moran's I on the holdout-year residuals of the best non-spatial model. If it is significant at 0.05 (H5), a spatial lag or spatial error model follows, chosen by Lagrange multiplier tests.
 6. **Fixed-effects panel (RQ6):** hospital fixed effects across window years with time-varying predictors. A holdout hospital without an estimated effect gets the mean effect. The run counts these hospitals.
    - The model fits complete cases on its own predictor set and adds no missing-value flags. This is its exception to the missing-value rule above. The run counts the rows left out. A holdout row with a missing predictor is still scored, with the fitting median.
@@ -78,20 +78,20 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
   2. It predicts windows Y-1 and Y. Each hospital's score is the average of its predictions over those windows.
   3. If the program year's period covers one year only, the fit predicts and compares that window alone. The result records this.
   4. The result validates the selected specification, not the final fitted model. The validation-only fit is never saved, promoted or counted in a research question test.
-  5. The run reports the AUC and the share of flagged hospitals in the top predicted quartile. A hospital without a flag stays missing and is counted.
+  5. The run reports the area under the curve (AUC) and the share of flagged hospitals in the top predicted quartile. A hospital without a flag stays missing and is counted.
   6. The flag is never a training input.
 - **Multiple testing:** each of the six hypotheses is reported at 0.05 with its exact p-value and no correction across hypotheses. Sensitivity analyses are marked exploratory.
 
 ## Tracking and promotion
 
-- MLflow records, for every run, the plan's SHA-256, the Git commit, the DVC data version, the Iceberg snapshot IDs, the feature list, the target type, the parameters, the metrics and the SHAP and diagnostic artifacts.
-- Only OLS, Elastic Net and gradient boosting can be promoted. The other models answer research questions and need inputs that the prediction API does not have.
+- MLflow records, for every run, the plan's SHA-256, the Git commit, the Data Version Control (DVC) data version, the Iceberg snapshot IDs, the feature list, the target type, the parameters, the metrics and the SHAP and diagnostic artifacts.
+- Only OLS, Elastic Net and gradient boosting can be promoted. The other models answer research questions and need inputs that the prediction application programming interface (API) does not have.
 - The champion and the challenger are scored on the same newest-period holdout. A challenger is promoted only when all three conditions hold:
   1. Its RMSE is at least 2% lower.
   2. The bootstrap 95% interval of the improvement excludes zero.
   3. Its RMSE is at most 5% worse in every hospital group of at least 100 holdout hospitals. The groups are ownership type, hospital subtype, census region and bed-size band (under 100, 100 to 299, 300 and over).
 - While a type has no champion, its candidate is compared with the intercept and CMI model fitted on the training years instead. It can become the first champion when its provenance check passed and conditions 1 and 2 hold against that model.
-- A promoted model then goes through the canary. The one exception is the first champion of a type: while the registry has no Production model there is nothing to run a canary beside, so a challenger whose verdict is `pass` or `pass_baseline` is promoted without one (one-time exception, owner decision of Nov 15 2026). It also skips the release of a held online load before the rollout, because a first deploy has none. Every later promotion keeps the canary and the release: after the promotion, the chain launches the `release` phase of the features job for the promoted model's set and the features run it trained on. Before the rollout, the phase reads its own hold record and either loads the held online data once or reports that nothing was held. A release the phase refuses fails the chain by name and stops the rollout.
+- A promoted model then goes through the canary. The one exception is the first champion of a type: while the registry has no Production model there is nothing to run a canary beside, so a challenger whose verdict is `pass` or `pass_baseline` is promoted without one (one-time exception). It also skips the release of a held online load before the rollout, because a first deploy has none. Every later promotion keeps the canary and the release: after the promotion, the chain launches the `release` phase of the features job for the promoted model's set and the features run it trained on. Before the rollout, the phase reads its own hold record and either loads the held online data once or reports that nothing was held. A release the phase refuses fails the chain by name and stops the rollout.
 
 ## Reproducibility
 
