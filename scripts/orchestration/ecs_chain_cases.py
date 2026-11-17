@@ -302,12 +302,12 @@ def start_metadata(port: int, limit: float | None = None) -> tuple[str, list[str
     handler = Capture(level=logging.ERROR)
     logging.getLogger().addHandler(handler)
     patched: dict[str, Any] = {"get_current_context": lambda: {"params": {"run_id": BRONZE, "mode": "real"}}}
-    if limit is not None:
-        patched["TRIGGER_TIMEOUT_SECONDS"] = limit
+    runtime: dict[str, Any] = loaded["create_dag_run"].__globals__  # the call and its limit live in the DAG runtime module
+    limits: dict[str, Any] = {} if limit is None else {"TRIGGER_TIMEOUT_SECONDS": limit}
     environment = {"AIRFLOW_API_PORT": str(port), "AIRFLOW__API_AUTH__JWT_SECRET": SIGNING}
     started = time.monotonic()
     try:
-        with mock.patch.dict(node.function.__globals__, patched), mock.patch.dict(os.environ, environment):
+        with mock.patch.dict(node.function.__globals__, patched), mock.patch.dict(runtime, limits), mock.patch.dict(os.environ, environment):
             result = node.function()
     finally:
         logging.getLogger().removeHandler(handler)

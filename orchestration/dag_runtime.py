@@ -10,12 +10,17 @@ There is no other path: the DAGs hold no broker client.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import http.client
 import importlib
 import json
 import logging
 import math
 import os
 import re
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -23,7 +28,7 @@ from typing import Any
 
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
-from orchestration.ingestion_schedule import RETRY_KIND, resolve_kind, resolve_retry, resolve_run_id, retry_run_id
+from orchestration.ingestion_schedule import RETRY_KIND, bronze_after_ingestion, bronze_after_retry, resolve_kind, resolve_retry, resolve_run_id, retry_run_id
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, drift_attempt_of, parameters_for, serving_parameters_for
 
@@ -62,6 +67,46 @@ JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"
 # The host family that every model set is like (its row in the host table says ``like``).
 MODEL_SET_PARENT = "features"
 HOST_TABLE = Path(__file__).resolve().parents[1] / "config/orchestration/host_jobs.json"
+
+
+BRONZE_CHAIN_DAG = "bronze_chain_dag"
+TRIGGER_TIMEOUT_SECONDS = 10
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def create_dag_run(dag_id: str, dag_run_id_value: str, conf: dict[str, str]) -> bool:
+    """Create a manual DAG run through the Airflow 3 REST API on the loopback port. Return True when it was created and False when it already existed.
+
+    The token is signed with the session's JWT secret as the host client does, and the call ends after ``TRIGGER_TIMEOUT_SECONDS``. Any other answer raises.
+    """
+    secret = os.environ.get("AIRFLOW__API_AUTH__JWT_SECRET", "")
+    if not secret:
+        raise RuntimeError("the Airflow JWT secret is not in the task environment")
+    now = int(time.time())
+    header = _b64(json.dumps({"alg": "HS512", "typ": "JWT"}, separators=(",", ":")).encode())
+    claims = _b64(
+        json.dumps(
+            {"sub": "admin", "role": "ADMIN", "teams": [], "aud": "apache-airflow", "iat": now, "nbf": now - 5, "exp": now + 120}, separators=(",", ":")
+        ).encode()
+    )
+    signature = _b64(hmac.new(secret.encode(), f"{header}.{claims}".encode(), hashlib.sha512).digest())
+    connection = http.client.HTTPConnection("127.0.0.1", int(os.environ.get("AIRFLOW_API_PORT", "8080")), timeout=TRIGGER_TIMEOUT_SECONDS)
+    try:
+        body = json.dumps({"dag_run_id": dag_run_id_value, "conf": conf, "logical_date": None})
+        connection.request(
+            "POST", f"/api/v2/dags/{dag_id}/dagRuns", body, {"Authorization": f"Bearer {header}.{claims}.{signature}", "Content-Type": "application/json"}
+        )
+        status = connection.getresponse().status
+    finally:
+        connection.close()
+    if status == 409:
+        return False
+    if status not in (200, 201):
+        raise RuntimeError(f"the Airflow API answered {status} to the trigger of {dag_id}")
+    return True
 
 
 def launch_pool() -> str:
@@ -253,6 +298,37 @@ def build_job_chain(template: str, asset: str | None = None, family: str | None 
     launched.get_openlineage_facets_on_failure = lineage.get_openlineage_facets_on_failure
     first >> launched >> found >> last
     return last
+
+
+def build_bronze_start(retry: bool) -> Any:
+    """Create ``start_bronze`` behind the gate of an ingestion DAG and return its operator.
+
+    The task starts ``bronze_chain_dag`` under the bronze run ID of the ingestion run (``bronze_<hex>``, also the Airflow run ID of the chain). A hand-started
+    ingestion run that passed starts it at once (its retry period is zero days). A scheduled ingestion run starts none, and the last retry
+    day of its period starts it whatever that day's own result was, because the files still missing then are carried over. A hand-started retry and a test
+    capture root start none. A start that fails fails the task and so the DAG run, in plain sight: nothing else would start bronze. A bronze run that exists
+    counts as started.
+    """
+
+    @task(task_id="start_bronze", trigger_rule=TriggerRule.ALL_DONE if retry else TriggerRule.ALL_SUCCESS, retries=0, execution_timeout=CHECK_TIMEOUT)
+    def start_bronze() -> str:
+        from airflow.sdk.exceptions import AirflowSkipException
+
+        context = get_current_context()
+        params = context["params"]
+        if params["capture_root"] != "raw/":
+            raise AirflowSkipException("a test capture root is never read by bronze")
+        if retry:
+            original, day = resolve_retry(str(params["original_run"]), int(params["day"]), context)
+            bronze = bronze_after_retry(original, day, context)
+        else:
+            bronze = bronze_after_ingestion(resolve_run_id(str(params["run_id"]), context), context)
+        if bronze is None:
+            raise AirflowSkipException("this run does not end an ingestion run's retry period, so it starts no bronze run")
+        created = create_dag_run(BRONZE_CHAIN_DAG, bronze, {"run_id": bronze, "mode": "real"})
+        return f"bronze run {bronze} {'started' if created else 'already exists'}"
+
+    return start_bronze().operator
 
 
 def research_request() -> SubmissionRequest:

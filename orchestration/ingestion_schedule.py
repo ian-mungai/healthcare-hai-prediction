@@ -13,7 +13,7 @@ daily retry of failed files runs on days 2 and 3 after the monthly run of day 1 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -114,3 +114,68 @@ def retry_run_id(original_run: str, day: int) -> str:
     parts = run_id_parts(original_run)
     attempt = "" if parts.attempt == 1 else f"_{parts.attempt}"
     return f"ingestion_retry_{parts.hex}{attempt}_{day}"
+
+
+def bronze_run_for(ingestion_run: str) -> str:
+    """The bronze run that follows an ingestion run or one of its retry days: ``bronze_`` and the hex and attempt of the ingestion run."""
+    if not isinstance(ingestion_run, str) or not re.fullmatch(f"{RUN_ID_PATTERN}|{run_id_pattern('ingestion_retry')}", ingestion_run):
+        raise ValueError("a bronze run follows an ingestion run or one of its retry days")
+    parts = run_id_parts(ingestion_run)
+    return compose_run_id("bronze", parts.hex, parts.attempt)
+
+
+def ingestion_runs_of(bronze_run: str) -> tuple[str, tuple[str, ...]]:
+    """The ingestion run that a bronze run follows and the run of each retry day (1 to ``RETRY_DAYS``), all with the bronze run's hex and attempt."""
+    if not isinstance(bronze_run, str) or not re.fullmatch(run_id_pattern("bronze"), bronze_run):
+        raise ValueError("only a bronze run follows ingestion runs")
+    parts = run_id_parts(bronze_run)
+    original = compose_run_id("ingestion", parts.hex, parts.attempt)
+    return original, tuple(retry_run_id(original, day) for day in range(1, RETRY_DAYS + 1))
+
+
+def bronze_after_ingestion(ingestion_run: str, context: Mapping[str, Any]) -> str | None:
+    """The bronze run that a finished ingestion run starts at once, or None. A hand-started run has a zero-day retry period, so its bronze run starts when it
+    has passed. A scheduled run waits for the last retry day (``bronze_after_retry``)."""
+    return None if is_scheduled(context) else bronze_run_for(ingestion_run)
+
+
+def bronze_after_retry(original_run: str, day: int, context: Mapping[str, Any]) -> str | None:
+    """The bronze run that a retry day starts, or None: the last day of a scheduled retry period ends the period. A hand retry starts no bronze run; the owner
+    starts a bronze run with an attempt suffix when one is wanted."""
+    return bronze_run_for(original_run) if is_scheduled(context) and day == RETRY_DAYS else None
+
+
+def captured_ids(record: Mapping[str, Any]) -> set[str]:
+    """The snapshot IDs a run record lists as captured (completed, changed or unchanged)."""
+    return {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in record["units"].get(name, [])}
+
+
+def carried_over(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The source files no run of the retry period captured: those the original run failed or did not attempt, less those a retry day captured. Bronze keeps
+    each one's earlier capture. A record without its units raises ``ValueError``."""
+    try:
+        outstanding = {item["snapshot_id"] for item in original["units"]["failed"]} | set(original["units"]["paused_not_attempted"])
+        for found in retries:
+            outstanding -= captured_ids(found)
+    except (KeyError, TypeError):
+        raise ValueError("a run record names its failed, paused and captured units") from None
+    return sorted(outstanding)
+
+
+NOTICE_LIST_LIMIT = 1000
+
+
+def carried_over_notice(bronze_run: str, files: Sequence[str]) -> tuple[str, str]:
+    """The subject and the message of the owner notice of a bronze run: every carried-over file by name (a subject holds 100 characters)."""
+    if not files:
+        return f"{bronze_run}: no file carried over"[
+            :100
+        ], f"Bronze run {bronze_run} loaded a capture of every source file from its ingestion run: no file was carried over."
+    shown = "\n".join(f"  {name}" for name in files[:NOTICE_LIST_LIMIT])
+    more = f"\n  and {len(files) - NOTICE_LIST_LIMIT} more (the run record lists them all)" if len(files) > NOTICE_LIST_LIMIT else ""
+    subject = f"{bronze_run}: {len(files)} files carried over"[:100]
+    message = (
+        f"Bronze run {bronze_run} proceeded with the earlier capture of {len(files)} source files that the ingestion run and its retry days did not capture:\n"
+        f"{shown}{more}"
+    )
+    return subject, message

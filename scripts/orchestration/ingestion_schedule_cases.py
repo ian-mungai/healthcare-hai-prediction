@@ -22,6 +22,7 @@ ECS. The failure modes, each with the case that covers it:
 
 from __future__ import annotations
 
+import importlib
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -58,6 +59,8 @@ RETRY_DAG = "ingestion_retry_dag"
 ORIGINAL = schedule.scheduled_run_id(LOGICAL_DATE)
 SCHEDULED_RETRY = {"original_run": schedule.SCHEDULED_RUN, "day": schedule.SCHEDULED_RETRY_DAY, "mode": "real"}
 PASSED = {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}
+WAITS = PASSED | {"start_bronze": "skipped"}  # the bronze start of a run that does not end a retry period
+STARTS = PASSED | {"start_bronze": "success"}  # the bronze start of a run that does
 
 
 @contextmanager
@@ -112,7 +115,8 @@ def scheduled_run_launches_the_monthly_kind_once_per_date() -> None:
     rig.stage_runs(run)
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
         states = current.run_dag("ingestion_dag.py")
-    require(states == PASSED, f"the scheduled chain did not pass: {states}")
+    require(states == WAITS, f"the scheduled chain did not pass: {states}")
+    require(not current.dag_runs, "a scheduled ingestion run started bronze before its retry period")
     require(rig.tasks_started() == 1, f"the scheduled run did not launch the publisher once: {rig.tasks_started()}")
     environment = rig.environment()["run"]
     require(environment["RUN_ID"] == run, f"the publisher did not run under the run id of the logical date: {environment}")
@@ -145,7 +149,7 @@ def scheduled_run_takes_the_current_code_run_and_keeps_it() -> None:
     rig.preflight.current_code_run = reader_of(CURRENT_CODE)
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
         states = current.run_dag("ingestion_dag.py")
-    require(states == PASSED, f"the scheduled run did not pass without code of its own: {states}")
+    require(states == WAITS, f"the scheduled run did not pass without code of its own: {states}")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"the publisher did not fetch the current code run: {rig.environment()['fetch']}")
     require(rig.preflight.code_runs.stored(run) == CURRENT_CODE, "the scheduled run was not bound to the code run it used")
     rig.preflight.current_code_run = reader_of(NEWER_CODE)
@@ -181,7 +185,7 @@ def without_a_current_code_run_the_run_uses_its_own_code() -> None:
     rig.preflight.current_code_run = reader_of(None)
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
         states = current.run_dag("ingestion_dag.py")
-    require(states == PASSED, f"a run with code of its own and no current code run did not pass: {states}")
+    require(states == WAITS, f"a run with code of its own and no current code run did not pass: {states}")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == run, f"the publisher did not fetch the code of its own run: {rig.environment()['fetch']}")
     require(rig.preflight.code_runs.stored(run) == run, "a run that used its own code was not bound to it")
     rig.preflight.current_code_run = reader_of(NEWER_CODE)
@@ -198,7 +202,7 @@ def a_run_with_no_current_code_run_reader_is_bound_to_its_own_code() -> None:
     rig.preflight.current_code_run = None
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
         states = current.run_dag("ingestion_dag.py")
-    require(states == PASSED, f"a run with no parameter configured did not pass: {states}")
+    require(states == WAITS, f"a run with no parameter configured did not pass: {states}")
     require(rig.preflight.code_runs.stored(run) == run, "a run with no parameter configured was not bound to its own code")
 
 
@@ -213,7 +217,7 @@ def hand_trigger_in_production_must_name_its_run() -> None:
     rig.stage_runs(named)
     with scheduled(rig, PRODUCTION, {"run_id": named, "mode": "real"}, "manual") as (current, _):
         states = current.run_dag("ingestion_dag.py")
-    require(states == PASSED, f"a hand trigger that names its run did not run it: {states}")
+    require(states == STARTS, f"a hand trigger that names its run did not run it: {states}")
     environment = rig.environment()["run"]
     require(
         (environment["RUN_ID"], environment["PUBLISHER_RUN_KIND"]) == (named, "bootstrap"),
@@ -254,7 +258,7 @@ def a_scheduled_retry_runs_each_of_the_two_days_once() -> None:
         date = datetime(2026, 12, 1 + day, tzinfo=UTC)
         with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, date) as (current, _):
             states = current.run_dag("ingestion_retry_dag.py")
-        require(states == PASSED, f"retry day {day} did not pass: {states}")
+        require(states == (STARTS if day == schedule.RETRY_DAYS else WAITS), f"retry day {day} did not pass: {states}")
         environment = rig.environment(day - 1)["run"]
         require(environment["PUBLISHER_RUN_KIND"] == "retry" and environment["HAI_CAPTURE_ROOT"] == "raw/", f"day {day} carried {environment}")
         require(environment["RUN_ID"] == schedule.retry_run_id(ORIGINAL, day), f"day {day} ran under {environment['RUN_ID']}")
@@ -294,7 +298,7 @@ def a_hand_triggered_retry_names_its_run_and_day_or_is_refused() -> None:
         require(states["preflight"] == "failed", f"a retry that names half its kind did not stop: {params}: {states}")
     require(rig.tasks_started() == 0 and not rig.ecs.calls, "a half-named retry reached the cloud")
     with scheduled(rig, PRODUCTION, {"original_run": ORIGINAL, "day": 2, "mode": "real"}, "manual", RETRY_DAG) as (current, _):
-        require(current.run_dag("ingestion_retry_dag.py") == PASSED, "a hand trigger that names its run and day did not run")
+        require(current.run_dag("ingestion_retry_dag.py") == WAITS, "a hand trigger that names its run and day did not run, or started bronze")
     require(rig.environment()["run"]["RUN_ID"] == schedule.retry_run_id(ORIGINAL, 2), "the hand trigger did not run under the run id of its day")
 
 
@@ -304,9 +308,74 @@ def a_retry_of_a_run_with_its_own_code_uses_that_code() -> None:
     rig.preflight.current_code_run = reader_of(NEWER_CODE)
     with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 3, tzinfo=UTC)) as (current, _):
         states = current.run_dag("ingestion_retry_dag.py")
-    require(states == PASSED, f"a retry of a run that ran its own code did not pass: {states}")
+    require(states == STARTS, f"a retry of a run that ran its own code did not pass: {states}")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == ORIGINAL, f"the retry did not fetch the code of its original run: {rig.environment()['fetch']}")
     require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 2)) == ORIGINAL, "the retry was not bound to the run whose code it used")
+
+
+BRONZE_START = [("bronze_chain_dag", "bronze_ab12cd34", {"run_id": "bronze_ab12cd34", "mode": "real"})]
+
+
+def hand_start_starts_bronze_at_once_and_a_test_root_none() -> None:
+    for environment in (PRODUCTION, {}):
+        rig = Rig()
+        rig.stage_runs("ingestion_ab12cd34")
+        with scheduled(rig, environment, {"run_id": "ingestion_ab12cd34", "mode": "real"}, "manual") as (current, _):
+            states = current.run_dag("ingestion_dag.py")
+        require(states == STARTS, f"a hand-started run did not start bronze: {states}")
+        require(current.dag_runs == BRONZE_START, f"the bronze start was {current.dag_runs}")
+    rig = Rig()
+    rig.stage_runs("ingestion_ab12cd34")
+    test_root = "ingestion_test/ingestion_ab12cd34/"
+    with scheduled(rig, {}, {"run_id": "ingestion_ab12cd34", "mode": "real", "capture_root": test_root}, "manual") as (current, _):
+        states = current.run_dag("ingestion_dag.py")
+    require(states == WAITS and not current.dag_runs, f"a test capture root started bronze: {states} {current.dag_runs}")
+
+
+def a_failed_ingestion_run_starts_no_bronze_run() -> None:
+    steps = importlib.import_module("orchestration.airflow_steps")
+    refused = mock.patch.object(steps, "preflight_step", side_effect=TaskRefused("a refusal of the run"))
+    with scheduled(Rig(), {}, {"run_id": "ingestion_ab12cd34", "mode": "real"}, "manual") as (current, _), refused:
+        states = current.run_dag("ingestion_dag.py")
+    require(states["gate"] == "failed" and states["start_bronze"] == "upstream_failed" and not current.dag_runs, f"{states} {current.dag_runs}")
+
+
+def an_existing_bronze_run_counts_and_an_api_refusal_fails() -> None:
+    rig = Rig()
+    rig.stage_runs("ingestion_ab12cd34")
+    with scheduled(rig, {}, {"run_id": "ingestion_ab12cd34", "mode": "real"}, "manual") as (current, _):
+        current.dag_run_exists = True
+        states = current.run_dag("ingestion_dag.py")
+    require(states == STARTS and "already exists" in str(current.results["start_bronze"]), f"{states} {current.results.get('start_bronze')}")
+    rig = Rig()
+    rig.stage_runs("ingestion_ab12cd34")
+    with scheduled(rig, {}, {"run_id": "ingestion_ab12cd34", "mode": "real"}, "manual") as (current, _):
+        current.dag_run_error = RuntimeError("the Airflow API answered 500 to the trigger of bronze_chain_dag")
+        states = current.run_dag("ingestion_dag.py")
+    require(states["gate"] == "success" and states["start_bronze"] == "failed", f"a refused bronze start did not fail visibly: {states}")
+
+
+def the_last_retry_day_starts_bronze_whatever_its_result() -> None:
+    bronze = schedule.bronze_run_for(ORIGINAL)
+    for day in range(1, schedule.RETRY_DAYS + 1):
+        rig = retry_rig()
+        with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 1 + day, tzinfo=UTC)) as (current, _):
+            current.run_dag("ingestion_retry_dag.py")
+        expected = [("bronze_chain_dag", bronze, {"run_id": bronze, "mode": "real"})] if day == schedule.RETRY_DAYS else []
+        require(current.dag_runs == expected, f"retry day {day}: the bronze start was {current.dag_runs}")
+    steps = importlib.import_module("orchestration.airflow_steps")
+    refused = mock.patch.object(steps, "preflight_step", side_effect=TaskRefused("a refusal of the retry day"))
+    with scheduled(retry_rig(), PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 3, tzinfo=UTC)) as (current, _), refused:
+        states = current.run_dag("ingestion_retry_dag.py")
+    require(states["gate"] == "failed" and states["start_bronze"] == "success", f"the end of the retry period did not start bronze: {states}")
+    require(len(current.dag_runs) == 1 and current.dag_runs[0][1] == bronze, f"the bronze start was {current.dag_runs}")
+
+
+def a_hand_started_retry_starts_no_bronze_run() -> None:
+    rig = retry_rig()
+    with scheduled(rig, PRODUCTION, {"original_run": ORIGINAL, "day": schedule.RETRY_DAYS, "mode": "real"}, "manual", RETRY_DAG) as (current, _):
+        states = current.run_dag("ingestion_retry_dag.py")
+    require(states == WAITS and not current.dag_runs, f"a hand retry started bronze: {states} {current.dag_runs}")
 
 
 class MissingParameter:
@@ -366,5 +435,10 @@ CASES: dict[str, Callable[[], None]] = {
     "a_scheduled_retry_runs_each_of_the_two_days_once": a_scheduled_retry_runs_each_of_the_two_days_once,
     "a_retry_outside_the_two_days_is_refused_before_any_cloud_call": a_retry_outside_the_two_days_is_refused_before_any_cloud_call,
     "a_hand_triggered_retry_names_its_run_and_day_or_is_refused": a_hand_triggered_retry_names_its_run_and_day_or_is_refused,
+    "hand_start_starts_bronze_at_once_and_a_test_root_none": hand_start_starts_bronze_at_once_and_a_test_root_none,
+    "a_failed_ingestion_run_starts_no_bronze_run": a_failed_ingestion_run_starts_no_bronze_run,
+    "an_existing_bronze_run_counts_and_an_api_refusal_fails": an_existing_bronze_run_counts_and_an_api_refusal_fails,
+    "the_last_retry_day_starts_bronze_whatever_its_result": the_last_retry_day_starts_bronze_whatever_its_result,
+    "a_hand_started_retry_starts_no_bronze_run": a_hand_started_retry_starts_no_bronze_run,
     "a_retry_of_a_run_with_its_own_code_uses_that_code": a_retry_of_a_run_with_its_own_code_uses_that_code,
 }

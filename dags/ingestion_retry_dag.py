@@ -1,11 +1,14 @@
-"""Retry the files the monthly publisher run could not fetch, once a day for up to seven days, through the same publisher job on the host.
+"""Retry the files the monthly publisher run could not fetch, once a day on days 2 and 3 of the month, through the same publisher job on the host.
 
-The DAG carries its run kind as launch parameters: the original run, the retry day (1 to 7) and the capture root. The retry run's own ID is fixed by the
-original run and the day, so the same day always has the same ID, and a repeat of it joins the recorded launch and starts nothing new. The retry is a new
-run of the publisher: capture mode skips every unit that has a completion record, so a retry tries exactly the units that have none, and nothing is
-restored or pruned. Nothing is staged for the run but its code, and no step waits for the owner.
-In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on days 2 to 8 of each month at midnight UTC, and a scheduled run takes the monthly run of
-day 1 as its original and the day of the month less one as its day (orchestration/ingestion_schedule.py); development keeps the hand trigger.
+The DAG carries its run kind as launch parameters: the original run, the retry day (1 or 2) and the capture root. The retry run's own ID is
+``ingestion_retry_<hex>_<day>`` with the original run's hex, so the same day always has the same ID, and a repeat of it joins the recorded launch and starts
+nothing new. The retry is a new run of the publisher: capture mode skips every unit that has a completion record, so a retry tries exactly the units that have
+none, and nothing is restored or pruned. Nothing is staged for the run but its code, and no step waits for the owner.
+In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on days 2 and 3 of each month at midnight UTC, and a scheduled run takes the monthly run of day 1
+as its original and the day of the month less one as its day (orchestration/ingestion_schedule.py); development keeps the hand trigger.
+
+The last retry day ends the retry period: its ``start_bronze`` task starts ``bronze_chain_dag`` under ``bronze_<hex>`` whatever the day's own result, because
+the files still missing then keep their earlier capture. A hand-started retry starts no bronze run.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import os
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_job_chain
+from orchestration.dag_runtime import build_bronze_start, build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RETRY_DAY, SCHEDULED_RUN, retry_schedule_for
 from orchestration.training_contract import RETRY_DAYS
 
@@ -40,4 +43,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("publisher_run")
+    build_job_chain("publisher_run") >> build_bronze_start(retry=True)

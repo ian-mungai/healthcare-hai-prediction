@@ -47,11 +47,28 @@ STORAGE: list[FakeStorage] = []
 STAGED: dict[str, bytes] = {}
 
 
+class FakeClient:
+    """The S3 client of the check phase's run record: no ingestion run record exists in these cases, and the written record is kept."""
+
+    def __init__(self) -> None:
+        self.puts: dict[str, bytes] = {}
+
+    def get_object(self, **arguments: str) -> dict[str, Any]:
+        from botocore.exceptions import ClientError
+
+        raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+
+    def put_object(self, **arguments: Any) -> dict[str, Any]:
+        self.puts[arguments["Key"]] = arguments["Body"]
+        return {}
+
+
 class FakeStorage:
     """Versioned objects in memory: list current keys, get or download one exact version."""
 
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.client = FakeClient()
 
     def put(self, key: str, data: bytes) -> str:
         version = f"v-{hashlib.sha256(key.encode() + data).hexdigest()[:12]}"
@@ -272,6 +289,18 @@ def case_qualification_writes_only_the_twins(case: Case) -> None:
     require(arguments[arguments.index("--dictionary-namespace") + 1] == "bronze_dictionary_e2e", arguments)
     require(all(name.startswith(("bronze_e2e.", "bronze_dictionary_e2e.")) for name in catalog()), sorted(catalog()))
     require("bronze_chain_dag" not in case.out, "a qualification run never offers the chain")
+
+
+def case_a_real_run_records_the_files_it_carried_over(case: Case) -> None:
+    """The check phase of a real run writes ``carried_over.json`` once: with no ingestion run record it says the files are not known and names none, and a
+    qualification run (the test twins) writes none."""
+    require(case.chain() == [0, 0, 0], case.err)
+    stored = STORAGE[0].client.puts
+    key = f"lakehouse/bronze_runs/{RUN}/carried_over.json"
+    require(list(stored) == [key], sorted(stored))
+    document = json.loads(stored[key])
+    require(document["carried_over"] is None and "no run record" in document["note"] and document["bronze_run"] == RUN, document)
+    require("carried over: unknown files" in case.out, case.out)
 
 
 def case_retry_has_no_second_effect(case: Case) -> None:
@@ -640,6 +669,7 @@ def case_the_owner_cannot_stage_an_inventory_with_an_empty_table(case: Case) -> 
 
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
+    "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,
     "a dry run writes nothing shared and prints the checked plan": case_dry_run_writes_nothing,

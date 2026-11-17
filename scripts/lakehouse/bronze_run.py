@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orchestration import ingestion_schedule
 from orchestration.training_contract import run_id_pattern
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
@@ -262,12 +263,81 @@ def accept_report(job: Job) -> None:
         raise StepError("a table check of the loader report did not pass")
 
 
+def read_run_record(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    """One stored run record of an ingestion run (the current version), or None when the key holds none. Any other failure is raised, never read as missing."""
+    from botocore.exceptions import ClientError
+
+    try:
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) in ("NoSuchKey", "404", "NotFound"):
+            return None
+        raise
+    record = json.loads(body)
+    if not isinstance(record, dict):
+        raise StepError(f"{key} is not a run record")
+    return record
+
+
+def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any) -> dict[str, Any]:
+    """Name the source files that no run of the ingestion run's retry period captured, in the bronze run record and in the owner notice.
+
+    Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The files are the units that
+    the ingestion run failed or did not attempt, less those a retry day captured (``ingestion_schedule.carried_over``). The record
+    ``lakehouse/bronze_runs/<run>/carried_over.json`` is written once, after the notice, so it says whether the notice was sent. A run with no ingestion run
+    record (a hand-staged bronze run) says that, and names no file. A notice that fails is recorded and never fails the run.
+    """
+    original, retries = ingestion_schedule.ingestion_runs_of(run)
+    folder = f"{root}ingestion_runs/"
+    first = read_run_record(client, bucket, f"{folder}{original}/run.json")
+    document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries)}
+    if first is None:
+        document |= {"carried_over": None, "note": f"no run record of {original} under {folder}: the files carried over are not known", "notice": "not sent"}
+    else:
+        found = [item for item in (read_run_record(client, bucket, f"{folder}{name}/run.json") for name in retries) if item is not None]
+        files = ingestion_schedule.carried_over(first, found)
+        document |= {"carried_over": files, "retry_records_read": len(found)}
+        if not files:
+            document["notice"] = "not needed: no file carried over"
+        elif not topic:
+            document["notice"] = "not sent: no alerts topic"
+        else:
+            subject, message = ingestion_schedule.carried_over_notice(run, files)
+            try:
+                notify.publish(TopicArn=topic, Subject=subject, Message=message)
+                document["notice"] = "sent"
+            except Exception as error:
+                document["notice"] = f"failed: {type(error).__name__}"
+    key = f"lakehouse/bronze_runs/{run}/carried_over.json"
+    body = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+    from botocore.exceptions import ClientError
+
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
+            raise
+    return document
+
+
 def check(job: Job) -> None:
     accept_report(job)
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
     if job.target == "real":
+        topic = os.environ.get("ALERTS_TOPIC_ARN", "")
+        notify = None
+        if topic:
+            import boto3
+
+            notify = boto3.client("sns")
+        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", "raw/"), topic=topic, notify=notify)
+        files = done["carried_over"]
+        sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
+    if job.target == "real":
         conf = json.dumps({"run_id": job.run, "mode": "real"})
-        sys.stdout.write(f"to start the chain by hand: airflow dags trigger bronze_chain_dag --conf '{conf}'\n")
+        sys.stdout.write(
+            f"the chain starts from this run through its ingestion run; to start it by hand: airflow dags trigger bronze_chain_dag --conf '{conf}'\n"
+        )
     else:
         sys.stdout.write("this was a qualification run in the test twins: the chain reads production bronze, so do not start it\n")
 

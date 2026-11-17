@@ -40,6 +40,7 @@ from orchestration.training_contract import (
     PROMOTION_MODELS,
     chain_layer_run,
     chain_parameters_for,
+    compose_run_id,
     drift_attempt_of,
     model_drift_run_id,
     model_features_run_id,
@@ -48,6 +49,7 @@ from orchestration.training_contract import (
     record_key,
     release_parameters_for,
     research_attempt_of,
+    run_id_parts,
     serving_parameters_for,
     trained_run_id,
 )
@@ -692,6 +694,8 @@ class Preflight:
             research_code = self.drift_code_run(request)
         if research_code is None and row.get("needs_publisher_run_request"):
             research_code, bind = self.publisher_code_run(request)
+        if research_code is None and row.get("needs_bronze_request"):
+            research_code, bind = self.bronze_code_run(request.run_id)
         spec = self.spec(request, job, research_code)
         revision, job_memory = self.checked_revision(job, cap)
         if research_code is not None and bind:  # the only write of a job step, after every refusal
@@ -773,18 +777,42 @@ class Preflight:
             raise LaunchRefused("the current code run parameter is not a staged code run")
         return value, True
 
+    def bronze_code_run(self, bronze_run: str) -> tuple[str, bool]:
+        """The code run of a bronze run and whether the run still needs binding to it.
+
+        A run with a binding keeps it. A bronze run that has code staged under its own run ID (staged by hand) runs that code. Any other bronze run is the one
+        its ingestion run starts, and runs the code of that ingestion run (its binding, or the ingestion run itself when it ran its own code), bound once.
+        """
+        stored = self.code_runs.stored(bronze_run)
+        if stored is not None:
+            return stored, False
+        try:
+            self.code_digest(bronze_run)
+        except TaskUnavailable as error:
+            if str(error) != "code_digest_not_staged":
+                raise InputNotReady(str(error)) from None
+        except TaskRefused as error:
+            raise LaunchRefused(str(error)) from None
+        else:
+            return bronze_run, False
+        parts = run_id_parts(bronze_run)
+        return self.code_runs.resolve(compose_run_id("ingestion", parts.hex, parts.attempt)), True
+
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and for each model the runs of its chain from the base run (its set's features run, the
-        drift check of that set and the training run the check may start), to the bronze run's staged code."""
+        drift check of that set and the training run the check may start), to the code the bronze run runs, and the bronze run to its code first."""
+        code, bind = self.bronze_code_run(bronze_run)
+        if bind:
+            self.code_runs.bind(bronze_run, code)
         for layer in CHAIN_LAYERS:
             run = chain_layer_run(layer, bronze_run)
-            self.code_runs.bind(run, bronze_run)
+            self.code_runs.bind(run, code)
             if layer == "features":
                 for model in MODELS:
                     features = model_features_run_id(run, model)
                     drift = model_drift_run_id(features)
                     for chained in (features, drift, model_training_run_id(drift, model)):
-                        self.code_runs.bind(chained, bronze_run)
+                        self.code_runs.bind(chained, code)
 
     def require_passed(self, job: str, after: str, input_run: str | None) -> None:
         """Refuse a job unless the launch of the previous job in the run it publishes from ended with every acceptance check passed."""

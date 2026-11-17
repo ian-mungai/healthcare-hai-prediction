@@ -3,10 +3,14 @@
 One job, one chain: preflight (the run kind, the capture root and the code digest are checked, nothing is launched), job (the publisher_host task on the
 host through the direct ECS launch library), evidence (its launch record says the run container passed) and gate. Nothing is staged for the run but its code
 archive, which carries the tracked inputs. The DAG run names the kind (``bootstrap``, which skips every unit that has a completion record, or ``monthly``)
-and the capture root (``raw/``, or one ``ingestion_test/<run id>/`` folder for a test) as the launch parameters, and the owner triggers the DAG by hand with
-the run's ``run_id``. In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on a monthly schedule: a scheduled run takes the run id of its logical date
-and is always the ``monthly`` kind, and only the hand trigger starts ``bootstrap`` (orchestration/ingestion_schedule.py). Development keeps the hand trigger.
-The plan rebuilds and holds, the daily retries of failed files and the start of a bronze DAG are later slices.
+and the capture root (``raw/``, or one ``ingestion_test/<run ID>/`` folder for a test) as the launch parameters, and the owner triggers the DAG by hand with
+the run's ``run_id`` (``ingestion_<hex>`` with a fresh random hex). In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on a monthly schedule: a
+scheduled run takes the run ID of its logical date (``ingestion_`` and the first eight hex digits of the digest of that date) and is always the ``monthly``
+kind, and only the hand trigger starts ``bootstrap`` (orchestration/ingestion_schedule.py). Development keeps the hand trigger.
+
+A fifth task, ``start_bronze``, starts ``bronze_chain_dag`` under ``bronze_<hex>`` of this run once the run passed, when the owner started it by hand (a
+zero-day retry period). A scheduled run starts none: the last day of its retry period does (``ingestion_retry_dag``). A test capture root starts none.
+The plan rebuilds and holds are a later slice.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import os
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_job_chain
+from orchestration.dag_runtime import build_bronze_start, build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RUN, schedule_for
 
 SCHEDULE = schedule_for(os.environ)
@@ -39,4 +43,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("publisher_run", family="publisher")
+    build_job_chain("publisher_run", family="publisher") >> build_bronze_start(retry=False)

@@ -15,24 +15,16 @@ layer is retried by clearing that layer's own DAG run.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import http.client
-import json
 import logging
-import os
-import time
 from datetime import timedelta
 
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import DAG, Param, get_current_context, task
 
-from orchestration.dag_runtime import pool_settings, run_step
+from orchestration.dag_runtime import create_dag_run, pool_settings, run_step
 from orchestration.training_contract import chain_layer_run, run_id_pattern
 
 LOG = logging.getLogger(__name__)
-TRIGGER_TIMEOUT_SECONDS = 10
 CHAIN = (
     ("silver", "silver_transform_dag", None),
     ("gold", "gold_transform_dag", "silver_snapshot_run"),
@@ -50,42 +42,6 @@ def chain_run(layer: str, bronze_run: str) -> str:
     if layer not in {name for name, _, _ in CHAIN}:
         raise ValueError(f"{layer} is not in the chain")
     return chain_layer_run(layer, bronze_run)
-
-
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def create_dag_run(dag_id: str, dag_run_id_value: str, conf: dict[str, str]) -> bool:
-    """Create a manual DAG run through the Airflow 3 REST API on the loopback port. Return True when it was created and False when it already existed.
-
-    The token is signed with the session's JWT secret as the host client does, and the call ends after ``TRIGGER_TIMEOUT_SECONDS``. Any other answer raises.
-    """
-    secret = os.environ.get("AIRFLOW__API_AUTH__JWT_SECRET", "")
-    if not secret:
-        raise RuntimeError("the Airflow JWT secret is not in the task environment")
-    now = int(time.time())
-    header = _b64(json.dumps({"alg": "HS512", "typ": "JWT"}, separators=(",", ":")).encode())
-    claims = _b64(
-        json.dumps(
-            {"sub": "admin", "role": "ADMIN", "teams": [], "aud": "apache-airflow", "iat": now, "nbf": now - 5, "exp": now + 120}, separators=(",", ":")
-        ).encode()
-    )
-    signature = _b64(hmac.new(secret.encode(), f"{header}.{claims}".encode(), hashlib.sha512).digest())
-    connection = http.client.HTTPConnection("127.0.0.1", int(os.environ.get("AIRFLOW_API_PORT", "8080")), timeout=TRIGGER_TIMEOUT_SECONDS)
-    try:
-        body = json.dumps({"dag_run_id": dag_run_id_value, "conf": conf, "logical_date": None})
-        connection.request(
-            "POST", f"/api/v2/dags/{dag_id}/dagRuns", body, {"Authorization": f"Bearer {header}.{claims}.{signature}", "Content-Type": "application/json"}
-        )
-        status = connection.getresponse().status
-    finally:
-        connection.close()
-    if status == 409:
-        return False
-    if status not in (200, 201):
-        raise RuntimeError(f"the Airflow API answered {status} to the trigger of {dag_id}")
-    return True
 
 
 def metadata_run_id(bronze_run: str) -> str:

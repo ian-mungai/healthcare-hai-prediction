@@ -346,6 +346,16 @@ class World:
         self.built: list[Operator] = []
         self.dag_settings: dict[str, Any] = {}
         self.strict_enum = False  # a case that tests a form's enum turns this on; the other cases keep the stand-in's lenient form
+        self.dag_runs: list[tuple[str, str, dict[str, str]]] = []  # the DAG runs that a task asked the Airflow API to create
+        self.dag_run_exists = False  # the API answers that the run exists already (409)
+        self.dag_run_error: Exception | None = None  # the API call raises this
+
+    def create_dag_run(self, dag_id: str, dag_run_id: str, conf: dict[str, str]) -> bool:
+        """The stand-in of ``dag_runtime.create_dag_run``: it records the request and answers as configured."""
+        if self.dag_run_error is not None:
+            raise self.dag_run_error
+        self.dag_runs.append((dag_id, dag_run_id, conf))
+        return not self.dag_run_exists
 
     def enter(self, task_id: str, attempt: int = 1) -> None:
         def get_task_states(dag_id: str, task_ids: list[str], run_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -489,6 +499,7 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
 
             with (
                 mock.patch.object(runtime, "get_current_context", lambda: current.context),
+                mock.patch.object(runtime, "create_dag_run", current.create_dag_run),
                 mock.patch.object(steps, "services", lambda: rig.services),
                 mock.patch.object(steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
                 mock.patch.object(steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
@@ -750,6 +761,37 @@ def bronze_request_is_checked_and_bound() -> None:
         rig.stage.objects[RUN_KEY.format(run=BRONZE_RUN, name="bronze_request.json")] = json.dumps({**good, "inventory_sha256": "ef" * 32}).encode()
         error = refuses(LaunchRefused, lambda: current.step("bronze_load", 2))
         require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
+
+
+def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
+    """A bronze run that its ingestion run started has no code staged under its own run ID. Its chain gate binds it, and the layer runs of its chain, to the
+    code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a binding is never replaced."""
+    pair, _ = table_pair()
+    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    ingestion, bronze = "ingestion_0b0b0b0b", "bronze_0b0b0b0b"
+    rig = Rig()
+    rig.stage_runs(ingestion)
+    rig.stage.stage(bronze, "bronze_request.json", good)
+    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded" and not rig.ecs.calls, "the chain gate failed or reached ECS")
+        require(rig.preflight.code_runs.stored(bronze) == ingestion, "the bronze run is not bound to the code of its ingestion run")
+        for layer in ("silver", "gold", "features"):
+            require(rig.preflight.code_runs.stored(f"{layer}_0b0b0b0b") == ingestion, f"the {layer} run is not bound to the code of the ingestion run")
+        require(current.step("bronze_load") == "succeeded", "the bronze job did not run")
+    require(rig.environment()["fetch"]["CODE_RUN_ID"] == ingestion, "the bronze job fetches its own code, not its ingestion run's")
+    own = Rig()
+    own.stage_runs("ingestion_0c0c0c0c", "bronze_0c0c0c0c")
+    with world(own, "bronze_chain_dag", {"run_id": "bronze_0c0c0c0c", "mode": "real"}) as current:
+        current.step("chain_gate")
+    require(own.preflight.code_runs.stored("bronze_0c0c0c0c") is None, "a bronze run with its own staged code was bound away from it")
+    require(own.preflight.code_runs.stored("silver_0c0c0c0c") == "bronze_0c0c0c0c", "its layers do not run its own code")
+    none = Rig()
+    with world(none, "bronze_chain_dag", {"run_id": "bronze_0d0d0d0d", "mode": "real"}) as current:
+        current.step("chain_gate")
+    require(
+        none.preflight.code_runs.stored("silver_0d0d0d0d") == "ingestion_0d0d0d0d",
+        "a run with no code anywhere is bound to its ingestion run, which then refuses it by name",
+    )
 
 
 SERVE_BASE = "features_b45e0001"
@@ -2823,8 +2865,9 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
 
 
 def ingestion_dag_runs_the_publisher_on_the_host() -> None:
-    """ingestion_dag is one chain of four tasks: the Run 3 publisher job launches once on its host definition, with the run kind and the capture root of the
-    DAG run and nothing staged for it but its code. A trigger that names neither gets the bootstrap kind under raw/."""
+    """ingestion_dag is one chain of four tasks and the bronze start: the Run 3 publisher job launches once on its host definition, with the run kind and the
+    capture root of the DAG run and nothing staged for it but its code. A trigger that names neither gets the bootstrap kind under raw/. A hand start under
+    raw/ starts the bronze run of its ingestion run, a test capture root starts none."""
     for trigger, kind, root in (
         ({"run_id": PUBLISHER_RUN, "mode": "real"}, "bootstrap", "raw/"),
         ({"run_id": PUBLISHER_RUN, "mode": "real", "run_kind": "monthly", "capture_root": PUBLISHER_TEST_ROOT}, "monthly", PUBLISHER_TEST_ROOT),
@@ -2832,7 +2875,13 @@ def ingestion_dag_runs_the_publisher_on_the_host() -> None:
         rig = Rig()
         with world(rig, "ingestion_dag", dict(trigger)) as current:
             states = current.run_dag("ingestion_dag.py")
-        require(states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}, f"the ingestion chain did not pass: {states}")
+        bronze = "success" if root == "raw/" else "skipped"
+        require(
+            states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success", "start_bronze": bronze},
+            f"the ingestion chain did not pass: {states}",
+        )
+        started = [(dag, run_id) for dag, run_id, _ in current.dag_runs]
+        require(started == ([("bronze_chain_dag", "bronze_ab12cd34")] if root == "raw/" else []), f"the bronze start was {started} under {root}")
         sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
         require(len(sent) == 1 and sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the publisher did not run once on the host: {sent}")
         run = rig.environment()["run"]
@@ -3210,6 +3259,7 @@ CASES: dict[str, Callable[[], None]] = {
     "fresh_run_settles_the_unfinished_launch_itself": fresh_run_settles_the_unfinished_launch_itself,
     "training_form_requires_a_model": training_form_requires_a_model,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
+    "a_bronze_run_runs_the_code_of_its_ingestion_run": a_bronze_run_runs_the_code_of_its_ingestion_run,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
     "ingestion_dag_form_refuses_a_capture_root_it_does_not_list": ingestion_dag_form_refuses_a_capture_root_it_does_not_list,
     "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,
