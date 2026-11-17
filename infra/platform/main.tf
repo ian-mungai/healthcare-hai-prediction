@@ -13,8 +13,7 @@ locals {
   # serving switch is true. A false switch leaves the stack as it was before those parts existed. A missing or unknown group reads as "" here, which no
   # switch filters out, and the precondition of the repository resource stops the plan on it.
   repository_groups = ["always", "monitoring", "serving"]
-  image_manifest    = var.image_manifest == "" ? "${path.module}/../services/images.json" : var.image_manifest
-  images            = jsondecode(file(local.image_manifest)).images
+  images            = jsondecode(file("${path.module}/../services/images.json")).images
   image_groups      = { for name, image in local.images : name => try(tostring(image.repository_group), null) == null ? "" : tostring(image.repository_group) }
   monitoring_images = toset([for name, group in local.image_groups : name if group == "monitoring"])
   serving_images    = toset([for name, group in local.image_groups : name if group == "serving"])

@@ -23,6 +23,7 @@
     "\"$python_bin\" -m scripts.infrastructure.run_openmetadata_e2e --output-directory \"$e2e_output/openmetadata\"",
     "\"$python_bin\" -m scripts.infrastructure.run_openmetadata_persistent_e2e --output-root \"$e2e_output/openmetadata_persistent\"",
     "\"$python_bin\" -m scripts.infrastructure.run_owner_list_e2e --out \"$quality_output/owner_list\"",
+    "\"$python_bin\" -m scripts.infrastructure.run_platform_groups_e2e --output-directory \"$e2e_output/platform_groups\"",
     "\"$python_bin\" -m scripts.infrastructure.run_policy_e2e --output-directory \"$policy_output\"",
     "\"$python_bin\" -m scripts.infrastructure.run_postgres_backup_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_push_images_e2e",

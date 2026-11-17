@@ -147,10 +147,3 @@ variable "allow_destructive_teardown" {
   default     = false
   nullable    = false
 }
-
-variable "image_manifest" {
-  description = "Path of the image list that sets the ECR repositories. Empty reads infra/services/images.json; only the tests name another file."
-  type        = string
-  default     = ""
-  nullable    = false
-}

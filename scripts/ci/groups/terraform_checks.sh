@@ -66,6 +66,7 @@ terraform_checks() {
   # The services stack proofs run with the real AWS provider offline, from the provider cache and the committed lock file, and read no credential. They need the Terraform
   # binary of the job and a new output folder each: the release check on the definitions the stack really plans and the first apply that gives the serving
   # services their own execution role, which must leave the services on a revision the release check accepts.
+  timed "terraform_checks: platform repository group cases" "$python_bin" -m scripts.infrastructure.run_platform_groups_e2e --output-directory "$e2e_output/platform_groups"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
   timed "terraform_checks: serving transition on the first apply" "$python_bin" -m scripts.infrastructure.run_serving_transition_e2e --output-directory "$e2e_output/serving_transition"
   # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that .github/actions/setup installs on a hosted runner. A

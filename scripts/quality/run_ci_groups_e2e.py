@@ -1638,6 +1638,12 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         # The runners that the Terraform groups start, and the configuration one of them reads, select those groups.
         selection_case(
             work,
+            "platform_groups_runner_selects_terraform_checks",
+            ["--scope", "paths", "--path", "scripts/infrastructure/run_platform_groups_e2e.py", "--part", "core+layers"],
+            ["python_lint", *LAYERS, "repository_code_checks", "configuration_checks", "terraform_checks"],
+        ),
+        selection_case(
+            work,
             "serving_release_runner_selects_terraform_checks",
             ["--scope", "paths", "--path", "scripts/infrastructure/run_serving_release_real_e2e.py", "--part", "core+layers"],
             ["python_lint", *LAYERS, "repository_code_checks", "configuration_checks", "terraform_checks"],
