@@ -1,23 +1,22 @@
-"""``scripts/infrastructure/open_ui.py`` opens only a web interface the Terraform declares, on the one host, with the exact Session Manager call.
+"""``open_ui`` validates everything, then ``scripts/open_ui.sh`` replaces itself with ``aws ssm start-session``: no process supervises the session.
 
-Every case runs the real script as a child process with a stand-in ``aws`` first on ``PATH``. The stand-in answers the instance lookup from a file and
-records every call, one argument per line, so a case can compare the exact argument list of each call. Nothing reaches AWS.
+Two layers are tested with a stand-in ``aws`` first on ``PATH``. The stand-in answers the instance lookup from a file and records every call, one argument per
+line. Cases on ``scripts.infrastructure.open_ui`` read the validated command it writes to its ``--exec-args-file`` (``vector``), and cases on the real
+``scripts/open_ui.sh`` in a fake checkout prove the exec: the exact arguments, the exact environment, no process between the test and ``aws`` and no file left
+behind. Nothing reaches AWS.
 """
 
 from __future__ import annotations
 
-import contextlib
+import ast
 import json
 import os
 import re
-import signal
+import shutil
 import sys
-import time
 from pathlib import Path
 
-import pytest
-
-from scripts.infrastructure import open_ui, web_ui_terraform
+from scripts.infrastructure import web_ui_terraform
 from scripts.process import CompletedProcess, run_command
 from tests.support import check
 
@@ -46,45 +45,15 @@ if [ "$1 $2" = "ec2 describe-instances" ]; then
   exit 0
 fi
 if [ "$1 $2" = "ssm start-session" ]; then
+  env | grep '^AWS_' | sort > "$STAND_IN_ENVFILE"
+  echo "$PPID" > "$STAND_IN_PPIDFILE"
   if [ -n "$STAND_IN_SESSION_ERROR" ]; then
-    echo "An error occurred ($STAND_IN_SESSION_ERROR) when calling StartSession: arn:aws:ssm:us-west-2:111111111111:x" >&2
+    echo "An error occurred ($STAND_IN_SESSION_ERROR) when calling StartSession" >&2
     exit 254
   fi
-  if [ -z "$STAND_IN_SESSION_MODE" ]; then exit 0; fi
-  stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
-  echo "$$" > "$STAND_IN_PIDFILE"
-  echo "start $(stamp)" >> "$STAND_IN_MARK"
-  echo "$(ps -o pgid= -p $$ | tr -d ' ') $(ps -o pgid= -p $PPID | tr -d ' ')" > "$STAND_IN_GROUPFILE"
-  case "$STAND_IN_SESSION_MODE" in
-    terminal_ctrl_c | plugin_exits)
-      # Like the real CLI: ignore the interrupt here (a handler, so the plugin starts with the default) and let the plugin, a foreground child, handle it.
-      trap 'echo "aws_int $(stamp)" >> "$STAND_IN_MARK"' INT
-      session-manager-plugin
-      exit $?
-      ;;
-    *)
-      trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"' INT
-      case "$STAND_IN_SESSION_MODE" in
-        stubborn) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"' TERM ;;
-        *) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"; exit 0' TERM ;;
-      esac
-      while true; do sleep 0.1; done
-      ;;
-  esac
+  exit 0
 fi
 exit 3
-"""
-
-
-PLUGIN_STAND_IN = """#!/bin/bash
-stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\\n", time'; }
-echo "$$" > "$STAND_IN_PLUGIN_PIDFILE"
-sleep "${STAND_IN_SLEEP:-20}" &
-sleeper=$!
-trap 'echo "plugin_int $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT
-if [ "$STAND_IN_SESSION_MODE" = terminal_ctrl_c ]; then kill -INT 0; fi
-while kill -0 "$sleeper" 2>/dev/null; do wait "$sleeper"; done
-exit 0
 """
 
 
@@ -101,12 +70,11 @@ class Workspace:
         self.bin.mkdir()
         (self.bin / "aws").write_text(STAND_IN)
         (self.bin / "aws").chmod(0o755)
-        (self.bin / "session-manager-plugin").write_text(PLUGIN_STAND_IN)
-        (self.bin / "session-manager-plugin").chmod(0o755)
         self.log = folder / "calls.log"
         self.answer = folder / "instances.json"
         self.answer.write_text(answer)
         self.env_file = folder / ".env"
+        self.command_file = folder / "command.bin"
         self.env_file.write_text("".join(f"{key}={value}\n" for key, value in (ENV_VALUES if values is None else values).items()))
 
     def run(self, *arguments: str, env_file: Path | None = None, session_error: str = "", extra: dict[str, str] | None = None) -> CompletedProcess[str]:
@@ -115,21 +83,25 @@ class Workspace:
             "STAND_IN_LOG": str(self.log),
             "STAND_IN_INSTANCES": str(self.answer),
             "STAND_IN_SESSION_ERROR": session_error,
-            "STAND_IN_MARK": str(self.folder / "marks.log"),
-            "STAND_IN_PIDFILE": str(self.folder / "child.pid"),
-            "STAND_IN_PLUGIN_PIDFILE": str(self.folder / "plugin.pid"),
-            "STAND_IN_GROUPFILE": str(self.folder / "groups.txt"),
+            "STAND_IN_ENVFILE": str(self.folder / "session_env.txt"),
+            "STAND_IN_PPIDFILE": str(self.folder / "session_ppid.txt"),
             **(extra or {}),
             "AWS_PROFILE": "an_inherited_profile",
             "AWS_REGION": "eu-west-1",
         }
         return run_command(
             sys.executable,
-            ["-m", "scripts.infrastructure.open_ui", *arguments, "--env-file", str(env_file or self.env_file)],
+            ["-m", "scripts.infrastructure.open_ui", *arguments, "--env-file", str(env_file or self.env_file), "--exec-args-file", str(self.command_file)],
             cwd=ROOT,
             env=environment,
             timeout=60,
         )
+
+    def vector(self) -> list[str] | None:
+        """The validated command ``open_ui`` wrote for the shell to exec, or ``None`` when it wrote nothing."""
+        if not self.command_file.exists() or self.command_file.stat().st_size == 0:
+            return None
+        return self.command_file.read_bytes().decode().split("\0")[:-1]
 
     def calls(self) -> list[list[str]]:
         if not self.log.exists():
@@ -170,7 +142,36 @@ def test_a_new_map_entry_is_accepted_and_a_removed_one_is_not(tmp_path: Path) ->
     check("prometheus" not in web_ui_terraform.forward_documents(removed, persistent), "a removed map entry must not be accepted")
 
 
-def test_every_listed_interface_runs_the_exact_session_manager_call(tmp_path: Path) -> None:
+FIXED_ENVIRONMENT = ["AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true", "AWS_MAX_ATTEMPTS=3", "AWS_RETRY_MODE=standard"]
+
+
+def expected_vector(name: str, port: int) -> list[str]:
+    """The command the shell must exec: ``env`` without the inherited ``AWS_*`` settings (the test passes AWS_PROFILE and AWS_REGION), with the fixed ones,
+    then ``aws`` and the exact Session Manager arguments."""
+    return [
+        "env",
+        "-u",
+        "AWS_PROFILE",
+        "-u",
+        "AWS_REGION",
+        *FIXED_ENVIRONMENT,
+        "aws",
+        "ssm",
+        "start-session",
+        "--target",
+        INSTANCE,
+        "--document-name",
+        f"example_project_{name}_forward_dev",
+        "--parameters",
+        f"localPortNumber={port}",
+        "--profile",
+        PROFILE,
+        "--region",
+        REGION,
+    ]
+
+
+def test_every_listed_interface_validates_to_the_exact_command(tmp_path: Path) -> None:
     for name, port in sorted(web_ui_terraform.forward_documents().items()):
         folder = tmp_path / name
         folder.mkdir()
@@ -179,26 +180,12 @@ def test_every_listed_interface_runs_the_exact_session_manager_call(tmp_path: Pa
         check(result.returncode == 0, f"{name}: exit {result.returncode}: {result.stderr}")
         check(f"http://127.0.0.1:{port}" in result.stdout, f"{name}: the output must give the browser address: {result.stdout}")
         calls = workspace.calls()
-        check(len(calls) == 2, f"{name}: expected the lookup and the session, saw {calls}")
-        lookup, session = calls
-        check(lookup[:2] == ["ec2", "describe-instances"], f"{name}: the first call must be the instance lookup: {lookup}")
+        check(len(calls) == 1, f"{name}: only the instance lookup may run, saw {calls}")
+        lookup = calls[0]
+        check(lookup[:2] == ["ec2", "describe-instances"], f"{name}: the call must be the instance lookup: {lookup}")
         check("Name=tag:Name,Values=example_project_host_dev" in lookup, f"{name}: the lookup must filter by the host Name tag: {lookup}")
         check("Name=instance-state-name,Values=running" in lookup, f"{name}: the lookup must filter by the running state: {lookup}")
-        expected = [
-            "ssm",
-            "start-session",
-            "--target",
-            INSTANCE,
-            "--document-name",
-            f"example_project_{name}_forward_dev",
-            "--parameters",
-            f"localPortNumber={port}",
-            "--profile",
-            PROFILE,
-            "--region",
-            REGION,
-        ]
-        check(session == expected, f"{name}: the session call differs:\n{session}\n{expected}")
+        check(workspace.vector() == expected_vector(name, port), f"{name}: the validated command differs:\n{workspace.vector()}\n{expected_vector(name, port)}")
 
 
 def test_a_chosen_local_port_changes_only_the_local_port(tmp_path: Path) -> None:
@@ -206,7 +193,7 @@ def test_a_chosen_local_port_changes_only_the_local_port(tmp_path: Path) -> None
     result = workspace.run("airflow", "--local-port", "18080")
     check(result.returncode == 0, f"exit {result.returncode}: {result.stderr}")
     check("http://127.0.0.1:18080" in result.stdout, f"the address must use the chosen port: {result.stdout}")
-    check("localPortNumber=18080" in workspace.calls()[1], f"the session must use the chosen port: {workspace.calls()[1]}")
+    check(workspace.vector() == expected_vector("airflow", 18080), f"only the local port may change: {workspace.vector()}")
 
 
 def test_a_bad_local_port_is_refused_before_any_aws_call(tmp_path: Path) -> None:
@@ -274,14 +261,6 @@ def test_a_failed_lookup_is_refused_without_a_session(tmp_path: Path) -> None:
     check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), "no session may start after a failed lookup")
 
 
-def test_a_failed_session_reports_its_exit_code(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    result = workspace.run("airflow", session_error="TargetNotConnected")
-    check(result.returncode == 1, f"a failed session must exit 1: {result.returncode}")
-    check("exit code 254" in result.stderr, f"the message must give the exit code of aws: {result.stderr}")
-    check("TargetNotConnected" in result.stderr, f"aws's own message must reach the terminal, which is the owner's: {result.stderr}")
-
-
 def list_run(*arguments: str, cwd: Path) -> CompletedProcess[str]:
     """Run ``--list`` with no ``aws`` on ``PATH``, from a folder without ``.env``."""
     return run_command(
@@ -340,238 +319,207 @@ def test_a_refused_input_is_never_echoed(tmp_path: Path) -> None:
     check(all(name in refused.stderr for name in web_ui_terraform.forward_documents()), f"a refused name must list every accepted name: {refused.stderr}")
 
 
-def mark_times(workspace: Workspace) -> list[tuple[str, float]]:
-    """What the stand-in processes recorded, in order: ``start``, then each signal one of them received, each with its time."""
-    path = workspace.folder / "marks.log"
-    return [(name, float(stamp)) for name, stamp in (line.split() for line in path.read_text().splitlines())] if path.exists() else []
-
-
-def marks(workspace: Workspace) -> list[str]:
-    """The signals the stand-in processes received, in order."""
-    return [name for name, _ in mark_times(workspace) if name != "start"]
-
-
-def seconds_between(workspace: Workspace, first: str, second: str) -> float:
-    """The time from the first mark named ``first`` to the first mark named ``second`` after it."""
-    times = mark_times(workspace)
-    begin = next(stamp for name, stamp in times if name == first)
-    return next(stamp for name, stamp in times if name == second and stamp >= begin) - begin
-
-
-def pids(workspace: Workspace) -> list[int]:
-    """The stand-in aws and plugin pids the case recorded."""
-    return [int((workspace.folder / name).read_text()) for name in ("child.pid", "plugin.pid") if (workspace.folder / name).exists()]
-
-
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def stop_child(workspace: Workspace) -> None:
-    """Make sure no stand-in process is left running, whatever the case did."""
-    for pid in pids(workspace):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-
-
-def nothing_left(workspace: Workspace, case: str) -> None:
-    for pid in pids(workspace):
-        check(not alive(pid), f"{case}: the stand-in process {pid} must be gone when open_ui exits")
-
-
-def deliver_to_stand_ins(workspace: Workspace, number: int) -> None:
-    """Stand in for a signal to the process group: these cases run ``open_ui`` inside the test process, whose group is the developer's, so the group signal is
-    sent to the stand-in processes only."""
-    for pid in pids(workspace):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, number)
-
-
-def test_a_terminal_ctrl_c_reaches_aws_and_the_plugin_and_leaves_nothing_running(tmp_path: Path) -> None:
-    """A SIGINT to the whole process group, as a terminal sends it: open_ui, aws and the plugin share the group, open_ui outlives the child and reports."""
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "terminal_ctrl_c"})
-        output = result.stdout + result.stderr
-        check("Traceback" not in output and "KeyboardInterrupt" not in output, f"open_ui must not die on the terminal's Ctrl+C: {output}")
-        check(result.returncode == 0, f"the plugin closed the session on Ctrl+C: exit 0 expected, got {result.returncode}: {output}")
-        check("the session is closed" in result.stdout and "cannot confirm" in result.stdout, f"open_ui must report after the child ends: {result.stdout}")
-        check(
-            marks(workspace) == ["plugin_int", "aws_int"] or marks(workspace) == ["aws_int", "plugin_int"],
-            f"aws and the plugin must both get the Ctrl+C: {marks(workspace)}",
-        )
-        aws_group, open_ui_group = (workspace.folder / "groups.txt").read_text().split()
-        check(aws_group == open_ui_group, f"aws must run in open_ui's own process group, not a new one: {aws_group} {open_ui_group}")
-        nothing_left(workspace, "terminal Ctrl+C")
-    finally:
-        stop_child(workspace)
-
-
-def test_a_normal_end_leaves_nothing_running_and_reports_the_exit_code(tmp_path: Path) -> None:
-    for number, mode in enumerate(("plugin_exits", "")):
+def test_no_validation_failure_writes_a_command(tmp_path: Path) -> None:
+    """Whatever refuses, nothing is left for the shell to exec: no command file and no start-session call."""
+    refusals = {
+        "an unknown name": ((), ["nothing_here"], instances(INSTANCE), None),
+        "an extra name": ((), ["airflow", "grafana"], instances(INSTANCE), None),
+        "a bad local port": ((), ["airflow", "--local-port", "0"], instances(INSTANCE), None),
+        "no host": ((), ["airflow"], instances(), None),
+        "two hosts": ((), ["airflow"], instances(INSTANCE, OTHER_INSTANCE), None),
+        "an unreadable lookup": ((), ["airflow"], "not json", None),
+        "a missing PROJECT_NAME": ((), ["airflow"], instances(INSTANCE), "PROJECT_NAME"),
+        "a missing AWS_REGION": ((), ["airflow"], instances(INSTANCE), "AWS_REGION"),
+    }
+    for number, (case, (_unused, arguments, answer, missing)) in enumerate(refusals.items()):
         folder = tmp_path / f"case{number}"
         folder.mkdir()
-        workspace = Workspace(folder, instances(INSTANCE))
-        try:
-            result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": mode, "STAND_IN_SLEEP": "1"} if mode else {})
-            check(result.returncode == 0, f"a session that ends by itself must exit 0: {result.returncode} {result.stderr}")
-            nothing_left(workspace, "normal end")
-        finally:
-            stop_child(workspace)
+        values = {key: value for key, value in ENV_VALUES.items() if key != missing} if missing else None
+        workspace = Workspace(folder, answer, values)
+        result = workspace.run(*arguments)
+        check(result.returncode != 0, f"{case}: it must refuse: {result.returncode}")
+        check(workspace.vector() is None, f"{case}: no command may be written for the shell to exec: {workspace.vector()}")
+        check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), f"{case}: no session may start")
 
 
-def test_the_deadline_sends_only_the_interrupt_when_the_plugin_closes_on_it(tmp_path: Path) -> None:
+def test_running_without_the_command_file_is_refused_with_a_fixed_message(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        began = time.monotonic()
-        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "plugin_exits", "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "20"})
-        elapsed = time.monotonic() - began
-        check(result.returncode == 1 and "deadline" in result.stderr, f"the deadline must end the session with exit 1: {result.returncode} {result.stderr}")
-        check("signals sent: SIGINT" in result.stderr and "SIGTERM" not in result.stderr, f"only SIGINT may be sent: {result.stderr}")
-        check("plugin_int" in marks(workspace), f"the plugin must get the interrupt: {marks(workspace)}")
-        check(elapsed < 10.0, f"the stop must end as soon as the child is gone, not wait the 20 s: {elapsed:.1f} s")
-        nothing_left(workspace, "deadline interrupt")
-    finally:
-        stop_child(workspace)
-
-
-def test_the_deadline_escalates_only_as_far_as_needed(tmp_path: Path) -> None:
-    for number, (mode, expected_sent, expected_marks) in enumerate(
-        (("stubborn_term", "SIGINT, SIGTERM", ["int", "term"]), ("stubborn", "SIGINT, SIGTERM, SIGKILL", ["int", "term"]))
-    ):
-        folder = tmp_path / f"case{number}"
-        folder.mkdir()
-        workspace = Workspace(folder, instances(INSTANCE))
-        try:
-            began = time.monotonic()
-            result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": mode, "HAI_OPEN_UI_SESSION_SECONDS": "1", "HAI_OPEN_UI_STOP_SECONDS": "1"})
-            elapsed = time.monotonic() - began
-            check(result.returncode == 1, f"{mode}: the deadline must end with exit 1: {result.returncode} {result.stderr}")
-            check(f"signals sent: {expected_sent})" in result.stderr, f"{mode}: the report must list exactly {expected_sent}: {result.stderr}")
-            check(marks(workspace) == expected_marks, f"{mode}: the child must receive {expected_marks}: {marks(workspace)}")
-            check(("SIGKILL" in result.stderr) == (mode == "stubborn"), f"{mode}: SIGKILL only when the child ignored the others: {result.stderr}")
-            check(elapsed >= (3.0 if mode == "stubborn" else 2.0), f"{mode}: each signal must wait the configured second first: {elapsed:.1f} s")
-            nothing_left(workspace, mode)
-        finally:
-            stop_child(workspace)
-
-
-def test_no_signal_is_sent_once_the_child_is_reaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    sent: list[tuple[str, int, int]] = []
-    real_kill = os.kill
-    for name, value in {
+    environment = {
         "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
         "STAND_IN_LOG": str(workspace.log),
-        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
-        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
-        "STAND_IN_PLUGIN_PIDFILE": str(workspace.folder / "plugin.pid"),
-        "STAND_IN_GROUPFILE": str(workspace.folder / "groups.txt"),
-    }.items():
-        monkeypatch.setenv(name, value)
-
-    def record_kill(pid: int, number: int) -> None:
-        sent.append(("kill", pid, number))
-        real_kill(pid, number)
-
-    def record_killpg(group: int, number: int) -> None:
-        sent.append(("killpg", group, number))
-        for pid in pids(workspace):
-            with contextlib.suppress(ProcessLookupError):
-                real_kill(pid, number)
-
-    monkeypatch.setattr(os, "kill", record_kill)
-    monkeypatch.setattr(os, "killpg", record_killpg)
-    try:
-        for mode, expected in (("plugin_exits", [signal.SIGINT]), ("stubborn_term", [signal.SIGINT, signal.SIGTERM])):
-            sent.clear()
-            monkeypatch.setenv("STAND_IN_SESSION_MODE", mode)
-            end = open_ui.run_session(["ssm", "start-session"], 0.5, 1.0)
-            check(end.sent == [number.name for number in expected], f"{mode}: the signals sent must be {expected}: {end.sent}")
-            check(
-                [number for _, _, number in sent] == expected,
-                f"{mode}: the operating system must see exactly {expected}, nothing after the child was reaped: {sent}",
-            )
-            check(end.alive is False and end.reason == "deadline", f"{mode}: the session must be over: {end}")
-        check(not any(kind == "killpg" and number != signal.SIGINT for kind, _, number in sent), "only the interrupt may go to the group")
-    finally:
-        stop_child(workspace)
+        "STAND_IN_INSTANCES": str(workspace.answer),
+    }
+    result = run_command(
+        sys.executable, ["-m", "scripts.infrastructure.open_ui", "airflow", "--env-file", str(workspace.env_file)], cwd=ROOT, env=environment, timeout=60
+    )
+    check(
+        result.returncode == 2 and "bash scripts/open_ui.sh" in result.stderr,
+        f"a run without --exec-args-file must exit 2 and name the script: {result.stderr}",
+    )
+    check(workspace.calls() == [], f"nothing may be run before that check: {workspace.calls()}")
 
 
-def test_an_error_inside_the_wait_still_stops_and_reaps_the_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    for name, value in {
-        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
-        "STAND_IN_LOG": str(workspace.log),
-        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
-        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
-        "STAND_IN_PLUGIN_PIDFILE": str(workspace.folder / "plugin.pid"),
-        "STAND_IN_GROUPFILE": str(workspace.folder / "groups.txt"),
-        "STAND_IN_SESSION_MODE": "stubborn_term",
-    }.items():
-        monkeypatch.setenv(name, value)
-
-    def broken(end: float) -> bool:
-        raise RuntimeError("the wait failed")
-
-    monkeypatch.setattr(open_ui, "session_expired", broken)
-    monkeypatch.setattr(os, "killpg", lambda group, number: deliver_to_stand_ins(workspace, number))
-    try:
-        with pytest.raises(RuntimeError, match="the wait failed"):
-            open_ui.run_session(["ssm", "start-session"], 60.0, 1.0)
-        nothing_left(workspace, "an error in the wait")
-        check(signal.getsignal(signal.SIGINT) is signal.default_int_handler, "the SIGINT disposition must be restored")
-    finally:
-        stop_child(workspace)
-
-
-def test_a_ctrl_c_before_the_session_starts_leaves_no_child(tmp_path: Path) -> None:
+def test_a_ctrl_c_during_validation_exits_130_and_starts_nothing(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path, instances(INSTANCE))
     result = workspace.run("airflow", extra={"STAND_IN_LOOKUP_INTERRUPT": "1"})
     output = result.stdout + result.stderr
     check(result.returncode == 130, f"a Ctrl+C during the host lookup must exit 130: {result.returncode} {output}")
-    check("Traceback" not in output and "interrupted" in result.stderr, f"the interruption must be reported plainly: {output}")
-    check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), "no session may start after the interruption")
+    check("Nothing was started" in result.stderr and "Traceback" not in output, f"the interruption must be reported plainly: {output}")
+    check(workspace.vector() is None, "no command may be written after an interruption")
 
 
-def test_the_defaults_are_a_fifteen_second_wait_and_an_eight_hour_deadline() -> None:
-    check(open_ui.STOP_SECONDS == 15.0 and open_ui.SESSION_SECONDS == 8 * 3600, "the defaults must be a 15 s wait and an 8 hour deadline")
+def test_open_ui_never_creates_a_child_process_itself() -> None:
+    """Static check of ``open_ui.py``: no subprocess, spawn, exec, fork, thread or signal machinery. The one child of a run, the instance lookup, is made by
+    the repository's ``AwsCli`` and has ended before ``open_ui`` returns; the session is a ``scripts/open_ui.sh`` exec."""
+    tree = ast.parse((ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text())
+    forbidden_modules = {"subprocess", "signal", "threading", "multiprocessing", "pty", "asyncio"}
+    forbidden_names = {"run_command", "Popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "system", "popen", "start"}
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found += [alias.name for alias in node.names if alias.name.split(".")[0] in forbidden_modules]
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in forbidden_modules | {"scripts.process"}:
+            found.append(node.module or "")
+        elif isinstance(node, ast.ImportFrom) and node.module == "scripts.process":
+            found.append("scripts.process")
+        elif isinstance(node, ast.Attribute | ast.Name):
+            name = node.attr if isinstance(node, ast.Attribute) else node.id
+            if name in forbidden_names or re.fullmatch(r"(exec|spawn)[lv]p?e?", name):
+                found.append(name)
+    check(found == [], f"open_ui.py must create no child process and run no session: {found}")
+    text = (ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text()
+    check("HAI_OPEN_UI" not in text, "the removed session settings must not be read")
 
 
-def test_the_default_wait_is_fifteen_seconds(tmp_path: Path) -> None:
-    workspace = Workspace(tmp_path, instances(INSTANCE))
-    try:
-        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "stubborn_term", "HAI_OPEN_UI_SESSION_SECONDS": "1"})
-        check(result.returncode == 1, f"the deadline must end with exit 1: {result.returncode} {result.stderr}")
-        gap = seconds_between(workspace, "int", "term")
-        check(14.0 <= gap <= 18.0, f"with no stop setting, SIGTERM must follow SIGINT after 15 s, not {gap:.2f} s")
-    finally:
-        stop_child(workspace)
+class Checkout:
+    """A fake checkout: the real ``scripts/open_ui.sh``, a ``.venv/bin/python`` that runs the real interpreter on the real code, and the stand-in ``aws``."""
+
+    def __init__(self, folder: Path, venv: bool = True) -> None:
+        self.workspace = Workspace(folder, instances(INSTANCE))
+        self.root = folder / "checkout"
+        (self.root / "scripts").mkdir(parents=True)
+        shutil.copy(ROOT / "scripts" / "open_ui.sh", self.root / "scripts" / "open_ui.sh")
+        (self.root / ".env").write_text(self.workspace.env_file.read_text())
+        if venv:
+            (self.root / ".venv" / "bin").mkdir(parents=True)
+            (self.root / ".venv" / "bin" / "python").write_text(f'#!/bin/bash\nexec "{sys.executable}" "$@"\n')
+            (self.root / ".venv" / "bin" / "python").chmod(0o755)
+        self.temporary = folder / "tmp"
+        self.temporary.mkdir()
+
+    def environment(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        return {
+            "PATH": f"{self.workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "PYTHONPATH": str(ROOT),
+            "TMPDIR": str(self.temporary),
+            "STAND_IN_LOG": str(self.workspace.log),
+            "STAND_IN_INSTANCES": str(self.workspace.answer),
+            "STAND_IN_ENVFILE": str(self.workspace.folder / "session_env.txt"),
+            "STAND_IN_PPIDFILE": str(self.workspace.folder / "session_ppid.txt"),
+            "STAND_IN_SESSION_ERROR": "",
+            "AWS_PROFILE": "an_inherited_profile",
+            "AWS_REGION": "eu-west-1",
+            **(extra or {}),
+        }
+
+    def run(self, kind: str, extra: dict[str, str] | None = None) -> CompletedProcess[str]:
+        """Run the wrapper. The Docker-call guard proves a shell's arguments only when they are literal, so each kind has its own literal command."""
+        if kind == "list":
+            command = ["scripts/open_ui.sh", "--list"]
+        elif kind == "unknown":
+            command = ["scripts/open_ui.sh", "nothing_here", "--env-file", ".env"]
+        elif kind == "port":
+            command = ["scripts/open_ui.sh", "airflow", "--local-port", "18080", "--env-file", ".env"]
+        else:
+            command = ["scripts/open_ui.sh", "airflow", "--env-file", ".env"]
+        return run_command("/bin/bash", command, cwd=self.root, env=self.environment(extra), timeout=60)
+
+    def link_run(self, target: Path) -> CompletedProcess[str]:
+        """Run the wrapper through ``./link``, a symbolic link in a folder outside the checkout."""
+        tools = self.workspace.folder / "tools"
+        tools.mkdir(exist_ok=True)
+        (tools / "link").symlink_to(target)
+        return run_command("/bin/bash", ["./link", "airflow", "--env-file", ".env"], cwd=tools, env=self.environment(), timeout=60)
+
+    def session_calls(self) -> list[list[str]]:
+        return [call for call in self.workspace.calls() if call[:2] == ["ssm", "start-session"]]
 
 
-def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> None:
-    for name in ("HAI_OPEN_UI_STOP_SECONDS", "HAI_OPEN_UI_SESSION_SECONDS"):
-        for value in ("abc", "0", "-5", "nan"):
-            folder = tmp_path / f"{name}{value}"
-            folder.mkdir()
-            workspace = Workspace(folder, instances(INSTANCE))
-            result = workspace.run("airflow", extra={name: value})
-            check(result.returncode == 2 and name in result.stderr, f"{name}={value} must exit 2 and name the setting: {result.returncode} {result.stderr}")
-            check(value not in result.stderr.replace(name, ""), f"{name}={value}: the value must not be echoed: {result.stderr}")
-            check(workspace.calls() == [], f"{name}={value}: no AWS call may happen")
+def test_the_wrapper_replaces_itself_with_aws_and_nothing_supervises_it(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    result = checkout.run("run")
+    check(result.returncode == 0, f"exit {result.returncode}: {result.stdout} {result.stderr}")
+    check("http://127.0.0.1:8080" in result.stdout, f"the browser address must be printed before the session: {result.stdout}")
+    sessions = checkout.session_calls()
+    check(
+        sessions == [expected_vector("airflow", 8080)[expected_vector("airflow", 8080).index("ssm") :]],
+        f"aws must get exactly the validated arguments: {sessions}",
+    )
+    environment = (tmp_path / "session_env.txt").read_text().split()
+    check(environment == FIXED_ENVIRONMENT, f"aws must get no inherited AWS_ setting, only the fixed ones: {environment}")
+    parent = int((tmp_path / "session_ppid.txt").read_text())
+    check(parent == os.getpid(), f"no wrapper or supervisor may stand between the caller and aws: aws's parent is {parent}, the caller is {os.getpid()}")
+    check(not any(checkout.temporary.iterdir()), f"the wrapper must leave no file behind: {list(checkout.temporary.iterdir())}")
 
 
-def test_a_child_that_exited_before_the_stop_gets_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The stop polls before every signal: a child that has exited (not yet reaped) is reaped and nothing is sent, so no signal can reach a reused pid."""
-    sent: list[tuple[str, int]] = []
-    monkeypatch.setattr(os, "kill", lambda pid, number: sent.append(("kill", number)))
-    monkeypatch.setattr(os, "killpg", lambda group, number: sent.append(("killpg", number)))
-    pid = os.posix_spawnp("true", ["true"], os.environ.copy())
-    time.sleep(0.5)
-    child = open_ui.Child(pid)
-    check(open_ui.stop_child(child, 1.0) == [], "a child that already exited must get no signal")
-    check(sent == [] and child.code == 0, f"nothing may be sent and the child must be reaped with its exit code: {sent} {child.code}")
+def test_a_chosen_local_port_reaches_aws_through_the_wrapper(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    result = checkout.run("port")
+    check(result.returncode == 0, f"exit {result.returncode}: {result.stderr}")
+    check("localPortNumber=18080" in checkout.session_calls()[0], f"the chosen port must reach aws: {checkout.session_calls()}")
+
+
+def test_the_exit_code_of_aws_is_the_exit_code_of_the_wrapper(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    result = checkout.run("run", {"STAND_IN_SESSION_ERROR": "TargetNotConnected"})
+    check(
+        result.returncode == 254 and "TargetNotConnected" in result.stderr,
+        f"aws's own exit code and message must come through: {result.returncode} {result.stderr}",
+    )
+    check(not any(checkout.temporary.iterdir()), "the wrapper must leave no file behind")
+
+
+def test_list_and_a_refusal_execute_nothing_and_leave_no_file(tmp_path: Path) -> None:
+    for kind in ("list", "unknown"):
+        folder = tmp_path / kind
+        folder.mkdir()
+        checkout = Checkout(folder)
+        result = checkout.run(kind)
+        check(result.returncode == (0 if kind == "list" else 2), f"{kind}: exit {result.returncode}: {result.stderr}")
+        check(checkout.workspace.calls() == [], f"{kind}: aws must not run at all: {checkout.workspace.calls()}")
+        check(not any(checkout.temporary.iterdir()), f"{kind}: the wrapper must leave no file behind")
+    check("Service" in result.stdout or "not a web interface" in result.stderr, "the last case must say why it ran nothing")
+
+
+def test_a_ctrl_c_during_validation_through_the_wrapper_starts_nothing(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    result = checkout.run("run", {"STAND_IN_LOOKUP_INTERRUPT": "1"})
+    output = result.stdout + result.stderr
+    check(
+        result.returncode == 130 and "Nothing was started" in result.stderr and "Traceback" not in output,
+        f"exit 130 and a plain message expected: {result.returncode} {output}",
+    )
+    check(checkout.session_calls() == [], "no session may start")
+    check(not any(checkout.temporary.iterdir()), "the wrapper must leave no file behind")
+
+
+def test_a_missing_environment_names_the_install_script_and_runs_nothing(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path, venv=False)
+    result = checkout.run("run")
+    check(result.returncode == 1 and "bash scripts/install.sh" in result.stderr, f"the install script must be named: {result.returncode} {result.stderr}")
+    check(checkout.workspace.calls() == [], "nothing may run without .venv")
+
+
+def test_the_wrapper_reached_through_a_symbolic_link_uses_its_own_checkout(tmp_path: Path) -> None:
+    checkout = Checkout(tmp_path)
+    result = checkout.link_run(checkout.root / "scripts" / "open_ui.sh")
+    check(result.returncode == 0, f"exit {result.returncode}: {result.stderr}")
+    check(len(checkout.session_calls()) == 1, f"the linked wrapper must start the session: {checkout.workspace.calls()}")
+
+
+def test_the_wrapper_is_plain_bash_that_ends_in_one_exec() -> None:
+    text = (ROOT / "scripts" / "open_ui.sh").read_text()
+    check(text.startswith("#!/usr/bin/env bash\n") and "set -euo pipefail" in text, "it must be bash with set -euo pipefail")
+    check(len(re.findall(r'^exec "\$\{command\[@\]\}"$', text, re.MULTILINE)) == 1, "it must end in exactly one exec of the validated command")
+    check("eval" not in text and "bash scripts/install.sh" in text, "it must not use eval and must name the install script")
+    check(re.search(r"^trap 'rm -f \"\$command_file\"' EXIT$", text, re.MULTILINE) is not None, "it must remove its command file on every exit")

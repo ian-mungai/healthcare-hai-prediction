@@ -64,7 +64,7 @@ Only the listed web interfaces can be opened from your Mac, each through its own
    bash scripts/open_ui.sh airflow
    ```
 
-4. Press Ctrl+C in that window to close the session. When a local service already holds the port, add `--local-port` and another port number to the command and use that port in the browser.
+4. Press Ctrl+C in that window to close the session. AWS Session Manager's own idle timeout and maximum session duration also end it. This repository sets neither, so the account defaults apply. When a local service already holds the port, add `--local-port` and another port number to the command and use that port in the browser.
 
 ## Worktrees
 

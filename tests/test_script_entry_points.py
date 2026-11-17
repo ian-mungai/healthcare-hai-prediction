@@ -1,6 +1,6 @@
 """The Bash entry points of the README: each runs one existing Python module with the repository's own environment and passes its arguments unchanged.
 
-``scripts/run_checks_e2e.sh``, ``scripts/host.sh`` and ``scripts/open_ui.sh`` are thin: they change to the repository root, refuse a missing ``.venv`` and name
+``scripts/run_checks_e2e.sh`` and ``scripts/host.sh`` are thin: they change to the repository root, refuse a missing ``.venv`` and name
 ``scripts/install.sh``, and ``exec`` the module with ``"$@"``. They read no argument themselves. The cases run each wrapper from a fake checkout whose
 ``.venv/bin/python`` records its arguments, so nothing real starts.
 """
@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WRAPPERS = {
     "run_checks_e2e.sh": "scripts.quality.run_checks_e2e",
     "host.sh": "scripts.infrastructure.host_session",
-    "open_ui.sh": "scripts.infrastructure.open_ui",
     "worktree_setup.sh": "scripts.quality.worktree_setup",
 }
 ARGUMENTS = ["start", "--flag", "a value with spaces", "", "--local-port=8081", "*", "$HOME", "it's"]
@@ -49,8 +48,6 @@ def run_wrapper(name: str, cwd: Path, exit_code: str = "0") -> CompletedProcess[
     environment = {"PATH": "/usr/bin:/bin", "STAND_IN_LOG": str(cwd / "calls.log"), "STAND_IN_EXIT": exit_code}
     if name == "host.sh":
         command = ["../scripts/host.sh", "start", "--flag", "a value with spaces", "", "--local-port=8081", "*", "$HOME", "it's"]
-    elif name == "open_ui.sh":
-        command = ["../scripts/open_ui.sh", "start", "--flag", "a value with spaces", "", "--local-port=8081", "*", "$HOME", "it's"]
     elif name == "worktree_setup.sh":
         command = ["../scripts/worktree_setup.sh", "start", "--flag", "a value with spaces", "", "--local-port=8081", "*", "$HOME", "it's"]
     else:
