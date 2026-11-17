@@ -47,6 +47,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "host_code_fetch_prepared",
     "alerts_topic_enabled",
     "athena_owner_is_project_user",
+    "prometheus_history_prepared",
     "publisher_secret_arns_enabled",
 )
 # Flags that are no stack inputs: each one builds an input that holds a .env value (the account, the region, the project name), so the committed file
@@ -410,6 +411,11 @@ def main() -> None:
     parser.add_argument(
         "--athena-retention", action="store_true", help="Render athena_retention_enabled for the storage stack; without it the stack keeps its default (off)."
     )
+    parser.add_argument(
+        "--prometheus-history-retention",
+        action="store_true",
+        help="Render prometheus_history_retention_enabled for the storage stack; without it the stack keeps its default (off).",
+    )
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
@@ -425,6 +431,10 @@ def main() -> None:
             if arguments.stack != "storage":
                 raise ConfigurationError("--athena-retention belongs to the storage stack: select --stack storage.")
             storage_inputs["athena_retention_enabled"] = True
+        if arguments.prometheus_history_retention:
+            if arguments.stack != "storage":
+                raise ConfigurationError("--prometheus-history-retention belongs to the storage stack: select --stack storage.")
+            storage_inputs["prometheus_history_retention_enabled"] = True
         preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None
         if preparation is not None:
             preparation = derive_environment_inputs(preparation, iam)

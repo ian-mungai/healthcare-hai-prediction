@@ -21,6 +21,7 @@ from scripts.infrastructure import (
     host_session_code_cases,
     host_session_entry_cases,
     host_session_group_signal,
+    host_session_prometheus_cases,
     host_session_refresh_cases,
     host_session_stop_cases,
 )
@@ -1521,4 +1522,5 @@ CASES.update(host_session_code_cases.CASES)
 CASES.update(host_session_refresh_cases.CASES)
 CASES.update(host_session_stop_cases.CASES)
 CASES.update(host_session_entry_cases.CASES)
+CASES.update(host_session_prometheus_cases.CASES)
 CASES.update(DEPLOYED_REVISION_CASES)

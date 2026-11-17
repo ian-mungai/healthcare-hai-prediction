@@ -53,6 +53,32 @@
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
         },
+        "prometheus_history_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_prometheus_history_task_(dev|prod)$"
+        },
+        "prometheus_restore_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_prometheus_restore_task_(dev|prod)$"
+        },
+        "prometheus_history_bucket_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+        },
+        "prometheus_history_memory_mib": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["limit", "reservation"],
+          "properties": {
+            "limit": { "type": "integer", "minimum": 64 },
+            "reservation": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "prometheus_history_interval_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600
+        },
         "model_api_enabled": {
           "type": "boolean"
         },

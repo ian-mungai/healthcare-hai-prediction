@@ -148,6 +148,7 @@ ROWS: list[Row] = [
         "training_prepared",
         "monitoring_enabled",
         "host_code_fetch_prepared",
+        "prometheus_history_prepared",
         "source_raw_root_enabled",
         "publisher_job_enabled",
         "publisher_keys_enabled",
@@ -403,6 +404,7 @@ IMAGE_REPOSITORIES = ("analytics", "quality", "spark", "training", "feature_stor
 EXEMPT = {
     "mlflow_retention_enabled": "wrapper option --mlflow-retention, covered by run_e2e",
     "athena_retention_enabled": "wrapper option --athena-retention, covered by run_e2e",
+    "prometheus_history_retention_enabled": "wrapper option --prometheus-history-retention, covered by run_e2e",
     "allow_destructive_teardown": "teardown guard of the platform stack, never an activation",
     "bronze_writer_prepared": "required key of the committed IAM preparation file",
     "job_writer_e2e_prepared": "required key of the committed IAM preparation file",

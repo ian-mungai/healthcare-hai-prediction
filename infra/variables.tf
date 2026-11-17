@@ -100,6 +100,25 @@ variable "mlflow_retention_enabled" {
   nullable    = false
 }
 
+variable "prometheus_history_retention_enabled" {
+  description = "Add the rules that expire the Prometheus metric blocks under prometheus/ after prometheus_history_expire_days and clear the delete markers they leave. Off by default, because the rules change the live lifecycle configuration of the data bucket; the owner sets it in the apply step that prepares Prometheus history."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "prometheus_history_expire_days" {
+  description = "Days after upload that a shipped Prometheus block expires from S3. It is the local retention (prometheus_retention_days of the services stack, 15 by default) plus 2: the age counts from the upload, which is one to three hours after the block ends, and the local retention counts from the newest block, so a shorter value would drop blocks that Prometheus still keeps. Used only while prometheus_history_retention_enabled is true."
+  type        = number
+  default     = 17
+  nullable    = false
+
+  validation {
+    condition     = var.prometheus_history_expire_days >= 3 && var.prometheus_history_expire_days <= 92 && floor(var.prometheus_history_expire_days) == var.prometheus_history_expire_days
+    error_message = "Use a whole number of days from 3 to 92: the local retention (1 to 90 days) plus 2."
+  }
+}
+
 variable "access_logging_reader_principals" {
   description = "The owner's administrator path, the only principals that may read the logs, as role/NAME or user/NAME. The account comes from expected_account_id. Required when access_logging_enabled is true."
   type        = list(string)

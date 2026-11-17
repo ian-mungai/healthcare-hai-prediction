@@ -70,6 +70,8 @@ OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
 CODE_FETCH = "code_fetch"
 CODE_FETCH_SECONDS = 1200
+PROMETHEUS_RESTORE = "prometheus_restore"
+PROMETHEUS_RESTORE_SECONDS = 1800
 CODE_RUN_ID = re.compile(CODE_RUN)
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
@@ -822,6 +824,16 @@ class Session:
             raise HostSessionError(f"{error}; the code task did not run to its end, so what repo shows is not known; no service was deployed") from None
         return code if code is not None else self.read_identity()
 
+    def restore_prometheus(self) -> None:
+        """Run the Prometheus history restore one-shot (monitoring/prometheus_history.py restore): the blocks of S3 that the data volume lacks are downloaded,
+        verified and placed before any service starts, so Prometheus opens them as its own. A stack with no such one-shot (the history roles are not applied)
+        starts as before and says so; a restore that fails stops the start."""
+        if PROMETHEUS_RESTORE not in self.names.one_shot:
+            self.step("prometheus_restore_skipped", "the services stack plans no prometheus_restore one-shot, so no metric history returns")
+            return
+        self.one_shot(PROMETHEUS_RESTORE, PROMETHEUS_RESTORE_SECONDS)
+        self.step("prometheus_restored", "the metric history of S3 is on the data volume before Prometheus starts")
+
     def read_identity(self) -> tuple[str, str]:
         """The code run ID and digest of the release that repo shows, from the identity task (``infra/services/scripts/code_identify.py``): it prints one
         line from the record that the install wrote beside the digest, and this reads that line from the task's log. A host with no record is refused by
@@ -988,15 +1000,17 @@ class Session:
             raise HostSessionError("the platform output log_group_names has no airflow group, so the code identity cannot be read")
 
     def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
-        """Host on, host_prepare, the code checkout, every service redeployed and stable, then the online store reloaded. Any failure, interruption or SIGTERM
-        stops the host unless ``keep_on``. ``code`` (run ID, code digest) is the code of the reload launch too; without it the identity task reads it from
-        the record of the release repo shows. start refuses before the host turns on when the stack has no code one-shot or no features task."""
+        """Host on, host_prepare, the code checkout, the Prometheus history restore, every service redeployed and stable, then the online store reloaded.
+        Any failure, interruption or SIGTERM stops the host unless ``keep_on``. ``code`` (run ID, code digest) is the code of the reload launch too;
+        without it the identity task reads it from the record of the release repo shows. start refuses before the host turns on when the stack has no
+        code one-shot or no features task."""
         self.refuse_missing_inputs(code)
         succeeded = False
         try:
             self.host_on()
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
             identity = self.place_code(code)
+            self.restore_prometheus()
             self.deploy_services()
             self.reload_online_store(identity)
             self.openmetadata_bootstrap()

@@ -250,6 +250,48 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
       }
     }
   }
+
+  # The Prometheus history shipper writes each finished metric block once under prometheus/blocks/ and no role holds a delete action, so the bucket removes them: the
+  # current objects expire prometheus_history_expire_days after upload (the local retention plus 2, the age counts from the upload and the local retention from the newest
+  # block) and a second rule clears the markers, as S3 lets a rule carry either days or the cleanup. The prefix is exact. The rules change the live lifecycle
+  # configuration, so they exist only while the owner sets prometheus_history_retention_enabled; a default plan leaves the rules above as they are.
+  dynamic "rule" {
+    for_each = var.prometheus_history_retention_enabled ? [1] : []
+
+    content {
+      id     = "expire_prometheus_blocks"
+      status = "Enabled"
+
+      filter {
+        prefix = "prometheus/"
+      }
+
+      expiration {
+        days = var.prometheus_history_expire_days
+      }
+
+      noncurrent_version_expiration {
+        noncurrent_days = 1
+      }
+    }
+  }
+
+  dynamic "rule" {
+    for_each = var.prometheus_history_retention_enabled ? [1] : []
+
+    content {
+      id     = "clear_prometheus_delete_markers"
+      status = "Enabled"
+
+      filter {
+        prefix = "prometheus/"
+      }
+
+      expiration {
+        expired_object_delete_marker = true
+      }
+    }
+  }
 }
 
 # Terraform state sits in this bucket under terraform_state/<stack>/terraform.tfstate, with its lock file beside it. Only the project user

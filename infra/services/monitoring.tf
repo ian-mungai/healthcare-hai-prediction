@@ -58,14 +58,14 @@ locals {
       memory            = var.monitoring_memory_mib.prometheus.limit
       memoryReservation = var.monitoring_memory_mib.prometheus.reservation
       stopTimeout       = 60
-      command = [
+      command = concat([
         "--config.file=/etc/prometheus/prometheus.yml",
         "--storage.tsdb.path=/prometheus",
         "--storage.tsdb.retention.time=${var.prometheus_retention_days}d",
         "--storage.tsdb.retention.size=${var.prometheus_retention_size_mb}MB",
         "--web.listen-address=127.0.0.1:9090",
         "--query.max-concurrency=4",
-      ]
+      ], local.prometheus_history_flags)
       environment = [{ name = "GOMEMLIMIT", value = local.monitoring_gomemlimit.prometheus }]
       mountPoints = [
         { sourceVolume = "code_monitoring_prometheus", containerPath = "/etc/prometheus", readOnly = true },

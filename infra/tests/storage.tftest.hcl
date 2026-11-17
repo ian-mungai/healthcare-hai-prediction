@@ -288,6 +288,47 @@ run "mlflow_retention_rule_only_with_its_flag" {
   }
 }
 
+# The Prometheus history rules are a live change to the bucket's lifecycle configuration, so they exist only when the owner turns the flag on. Blocks are written once, so
+# only the current objects age out, after prometheus_history_expire_days (the local retention of 15 days plus 2), and their delete markers are cleared.
+run "prometheus_history_rules_only_with_their_flag" {
+  command = plan
+
+  variables {
+    prometheus_history_retention_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
+      alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_prometheus_blocks", "clear_prometheus_delete_markers"])
+    )
+    error_message = "With prometheus_history_retention_enabled the plan must add exactly the two Prometheus rules to the five default rules."
+  }
+
+  assert {
+    condition = (
+      one([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_prometheus_blocks"]).filter[0].prefix == "prometheus/" &&
+      one(one([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_prometheus_blocks"]).expiration).days == 17 &&
+      one(one([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_prometheus_blocks"]).noncurrent_version_expiration).noncurrent_days == 1 &&
+      one([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "clear_prometheus_delete_markers"]).filter[0].prefix == "prometheus/" &&
+      one(one([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "clear_prometheus_delete_markers"]).expiration).expired_object_delete_marker == true
+    )
+    error_message = "Only prometheus/ objects expire, after 17 days (15 days of local retention plus 2), and the markers they leave are cleared."
+  }
+}
+
+run "prometheus_history_expiry_below_three_days_is_refused" {
+  command = plan
+
+  variables {
+    prometheus_history_retention_enabled = true
+    prometheus_history_expire_days       = 2
+  }
+
+  expect_failures = [var.prometheus_history_expire_days]
+}
+
 # The Athena results rule is a live change to the bucket's lifecycle configuration, so it exists only when the owner turns the flag on, like the MLflow rule.
 run "athena_results_rule_only_with_its_flag" {
   command = plan

@@ -64,6 +64,7 @@ locals {
     openmetadata_server   = 16
     opensearch            = 16
     prometheus            = 8
+    prometheus_history    = 2
     grafana               = 8
     statsd_exporter       = 2
     pushgateway           = 2

@@ -44,6 +44,8 @@ locals {
     "polaris_bootstrap"                     = "polaris"
     }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter", "pushgateway", "host_state_exporter", "redis_exporter", "postgres_exporter", "node_exporter"] : name => "monitoring" if var.monitoring_enabled
+    }, {
+    for name in ["prometheus_history", "prometheus_restore"] : name => "monitoring" if local.prometheus_history_on
   })
 
   log_configuration = {
@@ -178,6 +180,15 @@ locals {
           volumes       = local.monitoring_volumes
         }
       } : key => service if var.monitoring_enabled
+    },
+    {
+      for key, service in {
+        prometheus_history = {
+          task_role_arn = var.prometheus_history_task_role_arn
+          containers    = local.prometheus_history_containers
+          volumes       = { prometheus_data = "${var.data_mount_path}/prometheus", code_monitoring_package = "${local.code_path}/monitoring" }
+        }
+      } : key => service if local.prometheus_history_on
     }
   )
 

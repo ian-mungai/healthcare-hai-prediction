@@ -1188,7 +1188,7 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"layer pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"layer pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
-    for name in ("job_train_task", "mlflow_task", "host_code_fetch_task"):
+    for name in ("job_train_task", "mlflow_task", "host_code_fetch_task", "prometheus_history_task", "prometheus_restore_task"):
         yield Case(
             f"training pass: {name} to ECS tasks",
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
@@ -1256,7 +1256,19 @@ def job_project_cases() -> Iterator[Case]:
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
             False,
         )
-    for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow", "host_code_fetch_task_extra", "host_code_fetch", "code_fetch_task"):
+    for name in (
+        "job_train_task_extra",
+        "mlflow_task_extra",
+        "job_train",
+        "mlflow",
+        "host_code_fetch_task_extra",
+        "host_code_fetch",
+        "code_fetch_task",
+        "prometheus_history_task_extra",
+        "prometheus_restore_task_extra",
+        "prometheus_history",
+        "prometheus_restore",
+    ):
         yield Case(
             f"training pass: refuse {name}",
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),

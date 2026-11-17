@@ -108,6 +108,7 @@ locals {
       } : key => task if local.om_on
     },
     local.code_fetch_on ? { code_fetch = local.code_fetch_task } : {},
+    local.prometheus_history_on ? { prometheus_restore = local.prometheus_restore_task } : {},
   )
 }
 

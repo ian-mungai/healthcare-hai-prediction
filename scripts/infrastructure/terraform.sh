@@ -10,6 +10,7 @@ preparation_inputs=""
 preparation_sha256=""
 mlflow_retention=false
 athena_retention=false
+prometheus_retention=false
 keep_launch_hold=false
 continue_token=""
 jobs_inputs=""
@@ -30,6 +31,11 @@ while [[ $# -gt 0 ]]; do
     --athena-retention)
       [[ "$athena_retention" == false ]] || { printf 'Select the Athena retention rule once.\n' >&2; exit 2; }
       athena_retention=true
+      shift
+      ;;
+    --prometheus-history-retention)
+      [[ "$prometheus_retention" == false ]] || { printf 'Select the Prometheus history retention rules once.\n' >&2; exit 2; }
+      prometheus_retention=true
       shift
       ;;
     --keep-launch-hold)
@@ -71,6 +77,9 @@ if [[ "$mlflow_retention" == true ]]; then
 fi
 if [[ "$athena_retention" == true ]]; then
   [[ "$stack" == storage ]] || { printf 'The Athena retention rule belongs to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
+fi
+if [[ "$prometheus_retention" == true ]]; then
+  [[ "$stack" == storage ]] || { printf 'The Prometheus history retention rules belong to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services || "$stack" == platform ]] || { printf 'Preparation inputs are allowed only with --jobs, --services or --platform.\n' >&2; exit 2; }
@@ -147,6 +156,9 @@ if [[ "$stack" == storage && "$mlflow_retention" == true ]]; then
 fi
 if [[ "$stack" == storage && "$athena_retention" == true ]]; then
   render_args+=(--athena-retention)
+fi
+if [[ "$stack" == storage && "$prometheus_retention" == true ]]; then
+  render_args+=(--prometheus-history-retention)
 fi
 if [[ "$stack" == platform || "$stack" == services || "$stack" == alerts ]]; then
   # The shared renderer writes only the inputs the selected stack declares. The alerts root holds the alert address: apply it only through this wrapper
