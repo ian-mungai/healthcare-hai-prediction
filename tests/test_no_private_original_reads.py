@@ -33,6 +33,8 @@ def folded(node: ast.AST) -> str | None:
     match node:
         case ast.Constant(value=str() as text):
             return text
+        case ast.Constant(value=bytes() as raw):
+            return raw.decode("latin-1")
         case ast.JoinedStr(values=parts):
             return folded_all(parts, "")
         case ast.FormattedValue(value=inner, format_spec=None, conversion=-1):
@@ -51,6 +53,28 @@ def names_folder(node: ast.AST) -> bool:
     return text is not None and NAME in text
 
 
+# The only node types an absence check may hold. Anything else (an assignment expression, a subscript, a lambda, a conditional, a second loop clause
+# or a filter) means the expression does more than test for the folder, so its folder name is reported.
+ABSENCE_NODES = (
+    ast.UnaryOp,
+    ast.Not,
+    ast.Call,
+    ast.Name,
+    ast.Attribute,
+    ast.Constant,
+    ast.BinOp,
+    ast.Div,
+    ast.Load,
+    ast.Store,
+    ast.GeneratorExp,
+    ast.comprehension,
+    ast.Compare,
+    ast.In,
+)
+# The calls an absence check may make: the existence test, and a listing of a plain path by constant names.
+LISTINGS = {"rglob", "glob", "iterdir"}
+
+
 def plain_path(node: ast.AST) -> bool:
     """True for a path built only from names, attributes, literals and the division operator: nothing in it reads a file."""
     match node:
@@ -63,16 +87,50 @@ def plain_path(node: ast.AST) -> bool:
     return False
 
 
+def plain_listing(node: ast.AST) -> bool:
+    """True for a plain path, or a listing of one: ``<path>.rglob("*")``, ``.glob(...)`` or ``.iterdir()`` with literal arguments only."""
+    match node:
+        case ast.Call(func=ast.Attribute(value=path, attr=method), args=arguments, keywords=[]) if method in LISTINGS:
+            return plain_path(path) and all(isinstance(argument, ast.Constant) for argument in arguments)
+    return plain_path(node)
+
+
+def only_plain_nodes(node: ast.AST) -> bool:
+    """True when the expression holds only node types an absence check needs, and every call in it is the existence test or a listing."""
+    for inner in ast.walk(node):
+        if not isinstance(inner, ABSENCE_NODES):
+            return False
+        if isinstance(inner, ast.Call) and not (
+            (isinstance(inner.func, ast.Name) and inner.func.id == "any")
+            or (isinstance(inner.func, ast.Attribute) and (inner.func.attr == "exists" or inner.func.attr in LISTINGS))
+        ):
+            return False
+    return True
+
+
 def asserts_absence(node: ast.AST) -> bool:
-    """True for ``not <path>.exists()`` and ``not any(<name> in <path>.parts for ...)``, the two ways a test says the folder was not made."""
-    if not (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not) and isinstance(node.operand, ast.Call)):
+    """True for ``not <path>.exists()`` and ``not any(<name> in <path>.parts for <name> in <listing>)`` built from plain nodes alone.
+
+    The second form has one loop over a plain name, no filter, a plain ``.parts`` receiver and a plain listing as the iterator. No call, assignment
+    expression or subscript sits anywhere in either form, so nothing in it reads a file.
+    """
+    if not (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not) and isinstance(node.operand, ast.Call) and only_plain_nodes(node)):
         return False
-    call = node.operand
-    match call:
+    match node.operand:
         case ast.Call(func=ast.Attribute(value=path, attr="exists"), args=[], keywords=[]):
             return plain_path(path)
-        case ast.Call(func=ast.Name(id="any"), args=[ast.GeneratorExp(elt=ast.Compare(ops=[ast.In()], left=left, comparators=[ast.Attribute(attr="parts")]))]):
-            return names_folder(left)
+        case ast.Call(
+            func=ast.Name(id="any"), args=[ast.GeneratorExp(elt=ast.Compare(ops=[ast.In()], left=ast.Constant(), comparators=[receiver]), generators=[loop])]
+        ):
+            return (
+                isinstance(receiver, ast.Attribute)
+                and receiver.attr == "parts"
+                and plain_path(receiver.value)
+                and isinstance(loop.target, ast.Name)
+                and not loop.ifs
+                and not loop.is_async
+                and plain_listing(loop.iter)
+            )
     return False
 
 
@@ -129,10 +187,31 @@ PLANTED_READERS = {
     "a read beside an absence check": 'def read(root):\n    return not (root / "x").exists() and (root / "private_original").read_bytes()\n',
     "a test of membership that reads": 'def read(root):\n    return not any("private_original" in p.read_text() for p in root.rglob("*"))\n',
     "a plain reader": 'def read(root):\n    return (root / "private_original" / "owners.csv").read_bytes()\n',
+    "a read in a filter of the membership form": (
+        "def read(root):\n"
+        '    return not any("private_original" in path.parts for path in [root] if (v := (root / "private_original" / "o.csv").read_bytes()))\n'
+    ),
+    "a call in a filter of the membership form": (
+        'def read(root):\n    return not any("private_original" in path.parts for path in [root] if load(root / "private_original"))\n'
+    ),
+    "a read in the receiver of the membership form": (
+        'def read(root):\n    return not any("private_original" in load(root / "private_original").parts for path in [root])\n'
+    ),
+    "a read in the iterator of the membership form": (
+        'def read(root):\n    return not any("private_original" in path.parts for path in [(root / "private_original" / "o.csv").read_bytes()])\n'
+    ),
+    "a second loop in the membership form": 'def read(root):\n    return not any("private_original" in path.parts for path in [root] for o in load(root))\n',
+    "a tuple target in the membership form": 'def read(root):\n    return not any("private_original" in path.parts for path, other in load(root))\n',
+    "a walrus in an absence check": 'def read(root):\n    return not (value := (root / "private_original").exists())\n',
+    "a subscript call in an absence check": 'def read(root):\n    return not (readers["open"](root / "private_original")).exists()\n',
+    "a bytes literal": 'def read(root):\n    return (root / b"private_original".decode("ascii") / "owners.csv").read_bytes()\n',
+    "a joined bytes literal": 'def read(root):\n    return (root / (b"private_" + b"original").decode("ascii")).read_bytes()\n',
 }
 PLANTED_ABSENCE_CHECKS = {
     "a folder that was not made": 'def check(run):\n    return not (run / "private_original").exists() and not (run / "derived").exists()\n',
     "no folder in a state tree": 'def check(run):\n    return not any("private_original" in path.parts for path in run.state_root.rglob("*"))\n',
+    "no folder in a listed tree": 'def check(run):\n    return not any("private_original" in path.parts for path in run.state_root.iterdir())\n',
+    "no folder as bytes": 'def check(run):\n    return not (run / b"private_original").exists()\n',
 }
 
 
