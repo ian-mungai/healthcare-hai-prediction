@@ -289,7 +289,7 @@ def test_renderer_fills_every_placeholder_and_keeps_policy_variables() -> None:
         "arn:aws:s3:::example-data/lakehouse/*" in text and "role/healthcare_hai_prediction_lakehouse_reader" in text and f"{PROJECT}_lakehouse" not in text,
         "the bucket or the project name was not substituted",
     )
-    check(len(documents) == 14, "the renderer must produce the 14 approved policies")
+    check(len(documents) == 15, "the renderer must produce the 15 approved policies")
 
 
 def statement_resources(documents: dict[str, dict[str, Any]], service: str, sid: str) -> list[str]:
@@ -387,7 +387,7 @@ def test_plan_in_an_empty_account_lists_every_creation_and_changes_nothing(env_f
     code = manage_policies.run(arguments(env_file, "plan"), {}, session)
     output = capsys.readouterr().out
     check(code == 0, "a plan must succeed")
-    check(output.count("CREATE POLICY") == 14 and output.count("CREATE GROUP") == 2 and output.count("ATTACH POLICY") == 14, f"unexpected plan:\n{output}")
+    check(output.count("CREATE POLICY") == 15 and output.count("CREATE GROUP") == 2 and output.count("ATTACH POLICY") == 15, f"unexpected plan:\n{output}")
     check(output.count("ADD USER") == 2, "the user must join both groups")
     check(iam.writes() == [] and session.profiles == ["example_administrator"], "a plan must not write and must use the administrator profile")
 
@@ -395,13 +395,13 @@ def test_plan_in_an_empty_account_lists_every_creation_and_changes_nothing(env_f
 def test_apply_creates_everything_and_a_second_run_changes_nothing(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     check(plan_and_apply(env_file, iam) == 0, "the first apply must succeed")
-    check(len(iam.policies) == 14 and sorted(iam.groups) == [f"{PROJECT}_data_dev", f"{PROJECT}_platform_dev"], "policies or groups are missing")
-    check(sum(len(held) for held in iam.groups.values()) == 14 and iam.members[USER] == set(iam.groups), "attachments or membership are missing")
+    check(len(iam.policies) == 15 and sorted(iam.groups) == [f"{PROJECT}_data_dev", f"{PROJECT}_platform_dev"], "policies or groups are missing")
+    check(sum(len(held) for held in iam.groups.values()) == 15 and iam.members[USER] == set(iam.groups), "attachments or membership are missing")
     capsys.readouterr()
     iam.calls.clear()
     check(plan_and_apply(env_file, iam) == 0, "the second apply must succeed")
     check(iam.writes() == [], f"a second apply must write nothing: {iam.writes()}")
-    check("Summary: 0 change(s), 14 unchanged." in capsys.readouterr().out, "the second plan must show no change")
+    check("Summary: 0 change(s), 15 unchanged." in capsys.readouterr().out, "the second plan must show no change")
 
 
 def applied_iam(env_file: Path) -> FakeIam:
@@ -643,10 +643,10 @@ def test_a_failed_step_is_reported_and_the_others_still_run(env_file: Path, caps
     code = plan_and_apply(env_file, iam)
     output = capsys.readouterr()
     check(code == 1, "a failed step must give a non-zero exit code")
-    check(f"{PROJECT}_ecr_policy" not in iam.policies and len(iam.policies) == 13, "only the failed policy may be missing")
+    check(f"{PROJECT}_ecr_policy" not in iam.policies and len(iam.policies) == 14, "only the failed policy may be missing")
     check("FAILED" in output.out and "LimitExceeded" in output.out, "the failure must be named")
     iam.fail_on = set()
-    check(plan_and_apply(env_file, iam) == 0 and len(iam.policies) == 14, "a rerun must finish the work")
+    check(plan_and_apply(env_file, iam) == 0 and len(iam.policies) == 15, "a rerun must finish the work")
 
 
 def test_old_grouped_policies_are_detached_and_deleted_and_direct_attachments_move_to_the_groups(env_file: Path) -> None:
@@ -782,9 +782,9 @@ def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(en
     capsys.readouterr()
     check(export(env_file, iam, tmp_path / "out") == 0, "the export must succeed")
     exported = sorted((tmp_path / "out").glob("*.json"))
-    check(len(exported) == 14 and all(path.read_text(encoding="utf-8").endswith("}\n") for path in exported), "one template per service must be written")
+    check(len(exported) == 15 and all(path.read_text(encoding="utf-8").endswith("}\n") for path in exported), "one template per service must be written")
     check(sorted(path.name for path in exported) == sorted(path.name for path in (REPO_ROOT / "infra/iam/policies").glob("*_policy.json")), "names must match")
-    check(capsys.readouterr().out.count("Exported ") == 14, "each exported file must be named")
+    check(capsys.readouterr().out.count("Exported ") == 15, "each exported file must be named")
     check(ACCOUNT not in "".join(path.read_text(encoding="utf-8") for path in exported), "the account must not appear in an exported template")
     check(iam.writes() == [], f"an export must not write to IAM: {iam.writes()}")
     with pytest.raises(ConfigurationError):
@@ -807,7 +807,7 @@ def test_plan_prints_one_digest_and_apply_with_it_applies_the_plan(env_file: Pat
     check(iam.writes() == [], "a plan must not write")
     capsys.readouterr()
     check(manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam)) == 0, "the apply with the plan's digest must succeed")
-    check(len(iam.policies) == 14, "the apply must create the planned policies")
+    check(len(iam.policies) == 15, "the apply must create the planned policies")
     check(f"Plan digest: {digest}" in capsys.readouterr().out, "the apply must print the digest it recomputed")
     check(planned_digest(env_file, iam) != digest, "after the apply the plan has other steps and so another digest")
 
@@ -893,7 +893,7 @@ def test_the_command_line_refuses_an_apply_without_the_word_and_renders_offline(
     check(undigested.returncode == 2 and "--digest" in undigested.stderr, f"the command line must require the digest for apply: {undigested.stderr}")
     rendered = run_cli("infra.iam.scripts.render_policy", env_file, "--output-directory", str(tmp_path / "rendered"))
     files = sorted((tmp_path / "rendered").glob("*.json"))
-    check(rendered.returncode == 0 and len(files) == 14, f"the offline render must write 14 files: {rendered.stderr}")
+    check(rendered.returncode == 0 and len(files) == 15, f"the offline render must write 15 files: {rendered.stderr}")
     check(all(oct(path.stat().st_mode & 0o777) == "0o600" for path in files), "rendered files must be owner-only")
     check(
         f":{ACCOUNT}:" in files[0].read_text(encoding="utf-8") or ACCOUNT in "".join(path.read_text(encoding="utf-8") for path in files),

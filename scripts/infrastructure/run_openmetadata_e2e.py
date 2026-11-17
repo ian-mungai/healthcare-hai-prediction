@@ -1451,7 +1451,7 @@ def project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document
         "DATA_BUCKET_NAME": "example-project-data-dev",
     }
     folder = Path(os.environ.get("OM_POLICY_DIRECTORY", str(REPO / "infra" / "iam" / "policies")))
-    texts = [path.read_text() for path in sorted(folder.glob("*.json")) if path.name.endswith(("_iam_policy.json", "_ssm_policy.json"))]
+    texts = [path.read_text() for path in sorted(folder.glob("*.json")) if path.name.endswith(("_iam_policy.json", "_ssmforward_policy.json"))]
     spare = {name: "/example_project/spare" for text in texts for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", text) if name not in values}
     documents = [render_template(text, values, {**terraform_names(), **spare}) for text in texts]
     role = "arn:aws:iam::111111111111:role/example_project_job_openmetadata_task_dev"

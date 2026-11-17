@@ -24,16 +24,15 @@ ROOT = Path(__file__).resolve().parents[2]
 HOST_DAG = "Silver and gold through Airflow on the host"
 PLATFORM_FILE = ROOT / "config/orchestration/platform.json"
 AIRFLOW_FILE = ROOT / "infra/services/airflow.tf"
+FORWARD_FILE = ROOT / "infra/iam/web_ui_forwards.tf"
+FORWARD_DOCUMENT = "<PROJECT_NAME>_airflow_forward_<ENVIRONMENT>"
+GENERIC_DOCUMENT = "AWS-StartPortForwardingSession"
 # The wait limit of trigger_dag, read from its source: the infrastructure scripts may not import the orchestration scripts.
 TRIGGER_FILE = ROOT / "scripts/orchestration/trigger_dag.py"
 RUNS = {"silver": "SILVER_RUN_ID", "gold": "GOLD_RUN_ID"}
 FAILURE_PATH = "If a step fails"
 MUTANTS = (
-    (
-        "a broken port forward parameter",
-        '\'{"portNumber":["8080"],"localPortNumber":["18080"]}\'',
-        '\'{"portNumber":["8080"],"localPortNumber":["18080"]\'',
-    ),
+    ("a broken port forward parameter", "--parameters localPortNumber=18080", "--parameters localPortNumber:18080"),
     ("a mistyped Session Manager call", "ssm start-session", "ssm start-sessions"),
     ("an unknown workflow", "--dag gold_transform_dag", "--dag gold_dag"),
     ("a mistyped trigger option", "--silver-snapshot-run <SILVER_RUN_ID>", "--silver-snapshot-runs <SILVER_RUN_ID>"),
@@ -60,6 +59,22 @@ def ports() -> tuple[int, int]:
     local = int(json.loads(PLATFORM_FILE.read_text())["listeners"]["airflow_api"]["port"])
     found = re.search(r"airflow api-server --host 127\.0\.0\.1 --port ([0-9]+)", AIRFLOW_FILE.read_text())
     return local, int(found.group(1)) if found else -1
+
+
+def forward_port() -> int:
+    """The host port that the project Airflow forward document fixes, from its Terraform; -1 when the line is not found."""
+    found = re.search(r"^\s+airflow\s*=\s*\{ port = ([0-9]+),", FORWARD_FILE.read_text(), re.M)
+    return int(found.group(1)) if found else -1
+
+
+def forward_joins(body: str, local: int, remote: int) -> bool:
+    """The list forwards the local port of trigger_dag to the host port that the project document fixes, and never names the generic document."""
+    return (
+        remote > 0
+        and forward_port() == remote
+        and body.count(f"--document-name {FORWARD_DOCUMENT} --parameters localPortNumber={local} ") >= 1
+        and GENERIC_DOCUMENT not in body
+    )
 
 
 def max_wait_seconds() -> float:
@@ -143,7 +158,7 @@ def structure_checks(body: str) -> dict[str, bool]:
     checks["the host DAG list starts no Fargate task and no hand-started task"] = bool(body) and "FARGATE" not in body and "run-task" not in body
     order = [
         ("host and twins", index("host_session status", "describe-instances", "_job_silver_host", "_job_gold_host", "requiresCompatibilities")),
-        ("port forward", index("ssm start-session", "AWS-StartPortForwardingSession")),
+        ("port forward", index("ssm start-session", FORWARD_DOCUMENT)),
         ("silver staging", index("code_archive build", "run_stage/<SILVER_RUN_ID>/inputs/code.sha256")),
         ("silver trigger", index(*trigger_of("silver"))),
         ("silver records", index("lakehouse/launch_records/<SILVER_RUN_ID>/", "lakehouse/layer_runs/silver/<SILVER_RUN_ID>/")),
@@ -178,8 +193,14 @@ def structure_checks(body: str) -> dict[str, bool]:
         "lakehouse/launch_records/<SILVER_RUN_ID>/silver/" in steps[index(*trigger_of("gold"))]
     )
     local, remote = ports()
-    checks[f"the forward joins local port {local} (trigger_dag) to the API server's port {remote}"] = (
-        remote > 0 and body.count(f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}') >= 1
+    checks[f"the forward joins local port {local} (trigger_dag) to the API server's port {remote} through the project document"] = forward_joins(
+        body, local, remote
+    )
+    checks["planted: a forward through the generic document fails the forward case"] = not forward_joins(
+        body.replace(FORWARD_DOCUMENT, GENERIC_DOCUMENT), local, remote
+    )
+    checks["planted: a forward to another local port fails the forward case"] = not forward_joins(
+        body.replace(f"localPortNumber={local} ", "localPortNumber=1 "), local, remote
     )
     waits = [float(value) for value in re.findall(r"--mode real .*?--wait-seconds ([0-9]+)", body)]
     limit = max_wait_seconds()
@@ -201,7 +222,7 @@ def structure_checks(body: str) -> dict[str, bool]:
     checks["planted: a failure path that does not leave the launch to the gate fails its cases"] = bool(planted) and not all(
         failure_path_checks(planted).values()
     )
-    forward_step = index("ssm start-session", "AWS-StartPortForwardingSession")
+    forward_step = index("ssm start-session", FORWARD_DOCUMENT)
     checks["a restart hold of an earlier session is settled right after the forward and before any staging"] = forward_step >= 0 and all(
         word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle", "launch gate")
     )

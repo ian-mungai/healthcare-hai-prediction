@@ -18,7 +18,8 @@ R, A, P, E, B = "eu-west-1", "111111111111", "example_project", "dev", "example-
 VALUES = {"AWS_REGION": R, "AWS_ACCOUNT_ID": A, "PROJECT_NAME": P, "ENVIRONMENT": E, "DATA_BUCKET_NAME": B}
 TAG = {"Project": P}
 # The policy files of the project user, by the service part of their name. ssmcap holds the services apply command's grants on the launch hold and apply lock.
-SERVICES = ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "iam", "logs", "s3", "secretsmanager", "sns", "ssm", "ssmcap", "sts")
+# ssmforward holds the Session Manager documents that forward a port, apart from ssm to stay under the managed policy size limit.
+SERVICES = ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "iam", "logs", "s3", "secretsmanager", "sns", "ssm", "ssmcap", "ssmforward", "sts")
 USER = "example_project_dev"
 LEAF = "0" * 64
 
@@ -88,7 +89,13 @@ GROUP = arn("autoscaling", f"autoScalingGroup:00000000-0000-0000-0000-0000000000
 # ECS adds this tag to the host group when it creates the capacity provider; the call is checked against the project user's policy.
 ECS_GROUP_TAG = {"AmazonECSManaged": ""}
 BUDGET = f"arn:aws:budgets::{A}:budget/{P}_platform_{E}"
-DOCUMENT = f"arn:aws:ssm:{R}::document/AWS-StartPortForwardingSession"
+# The owner forwards a port of the host to the Mac through one project document per web page and no other port.
+# The catalog document belongs to the on-demand catalog task.
+WEB_PAGE_FORWARDS = ("openmetadata", "airflow", "mlflow", "streamlit", "grafana", "prometheus")
+FORWARD_DOCUMENTS = tuple(f"arn:aws:ssm:{R}:{A}:document/{P}_{name}_forward_{E}" for name in ("catalog", *WEB_PAGE_FORWARDS))
+GENERIC_FORWARD_DOCUMENT = f"arn:aws:ssm:{R}::document/AWS-StartPortForwardingSession"
+# Services that listen on the host and have no web page: no project document exists for them, so none may be named.
+INTERNAL_FORWARDS = ("postgres", "redis", "polaris", "model_api", "opensearch", "scheduler", "statsd", "pushgateway", "openmetadata_admin")
 SESSION = arn("ssm", f"session/{USER}-0123456789abcdef")
 PUBLIC_PARAMETER = f"arn:aws:ssm:{R}::parameter/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 # The lakehouse roles take their names from the Terraform variable defaults, whatever PROJECT_NAME is, so the oracle names them outright.
@@ -328,7 +335,8 @@ def approved_requests() -> dict[str, list[Request]]:
         region=None,
         extra={"ssm:resourceTag/Project": P, "ssm:resourceTag/Name": f"{P}_host_{E}", "ssm:SessionDocumentAccessCheck": "true"},
     )
-    add("ssm", "StartSession", DOCUMENT, region=None)
+    for document in FORWARD_DOCUMENTS:
+        ops["ssmforward"].append(request("ssm:StartSession", document, region=None))
     for action in ("ResumeSession", "TerminateSession"):
         add("ssm", action, SESSION, region=None, extra={"aws:username": USER})
     for target in (READER, WRITER, ATHENA_READER):
@@ -948,6 +956,28 @@ def session_cases() -> Iterator[Case]:
         False,
     )
     yield Case("session: shell document", request("ssm:StartSession", f"arn:aws:ssm:{R}::document/SSM-SessionManagerRunShell", region=None), False)
+    for name in WEB_PAGE_FORWARDS:
+        yield Case(
+            f"session: {name} web page forward document", request("ssm:StartSession", f"arn:aws:ssm:{R}:{A}:document/{P}_{name}_forward_{E}", region=None), True
+        )
+    yield Case("session: generic port forward document", request("ssm:StartSession", GENERIC_FORWARD_DOCUMENT, region=None), False)
+    yield Case("session: generic remote host port forward document", request("ssm:StartSession", f"{GENERIC_FORWARD_DOCUMENT}ToRemoteHost", region=None), False)
+    for name in INTERNAL_FORWARDS:
+        yield Case(
+            f"session: forward document of an internal port {name}",
+            request("ssm:StartSession", f"arn:aws:ssm:{R}:{A}:document/{P}_{name}_forward_{E}", region=None),
+            False,
+        )
+    yield Case(
+        "session: forward document of another project",
+        request("ssm:StartSession", f"arn:aws:ssm:{R}:{A}:document/other_project_airflow_forward_{E}", region=None),
+        False,
+    )
+    yield Case(
+        "session: forward document of another environment",
+        request("ssm:StartSession", f"arn:aws:ssm:{R}:{A}:document/{P}_airflow_forward_other", region=None),
+        False,
+    )
     yield Case(
         "session: another user's session",
         request("ssm:TerminateSession", arn("ssm", "session/other_user-0123456789abcdef"), extra={"aws:username": USER}, region=None),
@@ -2907,6 +2937,15 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def session_to_any_instance(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "ssm", "PortForwardToProjectHost")["Condition"]["StringEquals"]["ssm:resourceTag/Name"]
 
+    def generic_port_forward(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssmforward", "PortForwardDocumentsOnly")["Resource"].append(GENERIC_FORWARD_DOCUMENT)
+
+    def internal_port_forward(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssmforward", "PortForwardDocumentsOnly")["Resource"].append(f"arn:aws:ssm:{R}:{A}:document/{P}_polaris_forward_{E}")
+
+    def every_forward_document(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "ssmforward", "PortForwardDocumentsOnly")["Resource"] = f"arn:aws:ssm:{R}:{A}:document/{P}_*_forward_{E}"
+
     def console_of_any_named_instance(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "ec2", "ReadProjectHostConsole")["Condition"]["StringEquals"]["aws:ResourceTag/Name"]
 
@@ -4075,6 +4114,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "PassRole to any service": ("PassRole task_execution to ec2.amazonaws.com", pass_role_any_service),
         "PassRole of the host role": ("PassRole ecs_host is not the user's", pass_host_role),
         "port forwarding to any tagged instance": ("session: another host name", session_to_any_instance),
+        "the generic port forward document is granted": ("session: generic port forward document", generic_port_forward),
+        "a forward document for an internal port is granted": ("session: forward document of an internal port polaris", internal_port_forward),
+        "every forward document of the project is granted": ("session: forward document of an internal port", every_forward_document),
         "sessions of another user": ("session: another user's session", session_of_any_user),
         "console output of any instance with the project tag": ("console: another host name", console_of_any_named_instance),
         "console output of any project's host": ("console: instance of another project", console_of_any_project),

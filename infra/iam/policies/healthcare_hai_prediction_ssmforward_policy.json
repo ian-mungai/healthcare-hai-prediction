@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PortForwardDocumentsOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession"
+      ],
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_catalog_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_openmetadata_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_airflow_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_mlflow_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_streamlit_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_grafana_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_prometheus_forward_${ENVIRONMENT}"
+      ]
+    }
+  ]
+}
