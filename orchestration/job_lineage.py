@@ -8,14 +8,20 @@ any of them missing nothing is read or sent.
 - After a successful ``pin``: the task's START (``start_lines``).
 - After a successful ``upload``: one START and one COMPLETE per published table (``table_lines``), built by the same code as the Airflow evidence step's
   (``ecs_lineage.layer_table_events``) from the run folder that the upload just copied to S3: the pin file, the output record and the per-table inputs
-  record. The versions are the snapshots the job read and published. With the identity of ``LINEAGE_INVOCATION`` the events have the same run IDs, job
-  names and bytes as the evidence step's, so an event sent from here and one sent from Airflow for the same table are the same event and OpenMetadata
-  keeps one edge.
+  record. The versions are the snapshots the job read and published. With the identity of ``LINEAGE_INVOCATION`` and the two times the job writes into
+  its run folder (``stamp_times``: the task start by the pin, the time the upload began by the upload), which the upload copies to S3 where the evidence
+  step reads them (``ecs_lineage.job_times``), the events have the same run IDs, job names, times and bytes as the evidence step's, so an event sent from
+  here and one sent from Airflow for the same table are the same event and OpenMetadata keeps one edge. The only events that differ in content are the
+  task's START (the job sends it before the outcome of the run is known, so its run facet says not_applicable where the replay's says complete) and the
+  task's FAIL and terminal events (the job's clock at the failure against the launch records' end time).
 - After a failed ``pin`` or ``upload``: the task's FAIL (``failure_lines``). A job that is killed sends nothing; the Airflow side sends its FAIL from the
   launch records. OpenMetadata 2.0.7 writes nothing for an event without both inputs and outputs, so START and FAIL say what happened and draw no edge;
   only a table's COMPLETE does.
 
 Sending is bounded and never fails the job (``emit``): every failure, including a bug of this module, is one line on standard error without the credential.
+It also never makes a succeeding job late: ``LINEAGE_INVOCATION`` carries the absolute launch deadline, and a send happens only when it can use its whole
+budget and ``RESERVE_SECONDS`` remain after it (``delivery_budget``); otherwise nothing is sent and the line on standard error says why. The Airflow side
+sends the same events later.
 
 The job's image has no ``jsonschema``: the events are not checked against the OpenLineage schema here (the cases check them), and the records are checked
 by every rule but their closed schemas (``JOB_CHECKS``). The job does not read the input run's evidence again, because its pin phase compared the pins
@@ -27,6 +33,7 @@ This module imports nothing from Airflow, from ``scripts`` or from ``jsonschema`
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -42,6 +49,7 @@ from orchestration.snapshots import SnapshotError, checked_input_record, checked
 INVOCATION_VARIABLE = "LINEAGE_INVOCATION"
 START_SECONDS = 10.0  # the whole send of the task's START or FAIL, builder included
 TABLE_SECONDS = 120.0  # the whole send of a layer's per-table events, builder included: about 140 events at 0.22 s each
+RESERVE_SECONDS = 1800.0  # time a send never uses: the phases after the upload (gold maintenance, features Feast), the scratch wipe, the launcher's poll
 JOB_CHECKS = ecs_lineage.Checks(inputs=checked_input_record, outputs=checked_snapshot_record, frozen=False)
 DAG_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,249}")  # the patterns of data_contracts/orchestration/submission_request.schema.json
 DAG_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+~=-]{0,249}")
@@ -62,6 +70,7 @@ class JobRun:
     invocation: dict[str, Any]
     input_run: str
     started_at: str
+    deadline: float = 0.0  # the absolute launch deadline, epoch seconds: the job must have ended by then
 
     @property
     def model(self) -> str:
@@ -75,12 +84,13 @@ class JobRun:
 
 
 def parse_invocation(text: str) -> dict[str, Any]:
-    """The identity fields of ``LINEAGE_INVOCATION`` (``ecs_lineage.invocation_text``), exactly those, each in the form the submission request allows."""
+    """The fields of ``LINEAGE_INVOCATION`` (``ecs_lineage.invocation_text``), exactly those: the identity, each field in the form the submission request
+    allows, the input run bound at launch and the absolute launch deadline."""
     try:
         found = json.loads(text, object_pairs_hook=ecs_lineage.unique_object)
     except (ValueError, RecursionError):
         raise LineageRefused(f"{INVOCATION_VARIABLE} is not JSON") from None
-    fields = {*ecs_lineage.INVOCATION_FIELDS, "input_run"}
+    fields = {*ecs_lineage.INVOCATION_FIELDS, "input_run", "deadline_epoch"}
     if not isinstance(found, dict) or set(found) != fields:
         raise LineageRefused(f"{INVOCATION_VARIABLE} does not have exactly the fields {sorted(fields)}")
     attempt = found["attempt"]
@@ -91,6 +101,9 @@ def parse_invocation(text: str) -> dict[str, Any]:
         raise LineageRefused(f"{INVOCATION_VARIABLE} names task {found['task_id']!r}, not the job task {ecs_lineage.JOB_TASK!r}")
     if not isinstance(attempt, int) or isinstance(attempt, bool) or not 1 <= attempt <= 99:
         raise LineageRefused(f"{INVOCATION_VARIABLE} holds an attempt that is not a whole number from 1 to 99")
+    deadline = found["deadline_epoch"]
+    if not isinstance(deadline, int) or isinstance(deadline, bool) or not 0 < deadline < 2**33:
+        raise LineageRefused(f"{INVOCATION_VARIABLE} holds a launch deadline that is not a whole number of epoch seconds")
     return dict(found)
 
 
@@ -114,7 +127,40 @@ def job_run(text: str, layer: str, run: str, feature_set: str, folder: Path, sta
         "task_id": found["task_id"],
         "dag_run_id": found["dag_run_id"],
     }
-    return JobRun(layer, run, feature_set, folder, invocation, found["input_run"], started_at)
+    return JobRun(layer, run, feature_set, folder, invocation, found["input_run"], started_at, float(found["deadline_epoch"]))
+
+
+def delivery_budget(cap: float, left: float, *, failed: bool = False) -> tuple[float, str]:
+    """The seconds a send may take and, when it may take none, why. ``left`` is the time before the earlier of the launch's absolute deadline and the task's
+    own. A job that is still succeeding sends only when ``RESERVE_SECONDS`` remain after the whole of ``cap``, so no send can push it past the launcher's
+    deadline, where the launcher stops the task and records a timeout for work that finished. A job that has already failed has no outcome left to lose: its
+    FAIL gets what remains up to ``cap``."""
+    if failed:
+        return (min(cap, left), "") if left > 0 else (0.0, f"the deadline has passed ({left:.0f} s left)")
+    if left < cap + RESERVE_SECONDS:
+        need = f"{cap + RESERVE_SECONDS:.0f} s (its {cap:.0f} s and a reserve of {RESERVE_SECONDS:.0f} s)"
+        return 0.0, f"only {max(left, 0):.0f} s remain before the deadline and a send needs {need}"
+    return cap, ""
+
+
+def stamp_times(folder: Path, run_id: str, *, started_at: str | None = None, completed_at: str | None = None) -> dict[str, Any]:
+    """Write the run's lineage times (``ecs_lineage.TIMES_FILE``) into its run folder and return the record. Each time is written once and never changed: the
+    task start by the pin, the time the upload began by the upload, so a repeated phase keeps the first. The upload copies the record to S3, where the
+    evidence step reads the same two times that the job sends its events with."""
+    path = folder / ecs_lineage.TIMES_FILE
+    record: dict[str, Any] = {"schema": 1, "run_id": run_id}
+    if path.is_file():
+        record = ecs_lineage.parse_record(str(path), path.read_bytes())
+        if not isinstance(record, dict) or record.get("schema") != 1 or record.get("run_id") != run_id:
+            raise LineageRefused(f"{path.name}: is not the record of run {run_id}")
+    for name, value in (("started_at", started_at), ("completed_at", completed_at)):
+        if value is not None and name not in record:
+            record[name] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".part")
+    temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+    return record
 
 
 def facts(run: JobRun, ended_at: str, outcome: str) -> LaunchFacts:

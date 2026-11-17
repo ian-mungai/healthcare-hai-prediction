@@ -70,7 +70,7 @@ import time
 import urllib.parse
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -129,6 +129,10 @@ PIN_TEMPLATES = ("pin_silver", "pin_gold")  # the only templates whose invocatio
 TERMINAL = {"succeeded": "COMPLETE", "cancelled": "ABORT"}  # every other outcome is FAIL
 JOB_TASK = "job"  # the task of a one-job chain that launches (``dag_runtime.CHAIN_TASKS``); its identity is what the table events of a job name
 INVOCATION_FIELDS = ("template", "dag_id", "task_id", "dag_run_id", "attempt")
+TIMES_FILE = (
+    "lineage_times.json"  # beside the other run records: the run's two lineage times, written by the job (scripts/lakehouse/layer_run.py) when it sends lineage
+)
+TIMES_KEYS = frozenset({"schema", "run_id", "started_at", "completed_at"})
 
 
 class LineageRefused(ValueError):
@@ -313,13 +317,37 @@ def step_invocation(request: Mapping[str, Any]) -> dict[str, Any]:
     return body
 
 
-def invocation_text(request: Mapping[str, Any]) -> str:
+def invocation_text(request: Mapping[str, Any], deadline: int) -> str:
     """The lineage identity that the launch gives a job's phases (``LINEAGE_INVOCATION``): the five fields of the launching step's request that name its
-    events, with the task of the one-job chain (``JOB_TASK``, the task the evidence step's per-table events name) and the input run bound at launch. The job
-    rebuilds from it the same run IDs, job names and run facet that the evidence step builds, so an event sent from the job and one sent from Airflow for the
-    same table are the same event."""
+    events, with the task of the one-job chain (``JOB_TASK``, the task the evidence step's per-table events name), the input run bound at launch and
+    ``deadline``, the absolute time (epoch seconds) before which the job must end. The job rebuilds from the identity the same run IDs, job names and run
+    facet that the evidence step builds, so an event sent from the job and one sent from Airflow for the same table are the same event, and it keeps its
+    lineage delivery inside the deadline. ``deadline`` is the launch's own limit counted from the time the launch request is built, which is never later
+    than the time the launcher counts it from (the task start it records after RunTask), so it never lets a send run past the launcher's deadline."""
     body = {name: request[name] for name in INVOCATION_FIELDS} | {"task_id": JOB_TASK, "input_run": request.get("input_run_id") or "latest"}
-    return canonical(body)
+    return canonical(body | {"deadline_epoch": int(deadline)})
+
+
+def job_times(evidence: S3Evidence, layer: str, run_id: str) -> tuple[str, str] | None:
+    """The two times that a job which sent lineage wrote for its run (``TIMES_FILE``): the task start and the time its upload began. Both senders of the run's
+    per-table events use them, so one run's events have one set of times. None when the job wrote no record, or one without its upload time (a job that died
+    before the upload, a job of an earlier code revision, or a role that is denied the key, which is read as absent like the output record): the launch
+    records' times then stand. A record that breaks a rule is refused with its key."""
+    key = f"{EVIDENCE_PREFIX}/{layer}/{run_id}/{TIMES_FILE}"
+    try:
+        record = evidence.read(key)
+    except EvidenceDenied:
+        return None
+    if record is None:
+        return None
+    if not isinstance(record, dict) or not {"schema", "run_id", "started_at"} <= set(record) <= TIMES_KEYS or record["schema"] != 1:
+        raise LineageRefused(f"{key}: does not have the keys schema, run_id and started_at, and completed_at when the upload began")
+    if record["run_id"] != run_id:
+        raise LineageRefused(f"{key}: belongs to another run ({record['run_id']})")
+    started = timestamp_text(record["started_at"], f"{key} started_at")
+    if "completed_at" not in record:
+        return None
+    return started, timestamp_text(record["completed_at"], f"{key} completed_at")
 
 
 def timestamp_text(value: Any, where: str) -> str:
@@ -670,6 +698,9 @@ def layer_table_events(
     if facts.outcome != "succeeded":
         return []
     layer = facts.job
+    times = job_times(evidence, layer, facts.run_id)
+    if times is not None:  # the job's own times, which it sends with: one run, one set of event times
+        facts = replace(facts, started_at=times[0], ended_at=times[1])
     full = job_lineage(layer, invocation, declared, evidence, facts, checks)
     versioned = {(item["namespace"], item["name"]): item for item in [*full.inputs, *full.outputs]}
     reads = table_inputs(evidence, layer, facts.run_id, declared)
@@ -788,6 +819,9 @@ class LineageSource:
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
         if self.layer == BRONZE_JOB:
             return JobLineage([], [], launch_facet(self.invocation, facts, "not_applicable", [])), facts
+        if self.layer in TABLE_EVENT_JOBS:  # the task's START carries the start the job sent its own START with
+            times = job_times(self.evidence, self.layer, self.run_id)
+            facts = facts if times is None else replace(facts, started_at=times[0])
         full = job_lineage(self.layer, self.invocation, self.declared, self.evidence, facts)
         return (JobLineage([], [], full.launch) if self.layer in TABLE_EVENT_JOBS else full), facts
 

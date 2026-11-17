@@ -668,7 +668,14 @@ def after_needs_the_previous_job_to_pass() -> None:
             "attempt": 1,
             "input_run": SILVER_RUN,
         }
-        require(json.loads(lineage["pin"]) == wanted, f"the lineage identity is {lineage['pin']}")
+        found = json.loads(lineage["pin"])
+        deadline = found.pop("deadline_epoch")
+        require(found == wanted, f"the lineage identity is {lineage['pin']}")
+        # the absolute launch deadline: the request's build time plus the job's 6 hours, never later than the launcher's (task start plus 6 hours)
+        require(
+            int(passed.time.now) - 60 <= deadline - 21600 <= int(passed.time.now),
+            f"the lineage deadline {deadline} is not the launch time plus the job's deadline",
+        )
         current.step("gold_build")
         require(passed.tasks_started() == 2, "a later gold step launched again")
 

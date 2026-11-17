@@ -102,7 +102,6 @@ LINEAGE_PHASES = (
     "pin",
     "upload",
 )  # the phases that send lineage events: a START after the pin, the per-table events after the upload and a FAIL after either failed
-LINEAGE_MARGIN_SECONDS = 30.0  # the task time that is kept for the phase's own end after the lineage send
 STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
@@ -1165,29 +1164,65 @@ def lineage_time(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
+def lineage_wanted(job: Job, phase: str, dry: bool) -> bool:
+    """Whether this phase of a real, launched run has the lineage settings from the launch (a dry run, a local run and a release or reload launch have none)."""
+    return phase in LINEAGE_PHASES and not dry and job.mode == "real" and job.local is None and not launch_phase() and bool(os.environ.get(LINEAGE_VARIABLE))
+
+
+def stamp_upload_time(job: Job, phase: str, dry: bool) -> None:
+    """Write the time the upload began into the run's lineage times, before the upload copies the run folder to S3 (``job_lineage.stamp_times``): the evidence
+    step reads the same two times that the job sends its events with. A failure is one line on standard error and never fails the phase."""
+    try:
+        if phase == "upload" and lineage_wanted(job, phase, dry):
+            from orchestration import job_lineage
+
+            job_lineage.stamp_times(job.folder, job.run, completed_at=lineage_time(time.time()))
+    except StepError:  # the task deadline's alarm may land here: it ends the phase, as anywhere else in it
+        raise
+    except Exception as error:  # the lineage record is not the job's work
+        sys.stderr.write(f"layer_run: the lineage times of the upload were not recorded: {type(error).__name__}\n")
+
+
 def send_lineage(job: Job, phase: str, *, failed: bool, dry: bool) -> None:
     """Send the lineage events of a finished ``pin`` or ``upload`` phase (``orchestration/job_lineage.py``): the task's START after a pin, a START and a
     COMPLETE per published table after an upload, the task's FAIL after either failed. Nothing happens unless the launch gave the phase its lineage
-    settings, and nothing here can fail the phase or change its exit code: the send is bounded by ``job_lineage.emit`` and by what is left of the task, and
-    any error of this function is one line on standard error. The module is imported only when the settings are there, because the other images do not
-    hold what it imports."""
+    settings, and nothing here can fail the phase, change its exit code or make a succeeding job late: the send is bounded by ``job_lineage.emit`` and
+    runs only inside what is left of the earlier of the launch's absolute deadline (``LINEAGE_INVOCATION``, which the launcher also counts and which starts
+    before the init container) and the task's own, after a reserve (``job_lineage.delivery_budget``). A skip names its reason on standard error; any error of
+    this function is one line there too. The module is imported only when the settings are there, because the other images do not hold what it imports."""
     try:
-        if phase not in LINEAGE_PHASES or dry or job.mode != "real" or job.local is not None or launch_phase() or not os.environ.get(LINEAGE_VARIABLE):
+        if not lineage_wanted(job, phase, dry):
             return
         from orchestration import job_lineage
 
-        left = task_seconds_left(job) - LINEAGE_MARGIN_SECONDS
-        started = (job.code.parent / STARTED_FILE).read_text().strip()
-        run = job_lineage.job_run(os.environ[LINEAGE_VARIABLE], job.layer, job.run, job.feature_set, job.folder, lineage_time(float(started)))
+        init = lineage_time(float((job.code.parent / STARTED_FILE).read_text().strip()))
+        record = (
+            None if failed else job_lineage.stamp_times(job.folder, job.run, started_at=init)
+        )  # the pin writes the task start once; a failed phase writes nothing
+        run = job_lineage.job_run(os.environ[LINEAGE_VARIABLE], job.layer, job.run, job.feature_set, job.folder, record["started_at"] if record else init)
+        what, cap = (
+            ("failure", job_lineage.START_SECONDS)
+            if failed
+            else ("start", job_lineage.START_SECONDS)
+            if phase == "pin"
+            else ("table events", job_lineage.TABLE_SECONDS)
+        )
+        seconds, why = job_lineage.delivery_budget(cap, min(run.deadline - time.time(), task_seconds_left(job)), failed=failed)
+        if not seconds:
+            job_lineage.note(what, f"not sent: {why}")
+            return
         ended = lineage_time(time.time())
         if failed:
-            job_lineage.emit("failure", lambda: job_lineage.failure_lines(run, phase, ended), os.environ, min(job_lineage.START_SECONDS, left))
+            job_lineage.emit(what, lambda: job_lineage.failure_lines(run, phase, ended), os.environ, seconds)
         elif phase == "pin":
-            job_lineage.emit("start", lambda: job_lineage.start_lines(run), os.environ, min(job_lineage.START_SECONDS, left))
+            job_lineage.emit(what, lambda: job_lineage.start_lines(run), os.environ, seconds)
         else:
             manifest = job.folder / DBT_TARGET.get(job.layer, Path("target")) / "manifest.json"
-            inputs = inputs_record(job, manifest, None) if manifest.is_file() else None
-            job_lineage.emit("table events", lambda: job_lineage.table_lines(run, ended, inputs), os.environ, min(job_lineage.TABLE_SECONDS, left))
+
+            def build() -> list[str]:  # inside the send's budget: reading the manifest is part of it
+                return job_lineage.table_lines(run, ended, inputs_record(job, manifest, None) if manifest.is_file() else None)
+
+            job_lineage.emit(what, build, os.environ, seconds)
     except Exception as error:  # the job's work is done or has already failed: no lineage may change its exit code
         sys.stderr.write(f"layer_run: lineage of the {phase} phase was not sent: {type(error).__name__}\n")
 
@@ -1314,6 +1349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.phase != "pin" and not launch_phase():
                 check_code_run(job)
                 check_feature_set(job)
+            stamp_upload_time(job, args.phase, dry)
             dispatch(job, args.phase, args)
     except (
         StepError,
@@ -1330,6 +1366,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
         send_lineage(job, args.phase, failed=True, dry=dry)
         return 1
+    except Exception:  # any other ordinary failure (an SDK error, a bug) still gets its FAIL, and then fails the job as it would have: the exception goes on
+        send_lineage(job, args.phase, failed=True, dry=dry)
+        raise
     send_lineage(job, args.phase, failed=False, dry=dry)
     return 0
 

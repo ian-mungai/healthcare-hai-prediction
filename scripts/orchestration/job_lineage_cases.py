@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,6 +49,11 @@ def request_of(layer: str, input_run: str | None = None, task_id: str = "job") -
     return request
 
 
+def text_of(request: dict[str, Any], left: float = 6 * 3600) -> str:
+    """``LINEAGE_INVOCATION`` for a launch whose absolute deadline is ``left`` seconds away (a layer job's deadline is 6 hours)."""
+    return ecs_lineage.invocation_text(request, int(time.time() + left))
+
+
 def environ_for(url: str, text: str, kind: str = base.PROJECT_TRANSPORT) -> dict[str, str]:
     return {
         ecs_lineage.TRANSPORT_TYPE: kind,
@@ -72,7 +78,7 @@ def write_run_folder(bucket: Any, layer: str, run: str, folder: Path) -> bytes |
 
 def job_of(layer: str, folder: Path, feature_set: str = "") -> job_lineage.JobRun:
     run, input_run, _ = TEXT_FOR[layer]
-    text = ecs_lineage.invocation_text(request_of(layer, input_run))
+    text = text_of(request_of(layer, input_run))
     return job_lineage.job_run(text, layer, run, feature_set, folder, base.START)
 
 
@@ -146,7 +152,7 @@ def job_events_equal_the_airflow_side_events() -> None:
     with tempfile.TemporaryDirectory() as name:
         inputs = write_run_folder(bucket, "features", base.MODEL_RUN, Path(name))
         request = {**base.invocation("features"), "run_id": base.MODEL_RUN, "task_id": "job", "input_run_id": base.RUN_OF["features"]}
-        text = ecs_lineage.invocation_text(request)
+        text = text_of(request)
         run = job_lineage.job_run(text, "features", base.MODEL_RUN, "m1", Path(name), base.START)
         lines = job_lineage.table_lines(run, ENDED, inputs, declared=declared)
     wanted = [
@@ -163,9 +169,7 @@ def job_events_resolve_in_the_stand_in_receiver() -> None:
     for layer in ("silver", "gold", "features"):
         with folder_of(layer) as (_, folder, inputs), base.receiving(catalogue=wanted) as receiver:
             run = job_of(layer, folder)
-            sent = job_lineage.emit(
-                "table events", partial_lines(run, inputs), environ_for(receiver.url, ecs_lineage.invocation_text(request_of(layer, TEXT_FOR[layer][1]))), 30.0
-            )
+            sent = job_lineage.emit("table events", partial_lines(run, inputs), environ_for(receiver.url, text_of(request_of(layer, TEXT_FOR[layer][1]))), 30.0)
             lines = job_lineage.table_lines(run, ENDED, inputs)
         require(sent == len(lines) > 0, f"{layer}: sent {sent} of {len(lines)}")
         statuses = [status for status, _ in receiver.replies]
@@ -183,7 +187,7 @@ def partial_lines(run: job_lineage.JobRun, inputs: bytes | None) -> Callable[[],
 def a_failed_send_never_fails_the_job() -> None:
     """A receiver that answers 500, a refused connection, a credential the HTTP client refuses, a builder that raises, and a receiver that stalls past the
     deadline each end ``emit`` with a count and no exception, inside the deadline, with one line on standard error that never shows the credential."""
-    text = ecs_lineage.invocation_text(request_of("silver"))
+    text = text_of(request_of("silver"))
     lines = ["{}", "{}"]
     with answering(500) as failing:
         err = io.StringIO()
@@ -222,7 +226,7 @@ def a_failed_send_never_fails_the_job() -> None:
 
 def nothing_is_read_or_sent_without_the_settings() -> None:
     """Without the HTTP settings or the invocation, the builder never runs and no request is made; a transport type that is not an HTTP one sends nothing."""
-    text = ecs_lineage.invocation_text(request_of("silver"))
+    text = text_of(request_of("silver"))
     calls: list[int] = []
 
     def build() -> list[str]:
@@ -244,10 +248,11 @@ def nothing_is_read_or_sent_without_the_settings() -> None:
 
 
 def the_invocation_variable_is_closed() -> None:
-    """The variable holds exactly the launching step's six identity fields. Anything else is refused by name, so a job never sends an event under an identity
-    the launch did not give it."""
-    good = json.loads(ecs_lineage.invocation_text(request_of("gold", base.RUN_OF["silver"])))
-    require(set(good) == {"template", "dag_id", "task_id", "dag_run_id", "attempt", "input_run"} and good["task_id"] == ecs_lineage.JOB_TASK, f"fields {good}")
+    """The variable holds exactly the launching step's five identity fields, the input run bound at launch and the absolute launch deadline. Anything else
+    is refused by name, so a job never sends an event under an identity the launch did not give it."""
+    good = json.loads(text_of(request_of("gold", base.RUN_OF["silver"])))
+    fields = {"template", "dag_id", "task_id", "dag_run_id", "attempt", "input_run", "deadline_epoch"}
+    require(set(good) == fields and good["task_id"] == ecs_lineage.JOB_TASK, f"fields {good}")
     run, _, _ = TEXT_FOR["gold"]
 
     def parse(text: str) -> None:
@@ -259,6 +264,11 @@ def the_invocation_variable_is_closed() -> None:
         "a list": "[]",
         "a missing field": json.dumps({key: value for key, value in good.items() if key != "attempt"}),
         "an extra field": json.dumps({**good, "mode": "real"}),
+        "no launch deadline": json.dumps({key: value for key, value in good.items() if key != "deadline_epoch"}),
+        "a launch deadline of 0": json.dumps({**good, "deadline_epoch": 0}),
+        "a text launch deadline": json.dumps({**good, "deadline_epoch": str(good["deadline_epoch"])}),
+        "a boolean launch deadline": json.dumps({**good, "deadline_epoch": True}),
+        "a fractional launch deadline": json.dumps({**good, "deadline_epoch": good["deadline_epoch"] + 0.5}),
         "an attempt of 0": json.dumps({**good, "attempt": 0}),
         "an attempt of 100": json.dumps({**good, "attempt": 100}),
         "a text attempt": json.dumps({**good, "attempt": "1"}),
@@ -348,7 +358,7 @@ def the_job_images_need_no_jsonschema() -> None:
     ``ecs_lineage``, ``snapshots`` and the record checks import and build the same per-table events as with them."""
     with folder_of("gold") as (_, folder, inputs):
         wanted = job_lineage.table_lines(job_of("gold", folder), ENDED, inputs)
-        text = ecs_lineage.invocation_text(request_of("gold", base.RUN_OF["silver"]))
+        text = text_of(request_of("gold", base.RUN_OF["silver"]))
         with mock.patch.dict(sys.modules):  # restores the whole table on exit, so the real modules come back
             for name in [name for name in sys.modules if name.split(".")[0] in ("orchestration", "jsonschema", "referencing", "jsonschema_specifications")]:
                 del sys.modules[name]
@@ -362,43 +372,99 @@ def the_job_images_need_no_jsonschema() -> None:
     require(found == wanted and len(found) > 2, "the events built without jsonschema differ from the events built with it")
 
 
-class Phase:
-    """One run of ``layer_run.main`` for a phase, over a real run folder and the stand-in receiver, with the phase's own work stubbed."""
+@dataclass
+class Workspace:
+    """The job's work folder at a phase: the run folder with the records of the run, the per-table inputs record and the evidence bucket they came from."""
 
-    def __init__(self, layer: str, phase: str, url: str | None, *, fails: bool = False, extra: dict[str, str] | None = None) -> None:
-        self.layer, self.phase, self.url, self.fails, self.extra = layer, phase, url, fails, extra or {}
+    layer: str
+    work: Path
+    folder: Path
+    inputs: bytes | None
+    bucket: Any
+
+
+@contextmanager
+def workspace(layer: str, init_age: float = 120.0) -> Iterator[Workspace]:
+    """A work folder whose init container wrote the task start ``init_age`` seconds ago."""
+    run, _, _ = TEXT_FOR[layer]
+    bucket = base.template_bucket()
+    with tempfile.TemporaryDirectory() as name:
+        work = Path(name)
+        folder = work / "code/data/analytics/dbt/runs" / run
+        inputs = write_run_folder(bucket, layer, run, folder)
+        manifest = folder / layer_run.DBT_TARGET.get(layer, Path("target")) / "manifest.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text("{}")
+        (work / layer_run.STARTED_FILE).write_text(f"{time.time() - init_age:.0f}\n")
+        yield Workspace(layer, work, folder, inputs, bucket)
+
+
+class Phase:
+    """One run of ``layer_run.main`` for a phase, over a real run folder and the stand-in receiver, with the phase's own work stubbed. ``left`` is how many
+    seconds of the launch deadline remain, ``fails`` makes the phase raise a ``StepError`` and ``error`` any exception or exit instead."""
+
+    def __init__(
+        self,
+        layer: str,
+        phase: str,
+        url: str | None,
+        *,
+        fails: bool = False,
+        error: BaseException | None = None,
+        extra: dict[str, str] | None = None,
+        left: float = 6 * 3600,
+        init_age: float = 120.0,
+        ws: Workspace | None = None,
+    ) -> None:
+        self.layer, self.phase, self.url, self.fails, self.error, self.extra = layer, phase, url, fails, error, extra or {}
+        self.left, self.init_age, self.ws = left, init_age, ws
+        self.err = io.StringIO()
 
     def run(self) -> int:
+        if self.ws is not None:
+            return self.go(self.ws)
+        with workspace(self.layer, self.init_age) as ws:
+            return self.go(ws)
+
+    def go(self, ws: Workspace) -> int:
         run, input_run, _ = TEXT_FOR[self.layer]
-        bucket = base.template_bucket()
-        text = ecs_lineage.invocation_text(request_of(self.layer, input_run))
-        with tempfile.TemporaryDirectory() as name:
-            work = Path(name)
-            folder = work / "code/data/analytics/dbt/runs" / run
-            inputs = write_run_folder(bucket, self.layer, run, folder)
-            manifest = folder / layer_run.DBT_TARGET.get(self.layer, Path("target")) / "manifest.json"
-            manifest.parent.mkdir(parents=True, exist_ok=True)
-            manifest.write_text("{}")
-            environ = {"LAYER_DRY_RUN": "", "LAYER_PHASE": "", **self.extra}
-            if self.url:
-                environ |= environ_for(self.url, text)
-            arguments = [self.phase, "--layer", self.layer, "--run", run, "--work", name, "--code-run-id", run, "--bucket", BUCKET, "--input-run", input_run]
+        text = text_of(request_of(self.layer, input_run), self.left)
+        environ = {"LAYER_DRY_RUN": "", "LAYER_PHASE": "", **self.extra}
+        if self.url:
+            environ |= environ_for(self.url, text)
+        arguments = [
+            self.phase,
+            "--layer",
+            self.layer,
+            "--run",
+            run,
+            "--work",
+            str(ws.work),
+            "--code-run-id",
+            run,
+            "--bucket",
+            BUCKET,
+            "--input-run",
+            input_run,
+        ]
 
-            def dispatch(job: Any, phase: str, args: Any) -> None:
-                if self.fails:
-                    raise layer_run.StepError(f"{phase} failed")
+        def dispatch(job: Any, phase: str, args: Any) -> None:
+            if self.error is not None:
+                raise self.error
+            if self.fails:
+                raise layer_run.StepError(f"{phase} failed")
 
-            with (
-                mock.patch.dict("os.environ", environ, clear=False),
-                mock.patch.object(layer_run, "dispatch", dispatch),
-                mock.patch.object(layer_run, "startup"),
-                mock.patch.object(layer_run, "check_code_run"),
-                mock.patch.object(layer_run, "check_feature_set"),
-                mock.patch.object(layer_run.task_capacity, "apply"),
-                mock.patch.object(layer_run, "inputs_record", lambda job, manifest, tables: inputs),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                return int(layer_run.main(arguments))
+        with (
+            mock.patch.dict("os.environ", environ, clear=False),
+            mock.patch.object(layer_run, "dispatch", dispatch),
+            mock.patch.object(layer_run, "startup"),
+            mock.patch.object(layer_run, "check_code_run"),
+            mock.patch.object(layer_run, "check_feature_set"),
+            mock.patch.object(layer_run.task_capacity, "apply"),
+            mock.patch.object(layer_run, "inputs_record", lambda job, manifest, tables: ws.inputs),
+            contextlib.redirect_stderr(self.err),
+        ):
+            return int(layer_run.main(arguments))
 
 
 def the_layer_driver_sends_at_pin_and_upload_only() -> None:
@@ -436,6 +502,170 @@ def the_layer_driver_sends_at_pin_and_upload_only() -> None:
         require(Phase("gold", "upload", failing.url, fails=True).run() == 1, "a failed upload still exits 1 when its FAIL is refused")
 
 
+def delivery_never_crosses_the_launch_deadline() -> None:
+    """A job's lineage delivery runs inside what is left of the absolute launch deadline that the launcher also counts (which starts before the init
+    container), after a reserve for the phases that follow the upload and the launcher's own poll, and is skipped with a recorded reason when that time is
+    short, so a send never turns a successful job into a launcher timeout. The review's case: 2 s left, a receiver that answers after 3 s."""
+    cap, reserve = job_lineage.TABLE_SECONDS, job_lineage.RESERVE_SECONDS
+    require(reserve >= 600, f"the reserve of {reserve} s is under the launcher's stop and poll time and the maintenance and Feast phases that follow")
+    for left, seconds in ((cap + reserve + 1, cap), (cap + reserve, cap), (cap + reserve - 1, 0.0), (2.0, 0.0), (0.0, 0.0), (-5.0, 0.0)):
+        got, why = job_lineage.delivery_budget(cap, left)
+        require(got == seconds and bool(why) == (seconds == 0.0), f"{left} s left gives {got} s and {why!r}, not {seconds}")
+    for left, seconds in ((600.0, 10.0), (3.0, 3.0), (0.5, 0.5), (0.0, 0.0), (-1.0, 0.0)):
+        got, why = job_lineage.delivery_budget(10.0, left, failed=True)
+        require(got == seconds and bool(why) == (seconds == 0.0), f"a FAIL with {left} s left gets {got} s and {why!r}, not {seconds}")
+    with base.receiving(delay=3.0) as slow:
+        phase = Phase("silver", "upload", slow.url, left=2.0)
+        began = time.monotonic()
+        code = phase.run()
+        spent = time.monotonic() - began
+        require(code == 0 and slow.requests == [] and spent < 2.5, f"2 s left: exit {code}, {len(slow.requests)} requests, {spent:.2f} s")
+        require("not sent" in phase.err.getvalue() and "deadline" in phase.err.getvalue(), f"the skip is not recorded: {phase.err.getvalue()!r}")
+        phase = Phase("silver", "pin", slow.url, left=reserve - 1)
+        require(phase.run() == 0 and slow.requests == [] and "deadline" in phase.err.getvalue(), "a START is skipped inside the reserve too")
+    with base.receiving() as fast:
+        late = Phase("gold", "upload", fast.url, init_age=21600 - 100)
+        require(
+            late.run() == 0 and fast.requests == [] and "deadline" in late.err.getvalue(),
+            "a task whose init container started 100 s before its own deadline sends nothing",
+        )
+        enough = Phase("gold", "upload", fast.url, left=cap + reserve + 60)
+        require(enough.run() == 0 and len(fast.requests) > 2, f"with the time and the reserve the events go out: {len(fast.requests)}")
+        before = len(fast.requests)
+        require(
+            Phase("gold", "upload", fast.url, fails=True, left=2.0).run() == 1 and len(fast.requests) == before + 1, "a FAIL inside the last seconds still goes"
+        )
+        require(
+            Phase("gold", "upload", fast.url, fails=True, left=-5.0).run() == 1 and len(fast.requests) == before + 1, "no FAIL after the deadline has passed"
+        )
+
+
+def the_two_senders_share_one_set_of_event_times() -> None:
+    """The job and the Airflow evidence step send the same table events for one run, byte for byte, with the times of one record that the job writes beside
+    its other run records (``lineage_times.json``: the init container's task start, written once by the pin, and the time the upload began, written once
+    by it), which the upload copies to S3 where the evidence step reads it. Launch, init, upload and task-end times all differ here, and the events carry
+    only the record's. A run with no complete record keeps the launch records' times."""
+    wanted = base.catalogue_of_the_mirror()
+    launch_times = {"2026-11-04T10:00:00Z", "2026-11-04T10:30:00Z"}
+    for layer in ("silver", "gold", "features"):
+        with workspace(layer) as ws, base.receiving(catalogue=wanted) as receiver:
+            require(Phase(layer, "pin", receiver.url, ws=ws).run() == 0, f"{layer}: pin")
+            started_event = json.loads(receiver.requests[-1]["body"])
+            before = len(receiver.requests)
+            require(Phase(layer, "upload", receiver.url, ws=ws).run() == 0, f"{layer}: upload")
+            sent = [item["body"].decode() for item in receiver.requests[before:]]
+            record = json.loads((ws.folder / ecs_lineage.TIMES_FILE).read_text())
+            copied = [
+                path.relative_to(ws.folder).as_posix() for path in layer_run.uploadable(layer_run.Job(layer, TEXT_FOR[layer][0], "real", ws.work / "code"))
+            ]
+            require(ecs_lineage.TIMES_FILE in copied, f"{layer}: the upload does not copy the lineage times record to S3: {copied}")
+            run = TEXT_FOR[layer][0]
+            base.put(
+                ws.bucket, f"{ecs_lineage.EVIDENCE_PREFIX}/{layer}/{run}/{ecs_lineage.TIMES_FILE}", record
+            )  # the upload copies the run folder to these keys
+            declared = ecs_lineage.declared_lineage(layer)
+            airflow = airflow_lines(layer, ws.bucket, declared)
+            absent = airflow_lines(layer, base.template_bucket(), declared)
+            unfinished = base.template_bucket()
+            base.put(
+                unfinished, f"{ecs_lineage.EVIDENCE_PREFIX}/{layer}/{run}/{ecs_lineage.TIMES_FILE}", {k: v for k, v in record.items() if k != "completed_at"}
+            )
+            incomplete = airflow_lines(layer, unfinished, declared)
+        require(
+            set(record) == {"schema", "run_id", "started_at", "completed_at"} and record["started_at"] != record["completed_at"], f"{layer}: record {record}"
+        )
+        require(sent == airflow and len(sent) > 2, f"{layer}: {len(sent)} job events differ from {len(airflow)} Airflow events")
+        started, completed = ecs_lineage.utc_time(record["started_at"]), ecs_lineage.utc_time(record["completed_at"])
+        times: dict[str, set[str]] = {event["eventType"]: set() for event in map(json.loads, sent)}
+        for event in map(json.loads, sent):
+            times[event["eventType"]].add(event["eventTime"])
+        require(times == {"START": {started}, "COMPLETE": {completed}}, f"{layer}: event times {times}, the record has {started} and {completed}")
+        require(not ({started, completed} & launch_times), f"{layer}: the case does not tell the record's times from the launch's")
+        require(started_event["eventTime"] == started, f"{layer}: the task START carries the record's start")
+        for label, lines in (("no record", absent), ("a record without the upload time", incomplete)):
+            found = {json.loads(line)["eventTime"] for line in lines}
+            require(found == launch_times, f"{layer}, {label}: the evidence step's times are {found}, not the launch records'")
+
+
+def the_replay_task_start_shares_the_job_start() -> None:
+    """The replay's task START has the job's START time when the job wrote it, and the job's START and the replay's differ in the run facet's outcome fields
+    only: the job sends its START at the end of the pin phase, before the outcome of the run is known, so it says not_applicable where the replay, which
+    reads the finished run, says complete. Nothing else differs."""
+    rig = base.Rig()
+    base.evidence_bucket(rig)
+    base.operator(rig, None).execute(base.context())
+    inv = ecs_lineage.step_invocation(request_of("gold", base.RUN_OF["silver"]))
+    started = "2026-11-04T09:59:30+00:00"
+    base.put(
+        rig.bucket,
+        f"{ecs_lineage.EVIDENCE_PREFIX}/gold/{base.RUN_OF['gold']}/{ecs_lineage.TIMES_FILE}",
+        {"schema": 1, "run_id": base.RUN_OF["gold"], "started_at": started, "completed_at": "2026-11-04T10:20:00+00:00"},
+    )
+    source = ecs_lineage.LineageSource(
+        "gold",
+        base.RUN_OF["gold"],
+        1,
+        inv,
+        base.DECLARED["gold"],
+        ecs_lineage.S3Evidence(rig.bucket, BUCKET),
+        base.S3LaunchStore(rig.bucket, BUCKET, base.PREFIX),
+    )
+    events = source.events()
+    require(events[0]["eventType"] == "START" and events[0]["eventTime"] == "2026-11-04T09:59:30Z", f"the replay START has time {events[0]['eventTime']}")
+    run = job_lineage.job_run(text_of(request_of("gold", base.RUN_OF["silver"])), "gold", base.RUN_OF["gold"], "", Path("/nonexistent"), started)
+    mine = json.loads(job_lineage.start_lines(run)[0])
+    meant_to_differ = ("snapshotState", "missingOutputs", "refusal")
+
+    def plain(event: dict[str, Any]) -> dict[str, Any]:
+        found = json.loads(json.dumps(event))
+        for name in meant_to_differ:
+            found["run"]["facets"]["haiLaunch"].pop(name, None)
+        return found
+
+    require(plain(mine) == plain(events[0]), f"the job's START and the replay's differ beyond {meant_to_differ}")
+    require(
+        mine["run"]["facets"]["haiLaunch"]["snapshotState"] == "not_applicable" and events[0]["run"]["facets"]["haiLaunch"]["snapshotState"] == "complete",
+        "the outcome fields",
+    )
+
+
+def any_ordinary_exception_sends_the_fail_and_propagates() -> None:
+    """A phase that dies of any ordinary exception, an SDK failure included (a denied pin claim is a botocore ClientError, a failed upload a boto3
+    S3UploadFailedError), sends the FAIL and then raises the same exception, so the job's failure and exit code are what they were. An exit that is not an
+    ``Exception`` (an interrupt, ``SystemExit``) sends nothing and propagates; with no settings nothing is sent; a refused FAIL still leaves the error."""
+    from boto3.exceptions import S3UploadFailedError
+    from botocore.exceptions import ClientError
+
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "not allowed"}}, "PutObject")
+    for phase, error in (
+        ("pin", denied),
+        ("upload", S3UploadFailedError(f"Failed to upload part: {CREDENTIAL}")),
+        ("upload", RuntimeError("a bug")),
+        ("pin", ZeroDivisionError("a bug")),
+    ):
+        with base.receiving() as receiver:
+            run = Phase("silver", phase, receiver.url, error=error)
+            raised = refuses(type(error), run.run)
+            require(raised is error, f"{phase} {type(error).__name__}: another exception came out: {raised!r}")
+            sent = [json.loads(item["body"]) for item in receiver.requests]
+            require([event["eventType"] for event in sent] == ["FAIL"], f"{phase} {type(error).__name__}: {len(sent)} requests")
+            require(phase in sent[0]["run"]["facets"]["haiLaunch"]["refusal"], f"{phase}: the FAIL names the phase")
+            require(CREDENTIAL not in json.dumps(sent), f"{phase} {type(error).__name__}: the FAIL carries the exception's text")
+    for exit_error in (KeyboardInterrupt(), SystemExit(3)):
+        with base.receiving() as receiver:
+            came = refuses(type(exit_error), Phase("gold", "upload", receiver.url, error=exit_error).run)
+            require(came is exit_error and receiver.requests == [], f"{exit_error!r} sent a request")
+    with base.receiving() as receiver:
+        refuses(RuntimeError, Phase("gold", "upload", None, error=RuntimeError("x")).run)
+        require(receiver.requests == [], "no settings, no request")
+    with answering(500) as refusing:
+        own = RuntimeError("the job's own failure")
+        require(refuses(RuntimeError, Phase("gold", "upload", refusing.url, error=own).run) is own and refusing.requests == 1, "a refused FAIL changes nothing")
+    with base.receiving() as receiver:
+        refuses(RuntimeError, Phase("gold", "build", receiver.url, error=RuntimeError("a bug")).run)
+        require(receiver.requests == [], "a phase that sends no lineage sends no FAIL for an ordinary exception either")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "job_events_equal_the_airflow_side_events": job_events_equal_the_airflow_side_events,
     "job_events_resolve_in_the_stand_in_receiver": job_events_resolve_in_the_stand_in_receiver,
@@ -446,4 +676,8 @@ CASES: dict[str, Callable[[], None]] = {
     "record_checks_without_jsonschema_equal_the_schema_checks": record_checks_without_jsonschema_equal_the_schema_checks,
     "the_job_images_need_no_jsonschema": the_job_images_need_no_jsonschema,
     "the_layer_driver_sends_at_pin_and_upload_only": the_layer_driver_sends_at_pin_and_upload_only,
+    "delivery_never_crosses_the_launch_deadline": delivery_never_crosses_the_launch_deadline,
+    "the_two_senders_share_one_set_of_event_times": the_two_senders_share_one_set_of_event_times,
+    "the_replay_task_start_shares_the_job_start": the_replay_task_start_shares_the_job_start,
+    "any_ordinary_exception_sends_the_fail_and_propagates": any_ordinary_exception_sends_the_fail_and_propagates,
 }

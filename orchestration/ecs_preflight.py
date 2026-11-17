@@ -985,7 +985,7 @@ class Preflight:
             "LAYER_PHASE": lambda: LAYER_PHASES.get(request.template, ""),
             "RELEASE_MODEL": lambda: release_model_of(request) if releasing else "",
             "PHASE": lambda: phase_of(request.template),
-            "LINEAGE_INVOCATION": lambda: invocation_text(request.as_dict()),
+            "LINEAGE_INVOCATION": lambda: invocation_text(request.as_dict(), int(self.clock()) + int(row["deadline_seconds"])),
             **{
                 name: partial(fixed.__getitem__, name)
                 for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, *RETRY_VARIABLES, DEADLINE_VARIABLE)
