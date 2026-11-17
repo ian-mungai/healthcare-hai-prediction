@@ -1,4 +1,8 @@
-"""Person cells of the HCAI utilization workbook at the bronze load boundary: synthetic workbooks only.
+"""Person cells of the HCAI utilization workbook at the bronze load boundary: synthetic workbooks and synthetic keys only.
+
+The administrator, report preparer and individual owner names become keyed pseudonyms in their own cells (the sheet rows have no pseudonym column), with the
+same HMAC and key as the CMS owners and ONC person fields; phone, street address and the individual owner's city and ZIP are emptied, as CMS empties an
+individual owner's address; free text that holds a collected name, an email or a phone number is replaced.
 
 Most cases call ``person_fields.protect_sheets`` on JSON Lines records shaped as ``file_readers.read_sheet_rows`` writes them. The last group writes real
 ``.xlsx`` workbooks with ``openpyxl`` and reads them through the real reader. ``openpyxl`` is not in the host environment, so that group skips there; run it
@@ -8,6 +12,7 @@ plan, an independent source: every header has the real 354 columns and every wor
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import io
@@ -17,12 +22,14 @@ import sys
 import traceback
 import types
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from scripts import pseudonym_core
 from scripts.lakehouse import bronze, file_readers, person_fields
 from tests.support import check
 
@@ -35,10 +42,27 @@ DATA_SHEETS = ("Page 1-6", "NonResp 1-6")
 INDIVIDUAL = "Investor - Individual"
 CORPORATION = "Investor - Corporation"
 REPLACED = "[REDACTED]"
+PSEUDONYM = re.compile("v1:[0-9a-f]{64}")
+NAMESPACE = "hcai_person_name"
 # Built from parts so the privacy scan does not read a fixture as a real telephone number.
 PHONE = "-".join(("555", "010", "7788"))
 SYNTHETIC_VALUES = ["Zorba Quill", PHONE, "9 Synthetic Way", "Mira Tolliver", "Orrin Vale", "q.vale@example.test", "Pell Dunmore"]
 Cells = list[str | None]
+
+
+def key_for(label: str) -> Callable[[str], str | None]:
+    """A synthetic key reader: the 32 bytes come from a label, never from a real key."""
+    text = base64.urlsafe_b64encode(hashlib.sha256(label.encode()).digest()).decode()
+    return lambda _version: text
+
+
+KEY = key_for("synthetic hcai key one")
+
+
+def pseudonym_of(name: str, keys: Callable[[str], str | None] = KEY) -> str:
+    """The pseudonym the shared core derives for one name, computed apart from the loader."""
+    key = pseudonym_core.load_key("v1", keys)
+    return pseudonym_core.derive(key, "v1", NAMESPACE, "name", [pseudonym_core.normalize_name(name)])
 
 
 def cells(header: list[str], values: dict[str, str | None]) -> Cells:
@@ -103,7 +127,7 @@ def protected(tmp_path: Path, records: list[dict[str, Any]]) -> tuple[list[dict[
     rows_path = tmp_path / "rows.jsonl"
     write_records(rows_path, records)
     before = read_back(rows_path)
-    stats = person_fields.protect_sheets(TABLE, rows_path)
+    stats = person_fields.protect_sheets(TABLE, rows_path, KEY)
     return before, read_back(rows_path), stats
 
 
@@ -113,7 +137,7 @@ def assert_refused(tmp_path: Path, records: list[dict[str, Any]], match: str) ->
     write_records(rows_path, records)
     before = rows_path.read_bytes()
     with pytest.raises(person_fields.PersonFieldError, match=match):
-        person_fields.protect_sheets(TABLE, rows_path)
+        person_fields.protect_sheets(TABLE, rows_path, KEY)
     check(rows_path.read_bytes() == before, "a refused workbook changed its rows file")
     check(not list(tmp_path.glob("*.protected")), "a refused workbook left a staging file")
 
@@ -122,7 +146,7 @@ def page_cells(records: list[dict[str, Any]], sheet: str = "Page 1-6") -> dict[i
     return {r["w"]: dict(zip(HEADER, r["c"], strict=False)) for r in records if r["s"] == sheet}
 
 
-def test_person_cells_are_replaced_and_the_shape_is_kept(tmp_path: Path) -> None:
+def test_person_cells_are_pseudonymized_or_emptied_and_the_shape_is_kept(tmp_path: Path) -> None:
     rows = [
         data_row("100", INDIVIDUAL, "Pell Dunmore", "Zorba Quill", "Scanner donated by Zorba Quill"),
         data_row("101", CORPORATION, "Fixture Holdings LLC", "Zorba Quill", "Scanner"),
@@ -132,11 +156,98 @@ def test_person_cells_are_replaced_and_the_shape_is_kept(tmp_path: Path) -> None
     check(not [value for value in SYNTHETIC_VALUES if value in text], "sheet person cell check failed")
     check([(r["s"], r["w"], len(r["c"]), r["t"]) for r in after] == [(r["s"], r["w"], len(r["c"]), r["t"]) for r in before], "sheet shape check failed")
     page = page_cells(after)
-    check(page[6]["FAC_PAR_CORP_NAME"] == page[6]["FAC_PAR_CORP_CITY"] == page[6]["FAC_PAR_CORP_ZIP"] == REPLACED, "individual owner cells were kept")
-    check(page[7]["FAC_PAR_CORP_NAME"] == "Fixture Holdings LLC" and page[7]["FAC_PAR_CORP_CITY"] == "Fixtureville", "corporation owner cells were replaced")
+    check(page[6]["FAC_PAR_CORP_NAME"] == pseudonym_of("Pell Dunmore"), "the individual owner name is not its keyed pseudonym")
+    check(page[6]["FAC_PAR_CORP_CITY"] == page[6]["FAC_PAR_CORP_ZIP"] == "", "individual owner city or ZIP were kept")
+    check(page[7]["FAC_PAR_CORP_NAME"] == "Fixture Holdings LLC" and page[7]["FAC_PAR_CORP_CITY"] == "Fixtureville", "corporation owner cells were changed")
+    check(page[6]["FAC_STR_ADDR"] == page[6]["FAC_PHONE"] == page[6]["FAC_PAR_CORP_BUS_ADDR"] == "", "street address, phone or owner address were kept")
+    check(page[7]["FAC_STR_ADDR"] == page[7]["FAC_PHONE"] == page[7]["FAC_PAR_CORP_BUS_ADDR"] == "", "a corporation row kept an address or phone")
     check(page[6]["TOT_LIC_BEDS"] == "120" and page[6]["FAC_NAME"] == "Fixture Hospital" and page[6]["DESC_EQUIP_01"] == REPLACED, "non-person cells changed")
     check(page[1]["FAC_ADMIN_NAME"] == "FAC_ADMIN_NAME", "the header row changed")
     check(stats["person_cells_replaced"] > 0 and stats["person_individual_owner_rows"] == 2, "sheet person cell counts are wrong")
+    check(stats["person_name_cells_pseudonymized"] == 14 and stats["person_cells_blanked"] == 16, f"pseudonym or blank counts are wrong: {stats}")
+
+
+def test_the_person_cells_come_out_pseudonymized_and_stable_across_runs(tmp_path: Path) -> None:
+    rows = [
+        data_row("100", INDIVIDUAL, "Pell Dunmore", "Zorba Quill", "Scanner"),
+        data_row("101", CORPORATION, "Fixture Holdings LLC", "zorba   QUILL", "Scanner", REPT_PREP_NAME="Quill, Zorba Jr", REV_REPT_PREP_NAME="Mira Tolliver"),
+    ]
+    first_dir, second_dir = tmp_path / "first", tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    _, first, _ = protected(first_dir, sheet_records(rows))
+    _, second, _ = protected(second_dir, sheet_records(rows))
+    check(first == second, "two runs over the same workbook gave different rows")
+    page = page_cells(first)
+    check(
+        all(PSEUDONYM.fullmatch(page[w][c] or "") for w in (6, 7) for c in ("FAC_ADMIN_NAME", "REPT_PREP_NAME", "REV_REPT_PREP_NAME")),
+        "a name cell is no pseudonym",
+    )
+    check(page[6]["FAC_ADMIN_NAME"] == page[7]["FAC_ADMIN_NAME"] == pseudonym_of("Zorba Quill"), "one person got two pseudonyms across rows and spellings")
+    check(page[6]["REPT_PREP_NAME"] == pseudonym_of("Mira Tolliver") != page[7]["REPT_PREP_NAME"], "two people share a pseudonym")
+    check(page[7]["REPT_PREP_NAME"] == pseudonym_of("Quill Zorba"), "the second name form is not its pseudonym")
+    check(page[6]["FAC_ADMIN_NAME"] != page[6]["REPT_PREP_NAME"], "two people share a pseudonym")
+    for sheet in DATA_SHEETS:
+        check(page_cells(first, sheet)[6]["FAC_ADMIN_NAME"] == pseudonym_of("Zorba Quill"), "a data sheet differs")
+
+
+def test_the_same_key_gives_the_same_pseudonym_and_another_key_gives_another(tmp_path: Path) -> None:
+    rows = [data_row("100", CORPORATION, "Fixture Holdings LLC", "Zorba Quill", "Scanner")]
+    rows_path = tmp_path / "rows.jsonl"
+    cases: dict[str, str] = {}
+    for label, keys in (("one", KEY), ("one again", key_for("synthetic hcai key one")), ("two", key_for("synthetic hcai key two"))):
+        write_records(rows_path, sheet_records(rows))
+        person_fields.protect_sheets(TABLE, rows_path, keys)
+        cases[label] = str(page_cells(read_back(rows_path))[6]["FAC_ADMIN_NAME"])
+    check(cases["one"] == cases["one again"] == pseudonym_of("Zorba Quill"), "the same key gave a different pseudonym")
+    check(
+        cases["two"] != cases["one"] and cases["two"] == pseudonym_of("Zorba Quill", key_for("synthetic hcai key two")), "another key gave the same pseudonym"
+    )
+
+
+def test_no_raw_person_value_survives_in_any_cell_of_any_sheet(tmp_path: Path) -> None:
+    owner = "Ownergiven Ownermid Ownersurname"
+    rows = [
+        data_row(
+            "100",
+            INDIVIDUAL,
+            owner,
+            "Fixturegiven Fixturesurname",
+            "Gift from Fixturegiven Fixturesurname, call " + PHONE,
+            FAC_PAR_CORP_BUS_ADDR="3 Owner Road",
+        ),
+        data_row("101", CORPORATION, "Fixture Holdings LLC", "Other Admin", "Contact q.vale@example.test", REPT_PREP_NAME="Prepgiven Prepsurname"),
+    ]
+    _, after, _ = protected(tmp_path, sheet_records(rows, tips="Questions: Prepgiven Prepsurname or q.vale@example.test"))
+    text = json.dumps(after)
+    raw = [PHONE, "9 Synthetic Way", "3 Owner Road", "1 Owner Road", "Fixturegiven", "Fixturesurname", "Ownergiven", "Ownersurname", "Prepgiven", "Prepsurname"]
+    raw += ["Other Admin", "Mira Tolliver", "Orrin Vale", "q.vale@example.test"]
+    check(not [value for value in raw if value in text], f"a raw value survived: {[value for value in raw if value in text]}")
+    page = page_cells(after)
+    check(page[6]["FAC_PAR_CORP_NAME"] == pseudonym_of(owner) and page[7]["FAC_PAR_CORP_NAME"] == "Fixture Holdings LLC", "the owner cells are wrong")
+    check(page[6]["DESC_EQUIP_01"] == REPLACED and page[7]["DESC_EQUIP_01"] == REPLACED, "a free text cell kept a person value")
+    tip = next(r for r in after if r["s"] == "Tips")
+    check(tip["c"] == [REPLACED], "the auxiliary sheet kept a person value")
+
+
+def test_a_missing_or_malformed_key_stops_the_load_and_writes_nothing(tmp_path: Path) -> None:
+    rows = [data_row("100", CORPORATION, "Fixture Holdings LLC", "Zorba Quill", "Scanner")]
+    for label, keys in (("missing", lambda _version: None), ("malformed", lambda _version: "not-a-key")):
+        rows_path = tmp_path / f"{label}.jsonl"
+        write_records(rows_path, sheet_records(rows))
+        before = rows_path.read_bytes()
+        with pytest.raises(pseudonym_core.PseudonymizationError, match="key_"):
+            person_fields.protect_sheets(TABLE, rows_path, keys)
+        check(rows_path.read_bytes() == before and not list(tmp_path.glob("*.protected")), f"a {label} key changed or staged the rows")
+
+
+def test_a_key_failure_reaches_the_loader_as_a_fixed_code_with_no_value(tmp_path: Path) -> None:
+    workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
+    write_xlsx(workbook, sheet_records([data_row("100", CORPORATION, "Fixture Holdings LLC", "Zorba Quill", "Scanner")]))
+    with pytest.raises(bronze.BronzeError, match="person fields: key_missing") as caught:
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, lambda _version: None)
+    check("Zorba" not in str(caught.value), "a name reached the loader error")
+    check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a key failure left a rows file that still holds the published values")
 
 
 def test_an_already_redacted_version_one_style_workbook_loads_unchanged(tmp_path: Path) -> None:
@@ -172,7 +283,7 @@ def test_a_personal_looking_column_without_a_decision_stops_the_load(tmp_path: P
     rows_path = tmp_path / "rows.jsonl"
     write_records(rows_path, sheet_records([["x"] * len(header)], tips="Utilization data", header=header))
     with pytest.raises(person_fields.PersonFieldError, match="unreviewed personal-looking column"):
-        person_fields.protect_sheets(TABLE, rows_path, policy_path)
+        person_fields.protect_sheets(TABLE, rows_path, KEY, policy_path)
 
 
 def test_the_table_is_no_longer_blocked_and_other_hcai_tables_have_no_policy(tmp_path: Path) -> None:
@@ -311,11 +422,11 @@ def test_a_null_or_empty_name_cell_is_no_name(tmp_path: Path, missing: str | Non
     check(stats["person_individual_owner_rows"] == 2, "the individual owner rows were not counted")
 
 
-def test_a_workbook_without_any_name_loads_and_still_redacts_the_address_cells(tmp_path: Path) -> None:
+def test_a_workbook_without_any_name_loads_and_still_empties_the_address_cells(tmp_path: Path) -> None:
     rows = [data_row("100", INDIVIDUAL, None, None, "Scanner", REPT_PREP_NAME=None, REV_REPT_PREP_NAME=None)]
     _, after, _ = protected(tmp_path, sheet_records(rows, tips="Utilization data"))
     row = page_cells(after)[6]
-    check(row["FAC_STR_ADDR"] == REPLACED and row["FAC_PHONE"] == REPLACED and row["FAC_PAR_CORP_CITY"] == REPLACED, "address cells were kept")
+    check(row["FAC_STR_ADDR"] == row["FAC_PHONE"] == row["FAC_PAR_CORP_CITY"] == "", "address cells were kept")
     check(row["FAC_ADMIN_NAME"] is None and row["FAC_PAR_CORP_NAME"] is None, "a null name cell was filled")
 
 
@@ -327,13 +438,14 @@ def test_protecting_an_already_protected_workbook_changes_nothing_even_with_the_
     ]
     rows_path = tmp_path / "rows.jsonl"
     write_records(rows_path, sheet_records(rows, tips=f"Data {note}"))
-    first_stats = person_fields.protect_sheets(TABLE, rows_path)
+    first_stats = person_fields.protect_sheets(TABLE, rows_path, KEY)
     first = rows_path.read_bytes()
     check(first_stats["person_cells_replaced"] > 0 and "Zorba" not in first.decode(), "the first pass did not protect the workbook")
     check(note in json.dumps(read_back(rows_path)), "the first pass replaced a note that holds no collected name")
-    second_stats = person_fields.protect_sheets(TABLE, rows_path)
+    second_stats = person_fields.protect_sheets(TABLE, rows_path, KEY)
     check(rows_path.read_bytes() == first, "a second pass changed the already protected rows")
-    check(second_stats["person_cells_replaced"] == 0, "a second pass replaced cells again")
+    check(second_stats["person_cells_replaced"] == 0 and second_stats["person_name_cells_pseudonymized"] == 0, "a second pass changed cells again")
+    check(second_stats["person_cells_blanked"] == 0, "a second pass blanked cells again")
 
 
 def write_xlsx(path: Path, records: list[dict[str, Any]]) -> None:
@@ -366,12 +478,12 @@ def test_a_native_xlsx_of_a_reviewed_layout_is_read_by_openpyxl_and_protected(tm
     check(label == "xlsx" and count == len(fixture), "the real reader did not return every fixture row")
     check([(r["s"], r["w"]) for r in read] == [(r["s"], r["w"]) for r in fixture], "the real reader's sheet and row positions differ from the fixture shape")
     check("Zorba" in json.dumps(read), "the workbook read did not hold the published names before protection")
-    stats = person_fields.protect_sheets(TABLE, rows_path)
+    stats = person_fields.protect_sheets(TABLE, rows_path, KEY)
     after = read_back(rows_path)
     check("Zorba" not in json.dumps(after) and "Pell" not in json.dumps(after), "a collected name survived in a real workbook")
     check([(r["s"], r["w"], r["t"]) for r in after] == [(r["s"], r["w"], r["t"]) for r in read], "protecting a real workbook changed its shape")
     page = page_cells(after)
-    check(page[6]["FAC_PAR_CORP_NAME"] == REPLACED and page[6]["DESC_EQUIP_01"] == REPLACED, "an individual owner or name cell was kept")
+    check(page[6]["FAC_PAR_CORP_NAME"] == pseudonym_of("Pell Dunmore") and page[6]["DESC_EQUIP_01"] == REPLACED, "an individual owner or name cell was kept")
     check(page[7]["FAC_PAR_CORP_NAME"] == "Fixture Holdings LLC" and page[7]["FAC_NAME"] == "Fixture Hospital", "a corporation cell was replaced")
     check(stats["person_cells_replaced"] > 0 and stats["person_individual_owner_rows"] == 2, "the real workbook counts are wrong")
 
@@ -383,7 +495,7 @@ def test_a_native_xlsx_of_an_unreviewed_layout_is_refused_before_any_row_is_hand
     write_xlsx(workbook, mutate(sheet_records(rows)))
     # No Spark session is passed: the load must stop before the frame is built, so any attempt to read the rows would fail with another error.
     with pytest.raises(bronze.BronzeError, match=f"person fields: .*{match}"):
-        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, KEY)
     check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused real workbook left a rows file or a staging file")
 
 
@@ -413,13 +525,12 @@ INDIVIDUAL_SPELLINGS = [
 @pytest.mark.parametrize(
     "owner_type", INDIVIDUAL_SPELLINGS, ids=["trailing space", "leading space", "upper case", "lower case", "no-break space", "double spaces"]
 )
-def test_a_respelled_individual_owner_type_still_redacts_the_owner_cells(tmp_path: Path, owner_type: str) -> None:
+def test_a_respelled_individual_owner_type_still_protects_the_owner_cells(tmp_path: Path, owner_type: str) -> None:
     rows = [data_row("100", owner_type, "Pell Dunmore", "Zorba Quill", "Scanner donated by Pell Dunmore")]
     _, after, stats = protected(tmp_path, sheet_records(rows))
     page = page_cells(after)
-    check(
-        page[6]["FAC_PAR_CORP_NAME"] == page[6]["FAC_PAR_CORP_CITY"] == page[6]["FAC_PAR_CORP_ZIP"] == REPLACED, f"the owner cells of {owner_type!r} were kept"
-    )
+    check(page[6]["FAC_PAR_CORP_NAME"] == pseudonym_of("Pell Dunmore"), f"the owner name of {owner_type!r} is no pseudonym")
+    check(page[6]["FAC_PAR_CORP_CITY"] == page[6]["FAC_PAR_CORP_ZIP"] == "", f"the owner city or ZIP of {owner_type!r} were kept")
     check("Pell Dunmore" not in json.dumps(after) and stats["person_individual_owner_rows"] == 2, "the owner name or the owner row count is wrong")
 
 
@@ -441,10 +552,10 @@ def test_every_reviewed_owner_type_loads_and_only_the_individual_and_blank_rows_
     ]
     _, after, stats = protected(tmp_path, sheet_records(rows))
     page = page_cells(after)
-    redacted = [page[6 + index]["FAC_PAR_CORP_NAME"] == REPLACED for index in range(len(REVIEWED_TYPES))]
+    protected_names = [bool(PSEUDONYM.fullmatch(page[6 + index]["FAC_PAR_CORP_NAME"] or "")) for index in range(len(REVIEWED_TYPES))]
     check(
-        redacted == [owner_type in persons for owner_type in REVIEWED_TYPES] and stats["person_individual_owner_rows"] == 4,
-        f"owner cells by type: {redacted}",
+        protected_names == [owner_type in persons for owner_type in REVIEWED_TYPES] and stats["person_individual_owner_rows"] == 4,
+        f"owner cells by type: {protected_names}",
     )
 
 
@@ -467,16 +578,16 @@ def native_cells_at_the_spark_boundary(tmp_path: Path, owner_type: str) -> list[
         return object()
 
     with patch.object(bronze, "read_sheet_frame", side_effect=capture):
-        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, KEY)
     return seen
 
 
 @pytest.mark.parametrize("owner_type", [INDIVIDUAL, INDIVIDUAL + " ", INDIVIDUAL.upper()], ids=["exact", "trailing space", "upper case"])
-def test_a_native_xlsx_reaches_the_spark_read_with_the_owner_cells_redacted_whatever_the_spelling(tmp_path: Path, owner_type: str) -> None:
+def test_a_native_xlsx_reaches_the_spark_read_with_the_owner_cells_protected_whatever_the_spelling(tmp_path: Path, owner_type: str) -> None:
     seen = native_cells_at_the_spark_boundary(tmp_path, owner_type)
     cells_ = next(record["c"] for record in seen if record["s"] == "Page 1-6" and record["w"] == 6)
     owner = [cells_[HEADER.index(column)] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
-    check(owner == [REPLACED] * 3 and "Pell Dunmore" not in json.dumps(seen), f"the owner cells reached Spark as {owner}")
+    check(owner == [pseudonym_of("Pell Dunmore"), "", ""] and "Pell Dunmore" not in json.dumps(seen), f"the owner cells reached Spark as {owner}")
 
 
 def test_a_native_xlsx_with_an_unknown_owner_type_is_refused_before_the_spark_read(tmp_path: Path) -> None:
@@ -484,7 +595,7 @@ def test_a_native_xlsx_with_an_unknown_owner_type_is_refused_before_the_spark_re
     write_xlsx(workbook, sheet_records([data_row("100", "New ownership class", "Pell Dunmore", "Zorba Quill", "Scanner")]))
     refused = patch.object(bronze, "read_sheet_frame", side_effect=AssertionError("Spark must not read an unprotected workbook"))
     with refused, pytest.raises(bronze.BronzeError, match="person fields: .*owner type"):
-        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, KEY)
     check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused workbook left a rows file or a staging file")
 
 
@@ -513,7 +624,7 @@ def test_a_workbook_the_native_reader_cannot_read_fails_with_a_fixed_code_and_no
     workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
     workbook_with_a_text_in_a_numeric_cell(workbook)
     with pytest.raises(bronze.BronzeError) as caught:
-        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, KEY)
     shown = "".join(traceback.format_exception(caught.value))
     check(SOURCE_MARKER not in str(caught.value) and SOURCE_MARKER not in shown, "the cell text reached the message or the traceback")
     check(
@@ -559,7 +670,7 @@ def test_the_loader_reports_an_unreadable_workbook_by_its_fixed_code_only(monkey
     monkeypatch.setitem(sys.modules, "pyspark.sql", types.ModuleType("pyspark.sql"))
     monkeypatch.setitem(sys.modules, "pyspark.sql.functions", functions)
     with pytest.raises(bronze.BronzeError) as caught:
-        bronze.load_object(None, item, Store(), "ns", tmp_path / "scratch")
+        bronze.load_object(None, item, Store(), "ns", tmp_path / "scratch", KEY)
     shown = "".join(traceback.format_exception(caught.value))
     check(SOURCE_MARKER not in str(caught.value) and SOURCE_MARKER not in shown, "the cell text reached the loader error or its traceback")
     check(str(caught.value).endswith(bronze.WORKBOOK_UNREADABLE), f"the loader error is {str(caught.value)!r}")
@@ -578,7 +689,7 @@ def test_a_blank_owner_type_is_read_like_the_individual_type(tmp_path: Path, lab
     _, after, stats = protected(tmp_path, fixture)
     page = page_cells(after)
     owner = [page[6][column] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
-    check(owner == [REPLACED] * 3, f"the owner cells of a {label} type were kept: {owner}")
+    check(owner == [pseudonym_of("Pell Dunmore"), "", ""], f"the owner cells of a {label} type were kept: {owner}")
     check("Pell Dunmore" not in json.dumps(after) and stats["person_individual_owner_rows"] == 2, "the owner name reached the equipment text or the Tips sheet")
 
 
@@ -600,9 +711,9 @@ def test_a_native_xlsx_with_a_blank_owner_type_reaches_the_spark_read_with_the_o
         return object()
 
     with patch.object(bronze, "read_sheet_frame", side_effect=capture):
-        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path, KEY)
     header = entry["header"]
     cells_ = next(record["c"] for record in seen if record["s"] == "Page 1-6" and record["w"] == 6)
     owner = [cells_[header.index(column)] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
-    check(owner == [REPLACED] * 3, f"{year} {label}: the owner cells reached Spark as {owner}")
+    check(owner == [pseudonym_of("Pell Dunmore"), "", ""], f"{year} {label}: the owner cells reached Spark as {owner}")
     check("Pell Dunmore" not in json.dumps(seen), f"{year} {label}: the owner name survived in the equipment text or the Tips sheet")

@@ -13,7 +13,7 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES
 DOWNLOADS_PATH = "data/acquisition_planning/hcai_util_2018_2025_downloads.json"
 APPROVAL = (
     "Collect the 2018-2024 annual files and the 2025 preliminary file; store each workbook whole under raw/ as published; "
-    "bronze redacts the person cells at load ([REDACTED], not pseudonyms); sheets checked on capture."
+    "bronze pseudonymizes the person cells at load; sheets checked on capture."
 )
 
 

@@ -82,7 +82,7 @@
         "canonical_sha256": "ba963fa434d0cb069b9dc111bad5409490c9ead86b29674eb03419e87f5970cd"
       }
     ],
-    "bc96254c49d9fee23450d0998c5b74b5bc176b0af25e3e1dc7c746c4a53e4e20": [
+    "243c1ff10a1a0c33142ad9e32c94851233f3367795756f76866ab830f56bc8b0": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/hcai_util_2018_2025_plan.json",
         "sha256": "e91f49f8ef9609f6ca92769e35ac5f686baa05f2f3769543991514b0a398b45b",

@@ -51,7 +51,7 @@ HEADER = [
     "MED_SURG_LIC_BEDS",
     "EQUIP_DESC",
 ]
-# Synthetic people; their names must never reach a snapshot or S3.
+# Synthetic people. The stored workbook holds them as published; bronze pseudonymizes them (tests/test_bronze_hcai_stored_workbook.py).
 PEOPLE = ["Pat Q Example", "Lee Sample", "Jordan Owner"]
 YEARS = [2018, 2025]
 # Phone-like samples are assembled so this file does not trip the privacy scan.
@@ -258,9 +258,10 @@ def exercise(root: Path) -> list[dict]:
         def public_with_names() -> None:
             governance = read_json(receipt_path)["governance"]
             require(governance["access_class"] == "public" and governance["contains_pii"] is True, "Governance does not say the public file names people")
-            require(contract.REDACT_AT_LOAD in governance["use_restrictions"], "The bronze redaction restriction is missing")
+            require(contract.PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"], "The bronze pseudonymization restriction is missing")
+            require("pseudonymizes" in contract.PSEUDONYMIZE_AT_LOAD and "redact" not in contract.PSEUDONYMIZE_AT_LOAD, "The restriction still says redacts")
 
-        scenario("receipt_records_public_names_redacted_in_bronze", public_with_names)
+        scenario("receipt_records_public_names_pseudonymized_in_bronze", public_with_names)
         scenario("capture_and_version_verified_storage", lambda: execute(plan, last, run, True, True, client, OUTPUTS, web, LIMITS))
 
         scenario(

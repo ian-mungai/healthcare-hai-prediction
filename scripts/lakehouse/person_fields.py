@@ -3,7 +3,8 @@
 All the data is public and raw/ keeps each published file whole. A bronze table whose files can name people has a reviewed policy in
 ``config/lakehouse/person_policies.json``. The loader applies it to the rows it reads, before anything reaches Spark: direct identifier columns are dropped,
 identifiers and names become keyed pseudonyms and free-text cells that hold a person named in the same file are replaced. The treatments, the normalization
-and the HMAC-SHA-256 are those of ``scripts/acquisition/pseudonymize.py``, so the same person gets the same pseudonym there and here.
+and the HMAC-SHA-256 are those of ``scripts/acquisition/pseudonymize.py``, so the same person gets the same pseudonym there and here. A workbook table
+(HCAI utilization) has no pseudonym column: its names become the same keyed pseudonyms inside their own cells, under the namespace its policy names.
 
 A file is protected only through a layout the policy lists. A header that matches a policy is transformed. A header that matches a listed unchanged layout
 (a stored version 1 capture, already filtered at acquisition) loads as it is after a guard checks its rows. Any other header stops the load. The key is
@@ -152,13 +153,13 @@ PHONE = re.compile(r"(?<!\d)(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4}(?!\d)")
 
 
 def check_sheet_columns(rule: dict, header: list[str]) -> None:
-    """Every personal-looking column is replaced or reviewed as not personal, and every column the rules name is present."""
+    """Every personal-looking column is pseudonymized, emptied or reviewed as not personal, and every column the rules name is present."""
     pattern = re.compile(rule["personal_pattern"])
-    reviewed = {*rule["redact_columns"], *rule["not_personal_columns"]}
+    reviewed = {*rule["blank_columns"], *rule["name_columns"], *rule["not_personal_columns"]}
     if any(pattern.search(column.upper()) and column not in reviewed for column in header):
         raise PersonFieldError("unreviewed personal-looking column in a data sheet")
     owner = rule["individual_owner"]
-    needed = {*rule["redact_columns"], *rule["name_columns"], *owner["redact_columns"], owner["column"], owner["name_column"]}
+    needed = {*rule["blank_columns"], *rule["name_columns"], *owner["blank_columns"], owner["column"], owner["name_column"]}
     if not needed <= set(header):
         raise PersonFieldError("a column named by the sheet person rules is missing from a data sheet")
     known = owner.get("known_types")
@@ -171,6 +172,11 @@ def check_sheet_columns(rule: dict, header: list[str]) -> None:
 def check_sheet_rule(table: str, rule: dict) -> None:
     """The reviewed layouts of a workbook table: unique sheet names holding the data sheets, and a complete header that passes the column review."""
     layouts = rule.get("layouts")
+    shape = rule.get("pseudonym")
+    if not isinstance(shape, dict) or set(shape) != {"kind", "namespace"} or shape["kind"] != "name" or not isinstance(shape["namespace"], str):
+        raise PersonFieldError(f"{table}: person policy entry invalid (workbook pseudonym rule)")
+    if pseudonymize.NAME_PATTERN.fullmatch(shape["namespace"]) is None:
+        raise PersonFieldError(f"{table}: person policy entry invalid (workbook pseudonym namespace)")
     if not isinstance(layouts, list) or not layouts:
         raise PersonFieldError(f"{table}: person policy entry invalid (no reviewed workbook layout)")
     for layout in layouts:
@@ -235,9 +241,14 @@ def reviewed_layout(rule: dict, records: list[dict]) -> dict:
     return dict(layout)
 
 
+def is_pseudonym(value: str | None) -> bool:
+    """True for a cell that already holds a pseudonym: a second pass leaves it alone and never reads it as a name."""
+    return value is not None and pseudonymize.PSEUDONYM_FORMAT.fullmatch(value.strip()) is not None
+
+
 def name_forms(value: str | None) -> set[tuple[str, ...]]:
-    """The scrub word sequences of one name cell: the whole name and, when it has a middle part, the first and last words. A null or blank cell is no name."""
-    if value is None or not value.strip():
+    """The scrub word sequences of one name cell: the whole name and, with a middle part, the first and last words. A null, blank or pseudonym cell has none."""
+    if value is None or not value.strip() or is_pseudonym(value):
         return set()
     words = pseudonymize.scrub_name_words(value)
     if not words:
@@ -266,14 +277,18 @@ def sheet_names(rule: dict, records: list[dict], headers: dict[str, list[str]]) 
     return names
 
 
-def protect_sheets(table: str, rows_path: Path, path: Path = POLICY_PATH) -> dict[str, int]:
-    """Replace the person cells of a workbook's JSON Lines sheet rows in place and return the counts; {} when the table has no sheet policy.
+def protect_sheets(table: str, rows_path: Path, keys: KeyReader | None = None, path: Path = POLICY_PATH) -> dict[str, int]:
+    """Protect the person cells of a workbook's JSON Lines sheet rows in place and return the counts; {} when the table has no sheet policy.
 
-    Only a workbook whose sheets and data sheet headers match a reviewed layout loads; any other sheet, header or cell beyond the header stops the load
-    before the file is touched. A replaced cell keeps its position and type, so the cell arrays stay aligned. Cells are replaced, not pseudonymized, because
-    the sheet row shape has no column for a pseudonym. Any error leaves the caller to remove the rows file.
+    Administrator, report preparer and individual owner names become keyed pseudonyms (the HMAC, key and normalization of the CMS owners and ONC person fields)
+    in the cell they were in. Phone, street address and an individual owner's address, city and ZIP are emptied, as CMS empties an individual owner's address.
+    An email, a phone number or a collected name inside any other cell replaces that cell. Only a workbook whose sheets and data sheet headers match a reviewed
+    layout loads; any other sheet, header or cell beyond the header stops the load before the file is touched, and so does a key that cannot be read. A
+    changed cell keeps its position and type, so the cell arrays stay aligned: the sheet row shape has no column for a pseudonym. Any error leaves the caller
+    to remove the rows file.
     """
-    entry = read_policies(path)["tables"].get(table)
+    document = read_policies(path)
+    entry = document["tables"].get(table)
     if entry is None:
         return {}
     refuse_blocked(table, path)
@@ -285,22 +300,32 @@ def protect_sheets(table: str, rows_path: Path, path: Path = POLICY_PATH) -> dic
     layout = reviewed_layout(rule, records)
     headers = {sheet: list(layout["header"]) for sheet in rule["data_sheets"]}
     index = pseudonymize.index_names(sheet_names(rule, records, headers))
+    key_version, shape = document["key_version"], rule["pseudonym"]
+    key = pseudonymize.load_key(key_version, keys if keys is not None else parameter_store_reader())
     owner = rule["individual_owner"]
-    stats = {"person_cells_replaced": 0, "person_individual_owner_rows": 0}
+    stats = {"person_cells_replaced": 0, "person_cells_blanked": 0, "person_name_cells_pseudonymized": 0, "person_individual_owner_rows": 0}
     for record in records:
         header = headers.get(record["s"])
         data_row = header is not None and record["w"] > 1 + rule["label_rows"]
         row = dict(zip(header, record["c"], strict=False)) if header is not None else {}
         individual = data_row and is_individual_owner(owner, row)
         stats["person_individual_owner_rows"] += int(individual)
-        targets = {*rule["redact_columns"], *(owner["redact_columns"] if individual else [])} if data_row and header is not None else set()
+        names = {*rule["name_columns"], *([owner["name_column"]] if individual else [])} if data_row else set()
+        blanks = {*rule["blank_columns"], *(owner["blank_columns"] if individual else [])} if data_row else set()
         cells = record["c"]
         for position, value in enumerate(cells):
             text = value or ""
             column = header[position] if header is not None and position < len(header) else ""
-            if value == replacement or not text.strip():
+            if value == replacement or not text.strip() or is_pseudonym(text):
                 continue
-            if (column in targets and data_row) or EMAIL.search(text) or PHONE.search(text) or (index and pseudonymize.contains_name(text, index)):
+            if column in names:
+                parts = pseudonymize.normalized_parts(shape["kind"], [text])
+                cells[position] = "" if parts is None else pseudonymize.derive(key, key_version, shape["namespace"], shape["kind"], parts)
+                stats["person_name_cells_pseudonymized" if parts is not None else "person_cells_blanked"] += 1
+            elif column in blanks:
+                cells[position] = ""
+                stats["person_cells_blanked"] += 1
+            elif EMAIL.search(text) or PHONE.search(text) or (index and pseudonymize.contains_name(text, index)):
                 cells[position] = replacement
                 stats["person_cells_replaced"] += 1
     staging = rows_path.with_name(rows_path.name + ".protected")

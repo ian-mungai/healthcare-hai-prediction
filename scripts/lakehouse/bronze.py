@@ -959,7 +959,7 @@ def parse_object(
             rows_path.unlink(missing_ok=True)
             raise
         try:
-            stats.update(person_fields.protect_sheets(item["table"], rows_path))
+            stats.update(person_fields.protect_sheets(item["table"], rows_path, keys))
         except (person_fields.PersonFieldError, PseudonymizationError) as error:
             rows_path.unlink(missing_ok=True)
             raise BronzeError(f"person fields: {error}") from None

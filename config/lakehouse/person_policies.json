@@ -707,26 +707,27 @@
       ]
     },
     "hcai_util_workbook_sheet_rows": {
-      "reason": "The HCAI utilization workbook (plan version 2) holds administrator and report preparer names, a facility phone number and street addresses as published, and the name, city and ZIP code of an individual investor owner. Only the workbook layouts listed here load: the exact sheet names and the complete data sheet header of each plan year. Its data sheets are Page 1-6 and NonResp 1-6; Tips and Crosswalk hold no person fields by design and are scanned only for contact details and the names found in the data sheets.",
+      "reason": "The HCAI utilization workbook (plan version 2) holds administrator and report preparer names, a facility phone number and street addresses as published, and the name, city and ZIP code of an individual investor owner. Bronze turns each person name into a keyed pseudonym in its own cell (the sheet rows have no pseudonym column, so the name is not kept beside it) and empties the phone, the street addresses and an individual owner's city and ZIP. Only the workbook layouts listed here load: the exact sheet names and the complete data sheet header of each plan year. Its data sheets are Page 1-6 and NonResp 1-6; Tips and Crosswalk hold no person fields by design and are scanned only for contact details and the names found in the data sheets.",
       "sheet_cells": {
         "data_sheets": [
           "Page 1-6",
           "NonResp 1-6"
         ],
         "label_rows": 4,
-        "redact_columns": [
+        "blank_columns": [
           "FAC_STR_ADDR",
           "FAC_PHONE",
-          "FAC_ADMIN_NAME",
-          "FAC_PAR_CORP_BUS_ADDR",
-          "REPT_PREP_NAME",
-          "REV_REPT_PREP_NAME"
+          "FAC_PAR_CORP_BUS_ADDR"
         ],
         "name_columns": [
           "FAC_ADMIN_NAME",
           "REPT_PREP_NAME",
           "REV_REPT_PREP_NAME"
         ],
+        "pseudonym": {
+          "kind": "name",
+          "namespace": "hcai_person_name"
+        },
         "not_personal_columns": [
           "FAC_NAME",
           "FAC_PAR_CORP_NAME",
@@ -749,8 +750,7 @@
             "Investor - Individual"
           ],
           "name_column": "FAC_PAR_CORP_NAME",
-          "redact_columns": [
-            "FAC_PAR_CORP_NAME",
+          "blank_columns": [
             "FAC_PAR_CORP_CITY",
             "FAC_PAR_CORP_ZIP"
           ]

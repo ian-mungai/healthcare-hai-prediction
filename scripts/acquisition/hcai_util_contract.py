@@ -1,7 +1,7 @@
 """Frozen scope, workbook reading and checks for the HCAI annual utilization workbooks, 2018-2025.
 
 All the data is public. Under plan version 2 each workbook is stored whole under raw/ as published; its receipt records that it names
-administrators and report preparers, whose cells bronze redacts at load ([REDACTED]; the sheets have no pseudonym column).
+administrators and report preparers, whose cells bronze pseudonymizes at load (keyed, in place: the sheets have no pseudonym column).
 Captures stored under plan version 1 hold one abstracted CSV per
 sheet, rebuilt from an original kept on the Mac; they keep verifying with the version 1 rules below.
 Failure modes: data/acquisition_planning/hcai_util_2018_2025_failure_modes.md.
@@ -27,7 +27,7 @@ CODE_ENTRY = "scripts.acquisition.store_hcai_util"
 RELEASE_PATH = "config/acquisition/access_releases_20260929.json"
 SOURCE_ID = "HCAI_UTIL"
 TERMS_URL = "https://data.chhs.ca.gov/pages/terms"
-REDACT_AT_LOAD = "Names administrators and report preparers as published; bronze redacts the person cells at load ([REDACTED])."
+PSEUDONYMIZE_AT_LOAD = "Names administrators and report preparers as published; bronze pseudonymizes the person cells at load."
 # Plan version 1 only: the redaction of the stored abstracted captures, kept so those captures keep verifying.
 REPLACEMENT = "[REDACTED]"
 REDACT = ["FAC_STR_ADDR", "FAC_PHONE", "FAC_ADMIN_NAME", "FAC_PAR_CORP_BUS_ADDR", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
@@ -382,7 +382,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
         require(
             governance["access_class"] == "public"
             and governance["contains_pii"] is True
-            and REDACT_AT_LOAD in governance["use_restrictions"]
+            and PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"]
             and governance["license_or_terms_url"] == TERMS_URL,
             "HCAI utilization governance differs",
         )

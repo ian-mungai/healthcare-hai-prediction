@@ -2,7 +2,7 @@
 
 All the data is public. Offline by default. ``--fetch`` downloads missing workbooks through the reviewed signed redirect into the
 collection's downloads folder; ``--execute`` stores the workbook as published, the download proof and the scope. The receipt records that
-the workbook names administrators and report preparers, whose cells bronze redacts at load. Each year is independent: one that fails is
+the workbook names administrators and report preparers, whose cells bronze pseudonymizes at load. Each year is independent: one that fails is
 held and named, and the others continue.
 """
 
@@ -115,7 +115,7 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
             "credential_reference": None,
             "credentials_required": False,
             "license_or_terms_url": contract.TERMS_URL,
-            "use_restrictions": ["Attribute HCAI; the workbook is stored unchanged.", contract.REDACT_AT_LOAD],
+            "use_restrictions": ["Attribute HCAI; the workbook is stored unchanged.", contract.PSEUDONYMIZE_AT_LOAD],
         },
     }
     stamp = meta["retrieved_at_utc"].replace("-", "").replace(":", "")[:15] + "Z"
@@ -145,7 +145,7 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
         checks_passed=["recorded_original_hash", "sheet_names", "exact_data_header", "no_cell_beyond_the_header", "hospital_count"],
         warnings=[
             "Acquisition checks only. Definitions by year, hospital identity, joins and model eligibility remain unreviewed.",
-            "The workbook names administrators and report preparers; bronze redacts their cells at load.",
+            "The workbook names administrators and report preparers; bronze pseudonymizes their cells at load.",
             "Rows 2-4 of the data sheets are publisher label rows, not hospitals; dates are Excel serial numbers.",
             *(["Preliminary data: HCAI will revise it; a replacement file needs a new plan."] if entry["preliminary"] else []),
         ],
