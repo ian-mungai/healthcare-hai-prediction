@@ -1,20 +1,28 @@
 """Check a Production model's baseline for drift on demand: its newest window year against the years before it, with no gate and no training.
 
 ``python -m monitoring.live_check --model m2 --matrix P --manifest P --features P --run-id ID --out DIR --workspace DIR`` reads the inputs that the drift
-task's baseline phase fetches (the Production run's DVC matrix, its manifest and the model's feature list). It splits the matrix by ``window_year`` into a
-reference (the years before the manifest's ``newest_window_year``) and a current window (that year) and runs ``monitoring.drift_check`` on the split with the
-tracked drift configuration. The record ``drift_<HAI type>.json`` (its ``triggered`` flag is always false: nothing is triggered) and Evidently's own report
-``report_<HAI type>.html`` go to ``--out``. The report is also added as a snapshot to the Evidently UI workspace ``--workspace``, in one project for the model
-and the HAI type (``m2 Elastic Net HAI_1 CLABSI``). A rerun of the same run ID writes the same record and adds no second snapshot or project.
+task's baseline phase fetches (the Production run's DVC matrix, its manifest and the model's feature list). The newest window year is the maximum of the
+matrix's ``window_year`` and must agree with the manifest's ``newest_window_year``. The check splits the matrix into a reference (the years before it, labeled
+with their own maximum) and a current window (the newest year) and runs ``monitoring.drift_check`` on the split with the tracked drift configuration. The
+record ``drift_<HAI type>.json`` (its ``triggered`` flag is always false: nothing is triggered) and Evidently's own report ``report_<HAI type>.html`` go to
+``--out``. The report is also added as a snapshot to the Evidently UI workspace ``--workspace``, in one project for the model and the HAI type
+(``m2 Elastic Net HAI_1 CLABSI``).
 
-A check that cannot compare is refused with exit 2 and writes nothing: a baseline with no row of its newest year, with fewer rows of it than the drift
-configuration's minimum, with no row before it or of a population that is not monitored. Exit 3 means that Evidently is missing. ``record_sinks`` is the one
-place where the drift metrics push is wired: each sink gets the written record once.
+A run ID is bound to its inputs (model, type, matrix, manifest, feature list, drift configuration and ``--production-version``) when it is first written. The
+workspace keeps the first record and report under ``.live_runs/<run ID>/``. A rerun with the same inputs, in any job, copies those bytes to ``--out`` and
+computes nothing, so a completed run is a no-op; a rerun with other inputs is refused as ``run_inputs_changed``, before any file or snapshot changes. Snapshot
+files are written atomically, and a snapshot file that an interrupted write left incomplete is set aside under ``.incomplete``.
+
+A check that cannot compare is refused with exit 2 and writes nothing: a baseline with no row of the manifest's newest year, with rows newer than it, with
+fewer rows of it than the drift configuration's minimum, with no row before it or of a population that is not monitored. Exit 3 means that Evidently is
+missing. ``record_sinks`` is the one place where the drift metrics push is wired: each sink gets the record once, when it is first computed.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import importlib
 import json
 import os
@@ -22,7 +30,8 @@ import re
 import sys
 import tempfile
 from argparse import Namespace
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -47,14 +56,36 @@ def project_name(model: str, hai_type: str) -> str:
     return f"{model} {MODEL_NAMES[model]} {hai_type} {HAI_NAMES[hai_type]}"
 
 
+LIVE_RUNS = ".live_runs"
+INCOMPLETE = ".incomplete"
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What the inputs say after every refusal: the configuration, the manifest, the two years and the two row sets of the split."""
+
+    config: dict[str, Any]
+    config_sha: str
+    manifest: dict[str, Any]
+    newest: int
+    reference_newest: int
+    reference: Any
+    current: Any
+
+
 def count_of(rows: Any) -> int:
     counted = rows.aggregate("count(*)").fetchone()
     return int(counted[0]) if counted else 0
 
 
-def build(arguments: Namespace, on_report: Callable[[Any], None]) -> dict[str, Any]:
-    """Split the baseline matrix by window year, run the drift check on the split and return its record."""
-    config, _ = drift_config.load(arguments.config)
+def maximum_year(rows: Any) -> int | None:
+    found = rows.aggregate(f"max({YEAR})").fetchone()
+    return None if not found or found[0] is None else int(found[0])
+
+
+def split_plan(arguments: Namespace) -> Plan:
+    """Read and check the inputs and split the matrix by window year. The newest year comes from the data and must be the manifest's."""
+    config, config_sha = drift_config.load(arguments.config)
     manifest = drift_check.read_manifest(arguments.manifest, "manifest")
     newest = manifest.get("newest_window_year")
     if not isinstance(newest, int):
@@ -65,22 +96,45 @@ def build(arguments: Namespace, on_report: Callable[[Any], None]) -> dict[str, A
     matrix = drift_check.open_matrix(arguments.matrix, "baseline")
     if YEAR not in matrix.columns:
         raise CheckError("column_missing", f"{YEAR} is not a column of the matrix")
+    data_newest = maximum_year(matrix)
+    if data_newest is not None and data_newest > newest:
+        raise CheckError("manifest_year_stale", f"the baseline holds rows of window year {data_newest} but its manifest names {newest} as the newest year")
+    if data_newest is None or data_newest < newest:
+        raise CheckError("no_current_window", f"the baseline has no row of window year {newest}, so there is no current window to compare")
     current, reference = matrix.filter(f"{YEAR} = {newest}"), matrix.filter(f"{YEAR} < {newest}")
     rows = count_of(current)
-    if rows == 0:
-        raise CheckError("no_current_window", f"the baseline has no row of window year {newest}, so there is no current window to compare")
     if rows < config["minimum_current_rows"]:
         raise CheckError(
             "too_few_current_rows", f"the baseline has {rows} rows of window year {newest} and the drift configuration needs {config['minimum_current_rows']}"
         )
-    if count_of(reference) == 0:
+    reference_newest = maximum_year(reference)
+    if reference_newest is None:
         raise CheckError("no_reference_rows", f"the baseline has no row of window year {newest - 1} or earlier, so there is no reference to compare with")
+    return Plan(config, config_sha, manifest, newest, reference_newest, reference, current)
+
+
+def inputs_identity(arguments: Namespace, plan: Plan) -> str:
+    """The SHA-256 that binds a run ID to what it was computed from."""
+    parts = {
+        "model": arguments.model,
+        "hai_type": plan.manifest["hai_type"],
+        "matrix_sha256": drift_check.sha256_of(arguments.matrix),
+        "manifest_sha256": drift_check.sha256_of(arguments.manifest),
+        "features_sha256": drift_check.sha256_of(arguments.features),
+        "config_sha256": plan.config_sha,
+        "production_version": arguments.production_version or "",
+    }
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
+
+
+def build(arguments: Namespace, plan: Plan, on_report: Callable[[Any], None]) -> dict[str, Any]:
+    """Run the drift check on the split and return its record."""
     with tempfile.TemporaryDirectory(prefix="live_check_") as scratch:
         folder = Path(scratch)
-        reference.write_parquet(str(folder / "reference.parquet"))
-        current.write_parquet(str(folder / "current.parquet"))
-        identity = {"hai_type": manifest["hai_type"], "population": manifest["population"]}
-        (folder / "reference_manifest.json").write_text(json.dumps(identity | {"newest_window_year": newest - 1}) + "\n")
+        plan.reference.write_parquet(str(folder / "reference.parquet"))
+        plan.current.write_parquet(str(folder / "current.parquet"))
+        identity = {"hai_type": plan.manifest["hai_type"], "population": plan.manifest["population"]}
+        (folder / "reference_manifest.json").write_text(json.dumps(identity | {"newest_window_year": plan.reference_newest}) + "\n")
         (folder / "current_manifest.json").write_text(json.dumps(identity) + "\n")
         record = drift_check.build_record(
             Namespace(
@@ -98,41 +152,153 @@ def build(arguments: Namespace, on_report: Callable[[Any], None]) -> dict[str, A
     return record
 
 
-def write_html(report: Any, target: Path) -> None:
-    """Save Evidently's own report as one self-contained HTML file, atomically."""
-    handle, name = tempfile.mkstemp(dir=target.parent, prefix=".report_", suffix=".tmp")
-    os.close(handle)
+def write_bytes(target: Path, body: bytes, temp_folder: Path | None = None) -> None:
+    """Write ``body`` to ``target`` through a temporary file (in ``temp_folder``, by default the target's folder) and a rename, so no reader sees half of it."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(dir=temp_folder or target.parent, prefix=".live_", suffix=".tmp")
     try:
-        report.save_html(name)
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(name, target)
     finally:
         if os.path.exists(name):
             os.unlink(name)
 
 
-def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str) -> None:
+def write_html(report: Any, target: Path) -> bytes:
+    """Save Evidently's own report as one self-contained HTML file, atomically, and return its bytes."""
+    handle, name = tempfile.mkstemp(dir=target.parent, prefix=".report_", suffix=".tmp")
+    os.close(handle)
+    try:
+        report.save_html(name)
+        body = Path(name).read_bytes()
+        os.replace(name, target)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+    return body
+
+
+def recorded_outputs(workspace: Path, run_id: str, names: list[str]) -> tuple[str, dict[str, bytes]] | None:
+    """The identity and the files that the first computation of ``run_id`` recorded in the workspace, or None when it recorded none or not all of them."""
+    folder = workspace / LIVE_RUNS / run_id
+    try:
+        identity = json.loads((folder / "identity.json").read_bytes())["inputs_sha256"]
+        return str(identity), {name: (folder / name).read_bytes() for name in names}
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def record_outputs(workspace: Path, run_id: str, identity: str, files: dict[str, bytes]) -> None:
+    """Keep the first outputs of ``run_id``: the files first and the identity last, so a half record is never taken as a complete one."""
+    folder = workspace / LIVE_RUNS / run_id
+    for name, body in files.items():
+        write_bytes(folder / name, body)
+    write_bytes(folder / "identity.json", (json.dumps({"inputs_sha256": identity}, sort_keys=True) + "\n").encode())
+
+
+def snapshot_identity(workspace: Path, name: str, run_id: str) -> tuple[bool, str | None]:
+    """Whether the project ``name`` holds a snapshot of ``run_id`` and the inputs identity that snapshot carries, read from the files the UI reads."""
+    for metadata in sorted(workspace.glob("*/metadata.json")):
+        try:
+            if json.loads(metadata.read_bytes()).get("name") != name:
+                continue
+        except ValueError:
+            continue
+        for path in sorted((metadata.parent / "snapshots").glob("*.json")):
+            try:
+                found = json.loads(path.read_bytes()).get("metadata", {})
+            except ValueError:
+                continue
+            if found.get("run_id") == run_id:
+                return True, found.get("inputs_sha256") or None
+    return False, None
+
+
+def set_aside_incomplete_snapshots(workspace: Path) -> None:
+    """Move a snapshot file that is not complete JSON, as an interrupted write leaves it, out of the folder the loader reads (it parses every file there)."""
+    for path in sorted(workspace.glob("*/snapshots/*.json")):
+        try:
+            json.loads(path.read_bytes())
+        except ValueError:
+            target = path.parent.parent / INCOMPLETE
+            target.mkdir(exist_ok=True)
+            os.replace(path, target / path.name)
+            sys.stderr.write(f"live drift check: set aside the incomplete snapshot file {path.name} of {path.parent.parent.name} under {INCOMPLETE}\n")
+
+
+@contextlib.contextmanager
+def atomic_snapshot_writes() -> Iterator[None]:
+    """Make Evidently's local blob storage write each snapshot through a temporary file in the project folder and a rename. Its own writer opens the final path,
+    so a stopped task leaves a half file that the loader then fails on. The temporary file is outside the snapshots folder, which the loader reads whole."""
+    storage = importlib.import_module("evidently.legacy.ui.storage.local.base").FSSpecBlobStorage
+    original = storage.put_blob
+
+    async def put_blob(self: Any, blob_id: str, obj: str) -> str:
+        target = Path(self.location.path, blob_id)
+        write_bytes(target, obj.encode(), temp_folder=target.parent.parent)
+        return blob_id
+
+    storage.put_blob = put_blob
+    try:
+        yield
+    finally:
+        storage.put_blob = original
+
+
+def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, inputs_sha256: str) -> None:
     """Add the report as a snapshot of the project ``name`` in the Evidently UI workspace, creating the workspace and the project when they are not there. A
     snapshot of the same run is never added twice."""
-    store = importlib.import_module("evidently.legacy.ui.workspace").Workspace.create(str(workspace))
-    found = [project for project in store.list_projects() if project.name == name]
-    project = found[0] if found else store.create_project(name)
-    if any(item.metadata.get("run_id") == run_id for item in project.list_snapshots(include_reports=True)):
-        return
-    report.metadata["run_id"] = run_id
-    store.add_report(project.id, report)
+    set_aside_incomplete_snapshots(workspace)
+    with atomic_snapshot_writes():
+        store = importlib.import_module("evidently.legacy.ui.workspace").Workspace.create(str(workspace))
+        found = [project for project in store.list_projects() if project.name == name]
+        project = found[0] if found else store.create_project(name)
+        if any(item.metadata.get("run_id") == run_id for item in project.list_snapshots(include_reports=True)):
+            return
+        report.metadata["run_id"] = run_id
+        report.metadata["inputs_sha256"] = inputs_sha256
+        store.add_report(project.id, report)
 
 
 def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Path:
-    """Run the live check and return the record's path. The files are written only after the comparison, the record first."""
+    """Run the live check and return the record's path. The inputs are checked and the run is matched with its recorded identity before any file changes."""
+    plan = split_plan(arguments)
+    identity = inputs_identity(arguments, plan)
+    hai_type = plan.manifest["hai_type"]
+    name = project_name(arguments.model, hai_type)
+    names = [f"drift_{hai_type}.json", f"report_{hai_type}.html"]
+    recorded = recorded_outputs(arguments.workspace, arguments.run_id, names)
+    snapshot = snapshot_identity(arguments.workspace, name, arguments.run_id)
+    for known in (recorded[0] if recorded else None, snapshot[1]):
+        if known not in (None, identity):
+            raise CheckError(
+                "run_inputs_changed",
+                f"run {arguments.run_id} was first written from other inputs (model, type, baseline matrix, manifest, feature list, configuration or "
+                "production version). A check of other inputs needs a new run ID",
+            )
+    target = arguments.out / names[0]
+    if recorded and snapshot[0]:
+        for file, body in recorded[1].items():
+            write_bytes(arguments.out / file, body)
+        return target
     reports: list[Any] = []
-    record = build(arguments, reports.append)
+    record = build(arguments, plan, reports.append)
     if len(reports) != 1:
         raise RuntimeError(f"the check computed {len(reports)} Evidently reports, expected one")
-    target = drift_check.write_record(arguments.out, record)
-    write_html(reports[0], arguments.out / f"report_{record['hai_type']}.html")
-    add_to_workspace(reports[0], arguments.workspace, project_name(arguments.model, record["hai_type"]), arguments.run_id)
-    for sink in record_sinks:
-        sink(record)
+    if recorded:
+        for file, body in recorded[1].items():
+            write_bytes(arguments.out / file, body)
+    else:
+        drift_check.write_record(arguments.out, record)
+        write_html(reports[0], arguments.out / names[1])
+    add_to_workspace(reports[0], arguments.workspace, name, arguments.run_id, identity)
+    if not recorded:
+        record_outputs(arguments.workspace, arguments.run_id, identity, {file: (arguments.out / file).read_bytes() for file in names})
+        for sink in record_sinks:
+            sink(record)
     return target
 
 
@@ -145,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True, help="the folder that receives drift_<HAI type>.json and report_<HAI type>.html")
     parser.add_argument("--workspace", type=Path, required=True, help="the Evidently UI workspace folder that receives the snapshot")
     parser.add_argument("--config", type=Path, default=drift_config.CONFIG)
+    parser.add_argument("--production-version", help="the Production run and version of the baseline, bound with the inputs to the run ID")
     arguments = parser.parse_args(argv)
     try:
         if not re.fullmatch(RUN_ID, arguments.run_id):

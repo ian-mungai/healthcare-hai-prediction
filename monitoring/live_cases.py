@@ -70,10 +70,24 @@ def write_baseline(
 
 
 def run_live(
-    folder: Path, paths: dict[str, Path], *, evidently: bool = False, model: str = "m2", run: str = RUN, out: Path | None = None, workspace: Path | None = None
+    folder: Path,
+    paths: dict[str, Path],
+    *,
+    evidently: bool = False,
+    model: str = "m2",
+    run: str = RUN,
+    out: Path | None = None,
+    workspace: Path | None = None,
+    extra: tuple[str, ...] = (),
 ) -> tuple[int, str, Path, Path]:
     out, workspace = out or folder / "demo_out", workspace or folder / "evidently_workspace"
-    arguments = [f"--{name}={path}" for name, path in paths.items()] + [f"--model={model}", f"--run-id={run}", f"--out={out}", f"--workspace={workspace}"]
+    arguments = [f"--{name}={path}" for name, path in paths.items()] + [
+        f"--model={model}",
+        f"--run-id={run}",
+        f"--out={out}",
+        f"--workspace={workspace}",
+        *extra,
+    ]
     done = run_command(EVIDENTLY_PROGRAM if evidently else PYTHON, ["-m", "monitoring.live_check", *arguments], cwd=ROOT, timeout=drift_cases.TIMEOUT)
     return done.returncode, done.stdout + done.stderr, out, workspace
 
@@ -176,8 +190,8 @@ def another_run_adds_a_snapshot_to_the_same_project(folder: Path) -> Problems:
 
 def another_model_gets_its_own_project(folder: Path) -> Problems:
     paths, evidently = write_baseline(folder), drift_cases.need_evidently()
-    for model in ("m1", "m4"):
-        code, text, _, workspace = run_live(folder, paths, evidently=evidently, model=model, out=folder / f"out_{model}")
+    for model, run in (("m1", RUN), ("m4", OTHER_RUN)):
+        code, text, _, workspace = run_live(folder, paths, evidently=evidently, model=model, run=run, out=folder / f"out_{model}")
         if code != 0:
             return [f"exit {code}: {text[:400]}"]
     found = projects_of(workspace)
@@ -186,6 +200,199 @@ def another_model_gets_its_own_project(folder: Path) -> Problems:
         if sorted(found) == ["m1 OLS baseline HAI_1 CLABSI", "m4 Gradient boosting HAI_1 CLABSI"]
         else [f"expected one project per model, got {sorted(found)}"]
     )
+
+
+def baseline_in(folder: Path, name: str, **keywords: Any) -> dict[str, Path]:
+    """A baseline matrix, manifest and feature list in the sub-folder ``name`` of ``folder``."""
+    (folder / name).mkdir(exist_ok=True)
+    return write_baseline(folder / name, **keywords)
+
+
+def recorded(out: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in sorted(out.iterdir())} if out.exists() else {}
+
+
+def changed_inputs_under_the_same_run_are_refused(folder: Path) -> Problems:
+    """A run ID is bound to the model, the type, the baseline matrix, its manifest, the feature list and the production version at its first write. Any change
+    under the same ID is refused by name before a file or a snapshot changes, and the first results stay."""
+    evidently = drift_cases.need_evidently()
+    first = baseline_in(folder, "first", shifted=FEATURES)
+    code, text, out, workspace = run_live(folder, first, evidently=evidently, extra=("--production-version=run1:3",))
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    before, snapshots = recorded(out), projects_of(workspace)
+    manifest_changed = baseline_in(folder, "manifest", shifted=FEATURES)
+    manifest_changed["manifest"].write_text(manifest_changed["manifest"].read_text().replace("}", ', "note": "other"}'))
+    features_changed = baseline_in(folder, "features", shifted=FEATURES, features=FEATURES[:3])
+    variants = {
+        "another baseline matrix": (baseline_in(folder, "matrix"), {}),
+        "another manifest": (manifest_changed, {}),
+        "another feature list": (features_changed, {}),
+        "another model": (first, {"model": "m1"}),
+        "another production version": (first, {"extra": ("--production-version=run1:4",)}),
+    }
+    problems = []
+    for name, (paths, keywords) in variants.items():
+        keywords = {"extra": ("--production-version=run1:3",), **keywords}
+        code, text, other_out, _ = run_live(folder, paths, evidently=evidently, out=folder / f"out_{name.replace(' ', '_')}", **keywords)
+        if code != 2 or "run_inputs_changed" not in text or RUN not in text:
+            problems.append(f"{name}: expected exit 2 naming run_inputs_changed and the run, got {code}: {text[:240]}")
+        if recorded(other_out):
+            problems.append(f"{name}: a refused rerun wrote {sorted(recorded(other_out))}")
+    if recorded(out) != before or projects_of(workspace) != snapshots:
+        problems.append("a refused rerun changed the first record, the first report or the workspace")
+    return problems
+
+
+def a_rerun_reuses_the_recorded_outputs_byte_for_byte(folder: Path) -> Problems:
+    """A rerun of a completed run ID with the same inputs, in another job (a new output folder, the same workspace), recomputes nothing: the record and
+    Evidently's HTML are the recorded bytes and the workspace keeps its one snapshot."""
+    paths, evidently = write_baseline(folder, shifted=NUMERIC[:2]), drift_cases.need_evidently()
+    code, text, first_out, workspace = run_live(folder, paths, evidently=evidently, out=folder / "job_one")
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    code, text, second_out, _ = run_live(folder, paths, evidently=evidently, out=folder / "job_two")
+    problems = [] if code == 0 else [f"the rerun exited {code}: {text[:300]}"]
+    if recorded(second_out) != recorded(first_out) or sorted(recorded(first_out)) != OUTPUTS:
+        problems.append("the rerun's record or HTML differs from the recorded bytes")
+    code, text, third_out, _ = run_live(folder, paths, out=folder / "job_three")
+    if code != 0 or recorded(third_out) != recorded(first_out):
+        problems.append(f"a rerun in an environment without Evidently did not reuse the recorded outputs (exit {code}): {text[:200]}")
+    if projects_of(workspace) != {"m2 Elastic Net HAI_1 CLABSI": [RUN]}:
+        problems.append(f"the rerun changed the workspace: {projects_of(workspace)}")
+    return problems
+
+
+def a_reused_run_calls_no_sink(folder: Path) -> Problems:
+    """A rerun that reuses the recorded outputs is a no-op: the metrics sinks run for the first computation only."""
+    paths = write_baseline(folder, shifted=FEATURES)
+    script = (
+        "import json, sys\n"
+        "from argparse import Namespace\n"
+        "from pathlib import Path\n"
+        "from monitoring import live_check\n"
+        "seen = []\n"
+        "for name in ('one', 'two'):\n"
+        "    live_check.run(Namespace(model='m2', matrix=Path(sys.argv[1]), manifest=Path(sys.argv[2]), features=Path(sys.argv[3]), run_id=sys.argv[4],\n"
+        "        out=Path(sys.argv[5], name), workspace=Path(sys.argv[6]), config=live_check.drift_config.CONFIG, production_version=None),\n"
+        "        record_sinks=(lambda record: seen.append(record['hai_type']),))\n"
+        "print(json.dumps(seen))\n"
+    )
+    arguments = [
+        "-c",
+        script,
+        str(paths["matrix"]),
+        str(paths["manifest"]),
+        str(paths["features"]),
+        RUN,
+        str(folder / "outs"),
+        str(folder / "evidently_workspace"),
+    ]
+    done = run_command(EVIDENTLY_PROGRAM, arguments, cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    if done.returncode != 0:
+        return [f"exit {done.returncode}: {(done.stdout + done.stderr)[:400]}"]
+    seen = json.loads(done.stdout.strip().splitlines()[-1])
+    return [] if seen == ["HAI_1"] else [f"the sinks saw {seen}, expected one record for two runs"]
+
+
+def a_manifest_older_than_the_data_is_refused(folder: Path) -> Problems:
+    """The newest year comes from the data. A stale manifest that names 2023 over a matrix that holds 2024 rows is refused, never run against 2023."""
+    paths = write_baseline(folder, shifted=FEATURES, newest=2023)
+    code, text, out, workspace = run_live(folder, paths, evidently=drift_cases.need_evidently())
+    problems = (
+        []
+        if code == 2 and "manifest_year_stale" in text and "2023" in text and "2024" in text
+        else [f"expected exit 2 naming the years, got {code}: {text[:300]}"]
+    )
+    return problems + empty(out, workspace)
+
+
+def reference_years_come_from_the_data(folder: Path) -> Problems:
+    """A matrix with 2021, 2022 and 2024 rows has the reference maximum 2022 in its record, not an invented 2023."""
+    paths = write_baseline(folder, shifted=FEATURES, years=(2021, 2022))
+    code, text, out, _ = run_live(folder, paths, evidently=drift_cases.need_evidently())
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    record = drift_cases.read_record(out)
+    return [] if record["reference"]["newest_window_year"] == 2022 and record["reference"]["rows"] == 1000 else [f"the reference is {record['reference']}"]
+
+
+SNAPSHOT_SCRIPT = (
+    "import json, resource, signal, sys\n"
+    "import numpy, pandas\n"
+    "from pathlib import Path\n"
+    "from evidently.legacy.metric_preset import DataDriftPreset\n"
+    "from evidently.legacy.pipeline.column_mapping import ColumnMapping\n"
+    "from evidently.legacy.report import Report\n"
+    "from monitoring import live_check\n"
+    "generator = numpy.random.default_rng(1)\n"
+    "frame = lambda shift: pandas.DataFrame({'a': generator.normal(shift, 1, 200)})\n"
+    "report = Report(metrics=[DataDriftPreset(columns=['a'])])\n"
+    "report.run(reference_data=frame(0), current_data=frame(2), column_mapping=ColumnMapping(numerical_features=['a']))\n"
+    "workspace = Path(sys.argv[1])\n"
+    "signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n"
+    "hard = resource.getrlimit(resource.RLIMIT_FSIZE)[1]\n"
+    "resource.setrlimit(resource.RLIMIT_FSIZE, (3000, hard))\n"
+    "try:\n"
+    "    live_check.add_to_workspace(report, workspace, 'p', 'r1', 'hash1')\n"
+    "    interrupted = False\n"
+    "except OSError:\n"
+    "    interrupted = True\n"
+    "resource.setrlimit(resource.RLIMIT_FSIZE, (hard, hard))\n"
+    "def half(path):\n"
+    "    try:\n"
+    "        json.loads(path.read_text())\n"
+    "        return False\n"
+    "    except ValueError:\n"
+    "        return True\n"
+    "halves = [path.name for path in workspace.glob('*/snapshots/*') if half(path)]\n"
+    "live_check.add_to_workspace(report, workspace, 'p', 'r1', 'hash1')\n"
+    "print(json.dumps({'interrupted': interrupted, 'halves': halves}))\n"
+)
+
+
+def an_interrupted_snapshot_write_leaves_the_workspace_loadable(folder: Path) -> Problems:
+    """A snapshot write stopped after 3000 bytes (a file size limit stands for the stopped task) leaves no half file where the loader reads, so the next add
+    loads the workspace and adds the snapshot once."""
+    workspace = folder / "evidently_workspace"
+    program = EVIDENTLY_PROGRAM if drift_cases.need_evidently() else PYTHON
+    done = run_command(program, ["-c", SNAPSHOT_SCRIPT, str(workspace)], cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    if done.returncode != 0:
+        return [f"the add after the interruption failed: {(done.stdout + done.stderr)[-400:]}"]
+    result = json.loads(done.stdout.strip().splitlines()[-1])
+    problems = [] if result["interrupted"] else ["the first write was not interrupted: the case proves nothing"]
+    if result["halves"]:
+        problems.append(f"the interrupted write left half files where the loader reads: {result['halves']}")
+    for path in workspace.glob("*/snapshots/*"):
+        try:
+            json.loads(path.read_text())
+        except ValueError:
+            problems.append(f"{path.name} is not complete JSON")
+    return problems + ([] if projects_of(workspace) == {"p": ["r1"]} else [f"the workspace holds {projects_of(workspace)}"])
+
+
+def a_damaged_snapshot_file_is_set_aside_not_fatal(folder: Path) -> Problems:
+    """A snapshot file that an older write left incomplete does not block the workspace: it is set aside (named on stderr, kept under .incomplete), the valid
+    files stay, and a rerun of the run that lost its snapshot adds it again with the recorded outputs."""
+    paths, evidently = write_baseline(folder, shifted=NUMERIC[:2]), drift_cases.need_evidently()
+    code, text, first_out, workspace = run_live(folder, paths, evidently=evidently, out=folder / "one")
+    code2, text2, _, _ = run_live(folder, paths, evidently=evidently, run=OTHER_RUN, out=folder / "other")
+    if code or code2:
+        return [f"setup exit {code} {code2}: {(text + text2)[:300]}"]
+    damaged = next(path for path in workspace.glob("*/snapshots/*.json") if json.loads(path.read_text())["metadata"].get("run_id") == RUN)
+    damaged.write_text(damaged.read_text()[:100])
+    third = "20261117T130000Z-0a1b2c3f"
+    code, text, _, _ = run_live(folder, paths, evidently=evidently, run=third, out=folder / "third")
+    problems = [] if code == 0 else [f"a damaged snapshot file blocked the workspace (exit {code}): {text[-300:]}"]
+    if damaged.name not in text or "set aside" not in text or not list(workspace.glob("*/.incomplete/*.json")) or damaged.exists():
+        problems.append("the damaged file was not set aside and named")
+    code, text, rerun_out, _ = run_live(folder, paths, evidently=evidently, out=folder / "rerun")
+    if code != 0 or recorded(rerun_out) != recorded(first_out):
+        problems.append(f"the rerun of the run that lost its snapshot did not give the recorded outputs (exit {code}): {text[-200:]}")
+    found = projects_of(workspace)
+    if found != {"m2 Elastic Net HAI_1 CLABSI": sorted([RUN, OTHER_RUN, third])}:
+        problems.append(f"the workspace holds {found}")
+    return problems
 
 
 def passes_the_record_to_each_sink_once(folder: Path) -> Problems:
@@ -200,7 +407,7 @@ def passes_the_record_to_each_sink_once(folder: Path) -> Problems:
         "def sink(record):\n"
         "    seen.append({'hai_type': record['hai_type'], 'triggered': record['triggered'], 'html': Path(sys.argv[1], 'report_HAI_1.html').is_file()})\n"
         "live_check.run(Namespace(model='m2', matrix=Path(sys.argv[2]), manifest=Path(sys.argv[3]), features=Path(sys.argv[4]), run_id=sys.argv[5],\n"
-        "    out=Path(sys.argv[1]), workspace=Path(sys.argv[6]), config=live_check.drift_config.CONFIG), record_sinks=(sink,))\n"
+        "    out=Path(sys.argv[1]), workspace=Path(sys.argv[6]), config=live_check.drift_config.CONFIG, production_version=None), record_sinks=(sink,))\n"
         "print(json.dumps(seen))\n"
     )
     out, workspace = folder / "demo_out", folder / "evidently_workspace"
@@ -317,6 +524,16 @@ def baseline_phase_covers_only_the_live_type(folder: Path) -> Problems:
     return problems + ([] if refused == 2 and len(calls) == 2 else [f"a live baseline with no model exited {refused} after {len(calls)} fetches"])
 
 
+def baseline_phase_records_the_production_version_of_a_live_run(folder: Path) -> Problems:
+    """A live baseline records the Production run and version it fetched, which bind the run ID to the model; the gate task's record stays as it was."""
+    baseline, work = aws_cases.workspace_with_two_baselines(folder)
+    runner = importlib.import_module("monitoring.aws_run")
+    live = runner.baseline_phase(baseline.store, work, RUN, project=baseline.work.project, hai_types=("HAI_1",), record_versions=True)
+    gate = runner.baseline_phase(baseline.store, work, OTHER_RUN, project=baseline.work.project, hai_types=("HAI_1",))
+    problems = [] if live.get("versions") == {"HAI_1": "run1:1"} else [f"the live record holds {live.get('versions')}"]
+    return problems + ([] if "versions" not in gate else ["the gate task's baseline record gained a versions entry"])
+
+
 def live_type_is_a_hai_type(folder: Path) -> Problems:
     code, text = phase(folder, "current", live="HAI_9")
     return [] if code == 2 and "invalid choice" in text and "HAI_9" in text else [f"expected exit 2 with an invalid choice HAI_9, got {code}: {text[:300]}"]
@@ -353,6 +570,80 @@ def publish_repeats_to_the_same_result(folder: Path) -> Problems:
     first = dict(s3.objects)
     importlib.import_module("monitoring.aws_run").publish_live_phase(s3, BUCKET, work, RUN, "HAI_1")
     return [] if s3.objects == first and len(first) == 3 else ["a second publish changed or added objects"]
+
+
+def publish_again(folder: Path, s3: aws_cases.MemoryS3, *, html: str | None = None, record: dict[str, Any] | None = None) -> Any:
+    """Publish the run that ``live_publish`` prepared in ``folder`` again, after the outputs were changed as the arguments say."""
+    out = folder / "work" / "drift_live" / RUN
+    if html is not None:
+        (out / "report_HAI_1.html").write_text(html)
+    if record is not None:
+        (out / "drift_HAI_1.json").write_text(json.dumps(record) + "\n")
+    return importlib.import_module("monitoring.aws_run").publish_live_phase(s3, BUCKET, folder / "work", RUN, "HAI_1")
+
+
+def publish_creates_each_object_once_and_the_marker_last(folder: Path) -> Problems:
+    """Every demo object and the marker are created with If-None-Match, so no write replaces an object, and the marker is the last write."""
+    s3 = aws_cases.MemoryS3()
+    live_publish(folder, s3)
+    prefix = f"drift_demo/{RUN}/"
+    return (
+        [] if s3.conditions == ["*", "*", "*"] and s3.puts[-1] == prefix + "_complete.json" else [f"the writes were {s3.puts} with conditions {s3.conditions}"]
+    )
+
+
+def publish_of_a_completed_run_changes_nothing(folder: Path) -> Problems:
+    """A completed run published again with a recomputed HTML (other bytes, same record) writes nothing, so the stored HTML keeps matching the marker."""
+    s3 = aws_cases.MemoryS3()
+    live_publish(folder, s3)
+    stored = dict(s3.objects)
+    done = publish_again(folder, s3, html="<html>recomputed with other timestamps</html>\n")
+    marker = json.loads(s3.objects[(BUCKET, f"drift_demo/{RUN}/_complete.json")])
+    html = s3.objects[(BUCKET, f"drift_demo/{RUN}/report_HAI_1.html")]
+    problems = [] if s3.objects == stored and len(s3.puts) == 3 and done.get("reused") is True else ["a completed run was written again"]
+    return problems + ([] if marker["files"]["report_HAI_1.html"] == hashlib.sha256(html).hexdigest() else ["the stored HTML does not match the marker"])
+
+
+def publish_refuses_a_completed_run_with_another_record(folder: Path) -> Problems:
+    s3 = aws_cases.MemoryS3()
+    live_publish(folder, s3)
+    stored = dict(s3.objects)
+    try:
+        publish_again(folder, s3, record={"run_id": RUN, "hai_type": "HAI_1", "drift_share": 0.2})
+    except importlib.import_module("monitoring.drift_check").CheckError as error:
+        return [] if "demo_run_conflict" in str(error) and s3.objects == stored else [f"unexpected: {error}, objects changed {s3.objects != stored}"]
+    return ["a completed run was published again with another record"]
+
+
+def publish_retry_after_an_interrupted_marker_completes_it(folder: Path) -> Problems:
+    """A publish stopped before its marker leaves the objects and no marker. The retry with the same bytes completes it with a marker that matches them; a retry
+    with other HTML is refused by name and never replaces the object or writes a marker."""
+    s3 = aws_cases.MemoryS3()
+    s3.fail_on = {f"drift_demo/{RUN}/_complete.json"}
+    try:
+        live_publish(folder, s3)
+    except aws_cases.Interrupted:
+        pass
+    else:
+        return ["the interrupted marker put did not interrupt the publish"]
+    marker_key = (BUCKET, f"drift_demo/{RUN}/_complete.json")
+    problems = [] if marker_key not in s3.objects and len(s3.objects) == 2 else [f"the interrupted publish left {sorted(key[1] for key in s3.objects)}"]
+    stored = dict(s3.objects)
+    try:
+        publish_again(folder, s3, html="<html>other bytes</html>\n")
+    except importlib.import_module("monitoring.drift_check").CheckError as error:
+        if "demo_object_conflict" not in str(error) or s3.objects != stored:
+            problems.append(f"unexpected refusal or write: {error}")
+    else:
+        problems.append("other HTML replaced an object of an unfinished publish")
+    s3.fail_on = set()
+    (folder / "work" / "drift_live" / RUN / "report_HAI_1.html").write_text("<html>report</html>\n")
+    publish_again(folder, s3)
+    marker = json.loads(s3.objects[marker_key])
+    html = s3.objects[(BUCKET, f"drift_demo/{RUN}/report_HAI_1.html")]
+    return problems + (
+        [] if marker["files"]["report_HAI_1.html"] == hashlib.sha256(html).hexdigest() else ["the completed marker does not match the stored HTML"]
+    )
 
 
 def publish_refuses_missing_outputs(folder: Path) -> Problems:
@@ -510,13 +801,25 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("live_another_run_adds_a_snapshot", another_run_adds_a_snapshot_to_the_same_project),
         ("live_another_model_gets_its_own_project", another_model_gets_its_own_project),
         ("live_passes_the_record_to_each_sink_once", passes_the_record_to_each_sink_once),
+        ("live_changed_inputs_under_the_same_run_are_refused", changed_inputs_under_the_same_run_are_refused),
+        ("live_rerun_reuses_the_recorded_outputs_byte_for_byte", a_rerun_reuses_the_recorded_outputs_byte_for_byte),
+        ("live_reused_run_calls_no_sink", a_reused_run_calls_no_sink),
+        ("live_refuses_a_manifest_older_than_the_data", a_manifest_older_than_the_data_is_refused),
+        ("live_reference_years_come_from_the_data", reference_years_come_from_the_data),
+        ("live_interrupted_snapshot_write_leaves_the_workspace_loadable", an_interrupted_snapshot_write_leaves_the_workspace_loadable),
+        ("live_damaged_snapshot_file_is_set_aside_not_fatal", a_damaged_snapshot_file_is_set_aside_not_fatal),
         ("live_task_check_runs_the_live_check", check_phase_runs_the_live_check),
         ("live_task_check_refuses_an_unmonitored_type", check_phase_refuses_an_unmonitored_type),
         ("live_task_current_reads_nothing", current_phase_reads_nothing_in_live_mode),
         ("live_task_baseline_covers_only_the_live_type", baseline_phase_covers_only_the_live_type),
+        ("live_task_baseline_records_the_production_version", baseline_phase_records_the_production_version_of_a_live_run),
         ("live_task_type_is_a_hai_type", live_type_is_a_hai_type),
         ("live_task_publish_writes_the_demo_prefix_then_the_marker", publish_writes_the_demo_prefix_then_the_marker),
         ("live_task_publish_repeats_to_the_same_result", publish_repeats_to_the_same_result),
+        ("live_task_publish_creates_each_object_once_and_the_marker_last", publish_creates_each_object_once_and_the_marker_last),
+        ("live_task_publish_of_a_completed_run_changes_nothing", publish_of_a_completed_run_changes_nothing),
+        ("live_task_publish_refuses_a_completed_run_with_another_record", publish_refuses_a_completed_run_with_another_record),
+        ("live_task_publish_retry_after_an_interrupted_marker_completes_it", publish_retry_after_an_interrupted_marker_completes_it),
         ("live_task_publish_refuses_missing_outputs", publish_refuses_missing_outputs),
         ("live_task_publish_cli_refuses_a_bad_bucket_name", publish_cli_refuses_a_bad_bucket_name),
         ("live_ui_role_exists_and_holds_no_grant", ui_role_exists_and_holds_no_grant),

@@ -127,11 +127,35 @@ run "drift_role_is_narrow" {
 
   assert {
     condition = (
+      length(jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement) == 4 &&
       jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Action == ["s3:PutObject"] &&
-      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/drift/*", "arn:aws:s3:::example-project-ci-bucket/drift_demo/*"] &&
-      length(jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement) == 1
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/drift/*" &&
+      !contains(keys(jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0]), "Condition")
     )
-    error_message = "The drift task may only create objects under drift/ (the gate runs) and drift_demo/ (the on-demand live check). It cannot read, list or delete them."
+    error_message = "The drift task creates the records of the gate runs under drift/ as before: PutObject on that prefix and nothing else."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[1].Action == ["s3:PutObject"] &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/drift_demo/*" &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[1].Condition == {
+        Null         = { "s3:if-none-match" = "false" }
+        StringEquals = { "s3:if-none-match" = "*" }
+      }
+    )
+    error_message = "The live check creates objects under drift_demo/ only with If-None-Match *, so a write never replaces an object or a completion marker."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[2].Action == ["s3:GetObject"] &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[2].Resource == "arn:aws:s3:::example-project-ci-bucket/drift_demo/*" &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[3].Action == ["s3:ListBucket"] &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[3].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[3].Condition == { StringLike = { "s3:prefix" = ["drift_demo/*"] } }
+    )
+    error_message = "The live check reads and lists only the drift_demo/ prefix, to find its own completion marker and tell a missing key from a denied one. It never reads drift/."
   }
 
   assert {

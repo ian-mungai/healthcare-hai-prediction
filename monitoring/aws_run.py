@@ -110,23 +110,29 @@ def baseline_phase(
     deadlines: dvc_baseline.Deadlines | None = None,
     model: str | None = None,
     feature_list_sha: str | None = None,
+    record_versions: bool = False,
 ) -> dict[str, Any]:
-    """Fetch the baseline of every type that has a Production model of the model and record the types that have none, with the reason."""
+    """Fetch the baseline of every type that has a Production model of the model and record the types that have none, with the reason. A live run also
+    records the Production run and version of each type it fetched, which bind its run ID to the model it checked."""
     folder = run_folder(work, run)
     if (done := read_done(folder, "baseline", run)) is not None:
         return done
     monitored: list[str] = []
     unmonitored: dict[str, str] = {}
+    versions: dict[str, str] = {}
     for hai_type in hai_types:
         try:
-            baseline.fetch(store, hai_type, folder / hai_type, project=project, deadlines=deadlines, model=model, feature_list_sha=feature_list_sha)
+            fetched = baseline.fetch(store, hai_type, folder / hai_type, project=project, deadlines=deadlines, model=model, feature_list_sha=feature_list_sha)
         except CheckError as error:
             if error.code != baseline.NOTHING_TO_MONITOR:
                 raise
             unmonitored[hai_type] = error.name
         else:
             monitored.append(hai_type)
+            versions[hai_type] = f"{fetched.run_id}:{fetched.version}"
     done = {"phase": "baseline", "run_id": run, "monitored": monitored, "unmonitored": unmonitored} | ({} if model is None else {"model": model})
+    if record_versions:
+        done["versions"] = versions
     write_json(folder / "baseline.done.json", done)
     return done
 
@@ -253,15 +259,48 @@ def check_live_phase(work: Path, run: str, hai_type: str, workspace: Path, *, co
             out=live_folder(work, run),
             workspace=workspace,
             config=config,
+            production_version=base.get("versions", {}).get(hai_type),
         ),
         record_sinks=live_check.RECORD_SINKS,
     )
     return {"phase": "check", "run_id": run, "types": [hai_type]}
 
 
+def error_code_of(error: Exception) -> str:
+    """The S3 error code that boto3 carries on a client error, or an empty string."""
+    response = getattr(error, "response", None)
+    return str(response.get("Error", {}).get("Code", "")) if isinstance(response, dict) else ""
+
+
+def read_object(client: Any, bucket: str, key: str) -> bytes | None:
+    """The object's bytes, or None when the key does not exist (S3 answers NoSuchKey to a caller that may list the prefix)."""
+    try:
+        body: bytes = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except Exception as error:
+        if error_code_of(error) in ("NoSuchKey", "404"):
+            return None
+        raise
+    return body
+
+
+def create_object(client: Any, bucket: str, key: str, body: bytes, content_type: str) -> None:
+    """Create the object only when the key is free (If-None-Match). An object that is there with the same bytes is the result of an earlier try and stays; one
+    with other bytes is never replaced."""
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type, IfNoneMatch="*")
+    except Exception as error:
+        if error_code_of(error) not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+        if read_object(client, bucket, key) != body:
+            raise CheckError("demo_object_conflict", f"s3://{bucket}/{key} exists with other content and is never replaced: use a new run ID") from None
+
+
 def publish_live_phase(client: Any, bucket: str, work: Path, run: str, hai_type: str) -> dict[str, Any]:
-    """Upload the live check's record and HTML report to ``drift_demo/<run>/`` and then the marker that names them. Nothing is uploaded when one is missing or
-    belongs to another run. The prefix is never ``drift/<run>/``, which the drift DAG reads to start training."""
+    """Upload the live check's record and HTML report to ``drift_demo/<run>/`` and then the marker that names them, each created only when its key is free.
+
+    A run whose marker exists is complete: the same record is a no-op (its stored HTML keeps matching the marker, whatever the local HTML is) and another
+    record is refused as ``demo_run_conflict``. An earlier try that stopped before the marker left objects that the retry finds again: the same bytes complete
+    the run, other bytes are refused as ``demo_object_conflict``. The prefix is never ``drift/<run>/``, which the drift DAG reads to start training."""
     base = require_baseline(run_folder(work, run), run)
     bodies: dict[str, bytes] = {}
     for name in live_names(hai_type):
@@ -269,23 +308,25 @@ def publish_live_phase(client: Any, bucket: str, work: Path, run: str, hai_type:
         if not path.is_file():
             raise CheckError("record_missing", f"the live check of {hai_type} has no {name} at {path}")
         bodies[name] = path.read_bytes()
-    if json.loads(bodies[live_names(hai_type)[0]]).get("run_id") != run:
+    record_name = live_names(hai_type)[0]
+    if json.loads(bodies[record_name]).get("run_id") != run:
         raise CheckError("record_stale", f"the live record of {hai_type} belongs to another run")
-    marker = {
-        "kind": "drift_live",
-        "run_id": run,
-        "hai_type": hai_type,
-        "model": base.get("model"),
-        "files": {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()},
-    }
+    digests = {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}
+    prefix = f"{LIVE_PREFIX}/{run}/"
+    stored = read_object(client, bucket, prefix + MARKER)
+    if stored is not None:
+        try:
+            published = json.loads(stored).get("files", {}).get(record_name)
+        except ValueError:
+            published = None
+        if published != digests[record_name]:
+            raise CheckError("demo_run_conflict", f"run {run} is already published with another record: use a new run ID")
+        return {"phase": "publish", "run_id": run, "files": list(bodies), "reused": True}
     for name, body in bodies.items():
-        client.put_object(
-            Bucket=bucket, Key=f"{LIVE_PREFIX}/{run}/{name}", Body=body, ContentType="text/html" if name.endswith(".html") else "application/json"
-        )
-    client.put_object(
-        Bucket=bucket, Key=f"{LIVE_PREFIX}/{run}/{MARKER}", Body=(json.dumps(marker, indent=2, sort_keys=True) + "\n").encode(), ContentType="application/json"
-    )
-    return {"phase": "publish", "run_id": run, "files": list(bodies)}
+        create_object(client, bucket, prefix + name, body, "text/html" if name.endswith(".html") else "application/json")
+    marker = {"kind": "drift_live", "run_id": run, "hai_type": hai_type, "model": base.get("model"), "files": digests}
+    create_object(client, bucket, prefix + MARKER, (json.dumps(marker, indent=2, sort_keys=True) + "\n").encode(), "application/json")
+    return {"phase": "publish", "run_id": run, "files": list(bodies), "reused": False}
 
 
 def model_feature_list_sha(root: Path, model: str | None) -> str | None:
@@ -359,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                     hai_types=(live,) if live else HAI_TYPES,
                     model=arguments.model,
                     feature_list_sha=model_feature_list_sha(arguments.root, arguments.model),
+                    record_versions=bool(live),
                 )
             elif arguments.phase == "current" and live:
                 result = {"phase": "current", "run_id": arguments.run, "types": []}

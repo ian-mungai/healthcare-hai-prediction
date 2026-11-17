@@ -5,7 +5,32 @@
       "Sid": "CreateDriftRecords",
       "Effect": "Allow",
       "Action": ["s3:PutObject"],
-      "Resource": ["arn:aws:s3:::${DATA_BUCKET_NAME}/drift/*", "arn:aws:s3:::${DATA_BUCKET_NAME}/drift_demo/*"]
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift/*"
+    },
+    {
+      "Sid": "CreateDriftDemoObjectsOnce",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift_demo/*",
+      "Condition": {
+        "Null": { "s3:if-none-match": "false" },
+        "StringEquals": { "s3:if-none-match": "*" }
+      }
+    },
+    {
+      "Sid": "ReadDriftDemoObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift_demo/*"
+    },
+    {
+      "Sid": "ListDriftDemoPrefix",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": { "s3:prefix": ["drift_demo/*"] }
+      }
     }
   ]
 }

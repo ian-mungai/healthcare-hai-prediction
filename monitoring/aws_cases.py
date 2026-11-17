@@ -40,16 +40,35 @@ class Missing(Exception):
     response = {"Error": {"Code": "NoSuchKey"}}
 
 
+class PreconditionFailed(Exception):
+    """What boto3 raises for a conditional write onto a key that exists."""
+
+    response = {"Error": {"Code": "PreconditionFailed"}}
+
+
+class Interrupted(Exception):
+    """A write that never reached the bucket, as a lost connection or a stopped task leaves it."""
+
+
 class MemoryS3:
-    """The two S3 calls the task and the DAG make, on a dictionary."""
+    """The S3 calls the task and the DAG make, on a dictionary. A put with ``IfNoneMatch="*"`` fails on a key that exists, as S3 does, and ``fail_on`` names
+    keys whose put is interrupted before it writes."""
 
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.puts: list[str] = []
+        self.conditions: list[str | None] = []
+        self.fail_on: set[str] = set()
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
-        self.objects[(arguments["Bucket"], arguments["Key"])] = bytes(arguments["Body"])
+        key = (arguments["Bucket"], arguments["Key"])
+        if arguments["Key"] in self.fail_on:
+            raise Interrupted(f"the put of {arguments['Key']} was interrupted")
+        if arguments.get("IfNoneMatch") == "*" and key in self.objects:
+            raise PreconditionFailed(f"{arguments['Key']} exists")
+        self.objects[key] = bytes(arguments["Body"])
         self.puts.append(arguments["Key"])
+        self.conditions.append(arguments.get("IfNoneMatch"))
         return {}
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
