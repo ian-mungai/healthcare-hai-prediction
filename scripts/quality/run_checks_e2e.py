@@ -34,7 +34,6 @@ COPIED = [
     ".github/workflows/ci.yml",
     "config/quality/ci_groups.json",
     "config/quality/launcher_inputs.json",
-    "config/quality/test_env_names.json",
     ".pre-commit-config.yaml",
     "pyproject.toml",
     ".env.example",
@@ -64,7 +63,6 @@ CI_SOURCE = (ROOT / "scripts" / "ci" / "groups" / "python_lint.sh").read_text()
 ALLOWLIST = ".privacy_allowlist"
 # The scratch repository holds none of the documents that an entry's path-absent expiry waits on, so the copy makes those entries permanent.
 ALLOWLIST_SOURCE = re.sub(r" -- expires-when path-absent:\S+$", " -- permanent", (ROOT / ALLOWLIST).read_text(), flags=re.MULTILINE)
-ENV_EXAMPLE_SOURCE = (ROOT / ".env.example").read_text()
 VENDOR_ADDRESS = "noreply" + "@" + "anthropic.com"  # The attribution check matches this vendor address.
 HOME_PATH = "/Us" + "ers/jdoe/projects/app/run.log"
 TEMP_PATH = "/var/" + "folders/zq/k3j9x0000gn/T/run_1"
@@ -143,7 +141,13 @@ IMPORTERS_HOOK = "typecheck-importers"
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
 TEST_SETTING = "SAMPLE_TEST" + "_SETTING"
-TEST_ENV_LIST = "config/quality/test_env_names.json"
+CONTAINER_SETTING = "SAMPLE_CONTAINER" + "_SETTING"
+TOOL_SETTING = "SAMPLE_TOOL" + "_SETTING"
+ENV_LIST = "config/quality/env_names.json"
+# The settings a person puts in .env, in the order of .env.example. The env-example cases start from a repository that holds only these.
+ENV_FILE_NAMES = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCOUNT_ID", "PROJECT_NAME", "S3_BUCKET", "ENVIRONMENT", "ALERT_EMAIL"]
+CONTAINER_SETTER = "infra/jobs/sample.tf"
+CONTAINER_SETTER_TEXT = f'environment = [{{ name = "{CONTAINER_SETTING}", value = "x" }}]\n'
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
 USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
@@ -252,12 +256,27 @@ def read_sample(name: str) -> str:
     return "import os\n\nVALUE = " + ENVIRON + f'.get("{name}", "")\n'
 
 
-def test_env_list(names: list[str], modules: list[str] | None = None) -> str:
-    """This repository's list of test variables plus ``names`` and the extra test modules ``modules``."""
-    data = json.loads((ROOT / TEST_ENV_LIST).read_text())
-    data["test_modules"] |= {path: "sample test module" for path in modules or []}
-    data["names"] |= {name: "sample test variable" for name in names}
-    return json.dumps(data) + "\n"
+def env_entry(category: str, **extra: str) -> dict[str, str]:
+    """One entry of the name list: a category, a reason and optional ``set_in`` or ``set_by``."""
+    return {"category": category, "reason": "sample", **extra}
+
+
+def env_names(names: dict[str, dict[str, str]] | None = None, modules: list[str] | None = None, env_file: list[str] | None = None) -> str:
+    """The name list of a sample repository: the settings of .env, the extra test modules ``modules`` and the entries ``names``."""
+    data = {"env_file": ENV_FILE_NAMES if env_file is None else env_file, "test_modules": {path: "sample test module" for path in modules or []}}
+    return json.dumps({**data, "names": names or {}}) + "\n"
+
+
+def env_example_text(*names: str) -> str:
+    """The sample .env.example: a header line and one placeholder line per name."""
+    return "# Settings of a person.\n" + "".join(f"{name}=placeholder\n" for name in names)
+
+
+ENV_BASELINE = {
+    ".env.example": env_example_text(*ENV_FILE_NAMES),
+    ENV_LIST: env_names(),
+    "app/settings.py": "import os\n\n" + "".join(f'{name} = {ENVIRON}.get("{name}", "")\n' for name in ENV_FILE_NAMES),
+}
 
 
 def guide_page(*body: str) -> str:
@@ -2320,80 +2339,186 @@ CASES = [
             'COMMAND = ["python", "-m", "mypy", "--config-file", str(config), "--check-untyped-defs", "--disallow-untyped-defs"]\n'
         },
     ),
-    Case("documented variable", "env-example", True, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '.get("AWS_REGION", "")\n'}),
-    Case("undocumented variable", "env-example", False, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '["NEW_SETTING"]\n'}),
+    Case("documented variable", "env-example", True, {"app/tool.py": read_sample("AWS_REGION")}),
     Case(
-        "variable read only by test code, in the list",
-        "env-example",
-        True,
-        {"scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING])},
-    ),
-    Case(
-        "variable read only by test code, not in the list",
+        "undocumented variable",
         "env-example",
         False,
-        {"scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([])},
-        reason=f"{TEST_SETTING} is read but not in .env.example or the test variable list",
+        {"app/tool.py": read_sample("NEW_SETTING")},
+        reason=f"NEW_SETTING is read but is in neither .env.example nor {ENV_LIST}",
+    ),
+    Case(
+        "documented variable nothing reads",
+        "env-example",
+        False,
+        {".env.example": env_example_text(*ENV_FILE_NAMES, UNUSED_SETTING), ENV_LIST: env_names(env_file=[*ENV_FILE_NAMES, UNUSED_SETTING])},
+        reason=f"{UNUSED_SETTING} is in .env.example but production code does not use it",
+    ),
+    Case(
+        "variable that only test code reads, in the list",
+        "env-example",
+        True,
+        {"app/tool_cases.py": read_sample(TEST_SETTING), ENV_LIST: env_names({TEST_SETTING: env_entry("test")})},
+    ),
+    Case(
+        "variable that only test code reads, not in the list",
+        "env-example",
+        False,
+        {"app/tool_cases.py": read_sample(TEST_SETTING)},
+        reason=f"{TEST_SETTING} is read but is in neither .env.example nor {ENV_LIST}",
     ),
     Case(
         "test variable in .env.example",
         "env-example",
         False,
-        {
-            "scripts/tool_cases.py": read_sample(TEST_SETTING),
-            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
-            TEST_ENV_LIST: test_env_list([]),
-        },
-        reason=f"{TEST_SETTING} is used only by test code",
+        {"app/tool_cases.py": read_sample(TEST_SETTING), ".env.example": env_example_text(*ENV_FILE_NAMES, TEST_SETTING)},
+        reason=f"{TEST_SETTING} is in .env.example but not in env_file of {ENV_LIST}",
     ),
     Case(
-        "listed variable no test code reads",
-        "env-example",
-        False,
-        {TEST_ENV_LIST: test_env_list([TEST_SETTING])},
-        reason=f"{TEST_SETTING} is listed but no test code reads it",
-    ),
-    Case(
-        "listed variable production code reads",
+        "setting of .env that only test code reads",
         "env-example",
         False,
         {
-            "scripts/tool.py": read_sample(TEST_SETTING),
-            "scripts/tool_cases.py": read_sample(TEST_SETTING),
-            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
-            TEST_ENV_LIST: test_env_list([TEST_SETTING]),
+            "app/tool_cases.py": read_sample(TEST_SETTING),
+            ".env.example": env_example_text(*ENV_FILE_NAMES, TEST_SETTING),
+            ENV_LIST: env_names(env_file=[*ENV_FILE_NAMES, TEST_SETTING]),
         },
-        reason=f"{TEST_SETTING} is listed but production code also uses it",
+        reason=f"{TEST_SETTING} is in .env.example but production code does not use it",
     ),
     Case(
-        "production read only in the list",
+        "test variable that production code reads",
         "env-example",
         False,
-        {"scripts/tool.py": read_sample(TEST_SETTING), "scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING])},
-        reason=f"{TEST_SETTING} is read but not in .env.example or the test variable list",
+        {"app/tool.py": read_sample(TEST_SETTING), "app/tool_cases.py": read_sample(TEST_SETTING), ENV_LIST: env_names({TEST_SETTING: env_entry("test")})},
+        reason=f"{TEST_SETTING} is listed as test but production code also uses it",
     ),
     Case(
-        "variable read by test and production code",
+        "listed test variable no test code reads",
+        "env-example",
+        False,
+        {ENV_LIST: env_names({TEST_SETTING: env_entry("test")})},
+        reason=f"{TEST_SETTING} is listed as test but no test code uses it",
+    ),
+    Case(
+        "container variable only in .env.example",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            CONTAINER_SETTER: CONTAINER_SETTER_TEXT,
+            ".env.example": env_example_text(*ENV_FILE_NAMES, CONTAINER_SETTING),
+        },
+        reason=f"{CONTAINER_SETTING} is in .env.example but not in env_file of {ENV_LIST}",
+    ),
+    Case(
+        "variable in .env.example and in the list",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            CONTAINER_SETTER: CONTAINER_SETTER_TEXT,
+            ".env.example": env_example_text(*ENV_FILE_NAMES, CONTAINER_SETTING),
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTING} is in both .env.example and {ENV_LIST}",
+    ),
+    Case(
+        "container variable set in infra",
         "env-example",
         True,
         {
-            "scripts/tool.py": read_sample(TEST_SETTING),
-            "scripts/tool_cases.py": read_sample(TEST_SETTING),
-            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            CONTAINER_SETTER: CONTAINER_SETTER_TEXT,
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
         },
+    ),
+    Case(
+        "container variable nothing sets",
+        "env-example",
+        False,
+        {"app/tool.py": read_sample(CONTAINER_SETTING), ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")})},
+        reason=f"{CONTAINER_SETTING} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "container variable set in a named file",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "app/launch.py": f'ENVIRONMENT_OVERRIDE = {{"{CONTAINER_SETTING}": "x"}}\n',
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in="app/launch.py")}),
+        },
+    ),
+    Case(
+        "container variable named file does not use it",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "app/launch.py": "X = 1\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in="app/launch.py")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed with set_in app/launch.py, which is not a tracked file that uses it",
+    ),
+    Case(
+        "container variable set by the platform",
+        "env-example",
+        True,
+        {"app/tool.py": read_sample(CONTAINER_SETTING), ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_by="ecs")})},
+    ),
+    Case(
+        "container variable no production code uses",
+        "env-example",
+        False,
+        {ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")})},
+        reason=f"{CONTAINER_SETTING} is listed as container but no production code uses it",
+    ),
+    Case(
+        "tool variable that production code reads",
+        "env-example",
+        True,
+        {"app/tool.py": read_sample(TOOL_SETTING), ENV_LIST: env_names({TOOL_SETTING: env_entry("tool")})},
+    ),
+    Case(
+        "listed variable with an unknown category",
+        "env-example",
+        False,
+        {"app/tool.py": read_sample(TOOL_SETTING), ENV_LIST: env_names({TOOL_SETTING: env_entry("person")})},
+        reason=f"{TOOL_SETTING} has category person: use test, container or tool",
+    ),
+    Case(
+        "setting of .env missing from .env.example",
+        "env-example",
+        False,
+        {".env.example": env_example_text(*ENV_FILE_NAMES[:-1])},
+        reason="ALERT_EMAIL is in env_file but not in .env.example",
+    ),
+    Case(
+        "settings of .env in another order",
+        "env-example",
+        False,
+        {".env.example": env_example_text(*ENV_FILE_NAMES[::-1])},
+        reason=".env.example lists its names in a different order than env_file",
+    ),
+    Case(
+        "name commented out in .env.example",
+        "env-example",
+        False,
+        {".env.example": env_example_text(*ENV_FILE_NAMES) + f"# {TEST_SETTING}=\n"},
+        reason=f"{TEST_SETTING} is commented out in .env.example",
     ),
     Case(
         "variable read by a listed test module",
         "env-example",
         True,
-        {"scripts/tool_model.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING], ["scripts/tool_model.py"])},
+        {"app/tool_model.py": read_sample(TEST_SETTING), ENV_LIST: env_names({TEST_SETTING: env_entry("test")}, ["app/tool_model.py"])},
     ),
     Case(
         "listed test module is gone",
         "env-example",
         False,
-        {TEST_ENV_LIST: test_env_list([], ["scripts/tool_model.py"])},
-        reason="scripts/tool_model.py is listed as a test module but is not a tracked file",
+        {ENV_LIST: env_names(modules=["app/tool_model.py"])},
+        reason="app/tool_model.py is listed as a test module but is not a tracked file",
     ),
     Case("script removed with its docs", "removed-names", True, committed={f"scripts/{OLD_SCRIPT}": "X = 1\n"}, delete=[f"scripts/{OLD_SCRIPT}"]),
     Case(
@@ -2960,7 +3085,6 @@ CASES = [
         committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n"},
         files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md\n"},
     ),
-    Case("documented variable nothing reads", "env-example", False, {".env.example": ENV_EXAMPLE_SOURCE + f"# Retired setting.\n{UNUSED_SETTING}=\n"}),
     Case(
         "function used by another file",
         "unused-code",
@@ -3590,23 +3714,13 @@ def scratch_repo(root: Path, case: Case) -> Path:
     git(repo, "config", "maintenance.auto", "false")
     for key, value in case.git_config.items():
         git(repo, "config", key, value)
-    # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
-    # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too, and the Airflow launch library that
-    # reads the HAI_LAUNCH_* ones. Other hooks must not see that library: its imports and unused helpers would fail their samples. The startup check
-    # tests read the variables that the test variable list names for them (STARTUP_CHECK_TEST_FAULT, STARTUP_CHECK_TEST_PROBE, PLANT). A name that
-    # .env.example keeps needs a production file here, or the scratch repository would show it as read by tests only.
+    # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The env-example cases copy the scripts
+    # that run the hook but keep them out of Git (see below): they start from a baseline of their own, the settings of .env and a file that reads them.
     listed = run_command(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
     ).stdout.splitlines()
     if case.hook == "env-example":
-        listed += [
-            "orchestration/airflow_steps.py",
-            "orchestration/dag_runtime.py",
-            "dags/bronze_chain_dag.py",
-            "tests/startup_check_child_faults.py",
-            "tests/startup_check_faults.py",
-            "tests/test_startup_check_planted.py",
-        ]
+        listed = [path for path in listed if path.startswith("scripts/")]
     for relative in [*COPIED, *listed]:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -3614,7 +3728,8 @@ def scratch_repo(root: Path, case: Case) -> Path:
     (repo / ALLOWLIST).write_text(ALLOWLIST_SOURCE)
     for tool in (".venv", ".tools"):
         (repo / tool).symlink_to(ROOT / tool)
-    (repo / ".git" / "info" / "exclude").write_text(".venv\n.tools\n__pycache__/\n")
+    (repo / ".git" / "info" / "exclude").write_text(".venv\n.tools\n__pycache__/\n" + ("scripts/\n" if case.hook == "env-example" else ""))
+    write(repo, ENV_BASELINE if case.hook == "env-example" else {})
     write(repo, case.committed)
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "chore: scratch setup")

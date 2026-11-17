@@ -84,12 +84,15 @@ CI_GROUP_FILES = "scripts/ci/groups"
 
 ENV_READ = re.compile(r"""(?:os\.environ(?:\.get)?\s*[\[(]\s*|os\.getenv\s*\(\s*)["']([A-Z][A-Z0-9_]*)["']""")
 ENV_EXAMPLE_NAME = re.compile(r"^\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=", re.MULTILINE)
-TEST_ENV_LIST = "config/quality/test_env_names.json"
+ENV_LIST = "config/quality/env_names.json"
+ENV_CATEGORIES = ("test", "container", "tool")
 # Test code: a tests folder, test_*.py, *_cases.py, run_*e2e.py runners, and stand-in, fake, fixture, fault and plant modules. A module outside this rule
-# that only tests use goes under "test_modules" in TEST_ENV_LIST.
+# that only tests use goes under "test_modules" in ENV_LIST.
 TEST_CODE = re.compile(
     r"(?:^|/)(?:tests?/|test_[^/]*$|conftest\.py$)|_cases\.py$|(?:^|/)run_(?:[^/]*_)?e2e\.py$|stand_?ins?|fake|_faults\.py$|planted|plants?\.py$|fixtures?\.py$|_fixture"
 )
+# Where Terraform, the job templates and the launcher configs set the variables of a container.
+CONTAINER_SETTERS = re.compile(r"(?:infra/|config/orchestration/|data_contracts/orchestration/|services/|docker-compose[^/]*$)")
 SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts"}
 FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
@@ -561,75 +564,129 @@ def mypy_commands() -> list[Finding]:
     return findings
 
 
-def test_env_list() -> tuple[set[str], dict[str, str]]:
-    """Return the committed test variable names and the extra test modules (path to reason) of ``TEST_ENV_LIST``; a missing file lists none."""
-    path = Path(TEST_ENV_LIST)
-    data = json.loads(path.read_text()) if path.exists() else {}
-    return set(data.get("names", {})), dict(data.get("test_modules", {}))
+def env_list() -> dict[str, Any]:
+    """Return ``ENV_LIST``: ``env_file`` (the settings of .env, in order), ``test_modules`` (path to reason) and ``names`` (name to entry); empty if missing."""
+    path = Path(ENV_LIST)
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def env_example() -> list[Finding]:
-    """Every environment variable the code reads is in .env.example, or in the test variable list when only test code uses it.
+    """Every environment variable that tracked Python code reads is in .env.example or in ``ENV_LIST``, never in both.
 
-    .env.example shows what a person sets and what production code reads. A name that only test code uses (see ``TEST_CODE``) belongs in
-    ``TEST_ENV_LIST``, a name in that list must still be used by test code and never by production code.
+    .env.example is a direct example of the real .env: the names of ``env_file`` and nothing else, one placeholder line each, with no commented-out
+    names. Every other name is in ``ENV_LIST`` with a category: ``test`` (only test code uses it, see ``TEST_CODE``), ``container`` (Terraform, ECS,
+    Airflow, a job template or the launcher sets it inside a container) or ``tool`` (the OS or a tool sets it, or a person exports it for one command).
+    A container name must be set in a ``CONTAINER_SETTERS`` file, in the file named by ``set_in`` or by the platform (``set_by`` is ``ecs``). A name
+    counts as set by its own spelling in an environment form (a quoted key, ``NAME=``, ``NAME:`` or ``name = "NAME"``), so the check shows where a
+    name is set, not that the value is right.
     """
+    data = env_list()
+    env_file: list[str] = data.get("env_file", [])
+    names: dict[str, Any] = data.get("names", {})
+    extra_modules: dict[str, str] = data.get("test_modules", {})
+    documented: list[tuple[int, str]] = []
+    findings = []
     example = Path(".env.example")
-    documented = set(ENV_EXAMPLE_NAME.findall(example.read_text())) if example.exists() else set()
-    listed, extra_modules = test_env_list()
+    for number, line in enumerate(example.read_text().splitlines() if example.exists() else [], 1):
+        match = ENV_EXAMPLE_NAME.match(line)
+        if match and line.lstrip().startswith("#"):
+            fix = f"remove {match.group(1)} from .env.example: it shows only the settings a person puts in .env"
+            findings.append(Finding(f".env.example:{number}", f"{match.group(1)} is commented out in .env.example", f"{POLICY}: docs match the code", fix))
+        elif match:
+            documented.append((number, match.group(1)))
+    shown = {name for _, name in documented}
     tracked = set(git("ls-files").splitlines())
 
     def is_test(path: str) -> bool:
         """Return whether ``path`` is test code: it matches ``TEST_CODE`` or is a listed test module."""
         return bool(TEST_CODE.search(path)) or path in extra_modules
 
-    findings = []
     for module in sorted(extra_modules):
         if module not in tracked:
             findings.append(
-                Finding(TEST_ENV_LIST, f"{module} is listed as a test module but is not a tracked file", CLEANUP_RULE, f"remove {module} from {TEST_ENV_LIST}")
+                Finding(ENV_LIST, f"{module} is listed as a test module but is not a tracked file", CLEANUP_RULE, f"remove {module} from {ENV_LIST}")
             )
     for path in git("ls-files", "*.py").splitlines():
         for number, line in enumerate(Path(path).read_text().splitlines(), 1):
             for name in ENV_READ.findall(line):
-                if name in documented or (name in listed and is_test(path)):
-                    continue
-                if name in listed:
-                    fix = f"move {name} from {TEST_ENV_LIST} to .env.example with a comment"
-                else:
-                    fix = f"add {name}= with a comment to .env.example, or to {TEST_ENV_LIST} when only test code uses it"
-                findings.append(
-                    Finding(f"{path}:{number}", f"{name} is read but not in .env.example or the test variable list", f"{POLICY}: docs match the code", fix)
-                )
-    # A name is a whole word of the other files exactly when it is one of their \w+ runs: one pass over them, not one search of all their text per name.
-    # Test code and production code are told apart per file; Markdown only shows that a name is mentioned, so it never counts as production use.
-    interest = documented | listed
-    users: dict[str, tuple[set[str], set[str], set[str]]] = {name: (set(), set(), set()) for name in interest}
+                if name not in shown and name not in names:
+                    fix = f"add {name} to .env.example when a person sets it in .env, otherwise to {ENV_LIST} with the category test, container or tool"
+                    findings.append(
+                        Finding(f"{path}:{number}", f"{name} is read but is in neither .env.example nor {ENV_LIST}", f"{POLICY}: docs match the code", fix)
+                    )
+    # A name is a whole word of a file exactly when it is one of its \w+ runs: one pass over the files, not one search of all their text per name.
+    # Test code and production code are told apart per file; Markdown only mentions a name, so it never counts as use.
+    interest = shown | set(names) | set(env_file)
+    users: dict[str, tuple[set[str], set[str]]] = {name: (set(), set()) for name in interest}
+    setters: dict[str, set[str]] = {name: set() for name in names if isinstance(names[name], dict) and names[name].get("category") == "container"}
+    alternatives = "|".join(map(re.escape, setters)) or "(?!)"
+    setter = re.compile(
+        rf"""["']({alternatives})["']\s*[:=,\]]|^\s*-?\s*({alternatives})\s*[:=]|["']({alternatives})=|name\s*=\s*["']({alternatives})["']""", re.M
+    )
     for path, lines in reference_files().items():
-        if path in (".env.example", TEST_ENV_LIST):
+        if path in (".env.example", ENV_LIST) or path.endswith(".md"):
             continue
-        slot = 2 if path.endswith(".md") else (0 if is_test(path) else 1)
         for word in {word for line in lines for word in re.findall(r"\w+", line)} & interest:
-            users[word][slot].add(path)
-    for number, line in enumerate(example.read_text().splitlines() if example.exists() else [], 1):
-        match = ENV_EXAMPLE_NAME.match(line)
-        if not match:
-            continue
-        name = match.group(1)
-        tests, production, mentions = users[name]
-        if not (tests or production or mentions):
-            fix = f"remove {name} from .env.example, or restore the code that reads it"
-            findings.append(Finding(f".env.example:{number}", f"{name} is documented but nothing reads it", CLEANUP_RULE, fix))
-        elif tests and not production:
-            fix = f"move {name} from .env.example to {TEST_ENV_LIST}"
-            findings.append(Finding(f".env.example:{number}", f"{name} is used only by test code", f"{POLICY}: docs match the code", fix))
-    for name in sorted(listed):
-        tests, production, _ = users[name]
-        if not tests:
-            findings.append(Finding(TEST_ENV_LIST, f"{name} is listed but no test code reads it", CLEANUP_RULE, f"remove {name} from {TEST_ENV_LIST}"))
-        elif production:
-            fix = f"remove {name} from {TEST_ENV_LIST} and document it in .env.example"
-            findings.append(Finding(TEST_ENV_LIST, f"{name} is listed but production code also uses it", f"{POLICY}: docs match the code", fix))
+            users[word][0 if is_test(path) else 1].add(path)
+        if setters and CONTAINER_SETTERS.match(path) and not is_test(path):
+            for found in setter.finditer("\n".join(lines)):
+                setters[next(group for group in found.groups() if group)].add(path)
+    for number, name in documented:
+        if name in names:
+            fix = f"keep {name} only in {ENV_LIST}, or only in .env.example when a person sets it in .env"
+            findings.append(Finding(f".env.example:{number}", f"{name} is in both .env.example and {ENV_LIST}", f"{POLICY}: docs match the code", fix))
+        elif name not in env_file:
+            fix = f"move {name} to {ENV_LIST} with the category test, container or tool"
+            findings.append(
+                Finding(f".env.example:{number}", f"{name} is in .env.example but not in env_file of {ENV_LIST}", f"{POLICY}: docs match the code", fix)
+            )
+        elif not users[name][1]:
+            fix = f"remove {name} from .env.example and env_file, or restore the production code that uses it"
+            findings.append(Finding(f".env.example:{number}", f"{name} is in .env.example but production code does not use it", CLEANUP_RULE, fix))
+    for name in env_file:
+        if name not in shown:
+            findings.append(
+                Finding(
+                    ENV_LIST,
+                    f"{name} is in env_file but not in .env.example",
+                    f"{POLICY}: docs match the code",
+                    f"add {name}= with a placeholder to .env.example",
+                )
+            )
+    if shown <= set(env_file) and set(env_file) <= shown and [name for _, name in documented] != env_file:
+        fix = f"list the names in .env.example in the order of env_file in {ENV_LIST}"
+        findings.append(Finding(".env.example", ".env.example lists its names in a different order than env_file", f"{POLICY}: docs match the code", fix))
+    for name in sorted(names):
+        entry, (tests, production) = names[name], users[name]
+        category = entry.get("category") if isinstance(entry, dict) else None
+        if category not in ENV_CATEGORIES:
+            fix = f"give {name} one of the categories test, container or tool in {ENV_LIST}"
+            findings.append(Finding(ENV_LIST, f"{name} has category {category}: use test, container or tool", f"{POLICY}: docs match the code", fix))
+        elif category == "test":
+            if production:
+                fix = f"change the category of {name} to container or tool, or stop production code from using it"
+                findings.append(Finding(ENV_LIST, f"{name} is listed as test but production code also uses it", f"{POLICY}: docs match the code", fix))
+            elif not tests:
+                findings.append(Finding(ENV_LIST, f"{name} is listed as test but no test code uses it", CLEANUP_RULE, f"remove {name} from {ENV_LIST}"))
+        elif not production:
+            findings.append(Finding(ENV_LIST, f"{name} is listed as {category} but no production code uses it", CLEANUP_RULE, f"remove {name} from {ENV_LIST}"))
+        elif category == "container" and not setters[name] and entry.get("set_by") != "ecs":
+            home = entry.get("set_in")
+            if home is None:
+                fix = f"set {name} in infra/ or a job or launcher config, or name its file in set_in, or set set_by to ecs in {ENV_LIST}"
+                findings.append(
+                    Finding(
+                        ENV_LIST,
+                        f"{name} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+                        f"{POLICY}: docs match the code",
+                        fix,
+                    )
+                )
+            elif not (home in tracked and not is_test(home) and re.search(rf"\b{re.escape(name)}\b", Path(home).read_text())):
+                fix = f"name a tracked production file that sets {name} in set_in, or remove it"
+                findings.append(
+                    Finding(ENV_LIST, f"{name} is listed with set_in {home}, which is not a tracked file that uses it", f"{POLICY}: docs match the code", fix)
+                )
     return findings
 
 
