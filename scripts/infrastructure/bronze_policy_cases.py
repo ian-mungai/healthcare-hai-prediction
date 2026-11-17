@@ -18,6 +18,7 @@ TWINS = ("bronze_e2e", "bronze_dictionary_e2e", "smoke_check_e2e", "duckdb_view_
 PAYLOADS = "bronze_objects/sha256"
 RECORD_FOLDERS = ("raw/ingestion_units/", "raw/ingestion_stale/")
 KEY_PARAMETER = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1"
+ALERTS_TOPIC = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 LARGEST_BUCKET = "a" * 63  # the longest valid bucket name
 INLINE_QUOTA = 10240  # all inline policies of one role together, whitespace excluded
 MANAGED_QUOTA = 6144  # each managed policy, whitespace excluded
@@ -71,6 +72,22 @@ def render(
         ),
         "key": load("bronze_writer_pseudonym_key", {"PSEUDONYM_KEY_ARN": KEY_PARAMETER}, defect),
     }
+    documents["run_record_writes"] = load(
+        "bronze_writer_run_record_writes",
+        {"BRONZE_RUN_RECORD_ARNS": json.dumps([f"{bucket}/lakehouse/bronze_runs/*/check.json", f"{bucket}/lakehouse/bronze_runs/*/carried_over.json"])},
+        defect,
+    )
+    documents["owner_notice"] = load("owner_notice", {"ALERTS_TOPIC_ARN": ALERTS_TOPIC}, defect)
+    if raw:
+        documents["run_records_read"] = load(
+            "bronze_writer_run_records",
+            {
+                "BUCKET_ARN": bucket,
+                "RUN_RECORD_ARNS": json.dumps([f"{bucket}/raw/ingestion_runs/*/run.json"]),
+                "RUN_RECORD_LIST_PREFIXES": json.dumps(["raw/ingestion_runs/*"]),
+            },
+            defect,
+        )
     for root in roots:
         arns = [*(f"{bucket}/{root}{collection}/*" for collection in collections), f"{bucket}/{root}{PAYLOADS}/*"]
         arns += [f"{bucket}/{folder}*" for folder in RECORD_FOLDERS if root]
@@ -137,6 +154,32 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     check("s3:ListBucketVersions", BUCKET, False, prefix="example/not_mapped/")
     check("s3:ListBucket", BUCKET, False, prefix="")
     check("s3:GetBucketLocation", BUCKET, False)
+    for record in ("check.json", "carried_over.json"):
+        check("s3:PutObject", f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34/{record}", True)
+        for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
+            check(action, f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34/{record}", False)
+    for other in (
+        "lakehouse/bronze_runs/bronze_ab12cd34/other.json",
+        "lakehouse/bronze_runs/check.json",
+        "lakehouse/bronze_run/bronze_ab12cd34/check.json",
+        "bronze_runs/bronze_ab12cd34/check.json",
+    ):
+        check("s3:PutObject", f"{BUCKET}/{other}", False)
+    run_record = f"{BUCKET}/raw/ingestion_runs/ingestion_ab12cd34/run.json"
+    check("s3:GetObjectVersion", run_record, raw)
+    check("s3:GetObjectVersion", f"{BUCKET}/raw/ingestion_runs/ingestion_retry_ab12cd34_2/run.json", raw)
+    check("s3:ListBucketVersions", BUCKET, raw, prefix="raw/ingestion_runs/ingestion_ab12cd34/run.json")
+    for denied in ("bootstrap.json", "state/unit.json", "plan_rebuild/report.json"):
+        check("s3:GetObjectVersion", f"{BUCKET}/raw/ingestion_runs/ingestion_ab12cd34/{denied}", False)
+    check("s3:GetObjectVersion", f"{BUCKET}/ingestion_runs/ingestion_ab12cd34/run.json", False)
+    check("s3:ListBucketVersions", BUCKET, False, prefix="ingestion_runs/ingestion_ab12cd34/run.json")
+    check("s3:GetObjectVersion", f"{BUCKET}/raw/ingestion_test/ingestion_ab12cd34/ingestion_runs/ingestion_ab12cd34/run.json", False)
+    for action in ("s3:PutObject", "s3:DeleteObject", "s3:GetObject"):
+        check(action, run_record, False)
+    check("sns:Publish", ALERTS_TOPIC, True)
+    check("sns:Publish", ALERTS_TOPIC.replace("alerts", "other"), False)
+    for action in ("sns:Subscribe", "sns:SetTopicAttributes", "sns:DeleteTopic"):
+        check(action, ALERTS_TOPIC, False)
     check("ssm:GetParameters", KEY_PARAMETER, True)
     for action in ("ssm:PutParameter", "ssm:GetParameter", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
         check(action, KEY_PARAMETER, False)
@@ -208,14 +251,20 @@ def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
                 json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
             ),
         ),
+        ("run_record_write_widened", ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"]))),
+        ("run_record_delete_allowed", ("bronze_writer_run_record_writes", '"s3:PutObject"', '"s3:PutObject", "s3:DeleteObject"')),
+        ("run_record_read_widened", ("bronze_writer_run_records", "${RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/raw/ingestion_runs/*"]))),
+        ("run_record_current_read_allowed", ("bronze_writer_run_records", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:GetObject"')),
+        ("notice_topic_wildcard", ("owner_notice", "${ALERTS_TOPIC_ARN}", ALERTS_TOPIC.replace("alerts_dev", "*"))),
+        ("notice_subscribe_allowed", ("owner_notice", '"sns:Publish"', '["sns:Publish", "sns:Subscribe"]')),
         ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:PutParameter"')),
         ("key_single_read_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:GetParameter"')),
         ("key_version_wildcard", ("bronze_writer_pseudonym_key", "${PSEUDONYM_KEY_ARN}", KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*"))),
     )
     results = []
     for name, defect in defects:
-        documents = render(PRODUCTION, ("cms/hospitals",), defect=defect)
-        failures = evaluate(documents, PRODUCTION, ("cms/hospitals",))
+        documents = render(PRODUCTION, ("cms/hospitals",), raw=True, defect=defect)
+        failures = evaluate(documents, PRODUCTION, ("cms/hospitals",), raw=True)
         folder = out / name
         folder.mkdir(parents=True, exist_ok=False)
         for label, document in documents.items():

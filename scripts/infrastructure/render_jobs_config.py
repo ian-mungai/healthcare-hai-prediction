@@ -238,7 +238,7 @@ def main() -> int:
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
         if "metadata" in families:
             values["host_private_ip"] = host_private_ip()
-        if "promote" in families:
+        if "promote" in families or selection["bronze_job_enabled"] is True:
             values["alerts_topic_arn"] = alerts_topic_arn(storage)
         values.update(prepared)
         if arguments.check_plan:

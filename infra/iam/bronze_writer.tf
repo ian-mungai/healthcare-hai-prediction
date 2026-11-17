@@ -22,7 +22,37 @@ locals {
   bronze_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)
   # IAM caps all inline policies of one role together at 10,240 characters and each managed policy at 6,144 (whitespace excluded). The source reads grow with
   # the bucket name length and the raw root, so they live in managed policies, one object policy per root. Table statements stay inline.
+  # What the check phase reads and writes for its run records: the ingestion run records of the capture root (by exact version, only while the raw root
+  # switch is on), the two records of its own run (create-only by the check phase, never any other key of bronze_runs) and the owner notice of the carried-over
+  # files, once the stack is told the alerts topic.
+  bronze_run_record_policies = merge(
+    var.source_raw_root_enabled ? {
+      run_records_read = {
+        description = "Read the run records of the ingestion runs under the capture root, by exact version, and list their versions."
+        document = templatefile("${path.module}/owner_policies/bronze_writer_run_records.json", {
+          BUCKET_ARN               = local.bronze_bucket_arn
+          RUN_RECORD_ARNS          = jsonencode(["${local.bronze_bucket_arn}/raw/ingestion_runs/*/run.json"])
+          RUN_RECORD_LIST_PREFIXES = jsonencode(["raw/ingestion_runs/*"])
+        })
+      }
+    } : {},
+    {
+      run_record_writes = {
+        description = "Write the run record and the carried-over record of a bronze run, and no other key."
+        document = templatefile("${path.module}/owner_policies/bronze_writer_run_record_writes.json", {
+          BRONZE_RUN_RECORD_ARNS = jsonencode(["${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json", "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json"])
+        })
+      }
+    },
+    var.alerts_topic_arn == null ? {} : {
+      owner_notice = {
+        description = "Publish the owner notice of the carried-over files to the one alerts topic."
+        document    = templatefile("${path.module}/owner_policies/owner_notice.json", { ALERTS_TOPIC_ARN = var.alerts_topic_arn })
+      }
+    }
+  )
   bronze_managed_policies = merge(
+    local.bronze_run_record_policies,
     {
       pseudonym_key = {
         description = "Read the one pseudonym key parameter of the reviewed key version, at load. No other parameter and no write."

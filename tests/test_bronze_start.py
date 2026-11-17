@@ -112,11 +112,11 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
         def __init__(self, objects: dict[str, bytes]) -> None:
             self.objects, self.puts, self.published = objects, {}, []
 
-        def get_object(self, **arguments: str) -> dict[str, Any]:
-            from botocore.exceptions import ClientError
+        def list_object_versions(self, **arguments: str) -> dict[str, Any]:
+            return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}
 
-            if arguments["Key"] not in self.objects:
-                raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+        def get_object(self, **arguments: str) -> dict[str, Any]:
+            check(arguments.get("VersionId") == f"v-{arguments['Key']}", f"a run record was read without its exact version: {arguments}")
             return {"Body": Body(self.objects[arguments["Key"]])}
 
         def put_object(self, **arguments: Any) -> dict[str, Any]:
@@ -143,3 +143,5 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
     missing = Client({})
     gone = bronze_run.record_carried_over(missing, "bucket", f"bronze_{HEX}", "raw/", topic="", notify=missing)
     check(gone["carried_over"] is None and "no run record" in gone["note"], f"{gone}")
+    unconfigured = bronze_run.record_carried_over(Client(objects), "bucket", f"bronze_{HEX}", "", topic="", notify=None)
+    check(unconfigured["carried_over"] is None and "no capture root" in unconfigured["note"], f"{unconfigured}")

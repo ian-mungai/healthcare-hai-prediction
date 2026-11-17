@@ -86,6 +86,7 @@ def test_an_identical_retry_of_a_reversion_run_makes_no_write_and_no_data_load(t
     monkeypatch.setattr(bronze, "load_objects", load_objects)
     monkeypatch.setattr(bronze, "prune", lambda *args: {})
     monkeypatch.setattr(bronze, "verify", lambda *args: {name: {"passed": True} for name in f.BOTH})
+    monkeypatch.setattr(bronze, "table_snapshots", lambda spark, namespace, names: {name: 7 for name in names})
     monkeypatch.setattr(dictionary, "build", lambda *args, **kwargs: {})
 
     def run() -> tuple[int, str]:

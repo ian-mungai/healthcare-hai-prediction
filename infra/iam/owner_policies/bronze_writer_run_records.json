@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IngestionRunRecordVersionsOnly",
+      "Effect": "Allow",
+      "Action": ["s3:GetObjectVersion"],
+      "Resource": ${RUN_RECORD_ARNS}
+    },
+    {
+      "Sid": "ListIngestionRunRecordVersions",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${RUN_RECORD_LIST_PREFIXES}}}
+    }
+  ]
+}

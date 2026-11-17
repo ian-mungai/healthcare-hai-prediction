@@ -548,13 +548,19 @@ def _host_address_cases(
     promote = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["promote", "silver"]}
     checks: dict[str, bool] = {}
     answer(json.dumps("10.40.0.20"), 0)
-    # Each output is read only for the host job that needs it: the address for metadata, the alerts topic for promote.
+    # Each output is read only for the job that needs it: the address for metadata, the alerts topic for promote and the bronze job.
     both = {"host_private_ip": "10.40.0.20", "alerts_topic_arn": TOPIC}
     for name, variables, asks, wanted in (
         ("an_override_free_render", document["variables"], [ask, topic_ask], both),
         ("the_publisher_job_with_the_committed_host_jobs", publisher_variables, [ask, topic_ask], both),
         ("the_metadata_host_job", metadata, [ask], {"host_private_ip": "10.40.0.20"}),
         ("the_promote_host_job", promote, [topic_ask], {"alerts_topic_arn": TOPIC}),
+        (
+            "the_bronze_job",
+            document["variables"] | {"bronze_job_enabled": True, "host_jobs_enabled": True, "host_jobs": ["bronze"]},
+            [topic_ask],
+            {"alerts_topic_arn": TOPIC},
+        ),
         ("host_jobs_turned_off", document["variables"] | {"host_jobs_enabled": False}, [], {}),
     ):
         calls.unlink(missing_ok=True)

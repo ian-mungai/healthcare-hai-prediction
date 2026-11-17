@@ -248,12 +248,13 @@ def table_check_passed(check: object) -> bool:
     return check.get("passed") is True and check.get("objects_match_inputs") is True and all(check[name] is True for name in optional if name in check)
 
 
-def accept_report(job: Job) -> None:
-    """The loader wrote exactly one report, it passed, and it names the requested tables and no others."""
+def accept_report(job: Job) -> tuple[dict[str, Any], bytes]:
+    """The loader wrote exactly one report, it passed, and it names the requested tables and no others. Return the report and its bytes."""
     reports = sorted((job.code / REPORT_FOLDER).glob("report_*.json"))
     if len(reports) != 1:
         raise StepError(f"expected one loader report, found {len(reports)}")
-    report = json.loads(reports[0].read_text())
+    body = reports[0].read_bytes()
+    report = json.loads(body)
     if report.get("mode") != "load" or report.get("passed") is not True:
         raise StepError("the loader report did not pass")
     if sorted(report.get("tables", [])) != sorted(job.tables):
@@ -261,19 +262,61 @@ def accept_report(job: Job) -> None:
     checks = report.get("checks", {})
     if not isinstance(checks, dict) or set(checks) != set(job.tables) or not all(table_check_passed(check) for check in checks.values()):
         raise StepError("a table check of the loader report did not pass")
+    return report, body
+
+
+def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory: dict[str, Any]) -> dict[str, Any]:
+    """The run record ``lakehouse/bronze_runs/<run>/check.json`` of a passed real run, in the shape ``orchestration.raw_lineage.loaded_objects`` reads: the
+    tables, the snapshot of each (which the loader read from the catalog), the generation of the metadata it published, the digest of the loader report
+    and every object the run loaded with its version, SHA-256 and size (from the pinned inventory). A report without them gives no record."""
+    snapshots, index = report.get("snapshots"), report.get("metadata_index")
+    if not isinstance(snapshots, dict) or set(snapshots) != set(job.tables) or any(type(value) is not int or value <= 0 for value in snapshots.values()):
+        raise StepError("the loader report holds no snapshot of each requested table")
+    if not isinstance(index, dict) or not isinstance(index.get("generation"), str) or not index["generation"]:
+        raise StepError("the loader report names no metadata generation")
+    objects = [
+        dict(zip(("table", "bucket", "key", "version_id", "sha256", "byte_count"), (row[0], job.bucket, row[1], row[2], row[3], row[4]), strict=True))
+        for row in inventory["objects"]
+        if row[0] in job.tables
+    ]
+    if not objects:
+        raise StepError("the pinned inventory lists no object of the requested tables")
+    return {
+        "schema_version": 1,
+        "run_id": job.run,
+        "target": job.target,
+        "namespaces": list(job.namespaces),
+        "tables": list(job.tables),
+        "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "metadata_generation": index["generation"],
+        "snapshots": snapshots,
+        "objects": objects,
+    }
+
+
+def store_run_record(client: Any, bucket: str, run: str, record: dict[str, Any]) -> str:
+    """Write the run record once. A retry of the run finds it and keeps the first one, so the record names the load that made the tables."""
+    from botocore.exceptions import ClientError
+
+    key = f"lakehouse/bronze_runs/{run}/check.json"
+    body = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) != "PreconditionFailed":
+            raise
+        return "kept"
+    return "written"
 
 
 def read_run_record(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
     """One stored run record of an ingestion run (the current version), or None when the key holds none. Any other failure is raised, never read as missing."""
-    from botocore.exceptions import ClientError
-
-    try:
-        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
-    except ClientError as error:
-        if str(error.response.get("Error", {}).get("Code")) in ("NoSuchKey", "404", "NotFound"):
-            return None
-        raise
-    record = json.loads(body)
+    latest = [
+        item["VersionId"] for item in client.list_object_versions(Bucket=bucket, Prefix=key).get("Versions", []) if item["Key"] == key and item["IsLatest"]
+    ]
+    if not latest:
+        return None
+    record = json.loads(client.get_object(Bucket=bucket, Key=key, VersionId=latest[0])["Body"].read())
     if not isinstance(record, dict):
         raise StepError(f"{key} is not a run record")
     return record
@@ -289,9 +332,15 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder = f"{root}ingestion_runs/"
-    first = read_run_record(client, bucket, f"{folder}{original}/run.json")
+    first = read_run_record(client, bucket, f"{folder}{original}/run.json") if root else None
     document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries)}
-    if first is None:
+    if not root:
+        document |= {
+            "carried_over": None,
+            "note": "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known",
+            "notice": "not sent",
+        }
+    elif first is None:
         document |= {"carried_over": None, "note": f"no run record of {original} under {folder}: the files carried over are not known", "notice": "not sent"}
     else:
         found = [item for item in (read_run_record(client, bucket, f"{folder}{name}/run.json") for name in retries) if item is not None]
@@ -321,16 +370,18 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
 
 
 def check(job: Job) -> None:
-    accept_report(job)
+    report, body = accept_report(job)
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
     if job.target == "real":
+        stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job)))
+        sys.stdout.write(f"run record {stored}\n")
         topic = os.environ.get("ALERTS_TOPIC_ARN", "")
         notify = None
         if topic:
             import boto3
 
             notify = boto3.client("sns")
-        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", "raw/"), topic=topic, notify=notify)
+        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=topic, notify=notify)
         files = done["carried_over"]
         sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
     if job.target == "real":

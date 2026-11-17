@@ -163,11 +163,11 @@ run "bronze_rendered_storage_scope" {
 
   assert {
     condition = (
-      toset(keys(aws_iam_policy.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists"]) &&
-      toset(keys(aws_iam_role_policy_attachment.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists"]) &&
+      toset(keys(aws_iam_policy.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists", "run_record_writes"]) &&
+      toset(keys(aws_iam_role_policy_attachment.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists", "run_record_writes"]) &&
       alltrue([for attachment in aws_iam_role_policy_attachment.bronze_writer : attachment.role == aws_iam_role.bronze_writer[0].name])
     )
-    error_message = "Without the raw root switch, the bronze role carries exactly three managed policies, each attached to it."
+    error_message = "Without the raw root switch, the bronze role carries exactly four managed policies (the record writes are one), each attached to it."
   }
 
   assert {
@@ -257,7 +257,9 @@ run "bronze_largest_valid_configuration_keeps_inline_policies_under_the_role_quo
   }
 
   assert {
-    condition     = toset(keys(aws_iam_policy.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_objects_raw", "source_lists"])
+    condition = toset(keys(aws_iam_policy.bronze_writer)) == toset(
+      ["pseudonym_key", "source_objects_root", "source_objects_raw", "source_lists", "run_records_read", "run_record_writes"]
+    )
     error_message = "With the raw root switch on, the source object reads split by root so that each managed policy keeps its own margin."
   }
 
@@ -277,5 +279,67 @@ run "bronze_largest_valid_configuration_keeps_inline_policies_under_the_role_quo
       ]), ["raw/ingestion_units/*", "raw/ingestion_stale/*"]))
     )
     error_message = "The raw policy must hold every mapped collection under raw, the root policy none of them, and the list policy both roots."
+  }
+}
+
+run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_one_topic" {
+  command = plan
+
+  variables {
+    source_raw_root_enabled         = true
+    bronze_writer_prepared          = true
+    alerts_topic_arn                = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.bronze_writer["run_records_read"].policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
+      jsondecode(aws_iam_policy.bronze_writer["run_records_read"].policy).Statement[0].Resource == ["arn:aws:s3:::example-data-bucket/raw/ingestion_runs/*/run.json"] &&
+      jsondecode(aws_iam_policy.bronze_writer["run_records_read"].policy).Statement[1].Action == ["s3:ListBucketVersions"] &&
+      jsondecode(aws_iam_policy.bronze_writer["run_records_read"].policy).Statement[1].Condition.StringLike["s3:prefix"] == ["raw/ingestion_runs/*"]
+    )
+    error_message = "The bronze role must read the ingestion run records by exact version and list only their prefix."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[0].Action == ["s3:PutObject"] &&
+      toset(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[0].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/check.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
+      ])
+    )
+    error_message = "The bronze role must write exactly the run record and the carried-over record of a run, and no other key."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.bronze_writer["owner_notice"].policy).Statement[0].Action == "sns:Publish" &&
+      jsondecode(aws_iam_policy.bronze_writer["owner_notice"].policy).Statement[0].Resource == "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+    )
+    error_message = "The bronze role must publish to the one alerts topic and nowhere else."
+  }
+}
+
+run "bronze_without_the_alerts_topic_has_no_notice_policy" {
+  command = plan
+
+  variables {
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(aws_iam_policy.bronze_writer), "owner_notice") && !contains(keys(aws_iam_policy.bronze_writer), "run_records_read")
+    error_message = "Without the alerts topic and the raw root switch the bronze role has neither the notice nor the ingestion run record read."
   }
 }

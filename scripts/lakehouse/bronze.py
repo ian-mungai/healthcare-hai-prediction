@@ -1112,6 +1112,19 @@ def load_objects(
     return summary
 
 
+def table_snapshots(spark: Any, namespace: str, names: list[str]) -> dict[str, int]:
+    """The current snapshot of each loaded table: the newest by the commit time the catalog recorded. The run record names these snapshots."""
+    from pyspark.sql import functions
+
+    found: dict[str, int] = {}
+    for name in names:
+        rows = spark.table(f"{namespace}.{name}.snapshots").orderBy(functions.desc("committed_at")).limit(1).collect()
+        if not rows:
+            raise BronzeError(f"{namespace}.{name} has no snapshot after the load")
+        found[name] = int(rows[0]["snapshot_id"])
+    return found
+
+
 def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], namespace: str) -> dict[str, dict[str, Any]]:
     """Recount each loaded table against its inputs and the table map's expected distinct files and rows."""
     from pyspark.sql import functions
@@ -1427,6 +1440,7 @@ def main(argv: list[str] | None = None) -> int:
         pruned = {} if unchanged or args.bootstrap_all else prune(spark, config, names, inputs, config["namespace"])
         copies = 0 if unchanged else write_copies(spark, config["namespace"], names, inputs, unselected)
         checks = verify(spark, config, inputs, config["namespace"])
+        snapshots = table_snapshots(spark, config["namespace"], names) if all(check["passed"] for check in checks.values()) else {}
         # Dictionaries follow every passing load, so they never describe an older bronze table [91].
         if all(check["passed"] for check in checks.values()):
             dictionary_names = sorted(set(repair_names) & checks.keys()) if args.bootstrap_all else sorted(checks)
@@ -1462,6 +1476,7 @@ def main(argv: list[str] | None = None) -> int:
         "pruned": {name: count for name, count in pruned.items() if count},
         "stored_copies": copies,
         "metadata_index": metadata_index,
+        "snapshots": snapshots,
         "dictionaries": dictionaries,
         "unselected": unloaded,
         "passed": passed,

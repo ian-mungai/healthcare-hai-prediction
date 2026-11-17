@@ -335,3 +335,39 @@ run "another_read_environment_is_refused" {
 
   expect_failures = [var.bronze_read_environment]
 }
+
+run "the_check_phase_gets_the_capture_root_and_the_alerts_topic_and_no_other_phase_does" {
+  command = plan
+
+  variables {
+    bronze_job_enabled      = true
+    bronze_read_environment = { HAI_READ_RAW_ROOT = "true" }
+    alerts_topic_arn        = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+  }
+
+  assert {
+    condition = (
+      [for container in jsondecode(output.host_container_definitions["bronze"]) : contains([for item in container.environment : item.name], "ALERTS_TOPIC_ARN")] == [false, false, false, false, true] &&
+      [for container in jsondecode(output.host_container_definitions["bronze"]) : contains([for item in container.environment : item.name], "HAI_CAPTURE_ROOT")] == [false, false, false, false, true] &&
+      [for item in jsondecode(output.host_container_definitions["bronze"])[4].environment : item.value if item.name == "ALERTS_TOPIC_ARN"] == ["arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"] &&
+      [for item in jsondecode(output.host_container_definitions["bronze"])[4].environment : item.value if item.name == "HAI_CAPTURE_ROOT"] == ["raw/"]
+    )
+    error_message = "Only the check phase receives the capture root (while the raw read is on) and the alerts topic (once it is given)."
+  }
+}
+
+run "without_the_raw_read_or_the_topic_the_check_phase_gets_neither" {
+  command = plan
+
+  variables {
+    bronze_job_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(output.host_container_definitions["bronze"]) :
+      !contains([for item in container.environment : item.name], "ALERTS_TOPIC_ARN") && !contains([for item in container.environment : item.name], "HAI_CAPTURE_ROOT")
+    ])
+    error_message = "With neither the raw read nor the alerts topic, no bronze container names the capture root or the topic."
+  }
+}

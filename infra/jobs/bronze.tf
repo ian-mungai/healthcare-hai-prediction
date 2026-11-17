@@ -74,7 +74,11 @@ locals {
           { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
         ],
         [for name in lookup(local.bronze_run_variables, step.name, []) : { name = name, value = "" }],
-        step.name == "init" ? [] : [for name, value in var.bronze_read_environment : { name = name, value = value }]
+        step.name == "init" ? [] : [for name, value in var.bronze_read_environment : { name = name, value = value }],
+        # The check phase names the files that no run of the ingestion retry period captured: it reads the run records under the capture root (raw/, only while the
+        # raw read is on) and publishes the owner notice to the alerts topic, once the stack is told it (the way the promote task gets it).
+        step.name == "check" && contains(keys(var.bronze_read_environment), "HAI_READ_RAW_ROOT") ? [{ name = "HAI_CAPTURE_ROOT", value = "raw/" }] : [],
+        step.name == "check" && var.alerts_topic_arn != null ? [{ name = "ALERTS_TOPIC_ARN", value = var.alerts_topic_arn }] : []
       )
       secrets = step.name == "load" ? lookup(local.writer_parameters, local.bronze_role, []) : []
       mountPoints = [

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from orchestration import raw_lineage
 from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
 from scripts.quality import lock_env
 
@@ -53,10 +54,8 @@ class FakeClient:
     def __init__(self) -> None:
         self.puts: dict[str, bytes] = {}
 
-    def get_object(self, **arguments: str) -> dict[str, Any]:
-        from botocore.exceptions import ClientError
-
-        raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
+    def list_object_versions(self, **arguments: str) -> dict[str, Any]:
+        return {"Versions": []}
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
         self.puts[arguments["Key"]] = arguments["Body"]
@@ -163,7 +162,9 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     (CATALOG[0] / "tables.json").write_text(json.dumps(tables, sort_keys=True))
     checks = {name: {"passed": "report_failed" not in DEFECTS, "objects_match_inputs": True} for name in names}
     shown = [name for name in names if name != "beta_data"] if "report_missing_table" in DEFECTS else names
+    snapshots = {name: 100 + position for position, name in enumerate(names)}
     report = {"mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
+    report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if "no_report" not in DEFECTS:
@@ -294,10 +295,14 @@ def case_qualification_writes_only_the_twins(case: Case) -> None:
 def case_a_real_run_records_the_files_it_carried_over(case: Case) -> None:
     """The check phase of a real run writes ``carried_over.json`` once: with no ingestion run record it says the files are not known and names none, and a
     qualification run (the test twins) writes none."""
-    require(case.chain() == [0, 0, 0], case.err)
+    with mock.patch.dict(os.environ, {"HAI_CAPTURE_ROOT": "raw/"}):
+        require(case.chain() == [0, 0, 0], case.err)
     stored = STORAGE[0].client.puts
     key = f"lakehouse/bronze_runs/{RUN}/carried_over.json"
-    require(list(stored) == [key], sorted(stored))
+    record_key = f"lakehouse/bronze_runs/{RUN}/check.json"
+    require(sorted(stored) == sorted([key, record_key]), sorted(stored))
+    objects, snapshots = raw_lineage.loaded_objects(json.loads(stored[record_key]), record_key, RUN)
+    require({item["table"] for item in objects} == {"alpha_data", "beta_data"} and set(snapshots) == {"alpha_data", "beta_data"}, (objects, snapshots))
     document = json.loads(stored[key])
     require(document["carried_over"] is None and "no run record" in document["note"] and document["bronze_run"] == RUN, document)
     require("carried over: unknown files" in case.out, case.out)
