@@ -24,7 +24,6 @@ from jsonschema import Draft202012Validator
 
 from orchestration import dbt_lineage
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
-from services.lineage import provider_events
 
 ROOT = Path(__file__).resolve().parents[1]
 JOB_NAMESPACE = "hai-prediction-local"
@@ -103,7 +102,6 @@ def task_events(
     declared: dict[str, Any],
     versions: dict[tuple[str, str], dict[str, str]],
     pins: dict[tuple[str, str], dict[str, str]],
-    provider_run: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     """The task run's START and terminal events, with pinned input and published output versions as dataset facets."""
     inputs = [
@@ -126,8 +124,6 @@ def task_events(
     for event_type, instant in (("START", frame.started), (frame.terminal, frame.ended)):
         event_id = hashlib.sha256(canonical([frame.run_id, event_type]).encode()).hexdigest()
         facets: dict[str, Any] = {"haiIdentity": identity_facet(frame, event_id)}
-        if provider_run is not None:
-            facets["parent"] = provider_run["parent"]
         if event_type != "START":
             facets["haiSnapshotStatus"] = {"_producer": PRODUCER, "_schemaURL": SNAPSHOT_STATUS_SCHEMA, "state": snapshot_state, "missingOutputs": missing}
         events.append(
@@ -176,7 +172,7 @@ def model_events(frame: Frame, models: list[dict[str, Any]]) -> list[dict[str, A
     return events
 
 
-def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def build_events(record: dict[str, Any]) -> list[dict[str, Any]]:
     """Return stable START and terminal events from validated, declared record fields only."""
     request_check, lineage_check = record_validators()
     request = {key: record[key] for key in (*REQUEST_KEYS, SELECTOR_KEY) if key in record}
@@ -208,10 +204,6 @@ def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = N
     if datetime.fromisoformat(ended) < datetime.fromisoformat(started):
         raise LineageError("record ended before its intent")
     run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, canonical([JOB_NAMESPACE, request, attempt_id])))
-    if provider_run is not None:
-        if provider_run.get("caller") != {key: request[key] for key in ("dag_id", "task_id", "dag_run_id", "attempt")}:
-            raise LineageError("provider correlation conflicts with the v2 caller")
-        run_id = provider_events.native_uuid(provider_run.get("run_id"))
     job = {"namespace": JOB_NAMESPACE, "name": f"{request['dag_id']}.{request['task_id']}"}
     terminal = "ABORT" if record.get("cancelled") is True else "COMPLETE" if code == 0 else "FAIL"
     versions: dict[tuple[str, str], dict[str, str]] = {}
@@ -231,7 +223,7 @@ def build_events(record: dict[str, Any], provider_run: dict[str, Any] | None = N
             raise LineageError(str(error)) from None
         pins = {(item["namespace"], item["name"]): item["snapshot"] for item in pinned["inputs"]}
     frame = Frame(request, run_id, attempt_id, job, started, ended, terminal)
-    events = task_events(frame, record["lineage"], versions, pins, provider_run)
+    events = task_events(frame, record["lineage"], versions, pins)
     if "dbt_lineage" in record:
         if not isinstance(attempt_id, str):
             raise LineageError("dbt lineage requires a completed launcher attempt")
@@ -262,11 +254,6 @@ class Outbox:
             self.connection.close()
             raise
         self.connection.execute("CREATE TABLE IF NOT EXISTS sweep_cursors (root TEXT PRIMARY KEY, cursor TEXT)")
-        self.connection.execute("CREATE TABLE IF NOT EXISTS provider_runs (caller TEXT PRIMARY KEY, link TEXT NOT NULL)")
-        self.connection.execute(
-            "CREATE TABLE IF NOT EXISTS provider_events "
-            "(id TEXT PRIMARY KEY, envelope TEXT NOT NULL, seen_cycle INTEGER NOT NULL, flushed INTEGER NOT NULL DEFAULT 0)"
-        )
 
     def _upgrade_events(self) -> None:
         """Create and upgrade the events table under one write lock so concurrent openers never add a column twice.
@@ -318,11 +305,6 @@ class Outbox:
         finally:
             self._set_query_deadline(previous)
 
-    def record_cycle(self) -> int:
-        """Return the completed bounded record traversal count used by deferred native callbacks."""
-        value = self.cursor("!provider-record-cycle")
-        return int(value) if value is not None else 0
-
     def cursor(self, root: str) -> str | None:
         """Recover a traversal position bound to the opened record directory."""
         row = self.connection.execute("SELECT cursor FROM sweep_cursors WHERE root=?", (root,)).fetchone()
@@ -360,11 +342,6 @@ class Outbox:
         self.connection.execute("INSERT INTO events(id,payload,sequence) VALUES (?,?,?)", (event_id, payload, sequence))
         return 1
 
-    def provider_run(self, request: dict[str, Any]) -> dict[str, Any] | None:
-        """Resolve a native task run only from the persisted exact v2 caller fields."""
-        row = self.connection.execute("SELECT link FROM provider_runs WHERE caller=?", (provider_events.caller_key(request),)).fetchone()
-        return json.loads(row[0]) if row is not None else None
-
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -375,11 +352,11 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: float = 30, require_provider: bool = False) -> dict[str, int]:
+def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: float = 30) -> dict[str, int]:
     """Collect bounded completion records using directory-bound reads and queue stable events."""
     if not 1 <= limit <= MAX_RECORDS or not 0 < deadline_seconds <= 300:
         raise LineageError("sweep needs bounded record and time limits")
-    queued = scanned = legacy_skipped = deferred = 0
+    queued = scanned = legacy_skipped = 0
     deadline = time.monotonic() + deadline_seconds
     root_fd = os.open(records, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
@@ -405,7 +382,7 @@ def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: f
                             resuming = False
                         continue
                     if scanned >= limit:
-                        return {"queued": queued, "scanned": scanned, "legacy_skipped": legacy_skipped, **({"deferred": deferred} if require_provider else {})}
+                        return {"queued": queued, "scanned": scanned, "legacy_skipped": legacy_skipped}
                     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
                     try:
                         metadata = os.fstat(descriptor)
@@ -427,22 +404,12 @@ def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: f
                     if "request_version" not in record:
                         legacy_skipped += 1
                     else:
-                        events = build_events(record)
-                        if require_provider:
-                            native = box.provider_run(record)
-                            if native is None:
-                                deferred += 1
-                            else:
-                                queued += box.enqueue(build_events(record, native))
-                        else:
-                            queued += box.enqueue(events)
+                        queued += box.enqueue(build_events(record))
                     box.checkpoint(root_key, position)
             box.checkpoint(root_key, None)
-            if require_provider:
-                box.checkpoint("!provider-record-cycle", str(box.record_cycle() + 1))
     finally:
         os.close(root_fd)
-    return {"queued": queued, "scanned": scanned, "legacy_skipped": legacy_skipped, **({"deferred": deferred} if require_provider else {})}
+    return {"queued": queued, "scanned": scanned, "legacy_skipped": legacy_skipped}
 
 
 def main() -> int:

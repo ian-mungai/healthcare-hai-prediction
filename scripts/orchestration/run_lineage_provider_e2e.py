@@ -113,8 +113,8 @@ def main() -> int:
                 checked = json.loads(lines[-1])
                 result["provider"] = checked["constraints"]["lineage_packages"]
                 result["in_image_checks"] = checked
-                if checked.get("lineage_transport", {}).get("ok") is not True:
-                    raise RuntimeError("pinned-image local transport and safe projection check failed")
+                if checked.get("lineage_provider_off", {}).get("ok") is not True:
+                    raise RuntimeError(f"pinned-image provider switch and no-spool check failed: {checked.get('lineage_provider_off')}")
                 if checked.get("lineage_http_transport", {}).get("ok") is not True:
                     raise RuntimeError(f"pinned-image scheduler HTTP transport check failed: {checked.get('lineage_http_transport')}")
             finally:

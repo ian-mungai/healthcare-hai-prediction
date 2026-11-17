@@ -26,9 +26,7 @@ import json
 import os
 import re
 import sys
-import tempfile
 from collections.abc import Callable
-from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -184,64 +182,36 @@ def constraints(tools: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def lineage_transport() -> dict[str, Any]:
-    """Check native pinned event classes, transport factory and sanitized local persistence without network delivery."""
-    from airflow.providers.openlineage.plugins.facets import AirflowRunFacet
-    from openlineage.client.event_v2 import Job, Run, RunEvent, RunState
-    from openlineage.client.facet_v2 import parent_run
-    from openlineage.client.transport.factory import DefaultTransportFactory
+def lineage_provider_off() -> dict[str, Any]:
+    """Check that the OpenLineage provider sends nothing unless it is enabled with a transport, and that the image ships no lineage spool code."""
+    from unittest.mock import patch
 
-    provider = importlib.import_module("hai_lineage.provider_events")
-    transport_module = importlib.import_module("hai_lineage.provider_transport")
-    sentinel = "synthetic-provider-metadata-must-not-leave-memory"
-    run_id, parent_id = "13d9e9ef-93b2-4efc-90d5-066b1becf67d", "3589fe84-f7d0-49fe-b456-5fa256a72938"
-    facet = AirflowRunFacet(
-        dag={"dag_id": "transform_dag", "owner": sentinel},
-        dagRun={"run_id": "manual__provider_probe", "conf": {"secret": sentinel}},
-        task={"task_id": "silver_build", "source_code": sentinel},
-        taskInstance={"try_number": 1, "map_index": None},
-        taskUuid=run_id,
-    )
-    event = RunEvent(
-        eventType=RunState.START,
-        eventTime=datetime.now(UTC).isoformat(),
-        run=Run(
-            runId=run_id,
-            facets={
-                "airflow": facet,
-                "parent": parent_run.ParentRunFacet(
-                    run=parent_run.Run(runId=parent_id), job=parent_run.Job(namespace=provider.NAMESPACE, name="transform_dag")
-                ),
-            },
-        ),
-        job=Job(namespace=provider.NAMESPACE, name="transform_dag.silver_build"),
-        producer=provider.PRODUCER,
-    )
-    transport = DefaultTransportFactory().create({"type": "hai_lineage.provider_transport.SafeTransport", "path": "/opt/hai/lineage_provider"})
-    try:
-        transport_module.SpoolConfig.from_dict({"type": "hai_lineage.provider_transport.SafeTransport", "path": "/opt/hai/unapproved"})
-    except ValueError:
-        pass
-    else:
-        raise ValueError("native transport accepted an unapproved spool path")
-    with tempfile.TemporaryDirectory() as folder:
-        root = Path(folder)
-        if not provider.emit(root, event):
-            raise ValueError("native provider event did not reach the sanitized spool")
-        files = list(root.glob("*.json"))
-        if len(files) != 1:
-            raise ValueError("native provider event did not persist once")
-        envelope = provider.validate(json.loads(files[0].read_text()))
-        if envelope["event"]["run"]["runId"] != run_id or sentinel in files[0].read_text():
-            raise ValueError("native provider projection lost correlation or retained metadata")
-    if (
-        not isinstance(transport, transport_module.SafeTransport)
-        or transport.config_class is not transport_module.SpoolConfig
-        or transport.kind != "hai-lineage-spool"
-        or not transport.close(timeout=0)
-    ):
-        raise ValueError("native provider factory did not create the local transport")
-    return {"ok": True, "factory": transport.kind, "native_run_uuid_preserved": True, "sentinel_absent": True, "network": "none"}
+    from airflow.providers.openlineage import conf
+
+    shipped = [name for name in ("provider_events", "provider_transport") if importlib.util.find_spec(f"hai_lineage.{name}") is not None]
+    if shipped:
+        raise ValueError(f"the lineage package still ships spool code: {shipped}")
+    http = {"OPENLINEAGE__TRANSPORT__TYPE": "http", "OPENLINEAGE__TRANSPORT__URL": "http://127.0.0.1:1"}
+    cases = {
+        "nothing_configured": ({}, True),
+        "disabled_overrides_a_transport": ({"AIRFLOW__OPENLINEAGE__DISABLED": "true", **http}, True),
+        "enabled_with_a_transport": ({"AIRFLOW__OPENLINEAGE__DISABLED": "false", **http}, False),
+    }
+    caches = (conf.is_disabled, conf.transport, conf.config_path, conf.config_conn_id)
+    results = {}
+    for name, (environment, expected) in cases.items():
+        with patch.dict(os.environ):
+            for key in [key for key in os.environ if key.startswith(("AIRFLOW__OPENLINEAGE__", "OPENLINEAGE"))]:
+                del os.environ[key]
+            os.environ.update(environment)
+            for cached in caches:
+                cached.cache_clear()  # the provider reads its settings once per process, so each case starts clean
+            results[name] = {"disabled": conf.is_disabled(), "expected": expected}
+    for cached in caches:
+        cached.cache_clear()  # leave the process as it was found for the checks that follow
+    if any(row["disabled"] is not row["expected"] for row in results.values()):
+        raise ValueError(f"the provider switch does not follow its configuration: {results}")
+    return {"ok": True, "cases": results, "spool_code_shipped": shipped, "network": "none"}
 
 
 def real_dags() -> dict[str, Any]:
@@ -291,9 +261,9 @@ def main() -> int:
         "constraints": constraints(tools),
     }
     try:
-        report["lineage_transport"] = lineage_transport()
+        report["lineage_provider_off"] = lineage_provider_off()
     except (OSError, ValueError, TypeError, AttributeError, ImportError) as error:
-        report["lineage_transport"] = {"ok": False, "error": type(error).__name__}
+        report["lineage_provider_off"] = {"ok": False, "error": f"{type(error).__name__}: {error}"[:1000]}
     report["lineage_http_transport"] = lineage_http_transport()
     report["real_dags"] = real_dags()
     sys.stdout.write("IN_IMAGE " + json.dumps(report, default=str) + "\n")

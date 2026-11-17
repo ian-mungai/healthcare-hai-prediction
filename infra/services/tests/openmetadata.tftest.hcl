@@ -678,6 +678,18 @@ run "lineage_http_off_leaves_the_scheduler_as_before" {
   }
 
   assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          contains([for item in container.environment : "${item.name}=${item.value}"], "AIRFLOW__OPENLINEAGE__DISABLED=true")
+          && !strcontains(jsonencode(container.environment), "AIRFLOW__OPENLINEAGE__CONFIG_PATH")
+        ) if startswith(container.name, "airflow_") && container.name != "airflow_migrate"
+      ])
+    ])
+    error_message = "With airflow_lineage_http_enabled false every Airflow container has the OpenLineage provider disabled and no lineage configuration file, so no event is sent or spooled."
+  }
+
+  assert {
     condition     = [for container in jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions) : container.secrets if container.name == "airflow_scheduler"][0] == local.airflow_secrets
     error_message = "With airflow_lineage_http_enabled false the scheduler has exactly the shared Airflow secrets."
   }
@@ -701,8 +713,8 @@ run "lineage_http_on_sends_only_to_openmetadata_from_the_scheduler" {
       item.name => item.value if startswith(item.name, "OPENLINEAGE__") || startswith(item.name, "AIRFLOW__OPENLINEAGE__")
       } == {
       AIRFLOW__OPENLINEAGE__CONFIG_CONN_ID         = ""
-      AIRFLOW__OPENLINEAGE__CONFIG_PATH            = ""
       AIRFLOW__OPENLINEAGE__DEBUG_MODE             = "false"
+      AIRFLOW__OPENLINEAGE__DISABLED               = "false"
       AIRFLOW__OPENLINEAGE__DISABLE_SOURCE_CODE    = "true"
       AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT      = "5"
       AIRFLOW__OPENLINEAGE__INCLUDE_FULL_TASK_INFO = "false"
@@ -714,7 +726,7 @@ run "lineage_http_on_sends_only_to_openmetadata_from_the_scheduler" {
       OPENLINEAGE__TRANSPORT__TIMEOUT              = "5"
       OPENLINEAGE__TRANSPORT__AUTH__TYPE           = "api_key"
     }
-    error_message = "The scheduler sends over HTTP only to OpenMetadata's lineage route, with the 5 second limits and no spool configuration file."
+    error_message = "The scheduler sends over HTTP only to OpenMetadata's lineage route, with the 5 second limits, no configuration file and the provider enabled."
   }
 
   assert {
@@ -731,6 +743,16 @@ run "lineage_http_on_sends_only_to_openmetadata_from_the_scheduler" {
       !strcontains(aws_ecs_task_definition.service[key].container_definitions, "OPENLINEAGE__TRANSPORT") && !strcontains(aws_ecs_task_definition.service[key].container_definitions, "openmetadata_bot_lineage")
     ])
     error_message = "Only the scheduler holds the HTTP transport and the lineage credential."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "AIRFLOW__OPENLINEAGE__DISABLED=true") if startswith(container.name, "airflow_") && container.name != "airflow_migrate"
+      ])
+    ])
+    error_message = "With airflow_lineage_http_enabled true the api-server, the DAG processor and the triggerer keep the OpenLineage provider disabled, so a state change made by hand sends no lineage event."
   }
 
   assert {

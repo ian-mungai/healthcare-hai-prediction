@@ -192,10 +192,6 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"openlineage.client\"; Cannot find implementation or library stub for module named \"openlineage.client.event_v2\"; Cannot find implementation or library stub for module named \"openlineage.client.facet_v2\"; Cannot find implementation or library stub for module named \"openlineage.client.serde\"; Cannot find implementation or library stub for module named \"openlineage.client.transport.http\"; Cannot find implementation or library stub for module named \"hai_lineage\""
     },
-    "services/lineage/provider_transport.py": {
-      "runtime": "orchestration_image",
-      "reason": "Cannot find implementation or library stub for module named \"openlineage.client.transport.transport\""
-    },
     "tests/orchestration/fixtures/combined_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""

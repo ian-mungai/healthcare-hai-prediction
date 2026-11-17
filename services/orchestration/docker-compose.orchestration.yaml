@@ -29,7 +29,8 @@ x-airflow: &airflow
     # No schedule or asset trigger runs until the owner approves it (decision O3).
     AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
     AIRFLOW__OPENLINEAGE__NAMESPACE: hai-prediction-local
-    AIRFLOW__OPENLINEAGE__CONFIG_PATH: /opt/hai/hai_lineage/openlineage.yml
+    # No lineage transport is configured here, so the provider sends no event; AIRFLOW__OPENLINEAGE__DISABLED keeps it off if a transport variable is added later.
+    AIRFLOW__OPENLINEAGE__DISABLED: "true"
     AIRFLOW__OPENLINEAGE__CONFIG_CONN_ID: ""
     AIRFLOW__OPENLINEAGE__DISABLE_SOURCE_CODE: "true"
     AIRFLOW__OPENLINEAGE__INCLUDE_FULL_TASK_INFO: "false"
@@ -82,7 +83,6 @@ services:
     <<: *airflow
     command: ["api-server"]
     mem_limit: ${HAI_ORCH_MEM_APISERVER:?set by the launcher}
-    # Only this service and the scheduler write the lineage provider spool: the API server may emit the provider's state-change callbacks.
     volumes:
       - ${HAI_ORCH_REPO}/dags:/opt/airflow/dags:ro
       - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
@@ -92,7 +92,6 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/orchestration/ingestion_schedule.py:/opt/hai/orchestration/ingestion_schedule.py:ro
       - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
-      - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_STATE}/logs:/opt/airflow/logs
     ports:
       - "127.0.0.1:${HAI_ORCH_API_PORT:?set by the launcher}:8080"
@@ -114,7 +113,6 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/interface.py:/opt/hai/orchestration/interface.py:ro
       - ${HAI_ORCH_REPO}/orchestration/client.py:/opt/hai/orchestration/client.py:ro
       - ${HAI_ORCH_REPO}/services/lineage:/opt/hai/hai_lineage:ro
-      - ${HAI_ORCH_STATE}/lineage_provider:/opt/hai/lineage_provider
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/orchestration/ingestion_schedule.py:/opt/hai/orchestration/ingestion_schedule.py:ro
       - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro

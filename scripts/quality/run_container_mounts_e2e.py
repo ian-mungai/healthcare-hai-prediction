@@ -271,9 +271,9 @@ def scenarios(source: dict[str, str]) -> list[Case]:
         ),
         Case(
             "renamed_lineage_package",
-            {"services/lineage/provider_events.py": injected(source["services/lineage/provider_events.py"], "import orchestration.graph")},
+            {"services/lineage/http_transport.py": injected(source["services/lineage/http_transport.py"], "import orchestration.graph")},
             messages=(
-                "services/lineage/provider_events.py",
+                "services/lineage/http_transport.py",
                 "orchestration.graph",
                 "container services/orchestration/docker-compose.orchestration.yaml:airflow-scheduler",
             ),

@@ -108,8 +108,7 @@ locals {
   }, local.airflow_launch_volumes)
 
   airflow_state_volumes = {
-    airflow_logs             = "${var.data_mount_path}/airflow/logs"
-    airflow_lineage_provider = "${var.data_mount_path}/airflow/lineage_provider"
+    airflow_logs = "${var.data_mount_path}/airflow/logs"
   }
 
   airflow_code_mounts = concat([
@@ -125,11 +124,11 @@ locals {
 
   # With airflow_lineage_http_enabled the scheduler, which runs every task (LocalExecutor), sends the OpenLineage events over HTTP only to OpenMetadata's
   # lineage route with the lineage bot credential, injected as an ECS secret so no file holds it, and the 5 second limit of the provider and the client.
-  # The provider then has no config file and no transport setting, so the OpenLineage client reads its OPENLINEAGE__TRANSPORT__ variables, and the spool
-  # transport is not used. The type is the project transport of the mounted services/lineage/http_transport.py (PYTHONPATH /opt/hai), the client's HTTP transport
+  # The provider then has no config file and no transport setting, so the OpenLineage client reads its OPENLINEAGE__TRANSPORT__ variables, and the scheduler
+  # alone switches the provider back on (AIRFLOW__OPENLINEAGE__DISABLED false). The type is the project transport of the mounted services/lineage/http_transport.py (PYTHONPATH /opt/hai), the client's HTTP transport
   # with eventTime sent in the UTC Z form, which OpenMetadata accepts and its +00:00 form it refuses. With the flag false these maps are empty and the task definitions are as before.
   airflow_lineage_http_environment = var.airflow_lineage_http_enabled ? {
-    AIRFLOW__OPENLINEAGE__CONFIG_PATH  = ""
+    AIRFLOW__OPENLINEAGE__DISABLED     = "false"
     AIRFLOW__OPENLINEAGE__TRANSPORT    = ""
     OPENLINEAGE__TRANSPORT__TYPE       = "hai_lineage.http_transport.UtcHttpTransport"
     OPENLINEAGE__TRANSPORT__URL        = var.airflow_lineage_url
@@ -141,8 +140,6 @@ locals {
   airflow_lineage_http_secrets = var.airflow_lineage_http_enabled ? [{ name = "OPENLINEAGE__TRANSPORT__AUTH__API_KEY", valueFrom = local.secret_arn["openmetadata_bot_lineage"] }] : []
 
   airflow_scheduler_environment = [for name, value in merge(local.airflow_environment_map, local.airflow_lineage_http_environment) : { name = name, value = value }]
-
-  airflow_lineage_provider_mount = { sourceVolume = "airflow_lineage_provider", containerPath = "/opt/hai/lineage_provider", readOnly = false }
 
   # Airflow sends its metrics over UDP to the StatsD exporter on this host. The settings exist only while monitoring_enabled is true, so the flag off leaves the
   # Airflow task definitions as they were.
@@ -162,8 +159,8 @@ locals {
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS          = "true"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD                = "bash -c 'printf %s \"postgresql+psycopg2://airflow:$AIRFLOW_DB_PASSWORD@127.0.0.1:5432/airflow\"'"
     AIRFLOW__OPENLINEAGE__CONFIG_CONN_ID                   = ""
-    AIRFLOW__OPENLINEAGE__CONFIG_PATH                      = "/opt/hai/hai_lineage/openlineage.yml"
     AIRFLOW__OPENLINEAGE__DEBUG_MODE                       = "false"
+    AIRFLOW__OPENLINEAGE__DISABLED                         = "true"
     AIRFLOW__OPENLINEAGE__DISABLE_SOURCE_CODE              = "true"
     AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT                = "5"
     AIRFLOW__OPENLINEAGE__INCLUDE_FULL_TASK_INFO           = "false"
@@ -221,7 +218,7 @@ locals {
       memory            = local.memory_profile.airflow_apiserver.limit
       memoryReservation = local.memory_profile.airflow_apiserver.reservation
       command           = ["bash", "-ec", local.airflow_apiserver_script]
-      mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
+      mountPoints       = local.airflow_code_mounts
       portMappings      = [{ containerPort = 8080, hostPort = 8080, protocol = "tcp" }]
       dependsOn         = [{ containerName = "airflow_migrate", condition = "SUCCESS" }]
       healthCheck = {
@@ -244,7 +241,7 @@ locals {
       memory            = local.memory_profile.airflow_scheduler.limit
       memoryReservation = local.memory_profile.airflow_scheduler.reservation
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
-      mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
+      mountPoints       = local.airflow_code_mounts
       portMappings      = [{ containerPort = 8974, hostPort = 8974, protocol = "tcp" }]
       healthCheck = {
         command     = ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8974/health"]

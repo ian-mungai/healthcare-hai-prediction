@@ -350,7 +350,7 @@
     {
       "module": "scripts/orchestration/in_image_checks.py",
       "pattern": null,
-      "why": "reviewed: dags lists DAG_FOLDER = /opt/hai/dags, a path inside the Airflow image (scripts/orchestration/in_image_checks.py:39, glob :48), and the spool check lists a temporary folder (:226); neither is a folder of the checkout"
+      "why": "reviewed: dags lists DAG_FOLDER = /opt/hai/dags, a path inside the Airflow image (scripts/orchestration/in_image_checks.py:41, glob :51), a path inside the Airflow image and not a folder of the checkout"
     },
     {
       "module": "scripts/orchestration/ledger.py",
@@ -474,7 +474,7 @@
     "scripts/lakehouse/silver_quality.py": 1,
     "scripts/orchestration/airflow_mode_cases.py": 3,
     "scripts/orchestration/ecs_lineage_cases.py": 2,
-    "scripts/orchestration/in_image_checks.py": 2,
+    "scripts/orchestration/in_image_checks.py": 1,
     "scripts/orchestration/ledger.py": 1,
     "scripts/orchestration/offline_checks.py": 1,
     "scripts/orchestration/real_image_dags.py": 1,

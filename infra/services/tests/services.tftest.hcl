@@ -2515,11 +2515,19 @@ run "launch_mounts_are_always_present" {
     condition = alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : alltrue([
-          for mount in container.mountPoints : mount.readOnly || contains(["airflow_logs", "airflow_lineage_provider"], mount.sourceVolume)
+          for mount in container.mountPoints : mount.readOnly || mount.sourceVolume == "airflow_logs"
         ])
       ])
     ])
-    error_message = "The launch mounts are read-only: only the Airflow log and lineage provider folders are writable."
+    error_message = "The launch mounts are read-only: only the Airflow log folder is writable."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] :
+      !strcontains(aws_ecs_task_definition.service[key].container_definitions, "lineage_provider") && !contains([for volume in aws_ecs_task_definition.service[key].volume : volume.name], "airflow_lineage_provider")
+    ])
+    error_message = "No Airflow task definition has a lineage spool volume or mount: the provider sends over HTTP from the scheduler or sends nothing."
   }
 
   assert {

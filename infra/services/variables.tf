@@ -598,7 +598,7 @@ variable "airflow_launch_scratch_path" {
 }
 
 variable "airflow_lineage_http_enabled" {
-  description = "Send the OpenLineage events of the Airflow tasks over HTTP only to OpenMetadata's lineage route (/api/v1/openlineage/lineage), with the lineage bot credential of openmetadata_bot_token_names as an ECS secret of the scheduler and a 5 second limit, instead of the spool transport. It is on by default and needs persistent OpenMetadata running and the execution role granted the lineage bot parameter (the parameter_names_used output names it). False adds no OpenLineage transport setting and no lineage bot secret to the scheduler; the lineage code mounts of the Airflow containers are present either way."
+  description = "Send the OpenLineage events of the Airflow tasks over HTTP only to OpenMetadata's lineage route (/api/v1/openlineage/lineage), with the lineage bot credential of openmetadata_bot_token_names as an ECS secret of the scheduler and a 5 second limit, and switch the provider on for that container only. It is on by default and needs persistent OpenMetadata running and the execution role granted the lineage bot parameter (the parameter_names_used output names it). False leaves the provider disabled in every Airflow container (AIRFLOW__OPENLINEAGE__DISABLED true, no transport, no spool), so no lineage event is sent, and adds no lineage bot secret to the scheduler; with the flag on, a task or DAG run changed by hand in the UI or REST still sends no lineage event, because the api-server stays disabled; the lineage code mounts of the Airflow containers are present either way."
   type        = bool
   default     = true
   nullable    = false
