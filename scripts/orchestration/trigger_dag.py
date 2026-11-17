@@ -16,6 +16,7 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag serving_deploy_dag --mode real --hai-type HAI_1 --deploy-mode stable --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_live_check_dag --mode real --model m2 --hai-type HAI_1 --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_monitoring_dag --run-id <Airflow run ID> --clear-failed --wait-seconds 600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_monitoring_dag --mode real --model m6 \\
         --features-run <run> --drift-attempt 2 --wait-seconds 600
@@ -24,6 +25,10 @@ A workflow whose job publishes from a producer run requires that run as a run ID
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
+
+``drift_live_check_dag`` starts the on-demand live drift check of the Production baseline of ``--model`` and ``--hai-type``. Its form is the run ID (a new
+one when absent), the mode ``real``, the model and the type, and no other option. The run runs the code staged for its own run
+(``lakehouse/run_stage/<run ID>/inputs/code.tar.gz`` and ``code.sha256``), so name the run ID of the staged code with ``--run-id``. It starts no other DAG.
 
 ``--base-run`` names the run of ``features_base_dag`` whose model set a training or research run uses. The runs of the chain derive from it
 (``orchestration/training_contract.py``), so the trigger derives them and refuses any other value: ``training_dag`` takes the training run of its ``--model``
@@ -97,11 +102,12 @@ PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_base_dag": "gold_snapshot_run"}
 RESEARCH_DAG = "research_dag"
 SERVING_DAG = "serving_deploy_dag"
+LIVE_DAG = "drift_live_check_dag"
 DRIFT_DAG = "drift_monitoring_dag"
 FAILED_TASK_STATES = ("failed", "upstream_failed")
 # The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
 PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
-DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG)
+DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG, LIVE_DAG)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
@@ -167,8 +173,11 @@ def run_conf(
         conf |= publisher_conf(dag, mode, run_id, given_publisher)
     elif any(value is not None for value in given_publisher.values()):
         raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag does")
-    if dag in (*PARAMETER_DAGS, SERVING_DAG) and (silver_snapshot_run is not None or gold_snapshot_run is not None):
-        raise TriggerError("refused: a training, research or serving workflow reads no silver or gold snapshot run")
+    if dag in (*PARAMETER_DAGS, SERVING_DAG, LIVE_DAG) and (silver_snapshot_run is not None or gold_snapshot_run is not None):
+        raise TriggerError("refused: a training, research, serving or live drift workflow reads no silver or gold snapshot run")
+    if dag == LIVE_DAG:
+        conf.update(live_conf(training or {}))
+        return conf
     if dag == SERVING_DAG:
         conf.update(serving_conf(training or {}))
         return conf
@@ -217,6 +226,14 @@ def serving_conf(given: dict[str, Any]) -> dict[str, str]:
     if research is not None:
         raise TriggerError("refused: a stable deploy deploys the Production version and takes no research run")
     return {**closed, "research_run": "latest"}
+
+
+def live_conf(given: dict[str, Any]) -> dict[str, str]:
+    """The form of the live drift check: the model and the HAI type of the Production baseline it checks, each of the contract (the form's own choices)."""
+    model, hai_type = given.get("model"), given.get("hai_type")
+    if model not in MODELS or hai_type not in HAI_TYPES:
+        raise TriggerError(f"refused: the live drift check needs --model, one of {', '.join(MODELS)}, and --hai-type, one of {', '.join(HAI_TYPES)}")
+    return {"model": str(model), "hai_type": str(hai_type)}
 
 
 def base_run_plan(
@@ -432,7 +449,9 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
     cli.add_argument("--mlflow", choices=("local", "aws"), default="aws")
-    cli.add_argument("--model", choices=MODELS, help="the model a training run fits (required for training_dag) or a drift attempt checks")
+    cli.add_argument(
+        "--model", choices=MODELS, help="the model a training run fits (required for training_dag), a drift attempt checks or the live drift check covers"
+    )
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
@@ -494,6 +513,10 @@ def main(argv: list[str] | None = None) -> int:
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
         elif args.dag == SERVING_DAG:
             training = {"hai_type": args.hai_type, "deploy_mode": args.deploy_mode, "research_run": args.research_run}
+        elif args.dag == LIVE_DAG:
+            if args.model_version is not None:
+                raise TriggerError(f"refused: {args.dag} takes no model version, only model_promotion_dag does")
+            training = {"model": args.model, "hai_type": args.hai_type}
         conf = run_conf(
             args.dag,
             args.mode,

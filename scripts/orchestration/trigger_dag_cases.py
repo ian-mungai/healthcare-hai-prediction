@@ -11,9 +11,11 @@ API replaced by a stand-in that keeps the runs in memory; nothing reaches Airflo
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import io
 import json
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -583,6 +585,65 @@ def drift_attempt_cases() -> dict[str, bool]:
     }
 
 
+LIVE = "drift_live_check_dag"
+LIVE_FORM = Path(__file__).resolve().parents[2] / "dags/drift_live_check_dag.py"
+
+
+def live_check_cases() -> dict[str, bool]:
+    """The on-demand live drift check is started by hand with a run ID, a model and an HAI type: the form of ``dags/drift_live_check_dag.py`` and no other
+    option. Every refusal comes before the secret is read and before any Airflow call."""
+
+    class Ends(StandIn):
+        def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+            record = super().run(dag_id, dag_run_id)
+            self.runs[dag_run_id] = "success"
+            return record
+
+    start = ["--dag", LIVE, "--mode", "real", "--model", "m2", "--hai-type", HAI_TYPE, "--wait-seconds", "5"]
+    api, named = Ends(), Ends()
+    code, printed, _, _ = invoke(api, start)
+    named_code = invoke(named, [*start, "--run-id", RUN])[0]
+    declared = {
+        key.value
+        for node in ast.walk(ast.parse(LIVE_FORM.read_text()))
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and key.value in {"run_id", "mode", "model", "hai_type"}
+    }
+    refused_with = {
+        "--features-run": (FEATURES_RUN, "features run"),
+        "--base-run": (BASE, "base run"),
+        "--drift-attempt": ("2", "drift attempt"),
+        "--deploy-mode": ("stable", "deploy"),
+        "--research-run": (RESEARCH_RUN, "deploy"),
+        "--model-version": ("7", "model version"),
+        "--silver-snapshot-run": (SILVER, "silver"),
+        "--gold-snapshot-run": (SILVER, "gold"),
+        "--run-kind": ("monthly", "run kind"),
+        "--capture-root": ("raw/", "capture root"),
+        "--research-attempt": ("2", "research attempt"),
+    }
+    return {
+        "the live check triggers with the run, the mode, the model and the type and nothing else": code == 0
+        and printed is not None
+        and printed["state"] == "success"
+        and api.confs == [{"run_id": first(api).get("run_id"), "mode": "real", "model": "m2", "hai_type": HAI_TYPE}]
+        and re.fullmatch(trigger_dag.RUN_ID.pattern, str(first(api).get("run_id"))) is not None,
+        "a named run ID is used as given": named_code == 0 and named.confs == [{"run_id": RUN, "mode": "real", "model": "m2", "hai_type": HAI_TYPE}],
+        "the conf keys are exactly the parameters of the DAG's form": set(first(api)) == declared == {"run_id", "mode", "model", "hai_type"},
+        "a run ID that is not a run ID is refused before any call": refused_quietly([*start, "--run-id", "latest"], "run ID"),
+        "a mode other than real is refused before any call": refused_quietly([*start[:3], "promote", *start[4:]], "mode"),
+        "a live check without a model or without a type is refused before any call": refused_quietly([*start[:4], *start[6:]], "live drift check")
+        and refused_quietly([*start[:6], *start[8:]], "live drift check"),
+        "a model or a type outside the contract is stopped by the parser": invoke(Ends(), [*start[:5], "m7", *start[6:]])[0] == 2
+        and invoke(Ends(), [*start[:7], "HAI_9", *start[8:]])[0] == 2,
+        "every option of another workflow is refused before any call": all(
+            refused_quietly([*start, flag, value], words) for flag, (value, words) in refused_with.items()
+        ),
+        "the status of a live run can be read": invoke(StandIn({RUN: "success"}), ["--dag", LIVE, "--status", "--run-id", RUN, "--wait-seconds", "5"])[0] == 0,
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -593,6 +654,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "publisher request": publisher_cases,
     "base run": base_run_cases,
     "drift attempt": drift_attempt_cases,
+    "live check": live_check_cases,
 }
 
 
