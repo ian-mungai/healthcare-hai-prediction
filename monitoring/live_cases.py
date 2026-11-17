@@ -616,6 +616,160 @@ def restore_cli_refuses_a_bad_bucket_name(folder: Path) -> Problems:
     )
 
 
+WRITER_SCRIPT = (
+    "import json, sys, threading\n"
+    "import fsspec, numpy, pandas\n"
+    "from pathlib import Path\n"
+    "from evidently.legacy.metric_preset import DataDriftPreset\n"
+    "from evidently.legacy.pipeline.column_mapping import ColumnMapping\n"
+    "from evidently.legacy.report import Report\n"
+    "from evidently.legacy.ui.storage.local.base import FSSpecBlobStorage\n"
+    "from evidently.legacy.ui.workspace import Workspace\n"
+    "from monitoring import live_check\n"
+    "original = FSSpecBlobStorage.put_blob\n"
+    "generator = numpy.random.default_rng(1)\n"
+    "frame = lambda shift: pandas.DataFrame({'a': generator.normal(shift, 1, 200)})\n"
+    "def finish(coroutine):\n"
+    "    try:\n"
+    "        coroutine.send(None)\n"
+    "    except StopIteration:\n"
+    "        return\n"
+    "def make_report(hook):\n"
+    "    report = Report(metrics=[DataDriftPreset(columns=['a'])])\n"
+    "    report.run(reference_data=frame(0), current_data=frame(2), column_mapping=ColumnMapping(numerical_features=['a']))\n"
+    "    class Hooked(dict):\n"
+    "        def __setitem__(self, key, value):\n"
+    "            super().__setitem__(key, value)\n"
+    "            if key == 'run_id':\n"
+    "                hook()\n"
+    "    report.metadata = Hooked(report.metadata)\n"
+    "    return report\n"
+    "def unrelated():\n"
+    "    seen = {}\n"
+    "    def hook():\n"
+    "        other = FSSpecBlobStorage('memory://unrelated/ws')\n"
+    "        seen['class_during'] = FSSpecBlobStorage.put_blob is original\n"
+    "        try:\n"
+    "            finish(other.put_blob('p/snapshots/x.json', '{}'))\n"
+    "        except Exception as error:\n"
+    "            seen['error'] = type(error).__name__\n"
+    "        seen['memory_has_object'] = fsspec.filesystem('memory').exists('/unrelated/ws/p/snapshots/x.json')\n"
+    "        seen['disk_has_object'] = Path('/unrelated').exists()\n"
+    "    live_check.add_to_workspace(make_report(hook), Path(sys.argv[2]), 'p', 'r1', 'hash1')\n"
+    "    seen['class_after'] = FSSpecBlobStorage.put_blob is original\n"
+    "    return seen\n"
+    "def overlap():\n"
+    "    events = {name: threading.Event() for name in ('a_inside', 'b_inside', 'a_done')}\n"
+    "    errors = []\n"
+    "    def work(name, workspace, hook):\n"
+    "        try:\n"
+    "            live_check.add_to_workspace(make_report(hook), workspace, 'p', name, 'hash' + name)\n"
+    "        except Exception as error:\n"
+    "            errors.append(f'{name}: {type(error).__name__}: {error}')\n"
+    "    def hook_a():\n"
+    "        events['a_inside'].set()\n"
+    "        events['b_inside'].wait(60)\n"
+    "    def hook_b():\n"
+    "        events['b_inside'].set()\n"
+    "        events['a_done'].wait(60)\n"
+    "    def run_a():\n"
+    "        work('a', Path(sys.argv[2], 'a'), hook_a)\n"
+    "        events['a_done'].set()\n"
+    "    def run_b():\n"
+    "        events['a_inside'].wait(60)\n"
+    "        work('b', Path(sys.argv[2], 'b'), hook_b)\n"
+    "    threads = [threading.Thread(target=run_a), threading.Thread(target=run_b)]\n"
+    "    for thread in threads:\n"
+    "        thread.start()\n"
+    "    for thread in threads:\n"
+    "        thread.join(120)\n"
+    "    return {'class_after': FSSpecBlobStorage.put_blob is original, 'errors': errors, 'alive': [thread.is_alive() for thread in threads]}\n"
+    "def nesting():\n"
+    "    storage = Workspace.create(sys.argv[2]).project_manager.blob_storage\n"
+    "    state = {'before': 'put_blob' in vars(storage)}\n"
+    "    with live_check.atomic_snapshot_writes(storage):\n"
+    "        state['outer'] = 'put_blob' in vars(storage)\n"
+    "        outer_writer = vars(storage)['put_blob']\n"
+    "        with live_check.atomic_snapshot_writes(storage):\n"
+    "            state['inner'] = 'put_blob' in vars(storage)\n"
+    "        state['outer_is_back'] = vars(storage)['put_blob'] is outer_writer\n"
+    "        state['outer_after_inner'] = 'put_blob' in vars(storage)\n"
+    "    state['after'] = 'put_blob' in vars(storage)\n"
+    "    try:\n"
+    "        with live_check.atomic_snapshot_writes(storage):\n"
+    "            raise RuntimeError('stop')\n"
+    "    except RuntimeError:\n"
+    "        pass\n"
+    "    state['after_error'] = 'put_blob' in vars(storage)\n"
+    "    state['class'] = FSSpecBlobStorage.put_blob is original\n"
+    "    memory = FSSpecBlobStorage('memory://elsewhere/ws')\n"
+    "    with live_check.atomic_snapshot_writes(memory):\n"
+    "        state['memory_left_alone'] = 'put_blob' not in vars(memory)\n"
+    "    return state\n"
+    "print(json.dumps({'unrelated': unrelated, 'overlap': overlap, 'nesting': nesting}[sys.argv[1]]()))\n"
+)
+
+
+def writer_result(done: Any) -> tuple[dict[str, Any] | None, str]:
+    """The JSON result that ``WRITER_SCRIPT`` printed, or None with the end of its output when it failed."""
+    text = done.stdout + done.stderr
+    return (json.loads(done.stdout.strip().splitlines()[-1]) if done.returncode == 0 else None), text[-400:]
+
+
+def the_atomic_writer_leaves_an_unrelated_store_alone(folder: Path) -> Problems:
+    """While a workspace snapshot is being added, a write through another store that uses Evidently's own blob class (here an in-memory file system) goes to
+    that store, not to the local disk, and the class method is the library's own before, during and after."""
+    drift_cases.need_evidently()
+    workspace = folder / "ws"
+    done = run_command(EVIDENTLY_PROGRAM, ["-c", WRITER_SCRIPT, "unrelated", str(workspace)], cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    seen, text = writer_result(done)
+    if seen is None:
+        return [f"the probe failed: {text}"]
+    expected = {"class_during": True, "memory_has_object": True, "disk_has_object": False, "class_after": True}
+    problems = [f"{key} is {seen.get(key)!r}, expected {value!r}" for key, value in expected.items() if seen.get(key) != value]
+    return problems + ([f"the unrelated write failed with {seen['error']}"] if "error" in seen else [])
+
+
+def overlapping_writer_contexts_leave_the_library_unpatched(folder: Path) -> Problems:
+    """Two workspaces are written in overlapping threads (A enters, B enters, A leaves, B leaves). Afterwards the library's class method is its own, and each
+    snapshot is in its own workspace. Evidently 0.7.23's class is never replaced."""
+    drift_cases.need_evidently()
+    workspace = folder / "ws"
+    done = run_command(EVIDENTLY_PROGRAM, ["-c", WRITER_SCRIPT, "overlap", str(workspace)], cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    seen, text = writer_result(done)
+    if seen is None:
+        return [f"the probe failed: {text}"]
+    problems = [] if seen["class_after"] else ["the library's put_blob stayed replaced after both contexts ended"]
+    problems += [f"a thread failed: {error}" for error in seen["errors"]] + (["a thread did not end"] if any(seen["alive"]) else [])
+    for name in ("a", "b"):
+        if projects_of(folder / "ws" / name) != {"p": [name]}:
+            problems.append(f"workspace {name} holds {projects_of(folder / 'ws' / name)}")
+    return problems
+
+
+def the_atomic_writer_nests_and_restores_on_every_exit(folder: Path) -> Problems:
+    """On one workspace's own storage the writer is installed by instance, nests (the outer writer itself is back after an inner one ends) and is removed on a
+    normal exit and on an error, leaving the instance as it was. A storage on another file system is not touched."""
+    drift_cases.need_evidently()
+    workspace = folder / "ws"
+    done = run_command(EVIDENTLY_PROGRAM, ["-c", WRITER_SCRIPT, "nesting", str(workspace)], cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    seen, text = writer_result(done)
+    if seen is None:
+        return [f"the probe failed: {text}"]
+    expected = {
+        "before": False,
+        "outer": True,
+        "inner": True,
+        "outer_is_back": True,
+        "outer_after_inner": True,
+        "after": False,
+        "after_error": False,
+        "class": True,
+        "memory_left_alone": True,
+    }
+    return [f"{key} is {seen.get(key)!r}, expected {value!r}" for key, value in expected.items() if seen.get(key) != value]
+
+
 def passes_the_record_to_each_sink_once(folder: Path) -> Problems:
     """The one call site the monitoring merge wires: every sink in ``record_sinks`` gets the written record once, after the files exist. Nothing else runs."""
     paths = write_baseline(folder, shifted=FEATURES)
@@ -1036,6 +1190,9 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("live_restore_cli_refuses_a_bad_bucket_name", restore_cli_refuses_a_bad_bucket_name),
         ("live_changed_inputs_under_the_same_run_are_refused", changed_inputs_under_the_same_run_are_refused),
         ("live_binding_survives_lost_cached_outputs", the_binding_survives_lost_cached_outputs),
+        ("live_atomic_writer_leaves_an_unrelated_store_alone", the_atomic_writer_leaves_an_unrelated_store_alone),
+        ("live_overlapping_writer_contexts_leave_the_library_unpatched", overlapping_writer_contexts_leave_the_library_unpatched),
+        ("live_atomic_writer_nests_and_restores_on_every_exit", the_atomic_writer_nests_and_restores_on_every_exit),
         ("live_rerun_reuses_the_recorded_outputs_byte_for_byte", a_rerun_reuses_the_recorded_outputs_byte_for_byte),
         ("live_reused_run_calls_no_sink", a_reused_run_calls_no_sink),
         ("live_refuses_a_manifest_older_than_the_data", a_manifest_older_than_the_data_is_refused),

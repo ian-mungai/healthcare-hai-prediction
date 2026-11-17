@@ -212,30 +212,40 @@ def record_outputs(workspace: Path, run_id: str, files: dict[str, bytes]) -> Non
 
 
 @contextlib.contextmanager
-def atomic_snapshot_writes() -> Iterator[None]:
-    """Make Evidently's local blob storage write each snapshot through a temporary file in the project folder and a rename. Its own writer opens the final path,
-    so a stopped task leaves a half file that the loader then fails on. The temporary file is outside the snapshots folder, which the loader reads whole."""
-    storage = importlib.import_module("evidently.legacy.ui.storage.local.base").FSSpecBlobStorage
-    original = storage.put_blob
+def atomic_snapshot_writes(storage: Any) -> Iterator[None]:
+    """Make the blob storage ``storage``, which this workspace owns, write each snapshot through a temporary file in the project folder and a rename. The
+    library's own writer opens the final path, so a stopped task leaves a half file that the loader then fails on, and a temporary file must stay outside the
+    snapshots folder, which the loader reads whole. The writer is set on this one instance and never on the library's class, so every other store keeps its own
+    file system and overlapping workspaces cannot leave anything replaced. It nests and is taken off on every exit. A storage on a file system other than the
+    local one is left as it is."""
+    local = importlib.import_module("fsspec.implementations.local").LocalFileSystem
+    if not isinstance(storage.location.fs, local):
+        yield
+        return
+    absent = object()
+    previous = vars(storage).get("put_blob", absent)
 
-    async def put_blob(self: Any, blob_id: str, obj: str) -> str:
-        target = Path(self.location.path, blob_id)
+    async def put_blob(blob_id: str, obj: str) -> str:
+        target = Path(storage.location.path, blob_id)
         write_bytes(target, obj.encode(), temp_folder=target.parent.parent)
         return blob_id
 
-    storage.put_blob = put_blob
+    object.__setattr__(storage, "put_blob", put_blob)
     try:
         yield
     finally:
-        storage.put_blob = original
+        if previous is absent:
+            object.__delattr__(storage, "put_blob")
+        else:
+            object.__setattr__(storage, "put_blob", previous)
 
 
 def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, inputs_sha256: str) -> None:
     """Add the report as a snapshot of the project ``name`` in the Evidently UI workspace, creating the workspace and the project when they are not there. A
     snapshot of the same run is never added twice."""
     set_aside_incomplete_snapshots(workspace)
-    with atomic_snapshot_writes():
-        store = importlib.import_module("evidently.legacy.ui.workspace").Workspace.create(str(workspace))
+    store = importlib.import_module("evidently.legacy.ui.workspace").Workspace.create(str(workspace))
+    with atomic_snapshot_writes(store.project_manager.blob_storage):
         found = [project for project in store.list_projects() if project.name == name]
         project = found[0] if found else store.create_project(name)
         if any(item.metadata.get("run_id") == run_id for item in project.list_snapshots(include_reports=True)):
