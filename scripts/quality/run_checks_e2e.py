@@ -34,6 +34,7 @@ COPIED = [
     ".github/workflows/ci.yml",
     "config/quality/ci_groups.json",
     "config/quality/launcher_inputs.json",
+    "config/quality/test_env_names.json",
     ".pre-commit-config.yaml",
     "pyproject.toml",
     ".env.example",
@@ -141,6 +142,8 @@ IMPORTERS_HOOK = "typecheck-importers"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
+TEST_SETTING = "SAMPLE_TEST" + "_SETTING"
+TEST_ENV_LIST = "config/quality/test_env_names.json"
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
 USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
@@ -242,6 +245,19 @@ class Case:
     symlinks: dict[str, str] = field(default_factory=dict)  # Link path to link target, staged with the files.
     untracked: dict[str, str] = field(default_factory=dict)  # Written after staging, so Git does not track them.
     git_config: dict[str, str] = field(default_factory=dict)  # Repository settings applied before the committed files.
+
+
+def read_sample(name: str) -> str:
+    """A Python file that reads the environment variable ``name``."""
+    return "import os\n\nVALUE = " + ENVIRON + f'.get("{name}", "")\n'
+
+
+def test_env_list(names: list[str], modules: list[str] | None = None) -> str:
+    """This repository's list of test variables plus ``names`` and the extra test modules ``modules``."""
+    data = json.loads((ROOT / TEST_ENV_LIST).read_text())
+    data["test_modules"] |= {path: "sample test module" for path in modules or []}
+    data["names"] |= {name: "sample test variable" for name in names}
+    return json.dumps(data) + "\n"
 
 
 def guide_page(*body: str) -> str:
@@ -2306,6 +2322,79 @@ CASES = [
     ),
     Case("documented variable", "env-example", True, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '.get("AWS_REGION", "")\n'}),
     Case("undocumented variable", "env-example", False, {"scripts/tool.py": "import os\n\nNAME = " + ENVIRON + '["NEW_SETTING"]\n'}),
+    Case(
+        "variable read only by test code, in the list",
+        "env-example",
+        True,
+        {"scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING])},
+    ),
+    Case(
+        "variable read only by test code, not in the list",
+        "env-example",
+        False,
+        {"scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([])},
+        reason=f"{TEST_SETTING} is read but not in .env.example or the test variable list",
+    ),
+    Case(
+        "test variable in .env.example",
+        "env-example",
+        False,
+        {
+            "scripts/tool_cases.py": read_sample(TEST_SETTING),
+            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
+            TEST_ENV_LIST: test_env_list([]),
+        },
+        reason=f"{TEST_SETTING} is used only by test code",
+    ),
+    Case(
+        "listed variable no test code reads",
+        "env-example",
+        False,
+        {TEST_ENV_LIST: test_env_list([TEST_SETTING])},
+        reason=f"{TEST_SETTING} is listed but no test code reads it",
+    ),
+    Case(
+        "listed variable production code reads",
+        "env-example",
+        False,
+        {
+            "scripts/tool.py": read_sample(TEST_SETTING),
+            "scripts/tool_cases.py": read_sample(TEST_SETTING),
+            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
+            TEST_ENV_LIST: test_env_list([TEST_SETTING]),
+        },
+        reason=f"{TEST_SETTING} is listed but production code also uses it",
+    ),
+    Case(
+        "production read only in the list",
+        "env-example",
+        False,
+        {"scripts/tool.py": read_sample(TEST_SETTING), "scripts/tool_cases.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING])},
+        reason=f"{TEST_SETTING} is read but not in .env.example or the test variable list",
+    ),
+    Case(
+        "variable read by test and production code",
+        "env-example",
+        True,
+        {
+            "scripts/tool.py": read_sample(TEST_SETTING),
+            "scripts/tool_cases.py": read_sample(TEST_SETTING),
+            ".env.example": ENV_EXAMPLE_SOURCE + f"# Sample.\n{TEST_SETTING}=\n",
+        },
+    ),
+    Case(
+        "variable read by a listed test module",
+        "env-example",
+        True,
+        {"scripts/tool_model.py": read_sample(TEST_SETTING), TEST_ENV_LIST: test_env_list([TEST_SETTING], ["scripts/tool_model.py"])},
+    ),
+    Case(
+        "listed test module is gone",
+        "env-example",
+        False,
+        {TEST_ENV_LIST: test_env_list([], ["scripts/tool_model.py"])},
+        reason="scripts/tool_model.py is listed as a test module but is not a tracked file",
+    ),
     Case("script removed with its docs", "removed-names", True, committed={f"scripts/{OLD_SCRIPT}": "X = 1\n"}, delete=[f"scripts/{OLD_SCRIPT}"]),
     Case(
         "script removed, docs still name it",
@@ -3504,13 +3593,16 @@ def scratch_repo(root: Path, case: Case) -> Path:
     # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
     # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too, and the Airflow launch library that
     # reads the HAI_LAUNCH_* ones. Other hooks must not see that library: its imports and unused helpers would fail their samples. The startup check
-    # tests read the variables that .env.example documents for them (STARTUP_CHECK_TEST_FAULT, STARTUP_CHECK_TEST_PROBE, PLANT).
+    # tests read the variables that the test variable list names for them (STARTUP_CHECK_TEST_FAULT, STARTUP_CHECK_TEST_PROBE, PLANT). A name that
+    # .env.example keeps needs a production file here, or the scratch repository would show it as read by tests only.
     listed = run_command(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
     ).stdout.splitlines()
     if case.hook == "env-example":
         listed += [
             "orchestration/airflow_steps.py",
+            "orchestration/dag_runtime.py",
+            "dags/bronze_chain_dag.py",
             "tests/startup_check_child_faults.py",
             "tests/startup_check_faults.py",
             "tests/test_startup_check_planted.py",
@@ -3580,6 +3672,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             "docs-references",
             "temporary-code",
             "removed-names",
+            "env-example",
             IMPORTERS_HOOK,
             *CLEANUP_HOOKS,
         ):

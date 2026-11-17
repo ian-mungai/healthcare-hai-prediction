@@ -84,6 +84,12 @@ CI_GROUP_FILES = "scripts/ci/groups"
 
 ENV_READ = re.compile(r"""(?:os\.environ(?:\.get)?\s*[\[(]\s*|os\.getenv\s*\(\s*)["']([A-Z][A-Z0-9_]*)["']""")
 ENV_EXAMPLE_NAME = re.compile(r"^\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=", re.MULTILINE)
+TEST_ENV_LIST = "config/quality/test_env_names.json"
+# Test code: a tests folder, test_*.py, *_cases.py, run_*e2e.py runners, and stand-in, fake, fixture, fault and plant modules. A module outside this rule
+# that only tests use goes under "test_modules" in TEST_ENV_LIST.
+TEST_CODE = re.compile(
+    r"(?:^|/)(?:tests?/|test_[^/]*$|conftest\.py$)|_cases\.py$|(?:^|/)run_(?:[^/]*_)?e2e\.py$|stand_?ins?|fake|_faults\.py$|planted|plants?\.py$|fixtures?\.py$|_fixture"
+)
 SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts"}
 FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
@@ -555,25 +561,75 @@ def mypy_commands() -> list[Finding]:
     return findings
 
 
+def test_env_list() -> tuple[set[str], dict[str, str]]:
+    """Return the committed test variable names and the extra test modules (path to reason) of ``TEST_ENV_LIST``; a missing file lists none."""
+    path = Path(TEST_ENV_LIST)
+    data = json.loads(path.read_text()) if path.exists() else {}
+    return set(data.get("names", {})), dict(data.get("test_modules", {}))
+
+
 def env_example() -> list[Finding]:
-    """Every environment variable the code reads is listed in .env.example."""
+    """Every environment variable the code reads is in .env.example, or in the test variable list when only test code uses it.
+
+    .env.example shows what a person sets and what production code reads. A name that only test code uses (see ``TEST_CODE``) belongs in
+    ``TEST_ENV_LIST``, a name in that list must still be used by test code and never by production code.
+    """
     example = Path(".env.example")
     documented = set(ENV_EXAMPLE_NAME.findall(example.read_text())) if example.exists() else set()
+    listed, extra_modules = test_env_list()
+    tracked = set(git("ls-files").splitlines())
+
+    def is_test(path: str) -> bool:
+        """Return whether ``path`` is test code: it matches ``TEST_CODE`` or is a listed test module."""
+        return bool(TEST_CODE.search(path)) or path in extra_modules
+
     findings = []
+    for module in sorted(extra_modules):
+        if module not in tracked:
+            findings.append(
+                Finding(TEST_ENV_LIST, f"{module} is listed as a test module but is not a tracked file", CLEANUP_RULE, f"remove {module} from {TEST_ENV_LIST}")
+            )
     for path in git("ls-files", "*.py").splitlines():
         for number, line in enumerate(Path(path).read_text().splitlines(), 1):
             for name in ENV_READ.findall(line):
-                if name not in documented:
-                    fix = f"add {name}= with a comment to .env.example"
-                    findings.append(Finding(f"{path}:{number}", f"{name} is read but not in .env.example", f"{POLICY}: docs match the code", fix))
-    if example.exists():
-        # A name is a whole word of the other files exactly when it is one of their \w+ runs: one pass over them, not one search of all their text per name.
-        words = {word for path, lines in reference_files().items() if path != ".env.example" for line in lines for word in re.findall(r"\w+", line)}
-        for number, line in enumerate(example.read_text().splitlines(), 1):
-            match = ENV_EXAMPLE_NAME.match(line)
-            if match and match.group(1) not in words:
-                fix = f"remove {match.group(1)} from .env.example, or restore the code that reads it"
-                findings.append(Finding(f".env.example:{number}", f"{match.group(1)} is documented but nothing reads it", CLEANUP_RULE, fix))
+                if name in documented or (name in listed and is_test(path)):
+                    continue
+                if name in listed:
+                    fix = f"move {name} from {TEST_ENV_LIST} to .env.example with a comment"
+                else:
+                    fix = f"add {name}= with a comment to .env.example, or to {TEST_ENV_LIST} when only test code uses it"
+                findings.append(
+                    Finding(f"{path}:{number}", f"{name} is read but not in .env.example or the test variable list", f"{POLICY}: docs match the code", fix)
+                )
+    # A name is a whole word of the other files exactly when it is one of their \w+ runs: one pass over them, not one search of all their text per name.
+    # Test code and production code are told apart per file; Markdown only shows that a name is mentioned, so it never counts as production use.
+    interest = documented | listed
+    users: dict[str, tuple[set[str], set[str], set[str]]] = {name: (set(), set(), set()) for name in interest}
+    for path, lines in reference_files().items():
+        if path in (".env.example", TEST_ENV_LIST):
+            continue
+        slot = 2 if path.endswith(".md") else (0 if is_test(path) else 1)
+        for word in {word for line in lines for word in re.findall(r"\w+", line)} & interest:
+            users[word][slot].add(path)
+    for number, line in enumerate(example.read_text().splitlines() if example.exists() else [], 1):
+        match = ENV_EXAMPLE_NAME.match(line)
+        if not match:
+            continue
+        name = match.group(1)
+        tests, production, mentions = users[name]
+        if not (tests or production or mentions):
+            fix = f"remove {name} from .env.example, or restore the code that reads it"
+            findings.append(Finding(f".env.example:{number}", f"{name} is documented but nothing reads it", CLEANUP_RULE, fix))
+        elif tests and not production:
+            fix = f"move {name} from .env.example to {TEST_ENV_LIST}"
+            findings.append(Finding(f".env.example:{number}", f"{name} is used only by test code", f"{POLICY}: docs match the code", fix))
+    for name in sorted(listed):
+        tests, production, _ = users[name]
+        if not tests:
+            findings.append(Finding(TEST_ENV_LIST, f"{name} is listed but no test code reads it", CLEANUP_RULE, f"remove {name} from {TEST_ENV_LIST}"))
+        elif production:
+            fix = f"remove {name} from {TEST_ENV_LIST} and document it in .env.example"
+            findings.append(Finding(TEST_ENV_LIST, f"{name} is listed but production code also uses it", f"{POLICY}: docs match the code", fix))
     return findings
 
 
