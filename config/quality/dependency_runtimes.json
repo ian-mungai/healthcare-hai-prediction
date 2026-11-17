@@ -110,7 +110,8 @@
       "provided": {
         "airflow": "the official Airflow image pinned by digest in services/orchestration/Dockerfile",
         "psycopg2": "the PostgreSQL driver of the official Airflow image (psycopg2-binary in the orchestration group of uv.lock)",
-        "openlineage": "the provider and client in the orchestration group of uv.lock"
+        "openlineage": "the provider and client in the orchestration group of uv.lock",
+        "hai_lineage": "the first-party services/lineage folder, which the scheduler container mounts read only as /opt/hai/hai_lineage (infra/services/airflow.tf, volume code_lineage); no package of that name is installed"
       }
     },
     "feature_store": {

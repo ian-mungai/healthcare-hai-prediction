@@ -3798,12 +3798,6 @@ def deliver(instance: launcher.Launcher, worker: tuple[str, str], outcome: str, 
     instance.message_handlers[tag](key, outcome, value)
 
 
-def registry_state(env: Env) -> dict[str, Any]:
-    """A copy of the registry state, read by this process."""
-    state: dict[str, Any] = json.loads(json.dumps(env.state()))
-    return state
-
-
 def started_attempt(identity: str) -> dict[str, Any]:
     """The part of a started service attempt that the health steps read."""
     return {"id": identity, "phase": "started", "container_id": f"container-{identity}", "reason": ""}

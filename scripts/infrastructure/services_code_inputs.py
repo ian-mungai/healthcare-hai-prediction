@@ -25,8 +25,6 @@ from scripts.infrastructure.render_platform_config import PLATFORM_KEYS, PREPARA
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
-# The two settings this tool sets, and the image record that the renderer reads from its own file.
-INSTALLER_SETTINGS = ("code_fetch_task_role_arn", "code_bucket_name")
 # The setting the same tool sets for the catalog setup one-shot when it is given that role; without the role an existing value is kept as it is.
 CATALOG_SETUP_SETTING = "catalog_setup_task_role_arn"
 RENDERED_SEPARATELY = ("image_digests",)

@@ -46,7 +46,6 @@ URLS = {
 # The other modules that open a DuckDB connection, and why each is not bounded by the helper.
 LEFT = {
     "scripts/lakehouse/provenance.py": "the container reader opens the sealed copy read only and runs a plain select of the marker table",
-    "scripts/lakehouse/bronze_scan.py": "decodes one Parquet row group of at most 32 MiB in memory on one thread, and the bronze job sets no spill variables",
     "monitoring/current_window.py": "converts the JSON lines of rows it holds to Parquet with duckdb.read_json on the default connection",
     "monitoring/drift_check.py": "reads Parquet files with duckdb.read_parquet on the default in-memory connection",
     "scripts/features/feature_fixture.py": "builds the fixture databases of the feature checks in CI, never in a task",
