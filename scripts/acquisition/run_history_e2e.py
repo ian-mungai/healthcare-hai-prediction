@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 import json
+import re
 import sys
 import tempfile
 import urllib.error
@@ -336,6 +337,22 @@ def held_reference_scenarios(scenario: Any, root: Path, extend: Any, boundaries:
     release_scenarios(scenario, extend, execute)
 
 
+# The person, contact and address columns of the HCAI utilization files that the release scope must name as never read by silver.
+PRIVACY_EXCLUSIONS = ("administrator", "report-preparer", "phone", "street address", "parent corporation")
+
+
+def privacy_problems(release: dict[str, Any]) -> list[str]:
+    """Why a HCAI utilization release record does not keep the privacy exclusions: the scope must say silver never reads each named column group."""
+    match = re.search(r"silver never reads the (.+?) columns", release["scope"])
+    named = match.group(1) if match else ""
+    problems = [f"the scope does not say silver never reads the {name} columns" for name in PRIVACY_EXCLUSIONS if name not in named]
+    if "bronze redacts the person cells at load" not in release["scope"]:
+        problems.append("the scope does not say bronze redacts the person cells at load")
+    if "administrator" not in release["hold"] or "bronze redacts these cells at load" not in release["hold"] or "silver excludes them" not in release["hold"]:
+        problems.append("the hold does not name the administrator details, the bronze redaction and the silver exclusion")
+    return problems
+
+
 def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
     """New receipts bind the newest release record; receipts that bind an earlier record still verify (failure modes 15 to 18)."""
     paths = s3_store.ACCESS_RELEASE_PATHS
@@ -371,13 +388,27 @@ def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
         require(
             "model-eligible" in released[0]["scope"] and "silver" in released[0]["scope"], "The newest record does not make HCAI utilization model-eligible"
         )
-        require(
-            "administrator" in released[0]["hold"] and "redacts" in released[0]["hold"] and "silver" in released[0]["hold"],
-            "The privacy note lost its protections",
-        )
+        require(not privacy_problems(released[0]), f"The privacy note lost its protections: {privacy_problems(released[0])}")
         require("Nov 10 2026" in text and "Nov 17 2026" in text, "The newest record does not cite both owner decisions")
 
     scenario("newest_record_makes_hcai_utilization_model_eligible", eligible)
+
+    def mutation_caught(change: Any) -> None:
+        released = next(r for r in json.loads(paths[-1].read_text())["releases"] if r["source_id"] == "HCAI_UTIL")
+        changed = change(dict(released))
+        require(changed != released, "The mutation changed nothing")
+        require(bool(privacy_problems(changed)), "A scope that weakens the privacy exclusions passed")
+
+    scenario(
+        "scope_that_reads_the_person_columns_fails", lambda: mutation_caught(lambda r: r | {"scope": r["scope"].replace("silver never reads", "silver reads")})
+    )
+    for name in PRIVACY_EXCLUSIONS:
+        scenario(
+            f"scope_without_the_{name.replace(' ', '_').replace('-', '_')}_exclusion_fails",
+            lambda name=name: mutation_caught(lambda r: r | {"scope": r["scope"].replace(name, "")}),
+        )
+    scenario("hold_without_the_silver_exclusion_fails", lambda: mutation_caught(lambda r: r | {"hold": r["hold"].replace("silver excludes them", "")}))
+    scenario("hold_without_the_bronze_redaction_fails", lambda: mutation_caught(lambda r: r | {"hold": r["hold"].replace("bronze redacts", "bronze keeps")}))
     scenario(
         "unlisted_release_record_refused",
         lambda: require(not s3_store.released_by_record(source, {"access_release_sha256": "0" * 64}), "Unlisted record accepted"),
