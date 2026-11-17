@@ -28,6 +28,9 @@ LAYERS = ("silver", "gold", "features")
 RELEASE_VARIABLES = ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")
 RELEASE_PHASE = "release"
 RELOAD_PHASE = "reload"
+# A hand-started task has no Airflow task to name its lineage events after, so LINEAGE_INVOCATION stays empty and the job sends no lineage events
+# (scripts/lakehouse/layer_run.py sends only with a value, which the launch fills from the DAG's request). A runbook may still pass one.
+HAND_START_EMPTY = ("LINEAGE_INVOCATION",)
 
 
 class OverrideError(ValueError):
@@ -57,7 +60,7 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
     for container, names in jobs[job]["containers"].items():
         environment = []
         for name in names:
-            if not values.get(name) and not (job == "features" and name in RELEASE_VARIABLES and name not in needed):
+            if not values.get(name) and name not in HAND_START_EMPTY and not (job == "features" and name in RELEASE_VARIABLES and name not in needed):
                 raise OverrideError(f"{name} has no value: the {container} container of the {job} job needs it")
             environment.append({"name": name, "value": values.get(name, "")})
         if dry_run:
@@ -98,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         "RELEASE_MODEL": args.release_model,
         "MLFLOW_TRACKING_URI": args.mlflow_uri,
         "TRAINING_PARAMETERS": args.training_parameters,
+        "LINEAGE_INVOCATION": "",
     }
     try:
         document = build(args.job, values, args.dry_run)

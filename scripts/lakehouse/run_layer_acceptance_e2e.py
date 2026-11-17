@@ -935,8 +935,28 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
 
         return apply
 
+    def lineage(change: Callable[[dict[str, Any], str], object]) -> Callable[[Env, Env], None]:
+        def apply(env: Env, other: Env) -> None:
+            def edit_containers(document: dict[str, Any]) -> None:
+                for container in document["tasks"][0]["overrides"]["containerOverrides"]:
+                    change(container, container.get("name", ""))
+
+            edit(env.root / "describe.json", edit_containers)
+
+        return apply
+
+    def fill(container: dict[str, Any], name: str) -> None:
+        for item in container.get("environment", []):
+            if item["name"] == "LINEAGE_INVOCATION":
+                item["value"] = '{"template": "pin"}'
+
+    def drop_from_upload(container: dict[str, Any], name: str) -> None:
+        if name == "upload":
+            container["environment"] = [item for item in container["environment"] if item["name"] != "LINEAGE_INVOCATION"]
+
     records = ("lakehouse/launch_records/{run}/{layer}/claim.json", "lakehouse/launch_records/{run}/{layer}/01/end.json")
     good = (
+        ("a launched task whose lineage identity is filled (a hand-started one leaves it empty)", lineage(fill)),
         ("a host twin definition", definition("_host")),
         ("the launch records of the run", written(*records)),
         ("a host twin run with its launch records", both(definition("_host"), written(*records))),
@@ -944,6 +964,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
     )
     planted = (
         ("a definition with no host suffix, the retired Fargate family name", definition(""), NAMES["task"]),
+        ("an upload container without the lineage variable", lineage(drop_from_upload), NAMES["task"]),
         ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
         ("a definition with a suffix after host", definition("_host_x"), NAMES["task"]),
         ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),

@@ -957,6 +957,7 @@ class Session:
             "FEATURES_RUN": "",
             "INPUT_RUN_ID": "",
             "FEATURE_SET": "",
+            "LINEAGE_INVOCATION": "",  # a reload belongs to no pipeline run, so it has no identity to send lineage events under and sends none
         }
         unknown = sorted({name for names in self.names.reload.variables.values() for name in names if name not in values})
         if unknown:

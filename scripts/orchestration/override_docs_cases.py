@@ -64,7 +64,7 @@ def check_overrides(table: dict) -> None:
         if row.get("needs_serving_parameters"):
             continue
         needed = {variable for variables in row["containers"].values() for variable in variables}
-        unknown = needed - set(VALUES) - {job_overrides.DRY_RUN_VARIABLE}
+        unknown = needed - set(VALUES) - {job_overrides.DRY_RUN_VARIABLE, *job_overrides.HAND_START_EMPTY}
         require(not unknown, f"the {job} job needs {sorted(unknown)}, which have no sample value here: add one so its overrides are checked")
         for dry_run in (False, True) if job in job_overrides.LAYERS else (False,):
             document = job_overrides.build(job, {name: VALUES[name] for name in needed if name in VALUES}, dry_run)
@@ -95,6 +95,23 @@ def a_features_build_leaves_the_release_variables_empty() -> None:
         require("FEATURES_RUN" in str(error), f"the refusal does not name the variable: {error}")
     else:
         require(False, "the metadata job was built without the features run it ingests")
+
+
+def a_hand_start_leaves_the_lineage_identity_empty() -> None:
+    """A hand-started layer job has no Airflow task to take its lineage identity from, so ``LINEAGE_INVOCATION`` stays empty in its pin and upload containers
+    and the job sends no lineage (``scripts/lakehouse/layer_run.py`` sends only with a value). The generator builds every layer job without a value for it,
+    never refuses for it, and passes one through when a runbook gives it."""
+    for job in job_overrides.LAYERS:
+        needed = {variable for variables in job_table()[job]["containers"].values() for variable in variables}
+        values = {name: VALUES[name] for name in needed if name in VALUES}
+        document = job_overrides.build(job, values)
+        held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
+        carrying = sorted(name for name, environment in held.items() if "LINEAGE_INVOCATION" in environment)
+        require(carrying == ["pin", "upload"], f"{job}: the lineage identity is in {carrying}")
+        require(all(held[name]["LINEAGE_INVOCATION"] == "" for name in carrying), f"{job}: a hand start filled the lineage identity: {held['pin']}")
+        given = job_overrides.build(job, {**values, "LINEAGE_INVOCATION": "{}"})
+        found = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in given["containerOverrides"]}
+        require(found["pin"]["LINEAGE_INVOCATION"] == "{}", f"{job}: a given identity was dropped")
 
 
 def a_release_names_its_model_and_run() -> None:
@@ -230,6 +247,7 @@ CASES: dict[str, Callable[[], None]] = {
     "the_generator_refuses_a_missing_value_by_name": the_generator_refuses_a_missing_value_by_name,
     "a_job_variable_without_a_sample_fails_the_check": a_job_variable_without_a_sample_fails_the_check,
     "a_features_build_leaves_the_release_variables_empty": a_features_build_leaves_the_release_variables_empty,
+    "a_hand_start_leaves_the_lineage_identity_empty": a_hand_start_leaves_the_lineage_identity_empty,
     "a_release_names_its_model_and_run": a_release_names_its_model_and_run,
     "a_reload_names_its_model_and_no_features_run": a_reload_names_its_model_and_no_features_run,
     "the_session_reload_launch_equals_the_generator_output": the_session_reload_launch_equals_the_generator_output,
