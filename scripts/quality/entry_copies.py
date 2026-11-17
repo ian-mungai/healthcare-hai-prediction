@@ -196,7 +196,7 @@ SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 def bindings(name: str, tree: Tree, node: ast.AST, bound: dict[str, set[str]]) -> None:
     """Add what one import or assignment of a literal import call binds to ``bound`` (name to every module it may mean: a name that two imports of one scope
     bind keeps both): ``import a.b as t`` and ``from a import b as t`` bind ``t`` to ``a.b``, ``import a.b`` binds ``a`` to ``a`` and
-    ``t = import_module("a.b")`` binds ``t`` to ``a.b``."""
+    ``t = import_module("a.b")`` (also ``t: Module = import_module("a.b")``) binds ``t`` to ``a.b``."""
     known = set(tree.modules)
     if isinstance(node, ast.ImportFrom):
         base = tree.base(name, node)
@@ -209,8 +209,8 @@ def bindings(name: str, tree: Tree, node: ast.AST, bound: dict[str, set[str]]) -
                 bound.setdefault(alias.asname, set()).add(alias.name)
             elif not alias.asname:
                 bound.setdefault(alias.name.split(".")[0], set()).add(alias.name.split(".")[0])
-    elif isinstance(node, ast.Assign) and (module := imported_module(node.value)) is not None:
-        for target in node.targets:
+    elif isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None and (module := imported_module(node.value)) is not None:
+        for target in assigned(node):
             if isinstance(target, ast.Name):
                 bound.setdefault(target.id, set()).add(module)
 
@@ -584,6 +584,14 @@ def dynamic_cases() -> dict[str, tuple[dict[str, str], bool]]:
         "a class read through a name bound to an import_module call counts": (
             importer("module = importlib.import_module('package.module')\n\n\n" + USES.format(expression="module.ModuleError")),
             True,
+        ),
+        "a class read through a typed name bound to an import_module call counts": (
+            importer("module: ModuleType = importlib.import_module('package.module')\n\n\n" + USES.format(expression="module.ModuleError")),
+            True,
+        ),
+        "a typed name without a value binds nothing": (
+            importer("module: ModuleType\n\n\n" + USES.format(expression="module.ModuleError")),
+            False,
         ),
         "a class read from a __import__ call with a literal name and a fromlist counts": (
             importer(USES.format(expression="__import__('package.module', fromlist=['x']).ModuleError")),
