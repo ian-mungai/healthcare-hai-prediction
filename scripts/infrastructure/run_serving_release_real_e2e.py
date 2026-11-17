@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import proof_copies
 from scripts.process import run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,12 +83,6 @@ def variables() -> dict[str, Any]:
         "ecr_repository_urls": {name: f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project/{name}" for name in IMAGES},
         "image_digests": {name: "sha256:" + digit * 64 for name, digit in zip(IMAGES, "abcdef0123", strict=True)},
     }
-
-
-def discard_copy(copy: Path, keep: bool) -> None:
-    """Remove a copy of the stack, which holds the provider binary, unless it is evidence of a failure: the plans, states and reports stay either way."""
-    if not keep:
-        shutil.rmtree(copy)
 
 
 def terraform(arguments: list[str], cwd: Path, extra_environment: Mapping[str, str] | None = None) -> tuple[int, str]:
@@ -316,11 +311,11 @@ def run(output: Path, plugin_directory: Path | None, source: Path = STACK) -> di
         definitions = plan_definitions(planted)
         if isinstance(definitions, str):
             report["defects"].append({"defect": name, "caught": True, "detail": "the stack no longer plans"})
-            discard_copy(planted, keep=False)
+            proof_copies.discard_copy(planted, keep=False)
             continue
         code, text = check(definitions["model_api"], "model_api")
         report["defects"].append({"defect": name, "caught": code == 1, "detail": text[-160:]})
-        discard_copy(planted, keep=code != 1)
+        proof_copies.discard_copy(planted, keep=code != 1)
     report["passed"] = (
         bool(report["cases"])
         and all(item["passed"] for item in report["cases"])
@@ -339,7 +334,7 @@ def main() -> int:
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())
     if (output / "stack").is_dir():
-        discard_copy(output / "stack", keep=not report["passed"])
+        proof_copies.discard_copy(output / "stack", keep=not report["passed"])
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"event=serving_release_real_e2e passed={report['passed']}\n")
     for item in report["cases"]:

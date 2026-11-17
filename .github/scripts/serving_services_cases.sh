@@ -91,7 +91,7 @@ check "an unrelated runner does not select the group" test "$(selected scripts/i
 # --- the proofs keep their reports, not their copies of the stack ----------------------------------------------------------------------------------------
 # Each proof copies the stack with its provider binary (several hundred MB) for the first plan and for every planted defect. The copies of a passing run are
 # removed and the plans, states and reports stay. The copy of a defect that no check caught, and every copy of a failing run, stay for diagnosis.
-# The first case plants a real folder tree and calls the shared helper; the rest read that each runner uses it for every copy.
+# The first case plants a real folder tree and calls the shared helper (scripts/infrastructure/proof_copies.py); the rest read that each runner uses it for every copy.
 python_for_cases="${python_bin:-.venv/bin/python}"
 retention_cases() {
   local work
@@ -100,7 +100,7 @@ retention_cases() {
 import sys
 from pathlib import Path
 
-from scripts.infrastructure import run_serving_release_real_e2e as proof
+from scripts.infrastructure import proof_copies as proof
 
 work = Path(sys.argv[1])
 

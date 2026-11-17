@@ -36,6 +36,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import proof_copies
 from scripts.infrastructure import run_serving_release_real_e2e as release
 from scripts.process import run_command
 
@@ -389,7 +390,7 @@ def run(output: Path, plugin_directory: Path | None, source: Path = release.STAC
             found = checks(planted, output, f"defect_{len(report['defects'])}")
             caught = {kind: items[:2] for kind, items in found.items() if items}
             # Each copy holds the provider binary: keep one at a time, and only the copy of an uncaught defect stays as evidence.
-            release.discard_copy(planted, keep=not caught)
+            proof_copies.discard_copy(planted, keep=not caught)
             report["defects"].append({"defect": name, "caught": bool(caught), "caught_by": caught})
     finally:
         # The step, the stand-in and the definitions are scratch files of this run.
@@ -411,7 +412,7 @@ def main() -> int:
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())
     if (output / "stack").is_dir():
-        release.discard_copy(output / "stack", keep=not report["passed"])
+        proof_copies.discard_copy(output / "stack", keep=not report["passed"])
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"event=serving_transition_e2e passed={report['passed']}\n")
     for kind, items in report["checks"].items():
