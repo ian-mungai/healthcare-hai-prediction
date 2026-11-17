@@ -12,8 +12,9 @@ SettingsCache), not in a configuration file, so the bootstrap reads ``GET /v1/sy
 A rerun changes nothing when everything is current. A token that differs from its parameter is written again.
 It also retires the bots that earlier releases created for callers that no longer exist (``RETIRED_CALLERS``): it revokes the token and deletes the bot and
 its user. It touches a bot only when its name is exactly ``<caller>-bot`` and its user is the bot user this script creates (same name, ``<name>@example.org``,
-``isBot``); any other bot of that name is left and reported. An absent bot is a no-op. The token parameter of a retired caller is not deleted here, because the
-task role may only read and write the parameters of the current callers: the owner deletes it.
+``isBot``, and ``isAdmin`` reported false); any other user of that name is left and reported. A user lookup that fails fails the run. A bot that is gone while
+its user remains (a deletion that stopped half way) is finished on the next run by the same checks. An absent bot and user are a no-op. The token parameter of a
+retired caller is not deleted here, because the task role may only read and write the parameters of the current callers: the owner deletes it.
 Exit codes: 0 done, 1 a step failed (the message names the caller or the class of the error), 2 the configuration was refused before any call.
 Output names steps and callers and never prints a password or a token.
 The routes and the role names are the ones of the OpenMetadata REST API as the author knew them and are unproven against release 2.0.7.
@@ -100,31 +101,70 @@ def ensure_bot(api: str, session: str, caller: str) -> str:
     return str(token)
 
 
+def not_ours(user: Mapping[str, Any], name: str) -> str | None:
+    """Why a user must not be retired, or None when it is the bot user this script creates and it is not an administrator."""
+    if user.get("name") != name or user.get("email") != f"{name}@example.org" or user.get("isBot") is not True:
+        return "left: the user was not created by this project"
+    if user.get("isAdmin") is not False:
+        return "left: the user is an administrator or its administrator status is not confirmed"
+    return None
+
+
+def read_user(api: str, session: str, route: str) -> dict[str, Any] | None:
+    """The user record of a route, or None when there is no such user. Raises RuntimeError when the read fails, so a lookup error never counts as a result."""
+    status, user = base.call("GET", f"{api}/v1/users/{route}", session=session)
+    if status == 404:
+        return None
+    if status != 200 or not isinstance(user, dict):
+        raise RuntimeError("the bot user could not be read")
+    return user
+
+
+def retire_user(api: str, session: str, user_id: str) -> None:
+    """Revoke the token of a verified bot user and delete the user. Raises RuntimeError with a fixed reason when a step is refused."""
+    if base.call("PUT", f"{api}/v1/users/revokeToken", {"id": user_id}, session)[0] != 200:
+        raise RuntimeError("the token was not revoked")
+    if base.call("DELETE", f"{api}/v1/users/{user_id}?hardDelete=true", session=session)[0] not in (200, 404):
+        raise RuntimeError("the user was not deleted")
+
+
 def retire_bot(api: str, session: str, caller: str) -> str:
-    """Retire the project's bot of a caller that no longer exists; return ``absent``, ``retired`` or ``left``.
+    """Retire the project's bot of a caller that no longer exists; return ``absent``, ``retired`` or ``left: <reason>``.
 
-    Raises RuntimeError with a fixed reason when a step is refused.
+    Raises RuntimeError with a fixed reason when a read or a step fails, so a run never reports success without having checked the user.
 
-    The bot is touched only when its user is the one ``ensure_bot`` creates, so a bot of someone else that carries the name is never revoked or deleted.
+    The bot and its user are touched only when the user is the bot user ``ensure_bot`` creates and is not an administrator. A bot that is gone while its
+    user remains (a deletion that stopped half way) is finished by the same checks.
     """
     name = f"{caller}-bot"
     status, bot = base.call("GET", f"{api}/v1/bots/name/{name}", session=session)
     if status == 404:
-        return "absent"
+        user = read_user(api, session, f"name/{name}")
+        if user is None:
+            return "absent"
+        reason = not_ours(user, name)
+        if reason or not user.get("id"):
+            return reason or "left: the user has no identity"
+        retire_user(api, session, str(user["id"]))
+        return "retired"
     if status != 200 or not isinstance(bot, dict):
         raise RuntimeError("the bot could not be read")
     bot_id = bot.get("id")
     user_id = (bot.get("botUser") or {}).get("id")
     if not bot_id or not user_id:
-        return "left"
-    status, user = base.call("GET", f"{api}/v1/users/{user_id}", session=session)
-    if status != 200 or not (user.get("name") == name and user.get("email") == f"{name}@example.org" and user.get("isBot") is True):
-        return "left"
+        return "left: the bot has no user to check"
+    user = read_user(api, session, str(user_id))
+    if user is None:
+        raise RuntimeError("the bot user could not be read")
+    reason = not_ours(user, name)
+    if reason:
+        return reason
     if base.call("PUT", f"{api}/v1/users/revokeToken", {"id": user_id}, session)[0] != 200:
         raise RuntimeError("the token was not revoked")
-    for kind, identity in (("bots", bot_id), ("users", user_id)):
-        if base.call("DELETE", f"{api}/v1/{kind}/{identity}?hardDelete=true", session=session)[0] not in (200, 404):
-            raise RuntimeError(f"the {kind[:-1]} was not deleted")
+    if base.call("DELETE", f"{api}/v1/bots/{bot_id}?hardDelete=true", session=session)[0] not in (200, 404):
+        raise RuntimeError("the bot was not deleted")
+    if base.call("DELETE", f"{api}/v1/users/{user_id}?hardDelete=true", session=session)[0] not in (200, 404):
+        raise RuntimeError("the user was not deleted")
     return "retired"
 
 
@@ -205,6 +245,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
             sys.stdout.write(f"openmetadata_persistent_bootstrap: {caller} bot {retire_bot(api, session, caller)}\n")
         except RuntimeError as error:
             failed.append(f"{caller} retirement ({error})")
+        except Exception as error:
+            failed.append(f"{caller} retirement ({type(error).__name__})")
     try:
         sys.stdout.write(f"openmetadata_persistent_bootstrap: OpenLineage settings {lineage_settings(api, session)}\n")
     except RuntimeError as error:

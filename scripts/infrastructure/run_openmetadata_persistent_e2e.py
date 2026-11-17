@@ -84,6 +84,9 @@ class FakeServer:
         self.calls: list[tuple[str, str]] = []
         self.refuse_bot: str | None = None
         self.refuse_delete = False
+        self.fail_user_read = False
+        self.malformed_bot = False
+        self.fail_once: str | None = None
         self.revoked: list[str] = []
         self.missing_role: str | None = None
         self.password_changes = 0
@@ -145,11 +148,21 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     return self.reply(404) if name == state.missing_role else self.reply(200, {"id": str(uuid.uuid5(uuid.NAMESPACE_DNS, name)), "name": name})
                 if self.path.startswith("/api/v1/bots/name/"):
                     name = self.path.rsplit("/", 1)[1]
-                    return self.reply(200, {"id": bot_id(name), "name": name, "botUser": {"id": state.bots[name]}}) if name in state.bots else self.reply(404)
+                    return (
+                        self.reply(200, {"id": bot_id(name), "name": name, "botUser": "unexpected" if state.malformed_bot else {"id": state.bots[name]}})
+                        if name in state.bots
+                        else self.reply(404)
+                    )
                 if self.path.startswith("/api/v1/users/") and "/auth-mechanism/" not in self.path:
-                    user_id = self.path.split("?", 1)[0].rsplit("/", 1)[1]
-                    found = next((item for item in state.users.values() if item["id"] == user_id), None)
-                    return self.reply(200, {key: found[key] for key in ("id", "name", "email", "isBot")}) if found else self.reply(404)
+                    if state.fail_user_read:
+                        return self.reply(503)
+                    target = self.path.split("?", 1)[0].rsplit("/", 1)[1]
+                    if self.path.startswith("/api/v1/users/name/"):
+                        found = state.users.get(target)
+                    else:
+                        found = next((item for item in state.users.values() if item["id"] == target), None)
+                    shown = ("id", "name", "email", "isBot", "isAdmin")
+                    return self.reply(200, {key: found[key] for key in shown if key in found}) if found else self.reply(404)
                 if self.path.startswith("/api/v1/users/auth-mechanism/"):
                     user_id = self.path.rsplit("/", 1)[1]
                     user = next((item for item in state.users.values() if item["id"] == user_id), None)
@@ -183,6 +196,9 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                 if self.path == "/api/v1/users/revokeToken":
                     if state.refuse_delete:
                         return self.reply(403)
+                    if state.fail_once == "revoke":
+                        state.fail_once = None
+                        return self.reply(503)
                     require(any(item["id"] == request.get("id") for item in state.users.values()), "a token revocation must name a known user")
                     state.revoked.append(str(request["id"]))
                     return self.reply(200, {})
@@ -209,6 +225,7 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                             "name": request["name"],
                             "email": request["email"],
                             "isBot": True,
+                            "isAdmin": False,
                         }
                         state.users[request["name"]] = existing
                     return self.reply(200, {"id": existing["id"], "name": request["name"]})
@@ -227,6 +244,9 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                 if state.refuse_delete:
                     return self.reply(403)
                 route, _, query = self.path.partition("?")
+                if state.fail_once == "delete_" + route.rsplit("/", 2)[1][:-1]:
+                    state.fail_once = None
+                    return self.reply(503)
                 require(query == "hardDelete=true", "a retired bot and user are deleted for good")
                 _, _, kind, target = route.rsplit("/", 3)
                 if kind == "bots":
@@ -465,7 +485,9 @@ def stored_password_outside_the_server_policy_is_refused_first() -> None:
     OBSERVED["password_policy"] = sorted(bad)
 
 
-def seed_bot(state: FakeServer, name: str, *, email: str | None = None, store: FakeParameterStore | None = None, parameter: str = "") -> None:
+def seed_bot(
+    state: FakeServer, name: str, *, email: str | None = None, admin: bool | None = False, store: FakeParameterStore | None = None, parameter: str = ""
+) -> None:
     """A bot and its user as an earlier run or someone else left them; with a store and a parameter, also the token parameter an earlier run wrote."""
     user: dict[str, Any] = {
         "id": str(uuid.uuid5(uuid.NAMESPACE_URL, name)),
@@ -474,6 +496,8 @@ def seed_bot(state: FakeServer, name: str, *, email: str | None = None, store: F
         "email": email or f"{name}@example.org",
         "isBot": True,
     }
+    if admin is not None:
+        user["isAdmin"] = admin
     state.users[name] = user
     state.bots[name] = user["id"]
     if store is not None and parameter:
@@ -540,7 +564,105 @@ def refused_retirement_fails_visibly_but_others_finish() -> None:
         OBSERVED["refused_retirement"] = {"exit": code}
 
 
+def retirement_is_refused_for_an_administrator_or_unconfirmed_user() -> None:
+    for label, admin in (("administrator", True), ("administrator status not reported", None)):
+        with open_metadata() as (state, base):
+            store = FakeParameterStore()
+            seed_bot(state, RETIRED_BOT, admin=admin, store=store, parameter=RETIRED_PARAMETER)
+            code, out, err = run(environment(base), store)
+            require(code == 0, f"{label}: a refusal to retire is not a failure of the run: {err}")
+            require(retirements(state) == [], f"{label}: nothing may be revoked or deleted: {retirements(state)}")
+            require(RETIRED_BOT in state.bots and RETIRED_BOT in state.users, f"{label}: the bot and its user must stay")
+            require("left" in out and "administrator" in out, f"{label}: the run must say why it left the bot: {out}")
+            assert_no_values(out, err)
+    OBSERVED["administrator_user"] = {"requests": 0}
+
+
+def failed_user_read_fails_the_run_and_changes_nothing() -> None:
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, RETIRED_BOT, store=store, parameter=RETIRED_PARAMETER)
+        state.fail_user_read = True
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "comparison" in err and "read" in err, f"a failed lookup must fail the run and name the caller: {code} {err}")
+        require("ready" not in out, f"the run must not report ready: {out}")
+        require(retirements(state) == [] and RETIRED_BOT in state.bots and RETIRED_BOT in state.users, "nothing may change after a failed lookup")
+        require(PARAMETERS["lineage"] in store.values and PARAMETERS["ingestion"] in store.values, "a failed lookup stopped the other callers")
+        state.fail_user_read = False
+        code, out, err = run(environment(base), store)
+        require(code == 0 and sorted(state.bots) == ["ingestion-bot", "lineage-bot"], f"the next run must finish the retirement: {code} {err}")
+        OBSERVED["failed_user_read"] = {"exit": 1}
+
+
+def every_failed_retirement_step_recovers_on_the_next_run() -> None:
+    after_failure = {
+        "revoke": (True, True),
+        "delete_bot": (True, True),
+        "delete_user": (False, True),
+    }
+    for step, (bot_stays, user_stays) in after_failure.items():
+        with open_metadata() as (state, base):
+            store = FakeParameterStore()
+            seed_bot(state, RETIRED_BOT, store=store, parameter=RETIRED_PARAMETER)
+            state.fail_once = step
+            code, _out, err = run(environment(base), store)
+            require(code == 1 and "comparison" in err, f"{step}: the failed step must fail the run: {code} {err}")
+            require(
+                (RETIRED_BOT in state.bots) == bot_stays and (RETIRED_BOT in state.users) == user_stays,
+                f"{step}: unexpected state {sorted(state.bots)} {sorted(state.users)}",
+            )
+            code, out, err = run(environment(base), store)
+            require(code == 0, f"{step}: the rerun failed: {err}")
+            require(
+                sorted(state.bots) == ["ingestion-bot", "lineage-bot"] and sorted(state.users) == ["ingestion-bot", "lineage-bot"],
+                f"{step}: not retired after the rerun",
+            )
+            seen = len(state.calls)
+            code, _out, _err = run(environment(base), store)
+            require(code == 0 and retirements(state, seen) == [], f"{step}: a further rerun must send nothing")
+    OBSERVED["recovery_steps"] = sorted(after_failure)
+
+
+def an_unexpected_bot_answer_fails_the_run_with_its_class() -> None:
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, RETIRED_BOT, store=store, parameter=RETIRED_PARAMETER)
+        state.malformed_bot = True
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "comparison" in err and "AttributeError" in err, f"an unexpected answer must fail the run with its class: {code} {err}")
+        require(retirements(state) == [] and RETIRED_BOT in state.users, "nothing may change after an unexpected answer")
+        require(PARAMETERS["lineage"] in store.values, "an unexpected answer stopped the other callers")
+
+
+def an_orphaned_user_is_checked_like_a_bot_user_before_it_is_deleted() -> None:
+    for label, kwargs in (
+        ("foreign email", {"email": "someone@other.example"}),
+        ("administrator", {"admin": True}),
+        ("no administrator evidence", {"admin": None}),
+    ):
+        with open_metadata() as (state, base):
+            store = FakeParameterStore()
+            seed_bot(state, RETIRED_BOT, **kwargs)
+            del state.bots[RETIRED_BOT]
+            code, out, err = run(environment(base), store)
+            require(code == 0 and "left" in out, f"{label}: an orphan that is not the project's must be left: {code} {out} {err}")
+            require(retirements(state) == [] and RETIRED_BOT in state.users, f"{label}: nothing may be revoked or deleted")
+    with open_metadata() as (state, base):
+        store = FakeParameterStore()
+        seed_bot(state, RETIRED_BOT)
+        del state.bots[RETIRED_BOT]
+        state.fail_user_read = True
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "comparison" in err and "ready" not in out, f"a failed orphan lookup must fail the run: {code} {err}")
+        require(RETIRED_BOT in state.users and retirements(state) == [], "nothing may change after a failed orphan lookup")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "retirement_is_refused_for_an_administrator_or_unconfirmed_user": retirement_is_refused_for_an_administrator_or_unconfirmed_user,
+    "failed_user_read_fails_the_run_and_changes_nothing": failed_user_read_fails_the_run_and_changes_nothing,
+    "every_failed_retirement_step_recovers_on_the_next_run": every_failed_retirement_step_recovers_on_the_next_run,
+    "an_orphaned_user_is_checked_like_a_bot_user_before_it_is_deleted": an_orphaned_user_is_checked_like_a_bot_user_before_it_is_deleted,
+    "an_unexpected_bot_answer_fails_the_run_with_its_class": an_unexpected_bot_answer_fails_the_run_with_its_class,
     "retired_bot_is_removed_on_upgrade": retired_bot_is_removed_on_upgrade,
     "foreign_bots_are_left_alone": foreign_bots_are_left_alone,
     "refused_retirement_fails_visibly_but_others_finish": refused_retirement_fails_visibly_but_others_finish,
