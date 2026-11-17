@@ -29,6 +29,7 @@ SERVICES = {"airflow_scheduler": "stand-in-airflow-scheduler", "polaris": "stand
 OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 CODE_FETCH_FAMILY = "stand-in-code-fetch"
+CATALOG_SETUP_FAMILY = "stand-in-catalog-setup"
 RELOAD_FAMILY = "stand-in-features"
 HELD_RUN = "20261117T010000Z-0000a002"  # a held, not released run that a skipped reload names
 OLDER_RUN = "20261116T010000Z-0000a001"  # the run that a loaded reload names
@@ -132,7 +133,13 @@ class StandInHost:
     """
 
     def __init__(
-        self, faults: set[str] | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None, code_run: str | None = None
+        self,
+        faults: set[str] | None = None,
+        openmetadata: bool = False,
+        code_fetch: bool = False,
+        checkout: str | None = None,
+        code_run: str | None = None,
+        catalog_setup: bool = False,
     ) -> None:
         self.faults = set(faults or ())
         self.families = dict(
@@ -140,12 +147,14 @@ class StandInHost:
             online_reload=RELOAD_FAMILY,
             **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}),
             **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {}),
+            **({"catalog_setup": CATALOG_SETUP_FAMILY} if catalog_setup else {}),
         )
         # The code digest that /data/repo shows and the run ID recorded beside it. The code one-shot changes them only when it exits 0 with a digest in its
         # overrides, and exits 1 without overrides on a host that has none, as infra/services/scripts/code_fetch.py does. The identity task prints them.
         self.checkout, self.code_run, self.pending_output = checkout, code_run, ""
         self.pending_endless = False
         self.reloads: list[dict[str, Any]] = []
+        self.catalog_launches: list[list[str]] = []
         self.online: dict[str, tuple[str, str]] = {}
         self.now = 0.0
         self.desired = 0
@@ -384,6 +393,8 @@ class StandInHost:
             code = self.code_fetch_exit(options, code)
         if key == "online_reload":
             code = self.reload_exit(options, code)
+        if key == "catalog_setup":
+            code = self.catalog_setup_exit(options, code)
         arn = f"{ACCOUNT_MARK}task/{key}-{len(self.tasks)}"
         seconds = next((int(fault.split("=")[1]) for fault in self.faults if fault.startswith(f"task_seconds:{key}=")), TASK_SECONDS)
         self.tasks[arn] = {
@@ -428,6 +439,19 @@ class StandInHost:
             self.checkout, self.code_run = environment["CODE_SHA256"], environment["CODE_RUN_ID"]
             return 0
         return 0 if self.checkout is not None else 1
+
+    def catalog_setup_exit(self, options: dict[str, list[str]], code: int) -> int:
+        """The exit code and log of a catalog setup launch: it records its command, logs one result line (a JSON object) on exit 0 and one refusal line
+        on exit 1. Fault ``catalog_setup_refuses`` makes it exit 1 with a refusal line that holds an ARN; ``no_catalog_log`` leaves the log empty."""
+        containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
+        command: list[str] = next((container.get("command", []) for container in containers if container["name"] == "catalog_setup"), [])
+        self.catalog_launches.append(command)
+        if "catalog_setup_refuses" in self.faults:
+            self.pending_output = f"aws catalog setup principal (credentials): refused for {ACCOUNT_MARK}role/stand-in\nnoise that is not a result"
+            return 1
+        if "no_catalog_log" not in self.faults:
+            self.pending_output = "noise that is not a result\n" + json.dumps({"step": command[2] if len(command) > 2 else "", "ok": True})
+        return code
 
     def reload_exit(self, options: dict[str, list[str]], code: int) -> int:
         """The exit code of a reload launch (a features task with LAYER_PHASE reload): the launch is recorded by container, and a success marks the set

@@ -19,6 +19,9 @@ from typing import Any
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import principal_credentials
 
+# The privileges of the read-only reader principal, in plan order; the Mac setup (``catalog``) and the AWS setup share them.
+READER_PRIVILEGES = ("CATALOG_READ_PROPERTIES", "NAMESPACE_LIST", "NAMESPACE_READ_PROPERTIES", "TABLE_LIST", "TABLE_READ_PROPERTIES", "TABLE_READ_DATA")
+
 CATALOG_PRIVILEGES = ("CATALOG_READ_PROPERTIES",)
 NAMESPACE_PRIVILEGES = (
     "NAMESPACE_LIST",

@@ -79,6 +79,10 @@
           "minimum": 60,
           "maximum": 3600
         },
+        "catalog_setup_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:host_catalog_setup_task)_(dev|prod)$"
+        },
         "model_api_enabled": {
           "type": "boolean"
         },

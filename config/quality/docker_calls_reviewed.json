@@ -19,7 +19,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54"
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and aws_runner runs run_command(command[0], ...)",
       "lines": [
@@ -44,7 +44,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54"
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -71,7 +71,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54"
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
       "reason": "aws_runner (imported from the Census collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -109,7 +109,7 @@
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
         "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54"
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
       "reason": "imports a plan module named in the PLANNED table (scripts.acquisition collector contracts); the plan loaders read and validate plans and start no process",
       "lines": [
@@ -147,7 +147,7 @@
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
         "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54"
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45"
       },
       "reason": "aws_runner (imported from the BLS collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -163,7 +163,7 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
@@ -186,7 +186,7 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
@@ -204,7 +204,7 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
@@ -221,7 +221,7 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
@@ -239,7 +239,7 @@
       "file_sha256": "5ccc5833524e2a74eb6563d8fd2776421898ca446fec584de478b5770f8c72ad",
       "dependencies": {
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "every call runs sys.executable -m scripts.acquisition.verify_storage_records: each list starts with that literal module; the check cannot follow it because the function rewrites list elements by computed index",
@@ -267,7 +267,7 @@
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "AwsCli keeps cli_tools.run_argv as its default runner; every AwsCli.call builds a list that starts with the literal aws",
@@ -369,7 +369,7 @@
         "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
         "scripts/lakehouse/bronze.py": "sha256:0104be95316b5159caaa8d7a92e7de80e40b16255660d27b35334d50237621ec",
-        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
+        "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -390,7 +390,7 @@
         "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
         "scripts/lakehouse/bronze.py": "sha256:0104be95316b5159caaa8d7a92e7de80e40b16255660d27b35334d50237621ec",
-        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
+        "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -411,7 +411,7 @@
         "orchestration/launcher.py": "sha256:85c52ccf62ae0cf597fcff7abd6cce73f0292bd796ef9e5efcb82e9ad237cd66",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
         "scripts/lakehouse/bronze.py": "sha256:0104be95316b5159caaa8d7a92e7de80e40b16255660d27b35334d50237621ec",
-        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
+        "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -439,7 +439,7 @@
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:346993406097e06051381a300bf3fa73ba9654f0f1f0802a67028dd3e8b59029",
         "scripts/infrastructure/sts_stand_in.py": "sha256:2892a7d92971696bcf4d2c05580d8dfb38de1f92eac66c94d2606561cfb08914",
-        "scripts/lakehouse/catalog.py": "sha256:0c0d521b7867b5310c577a47277efd12e726e4bf52f87d06787c9b1ec7dbf447",
+        "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/dbt_package_archive.py": "sha256:b5eeba5e5ae835b219c5f866ebc990b8ceff4429dab31ae1eb8c5bbc8117e5ca",
         "scripts/lakehouse/fake_docker.py": "sha256:407ed4a3578abc30e504233a703473c3f77b7ddd8f84cddfbe84bb77052acb4e",
         "scripts/lakehouse/launcher_cleanup.py": "sha256:271cbf7f0a014802fb8d517775b145de61c0a19473c49e6cfde8be0add9bce68",
@@ -520,7 +520,7 @@
       "occurrences": 3,
       "file_sha256": "02588de24ea588964ce9d128b28adbe89affe015919eb166239777ed7ddb4007",
       "dependencies": {
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "tests/support.py": "sha256:d94c83009e222255d9076939b6826d80dcf6face84d56e9efdcd86fb14bbd11f"
       },
@@ -1397,18 +1397,18 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 1172,
+      "line": 1250,
       "code_sha256": "6eabf6922d0dcfc0c6ab8a78c4a8b071ea00cebd9a4df97104af549b56640e4f",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "ea51dbac63a52c916ae68473ecb5f421cbf91d250c57717caf448af5195d4834",
+      "file_sha256": "625cc37ac546b142241c1a06fa5e3f4ccc48780167d94e7b6b91299fc2205b65",
       "dependencies": {
         "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
         "scripts/infrastructure/render_platform_config.py": "sha256:f005cf2b9ee54712cd873b1897080c7fe9166ca4baa86d436f342f670bf0f79d",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "tolerant_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",
@@ -1632,9 +1632,9 @@
         "orchestration/ecs_preflight.py": "sha256:519b264655dd28d604cec99069449a156756f0ec1c68a0e88ebbe5c930fa14e4",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:ea51dbac63a52c916ae68473ecb5f421cbf91d250c57717caf448af5195d4834",
+        "scripts/infrastructure/host_session.py": "sha256:625cc37ac546b142241c1a06fa5e3f4ccc48780167d94e7b6b91299fc2205b65",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7b3526a3ea78ffb4bc77e11c8ef67784396524e0cba1bbb072d7d673c5ed2893",
-        "scripts/infrastructure/render_project_config.py": "sha256:6a011e0862c52e02feb9de864c959e324d9e2b5ebfc63abb91b50ae9727bdf54",
+        "scripts/infrastructure/render_project_config.py": "sha256:b2d63f5cec0b211f10efc8582df7783a4db97055819d68469ce323fecb008c45",
         "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b"
       },
       "reason": "tolerant_runner (imported from host_session) is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",

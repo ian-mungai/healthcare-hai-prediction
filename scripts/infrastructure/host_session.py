@@ -69,6 +69,17 @@ POLARIS_BOOTSTRAP = "polaris_bootstrap"
 OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
 CODE_FETCH = "code_fetch"
+CATALOG_SETUP = "catalog_setup"
+CATALOG_STEPS = ("catalog", "check", "inspect", "principal")
+CATALOG_IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features", "serving")
+CATALOG_APPROVAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+CATALOG_STEP_SECONDS = 600
+CATALOG_MAX_STEP_SECONDS = 3600
+CATALOG_SLACK_SECONDS = 300  # the task start, the lease margin and the log delay beyond the step deadline
+CATALOG_LOG_SECONDS = 180
+CATALOG_LINE = re.compile(r"\{.*\}|aws catalog setup .*")
+ARN_TEXT = re.compile(r"arn:aws[a-z-]*:[^\s\"',]*")
+CATALOG_LINE_LIMIT = 4000
 CODE_FETCH_SECONDS = 1200
 PROMETHEUS_RESTORE = "prometheus_restore"
 PROMETHEUS_RESTORE_SECONDS = 1800
@@ -341,7 +352,11 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         services=ordered,
         one_shot={
             key: str(one_shot[key]["task_definition"])
-            for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH) if optional in one_shot))
+            for key in (
+                HOST_PREPARE,
+                POLARIS_BOOTSTRAP,
+                *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP) if optional in one_shot),
+            )
         },
         state_serial=services_state_serial(SERVICES_DIRECTORY),
         reload=reload_task(jobs),
@@ -367,6 +382,7 @@ class Session:
         self.cli, self.names, self.clock, self.marker, self.job_prefix = cli, names, clock or Clock(), marker, job_prefix
         self.deadline: float | None = None
         self.launch_tokens: dict[str, str] = {}
+        self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
 
     def step(self, name: str, detail: str = "ok") -> None:
@@ -579,6 +595,7 @@ class Session:
                 reasons = [run_task_code(item.get("reason")) for item in launched.get("failures", [])]
                 raise HostSessionError(f"{key} RunTask failures: {reasons or ['no task started']}")
             task = tasks[0]["taskArn"]
+        self.last_task[key] = str(task)
 
         def stopped() -> dict[str, Any] | None:
             described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", task])
@@ -610,8 +627,8 @@ class Session:
 
     def same_code(self, key: str, arns: list[str], overrides: dict[str, Any] | None) -> bool:
         """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256, CODE_MODE) and the command that ``overrides`` ask for."""
-        if key.startswith(ONLINE_RELOAD):
-            return False  # a features task of any other launch is never this reload: wait for it to stop, then launch
+        if key.startswith(ONLINE_RELOAD) or key == CATALOG_SETUP:
+            return False  # a task of any other launch is never this one: wait for it to stop, then launch
         wanted = (code_environment(overrides, key), code_command(overrides, key))
         return all((code_environment(task.get("overrides"), key), code_command(task.get("overrides"), key)) == wanted for task in self.described(key, arns))
 
@@ -1136,6 +1153,47 @@ class Session:
             if not succeeded:
                 self.stop_after_failure("bootstrap", keep_on)
 
+    def catalog_lines(self, task: str) -> list[str] | None:
+        """The result or refusal lines of the catalog setup task's log (one JSON object, or lines that start ``aws catalog setup``), or None while the log
+        has none yet. A line is cut at ``CATALOG_LINE_LIMIT`` characters and shows no ARN."""
+        stream = f"{CATALOG_SETUP}/{CATALOG_SETUP}/{task.rsplit('/', 1)[-1]}"
+        try:
+            events = self.call("logs", "get-log-events", ["--log-group-name", self.names.log_group, "--log-stream-name", stream, "--start-from-head"])
+        except HostSessionError as error:
+            if "ResourceNotFound" in str(error):
+                return None
+            raise
+        lines = [str(event.get("message", "")).strip() for event in events.get("events", [])]
+        found = [ARN_TEXT.sub("<arn>", line)[:CATALOG_LINE_LIMIT] for line in lines if CATALOG_LINE.fullmatch(line)]
+        return found or None
+
+    def catalog_setup(self, step: str, identity: str | None = None, approval: str | None = None, seconds: int = CATALOG_STEP_SECONDS) -> list[str]:
+        """Run one catalog setup step as the one-shot task on the host and answer the lines it logged (its result, one JSON object).
+
+        The task runs ``scripts.lakehouse.aws_catalog_setup`` from /data/repo under its own role; this only launches it and reads its log, so it holds no
+        catalog credential. It refuses before launching when the stack has no such one-shot or Postgres and Polaris are not both stable. A task that exits
+        with a code other than 0 shows its refusal lines before the failure is raised."""
+        command = catalog_command(step, identity, approval, seconds)
+        if CATALOG_SETUP not in self.names.one_shot:
+            raise HostSessionError("the catalog_setup one-shot is missing: apply the services stack with catalog_setup_task_role_arn first")
+        if not self.names.log_group:
+            raise HostSessionError("the platform output log_group_names has no airflow group, so the task's result cannot be read")
+        gate = [self.names.services[key] for key in (FIRST_SERVICE, "polaris") if key in self.names.services]
+        if len(gate) != 2 or not self.services_stable(gate):
+            raise HostSessionError("postgres and polaris are not both stable; run start first")
+        overrides = {"containerOverrides": [{"name": CATALOG_SETUP, "command": command}]}
+        try:
+            task = self.one_shot(CATALOG_SETUP, seconds + CATALOG_SLACK_SECONDS, overrides)
+        except TaskExitError as error:
+            lines = self.wait("catalog setup log", lambda: self.catalog_lines(self.last_task[CATALOG_SETUP]), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
+            for line in lines:
+                self.step("catalog_setup_refused", line)
+            raise error from None
+        lines = self.wait("catalog setup log", lambda: self.catalog_lines(task), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
+        for line in lines:
+            self.step("catalog_setup_result", line)
+        return lines
+
     def status(self) -> dict[str, Any]:
         """Host, container instance and per-service counts; read only."""
         group = self.group_state()
@@ -1157,6 +1215,26 @@ class Session:
             "active_container_instances": len(self.active_instances()),
             "services": services,
         }
+
+
+def catalog_command(step: str, identity: str | None, approval: str | None, seconds: int) -> list[str]:
+    """The container command of one catalog setup launch, checked before anything is sent: the step, its identity and approval, and the step deadline."""
+    if step not in CATALOG_STEPS:
+        raise HostSessionError(f"the catalog setup step must be one of {', '.join(CATALOG_STEPS)}")
+    if not 1 <= seconds <= CATALOG_MAX_STEP_SECONDS:
+        raise HostSessionError(f"--seconds must be from 1 to {CATALOG_MAX_STEP_SECONDS}")
+    if step != "principal" and (identity is not None or approval is not None):
+        raise HostSessionError("--identity and --namespace-approval belong to the principal step only")
+    command = ["--seconds", str(seconds), step]
+    if step == "principal":
+        if identity not in CATALOG_IDENTITIES:
+            raise HostSessionError(f"the principal step needs --identity, one of {', '.join(CATALOG_IDENTITIES)}")
+        command += ["--identity", identity]
+        if approval is not None:
+            if not CATALOG_APPROVAL.fullmatch(approval):
+                raise HostSessionError("an approval ID has letters, digits, dashes and underscores only, at most 64")
+            command += ["--namespace-approval", approval]
+    return command
 
 
 def online_sets() -> list[str]:
@@ -1202,6 +1280,13 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap = commands.add_parser("bootstrap", help="run polaris_bootstrap once")
     bootstrap.add_argument("--again", action="store_true", help="run it again although it already ran")
     bootstrap.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
+    catalog = commands.add_parser(
+        "catalog-setup", help="run one AWS catalog setup step as a one-shot task on the host (needs the host on and the services stable)"
+    )
+    catalog.add_argument("step", choices=CATALOG_STEPS)
+    catalog.add_argument("--identity", choices=CATALOG_IDENTITIES, help="the identity of the principal step")
+    catalog.add_argument("--namespace-approval", help="the owner's approval ID for creating the identity's absent namespaces")
+    catalog.add_argument("--seconds", type=int, default=CATALOG_STEP_SECONDS, help="the deadline of the step inside the task")
     stop = commands.add_parser("stop", help="refuse while a job task runs, then host off and verify the instance terminated")
     drain = stop.add_mutually_exclusive_group()
     drain.add_argument(
@@ -1225,6 +1310,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("usage: give --code-run <run ID> and --code-sha256 <64 lowercase hex characters> together\n")
             return 2
         code = (arguments.code_run, arguments.code_sha256)
+    if arguments.command == "catalog-setup":
+        try:
+            catalog_command(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds)
+        except HostSessionError as error:
+            sys.stderr.write(f"usage: {error}\n")
+            return 2
     try:
         session = open_session(arguments.command == "start")
     except ConfigurationError as error:
@@ -1238,6 +1329,8 @@ def main(argv: list[str] | None = None) -> int:
             session.refresh(code=code)
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
+        elif arguments.command == "catalog-setup":
+            session.catalog_setup(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds)
         elif arguments.command == "stop":
             session.stop(arguments.wait_seconds, arguments.force_stop)
         else:

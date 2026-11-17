@@ -1,4 +1,4 @@
-"""Check the AWS catalog setup with stand-ins only: a loopback Polaris, the loopback Parameter Store stand-in and the real owned relay.
+"""Check the AWS catalog setup job with stand-ins only: a loopback Polaris, the loopback Parameter Store stand-in and in-memory S3, launch hold and ECS.
 
 Run from the repository root: ``.venv/bin/python -m scripts.lakehouse.run_aws_catalog_setup_e2e --out <NEW_DIRECTORY> [--mutations]``. No AWS
 service is contacted and no container starts. Each case states one failure mode of the setup and its required behavior. ``--mutations`` plants
@@ -9,16 +9,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
-import http.client
 import io
 import json
-import os
 import re
 import secrets
 import shutil
 import socket
-import stat
 import sys
 import tempfile
 import threading
@@ -33,12 +29,12 @@ from unittest import mock
 
 from botocore.exceptions import ClientError
 
-from orchestration.catalog_transport import CatalogTransport, TransportSpec
-from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import secret_store
 from scripts.infrastructure.secret_store_stand_in import CIPHERTEXT_MARKER, StandIn, StandInHandler
 from scripts.lakehouse import aws_catalog_setup as setup
-from scripts.lakehouse import catalog, catalog_journal, polaris_writer, principal_credentials, run_lock
+from scripts.lakehouse import polaris_writer, principal_credentials
+from scripts.lakehouse.catalog_setup_stand_in import ACCOUNT, FakeEcs, FakeHold, FakeS3
+from scripts.lakehouse.catalog_setup_state import CatalogState, LaunchGuard, LaunchSpec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUCKET = "example-lakehouse-bucket"
@@ -46,11 +42,12 @@ REGION = "us-west-2"
 RUN_SECONDS = 120.0
 CASE_SECONDS = 60.0
 STALL_SECONDS = 3.0
-INSTANCE = "i-0123456789abcdef0"
+LOCK_PARAMETER = "/example_project/services_apply_lock"
+CLUSTER = "example_cluster"
+FAMILY_PREFIX = "example_project_dev_job_"
+ROLE_ARN = "arn:aws:iam::" + ACCOUNT + ":role/example_project_catalog_setup_task_dev"
 # The suite's work folder; main sets it and removes it at the end.
 STATE_ROOT = Path(tempfile.gettempdir())
-# The Mac Polaris port, written out so a changed constant in the setup module cannot hide a defect.
-MAC_PORT = 8181
 
 
 class Polaris:
@@ -237,28 +234,29 @@ class Polaris:
 
 
 class Services:
-    """Stand-in services: the stand-in Parameter Store as the project profile's vault and the stand-in Polaris as the AWS catalog."""
+    """Stand-in services: the stand-in Parameter Store as the task's vault, the stand-in Polaris as the AWS catalog, and in-memory S3, launch hold and ECS."""
 
     bucket = BUCKET
     region = REGION
 
-    def __init__(
-        self,
-        ssm: StandIn,
-        polaris: Polaris,
-        execute: setup.Execute = setup.direct,
-        relay: Path | None = None,
-        state: Path | None = None,
-        denied: frozenset[str] = frozenset(),
-    ) -> None:
-        self.ssm, self.polaris, self.execute, self.relay, self.denied = ssm, polaris, execute, relay, denied
-        self.state = state or STATE_ROOT / secrets.token_hex(6)
-        self.approvals = self.state / "namespace_approvals"
-        self.locks = self.state / "principal_locks"
-        self.registry = run_lock.Registry(self.state / "registry", "test")
+    def __init__(self, ssm: StandIn, polaris: Polaris, denied: frozenset[str] = frozenset()) -> None:
+        self.ssm, self.polaris, self.denied = ssm, polaris, denied
+        self.s3, self.hold, self.ecs = FakeS3(), FakeHold(), FakeEcs()
+        self.state = CatalogState(self.s3, BUCKET)
+        self.guard = LaunchGuard(self.hold, self.ecs, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX))
         self.decryption: list[bool] = []
         self.refused: list[str] = []
-        self.closed: list[bool] = []
+        self.verified: list[bool] = []
+
+    @property
+    def polaris_port(self) -> int:
+        return self.polaris.port
+
+    def verify_identity(self) -> None:
+        self.verified.append(True)
+
+    def root_secret(self) -> str:
+        return self.polaris.root_secret
 
     def vault(self) -> setup.PairVault:
         parameters = secret_store.open_store(REPO_ROOT, self.ssm.endpoint).parameters
@@ -276,19 +274,6 @@ class Services:
 
         parameters.get_parameter = spy
         return setup.PairVault(parameters)
-
-    @contextlib.contextmanager
-    def remote(self, instance: str, *, deadline: float) -> Iterator[setup.Remote]:
-        if self.relay is None:
-            yield setup.Remote(self.polaris.port, self.execute)
-            return
-        transport = CatalogTransport(self.relay)
-        try:
-            endpoint = transport.start_relay(self.polaris.port, deadline=deadline)
-            route = setup.Route(transport, endpoint, deadline=deadline)
-            yield setup.Remote(route.port, route.execute)
-        finally:
-            self.closed.append(transport.close(deadline=time.monotonic() + 30))
 
 
 @contextlib.contextmanager
@@ -327,7 +312,7 @@ Case = Callable[[Path], dict[str, bool]]
 def case_catalog_created(_: Path) -> dict[str, bool]:
     """P10: an absent AWS catalog is created once with the Mac body on the project bucket, and table management is granted to catalog_admin."""
     with world() as (ssm, polaris, root):
-        code, out, _err = call(["catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris), root)
+        code, out, _err = call(["catalog"], Services(ssm, polaris), root)
         return {
             "the step succeeds": code == 0,
             "the outcome is created": (outcome(out) or {}).get("outcome") == "created",
@@ -342,8 +327,8 @@ def case_catalog_rerun(_: Path) -> dict[str, bool]:
     """Retry: a rerun over an existing matching catalog sends no create and reports already present."""
     with world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        first = call(["catalog", "--instance", "i-0123456789abcdef0"], services, root)
-        second = call(["catalog", "--instance", "i-0123456789abcdef0"], services, root)
+        first = call(["catalog"], services, root)
+        second = call(["catalog"], services, root)
         return {
             "both runs succeed": first[0] == 0 and second[0] == 0,
             "the rerun reports already present": (outcome(second[1]) or {}).get("outcome") == "already present",
@@ -356,7 +341,7 @@ def case_catalog_differs(_: Path) -> dict[str, bool]:
     with world() as (ssm, polaris, root):
         polaris.catalog = setup.catalog_body("another-bucket", REGION)
         before = json.dumps(polaris.catalog, sort_keys=True)
-        code, _out, err = call(["catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris), root)
+        code, _out, err = call(["catalog"], Services(ssm, polaris), root)
         return {
             "the step fails": code == 1,
             "the error names the location check": "(catalog_location)" in err,
@@ -370,10 +355,10 @@ def case_lost_create_reply(_: Path) -> dict[str, bool]:
     """Lost reply: the create lands but its reply is lost; the run fails without a second create and the rerun adopts the catalog."""
     with world(faults={"lose_create_reply"}) as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        first = call(["catalog", "--instance", "i-0123456789abcdef0"], services, root)
+        first = call(["catalog"], services, root)
         creates_after_failure = polaris.count("POST", "/api/management/v1/catalogs")
         polaris.faults.clear()
-        second = call(["catalog", "--instance", "i-0123456789abcdef0"], services, root)
+        second = call(["catalog"], services, root)
         return {
             "the first run fails visibly": first[0] == 1 and "(catalog_http)" in first[2],
             "the create was sent once": creates_after_failure == 1,
@@ -385,7 +370,7 @@ def case_lost_create_reply(_: Path) -> dict[str, bool]:
 def case_create_conflict(_: Path) -> dict[str, bool]:
     """Two runs: a create that meets a conflict reads the catalog back and verifies it instead of failing or retrying the create."""
     with world(faults={"conflict"}) as (ssm, polaris, root):
-        code, out, _err = call(["catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris), root)
+        code, out, _err = call(["catalog"], Services(ssm, polaris), root)
         return {
             "the step succeeds": code == 0,
             "the outcome is already present": (outcome(out) or {}).get("outcome") == "already present",
@@ -394,63 +379,10 @@ def case_create_conflict(_: Path) -> dict[str, bool]:
         }
 
 
-def case_mac_port(_: Path) -> dict[str, bool]:
-    """P9: no request or route may use the Mac Polaris port, so the tool can never reach the Mac catalog."""
-    checks: dict[str, bool] = {}
-    try:
-        setup.TunnelRequest(MAC_PORT, deadline=time.monotonic() + 5)
-        checks["a request on the Mac port is refused"] = False
-    except setup.SetupError as error:
-        checks["a request on the Mac port is refused"] = error.code == "network"
-    for label, ports in (("tunnel", (MAC_PORT, 18182)), ("relay", (18181, MAC_PORT))):
-        try:
-            setup.check_ports(TransportSpec("i-0123456789abcdef0", "project", REGION, *ports))
-            checks[f"the {label} on the Mac port is refused"] = False
-        except setup.SetupError as error:
-            checks[f"the {label} on the Mac port is refused"] = error.code == "network"
-    return checks
-
-
-def case_host_ingress(_: Path) -> dict[str, bool]:
-    """The route goes only to one running host whose inbound sources are project security groups of its VPC; its public address is allowed."""
-    from scripts.lakehouse.host_ingress_cases import describe_runner, ingress_variants
-
-    checks: dict[str, bool] = {}
-    settings = {"aws_profile": "synthetic", "aws_region": REGION, "data_bucket_name": "synthetic-bucket", "expected_account_id": "synthetic_account"}
-    spec = TransportSpec("i-0123456789abcdef0", "project", REGION, 18181, 18182)
-
-    def code(aws: AwsCli, **options: Any) -> str:
-        try:
-            setup.network_acceptance(spec, aws, "hai", **{"deadline": time.monotonic() + 10, **options})
-        except setup.SetupError as error:
-            return error.code
-        return ""
-
-    variants = ingress_variants("hai")
-    for label, instance, groups, accepted in variants:
-        checks[f"host ingress: {label}"] = code(AwsCli(settings, runner=describe_runner(instance, groups))) == ("" if accepted else "network")
-    host, closed = variants[0][1], variants[0][2]
-    now = [0.0]
-    reads = [0]
-    passing = describe_runner(host, closed)
-
-    def clock() -> float:
-        reads[0] += 1
-        return now[0] if reads[0] == 1 or now[0] > 2.0 else 2.0
-
-    def late(command: list[str], **options: Any) -> Any:
-        if "describe-instances" in command:
-            now[0] = 11.0
-        return passing(command, **options)
-
-    checks["a host reply that arrives after the step deadline is refused"] = code(AwsCli(settings, runner=late), deadline=10.0, clock=clock) == "network"
-    return checks
-
-
 def case_root_refused(_: Path) -> dict[str, bool]:
     """P1: Polaris refuses the root credentials; the error carries the HTTP status only and nothing is created."""
     with world(faults={"root_refused"}) as (ssm, polaris, root):
-        code, out, err = call(["catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris), root)
+        code, out, err = call(["catalog"], Services(ssm, polaris), root)
         return {
             "the step fails": code == 1,
             "the error names authentication and the status": "(authentication)" in err and "HTTP 401" in err,
@@ -463,7 +395,7 @@ def case_stalled_catalog(_: Path) -> dict[str, bool]:
     """Every wait has a deadline: a catalog that stops answering fails the run near its own deadline, not at the stand-in's pace."""
     with world(faults={"stall"}) as (ssm, polaris, root):
         began = time.monotonic()
-        code, _out, err = run_main(["--seconds", "1", "catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris))
+        code, _out, err = run_main(["--seconds", "1", "catalog"], Services(ssm, polaris))
         SECRETS_SEEN.append(root)
         OUTPUTS.append(err)
         took = time.monotonic() - began
@@ -475,148 +407,59 @@ def case_stalled_catalog(_: Path) -> dict[str, bool]:
         }
 
 
-def case_route_lost(_: Path) -> dict[str, bool]:
-    """A lost route fails the run visibly and is never reopened inside it; no request reaches the catalog."""
+def case_identity_refused(_: Path) -> dict[str, bool]:
+    """P2: a caller that is not the task's own role stops the task before any Parameter Store, S3, ECS or catalog call; missing settings stop it first."""
+    environment = {
+        "DATA_BUCKET_NAME": BUCKET,
+        "AWS_REGION": REGION,
+        "CATALOG_SETUP_ROLE_ARN": ROLE_ARN,
+        "CATALOG_SETUP_LOCK_PARAMETER": LOCK_PARAMETER,
+        "CATALOG_SETUP_CLUSTER": CLUSTER,
+        "CATALOG_SETUP_FAMILY_PREFIX": FAMILY_PREFIX,
+        "POLARIS_ROOT_SECRET": "root-" + secrets.token_hex(8),
+    }
+    made: list[str] = []
 
-    transport = mock.Mock(spec=CatalogTransport)
-    transport.execute.side_effect = RuntimeError("catalog_transport_unavailable")
-    with world() as (ssm, polaris, root):
-        route = setup.Route(transport, f"http://127.0.0.1:{polaris.port}", deadline=time.monotonic() + 30)
-        code, _out, err = call(["catalog", "--instance", "i-0123456789abcdef0"], Services(ssm, polaris, route.execute), root)
-        return {
-            "the step fails": code == 1,
-            "it names the route": "(transport)" in err,
-            "the route was tried once": transport.execute.call_count == 1,
-            "no request reached the catalog": not polaris.calls,
-        }
+    def client_of(caller: str) -> Callable[[Any, str], Any]:
+        def client(_services: Any, name: str) -> Any:
+            made.append(name)
+            return mock.Mock(get_caller_identity=lambda: {"Arn": caller})
 
+        return client
 
-def case_transport_folder_private(out: Path) -> dict[str, bool]:
-    """The live route keeps its worker registry in a private folder: new or left at 0755 by an earlier run, and never one it does not own."""
-    state = out / "state"
-    folder = state / "catalog_setup_transport"
-
-    def enter() -> int:
-        services = setup.LiveServices.__new__(setup.LiveServices)
-        services.state_root, services.ports = state, (49152, 49153)
-        services.__dict__.update(settings={"aws_profile": "p", "aws_region": REGION}, project_tag="hai")
-        transport = mock.Mock(spec=CatalogTransport)
-        transport.start.return_value = "http://127.0.0.1:9"
-        transport.close.return_value = True
-        with (
-            mock.patch.object(setup, "network_acceptance"),
-            mock.patch.object(setup, "CatalogTransport", return_value=transport) as constructed,
-            services.remote("i-0123456789abcdef0", deadline=time.monotonic() + 5),
-        ):
-            return int(constructed.call_args.args[0] == folder)
-
-    checks = {"the route used the transport folder": enter() == 1}
-    checks["a new folder is private"] = stat.S_IMODE(folder.stat().st_mode) == 0o700
-    checks["the parent keeps its mode"] = stat.S_IMODE(state.stat().st_mode) != 0o700
-    folder.chmod(0o755)
-    enter()
-    checks["a folder left at 0755 is tightened"] = stat.S_IMODE(folder.stat().st_mode) == 0o700
-    folder.rmdir()
-    elsewhere = out / "elsewhere"
-    elsewhere.mkdir(mode=0o755)
-    folder.symlink_to(elsewhere)
-    try:
-        enter()
-        refused = False
-    except PermissionError as error:
-        refused = str(error) == "transport_folder_must_be_a_private_directory"
-    checks["a symlink is refused and its target keeps its mode"] = refused and stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
-    folder.unlink()
-    folder.mkdir(mode=0o755)
-    checks.update(swapped_after_check(folder, out / "swap_target", out / "swap_moved"))
+    other = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_admin_dev/session"
+    own = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_catalog_setup_task_dev/0123456789abcdef"
+    checks: dict[str, bool] = {}
+    with mock.patch.object(setup.HostServices, "client", client_of(other)):
+        services = setup.HostServices(environment)
+        code, out, err = run_main(["check"], services)
+        OUTPUTS.append(out + err)
+        checks["another role stops the task"] = code == 1 and "(identity)" in err
+        checks["only the identity call was made"] = made == ["sts"]
+    made.clear()
+    with mock.patch.object(setup.HostServices, "client", client_of(own)):
+        setup.HostServices(environment).verify_identity()
+        checks["the task's own role passes"] = made == ["sts"]
+    with mock.patch.object(setup.HostServices, "client", client_of(own[:-1] + "x/")):
+        look_alike = "arn:aws:sts::" + ACCOUNT + ":assumed-role/example_project_catalog_setup_task_dev_extra/session"
+        with mock.patch.object(setup.HostServices, "client", client_of(look_alike)):
+            try:
+                setup.HostServices(environment).verify_identity()
+                checks["a role with the same prefix is refused"] = False
+            except setup.SetupError as error:
+                checks["a role with the same prefix is refused"] = error.code == "identity"
+    for name in ("CATALOG_SETUP_LOCK_PARAMETER", "POLARIS_ROOT_SECRET"):
+        trimmed = {key: value for key, value in environment.items() if key != name}
+        try:
+            setup.HostServices(trimmed).verify_identity() if name != "POLARIS_ROOT_SECRET" else setup.HostServices(trimmed).root_secret()
+            checks[f"a missing {name} is refused"] = False
+        except setup.SetupError as error:
+            checks[f"a missing {name} is refused"] = error.code in ("settings", "authentication")
     return checks
 
 
-def swapped_after_check(folder: Path, target: Path, moved: Path) -> dict[str, bool]:
-    """A writer of the parent swaps the checked 0755 folder for a symlink right after the check: the target keeps its mode and the call refuses."""
-    target.mkdir(mode=0o755)
-    inode = folder.stat().st_ino
-    real_stat, real_lstat, real_fstat = os.stat, os.lstat, os.fstat
-    swapped: list[bool] = []
-
-    def swap_after(real: Callable[..., os.stat_result], *, check_only: bool = False) -> Callable[..., os.stat_result]:
-        """Swap once after the call that inspects the folder without following it (lstat, stat without following, fstat)."""
-
-        def checked(*args: Any, **kwargs: Any) -> os.stat_result:
-            result = real(*args, **kwargs)
-            inspects = not check_only or kwargs.get("follow_symlinks") is False
-            if inspects and not swapped and stat.S_ISDIR(result.st_mode) and result.st_ino == inode:
-                swapped.append(True)
-                folder.rename(moved)
-                folder.symlink_to(target)
-            return result
-
-        return checked
-
-    with (
-        mock.patch.object(os, "stat", swap_after(real_stat, check_only=True)),
-        mock.patch.object(os, "lstat", swap_after(real_lstat)),
-        mock.patch.object(os, "fstat", swap_after(real_fstat)),
-    ):
-        try:
-            catalog_journal.private_directory(folder)
-            refused = False
-        except PermissionError as error:
-            refused = str(error) == "transport_folder_must_be_a_private_directory"
-    return {
-        "the swap happened after the check": swapped == [True],
-        "a folder swapped after the check is refused": refused,
-        "the swapped-in target keeps its mode": stat.S_IMODE(target.stat().st_mode) == 0o755,
-    }
-
-
-def case_real_relay(out: Path) -> dict[str, bool]:
-    """The real owned relay in front of the stand-in catalog: the catalog is created through it and every relay process is confirmed gone."""
-    folder = out / "relay_ledger"
-    folder.mkdir(mode=0o700)
-    with world() as (ssm, polaris, root):
-        services = Services(ssm, polaris, relay=folder)
-        code, out_text, _ = call(["catalog", "--instance", "i-0123456789abcdef0"], services, root)
-        return {
-            "the step succeeds through the relay": code == 0 and (outcome(out_text) or {}).get("outcome") == "created",
-            "the relay closed with every process confirmed gone": services.closed == [True],
-        }
-
-
-def case_profile_refused(_: Path) -> dict[str, bool]:
-    """P2: a profile that does not resolve to the project user stops the tool before any Parameter Store or catalog call."""
-    from scripts.infrastructure import render_project_config
-
-    def refuse(_: dict[str, str]) -> None:
-        raise render_project_config.ConfigurationError("the caller is not the project user")
-
-    services = setup.LiveServices.__new__(setup.LiveServices)
-    with (
-        mock.patch.object(render_project_config, "load_configuration", return_value=({"aws_profile": "admin", "aws_region": REGION}, {})),
-        mock.patch.object(render_project_config, "verify_project_identity", refuse),
-        mock.patch("boto3.Session", side_effect=AssertionError("no AWS client may be made")) as session,
-    ):
-        code, out, err = run_main(["check"], services)
-        OUTPUTS.append(out + err)
-        return {"the tool stops": code == 1, "the error names the profile": "(profile)" in err, "no AWS client was made": not session.called}
-
-
-def case_stray_request(_: Path) -> dict[str, bool]:
-    """A local program that probes loopback ports can reach the stand-in: the request is answered and recorded as a stray, not as a catalog request."""
-    with world() as (_ssm, polaris, _root):
-        connection = http.client.HTTPConnection("127.0.0.1", polaris.port, timeout=5)
-        connection.request("GET", "/")
-        status = connection.getresponse().status
-        connection.close()
-        return {
-            "the stray request is answered": status == 400,
-            "it is not counted as a catalog request": not polaris.calls,
-            "it is recorded as a stray": polaris.strays == [("GET", "/")],
-        }
-
-
 def case_check_metadata(_: Path) -> dict[str, bool]:
-    """The check reports the names the project profile may read by exact name with type and version, reads nothing with decryption and prints no value."""
+    """The check reports the names the task role may read by exact name with type and version, reads nothing with decryption and prints no value."""
     pairs = setup.configured_pairs()
     seeded = {pairs["reader"][0]: "reader-id-" + secrets.token_hex(6), pairs["reader"][1]: "reader-secret-" + secrets.token_hex(6)}
     seeded[pairs["gold"][1]] = "gold-secret-" + secrets.token_hex(6)
@@ -627,7 +470,7 @@ def case_check_metadata(_: Path) -> dict[str, bool]:
         SECRETS_SEEN.extend(seeded.values())
         return {
             "the check succeeds": code == 0,
-            "every name the project profile may read is reported": set(found) == set(project_names()),
+            "every name the task role may read is reported": set(found) == set(project_names()),
             "presence matches the store": all(found[name]["present"] == (name in seeded) for name in found),
             "present names report SecureString and a version": all(found[name].get("type") == "SecureString" and found[name].get("version") for name in seeded),
             "no read asked for decryption": bool(services.decryption) and not any(services.decryption),
@@ -643,41 +486,14 @@ def project_names() -> set[str]:
     return {name for pair in setup.configured_pairs().values() for name in pair}
 
 
-def case_check_project_policy(_: Path) -> dict[str, bool]:
-    """The project user's policy grants every identity's pair, the features pair included, so the check reads all fourteen names under the
-    policy's own grants, is never refused and names no administrator item."""
-    pairs = setup.configured_pairs()
-    policy = json.loads((REPO_ROOT / "infra/iam/policies/healthcare_hai_prediction_ssm_policy.json").read_text())
-    statement = next(item for item in policy["Statement"] if item["Sid"] == "SetUpAwsPolarisPairs")
-    granted = {
-        identity
-        for identity in setup.IDENTITIES
-        if all(f"AWS_POLARIS_{identity.upper()}_CLIENT_{part}_NAME}}" in " ".join(statement["Resource"]) for part in ("ID", "SECRET"))
-    }
-    ungranted = frozenset(name for identity, pair in pairs.items() if identity not in granted for name in pair)
-    with world() as (ssm, polaris, root):
-        services = Services(ssm, polaris, denied=ungranted)
-        code, out, err = call(["check"], services, root)
-        result = outcome(out) or {}
-        reported = {item["name"] for item in result.get("parameters", [])}
-        return {
-            "the policy grants both names of every identity": granted == set(setup.IDENTITIES) and "features" in granted,
-            "the check succeeds under the policy's grants": code == 0,
-            "every name is reported, the features pair included": reported == project_names() and set(pairs["features"]) <= reported,
-            "no administrator item is named": set(result) == {"parameters"},
-            "no name outside the policy was asked for": not services.refused,
-            "the error output is empty": err == "",
-        }
-
-
-def case_features_by_the_project_profile(_: Path) -> dict[str, bool]:
-    """The features identity is set up under the project profile like silver and gold: the issued pair goes straight to its own two names, only names
+def case_features_pair(_: Path) -> dict[str, bool]:
+    """The features identity is set up like silver and gold: the issued pair goes straight to its own two names, only names
     and counts are printed, and a rerun keeps the pair."""
     pairs = setup.configured_pairs()["features"]
     with world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         polaris.catalog = setup.catalog_body(BUCKET, REGION)
-        argv = ["principal", "--identity", "features", "--instance", INSTANCE, "--namespace-approval", "approval-1"]
+        argv = ["principal", "--identity", "features", "--namespace-approval", "approval-1"]
         code, out, err = call(argv, services, root)
         SECRETS_SEEN.extend(polaris.issued)
         result = outcome(out) or {}
@@ -694,12 +510,12 @@ def case_features_by_the_project_profile(_: Path) -> dict[str, bool]:
 
 
 def case_check_catalog(_: Path) -> dict[str, bool]:
-    """The check with an instance reads the catalog and changes nothing."""
+    """The inspection reads the catalog and changes nothing."""
     with world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        absent = call(["inspect", "--instance", "i-0123456789abcdef0"], services, root)
+        absent = call(["inspect"], services, root)
         polaris.catalog = setup.catalog_body(BUCKET, REGION)
-        present = call(["inspect", "--instance", "i-0123456789abcdef0"], services, root)
+        present = call(["inspect"], services, root)
         return {
             "an absent catalog is reported": absent[0] == 0 and (outcome(absent[1]) or {}).get("catalog") == "absent",
             "a present catalog is reported": present[0] == 0 and (outcome(present[1]) or {}).get("catalog") == "present",
@@ -770,7 +586,7 @@ def catalog_world(seeded: dict[str, str] | None = None) -> contextlib.AbstractCo
 
 
 def principal(services: Services, root: str, identity: str, approval: str | None = None) -> tuple[int, str, str]:
-    argv = ["principal", "--identity", identity, "--instance", INSTANCE, *(["--namespace-approval", approval] if approval else [])]
+    argv = ["principal", "--identity", identity, *(["--namespace-approval", approval] if approval else [])]
     result = call(argv, services, root)
     SECRETS_SEEN.extend(services.polaris.issued)
     return result
@@ -799,7 +615,7 @@ def case_reader_principal(_: Path) -> dict[str, bool]:
         return {
             "the step succeeds": code == 0 and (outcome(out) or {}).get("credentials") == "created",
             "the grants equal the reader plan": same_grants(polaris, "reader", False),
-            "every grant is a read privilege": all(grant["privilege"] in catalog.READER_PRIVILEGES for grant in polaris.grants[role]),
+            "every grant is a read privilege": all(grant["privilege"] in polaris_writer.READER_PRIVILEGES for grant in polaris.grants[role]),
             "the catalog role is assigned to the principal role": polaris.principal_roles.get(role) == {role},
             "the principal role is assigned to the principal": polaris.assigned.get(role) == {role},
             "the stored pair is the issued pair": stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
@@ -877,28 +693,34 @@ def case_namespace_needs_approval(_: Path) -> dict[str, bool]:
             "the step fails on the approval": code == 1 and "(approval)" in err,
             "no namespace was created": not polaris.namespaces,
             "no role was created": not polaris.principal_roles and set(polaris.grants) == {"catalog_admin"},
-            "no approval was recorded": not services.approvals.exists() or not any(services.approvals.iterdir()),
+            "no approval was recorded": not [call for call in services.s3.calls if call[0] == "put" and "/approvals/" in call[1]],
         }
 
 
 def case_namespace_approval(_: Path) -> dict[str, bool]:
-    """P8: an approval is recorded once for the exact set before creation, grants NAMESPACE_CREATE, carries to a rerun and is never replaced."""
+    """P8: an approval is recorded once for the exact set before creation as a write-once S3 record, grants NAMESPACE_CREATE, carries to a rerun and is
+    never replaced."""
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
+        key = services.state.key("approvals", "bronze")
         first = principal(services, root, "bronze", "cutover_initial")
-        record = json.loads((services.approvals / "bronze.json").read_text()) if (services.approvals / "bronze.json").exists() else {}
+        record = json.loads(services.s3.objects[key][0]) if key in services.s3.objects else {}
         again = principal(services, root, "bronze")
         before = len(polaris.calls)
         other = principal(services, root, "bronze", "another_approval")
+        stored = json.loads(services.s3.objects[key][0]) if key in services.s3.objects else {}
+        approval_puts = [call for call in services.s3.calls if call[0] == "put" and call[1] == key]
         return {
             "the approved run succeeds": first[0] == 0 and (outcome(first[1]) or {}).get("phase") == "active",
             "the absent namespaces were created": polaris.namespaces == set(setup.namespace_set("bronze")),
             "the record names the approval and the exact set": record.get("approval_id") == "cutover_initial"
             and record.get("namespaces") == list(setup.namespace_set("bronze")),
+            "every write of the record is a create only": bool(approval_puts) and all(call[2].get("IfNoneMatch") == "*" for call in approval_puts),
             "the grants are the active plan with NAMESPACE_CREATE": same_grants(polaris, "bronze", True)
             and {"type": "catalog", "privilege": "NAMESPACE_CREATE"} in polaris.grants[setup.PRINCIPALS["bronze"]],
             "a rerun keeps the recorded approval": again[0] == 0 and (outcome(again[1]) or {}).get("phase") == "active",
             "another approval is refused before any request": other[0] == 1 and "(approval)" in other[2] and len(polaris.calls) == before,
+            "the recorded approval is unchanged": stored.get("approval_id") == "cutover_initial",
         }
 
 
@@ -966,11 +788,10 @@ def case_catalog_missing(_: Path) -> dict[str, bool]:
 
 
 def case_principal_lock(_: Path) -> dict[str, bool]:
-    """P11: a second update of the same principal waits for the lock at most its bound, then stops without issuing or writing a pair."""
+    """P11: a second update of the same principal waits for the lease at most its bound, then stops without issuing or writing a pair."""
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        lock = services.locks / f"aws_{setup.PRINCIPALS['reader']}.lock"
-        with principal_credentials.serialized(lock, "reader", 1.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
+        with services.state.lease(setup.PRINCIPALS["reader"], wait=1.0, hold=600.0), mock.patch.object(principal_credentials, "LOCK_WAIT_SECONDS", 0.3):
             began = time.monotonic()
             code, _out, err = principal(services, root, "reader")
             took = time.monotonic() - began
@@ -987,10 +808,10 @@ def case_check_grants(_: Path) -> dict[str, bool]:
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         principal(services, root, "reader")
-        clean = call(["inspect", "--instance", INSTANCE], services, root)
+        clean = call(["inspect"], services, root)
         polaris.grants[setup.PRINCIPALS["reader"]].append({"type": "catalog", "privilege": "TABLE_WRITE_DATA"})
         calls = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
-        drifted = call(["inspect", "--instance", INSTANCE], services, root)
+        drifted = call(["inspect"], services, root)
         writes = len([item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH])
         return {
             "a matching reader is reported": ((outcome(clean[1]) or {}).get("principals") or {}).get("reader") == "matches",
@@ -1000,43 +821,47 @@ def case_check_grants(_: Path) -> dict[str, bool]:
         }
 
 
-def seed_registry(services: Services, live: bool) -> None:
-    """A test launcher registry with one attempt whose cloud try is live, or confirmed complete."""
-    now = int(time.time())
-    placement = {"try_id": "hai_a1_1", "target": "ecs", "state": "unknown" if live else "fenced"}
-    attempt: dict[str, Any] = {"id": "a1", "deadline_utc": now + 3600, "execution": {"live_try": "hai_a1_1" if live else None, "placements": [placement]}}
-    folder = services.registry.path
-    folder.mkdir(parents=True, exist_ok=True)
-    registry_id = secrets.token_hex(8)
-    (folder / "registry_id").write_text(json.dumps({"registry_id": registry_id, "kind": "test"}) + "\n")
-    state = run_lock.empty_state(registry_id, run_lock.LAUNCHER_SCHEMA)
-    state["attempts"] = {"a1": attempt}
-    (folder / "registry.json").write_text(json.dumps(state) + "\n")
-
-
 def case_live_writer_try(_: Path) -> dict[str, bool]:
-    """P5: while the launcher registry holds a cloud try without a confirmed end, or cannot prove there is none, a rerun that would reset the
-    pair stops before any reset; the live pair keeps working. With every try confirmed ended the reset goes ahead."""
+    """P5: while a job task of the project has no confirmed end, or ECS cannot prove there is none, or a services apply holds the launch hold, a
+    rerun that would reset the pair stops before any reset; the live pair keeps working. With every task ended the reset goes ahead, and the hold is
+    released after every run."""
     with catalog_world() as (ssm, polaris, root):
         polaris.namespaces |= set(setup.namespace_set("bronze"))
         services = Services(ssm, polaris)
         first = principal(services, root, "bronze")
         held = live_pair(polaris, "bronze")
         del ssm.values[setup.configured_pairs()["bronze"][1]]
-        seed_registry(services, live=True)
+        services.ecs.add(FAMILY_PREFIX + "bronze_host", "RUNNING")
+        services.ecs.add("example_project_dev_airflow_scheduler", "RUNNING")
         live = principal(services, root, "bronze")
         kept = live_pair(polaris, "bronze") == held
-        (services.registry.path / "registry.json").write_text("{not json")
+        released = LOCK_PARAMETER not in services.hold.values
+        services.ecs.tasks.clear()
+        services.ecs.add(FAMILY_PREFIX + "gold_host", "RUNNING", desired="STOPPED")
+        draining = principal(services, root, "bronze")
+        services.ecs.tasks.clear()
+        services.ecs.fail = True
         unreadable = principal(services, root, "bronze")
+        services.ecs.fail = False
+        services.hold.values[LOCK_PARAMETER] = "apply-token"
+        applying = principal(services, root, "bronze")
+        foreign_kept = services.hold.values.get(LOCK_PARAMETER) == "apply-token"
         kept = kept and live_pair(polaris, "bronze") == held
-        seed_registry(services, live=False)
+        del services.hold.values[LOCK_PARAMETER]
+        services.ecs.add(FAMILY_PREFIX + "silver_host", "STOPPED", desired="STOPPED")
+        services.ecs.add("example_project_dev_airflow_scheduler", "RUNNING")
         ended = principal(services, root, "bronze")
         return {
             "the first run succeeds": first[0] == 0,
-            "a live cloud try stops the rerun": live[0] == 1 and "(writer_try)" in live[2] and "without a confirmed end" in live[2],
-            "an unreadable registry stops the rerun": unreadable[0] == 1 and "(writer_try)" in unreadable[2],
+            "a live job task stops the rerun": live[0] == 1 and "(writer_try)" in live[2] and "no confirmed end" in live[2],
+            "a service task of the project is not a job task": "airflow" not in live[2],
+            "a task told to stop that still runs stops the rerun": draining[0] == 1 and "(writer_try)" in draining[2],
+            "tasks that cannot be listed stop the rerun": unreadable[0] == 1 and "(writer_try)" in unreadable[2],
+            "a services apply holding the hold stops the rerun": applying[0] == 1 and "(writer_try)" in applying[2] and foreign_kept,
             "the live pair was never reset": kept,
-            "with every try ended the pair is reset": ended[0] == 0 and (outcome(ended[1]) or {}).get("credentials") == "credentials reset",
+            "the hold is released after a stopped run": released,
+            "with every task ended the pair is reset": ended[0] == 0 and (outcome(ended[1]) or {}).get("credentials") == "credentials reset",
+            "the hold is released after the reset": LOCK_PARAMETER not in services.hold.values,
             "the stored pair is then the live pair": stored_pair(ssm, "bronze") == live_pair(polaris, "bronze"),
         }
 
@@ -1053,7 +878,7 @@ def case_extra_role_membership(_: Path) -> dict[str, bool]:
         seeded = principal(services, root, "reader")
         assigned = [item for item in polaris.calls if item[0] == "PUT" and "/catalog-roles/" in item[1] and not item[1].endswith("/grants")]
         untouched = role not in polaris.principals and ssm.writes() == 0
-        inspected = call(["inspect", "--instance", INSTANCE], services, root)
+        inspected = call(["inspect"], services, root)
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         polaris.issue(role)
@@ -1089,12 +914,12 @@ def case_missing_role_assignment(_: Path) -> dict[str, bool]:
         with catalog_world() as (ssm, polaris, root):
             services = Services(ssm, polaris)
             set_up = principal(services, root, "reader")
-            clean = call(["inspect", "--instance", INSTANCE], services, root)
+            clean = call(["inspect"], services, root)
             if label == "principal role":
                 polaris.assigned[role].discard(role)
             else:
                 polaris.principal_roles[role].discard(role)
-            found[label] = (set_up[0], clean, call(["inspect", "--instance", INSTANCE], services, root))
+            found[label] = (set_up[0], clean, call(["inspect"], services, root))
     checks: dict[str, bool] = {}
     for label, (set_up, clean, missing) in found.items():
         checks[f"the reader set up and matched before its {label} assignment was removed"] = (
@@ -1104,17 +929,6 @@ def case_missing_role_assignment(_: Path) -> dict[str, bool]:
             missing[0] == 0 and ((outcome(missing[1]) or {}).get("principals") or {}).get("reader") == "differs"
         )
     return checks
-
-
-def lock_free(path: Path) -> bool:
-    """True when nobody holds the lock file now."""
-    with path.open("a") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return False
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        return True
 
 
 @contextlib.contextmanager
@@ -1151,12 +965,12 @@ def held_secret_write(ssm: StandIn, name: str) -> Iterator[tuple[threading.Event
 
 
 def case_late_credential_write(_: Path) -> dict[str, bool]:
-    """P4 and P5: a credential write still running at the run's deadline keeps the principal lock and the launcher registry lock until it is
+    """P4 and P5: a credential write still running at the run's deadline keeps the principal lease and the launch hold until it is
     confirmed finished; one that cannot be confirmed in time leaves a pending mark that refuses every rerun until the write has ended, so a late
     write can never overwrite the pair a later run stored."""
     role = setup.PRINCIPALS["reader"]
     secret_name = setup.configured_pairs()["reader"][1]
-    args = ["--seconds", "1", "principal", "--identity", "reader", "--instance", INSTANCE]
+    args = ["--seconds", "1", "principal", "--identity", "reader"]
     checks: dict[str, bool] = {}
     with catalog_world() as (ssm, polaris, root), mock.patch.object(setup, "WRITE_SETTLE_SECONDS", STALL_SECONDS * 2, create=True):
         services = Services(ssm, polaris)
@@ -1168,8 +982,8 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
             first.start()
             entered.wait(STALL_SECONDS)
             time.sleep(1.3)
-            checks["a write past the deadline keeps the principal lock"] = not lock_free(services.locks / f"aws_{role}.lock")
-            checks["a write past the deadline keeps the registry lock"] = not lock_free(services.registry.path / "registry.lock")
+            checks["a write past the deadline keeps the principal lease"] = services.state.key("locks", role) in services.s3.objects
+            checks["a write past the deadline keeps the launch hold"] = LOCK_PARAMETER in services.hold.values
             checks["the run waits for its write to be confirmed"] = first.is_alive() and not finished.is_set()
             release.set()
             first.join(STALL_SECONDS * 3)
@@ -1185,6 +999,7 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
             issued = len(polaris.issued)
             refused = principal(services, root, "reader")
             checks["an unconfirmed write fails its run"] = first_run[0] == 1 and not finished.is_set()
+            checks["the unconfirmed write left a pending mark"] = services.state.key("pending", role) in services.s3.objects
             checks["a rerun while the write may commit is refused before any reset"] = (
                 refused[0] == 1 and "(credentials)" in refused[2] and len(polaris.issued) == issued
             )
@@ -1192,6 +1007,7 @@ def case_late_credential_write(_: Path) -> dict[str, bool]:
             finished.wait(STALL_SECONDS)
             time.sleep(0.2)
         ended = principal(services, root, "reader")
+        checks["the ended write cleared its mark"] = services.state.key("pending", role) not in services.s3.objects
         checks["once the write has ended a rerun succeeds with a working pair"] = ended[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader")
     return checks
 
@@ -1214,7 +1030,7 @@ def case_stored_pair_mismatch(_: Path) -> dict[str, bool]:
         services = Services(ssm, polaris)
         principal(services, root, "reader")
         ssm.values[secret_name] = stale
-        inspected = call(["inspect", "--instance", INSTANCE], services, root)
+        inspected = call(["inspect"], services, root)
         report = outcome(inspected[1]) or {}
         repaired = principal(services, root, "reader")
         with mock.patch.object(principal_credentials, "ensure_credentials", late_write):
@@ -1228,7 +1044,7 @@ def case_stored_pair_mismatch(_: Path) -> dict[str, bool]:
             and (outcome(repaired[1]) or {}).get("credentials") == "credentials reset"
             and stored_pair(ssm, "reader") != (None, stale),
             "a late write inside a run fails it with the named cause": landed[0] == 1 and "(stored_pair_mismatch)" in landed[2],
-            "the failed run leaves no pending mark": not setup.pending_write_mark(services.locks, role).exists(),
+            "the failed run leaves no pending mark": services.state.key("pending", role) not in services.s3.objects,
             "the next rerun repairs the pair": rerun[0] == 0 and stored_pair(ssm, "reader") == live_pair(polaris, "reader"),
         }
 
@@ -1237,7 +1053,7 @@ def case_late_server_write(_: Path) -> dict[str, bool]:
     """P4 and P5, the review's reproduction with the real SDK timeouts: both attempts of a secret write are held on the server past their client
     read timeout, a rerun stores a working pair, and the held writes then commit. Inspection detects the replaced pair and a rerun repairs it."""
     secret_name = setup.configured_pairs()["reader"][1]
-    args = ["principal", "--identity", "reader", "--instance", INSTANCE]
+    args = ["principal", "--identity", "reader"]
     release, condition = threading.Event(), threading.Condition()
     held: list[bool] = []
     finished: list[bool] = []
@@ -1282,7 +1098,7 @@ def case_late_server_write(_: Path) -> dict[str, bool]:
             release.set()
             ssm.server.RequestHandlerClass = before
         replaced = stored_pair(ssm, "reader") != live_pair(polaris, "reader")
-        inspected = outcome(call(["inspect", "--instance", INSTANCE], services, root)[1]) or {}
+        inspected = outcome(call(["inspect"], services, root)[1]) or {}
         repaired = principal(services, root, "reader")
         return {
             "the first run fails after its client timeouts": first[0] == 1 and len(held) == 2,
@@ -1328,7 +1144,7 @@ def case_request_expiry(_: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     for label in SLOW_REPLIES:
         with slow_peer(label) as port:
-            request = setup.TunnelRequest(port, deadline=time.monotonic() + 0.3)
+            request = setup.CatalogRequest(port, deadline=time.monotonic() + 0.3)
             began = time.monotonic()
             try:
                 request("GET", setup.CATALOG_PATH, "token")
@@ -1342,15 +1158,14 @@ def case_request_expiry(_: Path) -> dict[str, bool]:
 
 
 def case_lock_before_changes(_: Path) -> dict[str, bool]:
-    """P11, every wait has a deadline: while another update holds the principal's lock past the step deadline, the step stops at its deadline
+    """P11, every wait has a deadline: while another update holds the principal's lease past the step deadline, the step stops at its deadline
     before any approval, namespace, role, assignment or pair read."""
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
-        lock = services.locks / f"aws_{setup.PRINCIPALS['reader']}.lock"
         held, release = threading.Event(), threading.Event()
 
         def hold() -> None:
-            with principal_credentials.serialized(lock, "reader", 5.0):
+            with services.state.lease(setup.PRINCIPALS["reader"], wait=5.0, hold=600.0):
                 held.set()
                 release.wait(0.7)
 
@@ -1358,7 +1173,7 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
         holder.start()
         held.wait(5.0)
         began = time.monotonic()
-        code, out, err = run_main(["--seconds", "0.2", "principal", "--identity", "reader", "--instance", INSTANCE], services)
+        code, out, err = run_main(["--seconds", "0.2", "principal", "--identity", "reader"], services)
         took = time.monotonic() - began
         OUTPUTS.append(out + err)
         SECRETS_SEEN.append(root)
@@ -1378,19 +1193,122 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
         }
 
 
+def case_lease_takeover(_: Path) -> dict[str, bool]:
+    """P11: a lease is created once, refuses a second holder until its own expiry, is replaced only after that expiry, and is deleted only at the
+    version its holder created."""
+    from scripts.lakehouse.catalog_setup_state import CatalogState, StateError
+
+    clock = [1000.0]
+    s3 = FakeS3()
+    state = CatalogState(s3, BUCKET, clock=lambda: clock[0], sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    key = state.key("locks", "r")
+    checks: dict[str, bool] = {}
+    with state.lease("r", wait=1.0, hold=10.0):
+        checks["the lease is created without overwrite"] = ("put", key, {"IfNoneMatch": "*"}) in s3.calls
+        try:
+            with state.lease("r", wait=2.0, hold=10.0):
+                checks["a live lease refuses a second holder"] = False
+        except StateError as error:
+            checks["a live lease refuses a second holder"] = error.code == "credentials" and "lease ends" in str(error)
+    checks["the lease is deleted at its own version"] = key not in s3.objects and any(call[0] == "delete" and call[2].get("IfMatch") for call in s3.calls)
+    stack = contextlib.ExitStack()
+    stack.enter_context(state.lease("r", wait=1.0, hold=10.0))
+    clock[0] += 11.0
+    with state.lease("r", wait=1.0, hold=10.0):
+        taken = json.loads(s3.objects[key][0])
+        stack.close()
+        checks["an expired lease is replaced by a second holder"] = taken["expires_at"] > clock[0]
+        checks["the first holder never deletes the second holder's lease"] = key in s3.objects
+    checks["the second holder deletes its own lease"] = key not in s3.objects
+    return checks
+
+
+def case_launch_hold(_: Path) -> dict[str, bool]:
+    """P5: the hold is created without overwrite with the setup's own token, is deleted only while it still holds that token, and a hold that cannot be
+    released is reported with the command that clears it."""
+    from scripts.lakehouse.catalog_setup_state import LaunchGuard, LaunchSpec, StateError
+
+    hold, ecs = FakeHold(), FakeEcs()
+    guard = LaunchGuard(hold, ecs, LaunchSpec(LOCK_PARAMETER, CLUSTER, FAMILY_PREFIX))
+    checks: dict[str, bool] = {}
+    with guard.no_live_writer_try():
+        token = hold.values.get(LOCK_PARAMETER, "")
+        checks["the hold holds a setup token while the step runs"] = token.startswith("catalog_setup-") and len(token) > 20
+        hold.values[LOCK_PARAMETER] = "apply-token"
+    checks["a hold that another party replaced is left alone"] = hold.values.get(LOCK_PARAMETER) == "apply-token"
+    hold.values.clear()
+    with guard.no_live_writer_try():
+        pass
+    checks["a held run deletes its own hold"] = LOCK_PARAMETER not in hold.values and ("delete", LOCK_PARAMETER) in hold.calls
+    hold.fail_delete = True
+    try:
+        with guard.no_live_writer_try():
+            pass
+        checks["a hold that cannot be released is reported"] = False
+    except StateError as error:
+        checks["a hold that cannot be released is reported"] = error.code == "writer_try" and "services_apply resolve" in str(error)
+    return checks
+
+
+def case_import_closure(_: Path) -> dict[str, bool]:
+    """The task runs in the Airflow image from the repository checkout: the setup module reaches, by the imports that run when it loads, no project module
+    outside the few it names and no third-party package but botocore and boto3, so it needs nothing the image lacks."""
+    import ast
+
+    allowed = {
+        "scripts.lakehouse.aws_catalog_setup",
+        "scripts.lakehouse.catalog_setup_state",
+        "scripts.lakehouse.polaris_writer",
+        "scripts.lakehouse.principal_credentials",
+        "scripts.lakehouse.bronze_writer",
+        "scripts.infrastructure.secret_store",
+        "scripts.acquisition.raw_root",
+        "scripts.sdk_logs",
+    }
+    standard = sys.stdlib_module_names
+    seen: set[str] = set()
+    third_party: set[str] = set()
+    pending = ["scripts.lakehouse.aws_catalog_setup"]
+    while pending:
+        module = pending.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        source = REPO_ROOT / (module.replace(".", "/") + ".py")
+        if not source.exists():
+            continue
+        for node in ast.parse(source.read_text()).body:
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            for name in names:
+                top = name.split(".")[0]
+                if top in ("scripts", "orchestration"):
+                    pending.append(name)
+                elif top not in standard and top != "__future__":
+                    third_party.add(top)
+    modules = {name for name in seen if (REPO_ROOT / (name.replace(".", "/") + ".py")).exists()}
+    return {
+        "no project module outside the reviewed set is imported": modules <= allowed,
+        "no third-party package but botocore and boto3 is imported": third_party <= {"botocore", "boto3"},
+    }
+
+
 def case_check_never_decrypts(_: Path) -> dict[str, bool]:
-    """P6: ``check`` takes no instance and never decrypts; the authenticated grant inspection is the separate ``inspect`` step, read only."""
+    """P6: ``check`` takes no argument but the deadline and never decrypts; the authenticated grant inspection is the separate ``inspect`` step, read only."""
     with catalog_world() as (ssm, polaris, root):
         services = Services(ssm, polaris)
         try:
-            refused = run_main(["check", "--instance", INSTANCE], services)[0]
+            refused = run_main(["check", "--unknown", "x"], services)[0]
         except SystemExit as stop:
             refused = int(stop.code or 0)
         asked = list(ssm.requests()) + [f"{method} {path}" for method, path in polaris.calls]
-        code, out, _err = call(["inspect", "--instance", INSTANCE], services, root)
+        code, out, _err = call(["inspect"], services, root)
         changes = [item for item in polaris.calls if item[0] in ("POST", "PUT") and item[1] != setup.OAUTH_PATH]
         return {
-            "check refuses an instance before any request": refused != 0 and not asked,
+            "check refuses an extra argument before any request": refused != 0 and not asked,
             "inspect reports the catalog": code == 0 and (outcome(out) or {}).get("catalog") == "present",
             "inspect reads no pair parameter": not [name for _action, name in ssm.requests() if name in setup.writable_names()],
             "inspect changes nothing": not changes and ssm.writes() == 0,
@@ -1403,18 +1321,11 @@ CASES: dict[str, Case] = {
     "catalog_differs": case_catalog_differs,
     "lost_create_reply": case_lost_create_reply,
     "create_conflict": case_create_conflict,
-    "mac_port": case_mac_port,
-    "host_ingress": case_host_ingress,
     "root_refused": case_root_refused,
     "stalled_catalog": case_stalled_catalog,
-    "route_lost": case_route_lost,
-    "real_relay": case_real_relay,
-    "transport_folder_private": case_transport_folder_private,
-    "profile_refused": case_profile_refused,
-    "stray_request": case_stray_request,
+    "identity_refused": case_identity_refused,
     "check_metadata": case_check_metadata,
-    "check_project_policy": case_check_project_policy,
-    "features_by_the_project_profile": case_features_by_the_project_profile,
+    "features_pair": case_features_pair,
     "check_catalog": case_check_catalog,
     "vault_scope": case_vault_scope,
     "pair_names": case_pair_names,
@@ -1440,6 +1351,9 @@ CASES: dict[str, Case] = {
     "missing_role_assignment": case_missing_role_assignment,
     "lock_before_changes": case_lock_before_changes,
     "check_never_decrypts": case_check_never_decrypts,
+    "lease_takeover": case_lease_takeover,
+    "launch_hold": case_launch_hold,
+    "import_closure": case_import_closure,
 }
 
 
@@ -1464,6 +1378,21 @@ def run_cases(out: Path, deadline: float) -> dict[str, dict[str, bool]]:
     return results
 
 
+ORIGINAL_READ = CatalogState.read
+
+
+def expired_read(self: CatalogState, key: str) -> Any:
+    """The record as it is, with its lease expiry in the past."""
+    found = ORIGINAL_READ(self, key)
+    return None if found is None else ({**found[0], "expires_at": 0}, found[1])
+
+
+def unversioned_delete(self: CatalogState, key: str, version: str) -> bool:
+    """A delete that ignores the version it is given."""
+    self.client.delete_object(Bucket=self.bucket, Key=key)
+    return True
+
+
 # Each planted defect and the case that must fail when it is in place.
 MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[Any]]]] = {
     "the location check accepts any catalog": ("catalog_differs", lambda: mock.patch.object(setup, "matches", lambda body, bucket: True)),
@@ -1474,14 +1403,20 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
         ),
     ),
     "the vault writes any name": ("vault_scope", lambda: mock.patch.object(setup.PairVault, "check", staticmethod(lambda name, write=False: None))),
-    "the Mac port is allowed": ("mac_port", lambda: mock.patch.object(setup, "MAC_POLARIS_PORT", 1)),
+    "the identity is not verified": ("identity_refused", lambda: mock.patch.object(setup.HostServices, "verify_identity", lambda self: None)),
     "a conflict is a failure": ("create_conflict", lambda: mock.patch.object(setup, "verify_catalog", lambda *a: "absent")),
     "the grant comparison is skipped": ("extra_grant", lambda: mock.patch.object(setup, "compare_grants", lambda *a: None)),
     "absent namespaces need no approval": (
         "namespace_needs_approval",
-        lambda: mock.patch.object(setup, "approval_for", lambda folder, identity, approval_id: setup.Approval("any", identity, setup.namespace_set(identity))),
+        lambda: mock.patch.object(setup, "approval_for", lambda state, identity, approval_id: setup.Approval("any", identity, setup.namespace_set(identity))),
     ),
-    "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(setup, "record_approval", lambda folder, approval: None)),
+    "the approval is not recorded": ("namespace_approval", lambda: mock.patch.object(CatalogState, "record_approval", lambda self, identity, document: None)),
+    "the approval may be replaced": (
+        "namespace_approval",
+        lambda: mock.patch.object(
+            CatalogState, "create", lambda self, key, document: self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(document).encode())["ETag"]
+        ),
+    ),
     "a working pair is always reset": ("rerun_keeps_pair", lambda: mock.patch.object(principal_credentials, "pair_accepted", lambda *a: False)),
     "the request read has no absolute expiry": (
         "request_expiry",
@@ -1489,7 +1424,7 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
     ),
     "the principal lock is not taken first": (
         "lock_before_changes",
-        lambda: mock.patch.object(principal_credentials, "serialized", lambda *a: contextlib.nullcontext()),
+        lambda: mock.patch.object(CatalogState, "lease", lambda *a, **k: contextlib.nullcontext()),
     ),
     "role memberships are not checked": ("extra_role_membership", lambda: mock.patch.object(setup, "verify_memberships", lambda *a: None)),
     "missing role assignments are accepted": (
@@ -1506,7 +1441,16 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
         "stored_pair_mismatch",
         lambda: mock.patch.multiple(setup, verify_stored_pair=lambda *a, **k: None, stored_pair_causes=lambda *a, **k: {}),
     ),
-    "live writer tries are not checked": ("live_writer_try", lambda: mock.patch.object(setup, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext())),
+    "live writer tries are not checked": (
+        "live_writer_try",
+        lambda: mock.patch.object(LaunchGuard, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext()),
+    ),
+    "a live lease is taken over": ("lease_takeover", lambda: mock.patch.object(CatalogState, "read", expired_read)),
+    "a lease is deleted without its version": ("lease_takeover", lambda: mock.patch.object(CatalogState, "delete_version", unversioned_delete)),
+    "the hold is released without its token": (
+        "launch_hold",
+        lambda: mock.patch.object(LaunchGuard, "release", lambda self, token: self.ssm.delete_parameter(Name=self.spec.lock_parameter)),
+    ),
 }
 
 
@@ -1548,12 +1492,15 @@ def main() -> int:
     report = {
         "run_at_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "classification": "synthetic",
-        "limits": ["Stand-in Polaris and Parameter Store only; no AWS service, tunnel or container", "the real owned relay is exercised"],
+        "limits": [
+            "Stand-in Polaris, Parameter Store, S3, launch hold and ECS only; no AWS service or container",
+            "the task role, the host network and the image are not exercised",
+        ],
         "repeat_command": [".venv/bin/python", "-m", "scripts.lakehouse.run_aws_catalog_setup_e2e", "--out", "<NEW_DIRECTORY>", "--mutations"],
         "results": results,
         "mutations": mutations,
         "passed": passed,
-        "cleanup": "done: stand-ins stopped, relay processes confirmed gone, work folder removed",
+        "cleanup": "done: stand-ins stopped, work folder removed",
     }
     (out / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     for name, checks in results.items():

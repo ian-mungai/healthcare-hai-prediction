@@ -18,8 +18,8 @@ def test_held_principal_lock_is_the_positive_control(tmp_path: Path) -> None:
 @pytest.mark.parametrize("category", ["deadline", "credentials"])
 def test_bypassed_lock_cannot_use_a_later_failure_as_its_proof(tmp_path: Path, category: str) -> None:
     with (
-        patch.object(suite.principal_credentials, "serialized", lambda *args: contextlib.nullcontext()),
-        patch.object(suite.setup, "read_root", side_effect=suite.setup.SetupError(category, "synthetic later failure")),
+        patch.object(suite.CatalogState, "lease", lambda *args, **kwargs: contextlib.nullcontext()),
+        patch.object(suite.setup, "root_token", side_effect=suite.setup.SetupError(category, "synthetic later failure")),
     ):
         checks = suite.case_lock_before_changes(tmp_path)
     unchanged = {name: value for name, value in checks.items() if name != "the refusal identifies the principal lock"}

@@ -1,0 +1,63 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SetUpAwsPolarisPairs",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:PutParameter"],
+      "Resource": ${PAIR_ARNS}
+    },
+    {
+      "Sid": "HoldHostLaunches",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
+      "Resource": "${HOLD_ARN}"
+    },
+    {
+      "Sid": "DenyHoldOverwrite",
+      "Effect": "Deny",
+      "Action": "ssm:PutParameter",
+      "Resource": "${HOLD_ARN}",
+      "Condition": { "StringEqualsIgnoreCase": { "ssm:Overwrite": "true" } }
+    },
+    {
+      "Sid": "ReadAndWriteOwnRecords",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "${RECORDS_ARN}/*"
+    },
+    {
+      "Sid": "TellAbsentRecordsFromDeniedOnes",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "${BUCKET_ARN}",
+      "Condition": { "StringLike": { "s3:prefix": ["${RECORD_SCOPE}*"] } }
+    },
+    {
+      "Sid": "DenyApprovalAndLockCreateWithoutCondition",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": ["${RECORDS_ARN}/approvals/*", "${RECORDS_ARN}/locks/*"],
+      "Condition": { "StringNotEquals": { "s3:if-none-match": "*" } }
+    },
+    {
+      "Sid": "DenyApprovalDelete",
+      "Effect": "Deny",
+      "Action": "s3:DeleteObject",
+      "Resource": "${RECORDS_ARN}/approvals/*"
+    },
+    {
+      "Sid": "ListProjectTasks",
+      "Effect": "Allow",
+      "Action": "ecs:ListTasks",
+      "Resource": "*",
+      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+    },
+    {
+      "Sid": "DescribeProjectTasks",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeTasks",
+      "Resource": "${TASK_ARN}"
+    }
+  ]
+}

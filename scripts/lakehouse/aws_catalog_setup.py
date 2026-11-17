@@ -1,44 +1,41 @@
-"""The owner's AWS catalog setup: create or verify the AWS catalog and report the AWS Polaris pair parameters, under the project profile.
+"""The AWS catalog setup, run on the host as a one-off task: create or verify the AWS catalog and set up the AWS Polaris pair parameters.
 
-Run from the repository root at a terminal:
+The task runs from the repository checkout on the host (``/opt/hai/repo``) under its own task role, launched by the owner with
+``host_session catalog-setup <step>``. It reaches Polaris on the host's loopback port 8181 (host networking), so no tunnel and no project
+profile are involved. The steps and their arguments:
 
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup catalog --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup check
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup inspect --instance <HOST_INSTANCE_ID>
-    .venv/bin/python -m scripts.lakehouse.aws_catalog_setup principal --identity reader|e2e|bronze|silver|gold|features|serving --instance <HOST_INSTANCE_ID>
-        [--namespace-approval <APPROVAL_ID>]
+    catalog
+    check
+    inspect
+    principal --identity reader|e2e|bronze|silver|gold|features|serving [--namespace-approval <APPROVAL_ID>]
 
-The AWS catalog is reached only through ``orchestration.catalog_transport.CatalogTransport``: the Session Manager tunnel to the host's private
-port 8181 behind an owned loopback relay, after the network acceptance check. Neither local port may be the Mac Polaris port 8181, so a request
-can never reach the Mac catalog. Every catalog request runs once through ``Route.execute`` within the run's absolute deadline. A lost reply
-fails visibly and is never repeated inside a run; a rerun converges, because an existing catalog with the expected location and credential
-mode is ``already present`` and one that differs is refused, never changed.
+Every catalog request runs once within the step's absolute deadline. A lost reply fails visibly and is never repeated inside a run; a rerun converges,
+because an existing catalog with the expected location and credential mode is ``already present`` and one that differs is refused, never changed.
 
-The tool refuses to start unless the configured profile resolves to the project user. The Polaris root credential is read from Parameter
-Store into memory only and never printed, logged or written; errors carry the action and the HTTP status only.
+The task refuses to start unless the caller identity is its own task role (``CATALOG_SETUP_ROLE_ARN``). The Polaris root credential is injected by
+the task's execution role as ``POLARIS_ROOT_SECRET``, held in memory only and never printed, logged or written; errors carry the action and the HTTP
+status only. The result is one JSON line on standard output, which ``host_session`` reads from the task log; it holds names and outcomes, never a value.
 
 ``check`` reports each of the fourteen AWS Polaris pair parameters, the features pair included, by exact name with its type and version, never a value.
-The project user's policy grants every pair. ``check`` reads without decryption, drops the encrypted value unread and never reads the root secret.
-``inspect`` is the authenticated read: it decrypts the root secret into memory, reads the AWS
-catalog and each identity's roles and grants and changes nothing.
+It reads without decryption and drops the encrypted value unread. ``inspect`` is the authenticated read: it reads the AWS catalog and each identity's
+roles and grants and changes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
 identity (``bronze_writer.grant_plan`` for ``bronze`` and ``e2e``, which also gets the table grants on ``silver_e2e``, ``gold_e2e`` and
 ``features_e2e``; ``polaris_writer.grants`` on ``silver``, ``gold``, ``features`` or ``serving`` only; the Mac reader privileges for ``reader``).
-Every namespace a grant names must exist. An absent one is created only under ``--namespace-approval``, which the tool records once for that
-identity and its exact
-namespace set before it creates anything; for ``bronze`` and ``e2e`` the approval also grants ``NAMESPACE_CREATE`` (phase ``active``). After the
-grants the tool lists the catalog role's grants and compares them with the plan; any extra, missing or duplicate grant stops it before the
-catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store (``principal_credentials``), so a
-stored pair that Polaris accepts is kept, and a missing, half-written or refused pair is reset (P3 to P5). Updates of one principal run one at
-a time under a lock in the main checkout, taken within the step's deadline before any change (P11).
+Every namespace a grant names must exist. An absent one is created only under ``--namespace-approval``, which the task records once, as a write-once S3
+record, for that identity and its exact namespace set before it creates anything; for ``bronze`` and ``e2e`` the approval also grants
+``NAMESPACE_CREATE`` (phase ``active``). After the grants the task lists the catalog role's grants and compares them with the plan; any extra, missing
+or duplicate grant stops it before the catalog role is assigned (P7). The issued pair goes from the Polaris reply straight to Parameter Store
+(``principal_credentials``), so a stored pair that Polaris accepts is kept, and a missing, half-written or refused pair is reset (P3 to P5). Updates of
+one principal run one at a time under a leased lock in S3 (P11, ``catalog_setup_state``), taken within the step's deadline before any change. A pair
+reset runs only under the host launch hold, with no job task of the project live (P5).
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import functools
 import http.client
 import json
@@ -49,37 +46,35 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration import launcher
-from orchestration.catalog_transport import CatalogTransport, TransportSpec
-from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import bronze_writer, catalog, cutover_route, polaris_writer, principal_credentials, run_lock
-from scripts.lakehouse.catalog_journal import durable_directory, private_directory
+from scripts.lakehouse import bronze_writer, polaris_writer, principal_credentials
+from scripts.lakehouse.catalog_setup_state import CatalogState, LaunchGuard, LaunchSpec, PendingMark, StateError, error_code
 
 CATALOG = "hai_lakehouse"
-MAC_POLARIS_PORT = 8181
+POLARIS_HOST = "127.0.0.1"
+POLARIS_PORT = 8181
+ROOT_CLIENT_ID = "root"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features", "serving")
 WRITER_VARIABLES = "job_writer_variables.tf"
 OAUTH_PATH = "/api/catalog/v1/oauth/tokens"
 CATALOG_PATH = f"/api/management/v1/catalogs/{CATALOG}"
 REQUEST_SECONDS = 30.0
-READY_SECONDS = 120.0
-CLOSE_SECONDS = 30.0
 SECRET_SECONDS = 30.0
-# The longest the credential step holds the launcher registry lock; the launcher waits for that lock at most run_lock.LOCK_WAIT_SECONDS.
-REGISTRY_HOLD_SECONDS = 20.0
+# The longest the credential step holds the host launch hold; every host launch is refused for that long at most.
+HOLD_SECONDS = 20.0
 # The longest a pair write past its deadline is awaited, locks held: botocore's own bound for one call (secret_store.CLIENT_OPTIONS: 2 attempts
 # of 5 s connect and 10 s read) plus its retry backoff.
 WRITE_SETTLE_SECONDS = 45.0
+# Added to the lease of a principal beyond the step deadline and the settle time.
+LEASE_MARGIN_SECONDS = 15.0
 MAX_REPLY_BYTES = 1 << 20
 MANAGEMENT = "/api/management/v1"
 APPROVAL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -95,8 +90,6 @@ PRINCIPALS = {
 }
 
 Clock = Callable[[], float]
-# Runs one dependent catalog request exactly once and returns its result.
-Execute = Callable[[Callable[[], Any]], Any]
 Request = Callable[..., tuple[int, Any]]
 
 
@@ -106,11 +99,6 @@ class SetupError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-def direct[R](operation: Callable[[], R], /) -> R:
-    """Run an operation with no transport in between (the stand-ins)."""
-    return operation()
 
 
 def check_deadline(deadline: float, clock: Clock = time.monotonic) -> float:
@@ -154,45 +142,14 @@ def writable_names() -> frozenset[str]:
     return frozenset(name for pair in configured_pairs().values() for name in pair)
 
 
-def pending_write_mark(locks: Path, role: str) -> Path:
-    """The mark an unconfirmed pair write of the principal leaves next to its lock."""
-    return locks / f"aws_{role}.pending_write"
-
-
-def mark_pending_write(mark: Path) -> None:
-    """Record that a pair write of this process may still commit."""
-    mark.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    mark.write_text(json.dumps({"pid": os.getpid(), "since_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}) + "\n")
-
-
-def refuse_pending_write(mark: Path, role: str) -> None:
-    """Stop while an earlier pair write of the principal may still commit: its mark stays until the write ends, or its process has ended."""
-    try:
-        owner = json.loads(mark.read_text())["pid"]
-    except FileNotFoundError:
-        return
-    except (OSError, ValueError, KeyError, TypeError):
-        raise SetupError("credentials", f"the pending-write mark of principal {role} cannot be read; no pair change is safe until it is resolved") from None
-    if not isinstance(owner, int) or owner <= 0:
-        raise SetupError("credentials", f"the pending-write mark of principal {role} names no process; no pair change is safe until it is resolved")
-    try:
-        os.kill(owner, 0)
-    except ProcessLookupError:
-        mark.unlink(missing_ok=True)
-        return
-    except PermissionError:
-        pass
-    raise SetupError("credentials", f"an earlier pair write of principal {role} may still commit; rerun after it ends")
-
-
 class PairVault(secret_store.SecretStore):
     """Parameter Store through the project profile: writes only the fourteen AWS Polaris pair names and reads those and the Polaris root secret."""
 
-    def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic, pending: Path | None = None) -> None:
+    def __init__(self, parameters: Any, deadline: float | None = None, clock: Clock = time.monotonic, pending: PendingMark | None = None) -> None:
         super().__init__(parameters)
         self.deadline, self.clock, self.pending = deadline, clock, pending
 
-    def bounded(self, deadline: float, clock: Clock = time.monotonic, pending: Path | None = None) -> PairVault:
+    def bounded(self, deadline: float, clock: Clock = time.monotonic, pending: PendingMark | None = None) -> PairVault:
         """The same store with every pair read and write held to the absolute deadline; ``pending`` is the principal's pending-write mark."""
         return PairVault(self.parameters, deadline, clock, pending or self.pending)
 
@@ -215,14 +172,14 @@ class PairVault(secret_store.SecretStore):
 
         A write still running at the deadline is awaited for at most ``WRITE_SETTLE_SECONDS`` more, with every lock still held. One that has
         not ended then leaves the pending-write mark before the locks are released; the write removes the mark when it ends, and until then
-        every rerun of the principal refuses (``refuse_pending_write``). Without a mark to leave the write is refused before it starts.
+        every rerun of the principal refuses (``CatalogState.refuse_pending_write``). Without a mark to leave the write is refused before it starts.
         """
         if self.pending is None or self.deadline is None:
             raise secret_store.SecretStoreError(f"{what} has no pending-write mark, so it is not started")
         left = min(SECRET_SECONDS, check_deadline(self.deadline, self.clock))
         failure: list[BaseException] = []
         done, guard = threading.Event(), threading.Lock()
-        abandoned: list[Path] = []
+        abandoned: list[PendingMark] = []
 
         def work() -> None:
             try:
@@ -233,15 +190,14 @@ class PairVault(secret_store.SecretStore):
                 with guard:
                     done.set()
                     for mark in abandoned:
-                        with contextlib.suppress(OSError):
-                            mark.unlink()
+                        mark.clear()
 
         threading.Thread(target=work, name="pair-write", daemon=True).start()
         if not done.wait(left):
             done.wait(WRITE_SETTLE_SECONDS)
         with guard:
             if not done.is_set():
-                mark_pending_write(self.pending)
+                self.pending.set()
                 abandoned.append(self.pending)
                 raise secret_store.SecretStoreError(f"{what} did not finish within its deadline and may still commit; reruns refuse until it ends")
         if failure:
@@ -274,24 +230,24 @@ class PairVault(secret_store.SecretStore):
         }
 
 
-class TunnelRequest:
-    """A bounded request to the AWS Polaris behind the owned loopback relay, in the call shape of ``catalog.request``.
+class CatalogRequest:
+    """A bounded request to the AWS Polaris on the host's loopback, in the call shape of ``catalog.request``.
 
-    It sends nothing to the Mac Polaris port. Each request runs once through ``execute`` within the run's absolute deadline; a reply that does not
-    arrive fails visibly and is not repeated. A refusal returns the HTTP status only, so no reply body reaches an error.
+    Each request is sent once within the run's absolute deadline; a reply that does not arrive fails visibly and is not repeated. A refusal returns
+    the HTTP status only, so no reply body reaches an error.
     """
 
-    def __init__(self, port: int, *, deadline: float, execute: Execute = direct, clock: Clock = time.monotonic, realm: str = "POLARIS") -> None:
-        if port == MAC_POLARIS_PORT or not 1 <= port <= 65535:
-            raise SetupError("network", f"the catalog route must use a loopback port other than the Mac Polaris port {MAC_POLARIS_PORT}")
-        self.port, self.deadline, self.execute, self.clock, self.realm = port, deadline, execute, clock, realm
+    def __init__(self, port: int, *, deadline: float, clock: Clock = time.monotonic, realm: str = "POLARIS") -> None:
+        if not 1 <= port <= 65535:
+            raise SetupError("network", "the catalog port is not a port number")
+        self.port, self.deadline, self.clock, self.realm = port, deadline, clock, realm
 
     def __repr__(self) -> str:
-        return f"TunnelRequest(127.0.0.1:{self.port})"
+        return f"CatalogRequest({POLARIS_HOST}:{self.port})"
 
-    def bounded(self, deadline: float) -> TunnelRequest:
-        """The same route with the earlier of the two absolute deadlines."""
-        return TunnelRequest(self.port, deadline=min(self.deadline, deadline), execute=self.execute, clock=self.clock, realm=self.realm)
+    def bounded(self, deadline: float) -> CatalogRequest:
+        """The same request path with the earlier of the two absolute deadlines."""
+        return CatalogRequest(self.port, deadline=min(self.deadline, deadline), clock=self.clock, realm=self.realm)
 
     def __call__(
         self, method: str, path: str, token: str | None = None, body: dict[str, Any] | None = None, form: dict[str, str] | None = None
@@ -306,15 +262,14 @@ class TunnelRequest:
         if form is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
             data = urllib.parse.urlencode(form).encode()
-        result: tuple[int, Any] = self.execute(lambda: self.send(method, path, data, headers))
-        return result
+        return self.send(method, path, data, headers)
 
     def send(self, method: str, path: str, data: bytes | None, headers: dict[str, str]) -> tuple[int, Any]:
         """One request within the absolute deadline: a watchdog shuts the socket at expiry, so neither a silent peer nor one that keeps sending a
-        few bytes holds the header or body read past it (the cutover's ``bronze_inventory.PolarisHttp.send``). The connected socket is kept here
+        few bytes holds the header or body read past it. The connected socket is kept here
         because a closing response (``Connection: close`` or HTTP/1.0) detaches it from the connection while its body is still being read."""
         timeout = min(REQUEST_SECONDS, check_deadline(self.deadline, self.clock))
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        connection = http.client.HTTPConnection(POLARIS_HOST, self.port, timeout=timeout)
         expired = threading.Event()
         held: list[socket.socket] = []
         response: http.client.HTTPResponse | None = None
@@ -361,47 +316,9 @@ class TunnelRequest:
             raise SetupError("catalog_http", f"{method} {path} replied with a body that is not JSON") from None
 
 
-class Route:
-    """The owned loopback relay in front of the Session Manager tunnel; each request runs once with the route checked on both sides."""
-
-    def __init__(self, transport: CatalogTransport, endpoint: str, *, deadline: float) -> None:
-        parsed = urllib.parse.urlsplit(endpoint)
-        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
-            raise SetupError("network", "the catalog relay endpoint is not a loopback port")
-        self.transport, self.port, self.deadline = transport, parsed.port, deadline
-
-    def execute[R](self, operation: Callable[[], R], /) -> R:
-        try:
-            return self.transport.execute(operation, deadline=self.deadline)
-        except SetupError:
-            raise
-        except RuntimeError as error:
-            if str(error) == "catalog_transport_unavailable":
-                raise SetupError("transport", "the catalog route is unavailable; it is never reopened inside a run") from None
-            raise
-
-
-def check_ports(spec: TransportSpec) -> None:
-    """The tunnel and relay listen on local ports other than the Mac Polaris port (P9)."""
-    if MAC_POLARIS_PORT in (spec.tunnel_port, spec.relay_port):
-        raise SetupError("network", f"the tunnel and relay ports must differ from the Mac Polaris port {MAC_POLARIS_PORT}")
-
-
-def network_acceptance(spec: TransportSpec, aws: AwsCli, project_tag: str, *, deadline: float, clock: Clock = time.monotonic) -> None:
-    """Accept the route only to one running host whose inbound sources are project security groups of its VPC; the catalog stays private."""
-    check_ports(spec)
-    check_deadline(deadline, clock)
-    try:
-        facts = cutover_route.describe_host(aws, spec.instance, project_tag, deadline=deadline, clock=clock)
-    except StorageError as error:
-        raise SetupError("network", f"describing the catalog host failed ({error.code})") from None
-    if not cutover_route.host_accepted(facts, require_tag=False):
-        raise SetupError("network", "the catalog host is not one running instance whose security groups admit only project security groups")
-
-
 def root_token(request: Request, secret: str) -> str:
     """Exchange the root client credentials for a token held in memory; a refusal names the HTTP status only."""
-    form = {"grant_type": "client_credentials", "client_id": launcher.ROOT_CLIENT_ID, "client_secret": secret, "scope": "PRINCIPAL_ROLE:ALL"}
+    form = {"grant_type": "client_credentials", "client_id": ROOT_CLIENT_ID, "client_secret": secret, "scope": "PRINCIPAL_ROLE:ALL"}
     status, body = request("POST", OAUTH_PATH, form=form)
     if status != 200 or not isinstance(body, dict) or not isinstance(body.get("access_token"), str):
         raise SetupError("authentication", f"Polaris refused the root credentials (HTTP {status})")
@@ -469,16 +386,8 @@ def ensure_catalog(request: Request, access: str, bucket: str, region: str) -> s
     return outcome
 
 
-@dataclass(frozen=True)
-class Remote:
-    """The AWS catalog behind the route: the loopback port and the call that runs each request once."""
-
-    port: int
-    execute: Execute
-
-
 class Services(Protocol):
-    """What the setup needs from the world; the live services use the project profile, the E2E uses stand-ins."""
+    """What the setup needs from the world; the live services use the task role, the E2E uses stand-ins."""
 
     @property
     def bucket(self) -> str: ...
@@ -487,36 +396,28 @@ class Services(Protocol):
     def region(self) -> str: ...
 
     @property
-    def approvals(self) -> Path: ...
+    def polaris_port(self) -> int: ...
 
     @property
-    def locks(self) -> Path: ...
+    def state(self) -> CatalogState: ...
 
     @property
-    def registry(self) -> run_lock.Registry: ...
+    def guard(self) -> LaunchGuard: ...
+
+    def verify_identity(self) -> None: ...
+
+    def root_secret(self) -> str: ...
 
     def vault(self) -> PairVault: ...
 
-    def remote(self, instance: str, *, deadline: float) -> contextlib.AbstractContextManager[Remote]: ...
 
-
-def read_root(vault: PairVault, seconds: float) -> str:
-    """The Polaris root secret, read into memory within its own bound; it is never printed or written."""
-    try:
-        return secret_store.within(seconds, lambda: vault.get(secret_store.POLARIS_ROOT_SECRET), "reading the Polaris root secret")
-    except secret_store.SecretStoreError as error:
-        raise SetupError("authentication", str(error)) from None
-
-
-def step_catalog(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Create or verify the AWS catalog through the route."""
+def step_catalog(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Create or verify the AWS catalog."""
     deadline = clock() + seconds
-    vault = services.vault()
-    secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
-    with services.remote(instance, deadline=deadline) as remote:
-        request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-        access = root_token(request, secret)
-        outcome = ensure_catalog(request, access, services.bucket, services.region)
+    secret = services.root_secret()
+    request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
+    access = root_token(request, secret)
+    outcome = ensure_catalog(request, access, services.bucket, services.region)
     return {"catalog": CATALOG, "outcome": outcome}
 
 
@@ -536,18 +437,17 @@ def step_check(services: Services, seconds: float, clock: Clock = time.monotonic
     return {"parameters": parameters}
 
 
-def step_inspect(services: Services, instance: str, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Read the AWS catalog and each identity's roles, grants and stored pair through the route, authenticated with the root secret; nothing is changed."""
+def step_inspect(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Read the AWS catalog and each identity's roles, grants and stored pair, authenticated with the root secret; nothing is changed."""
     deadline = clock() + seconds
     vault = services.vault().bounded(deadline, clock)
-    secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
-    with services.remote(instance, deadline=deadline) as remote:
-        request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-        access = root_token(request, secret)
-        result: dict[str, Any] = {"catalog": verify_catalog(request, access, services.bucket)}
-        if result["catalog"] == "present":
-            result["principals"] = check_principals(request, access, services.approvals)
-            result["causes"] = stored_pair_causes(request, vault, result["principals"])
+    secret = services.root_secret()
+    request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
+    access = root_token(request, secret)
+    result: dict[str, Any] = {"catalog": verify_catalog(request, access, services.bucket)}
+    if result["catalog"] == "present":
+        result["principals"] = check_principals(request, access, services.state)
+        result["causes"] = stored_pair_causes(request, vault, result["principals"])
     return result
 
 
@@ -565,7 +465,7 @@ def namespace_set(identity: str) -> tuple[str, ...]:
 def grant_plan(identity: str, approved: bool) -> list[dict[str, Any]]:
     """The exact grants of the identity's catalog role; ``approved`` is the recorded namespace approval, which makes bronze and e2e ``active``."""
     if identity == "reader":
-        return [{"grant": {"type": "catalog", "privilege": privilege}} for privilege in catalog.READER_PRIVILEGES]
+        return [{"grant": {"type": "catalog", "privilege": privilege}} for privilege in polaris_writer.READER_PRIVILEGES]
     if identity in ("bronze", "e2e"):
         phase = "active" if approved else "prepared"
         grants = bronze_writer.grant_plan("real" if identity == "bronze" else "aws_qualify", phase, namespace_creation_approved=approved)
@@ -597,51 +497,13 @@ class Approval:
         return {"approval_id": self.approval_id, "identity": self.identity, "namespaces": list(self.namespaces)}
 
 
-def recorded_approval(folder: Path, identity: str) -> dict[str, Any] | None:
-    path = folder / f"{identity}.json"
-    if not path.exists():
-        return None
-    try:
-        found = json.loads(path.read_text())
-    except (OSError, ValueError):
-        raise SetupError("approval", f"the recorded namespace approval of {identity} cannot be read") from None
-    if not isinstance(found, dict):
-        raise SetupError("approval", f"the recorded namespace approval of {identity} is not an approval")
-    return found
-
-
-def record_approval(folder: Path, approval: Approval) -> None:
-    """Store the approval once; the same approval again is accepted, another one for the same identity is refused."""
-    found = recorded_approval(folder, approval.identity)
-    wanted = approval.document()
-    if found is not None:
-        if {key: found.get(key) for key in wanted} != wanted:
-            raise SetupError("approval", f"{approval.identity} already has another recorded namespace approval; it is never replaced")
-        return
-    durable_directory(folder)
-    temporary = folder / f".{approval.identity}.{os.getpid()}.tmp"
-    temporary.write_text(json.dumps({**wanted, "recorded_at_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}, sort_keys=True) + "\n")
-    try:
-        os.link(temporary, folder / f"{approval.identity}.json")
-    except FileExistsError:
-        temporary.unlink()
-        record_approval(folder, approval)
-        return
-    temporary.unlink()
-    descriptor = os.open(folder, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def approval_for(folder: Path, identity: str, approval_id: str | None) -> Approval | None:
+def approval_for(state: CatalogState, identity: str, approval_id: str | None) -> Approval | None:
     """The approval in force for the identity: the flag's, checked against any recorded one, or the recorded one alone (a rerun)."""
     if approval_id is not None and identity == "reader":
         raise SetupError("approval", "the reader names no namespace; a namespace approval does not apply")
     if approval_id is not None and not APPROVAL_ID.fullmatch(approval_id):
         raise SetupError("approval", "an approval ID has letters, digits, dashes and underscores only, at most 64")
-    found = recorded_approval(folder, identity)
+    found = state.approval(identity)
     if approval_id is None:
         if found is None:
             return None
@@ -667,52 +529,6 @@ def compare_grants(request: Request, access: str, role: str, expected: list[dict
         bronze_writer.verify_grants(listed_grants(request, access, role), expected)
     except bronze_writer.BindingError:
         raise SetupError("grants", f"the grants of catalog role {role} differ from the approved plan; the role stays unassigned") from None
-
-
-TERMINAL_PLACEMENTS = ("fenced", "complete")
-
-
-def live_cloud_tries(attempts: Iterable[Mapping[str, Any]]) -> int:
-    """The cloud placements of the attempts that have no confirmed end. A malformed record raises, so the caller treats the registry as unreadable."""
-    return sum(
-        1
-        for attempt in attempts
-        for placement in attempt.get("execution", {}).get("placements", [])
-        if placement["target"] == "ecs" and placement["state"] not in TERMINAL_PLACEMENTS
-    )
-
-
-@contextlib.contextmanager
-def no_live_writer_try(registry: run_lock.Registry, *, deadline: float, clock: Clock = time.monotonic) -> Iterator[None]:
-    """Hold the launcher registry lock, under which the launcher admits every try, and stop unless the registry proves no cloud try is live (P5).
-
-    The registry records each cloud try and its placement state but not the catalog pair it holds, so any try without a confirmed end
-    (``TERMINAL_PLACEMENTS``) stops the setup of every identity, and a registry that cannot be read proves nothing and stops it too. A
-    registry that does not exist yet has admitted nothing. The lock stays held until the credentials are stored, so no try is admitted in between.
-    """
-    registry.path.mkdir(parents=True, exist_ok=True)
-    with (registry.path / "registry.lock").open("a") as handle:
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if clock() >= deadline:
-                    raise SetupError("writer_try", "the launcher registry stayed locked until the deadline, so no live writer try can be ruled out") from None
-                time.sleep(0.05)
-        try:
-            if registry.identity_file.exists() or registry.state_file.exists():
-                try:
-                    identity = run_lock.read_identity(registry)
-                    state = run_lock.parse_state(registry.state_file.read_bytes(), identity["registry_id"], registry.state_file.name)
-                    live_tries = live_cloud_tries((state.get("attempts") or {}).values())
-                except (OSError, run_lock.RegistryError, KeyError, TypeError, AttributeError):
-                    raise SetupError("writer_try", "the launcher registry cannot be read, so no live writer try can be ruled out") from None
-                if live_tries:
-                    raise SetupError("writer_try", f"the launcher registry holds {live_tries} cloud try without a confirmed end; rerun after it ends")
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def role_names(request: Request, access: str, path: str, what: str) -> set[str] | None:
@@ -746,7 +562,7 @@ def verify_memberships(request: Request, access: str, identity: str, exact: bool
             raise SetupError("roles", f"{what} do not include the approved role")
 
 
-def verify_stored_pair(request: TunnelRequest, vault: PairVault, identity: str) -> None:
+def verify_stored_pair(request: CatalogRequest, vault: PairVault, identity: str) -> None:
     """Authenticate with the pair read back from Parameter Store; a refused or missing pair is ``stored_pair_mismatch``.
 
     No conditional write exists, so a timed-out pair write may still apply later and replace the pair. This check catches it at the end of every
@@ -765,7 +581,7 @@ def verify_stored_pair(request: TunnelRequest, vault: PairVault, identity: str) 
         raise SetupError("stored_pair_mismatch", f"the catalog refuses the stored pair of principal {role}; rerun the principal step to reset it")
 
 
-def stored_pair_causes(request: TunnelRequest, vault: PairVault, principals: dict[str, str]) -> dict[str, str]:
+def stored_pair_causes(request: CatalogRequest, vault: PairVault, principals: dict[str, str]) -> dict[str, str]:
     """``stored_pair_mismatch`` for each identity with a catalog role whose stored pair the catalog refuses; that identity becomes ``differs``."""
     causes: dict[str, str] = {}
     for identity, state in principals.items():
@@ -781,16 +597,15 @@ def stored_pair_causes(request: TunnelRequest, vault: PairVault, principals: dic
 
 
 def ensure_principal(
-    request: TunnelRequest,
+    request: CatalogRequest,
     access: str,
     identity: str,
     approval: Approval | None,
     vault: PairVault,
     *,
     bucket: str,
-    lock_path: Path,
-    approvals: Path,
-    registry: run_lock.Registry,
+    state: CatalogState,
+    guard: LaunchGuard,
 ) -> dict[str, Any]:
     """Set up one identity in order: namespaces, roles, grants, grant comparison, role assignment, credentials, principal assignment."""
     role = PRINCIPALS[identity]
@@ -807,7 +622,7 @@ def ensure_principal(
     if absent and approval is None:
         raise SetupError("approval", f"namespaces {', '.join(absent)} are absent; creating them needs --namespace-approval")
     if approval is not None:
-        record_approval(approvals, approval)
+        state.record_approval(approval.identity, approval.document())
     for name in absent:
         status, _ = request("POST", f"/api/catalog/v1/{CATALOG}/namespaces", access, body={"namespace": [name], "properties": {}})
         ensure_status(status, f"creating namespace {name}", (200, 201, 409))
@@ -826,17 +641,17 @@ def ensure_principal(
     def check(status: int, action: str, allowed: tuple[int, ...] = (200, 201, 204)) -> None:
         ensure_status(status, action, allowed)
 
-    hold = min(request.deadline, request.clock() + REGISTRY_HOLD_SECONDS)
+    hold = min(request.deadline, request.clock() + HOLD_SECONDS)
     try:
-        with no_live_writer_try(registry, deadline=hold, clock=request.clock):
+        with guard.no_live_writer_try():
             outcome = principal_credentials.ensure_credentials(
                 principal=role,
                 names=configured_pairs()[identity],
-                vault=vault.bounded(hold, request.clock, pending=pending_write_mark(lock_path.parent, role)),
+                vault=vault.bounded(hold, request.clock, pending=state.pending(role)),
                 request=request.bounded(hold),
                 access=access,
                 check=check,
-                lock_path=lock_path,
+                lock=contextlib.nullcontext(),
             )
     except principal_credentials.CredentialError as error:
         raise SetupError("credentials", str(error)) from None
@@ -853,45 +668,30 @@ def ensure_principal(
     }
 
 
-def step_principal(services: Services, identity: str, instance: str, approval_id: str | None, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
-    """Set up one AWS identity through the route; the approval is checked against the record before any request.
+def step_principal(services: Services, identity: str, approval_id: str | None, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Set up one AWS identity; the approval is checked against the record before any request.
 
-    The principal's lock is taken first, within the step's deadline, so no approval, namespace, role, assignment or pair changes before it
-    (P11). The credential step's own lock is then always free.
+    The principal's lease is taken first, within the step's deadline, so no approval, namespace, role, assignment or pair changes before it (P11). The
+    credential step takes no lock of its own: the lease covers it, and expires only after the step deadline and the longest a late pair write may commit.
     """
     if identity not in PRINCIPALS:
         raise SetupError("principal", f"unknown identity {identity}")
     deadline = clock() + seconds
-    approval = approval_for(services.approvals, identity, approval_id)
+    state = services.state
+    approval = approval_for(state, identity, approval_id)
     role = PRINCIPALS[identity]
-    held = contextlib.ExitStack()
-    try:
-        wait = min(principal_credentials.LOCK_WAIT_SECONDS, check_deadline(deadline, clock))
-        held.enter_context(principal_credentials.serialized(services.locks / f"aws_{role}.lock", role, wait))
-    except principal_credentials.CredentialError as error:
-        raise SetupError("credentials", str(error)) from None
-    with held:
-        refuse_pending_write(pending_write_mark(services.locks, role), role)
+    wait = min(principal_credentials.LOCK_WAIT_SECONDS, check_deadline(deadline, clock))
+    hold = check_deadline(deadline, clock) + WRITE_SETTLE_SECONDS + LEASE_MARGIN_SECONDS
+    with state.lease(role, wait=wait, hold=hold):
+        state.refuse_pending_write(role)
         vault = services.vault().bounded(deadline, clock)
-        secret = read_root(vault, min(SECRET_SECONDS, check_deadline(deadline, clock)))
-        with services.remote(instance, deadline=deadline) as remote:
-            request = TunnelRequest(remote.port, deadline=deadline, execute=remote.execute, clock=clock)
-            access = root_token(request, secret)
-            lock_path = services.locks / f"aws_{role}.credentials.lock"
-            return ensure_principal(
-                request,
-                access,
-                identity,
-                approval,
-                vault,
-                bucket=services.bucket,
-                lock_path=lock_path,
-                approvals=services.approvals,
-                registry=services.registry,
-            )
+        secret = services.root_secret()
+        request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
+        access = root_token(request, secret)
+        return ensure_principal(request, access, identity, approval, vault, bucket=services.bucket, state=state, guard=services.guard)
 
 
-def check_principals(request: Request, access: str, approvals: Path) -> dict[str, str]:
+def check_principals(request: Request, access: str, state: CatalogState) -> dict[str, str]:
     """Each identity's role memberships and grants against its plan, read only: ``matches``, ``differs`` or ``absent`` (no catalog role yet).
 
     ``matches`` needs both exact assignments (the principal role to the principal, the catalog role to the principal role) and the exact grants.
@@ -917,7 +717,7 @@ def check_principals(request: Request, access: str, approvals: Path) -> dict[str
                 raise
             found[identity] = "differs"
             continue
-        approval = approval_for(approvals, identity, None)
+        approval = approval_for(state, identity, None)
         try:
             compare_grants(request, access, role, grant_plan(identity, approval is not None))
             found[identity] = "matches"
@@ -928,95 +728,84 @@ def check_principals(request: Request, access: str, approvals: Path) -> dict[str
     return found
 
 
-class LiveServices:
-    """The project profile, checked against the caller identity on first use, and the Session Manager route to the AWS host."""
+SETTINGS = ("DATA_BUCKET_NAME", "AWS_REGION", "CATALOG_SETUP_ROLE_ARN", "CATALOG_SETUP_LOCK_PARAMETER", "CATALOG_SETUP_CLUSTER", "CATALOG_SETUP_FAMILY_PREFIX")
+ROLE_ARN = re.compile(r"arn:aws:iam::([0-9]{12}):role/([A-Za-z0-9_+=,.@-]{1,64})")
 
-    def __init__(self, tunnel_port: int, relay_port: int) -> None:
-        self.state_root = run_lock.main_checkout(REPO_ROOT) / "data/lakehouse"
-        self.ports = (tunnel_port, relay_port)
+
+class HostServices:
+    """The task role, checked against the caller identity before the first step, and Polaris on the host's loopback port."""
+
+    def __init__(self, environ: Mapping[str, str]) -> None:
+        missing = [name for name in SETTINGS if not environ.get(name)]
+        if missing:
+            raise SetupError("settings", f"the task has no value for {', '.join(missing)}")
+        self.settings = {name: str(environ[name]) for name in SETTINGS}
+        found = ROLE_ARN.fullmatch(self.settings["CATALOG_SETUP_ROLE_ARN"])
+        if found is None:
+            raise SetupError("settings", "CATALOG_SETUP_ROLE_ARN is not a role ARN")
+        self.expected_identity = f"arn:aws:sts::{found.group(1)}:assumed-role/{found.group(2)}/"
+        # The root secret is read once from the environment the execution role filled; it stays in memory only.
+        self.root = environ.get("POLARIS_ROOT_SECRET", "")
 
     @functools.cached_property
-    def settings(self) -> dict[str, str]:
-        """The profile, region and bucket; any project profile that does not resolve to the project user stops the tool (P2)."""
-        from scripts.infrastructure.render_project_config import ConfigurationError, load_configuration, verify_project_identity
+    def session(self) -> Any:
+        import boto3
 
-        try:
-            settings, _ = load_configuration(REPO_ROOT / ".env")
-            verify_project_identity(settings)
-        except ConfigurationError as error:
-            raise SetupError("profile", str(error)) from None
-        return settings
+        return boto3.Session(region_name=self.region)
 
-    @functools.cached_property
-    def project_tag(self) -> str:
-        """The project tag from the platform outputs; the host's inbound source groups must carry it."""
-        from scripts.infrastructure.host_session import output_value
-        from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
-
-        try:
-            outputs = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], self.settings, "The platform outputs could not be read.")
-            return str(output_value(outputs, "project_tag", str))
-        except (OSError, ValueError) as error:
-            raise SetupError("network", f"the platform outputs could not be read ({type(error).__name__})") from None
+    def client(self, name: str) -> Any:
+        return self.session.client(name, config=secret_store.client_config())
 
     @property
     def bucket(self) -> str:
-        return self.settings["data_bucket_name"]
+        return self.settings["DATA_BUCKET_NAME"]
 
     @property
     def region(self) -> str:
-        return self.settings["aws_region"]
+        return self.settings["AWS_REGION"]
 
     @property
-    def approvals(self) -> Path:
-        return self.state_root / "catalog_setup" / "namespace_approvals"
+    def polaris_port(self) -> int:
+        return POLARIS_PORT
 
-    @property
-    def locks(self) -> Path:
-        return self.state_root / "principal_locks"
+    @functools.cached_property
+    def state(self) -> CatalogState:
+        return CatalogState(self.client("s3"), self.bucket)
 
-    @property
-    def registry(self) -> run_lock.Registry:
-        """The real launcher registry of the main checkout, whatever checkout the tool runs from."""
-        return run_lock.resolve(None, REPO_ROOT)
+    @functools.cached_property
+    def guard(self) -> LaunchGuard:
+        spec = LaunchSpec(self.settings["CATALOG_SETUP_LOCK_PARAMETER"], self.settings["CATALOG_SETUP_CLUSTER"], self.settings["CATALOG_SETUP_FAMILY_PREFIX"])
+        return LaunchGuard(self.client("ssm"), self.client("ecs"), spec)
+
+    def verify_identity(self) -> None:
+        """Any caller that is not the task's own role stops the task before a Parameter Store, S3 or catalog call (P2)."""
+        try:
+            arn = str(self.client("sts").get_caller_identity()["Arn"])
+        except (ClientError, BotoCoreError, KeyError) as error:
+            raise SetupError(
+                "identity", f"the caller identity could not be read ({error_code(error) if isinstance(error, ClientError | BotoCoreError) else 'KeyError'})"
+            ) from None
+        if not arn.startswith(self.expected_identity):
+            raise SetupError("identity", "the caller is not the catalog setup task role")
+
+    def root_secret(self) -> str:
+        if not self.root:
+            raise SetupError("authentication", "the task has no Polaris root secret; its execution role injects POLARIS_ROOT_SECRET")
+        return self.root
 
     def vault(self) -> PairVault:
-        import boto3
-
-        session = boto3.Session(profile_name=self.settings["aws_profile"], region_name=self.region)
-        return PairVault(session.client("ssm", config=secret_store.client_config()))
-
-    @contextlib.contextmanager
-    def remote(self, instance: str, *, deadline: float) -> Iterator[Remote]:
-        spec = TransportSpec(instance, self.settings["aws_profile"], self.region, *self.ports)
-        network_acceptance(spec, AwsCli(self.settings), self.project_tag, deadline=deadline)
-        folder = self.state_root / "catalog_setup_transport"
-        private_directory(folder)
-        transport = CatalogTransport(folder)
-        try:
-            endpoint = transport.start(spec, deadline=deadline, ready_deadline=min(deadline, time.monotonic() + READY_SECONDS))
-            route = Route(transport, endpoint, deadline=deadline)
-            yield Remote(route.port, route.execute)
-        finally:
-            closed = transport.close(deadline=time.monotonic() + CLOSE_SECONDS)
-            if not closed:
-                sys.stderr.write("aws catalog setup: the catalog route did not close with every process confirmed gone; check the transport ledger\n")
-            if not closed and sys.exc_info()[0] is None:
-                raise SetupError("transport", "the catalog route did not close with every process confirmed gone")
+        return PairVault(self.client("ssm"))
 
 
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    cli.add_argument("--tunnel-port", type=int, default=18181)
-    cli.add_argument("--relay-port", type=int, default=18182)
     cli.add_argument("--seconds", type=float, default=600, help="the deadline of the whole step")
     steps = cli.add_subparsers(dest="step", required=True)
-    steps.add_parser("catalog").add_argument("--instance", required=True)
+    steps.add_parser("catalog")
     steps.add_parser("check")
-    steps.add_parser("inspect").add_argument("--instance", required=True)
+    steps.add_parser("inspect")
     principal = steps.add_parser("principal")
     principal.add_argument("--identity", required=True, choices=IDENTITIES)
-    principal.add_argument("--instance", required=True)
     principal.add_argument("--namespace-approval", help="the owner's approval ID for creating this identity's absent namespaces")
     return cli
 
@@ -1024,21 +813,22 @@ def parser() -> argparse.ArgumentParser:
 def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
     if args.seconds <= 0:
         raise SetupError("deadline", "--seconds must be positive")
+    services.verify_identity()
     if args.step == "catalog":
-        return step_catalog(services, args.instance, args.seconds)
+        return step_catalog(services, args.seconds)
     if args.step == "principal":
-        return step_principal(services, args.identity, args.instance, args.namespace_approval, args.seconds)
+        return step_principal(services, args.identity, args.namespace_approval, args.seconds)
     if args.step == "inspect":
-        return step_inspect(services, args.instance, args.seconds)
+        return step_inspect(services, args.seconds)
     return step_check(services, args.seconds)
 
 
 def main(argv: list[str] | None = None, services: Services | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        result = run(args, services or LiveServices(args.tunnel_port, args.relay_port))
-    except (SetupError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
-        code = f" ({error.code})" if isinstance(error, SetupError) else ""
+        result = run(args, services or HostServices(os.environ))
+    except (SetupError, StateError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
+        code = f" ({error.code})" if isinstance(error, SetupError | StateError) else ""
         sys.stderr.write(f"aws catalog setup {args.step}{code}: {error}\n")
         return 1
     sys.stdout.write(json.dumps(result, sort_keys=True, default=str) + "\n")

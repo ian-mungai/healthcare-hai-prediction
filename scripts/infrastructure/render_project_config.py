@@ -49,6 +49,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "alerts_topic_enabled",
     "athena_owner_is_project_user",
     "evidently_ui_prepared",
+    "host_catalog_setup_prepared",
     "prometheus_history_prepared",
     "publisher_secret_arns_enabled",
 )

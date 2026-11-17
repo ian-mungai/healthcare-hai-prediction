@@ -11,6 +11,7 @@ configuration_checks() {
   timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
   timed "configuration_checks: job IAM E2E" "$python_bin" -m scripts.infrastructure.run_jobs_iam_e2e --output "$quality_output/jobs_iam"
   timed "configuration_checks: Airflow launch policy cases" "$python_bin" -m scripts.infrastructure.airflow_launch_policy_cases --output "$quality_output/airflow_launch_policy"
+  timed "configuration_checks: Catalog setup policy cases" "$python_bin" -m scripts.infrastructure.catalog_setup_policy_cases --output "$quality_output/catalog_setup_policy"
   timed "configuration_checks: quality E2E" "$python_bin" -m scripts.quality.run_e2e --output-directory "$quality_output/e2e"
   timed "configuration_checks: case shards E2E" "$python_bin" -m scripts.quality.run_case_shards_e2e --output-directory "$quality_output/case_shards"
   timed "configuration_checks: persistent OpenMetadata bootstrap E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_persistent_e2e --output-root "$e2e_output/openmetadata_persistent"

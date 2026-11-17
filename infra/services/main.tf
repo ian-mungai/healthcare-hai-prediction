@@ -44,7 +44,7 @@ locals {
     "evidently_ui_restore"                  = "airflow"
     "host_prepare"                          = "airflow"
     "polaris_bootstrap"                     = "polaris"
-    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
+    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, local.catalog_setup_on ? { "catalog_setup" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter", "pushgateway", "host_state_exporter", "redis_exporter", "postgres_exporter", "node_exporter"] : name => "monitoring" if var.monitoring_enabled
     }, {
     for name in ["prometheus_history", "prometheus_restore"] : name => "monitoring" if local.prometheus_history_on

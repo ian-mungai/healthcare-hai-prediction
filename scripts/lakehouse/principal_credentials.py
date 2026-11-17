@@ -66,15 +66,21 @@ def ensure_credentials(
     request: Request,
     access: str,
     check: Check,
-    lock_path: Path,
+    lock_path: Path | None = None,
+    lock: contextlib.AbstractContextManager[None] | None = None,
 ) -> str:
     """Make sure the principal exists and its working client ID and secret are in Parameter Store; returns how the credentials were obtained.
 
     A stored pair that Polaris accepts is left alone. A missing, half-written or refused pair is replaced: the principal is created, or its
-    credentials are reset, and both new values are stored.
+    credentials are reset, and both new values are stored. The update runs under ``lock`` when the caller already holds the principal's lock (the
+    catalog setup task holds a leased lock in S3), otherwise under a file lock at ``lock_path``.
     """
     path = f"{MANAGEMENT}/{principal}"
-    with serialized(lock_path, principal, LOCK_WAIT_SECONDS):
+    if lock is None:
+        if lock_path is None:
+            raise CredentialError(f"the update of principal {principal} has no lock")
+        lock = serialized(lock_path, principal, LOCK_WAIT_SECONDS)
+    with lock:
         stored = [vault.find(name) for name in names]
         status, _ = request("GET", path, access)
         if status == 200 and stored[0] and stored[1] and pair_accepted(request, principal, stored[0], stored[1]):

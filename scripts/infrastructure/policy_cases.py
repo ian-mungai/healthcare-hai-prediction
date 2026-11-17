@@ -1188,7 +1188,15 @@ def job_project_cases() -> Iterator[Case]:
         for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
             yield Case(f"layer pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
         yield Case(f"layer pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
-    for name in ("job_train_task", "mlflow_task", "host_code_fetch_task", "prometheus_history_task", "prometheus_restore_task", "evidently_ui_task"):
+    for name in (
+        "job_train_task",
+        "mlflow_task",
+        "host_code_fetch_task",
+        "prometheus_history_task",
+        "prometheus_restore_task",
+        "evidently_ui_task",
+        "host_catalog_setup_task",
+    ):
         yield Case(
             f"training pass: {name} to ECS tasks",
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
@@ -1270,6 +1278,9 @@ def job_project_cases() -> Iterator[Case]:
         "prometheus_restore",
         "evidently_ui_task_extra",
         "evidently_ui",
+        "host_catalog_setup_task_extra",
+        "host_catalog_setup",
+        "catalog_setup_task",
     ):
         yield Case(
             f"training pass: refuse {name}",
@@ -3079,6 +3090,16 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         statement = by_sid(documents, "iam", "PassTrainingRoles")
         statement["Resource"] = [role("evidently_ui_task*") if item == role("evidently_ui_task") else item for item in as_list(statement["Resource"])]
 
+    def training_pass_without_catalog_setup_role(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        statement["Resource"] = [item for item in as_list(statement["Resource"]) if item != role("host_catalog_setup_task")]
+
+    def training_pass_catalog_setup_role_widened(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        statement["Resource"] = [
+            role("host_catalog_setup_task*") if item == role("host_catalog_setup_task") else item for item in as_list(statement["Resource"])
+        ]
+
     def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
 
@@ -3263,6 +3284,11 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "training pass: refuse host_code_fetch_task_extra",
                 training_pass_code_fetch_role_widened,
             ),
+            "training PassRole lacks the catalog setup task role": (
+                "training pass: host_catalog_setup_task to ECS tasks",
+                training_pass_without_catalog_setup_role,
+            ),
+            "catalog setup PassRole resource widened": ("training pass: refuse host_catalog_setup_task_extra", training_pass_catalog_setup_role_widened),
             "airflow launch PassRole resource widened": (
                 "airflow launch pass: refuse airflow_launch_task_extra",
                 job_resource("iam", "PassAirflowLaunchRole", 0, role("airflow_launch_task*")),

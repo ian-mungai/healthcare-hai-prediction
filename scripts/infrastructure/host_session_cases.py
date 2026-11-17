@@ -18,6 +18,7 @@ from typing import Any
 from orchestration.training_contract import MODEL_NAMES
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import (
+    host_session_catalog_cases,
     host_session_code_cases,
     host_session_entry_cases,
     host_session_group_signal,
@@ -1523,4 +1524,5 @@ CASES.update(host_session_refresh_cases.CASES)
 CASES.update(host_session_stop_cases.CASES)
 CASES.update(host_session_entry_cases.CASES)
 CASES.update(host_session_prometheus_cases.CASES)
+CASES.update(host_session_catalog_cases.CASES)
 CASES.update(DEPLOYED_REVISION_CASES)

@@ -44,7 +44,7 @@ from typing import Any
 from orchestration import launcher
 from orchestration.training_contract import compose_run_id, new_run_hex
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import principal_credentials, run_lock
+from scripts.lakehouse import polaris_writer, principal_credentials, run_lock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # The catalog, its credentials and its database belong to the main checkout, where the registry and the launcher live.
@@ -54,7 +54,7 @@ DEPLOYMENT = REPO_ROOT / "infra/deployment.auto.tfvars.json"
 CATALOG = "hai_lakehouse"
 READER = "lakehouse_reader"
 # Read-only privileges for the viewer; writes fail at the catalog even if a client allowed them (failure mode 56).
-READER_PRIVILEGES = ("CATALOG_READ_PROPERTIES", "NAMESPACE_LIST", "NAMESPACE_READ_PROPERTIES", "TABLE_LIST", "TABLE_READ_PROPERTIES", "TABLE_READ_DATA")
+READER_PRIVILEGES = polaris_writer.READER_PRIVILEGES
 POLARIS_HOST = "127.0.0.1"
 POLARIS_PORT = 8181
 # The start of this run: ``release`` skips unless the launcher created a container since then (failure mode R23).
