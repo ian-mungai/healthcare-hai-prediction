@@ -30,7 +30,9 @@ from scripts.infrastructure.host_session_stand_in import (
     CODE_FETCH_FAMILY,
     FAMILIES,
     GROUP,
+    HELD_RUN,
     HOST_ADDRESS,
+    JOBS_LOG_GROUP,
     LOG_GROUP,
     OPENMETADATA_FAMILY,
     OPENMETADATA_SERVICE,
@@ -82,6 +84,7 @@ def names(openmetadata: bool = False, code_fetch: bool = True, reload: bool = Tr
         reload=reload_task() if reload else None,
         host_address=HOST_ADDRESS if reload else "",
         log_group=LOG_GROUP if reload else "",
+        jobs_log_group=JOBS_LOG_GROUP if reload else "",
     )
 
 
@@ -1000,11 +1003,60 @@ def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, 
     }
 
 
+def a_skipped_reload_does_not_stop_start_and_is_reported() -> dict[str, bool]:
+    """Owner decision B, Nov 17 2026: a set whose reload ends skipped (a held newer run on a changed schema) loads nothing, and start goes on and says so."""
+    host, session, lines = build({"reload_skipped:m2"}, openmetadata=True)
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    skipped = [line for line in lines if line.startswith("online_store_reload_skipped")]
+    bootstrap_at = [index for index, entry in enumerate(host.log) if entry["options"].get("--task-definition") == [OPENMETADATA_FAMILY]]
+    return {
+        "start does not fail": message is None,
+        "every online set was launched, in order": [item["model"] for item in reload_runs(host)] == sets_online(),
+        "the skipped set is not online and the others are": sorted(host.online) == [model for model in sets_online() if model != "m2"],
+        "the catalog bootstrap still runs": len(bootstrap_at) == 1,
+        "the host stays on after a successful start": host.desired == 1 and not any(line.startswith("start_failed") for line in lines),
+        "the step log names the skipped set, the held run and the reason": len(skipped) == 1
+        and skipped[0].startswith("online_store_reload_skipped: m2:")
+        and HELD_RUN in skipped[0]
+        and "another schema" in skipped[0],
+        "the sets that loaded are reported as reloaded and the skipped one is not": "online_store_reloaded: m1" in lines
+        and "online_store_reloaded: m4" in lines
+        and "online_store_reloaded: m2" not in lines,
+        "the end of the reload step lists the sets that serve no online predictions": any(line.startswith("online_store_not_loaded: m2") for line in lines),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def a_start_with_every_set_loaded_reports_no_unloaded_set() -> dict[str, bool]:
+    host, session, lines = build()
+    session.start(code=(CODE_RUN, CODE_SHA))
+    return {
+        "every set is reported as reloaded": [line for line in lines if line.startswith("online_store_reloaded")]
+        == [f"online_store_reloaded: {model}" for model in sets_online()],
+        "no set is reported skipped or unloaded": not any(line.startswith(("online_store_reload_skipped", "online_store_not_loaded")) for line in lines),
+        "every set is online": sorted(host.online) == sorted(sets_online()),
+    }
+
+
+def a_reload_with_no_readable_result_is_reported_and_does_not_stop_start() -> dict[str, bool]:
+    """A task that exited 0 is a finished reload; when its log has no result line the outcome is unknown, which is reported by name, never as reloaded."""
+    host, session, lines = build({"reload_no_log"})
+    begun = host.now
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    unknown = [line for line in lines if line.startswith("online_store_reload_outcome_unknown")]
+    return {
+        "start does not fail": message is None and host.desired == 1,
+        "each set is reported with an unknown outcome": [line.split(":")[1].strip() for line in unknown] == sets_online(),
+        "no set is reported as reloaded": not any(line.startswith("online_store_reloaded") for line in lines),
+        "the wait for the log is bounded": host.now - begun < 3 * 400 + 5000,
+    }
+
+
 def start_without_code_reloads_the_recorded_run() -> dict[str, bool]:
     host, session, lines = build(checkout=OLD_SHA, code_run=OTHER_RUN)
     session.start()
     release = [item["launch"]["fetch"] for item in reload_runs(host)]
-    reads = [entry for entry in host.log if entry["service"] == "logs"]
+    reads = [entry for entry in host.log if entry["service"] == "logs" and entry["options"]["--log-group-name"] == [LOG_GROUP]]
     return {
         "every reload carries the run and digest recorded for the checkout": len(release) == len(sets_online())
         and all(item["CODE_RUN_ID"] == OTHER_RUN and item["CODE_SHA256"] == OLD_SHA for item in release),
@@ -1022,7 +1074,7 @@ def start_with_code_does_not_read_the_record() -> dict[str, bool]:
     modes = [(code_environment(item) or {}).get("CODE_MODE", "install") for item in runs_of(host, CODE_FETCH_FAMILY)]
     return {
         "the flags win: the code tasks are the install and the verification, with no identity task": modes == ["install", "verify"],
-        "no log is read": not any(entry["service"] == "logs" for entry in host.log),
+        "no identity log is read": not any(entry["service"] == "logs" and entry["options"]["--log-group-name"] == [LOG_GROUP] for entry in host.log),
         "every reload carries the run and digest given": all(
             item["launch"]["fetch"]["CODE_RUN_ID"] == CODE_RUN and item["launch"]["fetch"]["CODE_SHA256"] == CODE_SHA for item in reload_runs(host)
         ),
@@ -1251,6 +1303,10 @@ def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
         platform.pop("host_private_ip")
         platform.pop("log_group_names")
         bare = module.load_names({})
+        jobs["host_run_tasks"] = {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": variables}}}
+        named = module.load_names({"project_name": "stand_in", "environment": "dev"}, reload=True)
+        unnamed = module.load_names({}, reload=True)
+        plain_named = module.load_names({"project_name": "stand_in", "environment": "dev"})
     finally:
         module.terraform_document = original
     return {
@@ -1268,6 +1324,10 @@ def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
         )
         == (None, None, None, None),
         "a platform without the two outputs loads, so stop and status never wait on them": bare.host_address == "" and bare.log_group == "",
+        "the jobs log group is the one the jobs stack requires, from the project name and environment, for start only": named.jobs_log_group
+        == "stand_in_jobs_dev"
+        and unnamed.jobs_log_group == ""
+        and plain_named.jobs_log_group == "",
     }
 
 
@@ -1319,6 +1379,9 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
     "start_reloads_every_online_set_after_the_services_are_stable": start_reloads_every_online_set_after_the_services_are_stable,
+    "a_skipped_reload_does_not_stop_start_and_is_reported": a_skipped_reload_does_not_stop_start_and_is_reported,
+    "a_start_with_every_set_loaded_reports_no_unloaded_set": a_start_with_every_set_loaded_reports_no_unloaded_set,
+    "a_reload_with_no_readable_result_is_reported_and_does_not_stop_start": a_reload_with_no_readable_result_is_reported_and_does_not_stop_start,
     "start_without_code_reloads_the_recorded_run": start_without_code_reloads_the_recorded_run,
     "start_with_code_does_not_read_the_record": start_with_code_does_not_read_the_record,
     "start_without_a_code_record_is_refused": start_without_a_code_record_is_refused,

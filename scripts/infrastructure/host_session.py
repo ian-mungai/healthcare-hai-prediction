@@ -81,6 +81,9 @@ LOG_COMPONENT = "airflow"  # the log group component of the code one-shot (infra
 ONLINE_RELOAD = "online_reload"
 ONLINE_RELOAD_SECONDS = 2400  # the features task: code fetch, then the load of one set (feast_job.JOB_SECONDS is 1800)
 RELOAD_PHASE = "reload"
+RELOAD_LOG_STREAM = "features/feast"  # the awslogs stream prefix of the features task (its layer) and the container that runs the reload
+RELOAD_OUTCOMES = ("loaded", "already_loaded", "skipped")  # scripts.features.online_reload prints one line of JSON with one of these outcomes
+RELOAD_OUTCOME_SECONDS = 180
 RELOAD_CONTAINER = (
     "feast"  # the last container of the features task runs the reload (LAYER_PHASE reload); a task of an older revision lacks RELEASE_MODEL there
 )
@@ -163,6 +166,18 @@ def category(reason: object, categories: tuple[tuple[str, str], ...]) -> str:
     return next((name for needle, name in categories if needle in text), OTHER_REASON)
 
 
+def result_line(message: str, model: str) -> dict[str, Any] | None:
+    """The reload result of ``model`` that a log message holds: a JSON object with the set and one of ``RELOAD_OUTCOMES``, else None."""
+    text = message.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return None
+    return document if isinstance(document, dict) and document.get("feature_set") == model and document.get("outcome") in RELOAD_OUTCOMES else None
+
+
 def code_environment(overrides: dict[str, Any] | None, container: str) -> dict[str, str]:
     """The code environment variables (CODE_RUN_ID, CODE_SHA256) that the container overrides of a RunTask call or a described task set for ``container``."""
     containers = (overrides or {}).get("containerOverrides", [])
@@ -211,7 +226,9 @@ class Names:
 
     ``reload``, ``host_address`` and ``log_group`` are what ``start`` needs for the online store reload: the features task of the jobs stack, the host's private
     address (the Polaris endpoint the task is given) and the log group of the code one-shot (where its identity line is read). They are empty when the outputs
-    are missing or the command does not read them (only ``start`` does), and ``start`` refuses by name when one is empty."""
+    are missing or the command does not read them (only ``start`` does), and ``start`` refuses by name when one is empty. ``jobs_log_group`` is the jobs log
+    group of the project and environment (the name that the jobs stack requires), where the result line of a reload is read; it is empty for a command that
+    does not start or when the settings name no project, and then a reload's result is reported as unknown."""
 
     cluster: str
     group: str
@@ -223,6 +240,7 @@ class Names:
     reload: ReloadTask | None = None
     host_address: str = ""
     log_group: str = ""
+    jobs_log_group: str = ""
 
 
 def tolerant_runner(*args: Any, **kwargs: Any) -> CompletedProcess[str]:
@@ -272,6 +290,13 @@ def reload_task(jobs: dict[str, Any]) -> ReloadTask | None:
     return ReloadTask(family, {str(container): [str(name) for name in names] for container, names in variables.items()})
 
 
+def jobs_log_group(settings: dict[str, str]) -> str:
+    """The jobs log group of the project and environment, ``<project_name>_jobs_<environment>``: the only name that the jobs stack accepts for its log group
+    (infra/jobs/variables.tf, ``log_group_name``). Empty when the settings name no project or environment."""
+    project, environment = settings.get("project_name", ""), settings.get("environment", "")
+    return f"{project}_jobs_{environment}" if project and environment else ""
+
+
 def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None, reload: bool = False) -> Names:
     """Read the platform and services outputs with the project profile; with ``reload`` also the jobs outputs (``start`` only: a stop never waits for them).
 
@@ -303,6 +328,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         reload=reload_task(jobs),
         host_address=address if isinstance(address, str) else "",
         log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
+        jobs_log_group=jobs_log_group(settings) if reload else "",
     )
 
 
@@ -850,16 +876,59 @@ class Session:
             ]
         }
 
-    def reload_online_store(self, code: tuple[str, str]) -> None:
+    def reload_outcome(self, model: str, task: str) -> dict[str, Any] | None:
+        """The result line of a finished reload launch, from the task's log in the jobs log group: the JSON line that ``scripts.features.online_reload`` prints
+        for ``model`` (outcome ``loaded``, ``already_loaded`` or ``skipped``). None when the log has no such line within ``RELOAD_OUTCOME_SECONDS`` or cannot be
+        read: the task exited 0, so its reload finished, and only the report of its outcome is missing."""
+        if not self.names.jobs_log_group:
+            return None
+        stream = f"{RELOAD_LOG_STREAM}/{task.rsplit('/', 1)[-1]}"
+
+        def line() -> dict[str, Any] | None:
+            try:
+                events = self.call("logs", "get-log-events", ["--log-group-name", self.names.jobs_log_group, "--log-stream-name", stream, "--start-from-head"])
+            except HostSessionError as error:
+                if "ResourceNotFound" in str(error):
+                    return None
+                raise
+            found = [result_line(str(event.get("message", "")), model) for event in events.get("events", [])]
+            results = [item for item in found if item is not None]
+            return results[-1] if results else None
+
+        try:
+            return self.wait(f"online store reload log of set {model}", line, RELOAD_OUTCOME_SECONDS, TASK_POLL_SECONDS)
+        except HostSessionError:
+            return None
+
+    def reload_online_store(self, code: tuple[str, str]) -> list[str]:
         """Reload the online store of every online model set: one launch of the features task per set (``online_sets``), one after the other, each a
         feast container that loads the newest run of the set with load evidence again (``scripts.features.online_reload``). The store keeps no snapshot, so
-        it is empty after every start. A launch that is refused, fails or passes its deadline raises, and ``start`` then stops the host unless ``keep_on``."""
+        it is empty after every start. A launch that is refused, fails or passes its deadline raises, and ``start`` then stops the host unless ``keep_on``.
+
+        A launch that ends ``skipped`` (a held newer run on a changed schema, owner decision B, Nov 17 2026) is no failure: it loaded nothing, and the report
+        names the set, the held run and the reason. A launch whose log has no result line is reported as unknown. The answer is the sets that serve no
+        online features after the reload (skipped or unknown), also reported by one last line."""
+        unloaded: list[str] = []
         for model in online_sets():
             try:
-                self.one_shot(f"{ONLINE_RELOAD}_{model}", ONLINE_RELOAD_SECONDS, self.reload_overrides(model, code))
+                task = self.one_shot(f"{ONLINE_RELOAD}_{model}", ONLINE_RELOAD_SECONDS, self.reload_overrides(model, code))
             except HostSessionError as error:
                 raise HostSessionError(f"online store reload of set {model} failed: {error}") from None
-            self.step("online_store_reloaded", model)
+            outcome = self.reload_outcome(model, task)
+            if outcome is None:
+                unloaded.append(model)
+                self.step("online_store_reload_outcome_unknown", f"{model}: the launch exited 0 but its log has no result line; check the set's online store")
+            elif outcome["outcome"] == "skipped":
+                unloaded.append(model)
+                self.step("online_store_reload_skipped", f"{model}: {outcome.get('reason', 'no reason given')}")
+            else:
+                self.step("online_store_reloaded", model)
+        if unloaded:
+            self.step(
+                "online_store_not_loaded",
+                f"{', '.join(unloaded)}: no online features, so no online predictions from these sets' models, until a reload loads them",
+            )
+        return unloaded
 
     def refuse_missing_inputs(self, code: tuple[str, str] | None) -> None:
         """Refuse, before the host turns on, a start that cannot place its code or reload the online store."""

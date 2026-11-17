@@ -513,6 +513,82 @@ def case_e34_reload_skips_a_set_without_load_evidence(c: Checker) -> None:
         c.check("a set with no committed run is skipped too", none["outcome"] == "skipped" and store.loads == [])
 
 
+def case_e34_reload_skips_a_held_newer_run_on_a_changed_schema(c: Checker) -> None:
+    """A newer run that is held and not released, over an older run that was loaded on the schema the set had before, is skipped and named (owner decision B,
+    Nov 17 2026): nothing is loaded, because the older run's rows are on another schema than the set has now. Without a held newer run the same schema change
+    is still a refusal, and so is every other fault in the older run's record."""
+    online_reload: Any = importlib.import_module("scripts.features.online_reload")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m2", schema=schema)
+    held_new, older = RELOAD_RUNS[5], RELOAD_RUNS[4]
+    good = {"HAI_2": mine, "HAI_3": mine}
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        counter = [0]
+        store = Reloadable()
+
+        def attempt(*, held: bool = True, receipt: dict[str, Any] | None = None, release: str | None = None) -> dict[str, Any]:
+            """One reload with an optional held newer run, an older run that loaded itself (``receipt``) or an older run released on the schema ``release``."""
+            counter[0] += 1
+            holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+            runs = [older]
+            if held:
+                holds.write_new(feast_sets.HOLD_NAME, held_new, hold_of("m2", held_new, mine))
+                runs = [held_new, older]
+            if receipt is not None:
+                loaded_receipt(holds, schema, sha, "m2", older, **receipt)
+            if release is not None:
+                holds.write_new(feast_sets.HOLD_NAME, older, hold_of("m2", older, release))
+                holds.write_new(feast_sets.RELEASE_NAME, older, release_of("m2", older, release, sha))
+            return reload_run("m2", holds, runs=runs, store=store, production=lambda: dict(good))
+
+        for kind, change in (("loaded itself", {"receipt": {"set_schema_sha256": OLD_HASH}}), ("was released", {"release": OLD_HASH})):
+            result = attempt(**change)
+            c.check(f"a held newer run over an older run that {kind} on the old schema is skipped", result["outcome"] == "skipped")
+            c.check(f"the skip names the held run and the schema reason ({kind})", result["skipped_held"] == [held_new] and held_new in result["reason"])
+            c.check(f"the reason names the schema ({kind})", "another schema" in result["reason"])
+        c.check("nothing was loaded and the store holds nothing", store.loads == [] and store.marker is None)
+        c.refused(
+            "a changed schema without a held newer run is still refused (own load)",
+            lambda: attempt(held=False, receipt={"set_schema_sha256": OLD_HASH}),
+            "set_schema_sha256",
+        )
+        c.refused(
+            "a changed schema without a held newer run is still refused (release)", lambda: attempt(held=False, release=OLD_HASH), "schema of set m2 changed"
+        )
+        c.refused("a held newer run does not excuse a load record without a load ID", lambda: attempt(receipt={"load_id": None}), "load_id")
+        c.refused("a held newer run does not excuse a load record of another mode", lambda: attempt(receipt={"mode": "real"}), "mode")
+        c.refused(
+            "a held newer run does not excuse a load record with no schema hash", lambda: attempt(receipt={"set_schema_sha256": None}), "set_schema_sha256"
+        )
+        c.check("none of the refusals loaded anything", store.loads == [])
+        loaded = attempt(receipt={})
+        c.check(
+            "a held newer run over an older run on the current schema still loads the older run", loaded["outcome"] == "loaded" and loaded["run_id"] == older
+        )
+        c.check("the one load was the older run", store.loads == [f"m2:{older}:{BASE_RUN}"])
+        store.restart()
+        holds = feast_sets.FolderHoldStore(Path(raw) / "command")
+        holds.write_new(feast_sets.HOLD_NAME, held_new, hold_of("m2", held_new, mine))
+        loaded_receipt(holds, schema, sha, "m2", older, set_schema_sha256=OLD_HASH)
+        wiring: dict[str, Any] = {
+            "schema": (schema, sha),
+            "holds": holds,
+            "loader": store.loader(),
+            "runs": lambda name: [held_new, older],
+            "production": lambda: dict(good),
+        }
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = online_reload.main(["--model", "m2", "--run", LAUNCH_RUN, "--mode", "publish_fixture"], {}, **wiring)
+        line = json.loads(out.getvalue()) if out.getvalue().strip() else {}
+        c.check("the command exits 0 with one skipped line and no error text", code == 0 and err.getvalue() == "" and out.getvalue().count("\n") == 1)
+        c.check(
+            "the line names the outcome, the set, the held run and the reason",
+            (line.get("outcome"), line.get("feature_set"), line.get("skipped_held")) == ("skipped", "m2", [held_new]) and held_new in line.get("reason", ""),
+        )
+        c.check("the command loaded nothing", store.loads == [f"m2:{older}:{BASE_RUN}"] and store.marker is None)
+
+
 def case_e34_reload_refuses_what_does_not_fit(c: Checker) -> None:
     """A foreign hold, a record without a load, a changed schema, a Production model on another schema, an open promotion lease and a moved head each stop
     the reload by name, and nothing is loaded."""

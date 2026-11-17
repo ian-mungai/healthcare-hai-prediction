@@ -8,18 +8,20 @@ newest committed run that has load evidence, with the load that a release or a F
 - its own ``feast_materialize.json`` is a successful load of the set (``online`` is ``load``, with a load ID), or
 - it was held and its ``online_release.json`` is the release of that hold (``feast_sets.bound_release``).
 
-A newer run that is held and not released is skipped and named, because its load was never online; the older run with evidence is what the store served. The
-result is one of
+A newer run that is held and not released is skipped and named, because its load was never online; the older run with evidence is what the store served. When
+that older run's load is on another schema than the set has now, the reload does not load it either (owner decision B, Nov 17 2026): the set is skipped, naming
+the held run and the reason, until the held run is released. The result is one of
 
 - ``loaded``: the run's table was loaded online (the store was empty or held another load);
 - ``already_loaded``: the set's marker is ready for this run, schema and publication, so nothing is loaded again (``SetLoader.recover``);
-- ``skipped``: no committed run of the set has load evidence, so there is nothing that was ever online (a set that was never loaded, such as a fresh stack).
+- ``skipped``: no committed run of the set has load evidence, so there is nothing that was ever online (a set that was never loaded, such as a fresh stack), or
+  a held newer run sits over loaded runs on an older schema, so nothing may be loaded.
 
 Every other case is refused by name and loads nothing: a hold of another set or run, a release record or a load record that is not that run's, a set whose
-schema changed since the evidence was written, a Production model of the set on another schema, an unresolved promotion (an open lease), a set that is offline
-only or not a model set, and a publication whose table heads moved (``verify_heads`` inside the load). A reload writes no hold, release or load record: it
-changes the online store only, and the writer lease of the load serializes it with a release or a Feast load of the same set. Records hold names, counts and
-hashes only.
+schema changed since the evidence was written and that has no held newer run, a Production model of the set on another schema, an unresolved promotion
+(an open lease), a set that is offline only or not a model set, and a publication whose table heads moved (``verify_heads`` inside the load). A reload writes
+no hold, release or load record: it changes the online store only, and the writer lease of the load serializes it with a release or a Feast load of the same
+set. Records hold names, counts and hashes only.
 """
 
 from __future__ import annotations
@@ -40,6 +42,10 @@ from scripts.features.publication_reads import ReadError
 LOADED, ALREADY_LOADED, SKIPPED = "loaded", "already_loaded", "skipped"
 
 
+class SchemaChanged(ReadError):
+    """A run's load evidence is on another schema than the set has now and is otherwise its own (the one fault that a held newer run turns into a skip)."""
+
+
 def committed_runs(catalog: reads.IcebergCatalog, namespace: str, feature_set: str, schema: Mapping[str, Any]) -> list[str]:
     """The committed runs that publish the set's table, newest first (ties by the larger run ID); a retired run is no publication."""
     table = schema["model_sets"][feature_set]["table"]
@@ -50,6 +56,15 @@ def committed_runs(catalog: reads.IcebergCatalog, namespace: str, feature_set: s
         if table in reads.parse_snapshot_set(run, row.get("snapshot_set")) and not retired_publications.is_retired(namespace, run):
             found.append((reads.as_utc(row["committed_at"]), run))
     return [run for _, run in sorted(found, reverse=True)]
+
+
+def fits_but_for_schema(model: str, run: str, mode: str, loaded: Mapping[str, Any], holds: feast_sets.HoldStore) -> bool:
+    """True when ``loaded`` is the run's own successful load of the set for this request in every field but the schema hash it carries."""
+    try:
+        feast_sets.direct_load_record(model, run, mode, str(loaded.get("set_schema_sha256")), holds)
+    except ReadError:
+        return False
+    return True
 
 
 def evidence_of(model: str, run: str, set_hash: str, mode: str, holds: feast_sets.HoldStore) -> tuple[dict[str, Any] | None, bool]:
@@ -66,12 +81,17 @@ def evidence_of(model: str, run: str, set_hash: str, mode: str, holds: feast_set
             return None, True
         record = feast_sets.bound_release(released, hold, model, run)
         if record["set_schema_sha256"] != set_hash:
-            raise ReadError(f"the schema of set {model} changed since run {run} was released; nothing was loaded")
+            raise SchemaChanged(f"the schema of set {model} changed since run {run} was released; nothing was loaded")
         return record, False
     loaded = holds.read(feast_sets.MATERIALIZE_NAME, run)
     if loaded is None or loaded.get("online") != feature_sets.LOAD:
         return None, False
-    return feast_sets.direct_load_record(model, run, mode, set_hash, holds), False
+    try:
+        return feast_sets.direct_load_record(model, run, mode, set_hash, holds), False
+    except ReadError as error:
+        if fits_but_for_schema(model, run, mode, loaded, holds):
+            raise SchemaChanged(str(error)) from None
+        raise
 
 
 def reload_checked(
@@ -84,12 +104,24 @@ def reload_checked(
     runs: Callable[[str], Sequence[str]],
     production: Callable[[], Mapping[str, str | None]],
 ) -> dict[str, Any]:
-    """Select the newest run with load evidence and load it online, or report that the set has none."""
+    """Select the newest run with load evidence and load it online, or report that the set has none.
+
+    A newer run that is held and not released and an older run whose load is on another schema than the set has now (``SchemaChanged``) end in ``skipped``
+    with the held runs named: the older rows are never loaded on a wrong schema. The same schema change with no held newer run is refused."""
     document, _ = schema
     set_hash = feature_schema.set_schema_sha256(model, schema=document)
     skipped: list[str] = []
     for run in runs(model):
-        record, held = evidence_of(model, run, set_hash, mode, holds)
+        try:
+            record, held = evidence_of(model, run, set_hash, mode, holds)
+        except SchemaChanged:
+            if not skipped:
+                raise
+            reason = (
+                f"run {skipped[0]} is held and not released, and run {run}, the newest run that was loaded, is on another schema than set {model} has now; "
+                f"nothing was loaded until run {skipped[0]} is released"
+            )
+            return {"outcome": SKIPPED, "feature_set": model, "reason": reason, "skipped_held": skipped}
         if record is None:
             skipped += [run] if held else []
             continue

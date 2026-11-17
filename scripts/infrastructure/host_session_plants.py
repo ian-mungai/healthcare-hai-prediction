@@ -182,6 +182,16 @@ PLANTS: dict[str, tuple[str, str]] = {
     "never reloads the online store": ("            self.reload_online_store(identity)\n", ""),
     "reloads only the first online set": ("for model in online_sets():", "for model in online_sets()[:1]:"),
     "ignores a failed reload": ('raise HostSessionError(f"online store reload of set {model} failed: {error}") from None', "pass"),
+    "stops start for a skipped reload": (
+        "self.step(\"online_store_reload_skipped\", f\"{model}: {outcome.get('reason', 'no reason given')}\")",
+        'raise HostSessionError(f"online store reload of set {model} failed: skipped")',
+    ),
+    "reports a skipped reload as reloaded": ('elif outcome["outcome"] == "skipped":', 'elif outcome["outcome"] == "never":'),
+    "reports no set that serves nothing online": ("        if unloaded:\n", "        if False:\n"),
+    "reports an unreadable reload result as reloaded": (
+        "            if outcome is None:\n                unloaded.append(model)\n",
+        "            if False:\n                unloaded.append(model)\n",
+    ),
     "launches the reload without its phase": ('"LAYER_PHASE": RELOAD_PHASE,', '"LAYER_PHASE": "",'),
     "takes a running features task for the reload": (
         "if key.startswith(ONLINE_RELOAD):\n            return False",

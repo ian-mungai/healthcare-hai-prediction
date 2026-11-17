@@ -18,6 +18,7 @@ in ``FEATURES_RUN``. The release has no pin and no run folder of its own: the ru
 The same container runs the reload of the online store when the launch names ``reload`` in ``LAYER_PHASE`` (owner decision A, Nov 16 2026): ``host_session
 start`` launches it once per online model set after the services are stable. It needs only ``RELEASE_MODEL`` (the set) and runs
 ``scripts.features.online_reload``, which picks the run of the set itself, so ``FEATURES_RUN`` stays empty. Every build phase ends at once in a reload launch.
+Its result line (loaded, already loaded or skipped, a skip naming a held newer run and the reason) is what ``host_session start`` reads from the task's log.
 
 A features job takes ``FEATURE_SET`` (``--feature-set``): empty is the single path that builds every table, ``base`` the same tables as the base of the model
 sets, ``m1`` to ``m6`` one model table each. A model set pins the newest committed base run (``INPUT_RUN_ID`` names it; an older base run is refused) and
@@ -938,7 +939,8 @@ def feast(job: Job, bucket: str, client: Any) -> None:
 
 def reload(job: Job) -> None:
     """Reload the online store of the model set that the launch names (``scripts.features.online_reload``): the newest run of the set with load evidence is
-    loaded again, or the set is skipped when it has none. The module ends loaded, already loaded or skipped (exit 0), or refuses by name (exit 1)."""
+    loaded again, or the set is skipped when it has none or when a held newer run sits over runs loaded on an older schema.
+    The module ends loaded, already loaded or skipped (exit 0), or refuses by name (exit 1)."""
     model = os.environ.get(MODEL_VARIABLE, "")
     if not model:
         raise StepError(f"{MODEL_VARIABLE} is not set: a reload names the model set whose online store it loads")

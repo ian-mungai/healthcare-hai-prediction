@@ -30,7 +30,11 @@ OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 CODE_FETCH_FAMILY = "stand-in-code-fetch"
 RELOAD_FAMILY = "stand-in-features"
+HELD_RUN = "20261117T010000Z-0000a002"  # a held, not released run that a skipped reload names
+OLDER_RUN = "20261116T010000Z-0000a001"  # the run that a loaded reload names
 LOG_GROUP = "stand-in-airflow-log-group"
+JOBS_LOG_GROUP = "stand-in-jobs-log-group"
+RELOAD_STREAM = "features/feast"  # the awslogs stream prefix of the features task (the layer) and its container that runs the reload
 HOST_ADDRESS = "stand-in-host"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:111111111111:"
 BOOT_SECONDS = 120
@@ -99,8 +103,10 @@ class StandInHost:
     The features task (``online_reload``) and the code identity are always there: ``reload_fails:<set>`` makes the reload launch of that set exit 1,
     ``never_starts:<key>`` makes a task of the key stop without an exit code (``TaskFailedToStart``), ``task_seconds:<key>=<n>`` makes it run n virtual
     seconds, ``no_code_record`` makes the identity task refuse as a host with no run ID record does, ``no_identity_log`` and ``bad_identity_line`` make its
-    log empty or malformed. A log request (``get-log-events``) answers the output of a stopped task and fails with ``ResourceNotFoundException`` for a
-    stream or a group that has no such task.
+    log empty or malformed. A reload launch prints its result line (``online_reload`` prints one JSON line) in the jobs log group: ``loaded`` for its set,
+    ``reload_skipped:<set>`` makes it print ``skipped`` with a held run and a reason and exit 0, ``reload_no_log`` makes its log empty.
+    A log request (``get-log-events``) answers the output of a stopped task and fails with ``ResourceNotFoundException`` for a stream or a group that has no
+    such task.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
@@ -389,7 +395,17 @@ class StandInHost:
         )
         if code == 0 and f"reload_fails:{model}" in self.faults:
             return 1
+        if code == 0 and f"reload_skipped:{model}" in self.faults:
+            reason = f"run {HELD_RUN} is held and not released, and run {OLDER_RUN} is on another schema than set {model} has now; nothing was loaded"
+            self.pending_output = (
+                ""
+                if "reload_no_log" in self.faults
+                else json.dumps({"feature_set": model, "outcome": "skipped", "reason": reason, "skipped_held": [HELD_RUN]}, sort_keys=True)
+            )
+            return 0
         if code == 0:
+            if "reload_no_log" not in self.faults:
+                self.pending_output = json.dumps({"feature_set": model, "outcome": "loaded", "run_id": OLDER_RUN, "skipped_held": []}, sort_keys=True)
             fetch = launch.get("fetch", {})
             self.online[model] = (fetch.get("CODE_RUN_ID", ""), fetch.get("CODE_SHA256", ""))
         return code
@@ -398,7 +414,11 @@ class StandInHost:
         """The log of one task: its output once it stopped. A group other than the stand-in's, or a stream with no such task, is not found."""
         stream = options["--log-stream-name"][0].split("/")
         found = [task for arn, task in self.tasks.items() if arn.rsplit("/", 1)[-1] == stream[-1] and task["key"] == stream[0] == stream[1]]
-        if options["--log-group-name"] != [LOG_GROUP] or len(stream) != 3 or not found:
+        group = LOG_GROUP
+        if not found and len(stream) == 3 and f"{stream[0]}/{stream[1]}" == RELOAD_STREAM:
+            found = [task for arn, task in self.tasks.items() if arn.rsplit("/", 1)[-1] == stream[-1] and task["key"] == "online_reload"]
+            group = JOBS_LOG_GROUP
+        if options["--log-group-name"] != [group] or len(stream) != 3 or not found:
             raise StandInError("ResourceNotFoundException")
         task = found[0]
         events = [{"message": line} for line in task.get("output", "").splitlines()] if task["status"] == "STOPPED" else []
