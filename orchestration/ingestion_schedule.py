@@ -7,7 +7,7 @@ the first eight hex digits of the SHA-256 digest of the logical date, so the sam
 a repeat join the run it repeats and start nothing new. A scheduled run is always the ``monthly`` kind: only the hand trigger can start ``bootstrap``. The
 daily retry of failed files runs on days 2 and 3 after the monthly run of day 1 (the retry period) under a run ID fixed by the original run and the day
 (``ingestion_retry_<hex>_<day>``, the original run's hex), so the same day always joins its recorded launch. Bronze starts after the retry period
-(``orchestration/bronze_start.py``). The module reads no Airflow object and makes no call.
+(``dag_runtime.build_bronze_start``, which the two ingestion DAGs end with). The module reads no Airflow object and makes no call.
 """
 
 from __future__ import annotations

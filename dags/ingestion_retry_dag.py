@@ -5,7 +5,7 @@ The DAG carries its run kind as launch parameters: the original run, the retry d
 nothing new. The retry is a new run of the publisher: capture mode skips every unit that has a completion record, so a retry tries exactly the units that have
 none, and nothing is restored or pruned. Nothing is staged for the run but its code, and no step waits for the owner.
 In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on days 2 and 3 of each month at midnight UTC, and a scheduled run takes the monthly run of day 1
-as its original and the day of the month less one as its day (orchestration/ingestion_schedule.py); development keeps the hand trigger.
+as its original and the day of the month as its day, 2 or 3 (orchestration/ingestion_schedule.py); development keeps the hand trigger.
 
 The last retry day ends the retry period: its ``start_bronze`` task starts ``bronze_chain_dag`` under ``bronze_<hex>`` whatever the day's own result, because
 the files still missing then keep their earlier capture. A hand-started retry starts no bronze run.
