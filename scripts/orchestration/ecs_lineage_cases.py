@@ -1253,10 +1253,10 @@ def layer_dag_names_resolve_in_the_catalogue() -> None:
         require(len(completes) == len(declared["outputs"]), f"{dag}: {len(completes)} table events for {len(declared['outputs'])} published tables")
         names = {item["name"] for event in events for side in ("inputs", "outputs") for item in event[side]}
         inputs_in = tuple(
-            f"hai_lakehouse.hai_mirror_{schema}." for schema in {"features" if model else below[layer], layer}
+            f"hai_lakehouse.{schema}." for schema in {"features" if model else below[layer], layer}
         )  # a gold or features table may read its own layer
         require(
-            all(item["name"].startswith(f"hai_lakehouse.hai_mirror_{layer}.") for event in completes for item in event["outputs"]),
+            all(item["name"].startswith(f"hai_lakehouse.{layer}.") for event in completes for item in event["outputs"]),
             f"{dag}: an output is not in {layer}",
         )
         require(all(item["name"].startswith(inputs_in) for event in completes for item in event["inputs"]), f"{dag}: an input is not in {inputs_in}")
