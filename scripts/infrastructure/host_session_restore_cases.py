@@ -1,20 +1,23 @@
 """Host session cases for the restore after a teardown: the code run record kept outside the data volume and the check of the postgres task's database setup.
 
-The stand-in host here adds a Parameter Store (``get-parameter`` and ``put-parameter``) and a postgres service task whose setup containers end with an exit code
-the case chooses. A start on a fresh data volume finds no code record on the host, so it reads the record that an earlier start wrote to Parameter Store.
+The stand-in host here adds the record object in the data bucket (``s3api get-object`` and ``put-object``) and a postgres service task whose setup
+containers end with an exit code the case chooses.
+A start on a fresh data volume finds no code record on the host, so it reads the record that an earlier start wrote to the data bucket.
 """
 
 from __future__ import annotations
 
 import importlib
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import HostSessionError, Session
 from scripts.infrastructure.host_session_stand_in import PROFILE, REGION, SERVICES, StandInError, StandInHost
 
-RECORD_NAME = "/stand-in-project/code_run_record"
+RECORD_BUCKET = "stand-in-data-bucket"
+RECORD_KEY = "lakehouse/host_state/code_run_record.json"
 MLFLOW_USER_FAMILY = "stand-in-mlflow-user"
 POSTGRES_LOG_GROUP = "stand-in-postgres-log-group"
 POSTGRES_TASK = "arn:aws:ecs:stand-in:111111111111:task/stand-in-cluster/postgrestask0001"
@@ -30,26 +33,27 @@ class RecordHost(StandInHost):
 
     def __init__(self, faults: set[str] | None = None, setup_exits: dict[str, int] | None = None, **fields: Any) -> None:
         super().__init__(faults, code_fetch=True, **fields)
-        self.parameters: dict[str, str] = {}
+        self.record: str | None = None
         self.puts: list[dict[str, list[str]]] = []
         self.setup_exits = setup_exits
-        self.handlers[("ssm", "get-parameter")] = self.ssm_get_parameter
-        self.handlers[("ssm", "put-parameter")] = self.ssm_put_parameter
+        self.handlers[("s3api", "get-object")] = self.s3_get_object
+        self.handlers[("s3api", "put-object")] = self.s3_put_object
 
-    def ssm_get_parameter(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        if "ssm_denied" in self.faults:
-            raise StandInError("AccessDeniedException")
-        name = options["--name"][0]
-        if name not in self.parameters:
-            raise StandInError("ParameterNotFound")
-        return {"Parameter": {"Name": name, "Value": self.parameters[name]}}
+    def s3_get_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        if "s3_denied" in self.faults:
+            raise StandInError("AccessDenied")
+        key, target = options["--key"][0], options["--key"][1]
+        if key != RECORD_KEY or self.record is None:
+            raise StandInError("NoSuchKey")
+        Path(target).write_text(self.record, encoding="utf-8")
+        return {"ContentLength": len(self.record)}
 
-    def ssm_put_parameter(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        if "ssm_denied" in self.faults:
-            raise StandInError("AccessDeniedException")
+    def s3_put_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        if "s3_denied" in self.faults:
+            raise StandInError("AccessDenied")
         self.puts.append(options)
-        self.parameters[options["--name"][0]] = options["--value"][0]
-        return {"Version": len(self.puts)}
+        self.record = Path(options["--body"][0]).read_text(encoding="utf-8").strip()
+        return {"ETag": "stand-in"}
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         if self.setup_exits is not None and options.get("--service-name") == [SERVICES["postgres"]]:
@@ -88,7 +92,7 @@ def build(
     named: bool = True,
     mlflow_user: bool = False,
 ) -> tuple[RecordHost, Session, list[str]]:
-    """A session over the stand-in. ``record`` is the value of the code run record parameter; ``named`` gives the session the parameter and log group names."""
+    """A session over the stand-in. ``record`` is the value of the code run record; ``named`` gives the session the parameter and log group names."""
     from dataclasses import replace
 
     cases = importlib.import_module("scripts.infrastructure.host_session_cases")
@@ -96,10 +100,9 @@ def build(
     host, lines = RecordHost(faults, setup_exits, checkout=checkout, code_run=code_run), list[str]()
     if mlflow_user:
         host.families["mlflow_user"] = MLFLOW_USER_FAMILY
-    if record is not None:
-        host.parameters[RECORD_NAME] = record
-    cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
-    names = replace(cases.names(), code_record=RECORD_NAME, postgres_log_group=POSTGRES_LOG_GROUP) if named else cases.names()
+    host.record = record
+    cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION, "data_bucket_name": RECORD_BUCKET, "expected_account_id": "1" * 12}, host.runner)
+    names = replace(cases.names(), code_record_bucket=RECORD_BUCKET, postgres_log_group=POSTGRES_LOG_GROUP) if named else cases.names()
     if mlflow_user:
         names = replace(names, one_shot={**names.one_shot, "mlflow_user": MLFLOW_USER_FAMILY})
     marker = cases.Path(cases.tempfile.mkdtemp(prefix="host_session_restore_")) / "polaris_bootstrap.launched"
@@ -124,10 +127,8 @@ def start_with_code_writes_the_record_outside_the_volume() -> dict[str, bool]:
     session.start(code=(RUN_NEW, SHA_NEW))
     put = host.puts[-1] if host.puts else {}
     return {
-        "the record holds the run ID and the digest": host.parameters.get(RECORD_NAME) == f"{RUN_NEW} {SHA_NEW}",
-        "it is one overwrite of a String parameter under the named parameter": put.get("--type") == ["String"]
-        and "--overwrite" in put
-        and put.get("--name") == [RECORD_NAME],
+        "the record holds the run ID and the digest": host.record == f"{RUN_NEW} {SHA_NEW}",
+        "it is one put of the record key": put.get("--key") == [RECORD_KEY],
         "the report names the run only": f"code_record_written: {RUN_NEW}" in lines and not any(SHA_NEW in line for line in lines),
     }
 
@@ -136,7 +137,7 @@ def start_without_flags_writes_the_identity_of_the_checkout() -> dict[str, bool]
     host, session, _ = build()
     session.start()
     return {
-        "the record is the run and digest that the host shows": host.parameters.get(RECORD_NAME) == f"{RUN_OLD} {SHA_OLD}",
+        "the record is the run and digest that the host shows": host.record == f"{RUN_OLD} {SHA_OLD}",
         "one write": len(host.puts) == 1,
     }
 
@@ -149,7 +150,7 @@ def start_on_a_fresh_volume_uses_the_stored_record() -> dict[str, bool]:
         "the report says the stored record was used": f"code_record_used: {RUN_NEW}" in lines,
         "every reload carries the stored run and digest": bool(host.reloads)
         and all(item["launch"]["fetch"]["CODE_RUN_ID"] == RUN_NEW and item["launch"]["fetch"]["CODE_SHA256"] == SHA_NEW for item in host.reloads),
-        "the record is unchanged in content": host.parameters.get(RECORD_NAME) == f"{RUN_NEW} {SHA_NEW}",
+        "the record is unchanged in content": host.record == f"{RUN_NEW} {SHA_NEW}",
         "the host stays on": host.desired == 1,
     }
 
@@ -162,7 +163,7 @@ def start_on_a_fresh_volume_uses_a_stored_record_of_a_run_named_by_the_one_form(
     return {
         "the stored archive is installed": host.checkout == SHA_NEW and host.code_run == run,
         "the report says the stored record was used": f"code_record_used: {run}" in lines,
-        "the record is unchanged in content": host.parameters.get(RECORD_NAME) == f"{run} {SHA_NEW}",
+        "the record is unchanged in content": host.record == f"{run} {SHA_NEW}",
     }
 
 
@@ -171,7 +172,7 @@ def start_prefers_the_record_of_the_checkout_over_the_stored_one() -> dict[str, 
     session.start()
     return {
         "the checkout is kept": host.checkout == SHA_OLD,
-        "the stored record is replaced by what the host shows": host.parameters.get(RECORD_NAME) == f"{RUN_OLD} {SHA_OLD}",
+        "the stored record is replaced by what the host shows": host.record == f"{RUN_OLD} {SHA_OLD}",
         "the stored record was not used": not any(line.startswith("code_record_used") for line in lines),
     }
 
@@ -190,13 +191,13 @@ def a_malformed_stored_record_is_refused_by_name() -> dict[str, bool]:
     host, session, _ = build(checkout=None, code_run=None, record="not a record")
     message = failure(session.start)
     return {
-        "start fails and names the parameter form": message is not None and "code run record" in message and "unexpected form" in message,
+        "start fails and names the record form": message is not None and "code run record" in message and "unexpected form" in message,
         "nothing is deployed and the host is off": not any(entry["operation"] == "update-service" for entry in host.log) and host.desired == 0,
     }
 
 
 def an_unreadable_stored_record_is_named_when_the_volume_is_fresh() -> dict[str, bool]:
-    host, session, _ = build({"ssm_denied"}, checkout=None, code_run=None)
+    host, session, _ = build({"s3_denied"}, checkout=None, code_run=None)
     message = failure(session.start)
     return {
         "start fails and names the unreadable record": message is not None and "code run record" in message and "AccessDenied" in message,
@@ -205,7 +206,7 @@ def an_unreadable_stored_record_is_named_when_the_volume_is_fresh() -> dict[str,
 
 
 def a_failed_record_write_is_reported_and_start_continues() -> dict[str, bool]:
-    host, session, lines = build({"ssm_denied"})
+    host, session, lines = build({"s3_denied"})
     session.start(code=(RUN_NEW, SHA_NEW))
     return {
         "start finishes and the host stays on": host.desired == 1 and bool(host.reloads),
@@ -214,10 +215,10 @@ def a_failed_record_write_is_reported_and_start_continues() -> dict[str, bool]:
     }
 
 
-def a_session_without_the_parameter_name_neither_reads_nor_writes() -> dict[str, bool]:
+def a_session_without_the_bucket_name_neither_reads_nor_writes() -> dict[str, bool]:
     host, session, _ = build(named=False)
     session.start()
-    return {"no parameter call": not any(entry["service"] == "ssm" for entry in host.log)}
+    return {"no record call": not any(entry["service"] == "s3api" for entry in host.log)}
 
 
 def start_fails_by_name_when_the_database_setup_failed() -> dict[str, bool]:

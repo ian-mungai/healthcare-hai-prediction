@@ -1690,6 +1690,7 @@ def case_import_closure(_: Path) -> dict[str, bool]:
 
     allowed = {
         "scripts.lakehouse.aws_catalog_setup",
+        "scripts.lakehouse.catalog_restore",
         "scripts.lakehouse.catalog_setup_state",
         "scripts.lakehouse.polaris_writer",
         "scripts.lakehouse.principal_credentials",
@@ -1697,6 +1698,8 @@ def case_import_closure(_: Path) -> dict[str, bool]:
         "scripts.infrastructure.secret_store",
         "scripts.acquisition.raw_root",
         "scripts.sdk_logs",
+        "scripts.resource_peaks",
+        "scripts.metrics_push",
     }
     standard = sys.stdlib_module_names
     seen: set[str] = set()

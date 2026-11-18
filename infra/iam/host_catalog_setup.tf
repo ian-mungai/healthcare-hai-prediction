@@ -19,16 +19,19 @@ locals {
   catalog_setup_ssm_arn      = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter"
   catalog_setup_records      = "arn:aws:s3:::${var.data_bucket_name}/lakehouse/catalog_setup"
   catalog_setup_record_scope = "lakehouse/catalog_setup/"
+  # The three folders where each publish writes its catalog backup and committed snapshot. The restore step reads them and nothing else of the data.
+  catalog_backup_folders = ["lakehouse/catalog_backups/", "lakehouse/silver/catalog_backups/", "lakehouse/features/catalog_backups/"]
 }
 
-# The catalog setup one-shot sets up the AWS catalog and each identity's roles, grants and pair, and nothing else: the pair parameters, its own S3 records (write-once approvals,
-# leased locks, pending-write marks), the services apply lock that every host launch honours, and the listing of the project's tasks that proves no job is live. It holds no grant
-# on the Polaris root secret (the execution role injects it), no read of the data, no write outside lakehouse/catalog_setup/ and no other service.
+# The catalog setup one-shot sets up the AWS catalog and each identity's roles, grants and pair, and restores the catalog tables from the publish backups after a database restore.
+# It holds the pair parameters, its own S3 records (write-once approvals, leased locks, pending-write marks), the services apply lock that every host launch honours, the listing
+# of the project's tasks that proves no job is live, and the read of the three catalog backup folders. It holds no grant on the Polaris root secret (the execution role injects
+# it), no read of the data beyond those backup files, no write outside lakehouse/catalog_setup/ and no other service.
 resource "aws_iam_role" "host_catalog_setup_task" {
   count = var.host_catalog_setup_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "host_catalog_setup_task")
-  description          = "Catalog setup one-shot on the container host: the AWS Polaris pair parameters, its own S3 records, the services apply lock and the task listing, and nothing else."
+  description          = "Catalog setup one-shot on the container host: the AWS Polaris pair parameters, its own S3 records, the services apply lock, the task listing and the read of the catalog backup folders, and nothing else."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags
@@ -40,13 +43,15 @@ resource "aws_iam_role_policy" "host_catalog_setup_task" {
   name = "catalog_setup"
   role = aws_iam_role.host_catalog_setup_task[0].name
   policy = templatefile("${path.module}/owner_policies/host_catalog_setup.json", {
-    PAIR_ARNS    = jsonencode([for name in local.catalog_setup_pair_names : "${local.catalog_setup_ssm_arn}${name}"])
-    HOLD_ARN     = "${local.catalog_setup_ssm_arn}${var.services_apply_lock_parameter_name}"
-    RECORDS_ARN  = local.catalog_setup_records
-    BUCKET_ARN   = "arn:aws:s3:::${var.data_bucket_name}"
-    RECORD_SCOPE = local.catalog_setup_record_scope
-    CLUSTER_ARN  = "${local.ecs_arn}:cluster/${local.cluster_name}"
-    TASK_ARN     = "${local.ecs_arn}:task/${local.cluster_name}/*"
+    PAIR_ARNS       = jsonencode([for name in local.catalog_setup_pair_names : "${local.catalog_setup_ssm_arn}${name}"])
+    HOLD_ARN        = "${local.catalog_setup_ssm_arn}${var.services_apply_lock_parameter_name}"
+    RECORDS_ARN     = local.catalog_setup_records
+    BUCKET_ARN      = "arn:aws:s3:::${var.data_bucket_name}"
+    RECORD_SCOPE    = local.catalog_setup_record_scope
+    SNAPSHOT_ARNS   = jsonencode([for folder in local.catalog_backup_folders : "arn:aws:s3:::${var.data_bucket_name}/${folder}*"])
+    SNAPSHOT_SCOPES = jsonencode([for folder in local.catalog_backup_folders : "${folder}*"])
+    CLUSTER_ARN     = "${local.ecs_arn}:cluster/${local.cluster_name}"
+    TASK_ARN        = "${local.ecs_arn}:task/${local.cluster_name}/*"
   })
 }
 

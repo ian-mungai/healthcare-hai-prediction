@@ -8,6 +8,7 @@ profile are involved. The steps and their arguments:
     check
     inspect
     principal --identity reader|e2e|bronze|silver|gold|features|serving [--namespace-approval <APPROVAL_ID>]
+    restore [--dry-run]
 
 Every catalog request runs once within the step's absolute deadline. A lost reply fails visibly and is never repeated inside a run; a rerun converges,
 because an existing catalog with the expected location and credential mode is ``already present`` and one that differs is refused, never changed.
@@ -19,6 +20,10 @@ status only. The result is one JSON line on standard output, which ``host_sessio
 ``check`` reports each of the fourteen AWS Polaris pair parameters, the features pair included, by exact name with its type and version, never a value.
 It reads without decryption and drops the encrypted value unread. ``inspect`` is the authenticated read: it reads the AWS catalog and each identity's
 roles and grants and changes nothing.
+
+``restore`` brings the catalog tables to the newest publish backup of each layer after a database restore (``catalog_restore``): it reads the backup folders
+of the data bucket under the task role and registers or advances each table through the root credential. ``host_session start`` launches it after a start that
+restored a database; ``--dry-run`` reports what would change and writes nothing.
 
 ``principal`` sets up one AWS identity: its principal role, catalog role, grants and credentials. The grants are the approved plan of the
 identity (``bronze_writer.grant_plan`` for ``bronze`` and ``e2e``, which also gets the table grants on ``silver_e2e``, ``gold_e2e`` and
@@ -59,7 +64,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts import resource_peaks
 from scripts.infrastructure import secret_store
-from scripts.lakehouse import bronze_writer, polaris_writer, principal_credentials
+from scripts.lakehouse import bronze_writer, catalog_restore, polaris_writer, principal_credentials
 from scripts.lakehouse.catalog_setup_state import (
     RESOLVE,
     CatalogState,
@@ -73,7 +78,7 @@ from scripts.lakehouse.catalog_setup_state import (
     run_bounded,
 )
 
-CATALOG = "hai_lakehouse"
+CATALOG = catalog_restore.CATALOG
 POLARIS_HOST = "127.0.0.1"
 POLARIS_PORT = 8181
 ROOT_CLIENT_ID = "root"
@@ -109,12 +114,9 @@ Clock = Callable[[], float]
 Request = Callable[..., tuple[int, Any]]
 
 
-class SetupError(RuntimeError):
-    """A setup step failed; ``code`` names the step and the message never holds a credential or a parameter value."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
+class SetupError(catalog_restore.RestoreError):
+    """A setup step failed; ``code`` names the step and the message never holds a credential or a parameter value. It is a ``RestoreError``, so the restore
+    logic, which imports nothing from this module, handles a request that fails inside it like its own failures."""
 
 
 def check_deadline(deadline: float, clock: Clock = time.monotonic) -> float:
@@ -433,6 +435,8 @@ class Services(Protocol):
 
     def vault(self) -> PairVault: ...
 
+    def backup_store(self, left: float) -> catalog_restore.Store: ...
+
 
 def step_catalog(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
     """Create or verify the AWS catalog."""
@@ -472,6 +476,15 @@ def step_inspect(services: Services, seconds: float, clock: Clock = time.monoton
         result["principals"] = check_principals(request, access, services.state.bounded(Deadline(deadline, clock)))
         result["causes"] = stored_pair_causes(request, vault, result["principals"])
     return result
+
+
+def step_restore(services: Services, seconds: float, *, apply: bool, clock: Clock = time.monotonic) -> dict[str, Any]:
+    """Bring the catalog tables to the newest publish backup of each folder; ``apply`` false reports what would change and writes nothing."""
+    deadline = clock() + seconds
+    store = services.backup_store(seconds)
+    request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
+    access = root_token(request, services.root_secret())
+    return catalog_restore.restore_catalog(store, services.bucket, request, access, apply=apply, deadline=deadline, clock=clock)
 
 
 def namespace_set(identity: str) -> tuple[str, ...]:
@@ -839,6 +852,9 @@ class HostServices:
     def vault(self) -> PairVault:
         return PairVault(self.client("ssm"))
 
+    def backup_store(self, left: float) -> catalog_restore.Store:
+        return catalog_restore.LiveStore(self.bounded_client("s3", left), self.bucket)
+
 
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
@@ -850,6 +866,8 @@ def parser() -> argparse.ArgumentParser:
     principal = steps.add_parser("principal")
     principal.add_argument("--identity", required=True, choices=IDENTITIES)
     principal.add_argument("--namespace-approval", help="the owner's approval ID for creating this identity's absent namespaces")
+    restore = steps.add_parser("restore")
+    restore.add_argument("--dry-run", action="store_true", help="report what would change and write nothing")
     return cli
 
 
@@ -865,6 +883,8 @@ def run(args: argparse.Namespace, services: Services) -> dict[str, Any]:
         return step_principal(services, args.identity, args.namespace_approval, left)
     if args.step == "inspect":
         return step_inspect(services, left)
+    if args.step == "restore":
+        return step_restore(services, left, apply=not args.dry_run)
     return step_check(services, left)
 
 
@@ -872,8 +892,8 @@ def main(argv: list[str] | None = None, services: Services | None = None) -> int
     args = parser().parse_args(argv)
     try:
         result = run(args, services or HostServices(os.environ))
-    except (SetupError, StateError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
-        code = f" ({error.code})" if isinstance(error, SetupError | StateError) else ""
+    except (catalog_restore.RestoreError, StateError, secret_store.SecretStoreError, bronze_writer.BindingError, OSError, ValueError) as error:
+        code = f" ({error.code})" if isinstance(error, catalog_restore.RestoreError | StateError) else ""
         sys.stderr.write(f"aws catalog setup {args.step}{code}: {error}\n")
         return 1
     sys.stdout.write(json.dumps(result, sort_keys=True, default=str) + "\n")

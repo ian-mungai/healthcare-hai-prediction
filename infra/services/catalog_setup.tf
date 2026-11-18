@@ -1,5 +1,5 @@
 variable "catalog_setup_task_role_arn" {
-  description = "IAM output host_catalog_setup_role: the task role of the catalog setup one-shot. It reads and writes only the fourteen AWS Polaris pair parameters, the setup's own S3 records and the services apply lock, and lists the project's job tasks. Null plans no catalog setup one-shot, and host_session catalog-setup then refuses."
+  description = "IAM output host_catalog_setup_role: the task role of the catalog setup one-shot. It reads and writes only the fourteen AWS Polaris pair parameters, the setup's own S3 records and the services apply lock, lists the project's job tasks and reads the catalog backup folders of the data bucket for the restore step. Null plans no catalog setup one-shot, and host_session catalog-setup then refuses."
   type        = string
   default     = null
 
@@ -28,7 +28,8 @@ locals {
   # The catalog setup runs the tracked module scripts.lakehouse.aws_catalog_setup from the checkout that host_session places as /data/repo, in the Airflow image
   # (boto3 and the Python standard library are all it imports; a Terraform-independent E2E case checks that). It uses host networking, so Polaris is its own
   # 127.0.0.1:8181. The execution role injects the Polaris root secret as POLARIS_ROOT_SECRET, as for polaris_bootstrap, so the task role holds no grant on it.
-  # The registered command is the read-only check. host_session catalog-setup overrides the command with the step and its arguments for each launch.
+  # The registered command is the read-only check. host_session catalog-setup overrides the command with the step and its arguments for each launch, and host_session start
+  # launches the restore step after a start that restored a database.
   catalog_setup_task = {
     network_mode  = "host"
     task_role_arn = var.catalog_setup_task_role_arn

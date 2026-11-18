@@ -54,6 +54,19 @@
       "Resource": ["${RECORDS_ARN}/approvals/*", "${RECORDS_ARN}/locks/*"]
     },
     {
+      "Sid": "ReadCatalogBackups",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": ${SNAPSHOT_ARNS}
+    },
+    {
+      "Sid": "ListCatalogBackupFolders",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "${BUCKET_ARN}",
+      "Condition": { "StringLike": { "s3:prefix": ${SNAPSHOT_SCOPES} } }
+    },
+    {
       "Sid": "ListProjectTasks",
       "Effect": "Allow",
       "Action": "ecs:ListTasks",

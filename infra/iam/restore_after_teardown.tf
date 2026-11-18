@@ -5,18 +5,6 @@ variable "restore_after_teardown_prepared" {
   nullable    = false
 }
 
-variable "code_run_record_parameter_name" {
-  description = "Parameter Store name of the code run record: the run ID and digest of the code that host_session placed on the host, kept outside the data volume. The project user reads and writes it (it is under the project prefix, so the secret store policy names it)."
-  type        = string
-  default     = "/healthcare_hai_prediction/code_run_record"
-  nullable    = false
-
-  validation {
-    condition     = can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.code_run_record_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.code_run_record_parameter_name))
-    error_message = "Use a parameter path that starts with a slash and has letters, digits and underscores only."
-  }
-}
-
 locals {
   restore_after_teardown_statements = {
     # The backup service creates each dump and each marker once: the condition makes S3 refuse a key that exists. It has no read, no listing and no delete.
@@ -91,13 +79,4 @@ resource "aws_iam_role_policy" "restore_after_teardown" {
 output "restore_after_teardown_roles" {
   description = "The task role name and ARN of postgres_backup, postgres_restore and mlflow_user. Empty until restore_after_teardown_prepared is true. The services root takes the ARNs as postgres_backup_task_role_arn, postgres_restore_task_role_arn and mlflow_user_task_role_arn."
   value       = { for key, role in aws_iam_role.restore_after_teardown : key => { name = role.name, arn = role.arn } }
-}
-
-# The project user's policy files read this name from the variable default (scripts/infrastructure/secret_store.py), so no resource here uses it. The check reads it so
-# an unused declaration is not removed by mistake.
-check "code_run_record_parameter_is_under_the_project_prefix" {
-  assert {
-    condition     = startswith(var.code_run_record_parameter_name, "/healthcare_hai_prediction/") || startswith(var.code_run_record_parameter_name, "/${var.project_name}/")
-    error_message = "The code run record parameter belongs under the project prefix, where the project user's policy names it."
-  }
 }

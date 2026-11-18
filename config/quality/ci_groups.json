@@ -215,7 +215,7 @@
       "^monitoring/",
       "^\\.env\\.example$",
       "^orchestration/layer_report\\.py$",
-      "^scripts/lakehouse/(aws_catalog_setup|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
     "configuration_host_checks": [
@@ -232,7 +232,7 @@
       "^monitoring/",
       "^\\.env\\.example$",
       "^orchestration/layer_report\\.py$",
-      "^scripts/lakehouse/(aws_catalog_setup|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
       "^scripts/ci/groups/configuration_host_checks\\.sh$"
     ],
     "sql_style": [

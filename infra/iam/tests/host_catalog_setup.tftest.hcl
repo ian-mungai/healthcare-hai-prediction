@@ -80,7 +80,7 @@ run "the_catalog_setup_role_reaches_exactly_the_fourteen_pairs_and_nothing_of_th
 
   assert {
     condition = (
-      length(jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement) == 10
+      length(jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement) == 12
       && length([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement if statement.Sid == "SetUpAwsPolarisPairs"]) == 1
       && length(one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Resource if statement.Sid == "SetUpAwsPolarisPairs"])) == 14
       && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Action if statement.Sid == "SetUpAwsPolarisPairs"]) == ["ssm:GetParameter", "ssm:PutParameter"]
@@ -143,5 +143,42 @@ run "the_catalog_setup_role_writes_only_its_own_records_and_the_apply_lock" {
       && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Resource if statement.Sid == "DescribeProjectTasks"]) == "arn:aws:ecs:eu-west-1:111111111111:task/example_project_cluster_dev/*"
     )
     error_message = "The task listing is limited to the project cluster, and the task description to tasks of that cluster."
+  }
+}
+
+run "the_catalog_setup_role_reads_only_the_three_catalog_backup_folders_of_the_data" {
+  command = plan
+
+  variables {
+    host_catalog_setup_prepared = true
+  }
+
+  assert {
+    condition = (
+      one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Action if statement.Sid == "ReadCatalogBackups"]) == "s3:GetObject"
+      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Resource if statement.Sid == "ReadCatalogBackups"]) == [
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/catalog_backups/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/catalog_backups/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/catalog_backups/*",
+      ]
+    )
+    error_message = "The restore step reads the object of the three catalog backup folders and no other data object."
+  }
+
+  assert {
+    condition = (
+      one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Action if statement.Sid == "ListCatalogBackupFolders"]) == "s3:ListBucket"
+      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.StringLike["s3:prefix"] if statement.Sid == "ListCatalogBackupFolders"]) == [
+        "lakehouse/catalog_backups/*",
+        "lakehouse/silver/catalog_backups/*",
+        "lakehouse/features/catalog_backups/*",
+      ]
+    )
+    error_message = "The listing of the bucket is limited to the three catalog backup folders."
+  }
+
+  assert {
+    condition     = length([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement if statement.Effect == "Allow" && contains(flatten([statement.Action]), "s3:PutObject")]) == 1
+    error_message = "Only the setup's own records statement writes to S3."
   }
 }

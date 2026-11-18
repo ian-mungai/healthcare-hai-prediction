@@ -25,6 +25,7 @@ import json
 import re
 import signal
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -73,7 +74,7 @@ MLFLOW_USER_SKIPPED = 3  # the exit code of the task when the model API login is
 MLFLOW_USER_SECONDS = 300
 CODE_FETCH = "code_fetch"
 CATALOG_SETUP = "catalog_setup"
-CATALOG_STEPS = ("catalog", "check", "inspect", "principal")
+CATALOG_STEPS = ("catalog", "check", "inspect", "principal", "restore")
 CATALOG_IDENTITIES = ("reader", "e2e", "bronze", "silver", "gold", "features", "serving")
 CATALOG_APPROVAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 CATALOG_STEP_SECONDS = 600
@@ -109,6 +110,7 @@ RELOAD_CONTAINER = (
 )
 RELOAD_VARIABLE = "RELEASE_MODEL"
 POLARIS_PORT = 8181
+CODE_RECORD_KEY = "lakehouse/host_state/code_run_record.json"
 CODE_RECORD = re.compile(rf"({CODE_RUN}) ([a-f0-9]{{64}})")
 SETUP_CONTAINERS = ("postgres_restore_fetch", "postgres_databases")  # the setup containers of the postgres task, in the order they run
 SETUP_REASON_WORDS = ("refused", "failed")
@@ -273,8 +275,8 @@ class ReloadTask:
 class Names:
     """The names a session needs, read from Terraform outputs; ``services`` has the first service first.
 
-    ``code_record`` is the Parameter Store name of the code run record kept outside the data volume and ``postgres_log_group`` the log group of the postgres
-    task; an empty value switches the record or the log read off.
+    ``code_record_bucket`` is the data bucket that holds the code run record kept outside the data volume (``CODE_RECORD_KEY``) and ``postgres_log_group`` the
+    log group of the postgres task; an empty value switches the record or the log read off.
 
     ``reload``, ``host_address`` and ``log_group`` are what ``start`` needs for the online store reload: the features task of the jobs stack, the host's private
     address (the Polaris endpoint the task is given) and the log group of the code one-shot (where its identity line is read). They are empty when the outputs
@@ -293,7 +295,7 @@ class Names:
     host_address: str = ""
     log_group: str = ""
     jobs_log_group: str = ""
-    code_record: str = ""
+    code_record_bucket: str = ""
     postgres_log_group: str = ""
 
 
@@ -387,7 +389,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         host_address=address if isinstance(address, str) else "",
         log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
         jobs_log_group=jobs_log_group(settings) if reload else "",
-        code_record=f"/{settings['project_name']}/code_run_record" if settings.get("project_name") else "",
+        code_record_bucket=settings.get("data_bucket_name", ""),
         postgres_log_group=groups.get(POSTGRES_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(POSTGRES_COMPONENT), str) else "",
     )
 
@@ -1017,31 +1019,36 @@ class Session:
         return "repo shows a verified checkout, not the requested code; no service was deployed"
 
     def read_code_record(self) -> tuple[str, str] | None:
-        """The code run record kept outside the data volume (Parameter Store, ``<run ID> <digest>``), or None when there is none or the session names none.
-        An unreadable or malformed record raises, so a fresh volume never installs an archive nobody named."""
-        if not self.names.code_record:
+        """The code run record kept outside the data volume (an object in the data bucket, ``<run ID> <digest>``), or None when there is none or the session
+        names no bucket. An unreadable or malformed record raises, so a fresh volume never installs an archive nobody named."""
+        if not self.names.code_record_bucket:
             return None
-        try:
-            found = self.call("ssm", "get-parameter", ["--name", self.names.code_record])
-        except HostSessionError as error:
-            if "ParameterNotFound" in str(error):
-                return None
-            raise HostSessionError(f"the code run record cannot be read ({error})") from None
-        match = CODE_RECORD.fullmatch(str(found.get("Parameter", {}).get("Value", "")))
+        with tempfile.TemporaryDirectory(prefix="code_record_") as folder:
+            target = Path(folder) / "record"
+            try:
+                self.call("s3api", "get-object", ["--key", CODE_RECORD_KEY, str(target)])
+            except HostSessionError as error:
+                if "NoSuchKey" in str(error):
+                    return None
+                raise HostSessionError(f"the code run record cannot be read ({error})") from None
+            text = target.read_text(encoding="utf-8").strip() if target.exists() else ""
+        match = CODE_RECORD.fullmatch(text)
         if match is None:
-            raise HostSessionError("the code run record parameter holds an unexpected form; give --code-run and --code-sha256 once")
+            raise HostSessionError("the code run record holds an unexpected form; give --code-run and --code-sha256 once")
         return match.group(1), match.group(2)
 
     def write_code_record(self, identity: tuple[str, str]) -> None:
         """Keep the run ID and digest of the code that repo shows outside the data volume. A failed write is reported and never fails the session."""
-        if not self.names.code_record:
+        if not self.names.code_record_bucket:
             return
-        arguments = ["--name", self.names.code_record, "--type", "String", "--overwrite", "--value", f"{identity[0]} {identity[1]}"]
-        try:
-            self.call("ssm", "put-parameter", arguments)
-        except HostSessionError as error:
-            self.step("code_record_not_written", f"{error}; a fresh data volume then needs --code-run and --code-sha256")
-            return
+        with tempfile.TemporaryDirectory(prefix="code_record_") as folder:
+            body = Path(folder) / "record"
+            body.write_text(f"{identity[0]} {identity[1]}\n", encoding="utf-8")
+            try:
+                self.call("s3api", "put-object", ["--key", CODE_RECORD_KEY, "--body", str(body), "--content-type", "text/plain"])
+            except HostSessionError as error:
+                self.step("code_record_not_written", f"{error}; a fresh data volume then needs --code-run and --code-sha256")
+                return
         self.step("code_record_written", identity[0])
 
     def place_recorded_code(self, code: tuple[str, str] | None) -> tuple[str, str]:
@@ -1307,13 +1314,15 @@ class Session:
         found = [ARN_TEXT.sub("<arn>", line)[:CATALOG_LINE_LIMIT] for line in lines if CATALOG_LINE.fullmatch(line)]
         return found or None
 
-    def catalog_setup(self, step: str, identity: str | None = None, approval: str | None = None, seconds: int = CATALOG_STEP_SECONDS) -> list[str]:
+    def catalog_setup(
+        self, step: str, identity: str | None = None, approval: str | None = None, seconds: int = CATALOG_STEP_SECONDS, dry_run: bool = False
+    ) -> list[str]:
         """Run one catalog setup step as the one-shot task on the host and answer the lines it logged (its result, one JSON object).
 
         The task runs ``scripts.lakehouse.aws_catalog_setup`` from /data/repo under its own role; this only launches it and reads its log, so it holds no
         catalog credential. It refuses before launching when the stack has no such one-shot or Postgres and Polaris are not both stable. A task that exits
         with a code other than 0 shows its refusal lines before the failure is raised."""
-        command = catalog_command(step, identity, approval, seconds)
+        command = catalog_command(step, identity, approval, seconds, dry_run)
         if CATALOG_SETUP not in self.names.one_shot:
             raise HostSessionError("the catalog_setup one-shot is missing: apply the services stack with catalog_setup_task_role_arn first")
         if not self.names.log_group:
@@ -1357,14 +1366,17 @@ class Session:
         }
 
 
-def catalog_command(step: str, identity: str | None, approval: str | None, seconds: int) -> list[str]:
-    """The container command of one catalog setup launch, checked before anything is sent: the step, its identity and approval, and the step deadline."""
+def catalog_command(step: str, identity: str | None, approval: str | None, seconds: int, dry_run: bool = False) -> list[str]:
+    """The container command of one catalog setup launch, checked before anything is sent: the step, its identity and approval, the step deadline and, for
+    the restore step, the dry run flag."""
     if step not in CATALOG_STEPS:
         raise HostSessionError(f"the catalog setup step must be one of {', '.join(CATALOG_STEPS)}")
     if not 1 <= seconds <= CATALOG_MAX_STEP_SECONDS:
         raise HostSessionError(f"--seconds must be from 1 to {CATALOG_MAX_STEP_SECONDS}")
     if step != "principal" and (identity is not None or approval is not None):
         raise HostSessionError("--identity and --namespace-approval belong to the principal step only")
+    if dry_run and step != "restore":
+        raise HostSessionError("--dry-run belongs to the restore step only")
     command = ["--seconds", str(seconds), step]
     if step == "principal":
         if identity not in CATALOG_IDENTITIES:
@@ -1374,6 +1386,8 @@ def catalog_command(step: str, identity: str | None, approval: str | None, secon
             if not CATALOG_APPROVAL.fullmatch(approval):
                 raise HostSessionError("an approval ID has letters, digits, dashes and underscores only, at most 64")
             command += ["--namespace-approval", approval]
+    if dry_run:
+        command.append("--dry-run")
     return command
 
 
@@ -1427,6 +1441,7 @@ def build_parser() -> argparse.ArgumentParser:
     catalog.add_argument("--identity", choices=CATALOG_IDENTITIES, help="the identity of the principal step")
     catalog.add_argument("--namespace-approval", help="the owner's approval ID for creating the identity's absent namespaces")
     catalog.add_argument("--seconds", type=int, default=CATALOG_STEP_SECONDS, help="the deadline of the step inside the task")
+    catalog.add_argument("--dry-run", action="store_true", help="the restore step only: report what would change and write nothing")
     stop = commands.add_parser("stop", help="refuse while a job task runs, then host off and verify the instance terminated")
     drain = stop.add_mutually_exclusive_group()
     drain.add_argument(
@@ -1452,7 +1467,7 @@ def main(argv: list[str] | None = None) -> int:
         code = (arguments.code_run, arguments.code_sha256)
     if arguments.command == "catalog-setup":
         try:
-            catalog_command(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds)
+            catalog_command(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds, arguments.dry_run)
         except HostSessionError as error:
             sys.stderr.write(f"usage: {error}\n")
             return 2
@@ -1470,7 +1485,7 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "catalog-setup":
-            session.catalog_setup(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds)
+            session.catalog_setup(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds, arguments.dry_run)
         elif arguments.command == "stop":
             session.stop(arguments.wait_seconds, arguments.force_stop)
         else:

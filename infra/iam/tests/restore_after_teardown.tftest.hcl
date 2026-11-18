@@ -133,13 +133,3 @@ run "no_restore_role_holds_a_wildcard_or_a_delete" {
     error_message = "The roles output names the three roles for the services stack."
   }
 }
-
-run "the_code_run_record_name_has_a_safe_form" {
-  command = plan
-
-  variables {
-    code_run_record_parameter_name = "/aws/code_run_record"
-  }
-
-  expect_failures = [var.code_run_record_parameter_name]
-}

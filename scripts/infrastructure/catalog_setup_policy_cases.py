@@ -29,6 +29,7 @@ PAIR_NAMES = [
 ]
 HOLD = "/example_project/services_apply_lock"
 RECORDS = f"arn:aws:s3:::{BUCKET}/lakehouse/catalog_setup"
+SNAPSHOT_FOLDERS = ("lakehouse/catalog_backups/", "lakehouse/silver/catalog_backups/", "lakehouse/features/catalog_backups/")
 CLUSTER = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/example_project_cluster_dev"
 VALUES = {
     "PAIR_ARNS": json.dumps([f"{SSM}{name}" for name in PAIR_NAMES]),
@@ -36,6 +37,8 @@ VALUES = {
     "RECORDS_ARN": RECORDS,
     "BUCKET_ARN": f"arn:aws:s3:::{BUCKET}",
     "RECORD_SCOPE": "lakehouse/catalog_setup/",
+    "SNAPSHOT_ARNS": json.dumps([f"arn:aws:s3:::{BUCKET}/{folder}*" for folder in SNAPSHOT_FOLDERS]),
+    "SNAPSHOT_SCOPES": json.dumps([f"{folder}*" for folder in SNAPSHOT_FOLDERS]),
     "CLUSTER_ARN": CLUSTER,
     "TASK_ARN": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/example_project_cluster_dev/*",
 }
@@ -51,6 +54,37 @@ def render(defect: tuple[str, str] | None = None) -> dict[str, Any]:
             raise ValueError(f"the planted defect finds no text to replace: {defect[0][:40]}")
         text = text.replace(defect[0], defect[1], 1)
     return dict(json.loads(Template(text).substitute(VALUES)))
+
+
+def snapshot_cases() -> list[Case]:
+    """The reads of the catalog backup folders, which the restore step needs, and the writes it must not make."""
+    rows: list[Case] = []
+    for folder in SNAPSHOT_FOLDERS:
+        rows += [
+            (f"reads a catalog backup of {folder}", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/{folder}catalog_backup_20261117T120000Z-aaaaaaaa.json", True, {}),
+            (
+                f"reads a committed snapshot of {folder}",
+                "s3:GetObject",
+                f"arn:aws:s3:::{BUCKET}/{folder}catalog_committed_20261117T120000Z-aaaaaaaa.json",
+                True,
+                {},
+            ),
+            (f"lists the folder {folder}", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", True, {"s3:prefix": (folder,)}),
+        ]
+    return rows + [
+        ("writes no catalog backup", "s3:PutObject", f"arn:aws:s3:::{BUCKET}/lakehouse/catalog_backups/catalog_backup_x.json", False, CREATE_ONLY),
+        (
+            "writes no committed snapshot",
+            "s3:PutObject",
+            f"arn:aws:s3:::{BUCKET}/lakehouse/silver/catalog_backups/catalog_committed_x.json",
+            False,
+            CREATE_ONLY,
+        ),
+        ("deletes no catalog backup", "s3:DeleteObject", f"arn:aws:s3:::{BUCKET}/lakehouse/features/catalog_backups/catalog_backup_x.json", False, {}),
+        ("reads no sibling of a backup folder", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/catalog_backups_extra/x.json", False, {}),
+        ("reads no other silver object", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/silver/stg_hospital/data/x.parquet", False, {}),
+        ("lists no sibling of a backup folder", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {"s3:prefix": ("lakehouse/silver/",)}),
+    ]
 
 
 def cases() -> list[Case]:
@@ -93,6 +127,7 @@ def cases() -> list[Case]:
         ("lists its own prefix", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", True, {"s3:prefix": ("lakehouse/catalog_setup/approvals/bronze.json",)}),
         ("lists no other prefix", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {"s3:prefix": ("lakehouse/bronze/",)}),
         ("lists the bucket root without a prefix", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False, {}),
+        *snapshot_cases(),
         ("lists the project's tasks", "ecs:ListTasks", "*", True, {"ecs:cluster": (CLUSTER,)}),
         ("lists no other cluster's tasks", "ecs:ListTasks", "*", False, {"ecs:cluster": (CLUSTER + "_other",)}),
         ("describes the project's tasks", "ecs:DescribeTasks", f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/example_project_cluster_dev/abc", True, {}),
@@ -157,6 +192,12 @@ def defects() -> dict[str, tuple[str, str]]:
             '"Condition": { "StringLike": { "s3:prefix": ["${RECORD_SCOPE}*"] } }',
             '"Condition": { "StringLike": { "s3:prefix": ["*"] } }',
         ),
+        "the snapshot read covers the whole bucket": ('"Resource": ${SNAPSHOT_ARNS}', '"Resource": "arn:aws:s3:::example-data-bucket/*"'),
+        "the snapshot read also writes": (
+            '"Action": "s3:GetObject",\n      "Resource": ${SNAPSHOT_ARNS}',
+            '"Action": ["s3:GetObject", "s3:PutObject"],\n      "Resource": ${SNAPSHOT_ARNS}',
+        ),
+        "the snapshot folder listing is not limited": ('"s3:prefix": ${SNAPSHOT_SCOPES}', '"s3:prefix": ["*"]'),
         "the task listing covers every cluster": (
             '"Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }',
             '"Condition": { "ArnLike": { "ecs:cluster": "*" } }',

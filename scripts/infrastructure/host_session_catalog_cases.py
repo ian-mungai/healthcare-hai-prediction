@@ -58,22 +58,40 @@ def a_step_without_an_identity_has_no_identity_arguments() -> dict[str, bool]:
     }
 
 
+def a_restore_step_carries_its_deadline_and_the_dry_run_flag_only() -> dict[str, bool]:
+    host, session, lines = build()
+    session.start()
+    session.catalog_setup("restore", seconds=900)
+    session.catalog_setup("restore", seconds=60, dry_run=True)
+    return {
+        "the restore carries the deadline and the step": host.catalog_launches[0] == ["--seconds", "900", "restore"],
+        "the dry run adds its flag after the step": host.catalog_launches[1] == ["--seconds", "60", "restore", "--dry-run"],
+        "each launch is a task of the same one-shot": len(host.catalog_launches) == 2,
+        "the result is reported": any(line.startswith("catalog_setup_result: {") for line in lines),
+    }
+
+
 def arguments_are_checked_before_anything_is_launched() -> dict[str, bool]:
-    bad = {
-        "an unknown step": ("rotate", None, None, 60),
-        "a principal step without an identity": ("principal", None, None, 60),
-        "an identity outside the seven": ("principal", "admin", None, 60),
-        "an identity on the check step": ("check", "bronze", None, 60),
-        "an approval on the inspect step": ("inspect", None, "a1", 60),
-        "an approval ID with a space": ("principal", "bronze", "a 1", 60),
-        "an approval ID that is too long": ("principal", "bronze", "a" * 65, 60),
-        "a deadline of zero": ("check", None, None, 0),
-        "a deadline above an hour": ("check", None, None, 3601),
+    bad: dict[str, tuple[str, str | None, str | None, int, bool]] = {
+        "an identity on the restore step": ("restore", "bronze", None, 60, False),
+        "an approval on the restore step": ("restore", None, "a1", 60, False),
+        "a dry run on the check step": ("check", None, None, 60, True),
+        "a dry run on the principal step": ("principal", "bronze", None, 60, True),
+        "an unknown step": ("rotate", None, None, 60, False),
+        "a principal step without an identity": ("principal", None, None, 60, False),
+        "an identity outside the seven": ("principal", "admin", None, 60, False),
+        "an identity on the check step": ("check", "bronze", None, 60, False),
+        "an approval on the inspect step": ("inspect", None, "a1", 60, False),
+        "an approval ID with a space": ("principal", "bronze", "a 1", 60, False),
+        "an approval ID that is too long": ("principal", "bronze", "a" * 65, 60, False),
+        "a deadline of zero": ("check", None, None, 0, False),
+        "a deadline above an hour": ("check", None, None, 3601, False),
     }
     found: dict[str, bool] = {}
     for label, arguments in bad.items():
         found[f"{label} is refused"] = raised(functools.partial(catalog_command, *arguments)) is not None
     found["the usage error exits 2 before any AWS call"] = main(["catalog-setup", "principal"]) == 2
+    found["a dry run without the restore step exits 2 before any AWS call"] = main(["catalog-setup", "check", "--dry-run"]) == 2
     return found
 
 
@@ -142,6 +160,7 @@ def a_running_task_is_never_reused_for_another_launch() -> dict[str, bool]:
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
+    "catalog_setup_restore_command": a_restore_step_carries_its_deadline_and_the_dry_run_flag_only,
     "catalog_setup_runs_with_exactly_its_command": a_step_runs_as_one_task_with_exactly_its_command,
     "catalog_setup_steps_without_an_identity": a_step_without_an_identity_has_no_identity_arguments,
     "catalog_setup_arguments_checked_first": arguments_are_checked_before_anything_is_launched,
