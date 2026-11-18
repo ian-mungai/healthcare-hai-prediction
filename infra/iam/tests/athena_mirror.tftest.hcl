@@ -124,7 +124,7 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
 
   assert {
     condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["silver", "gold", "features"])
-    error_message = "Only the silver, gold and features writers get a grant, and never bronze, the qualification role or the project user."
+    error_message = "Without the bronze writer only the silver, gold and features writers get a grant, never the qualification role or the project user."
   }
 
   assert {
@@ -165,6 +165,111 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
       ])
     )
     error_message = "The features writer may read its database and read, create and update tables in it only, with no delete and no other database."
+  }
+}
+
+# Owner decision of Nov 18 2026 ("add the hook for bronze"): the bronze load registers its tables at the end of a committed load, so the bronze writer role gets
+# the same four mirror actions as the layer writers, on the bronze mirror database and its tables only, behind both switches.
+run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
+  command = plan
+  variables {
+    athena_mirror_prepared          = true
+    athena_owner_user               = "example_owner"
+    job_writer_layers_prepared      = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-project-ci-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-project-ci-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["silver", "gold", "features", "bronze"])
+    error_message = "The bronze writer joins the three layer writers in the mirror grant, and nothing else does."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.athena_mirror_writer["bronze"].role == aws_iam_role.bronze_writer[0].name &&
+      aws_iam_role_policy.athena_mirror_writer["bronze"].name == "glue_mirror_registrations" &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy).Statement : s.Action])) ==
+      toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
+      ]) &&
+      alltrue([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy).Statement : s.Effect == "Allow"])
+    )
+    error_message = "The bronze writer may read its database and read, create and update tables in it only, with no delete, no other database and no wildcard."
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.athena_mirror_writer["silver"].role == aws_iam_role.job_write_layer_task["silver"].name &&
+      !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["silver"].policy).Statement : s.Resource]), "arn:aws:glue:eu-west-1:111111111111:database/bronze")
+    )
+    error_message = "A layer writer keeps its own grant and gains no reach into the bronze mirror database."
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.bronze_writer) == 1 &&
+      length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) < 10240
+    )
+    error_message = "The inline policies of the bronze role stay inside the 10240 character quota of one role with the mirror grant added."
+  }
+}
+
+run "bronze_writer_grant_needs_the_mirror_switch" {
+  command = plan
+  variables {
+    job_writer_layers_prepared      = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-project-ci-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-project-ci-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.athena_mirror_writer) == 0 && length(aws_iam_role.bronze_writer) == 1
+    error_message = "With the mirror off the prepared bronze writer has no Glue grant."
+  }
+}
+
+run "bronze_writer_grant_needs_the_prepared_bronze_writer" {
+  command = plan
+  variables {
+    athena_mirror_prepared     = true
+    athena_owner_user          = "example_owner"
+    job_writer_layers_prepared = true
+  }
+
+  assert {
+    condition     = !contains(keys(aws_iam_role_policy.athena_mirror_writer), "bronze") && length(aws_iam_role.bronze_writer) == 0
+    error_message = "With no bronze writer role the mirror creates no bronze grant."
+  }
+}
+
+run "bronze_writer_grant_stands_without_the_layer_writers" {
+  command = plan
+  variables {
+    athena_mirror_prepared          = true
+    athena_owner_user               = "example_owner"
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-project-ci-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-project-ci-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["bronze"])
+    error_message = "The bronze grant follows the bronze writer switch, not the layer writer switch."
   }
 }
 
@@ -464,9 +569,11 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
         "arn:aws:glue:eu-west-1:111111111111:table/gold/*",
         "arn:aws:glue:eu-west-1:111111111111:database/features",
         "arn:aws:glue:eu-west-1:111111111111:table/features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
       ])
     )
-    error_message = "Without the catalog the endpoint policy allows the four mirror actions on the three mirror databases and their tables only, nothing else of Glue."
+    error_message = "Without the catalog the endpoint policy allows the four mirror actions on the four mirror databases and their tables only, nothing else of Glue."
   }
 
   assert {
@@ -474,8 +581,9 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
       "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev",
       "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev",
       "arn:aws:iam::111111111111:role/example_project_job_write_features_task_dev",
+      "arn:aws:iam::111111111111:role/example_project_job_write_bronze_task_dev",
     ]) && keys(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition) == ["ArnEquals"]
-    error_message = "Only the silver, gold and features writer roles may use the endpoint for these actions."
+    error_message = "Only the bronze, silver, gold and features writer roles may use the endpoint for these actions."
   }
 
   assert {

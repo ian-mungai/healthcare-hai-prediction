@@ -133,8 +133,11 @@ resource "aws_iam_role_policy" "bronze_writer" {
 
   lifecycle {
     precondition {
-      condition     = length(jsonencode(jsondecode(local.bronze_storage_policy))) + length(jsonencode(jsondecode(local.job_policy_documents.job_stage_read))) <= 10240
-      error_message = "The inline policies of the bronze role together are over the 10240 character quota of one role. Move statements into a managed policy."
+      condition = (
+        length(jsonencode(jsondecode(local.bronze_storage_policy))) + length(jsonencode(jsondecode(local.job_policy_documents.job_stage_read))) +
+        length(jsonencode(jsondecode(local.athena_writer_policies["bronze"]))) <= 10240
+      )
+      error_message = "The inline policies of the bronze role together (storage, stage read and the Glue mirror grant) are over the 10240 character quota of one role. Move statements into a managed policy."
     }
   }
 }

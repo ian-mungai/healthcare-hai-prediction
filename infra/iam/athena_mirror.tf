@@ -22,10 +22,11 @@ locals {
   athena_runs_tables   = { for layer, path in local.athena_contracts : layer => jsondecode(file(path)).publish.runs_table }
   athena_layer_folders = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/*"]
   athena_runs_folders  = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/${lookup(local.athena_runs_tables, layer, "publish_runs")}/*"]
-  # Only the layers that a publish writes have a writer role; bronze is registered by the owner's register command, and reaches no writer.
-  athena_published_layers   = { for layer, spec in local.athena_layers : layer => spec if contains(keys(local.athena_contracts), layer) }
-  athena_writer_mirror_arns = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_published_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
+  # Every mirrored layer has a writer role that registers its tables when a load or publish commits: the silver, gold and features layer writers and, since the
+  # bronze load registers its tables too (owner, Nov 18 2026), the bronze writer. A writer reaches only its own layer's database (the grant below); the endpoint
+  # lets each of them use the four mirror actions, so its resources are the databases of all four layers.
   athena_mirror_arns        = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
+  athena_writer_mirror_arns = local.athena_mirror_arns
   athena_glue_endpoint      = var.athena_mirror_prepared && var.job_endpoints_enabled
   athena_reader_policy = templatefile("${path.module}/owner_policies/athena_reader.json", {
     WORKGROUP_ARN      = local.athena_workgroup_arn
@@ -36,7 +37,20 @@ locals {
     BUCKET_ARN         = local.bronze_bucket_arn
     RESULTS_OBJECT_ARN = "${local.bronze_bucket_arn}/${local.athena_results_path}"
   })
-  athena_writer_arns = [for layer in keys(local.athena_published_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
+  athena_writer_arns = [for layer in keys(local.athena_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
+  # The role that each layer's grant attaches to, behind its own switches: the layer writers follow job_writer_layers_prepared, the bronze writer follows
+  # bronze_writer_prepared (its own role in bronze_writer.tf, not one of the layer writer definitions). Both need the mirror itself.
+  athena_writer_policies = {
+    for layer, spec in local.athena_layers : layer => templatefile("${path.module}/owner_policies/job_writer_glue_mirror.json", {
+      CATALOG_ARN       = local.athena_catalog_arn
+      DATABASE_ARN      = "${local.athena_account_arn}:database/${spec.database}"
+      REGISTRATION_ARNS = jsonencode([local.athena_catalog_arn, "${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]])
+    })
+  }
+  athena_writer_roles = merge(
+    var.athena_mirror_prepared && var.job_writer_layers_prepared ? { for layer, spec in local.athena_layers : layer => aws_iam_role.job_write_layer_task[layer].name if contains(keys(local.job_writer_layer_definitions), layer) } : {},
+    var.athena_mirror_prepared && var.bronze_writer_prepared ? { bronze = aws_iam_role.bronze_writer[0].name } : {},
+  )
   # The catalog task role of the OpenMetadata ingestion (the metadata host task) reads the registrations and writes nothing.
   athena_catalog_reader     = var.athena_mirror_prepared && var.openmetadata_prepared
   athena_catalog_reader_arn = "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_openmetadata_task")}"
@@ -86,15 +100,11 @@ resource "aws_athena_workgroup" "athena_mirror" {
 }
 
 resource "aws_iam_role_policy" "athena_mirror_writer" {
-  for_each = var.athena_mirror_prepared && var.job_writer_layers_prepared ? { for layer, spec in local.athena_layers : layer => spec if contains(keys(local.job_writer_layer_definitions), layer) } : {}
+  for_each = local.athena_writer_roles
 
-  name = "glue_mirror_registrations"
-  role = aws_iam_role.job_write_layer_task[each.key].name
-  policy = templatefile("${path.module}/owner_policies/job_writer_glue_mirror.json", {
-    CATALOG_ARN       = local.athena_catalog_arn
-    DATABASE_ARN      = "${local.athena_account_arn}:database/${each.value.database}"
-    REGISTRATION_ARNS = jsonencode([local.athena_catalog_arn, "${local.athena_account_arn}:database/${each.value.database}", local.athena_table_arns[each.key]])
-  })
+  name   = "glue_mirror_registrations"
+  role   = each.value
+  policy = local.athena_writer_policies[each.key]
 }
 
 # The owner's one way in. The role trusts the one user the owner names and carries the reader policy inline. The stack attaches nothing to a user or
@@ -152,7 +162,7 @@ resource "aws_iam_role_policy" "openmetadata_glue_read" {
   policy = templatefile("${path.module}/owner_policies/openmetadata_glue_read.json", { MIRROR_ARNS = jsonencode(local.athena_mirror_arns) })
 }
 
-# The private layer writers have no route to the public Glue API. This endpoint is the one way, restricted to the silver, gold and features writer roles
+# The private layer writers have no route to the public Glue API. This endpoint is the one way, restricted to the bronze, silver, gold and features writer roles
 # and the four mirror actions on the mirror databases, plus reads for the catalog task role when the catalog is prepared. It follows the reviewed private endpoint switch.
 resource "aws_security_group" "athena_glue_endpoint" {
   count = local.athena_glue_endpoint ? 1 : 0

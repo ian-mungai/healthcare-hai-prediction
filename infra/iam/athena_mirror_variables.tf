@@ -1,5 +1,5 @@
 variable "athena_mirror_prepared" {
-  description = "Create the silver, gold, features and bronze Glue databases, the limited Athena workgroup and the mirror-only grants (with openmetadata_prepared, also the catalog task's read of them). Whether publishes register the tables is set by enabled in config/lakehouse/athena_mirror.json (on since Nov 13 2026)."
+  description = "Create the silver, gold, features and bronze Glue databases, the limited Athena workgroup and the mirror-only grants (the layer writers' and, with bronze_writer_prepared, the bronze writer's registration of their own layer's tables; with openmetadata_prepared, also the catalog task's read of them). Whether publishes register the tables is set by enabled in config/lakehouse/athena_mirror.json (on since Nov 13 2026)."
   type        = bool
   default     = false
   nullable    = false
