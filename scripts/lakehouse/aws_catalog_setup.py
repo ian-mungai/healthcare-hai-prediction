@@ -57,6 +57,7 @@ from typing import Any, Protocol
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from scripts import resource_peaks
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import bronze_writer, polaris_writer, principal_credentials
 from scripts.lakehouse.catalog_setup_state import (
@@ -880,4 +881,4 @@ def main(argv: list[str] | None = None, services: Services | None = None) -> int
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    resource_peaks.recorded(main)

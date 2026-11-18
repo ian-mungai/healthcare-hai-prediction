@@ -555,10 +555,14 @@ def phase_table_matches_the_code_and_terraform(root: Path) -> dict[str, bool]:
     layers = literal("scripts/lakehouse/layer_run.py", "PHASES")
     table = metrics_push.JOB_PHASES
     return {
-        "the families are the Terraform host job families plus the publisher": set(table) == terraform | {"publisher"},
+        "the families are the Terraform host job families plus the publisher and the catalog setup": set(table) == terraform | {"publisher", "catalog_setup"},
         "drift phases equal the drift entry module": set(table["drift"]) == set(literal("monitoring/aws_run.py", "PHASES")),
         "bronze phases equal the bronze entry module": set(table["bronze"])
         == set(literal("scripts/lakehouse/bronze_run.py", "PHASES")) | {"inventory", "spark", "stage"},
+        "the catalog setup step is the phase even after the global --seconds option": metrics_push.phase_of(
+            "catalog_setup", ["aws_catalog_setup", "--seconds", "600", "principal"]
+        )
+        == "principal",
         "the bronze stage container command reads as the stage phase": metrics_push.phase_of("bronze", ["bronze_run.py", "stage", "--run", "x"]) == "stage",
         "each layer's phases equal layer_run": all(set(layers[layer]) <= set(table[layer]) for layer in layers),
         "the features family also names the release and reload container": "feast" in table["features"],

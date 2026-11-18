@@ -14,6 +14,6 @@ locals {
   monitoring_gap_environment = [
     { name = "EVIDENTLY_UI_ENABLED", value = tostring(var.evidently_ui_enabled) },
     { name = "OPENSEARCH_HEALTH_URL", value = local.om_on ? "http://127.0.0.1:9200/_cluster/health" : "" },
-    { name = "BOOTSTRAP_TASKS", value = join(",", concat(local.code_fetch_on ? ["code_fetch"] : [], ["polaris_bootstrap"], local.om_on ? ["openmetadata_bootstrap"] : [])) },
+    { name = "BOOTSTRAP_TASKS", value = join(",", concat(local.code_fetch_on ? ["code_fetch"] : [], ["polaris_bootstrap"], local.om_on ? ["openmetadata_bootstrap"] : [], local.catalog_setup_on ? ["catalog_setup"] : [])) },
   ]
 }

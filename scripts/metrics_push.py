@@ -49,6 +49,7 @@ OUTCOMES = ("running", "succeeded", "failed", "interrupted")
 FINAL_OUTCOMES = OUTCOMES[1:]
 JOB_PHASES: dict[str, tuple[str, ...]] = {
     "bronze": ("pin", "load", "check", "inventory", "spark", "stage"),
+    "catalog_setup": ("catalog", "principal", "check", "inspect"),
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
     "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast", "reload"),
@@ -249,7 +250,10 @@ def phase_of(job: str, argv: Sequence[str]) -> str | None:
     phases = JOB_PHASES[job]
     if len(phases) == 1:
         return phases[0]
-    first = next((argument for argument in argv[1:] if not argument.startswith("-")), None)
+    rest = list(argv[1:])
+    while "--seconds" in rest:
+        del rest[rest.index("--seconds") : rest.index("--seconds") + 2]
+    first = next((argument for argument in rest if not argument.startswith("-")), None)
     return first if first in phases else None
 
 

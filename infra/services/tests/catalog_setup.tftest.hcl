@@ -153,6 +153,8 @@ run "the_catalog_setup_task_runs_the_setup_module_from_the_checkout" {
       && contains(jsondecode(aws_ecs_task_definition.one_shot["catalog_setup"].container_definitions)[0].environment, { name = "CATALOG_SETUP_CLUSTER", value = "example-project-dev" })
       && contains(jsondecode(aws_ecs_task_definition.one_shot["catalog_setup"].container_definitions)[0].environment, { name = "CATALOG_SETUP_FAMILY_PREFIX", value = "example_project_dev_job_" })
       && !contains([for item in jsondecode(aws_ecs_task_definition.one_shot["catalog_setup"].container_definitions)[0].environment : item.name], "AWS_PROFILE")
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["catalog_setup"].container_definitions)[0].environment, { name = "HAI_JOB", value = "catalog_setup" })
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["catalog_setup"].container_definitions)[0].environment, { name = "PUSHGATEWAY_URL", value = "http://10.0.1.20:9091" })
     )
     error_message = "The task is told its bucket, its own role, the apply lock it honours, the cluster and the job family prefix, and no profile."
   }
