@@ -28,7 +28,7 @@ from scripts import metrics_push
 from scripts.infrastructure.host_state_exporter_cases import CLUSTER, PREFIX, OpenMetadataStandIn, ProbeStandIn, address, values
 from scripts.infrastructure.metrics_push_cases import quiet, valid_exposition
 
-RUN = "20261117T120000Z-0a1b2c3d"
+RUN = "features_0a1b2c3d"
 TASK_ARN = "arn:aws:ecs:us-west-2:111111111111:task/" + CLUSTER + "/{}"
 
 

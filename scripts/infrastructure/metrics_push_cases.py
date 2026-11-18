@@ -209,7 +209,7 @@ def drift_samples_carry_closed_labels(root: Path) -> dict[str, bool]:
 
 def refused_samples_are_dropped_and_named(root: Path) -> dict[str, bool]:
     bad = [
-        metrics_push.Sample("hai_drift_share", 0.1, {"run_id": "20261117T120000Z-0a1b2c3d"}),
+        metrics_push.Sample("hai_drift_share", 0.1, {"run_id": "drift_elastic_net_0a1b2c3d"}),
         metrics_push.Sample("hai_drift_share", 0.1, {"hai_type": "HAI_9"}),
         metrics_push.Sample("hai_unknown_metric", 1.0, {}),
         metrics_push.Sample("hai_drift_share", math.inf, {"hai_type": "HAI_2"}),
@@ -233,7 +233,7 @@ def grouping_keys_must_be_closed(root: Path) -> dict[str, bool]:
         good = metrics_push.Pusher.create(settings, ["monitoring/aws_run.py", "check", "--run", "x"])
         unknown_job = quiet(lambda: metrics_push.Pusher.create({**settings, "HAI_JOB": "not_a_job"}, ["x", "check"]))
         unknown_phase = quiet(lambda: metrics_push.Pusher.create(settings, ["x", "nonsense"]))
-        run_id_as_phase = quiet(lambda: metrics_push.Pusher.create(settings, ["x", "20261117T120000Z-0a1b2c3d"]))
+        run_id_as_phase = quiet(lambda: metrics_push.Pusher.create(settings, ["x", "drift_elastic_net_0a1b2c3d"]))
         unset = metrics_push.Pusher.create({"HAI_JOB": "drift"}, ["x", "check"])
         no_job = quiet(lambda: metrics_push.Pusher.create({"PUSHGATEWAY_URL": stand_in.url}, ["x", "check"]))
         https = quiet(lambda: metrics_push.Pusher.create({**settings, "PUSHGATEWAY_URL": "https://example.org:9091"}, ["x", "check"]))
@@ -413,7 +413,7 @@ def a_task_names_its_model_or_its_type_as_a_grouping_key(root: Path) -> dict[str
         return metrics_push.Pusher.create({**url, "HAI_JOB": job, **environment}, argv)
 
     train = made("train", ["x", "train"], TRAINING_PARAMETERS=json.dumps({"model": "m2", "hai_types": ["HAI_1"]}))
-    promote = made("promote", ["x", "canary"], TRAINING_PARAMETERS=json.dumps({"hai_type": "HAI_3", "research_run": "20261117T120000Z-0a1b2c3d"}))
+    promote = made("promote", ["x", "canary"], TRAINING_PARAMETERS=json.dumps({"hai_type": "HAI_3", "research_run": "research_0a1b2c3d"}))
     serve = made("serve", ["x", "serve"], SERVING_REQUEST=json.dumps({"hai_type": "HAI_5", "deploy_mode": "promote"}))
     odd = [
         made("train", ["x", "train"], TRAINING_PARAMETERS=json.dumps({"model": "m9"})),
@@ -712,7 +712,7 @@ def pending() -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
 
 MATERIALIZE_LOAD = '{"entities": 12, "feature_set": "m1", "load_id": "x", "mode": "real", "online": "load", "step": "materialize"}\n'
 MATERIALIZE_HOLD = '{"feature_set": "m2", "mode": "real", "online": "hold", "step": "materialize"}\n'
-RUN = "20261117T120000Z-0a1b2c3d"
+RUN = "features_0a1b2c3d"
 RELOAD_LOADED = json.dumps({"base_run": RUN, "feature_set": "m4", "load_id": "1", "outcome": "loaded", "run_id": RUN, "skipped_held": []}) + "\n"
 RELEASE_DONE = json.dumps({"base_run": RUN, "feature_set": "m1", "outcome": "already_released", "run_id": RUN}) + "\n"
 
@@ -768,16 +768,16 @@ def unreadable_step_output_adds_nothing_and_never_raises(root: Path) -> dict[str
 def layer_run_reload_and_release_push_their_result(root: Path) -> dict[str, bool]:
     from scripts.lakehouse import layer_run
 
-    job = layer_run.Job(layer="features", run="20261117T120000Z-0a1b2c3d", mode="real", code=Path("/nonexistent"), feature_set="")
+    job = layer_run.Job(layer="features", run="features_0a1b2c3d", mode="real", code=Path("/nonexistent"), feature_set="")
     metrics_push.drain()
     with (
-        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m4", layer_run.FEATURES_RUN_VARIABLE: "20261117T120000Z-0a1b2c3d"}),
+        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m4", layer_run.FEATURES_RUN_VARIABLE: "features_gradient_boosting_0a1b2c3d"}),
         mock.patch.object(layer_run, "run_module", lambda *_a, **_k: RELOAD_LOADED),
     ):
         layer_run.reload(job)
     after_reload = pending()
     with (
-        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m1", layer_run.FEATURES_RUN_VARIABLE: "20261117T120000Z-0a1b2c3d"}),
+        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m1", layer_run.FEATURES_RUN_VARIABLE: "features_ols_0a1b2c3d"}),
         mock.patch.object(layer_run, "run_module", lambda *_a, **_k: RELEASE_DONE),
     ):
         layer_run.release(job)
@@ -862,7 +862,7 @@ def layer_run_hands_its_dbt_and_quality_results_to_the_exit_push(root: Path) -> 
 
     with tempfile.TemporaryDirectory(prefix="layer_run_metrics_") as scratch:
         code = Path(scratch) / "code"
-        job = layer_run.Job(layer="gold", run="20261117T120000Z-0a1b2c3d", mode="real", code=code)
+        job = layer_run.Job(layer="gold", run="gold_0a1b2c3d", mode="real", code=code)
         (job.folder / "target").mkdir(parents=True)
         (job.folder / "target/run_results.json").write_text(json.dumps({"results": [{"unique_id": "model.hai.a", "status": "success"}]}), encoding="utf-8")
         (job.folder / "quality_gold").mkdir()
@@ -897,7 +897,7 @@ def layer_run_collects_the_failure_counts_of_a_failing_dbt_or_quality_command(ro
         return run
 
     with tempfile.TemporaryDirectory(prefix="layer_run_metrics_") as scratch:
-        job = layer_run.Job(layer="gold", run="20261117T120000Z-0a1b2c3d", mode="real", code=Path(scratch) / "code")
+        job = layer_run.Job(layer="gold", run="gold_0a1b2c3d", mode="real", code=Path(scratch) / "code")
         job.folder.mkdir(parents=True)
         metrics_push.drain()
         with (

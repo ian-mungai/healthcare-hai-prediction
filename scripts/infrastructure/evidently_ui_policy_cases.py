@@ -13,7 +13,7 @@ BUCKET = "arn:aws:s3:::example-project-ci-bucket"
 OTHER_BUCKET = "arn:aws:s3:::another-example-bucket"
 POLICIES = ("evidently_ui_restore_read",)
 POLICY = POLICIES[0]
-RUN = "20261117T120000Z-0a1b2c3d"
+RUN = "drift_elastic_net_0a1b2c3d"
 OBJECT = f"{BUCKET}/drift_demo/{RUN}/snapshot_HAI_1.json"
 Case = tuple[str, str, str, bool, dict[str, tuple[str, ...]]]
 

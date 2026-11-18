@@ -2532,7 +2532,7 @@ def drift_attempt_and_run_must_agree() -> None:
     require(rig.tasks_started() == started, "a refused drift run started a task")
 
 
-LIVE_RUN = "20261117T120000Z-1ee70001"
+LIVE_RUN = "drift_elastic_net_1ee70001"
 LIVE_PARAMS = {"run_id": LIVE_RUN, "mode": "real", "model": "m2", "hai_type": "HAI_3"}
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from scripts import metrics_push
 from scripts.training import training_metrics
 
-RUN = "20261117T120000Z-0a1b2c3d"
+RUN = "training_elastic_net_0a1b2c3d"
 
 
 def pending() -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:

@@ -34,7 +34,7 @@ PYTHON = str(ROOT / ".venv/bin/python")
 EVIDENTLY_PROGRAM = str(ROOT / ".tools/evidently/bin/python")
 LIVE_DAG_FILE = ROOT / "dags/drift_live_check_dag.py"
 RUN = drift_cases.RUN_ID
-OTHER_RUN = "20261117T120000Z-0a1b2c3e"
+OTHER_RUN = "drift_elastic_net_0a1b2c3e"
 BUCKET = "bucket-for-tests"
 OUTPUTS = ["drift_HAI_1.json", "project_HAI_1.json", "report_HAI_1.html", "snapshot_HAI_1.json"]
 Problems = list[str]
@@ -422,7 +422,7 @@ def a_damaged_snapshot_file_is_set_aside_not_fatal(folder: Path) -> Problems:
         return [f"setup exit {code} {code2}: {(text + text2)[:300]}"]
     damaged = next(path for path in workspace.glob("*/snapshots/*.json") if json.loads(path.read_text())["metadata"].get("run_id") == RUN)
     damaged.write_text(damaged.read_text()[:100])
-    third = "20261117T130000Z-0a1b2c3f"
+    third = "drift_elastic_net_0a1b2c3f"
     code, text, _, _ = run_live(folder, paths, evidently=evidently, run=third, out=folder / "third")
     problems = [] if code == 0 else [f"a damaged snapshot file blocked the workspace (exit {code}): {text[-300:]}"]
     if damaged.name not in text or "set aside" not in text or not list(workspace.glob("*/.incomplete/*.json")) or damaged.exists():
@@ -502,7 +502,7 @@ def restore_rerun_is_a_noop(folder: Path) -> Problems:
 def restore_skips_and_reports_an_incomplete_run(folder: Path) -> Problems:
     """A run with no completion marker, and a run whose snapshot object is missing, are skipped and named; the complete run is still restored."""
     s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
-    third = "20261117T140000Z-0a1b2c40"
+    third = "drift_elastic_net_0a1b2c40"
     problems = published(folder, s3, source) + published(folder, s3, source, run=OTHER_RUN, tag="b") + published(folder, s3, source, run=third, tag="c")
     if problems:
         return problems
