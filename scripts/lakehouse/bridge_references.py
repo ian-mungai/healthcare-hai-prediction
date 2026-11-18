@@ -14,7 +14,7 @@ sources fall in two domains, a dimension that maps to no domain and a control th
 run, so a new spelling must be reviewed before it reaches gold. The registry keeps the raw text.
 
 ``gold_contract_columns.csv`` is generated from the frozen gold contract (every column of every gold model with its explicit footnote column and
-whether it is the model's published measure-key column). ``registry_controls.csv`` is generated from the registry of revision 3 and its append-only
+whether it is the model's published measure-key column). ``registry_controls.csv`` is generated from the registry of revision 4 and its append-only
 additions. ``gold_measure_key_evidence.csv`` lists the published measure key of each ACS, impact, HAI hospital and BLS bridge row with the reviewed file that
 supports it (the reviewed ACS variable map, the reviewed impact layout, the HAI measure types and parts or the reviewed BLS measure list).
 ``gold_measure_key_rules.csv`` declares how each long fact is validated. Every PLACES, DRG, HCAHPS, SVI and GV published key must be an exact,
@@ -57,7 +57,7 @@ DOMAIN_SEED = SILVER_SEEDS / "gold_measure_id_domains.csv"
 DOMAIN_COLUMNS = ("domain", "published_key", "published_headers", "source_table", "source_column", "first_release", "last_release")
 SVI_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_context_columns.sql", "svi_identifier_columns")
 GV_IDENTIFIER_MACRO = (REPO_ROOT / "dbt/macros/county_health_columns.sql", "gv_identifier_columns")
-REGISTRY_REVISION = 3
+REGISTRY_REVISION = 4
 CONTRACT_COLUMNS = ("gold_model", "column_name", "footnote_column", "is_measure_key")
 CONTROL_COLUMNS = ("measure_control", "parent_control", "origin", "family", "closeout_decision")
 FAMILY_SUPPLEMENT = "registry_family_supplement.csv"

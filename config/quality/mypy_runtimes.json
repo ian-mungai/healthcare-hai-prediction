@@ -1,5 +1,9 @@
 {
   "pending": {
+    "scripts/infrastructure/monitoring_gap_cases.py": {
+      "runtime": "analytics",
+      "reason": "Library stubs not installed for \"yaml\""
+    },
     "scripts/serving/api.py": {
       "runtime": "serving",
       "reason": "Cannot find implementation or library stub for module named \"fastapi\"; Cannot find implementation or library stub for module named \"fastapi.concurrency\"; Cannot find implementation or library stub for module named \"fastapi.responses\"; Cannot find implementation or library stub for module named \"starlette.exceptions\""

@@ -202,7 +202,7 @@ def run(output: Path, plugin_dir: Path | None) -> dict[str, dict[str, bool]]:
         definitions = task_definitions(events)
         stack = {
             "the fixture plan passes its own test": code == 0,
-            "the plan holds the fifteen host definitions and the publisher": len(definitions) == 16,
+            "the plan holds the sixteen host definitions and the publisher": len(definitions) == 17,
             "every planned task definition of every module is an EC2 bridge task": bool(definitions) and not foreign_definitions(definitions),
         }
         planted = plant_checks(folder / "plants", plugin_dir)

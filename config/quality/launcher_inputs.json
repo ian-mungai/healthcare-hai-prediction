@@ -198,9 +198,19 @@
       "why": "reviewed: resource_types reads the Terraform files of the storage and iam stacks with glob at scripts/infrastructure/run_e2e.py:1428 (REPO_ROOT / \"infra\" / stack, called for storage and iam at :2843); the other sites list the stand-in tools folder (:1832) and the evidence output folder and temporary workspace of the run (:689, :707, :993, :2963, :2970), which are run-time folders"
     },
     {
+      "module": "scripts/infrastructure/stack_settings.py",
+      "pattern": "^infra/(iam|jobs|platform|services)/[^/]+\\.tf$",
+      "why": "reviewed: the declared-variable readers list the Terraform files of one stack folder with glob at scripts/infrastructure/stack_settings.py:95 and :104 to find the defaults of its variables; the pattern is the .tf files of the four stack folders, and the git ls-files call at :198 only asks whether one named path is tracked"
+    },
+    {
       "module": "scripts/infrastructure/sts_stand_in.py",
       "pattern": null,
       "why": "reviewed: history_bytes lists home / \".aws\" / \"cli\" / \"history\" with rglob (scripts/infrastructure/sts_stand_in.py:249), the AWS command history of a temporary home folder"
+    },
+    {
+      "module": "scripts/infrastructure/synthetic_workspace.py",
+      "pattern": "^infra/(services|jobs)/[^/]+\\.tf$",
+      "why": "reviewed: add_repository_files lists the Terraform variable files of infra/services and infra/jobs with glob at scripts/infrastructure/synthetic_workspace.py:19 and copies them into a temporary workspace; the pattern is those files"
     },
     {
       "module": "scripts/infrastructure/systemd_model.py",
@@ -371,6 +381,11 @@
       "module": "scripts/orchestration/run_real_image_dags_e2e.py",
       "pattern": "^dags/[^/]+[.]py$",
       "why": "reviewed: discover_dag_ids lists the DAG files of the folder it is given with glob at scripts/orchestration/run_real_image_dags_e2e.py:60; its one caller in the runner passes ROOT / \"dags\" (:128), and no other folder is listed"
+    },
+    {
+      "module": "scripts/orchestration/schedule_timetable_cases.py",
+      "pattern": null,
+      "why": "reviewed: walk (scripts/orchestration/schedule_timetable_cases.py:68) steps a timetable forward through its next run infos in time; it lists no folder and reads no file"
     },
     {
       "module": "scripts/orchestration/sentinel.py",

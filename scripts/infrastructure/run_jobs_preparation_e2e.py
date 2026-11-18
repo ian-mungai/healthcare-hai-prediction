@@ -81,6 +81,8 @@ def _derived() -> dict[str, Any]:
         "drift_mlflow_password_name": "/example_project/mlflow_admin_password",
         "mlflow_admin_password_name": "/example_project/mlflow_admin_password",
         "openmetadata_ingestion_token_name": "/example_project/openmetadata_bot_ingestion",
+        "openmetadata_lineage_token_name": "/example_project/openmetadata_bot_lineage",
+        "mlflow_metadata_reader_password_name": "/example_project/mlflow_metadata_reader_password",
         "drift_images": {"drift": image("drift"), "feature_store": image("feature_store"), "training": image("training")},
         "drift_roles": {"drift_task": role("drift_task"), "execution": role("execution")},
         "host_capacity_binding": BINDING,

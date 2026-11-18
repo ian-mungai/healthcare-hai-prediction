@@ -378,7 +378,9 @@ RENDERED_INPUTS = {
         "aws_polaris_reader_client_secret_name",
         "drift_mlflow_password_name",
         "mlflow_admin_password_name",
+        "mlflow_metadata_reader_password_name",
         "openmetadata_ingestion_token_name",
+        "openmetadata_lineage_token_name",
         "drift_images",
         "drift_roles",
         "images",
@@ -406,7 +408,7 @@ EXEMPT = {
 }
 # The platform stack takes no preparation file: its settings are the committed defaults, so its flags have no row.
 PLATFORM_FLAGS = ("monitoring_enabled", "serving_enabled")
-PLATFORM_LOG_GROUPS = ["airflow", "jobs", "mlflow", "openmetadata", "polaris", "postgres", "redis"]
+PLATFORM_LOG_GROUPS = ["airflow", "jobs", "openmetadata", "mlflow", "polaris", "postgres", "redis"]
 PLATFORM_ENVIRONMENT_KEYS = ["aws_profile", "aws_region", "environment", "expected_account_id", "project_name"]
 TOOL = (
     f"#!{sys.executable}\nimport json, os, sys\n"

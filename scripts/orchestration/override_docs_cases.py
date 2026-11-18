@@ -36,6 +36,7 @@ VALUES = {
     "PHASE": "promote",
     "LAYER_PHASE": "release",
     "RELEASE_MODEL": "m2",
+    "LIVE_HAI_TYPE": "HAI_1",
 }
 
 
