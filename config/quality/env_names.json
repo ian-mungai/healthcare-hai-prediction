@@ -69,6 +69,7 @@
     "PG_BACKUP_ONCE": {"category": "shell", "reason": "Optional: 1 makes the Postgres backup dump and upload steps run once instead of in a loop; the Postgres backup runner sets it."},
     "PG_DATABASES": {"category": "container", "reason": "Set by the Postgres backup and restore tasks of infra/services (postgres_backup.tf and postgres.tf)."},
     "PLANT": {"category": "test", "reason": "Set and read only by the startup check tests (tests/test_startup_check_*.py)"},
+    "PLANTED_GUARD": {"category": "test", "reason": "A throwaway name that the planted and clean sources of the entry copy and open_ui cases read."},
     "PROBE_UID": {"category": "test", "reason": "Set and read only by the host boot stand-ins of scripts/infrastructure/run_e2e.py"},
     "PROCESS_GROUP_REGISTRIES": {"category": "test", "reason": "Set and read only by the stand-in programs of scripts/quality/run_process_e2e.py and run_worker_deadline_e2e.py"},
     "PUSH_IMAGES_FAKE_DIGEST": {"category": "test", "reason": "Set and read only by the stand-in registry of scripts/infrastructure/push_images_cases.py"},
@@ -194,7 +195,6 @@
     "PRE_COMMIT_TO_REF": {"category": "tool", "reason": "Set by pre-commit when it checks a commit range."},
     "PROCESS_LAUNCH_SESSION": {"category": "tool", "reason": "Set by scripts/process.py and scripts/run_ci.sh for each program they start in a new session."},
     "PYTHONPATH": {"category": "tool", "reason": "Supplied by the operating system and by the tools that start Python."},
-    "WORKTREE_SETUP_REQUIRE_NATIVE": {"category": "test", "reason": "Set and read only by the terraform stand-in and the cases of scripts/quality/run_worktree_setup_e2e.py."},
-    "X": {"category": "test", "reason": "A throwaway name that the planted and clean sources of the entry copy and open_ui cases read."}
+    "WORKTREE_SETUP_REQUIRE_NATIVE": {"category": "test", "reason": "Set and read only by the terraform stand-in and the cases of scripts/quality/run_worktree_setup_e2e.py."}
   }
 }

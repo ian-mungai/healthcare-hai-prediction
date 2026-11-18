@@ -444,7 +444,7 @@ def test_open_ui_never_creates_a_child_process_itself() -> None:
 
 
 def test_the_static_check_catches_every_way_to_start_a_process() -> None:
-    clean = "import os\nfrom pathlib import Path\nvalue = os.environ.get('X')\nprint(Path('.'))\n"
+    clean = "import os\nfrom pathlib import Path\nvalue = os.environ.get('PLANTED_GUARD')\nprint(Path('.'))\n"
     check(process_uses(clean) == [], f"an ordinary use of os must pass: {process_uses(clean)}")
     planted = {
         "an aliased spawn import": "import os as o\no.posix_spawn('x', ['x'], {})\n",

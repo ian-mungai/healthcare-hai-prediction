@@ -521,7 +521,7 @@ def guard_cases() -> dict[str, tuple[dict[str, str], bool]]:
             True,
         ),
         "a conditional import of the package main does not replace the local main": (
-            guarded("if os.environ.get('X'):\n        from package.module import main\n    raise SystemExit(main())"),
+            guarded("if os.environ.get('PLANTED_GUARD'):\n        from package.module import main\n    raise SystemExit(main())"),
             True,
         ),
         "an import of the package main after the call of the local main is flagged": (
