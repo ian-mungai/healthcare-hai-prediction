@@ -15,6 +15,19 @@ that is not stored yet skips the step.
 Every HTTP call, its connection, its headers and the reading of its body end at one absolute run deadline (``RUN_SECONDS`` from the start of the run):
 a watchdog closes the socket at the deadline and every read checks the clock. Output names steps, users and models and never a password.
 
+Wheel citations (mlflow-3.17.2-py3-none-any.whl, SHA-256 4e44c03791beb518d8b0a40b0982d958c2634d902f46d67d7907c82107f21fac, under mlflow/server/auth/):
+routes.py:7 CREATE_USER is /api/2.0/mlflow/users/create. __init__.py:7264 create_user needs a JSON body with username and password (:7265), is routed
+at :8949 and is gated by validate_can_create_user (:4713). routes.py:23 GRANT_USER_PERMISSION is /api/3.0/mlflow/users/permissions/grant.
+__init__.py:7482 grant_user_permission reads username, resource_type, resource_id and permission and is routed at :8881. sqlalchemy_store.py:448-481
+inserts one row and raises RESOURCE_ALREADY_EXISTS when the user already has a row on the resource, so a grant never changes a permission.
+routes.py:27 GET_USER_PERMISSION is /api/3.0/mlflow/users/permissions/get. __init__.py:7503 get_user_permission answers allowed and permission, and
+answers the server default for a resource that does not exist (:7508-7510), so the check looks up the object first. permissions.py:24-76 lists the
+permission names READ, USE, EDIT, MANAGE, DENY and NO_PERMISSIONS. The resource types are registered_model and experiment (permissions.py:183) and an
+experiment is named by its ID. handlers.py:8617 (GetExperimentByName, missing: RESOURCE_DOES_NOT_EXIST at :1869-1874) and handlers.py:8658
+(GetRegisteredModel) are the lookups for an object's existence. /api/2.0/mlflow/registered-models/permissions/* and
+/api/2.0/mlflow/experiments/permissions/* are in neither routes.py nor __init__.py: 3.17.2 removed them and a call gets a 404 HTML page. The check
+never calls them.
+
 MLflow 3.17.2 routes, read from the wheel (``mlflow/server/auth/routes.py`` and ``__init__.py``): ``users/get`` and ``users/create``
 (``/api/2.0/mlflow``, the create call needs a JSON body with ``username`` and ``password``), ``users/permissions/get`` and ``users/permissions/grant``
 (``/api/3.0/mlflow``, the grant call inserts one row and answers ``RESOURCE_ALREADY_EXISTS`` for a user that already has a row, so it never changes a
