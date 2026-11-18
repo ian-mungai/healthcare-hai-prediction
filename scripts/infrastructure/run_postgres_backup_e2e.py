@@ -629,8 +629,40 @@ def case_restore_recovers_after_a_leftover_temporary_database() -> dict[str, boo
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
-    name.removeprefix("case_"): function for name, function in sorted(globals().items()) if name.startswith("case_") and callable(function)
+    "dump_leaves_one_ready_set_with_a_manifest": case_dump_leaves_one_ready_set_with_a_manifest,
+    "dump_names_a_failed_pg_dump": case_dump_names_a_failed_pg_dump,
+    "dump_refuses_a_truncated_dump": case_dump_refuses_a_truncated_dump,
+    "dump_refuses_an_empty_database": case_dump_refuses_an_empty_database,
+    "dump_removes_leftovers_of_an_interrupted_run": case_dump_removes_leftovers_of_an_interrupted_run,
+    "dump_stops_a_dump_that_passes_its_deadline": case_dump_stops_a_dump_that_passes_its_deadline,
+    "fetch_fails_visibly_when_the_bucket_cannot_be_read": case_fetch_fails_visibly_when_the_bucket_cannot_be_read,
+    "fetch_falls_back_to_the_older_set_when_the_newest_is_damaged": case_fetch_falls_back_to_the_older_set_when_the_newest_is_damaged,
+    "fetch_reads_only_the_requested_databases": case_fetch_reads_only_the_requested_databases,
+    "fetch_refuses_when_every_set_is_damaged": case_fetch_refuses_when_every_set_is_damaged,
+    "fetch_stops_at_its_deadline": case_fetch_stops_at_its_deadline,
+    "fetch_takes_the_newest_completed_set": case_fetch_takes_the_newest_completed_set,
+    "fetch_with_no_completed_backup_restores_nothing": case_fetch_with_no_completed_backup_restores_nothing,
+    "restore_failure_leaves_no_half_restored_database": case_restore_failure_leaves_no_half_restored_database,
+    "restore_fills_a_fresh_server_from_the_dumps": case_restore_fills_a_fresh_server_from_the_dumps,
+    "restore_is_idempotent": case_restore_is_idempotent,
+    "restore_never_touches_a_database_with_data": case_restore_never_touches_a_database_with_data,
+    "restore_only_fills_the_empty_ones": case_restore_only_fills_the_empty_ones,
+    "restore_recovers_after_a_leftover_temporary_database": case_restore_recovers_after_a_leftover_temporary_database,
+    "restore_refuses_a_restore_that_lost_a_table": case_restore_refuses_a_restore_that_lost_a_table,
+    "restore_without_a_dump_creates_empty_databases": case_restore_without_a_dump_creates_empty_databases,
+    "upload_a_rerun_after_an_interruption_adds_nothing_twice": case_upload_a_rerun_after_an_interruption_adds_nothing_twice,
+    "upload_needs_no_read_permission": case_upload_needs_no_read_permission,
+    "upload_never_replaces_an_existing_key": case_upload_never_replaces_an_existing_key,
+    "upload_refuses_a_file_that_is_not_a_dump": case_upload_refuses_a_file_that_is_not_a_dump,
+    "upload_refuses_a_truncated_dump": case_upload_refuses_a_truncated_dump,
+    "upload_refuses_an_empty_dump": case_upload_refuses_an_empty_dump,
+    "upload_sets_a_set_aside_after_three_failed_tries": case_upload_sets_a_set_aside_after_three_failed_tries,
+    "upload_stops_at_its_deadline": case_upload_stops_at_its_deadline,
+    "upload_takes_the_oldest_set_first_and_leaves_partial_sets": case_upload_takes_the_oldest_set_first_and_leaves_partial_sets,
+    "upload_writes_every_dump_then_the_marker": case_upload_writes_every_dump_then_the_marker,
 }
+if len(CASES) != sum(name.startswith("case_") for name in globals()):
+    raise SystemExit("a case_ function is missing from CASES")
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError)
 
 

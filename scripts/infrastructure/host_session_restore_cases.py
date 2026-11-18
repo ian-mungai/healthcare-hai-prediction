@@ -627,10 +627,52 @@ def a_stack_without_setup_containers_is_not_checked() -> dict[str, bool]:
     return {"start finishes": bool(host.reloads)}
 
 
+HELPERS = {"build", "failure", "installs", "RecordHost", "run_again_skips", "published_table_rows"}
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
-    "restore_" + name: function
-    for name, function in sorted(globals().items())
-    if callable(function)
-    and function.__module__ == __name__
-    and name not in {"build", "failure", "installs", "RecordHost", "run_again_skips", "published_table_rows"}
+    "restore_a_failed_catalog_recovery_is_retried_by_the_next_start": a_failed_catalog_recovery_is_retried_by_the_next_start,
+    "restore_a_failed_catalog_restore_fails_start_by_name_and_stops_the_host": a_failed_catalog_restore_fails_start_by_name_and_stops_the_host,
+    "restore_a_failed_catalog_restore_keeps_the_host_with_keep_on": a_failed_catalog_restore_keeps_the_host_with_keep_on,
+    "restore_a_failed_mlflow_user_task_is_reported_and_start_continues": a_failed_mlflow_user_task_is_reported_and_start_continues,
+    "restore_a_failed_record_write_is_reported_and_start_continues": a_failed_record_write_is_reported_and_start_continues,
+    "restore_a_malformed_stored_record_is_refused_by_name": a_malformed_stored_record_is_refused_by_name,
+    "restore_a_marker_that_cannot_be_cleared_is_reported_and_start_continues": a_marker_that_cannot_be_cleared_is_reported_and_start_continues,
+    "restore_a_marker_that_cannot_be_recorded_anywhere_fails_the_start_and_says_so": a_marker_that_cannot_be_recorded_anywhere_fails_the_start_and_says_so,
+    "restore_a_marker_that_cannot_be_written_fails_the_start_before_any_recovery": a_marker_that_cannot_be_written_fails_the_start_before_any_recovery,
+    "restore_a_pending_marker_of_an_earlier_start_runs_the_recovery_and_is_cleared": a_pending_marker_of_an_earlier_start_runs_the_recovery_and_is_cleared,
+    "restore_a_readable_log_without_a_restore_and_no_marker_runs_no_recovery": a_readable_log_without_a_restore_and_no_marker_runs_no_recovery,
+    "restore_a_restore_reply_with_every_published_table_completes_the_start": a_restore_reply_with_every_published_table_completes_the_start,
+    "restore_a_restored_database_on_a_stack_without_the_one_shot_fails_start_by_name": a_restored_database_on_a_stack_without_the_one_shot_fails_start_by_name,
+    "restore_a_result_line_that_is_not_the_restore_reply_fails_start": a_result_line_that_is_not_the_restore_reply_fails_start,
+    "restore_a_session_without_the_bucket_name_neither_reads_nor_writes": a_session_without_the_bucket_name_neither_reads_nor_writes,
+    "restore_a_setup_of_the_current_task_definition_with_an_older_task_still_listed_passes": (
+        a_setup_of_the_current_task_definition_with_an_older_task_still_listed_passes
+    ),
+    "restore_a_setup_that_ended_in_an_older_task_definition_does_not_count": a_setup_that_ended_in_an_older_task_definition_does_not_count,
+    "restore_a_skipped_mlflow_user_task_is_not_reported_ready_and_start_continues": a_skipped_mlflow_user_task_is_not_reported_ready_and_start_continues,
+    "restore_a_stack_without_setup_containers_is_not_checked": a_stack_without_setup_containers_is_not_checked,
+    "restore_a_stack_without_the_mlflow_user_task_runs_nothing_for_it": a_stack_without_the_mlflow_user_task_runs_nothing_for_it,
+    "restore_an_unknown_log_group_runs_the_recovery": an_unknown_log_group_runs_the_recovery,
+    "restore_an_unreadable_pending_marker_runs_the_recovery": an_unreadable_pending_marker_runs_the_recovery,
+    "restore_an_unreadable_setup_log_runs_the_recovery": an_unreadable_setup_log_runs_the_recovery,
+    "restore_an_unreadable_stored_record_is_named_when_the_volume_is_fresh": an_unreadable_stored_record_is_named_when_the_volume_is_fresh,
+    "restore_start_does_not_touch_the_catalog_when_nothing_was_restored": start_does_not_touch_the_catalog_when_nothing_was_restored,
+    "restore_start_fails_by_name_when_the_backup_fetch_failed": start_fails_by_name_when_the_backup_fetch_failed,
+    "restore_start_fails_by_name_when_the_database_setup_failed": start_fails_by_name_when_the_database_setup_failed,
+    "restore_start_needs_both_setup_containers_to_have_ended_well": start_needs_both_setup_containers_to_have_ended_well,
+    "restore_start_on_a_fresh_volume_uses_a_stored_record_of_a_run_named_by_the_one_form": (
+        start_on_a_fresh_volume_uses_a_stored_record_of_a_run_named_by_the_one_form
+    ),
+    "restore_start_on_a_fresh_volume_uses_the_stored_record": start_on_a_fresh_volume_uses_the_stored_record,
+    "restore_start_passes_when_the_setup_ended_well": start_passes_when_the_setup_ended_well,
+    "restore_start_prefers_the_record_of_the_checkout_over_the_stored_one": start_prefers_the_record_of_the_checkout_over_the_stored_one,
+    "restore_start_restores_the_catalog_after_a_restored_database": start_restores_the_catalog_after_a_restored_database,
+    "restore_start_runs_the_mlflow_user_task_after_the_services_are_stable": start_runs_the_mlflow_user_task_after_the_services_are_stable,
+    "restore_start_waits_for_a_running_fetch_and_a_pending_setup": start_waits_for_a_running_fetch_and_a_pending_setup,
+    "restore_start_with_code_writes_the_record_outside_the_volume": start_with_code_writes_the_record_outside_the_volume,
+    "restore_start_without_any_record_is_still_refused": start_without_any_record_is_still_refused,
+    "restore_start_without_flags_writes_the_identity_of_the_checkout": start_without_flags_writes_the_identity_of_the_checkout,
+    "restore_the_next_start_with_a_working_store_writes_the_marker_and_recovers": the_next_start_with_a_working_store_writes_the_marker_and_recovers,
+    "restore_the_pending_marker_is_written_before_the_recovery_and_cleared_after_it": the_pending_marker_is_written_before_the_recovery_and_cleared_after_it,
 }
+if len(CASES) != sum(1 for value in globals().values() if callable(value) and getattr(value, "__module__", None) == __name__) - len(HELPERS):
+    raise SystemExit("a case function is missing from CASES")

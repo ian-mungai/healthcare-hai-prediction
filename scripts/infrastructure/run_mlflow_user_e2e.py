@@ -313,8 +313,26 @@ def case_an_expired_deadline_sends_no_request() -> dict[str, bool]:
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
-    name.removeprefix("case_"): function for name, function in sorted(globals().items()) if name.startswith("case_")
+    "a_deny_grant_is_refused_and_never_reported_ready": case_a_deny_grant_is_refused_and_never_reported_ready,
+    "a_deny_on_an_experiment_in_the_trash_is_refused": case_a_deny_on_an_experiment_in_the_trash_is_refused,
+    "a_missing_login_parameter_skips_the_step": case_a_missing_login_parameter_skips_the_step,
+    "a_model_not_registered_yet_is_pending": case_a_model_not_registered_yet_is_pending,
+    "a_refused_administrator_login_fails_before_any_write": case_a_refused_administrator_login_fails_before_any_write,
+    "a_rerun_changes_nothing": case_a_rerun_changes_nothing,
+    "a_server_default_of_read_needs_no_write": case_a_server_default_of_read_needs_no_write,
+    "a_slow_answer_body_stops_at_the_run_deadline": case_a_slow_answer_body_stops_at_the_run_deadline,
+    "a_stalled_closing_response_stops_at_the_run_deadline": case_a_stalled_closing_response_stops_at_the_run_deadline,
+    "a_stronger_grant_is_reported_and_kept": case_a_stronger_grant_is_reported_and_kept,
+    "a_user_with_another_password_is_never_overwritten": case_a_user_with_another_password_is_never_overwritten,
+    "an_experiment_in_the_trash_is_pending": case_an_experiment_in_the_trash_is_pending,
+    "an_expired_deadline_sends_no_request": case_an_expired_deadline_sends_no_request,
+    "an_explicit_no_permission_row_is_refused": case_an_explicit_no_permission_row_is_refused,
+    "an_unsupported_type_is_refused_before_any_request": case_an_unsupported_type_is_refused_before_any_request,
+    "creates_the_user_and_grants_read": case_creates_the_user_and_grants_read,
+    "every_served_type_is_covered": case_every_served_type_is_covered,
 }
+if len(CASES) != sum(name.startswith("case_") for name in globals()):
+    raise SystemExit("a case_ function is missing from CASES")
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError)
 
 
