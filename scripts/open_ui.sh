@@ -4,9 +4,12 @@
 #   bash scripts/open_ui.sh <name> [--local-port N]
 #   bash scripts/open_ui.sh --list
 #
-# scripts.infrastructure.open_ui validates everything first (the name, the port, .env and the one running host) and writes the exact command. This script then
-# replaces itself with that command (exec), so no process supervises the session and a terminal Ctrl+C reaches aws and the Session Manager plugin as when aws is
-# run by hand. Every argument passes through to open_ui unchanged. Nothing is started when the validation refuses or is interrupted.
+# scripts.infrastructure.open_ui validates everything first (the name, the port, .env and the one running host) and prints the exact command, one part per line
+# (it refuses any part that holds a line break or a NUL). This script then replaces itself with that command (exec), so no process supervises the session, no
+# file is made and a terminal Ctrl+C reaches aws and the Session Manager plugin as when aws is run by hand. Nothing is started when the validation refuses or is
+# interrupted; this script then exits with the code of open_ui (130 for Ctrl+C). The internal --emit-command option belongs to this script alone: a caller that
+# passes it is refused. macOS bash is 3.2: it has no mapfile and a variable cannot hold a NUL, and a process substitution would run open_ui with SIGINT ignored,
+# so the command is read from a foreground command substitution and split on line breaks by parameter expansion, with no globbing or IFS.
 set -euo pipefail
 
 # Follow a symbolic link to the real script first (old Bash on macOS has no readlink -f), then take the repository root from the real location.
@@ -22,18 +25,32 @@ if [[ ! -x .venv/bin/python ]]; then
   printf 'open_ui.sh: the .venv environment is missing. Run bash scripts/install.sh first.\n' >&2
   exit 1
 fi
+for argument in "$@"; do
+  case "$argument" in
+    --emit-command*)
+      printf 'open_ui.sh: that option is internal and cannot be used.\n' >&2
+      exit 2
+      ;;
+  esac
+done
 
-command_file="$(mktemp "${TMPDIR:-/tmp}/hai_open_ui.XXXXXX")"
-trap 'rm -f "$command_file"' EXIT
-.venv/bin/python -m scripts.infrastructure.open_ui --exec-args-file "$command_file" "$@"
-command=()
-while IFS= read -r -d '' part; do
-  command+=("$part")
-done < "$command_file"
-# An empty file means there is nothing to start (--list).
-if ((${#command[@]} == 0)); then
+status=0
+output="$(.venv/bin/python -m scripts.infrastructure.open_ui --emit-command "$@")" || status=$?
+if ((status != 0)); then
+  exit "$status"
+fi
+# No command with a zero status means there is nothing to start (--list, whose table open_ui printed itself).
+if [[ -z "$output" ]]; then
   exit 0
 fi
-rm -f "$command_file"
-trap - EXIT
+command=()
+rest="$output"
+while [[ -n "$rest" ]]; do
+  command+=("${rest%%$'\n'*}")
+  if [[ "$rest" == *$'\n'* ]]; then
+    rest="${rest#*$'\n'}"
+  else
+    rest=""
+  fi
+done
 exec "${command[@]}"

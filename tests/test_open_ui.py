@@ -1,9 +1,9 @@
 """``open_ui`` validates everything, then ``scripts/open_ui.sh`` replaces itself with ``aws ssm start-session``: no process supervises the session.
 
 Two layers are tested with a stand-in ``aws`` first on ``PATH``. The stand-in answers the instance lookup from a file and records every call, one argument per
-line. Cases on ``scripts.infrastructure.open_ui`` read the validated command it writes to its ``--exec-args-file`` (``vector``), and cases on the real
-``scripts/open_ui.sh`` in a fake checkout prove the exec: the exact arguments, the exact environment, no process between the test and ``aws`` and no file left
-behind. Nothing reaches AWS.
+line. Cases on ``scripts.infrastructure.open_ui`` read the validated command it prints, one part per line, to its standard output in the internal
+``--emit-command`` mode (``vector``). Cases on the real ``scripts/open_ui.sh`` in a fake checkout prove the exec: the exact arguments, the exact environment,
+no process between the test and ``aws`` and no file left behind, because no file is made at all. Nothing reaches AWS.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class Workspace:
         self.answer = folder / "instances.json"
         self.answer.write_text(answer)
         self.env_file = folder / ".env"
-        self.command_file = folder / "command.bin"
+        self.last: CompletedProcess[str] | None = None
         self.env_file.write_text("".join(f"{key}={value}\n" for key, value in (ENV_VALUES if values is None else values).items()))
 
     def run(self, *arguments: str, env_file: Path | None = None, session_error: str = "", extra: dict[str, str] | None = None) -> CompletedProcess[str]:
@@ -89,19 +89,20 @@ class Workspace:
             "AWS_PROFILE": "an_inherited_profile",
             "AWS_REGION": "eu-west-1",
         }
-        return run_command(
+        self.last = run_command(
             sys.executable,
-            ["-m", "scripts.infrastructure.open_ui", *arguments, "--env-file", str(env_file or self.env_file), "--exec-args-file", str(self.command_file)],
+            ["-m", "scripts.infrastructure.open_ui", "--emit-command", *arguments, "--env-file", str(env_file or self.env_file)],
             cwd=ROOT,
             env=environment,
             timeout=60,
         )
+        return self.last
 
     def vector(self) -> list[str] | None:
-        """The validated command ``open_ui`` wrote for the shell to exec, or ``None`` when it wrote nothing."""
-        if not self.command_file.exists() or self.command_file.stat().st_size == 0:
+        """The validated command ``open_ui`` printed for the shell to exec, or ``None`` when it printed nothing."""
+        if self.last is None or not self.last.stdout:
             return None
-        return self.command_file.read_bytes().decode().split("\0")[:-1]
+        return self.last.stdout.split("\n")[:-1]
 
     def calls(self) -> list[list[str]]:
         if not self.log.exists():
@@ -178,7 +179,8 @@ def test_every_listed_interface_validates_to_the_exact_command(tmp_path: Path) -
         workspace = Workspace(folder, instances(INSTANCE))
         result = workspace.run(name)
         check(result.returncode == 0, f"{name}: exit {result.returncode}: {result.stderr}")
-        check(f"http://127.0.0.1:{port}" in result.stdout, f"{name}: the output must give the browser address: {result.stdout}")
+        check(f"http://127.0.0.1:{port}" in result.stderr, f"{name}: stderr must give the browser address: {result.stderr}")
+        check("http" not in result.stdout, f"{name}: stdout carries only the command: {result.stdout!r}")
         calls = workspace.calls()
         check(len(calls) == 1, f"{name}: only the instance lookup may run, saw {calls}")
         lookup = calls[0]
@@ -192,7 +194,7 @@ def test_a_chosen_local_port_changes_only_the_local_port(tmp_path: Path) -> None
     workspace = Workspace(tmp_path, instances(INSTANCE))
     result = workspace.run("airflow", "--local-port", "18080")
     check(result.returncode == 0, f"exit {result.returncode}: {result.stderr}")
-    check("http://127.0.0.1:18080" in result.stdout, f"the address must use the chosen port: {result.stdout}")
+    check("http://127.0.0.1:18080" in result.stderr, f"the address must use the chosen port: {result.stderr}")
     check(workspace.vector() == expected_vector("airflow", 18080), f"only the local port may change: {workspace.vector()}")
 
 
@@ -338,11 +340,11 @@ def test_no_validation_failure_writes_a_command(tmp_path: Path) -> None:
         workspace = Workspace(folder, answer, values)
         result = workspace.run(*arguments)
         check(result.returncode != 0, f"{case}: it must refuse: {result.returncode}")
-        check(workspace.vector() is None, f"{case}: no command may be written for the shell to exec: {workspace.vector()}")
+        check(workspace.vector() is None, f"{case}: no command may be printed for the shell to exec: {workspace.vector()}")
         check(all(call[:2] != ["ssm", "start-session"] for call in workspace.calls()), f"{case}: no session may start")
 
 
-def test_running_without_the_command_file_is_refused_with_a_fixed_message(tmp_path: Path) -> None:
+def test_running_without_the_internal_option_is_refused_with_a_fixed_message(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path, instances(INSTANCE))
     environment = {
         "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
@@ -354,7 +356,7 @@ def test_running_without_the_command_file_is_refused_with_a_fixed_message(tmp_pa
     )
     check(
         result.returncode == 2 and "bash scripts/open_ui.sh" in result.stderr,
-        f"a run without --exec-args-file must exit 2 and name the script: {result.stderr}",
+        f"a run without the internal option must exit 2 and name the script: {result.stderr}",
     )
     check(workspace.calls() == [], f"nothing may be run before that check: {workspace.calls()}")
 
@@ -365,30 +367,108 @@ def test_a_ctrl_c_during_validation_exits_130_and_starts_nothing(tmp_path: Path)
     output = result.stdout + result.stderr
     check(result.returncode == 130, f"a Ctrl+C during the host lookup must exit 130: {result.returncode} {output}")
     check("Nothing was started" in result.stderr and "Traceback" not in output, f"the interruption must be reported plainly: {output}")
-    check(workspace.vector() is None, "no command may be written after an interruption")
+    check(workspace.vector() is None, "no command may be printed after an interruption")
+
+
+FORBIDDEN_MODULES = frozenset({"subprocess", "pty", "multiprocessing", "threading", "signal", "asyncio"})
+FORBIDDEN_OS = re.compile(r"(exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|fork|forkpty|system|popen|startfile)")
+FORBIDDEN_CALLS = frozenset({"run_command", "Popen", "start"})
+FORBIDDEN_BARE_CALLS = frozenset({"eval", "exec", "compile"})
+
+
+def process_uses(source: str) -> list[str]:
+    """Every way ``source`` could create or run a process, whatever the alias: an import of a process module (also ``import x as y`` and ``from x import
+    y``), a ``from os import`` or ``os.`` attribute of the spawn, exec, fork or system families (through any alias of ``os``), an import of
+    ``scripts.process``, a call of ``run_command``, ``Popen``, ``start``, ``eval``, ``exec`` or ``compile``, and ``importlib.import_module`` or
+    ``__import__`` of a process module, of ``os`` or of a computed name."""
+    found: list[str] = []
+    os_aliases: set[str] = set()
+    importlib_aliases: set[str] = set()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in FORBIDDEN_MODULES or alias.name == "scripts.process":
+                    found.append(f"import {alias.name}")
+                if alias.name == "os":
+                    os_aliases.add(alias.asname or "os")
+                if top == "importlib":
+                    importlib_aliases.add(alias.asname or "importlib")
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.split(".")[0] in FORBIDDEN_MODULES or module == "scripts.process" or module.startswith("scripts.process."):
+                found.append(f"from {module} import")
+            for alias in node.names:
+                if module == "os" and FORBIDDEN_OS.fullmatch(alias.name):
+                    found.append(f"from os import {alias.name}")
+                if module == "importlib" or (module == "" and alias.name == "importlib"):
+                    importlib_aliases.add(alias.asname or alias.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in os_aliases and FORBIDDEN_OS.fullmatch(node.attr):
+            found.append(f"os.{node.attr}")
+        if isinstance(node, ast.Call):
+            function = node.func
+            name = function.id if isinstance(function, ast.Name) else function.attr if isinstance(function, ast.Attribute) else ""
+            if name in FORBIDDEN_CALLS or (name in FORBIDDEN_BARE_CALLS and isinstance(function, ast.Name)):
+                found.append(f"call of {name}")
+            if name == "getattr" and node.args and isinstance(node.args[0], ast.Name) and node.args[0].id in os_aliases:
+                found.append("getattr on os")
+            dynamic = name == "__import__" or (
+                name == "import_module"
+                and isinstance(function, ast.Attribute)
+                and isinstance(function.value, ast.Name)
+                and function.value.id in importlib_aliases
+            )
+            if name == "import_module" and isinstance(function, ast.Name):
+                dynamic = True
+            if dynamic:
+                argument = node.args[0] if node.args else None
+                target = argument.value if isinstance(argument, ast.Constant) and isinstance(argument.value, str) else None
+                if target is None or target.split(".")[0] in FORBIDDEN_MODULES | {"os"} or target == "scripts.process":
+                    found.append(f"dynamic import of {target or 'a computed name'}")
+    return found
 
 
 def test_open_ui_never_creates_a_child_process_itself() -> None:
-    """Static check of ``open_ui.py``: no subprocess, spawn, exec, fork, thread or signal machinery. The one child of a run, the instance lookup, is made by
-    the repository's ``AwsCli`` and has ended before ``open_ui`` returns; the session is a ``scripts/open_ui.sh`` exec."""
-    tree = ast.parse((ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text())
-    forbidden_modules = {"subprocess", "signal", "threading", "multiprocessing", "pty", "asyncio"}
-    forbidden_names = {"run_command", "Popen", "posix_spawn", "posix_spawnp", "fork", "forkpty", "system", "popen", "start"}
-    found: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found += [alias.name for alias in node.names if alias.name.split(".")[0] in forbidden_modules]
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in forbidden_modules | {"scripts.process"}:
-            found.append(node.module or "")
-        elif isinstance(node, ast.ImportFrom) and node.module == "scripts.process":
-            found.append("scripts.process")
-        elif isinstance(node, ast.Attribute | ast.Name):
-            name = node.attr if isinstance(node, ast.Attribute) else node.id
-            if name in forbidden_names or re.fullmatch(r"(exec|spawn)[lv]p?e?", name):
-                found.append(name)
-    check(found == [], f"open_ui.py must create no child process and run no session: {found}")
-    text = (ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text()
-    check("HAI_OPEN_UI" not in text, "the removed session settings must not be read")
+    """Static check of ``open_ui.py``: no subprocess, spawn, exec, fork, thread or signal machinery, under any alias. The one child of a run, the instance
+    lookup, is made by the repository's ``AwsCli`` and has ended before ``open_ui`` returns; the session is a ``scripts/open_ui.sh`` exec."""
+    source = (ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text()
+    check(process_uses(source) == [], f"open_ui.py must create no child process and run no session: {process_uses(source)}")
+    check("HAI_OPEN_UI" not in source, "the removed session settings must not be read")
+
+
+def test_the_static_check_catches_every_way_to_start_a_process() -> None:
+    clean = "import os\nfrom pathlib import Path\nvalue = os.environ.get('X')\nprint(Path('.'))\n"
+    check(process_uses(clean) == [], f"an ordinary use of os must pass: {process_uses(clean)}")
+    planted = {
+        "an aliased spawn import": "import os as o\no.posix_spawn('x', ['x'], {})\n",
+        "an aliased posix_spawnp": "import os as operating\noperating.posix_spawnp('x', ['x'], {})\n",
+        "a from-import of spawn": "from os import posix_spawnp as p\n",
+        "a from-import of exec": "from os import execvp\n",
+        "os.fork": "import os\nos.fork()\n",
+        "os.execv": "import os\nos.execv('/bin/true', ['true'])\n",
+        "os.system through an alias": "import os as shell\nshell.system('true')\n",
+        "getattr on os": "import os\ngetattr(os, 'sys' + 'tem')('true')\n",
+        "an aliased subprocess": "import subprocess as sp\n",
+        "a from-import of Popen": "from subprocess import Popen as P\n",
+        "a Popen call": "x.Popen(['true'])\n",
+        "pty": "import pty\n",
+        "an aliased multiprocessing": "import multiprocessing as mp\n",
+        "a from-import of threading": "from threading import Thread as T\n",
+        "signal": "import signal as s\n",
+        "scripts.process": "from scripts.process import run_command as r\n",
+        "a run_command call": "runner(run_command)\nrun_command('x', [])\n",
+        "a start call": "from somewhere import thing\nthing.start()\n",
+        "an importlib import of subprocess": "import importlib\nimportlib.import_module('subprocess')\n",
+        "an aliased importlib": "import importlib as il\nil.import_module('pty')\n",
+        "a from-import of import_module": "from importlib import import_module\nimport_module('os')\n",
+        "a computed import_module": "import importlib\nimportlib.import_module(name)\n",
+        "__import__": "__import__('multiprocessing')\n",
+        "eval": "eval('1')\n",
+    }
+    for case, source in planted.items():
+        check(process_uses(source) != [], f"{case} was not caught: {source!r}")
 
 
 class Checkout:
@@ -426,6 +506,12 @@ class Checkout:
         """Run the wrapper. The Docker-call guard proves a shell's arguments only when they are literal, so each kind has its own literal command."""
         if kind == "list":
             command = ["scripts/open_ui.sh", "--list"]
+        elif kind == "internal":
+            command = ["scripts/open_ui.sh", "airflow", "--emit-command", "--env-file", ".env"]
+        elif kind == "internal_first":
+            command = ["scripts/open_ui.sh", "--emit-command=1", "airflow", "--env-file", ".env"]
+        elif kind == "override":  # the removed output-file option: a caller must not be able to redirect anything
+            command = ["scripts/open_ui.sh", "airflow", "--exec-args-file", "/nonexistent_hostile_dir/command", "--env-file", ".env"]
         elif kind == "unknown":
             command = ["scripts/open_ui.sh", "nothing_here", "--env-file", ".env"]
         elif kind == "port":
@@ -449,7 +535,7 @@ def test_the_wrapper_replaces_itself_with_aws_and_nothing_supervises_it(tmp_path
     checkout = Checkout(tmp_path)
     result = checkout.run("run")
     check(result.returncode == 0, f"exit {result.returncode}: {result.stdout} {result.stderr}")
-    check("http://127.0.0.1:8080" in result.stdout, f"the browser address must be printed before the session: {result.stdout}")
+    check("http://127.0.0.1:8080" in result.stderr, f"the browser address must be printed before the session: {result.stderr}")
     sessions = checkout.session_calls()
     check(
         sessions == [expected_vector("airflow", 8080)[expected_vector("airflow", 8080).index("ssm") :]],
@@ -459,7 +545,7 @@ def test_the_wrapper_replaces_itself_with_aws_and_nothing_supervises_it(tmp_path
     check(environment == FIXED_ENVIRONMENT, f"aws must get no inherited AWS_ setting, only the fixed ones: {environment}")
     parent = int((tmp_path / "session_ppid.txt").read_text())
     check(parent == os.getpid(), f"no wrapper or supervisor may stand between the caller and aws: aws's parent is {parent}, the caller is {os.getpid()}")
-    check(not any(checkout.temporary.iterdir()), f"the wrapper must leave no file behind: {list(checkout.temporary.iterdir())}")
+    check(not any(checkout.temporary.iterdir()), f"the wrapper must make no file at all: {list(checkout.temporary.iterdir())}")
 
 
 def test_a_chosen_local_port_reaches_aws_through_the_wrapper(tmp_path: Path) -> None:
@@ -488,7 +574,7 @@ def test_list_and_a_refusal_execute_nothing_and_leave_no_file(tmp_path: Path) ->
         check(result.returncode == (0 if kind == "list" else 2), f"{kind}: exit {result.returncode}: {result.stderr}")
         check(checkout.workspace.calls() == [], f"{kind}: aws must not run at all: {checkout.workspace.calls()}")
         check(not any(checkout.temporary.iterdir()), f"{kind}: the wrapper must leave no file behind")
-    check("Service" in result.stdout or "not a web interface" in result.stderr, "the last case must say why it ran nothing")
+    check("Service" in result.stderr or "not a web interface" in result.stderr, "the last case must say why it ran nothing")
 
 
 def test_a_ctrl_c_during_validation_through_the_wrapper_starts_nothing(tmp_path: Path) -> None:
@@ -517,9 +603,72 @@ def test_the_wrapper_reached_through_a_symbolic_link_uses_its_own_checkout(tmp_p
     check(len(checkout.session_calls()) == 1, f"the linked wrapper must start the session: {checkout.workspace.calls()}")
 
 
+def test_a_hostile_or_missing_tmpdir_changes_nothing_because_no_file_is_made(tmp_path: Path) -> None:
+    """The wrapper makes no file, so nothing in ``TMPDIR`` (missing, unwritable, or holding a planted link) can act on it or be written through."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("untouched\n")
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    for number in range(8):
+        (hostile / f"hai_open_ui.{number:06d}").symlink_to(victim)
+    for case, directory in (("a missing directory", "/nonexistent_hostile_dir"), ("a directory with planted links", str(hostile))):
+        folder = tmp_path / ("missing" if "missing" in case else "planted")
+        folder.mkdir()
+        checkout = Checkout(folder)
+        result = checkout.run("run", {"TMPDIR": directory})
+        check(result.returncode == 0, f"{case}: the session must still start: {result.returncode} {result.stdout} {result.stderr}")
+        check(len(checkout.session_calls()) == 1, f"{case}: aws must run once: {checkout.workspace.calls()}")
+    check(victim.read_text() == "untouched\n", "nothing may be written through a planted link")
+    check(sorted(path.name for path in hostile.iterdir()) == [f"hai_open_ui.{number:06d}" for number in range(8)], "nothing may be created in TMPDIR")
+
+
+def test_a_caller_cannot_select_the_internal_mode_or_redirect_the_output(tmp_path: Path) -> None:
+    for kind in ("internal", "internal_first", "override"):
+        folder = tmp_path / kind
+        folder.mkdir()
+        checkout = Checkout(folder)
+        result = checkout.run(kind)
+        output = result.stdout + result.stderr
+        check(result.returncode == 2, f"{kind}: the caller's option must be refused with exit 2: {result.returncode} {output}")
+        check(
+            "/nonexistent_hostile_dir" not in output and "emit-command" not in output.replace("open_ui.sh: that option is internal", ""),
+            f"{kind}: no input may be echoed: {output}",
+        )
+        check(checkout.session_calls() == [], f"{kind}: no session may start")
+        check(not Path("/nonexistent_hostile_dir").exists(), f"{kind}: nothing may be written to the caller's path")
+        check(not any(checkout.temporary.iterdir()), f"{kind}: nothing may be left behind")
+
+
 def test_the_wrapper_is_plain_bash_that_ends_in_one_exec() -> None:
     text = (ROOT / "scripts" / "open_ui.sh").read_text()
     check(text.startswith("#!/usr/bin/env bash\n") and "set -euo pipefail" in text, "it must be bash with set -euo pipefail")
     check(len(re.findall(r'^exec "\$\{command\[@\]\}"$', text, re.MULTILINE)) == 1, "it must end in exactly one exec of the validated command")
     check("eval" not in text and "bash scripts/install.sh" in text, "it must not use eval and must name the install script")
-    check(re.search(r"^trap 'rm -f \"\$command_file\"' EXIT$", text, re.MULTILINE) is not None, "it must remove its command file on every exit")
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    check("mapfile" not in code and "readarray" not in code, "macOS bash 3.2 has neither mapfile nor readarray")
+    check("mktemp" not in code and "trap" not in code and "rm " not in code and "> " not in code.replace("2>&1", ""), "it must make, need and remove no file")
+    check(
+        "<<" not in code and "<(" not in code, "a here-document, here-string or process substitution makes a temporary file or runs open_ui with SIGINT ignored"
+    )
+    check("%%$'\\n'*" in code and "IFS" not in code and "set -f" not in code, "it must split on line breaks by parameter expansion, not by IFS or globbing")
+
+
+def test_a_command_part_with_a_line_break_or_nul_is_refused(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    environment = {
+        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "STAND_IN_LOG": str(workspace.log),
+        "STAND_IN_INSTANCES": str(workspace.answer),
+        "AWS_PLANTED\nINJECT": "x",
+    }
+    result = run_command(
+        sys.executable,
+        ["-m", "scripts.infrastructure.open_ui", "--emit-command", "airflow", "--env-file", str(workspace.env_file)],
+        cwd=ROOT,
+        env=environment,
+        timeout=60,
+    )
+    check(
+        result.returncode == 1 and result.stdout == "", f"a part with a line break must be refused with nothing printed: {result.returncode} {result.stdout!r}"
+    )
+    check("INJECT" not in result.stderr, f"the refused part must not be echoed: {result.stderr}")

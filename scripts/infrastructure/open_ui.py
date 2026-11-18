@@ -11,13 +11,14 @@ stays open until you stop it with Ctrl+C or its eight-hour deadline passes. The 
 ``infra/iam/web_ui_forwards.tf`` and the persistent OpenMetadata document in ``infra/iam/openmetadata_persistent.tf``: the same Terraform declares the
 documents, so a new web interface needs no change here. It refuses every other name before it calls AWS. No output names an account ID or an ARN.
 
-Running a session: ``open_ui`` only validates. It writes the validated command (``env``, which drops the inherited ``AWS_*`` settings and sets the fixed ones,
-then ``aws ssm start-session`` with its exact arguments) to the file named by ``--exec-args-file``, NUL-separated, and exits 0. ``scripts/open_ui.sh`` then
-replaces itself with that command (shell ``exec``; Python's ``os.exec*`` cannot pass the lint rule S606, which has no approved suppression), so no process
-supervises the session and a terminal Ctrl+C reaches ``aws`` and the Session Manager plugin as when ``aws`` is run by hand. A Ctrl+C before that exec exits
-130 with \"Nothing was started\". The only child ``open_ui`` itself causes is the instance lookup, made by ``AwsCli`` and ended before it returns. The session
-has no timer here: AWS Session Manager's own idle timeout and maximum session duration preferences end it, and this repository sets none, so the account
-defaults apply. The script cannot prove offline that AWS ended a remote session.
+Running a session: ``open_ui`` only validates, and it supervises nothing. Called by ``scripts/open_ui.sh`` with the internal ``--emit-command`` option, it
+prints the validated command to standard output, one part per line, and exits 0: ``env`` (which drops the inherited ``AWS_*`` settings and sets the fixed ones),
+then ``aws ssm start-session`` with its exact arguments. Every human message goes to standard error. The wrapper reads the command, checks this process's exit
+status and replaces itself with the command (shell ``exec``; Python's ``os.exec*`` cannot pass the lint rule S606, which has no approved suppression). No
+process is left to watch the session and no file is made. A terminal Ctrl+C then reaches ``aws`` and the Session Manager plugin as when ``aws`` is run by
+hand, and a Ctrl+C before the exec exits 130 with \"Nothing was started\". The only child ``open_ui`` itself causes is the instance lookup, made by ``AwsCli``
+and ended before it returns. This script sets no timer and no session limit: AWS Session Manager's own idle timeout and maximum session duration preferences
+end the session, and this repository sets neither, so the account defaults apply. It cannot prove offline that AWS ended a remote session.
 """
 
 from __future__ import annotations
@@ -125,7 +126,7 @@ def parse(argv: list[str], names: list[str]) -> argparse.Namespace:
     parser.add_argument("--list", action="store_true", help="print the Service, Port and Health path of each web interface and stop")
     parser.add_argument("--local-port", default=None, help="the port the browser uses on this Mac (default: the port of the interface)")
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
-    parser.add_argument("--exec-args-file", type=Path, default=None, help="where to write the validated command for scripts/open_ui.sh to exec")
+    parser.add_argument("--emit-command", action="store_true", help="internal: print the validated command for scripts/open_ui.sh to exec")
     return parser.parse_args(argv)
 
 
@@ -153,7 +154,7 @@ def run(argv: list[str]) -> int:
         if arguments.name is not None or arguments.local_port is not None:
             sys.stderr.write("open_ui: --list takes no name and no --local-port\n")
             return 2
-        sys.stdout.write(list_text())
+        (sys.stderr if arguments.emit_command else sys.stdout).write(list_text())
         return 0
     try:
         if arguments.name is None:
@@ -161,7 +162,7 @@ def run(argv: list[str]) -> int:
         if arguments.name not in documents:
             raise OpenUiError(f"the name is not a web interface. The web interfaces are: {', '.join(names)}", 2)
         local_port = chosen_port(arguments.local_port, documents[arguments.name])
-        if arguments.exec_args_file is None:
+        if not arguments.emit_command:
             raise OpenUiError("run it through bash scripts/open_ui.sh, which starts the session after this check", 2)
         settings, _ = load_configuration(arguments.env_file)
         target = host_instance(AwsCli(settings), settings["project_name"], settings["environment"])
@@ -169,11 +170,14 @@ def run(argv: list[str]) -> int:
         sys.stderr.write(f"open_ui: {error}\n")
         return error.code if isinstance(error, OpenUiError) else 1
     command = exec_command(settings, arguments.name, target, local_port)
-    arguments.exec_args_file.write_bytes(b"".join(part.encode() + b"\0" for part in command))
-    sys.stdout.write(
+    if any("\n" in part or "\0" in part for part in command):
+        sys.stderr.write("open_ui: the validated command holds a line break or a NUL, so it is refused.\n")
+        return 1
+    sys.stderr.write(
         f"open_ui: {arguments.name} opens at http://127.0.0.1:{local_port}\n"
         "Keep this window open and press Ctrl+C to close the session. AWS Session Manager's idle timeout and maximum session duration also end it.\n"
     )
+    sys.stdout.write("".join(part + "\n" for part in command))
     sys.stdout.flush()
     return 0
 
