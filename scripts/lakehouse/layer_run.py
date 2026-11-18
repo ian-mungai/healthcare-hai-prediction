@@ -1387,8 +1387,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise StepError(
                 "CODE_RUN_ID is not set to a code run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)"
             )
-        startup(job, args.phase)
-        task_capacity.apply(capacity_profile(args.layer, args.phase))
+        profile = capacity_profile(args.layer, args.phase)
+        if args.phase == "build":
+            # The build check selects the dbt target, and that reads the spill cap which only task_capacity derives (the task definition does not name it).
+            task_capacity.apply(profile)
+            startup(job, args.phase)
+        else:
+            startup(job, args.phase)
+            task_capacity.apply(profile)
         with task_deadline(job):
             if args.phase != "pin" and not launch_phase():
                 check_code_run(job)
