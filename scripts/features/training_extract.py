@@ -21,13 +21,16 @@ from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
 
-from orchestration.training_contract import BASE_RUN, HAI_TYPES, JOB_LANES, MODEL_LISTS, parameters_for, run_id_pattern
+from orchestration.training_contract import BASE_RUN, CODE_STAMP_RUN, HAI_TYPES, JOB_LANES, MODEL_LISTS, parameters_for, run_id_pattern
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 from scripts.features import feature_schema
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
 GOLD_RUN = run_id_pattern("gold")
+# The gold run and the base run that a stored publication names, the stamp form of before the run ID redesign too (the run and request stay strict).
+STORED_GOLD_RUN = f"(?:{CODE_STAMP_RUN}|{GOLD_RUN})"
+STORED_BASE_RUN = f"(?:{CODE_STAMP_RUN}|{BASE_RUN})"
 GROUP_COLUMNS = ("control_type_code", "provider_subtype_code", "state_code", "bed_count", "county_fips")
 SPINE_FIELDS = ("spine_key", "window_start", "is_primary_population", "is_sensitivity_population", "cmi")
 VALIDATION_FIELDS = (
@@ -307,7 +310,7 @@ def _identity(root: Path, publication: Any, schema_sha256: str, rows: Sequence[d
     targets = json.loads((root / "config/training/targets.json").read_bytes())
     if any((row["control"], row["hai_type"], "sir") not in controls for row in targets["target_candidates"]):
         raise ExtractError("a training target is absent from the publication control identity")
-    if not re.fullmatch(GOLD_RUN, str(record.get("gold_run_id", ""))):
+    if not re.fullmatch(STORED_GOLD_RUN, str(record.get("gold_run_id", ""))):
         raise ExtractError("feature publication has no valid gold run identity")
     if not SHA256.fullmatch(str(record.get("gold_snapshot_set_sha256", ""))):
         raise ExtractError("feature publication has no valid gold snapshot-set identity")
@@ -359,7 +362,7 @@ def extract(
     if selected is not None and publication.run_id != selected:
         raise ExtractError("the feature reader selected another publication")
     base_run = publication.base_run
-    if not isinstance(base_run, str) or not re.fullmatch(BASE_RUN, base_run):
+    if not isinstance(base_run, str) or not re.fullmatch(STORED_BASE_RUN, base_run):
         raise ExtractError(f"the {model} publication {publication.run_id} carries no base_run")
     base = reader.publication(base_run)
     if base.run_id != base_run:

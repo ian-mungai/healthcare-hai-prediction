@@ -322,7 +322,7 @@ class SyntheticReader:
         return SimpleNamespace(
             frame=SimpleNamespace(to_pylist=lambda: self.projected(wanted)),
             publication=self.publication(PUBLICATION),
-            base=self.publication(BASE),
+            base=self.publication(self.published[PUBLICATION]["base_run"]),
             feature_schema_sha256=self.schema_sha256,
             entity_count=len(self.rows),
         )

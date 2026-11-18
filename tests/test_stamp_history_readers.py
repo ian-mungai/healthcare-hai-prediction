@@ -254,6 +254,89 @@ def test_a_challenger_whose_features_run_is_of_the_run_id_form_runs_its_whole_ch
     check("release_online" not in [template for template, _, _ in launches], "a first champion launched a release")
 
 
+# training extraction: the stored gold run and base run of a publication
+
+IDENTITY_REFUSALS = ("no valid gold run identity", "carries no base_run", "input identity or schema differs")
+
+
+def extraction(tmp_path: Path, stored: str | None) -> dict[str, Any]:
+    """Extract through the real ``training_extract.extract`` over the synthetic publication of the lane B cases, naming the stamp form in the stored field
+    that the check reads (None for none, ``gold`` for the build input's gold run, ``base`` for the publication's base run and the base's own rows)."""
+    from scripts.features import training_extract
+    from scripts.training import lane_b_cases as cases
+
+    source = tmp_path / "source"
+    cases.fixture(source)
+    reader = cases.SyntheticReader(source)
+    if stored == "base":
+        reader.published[cases.PUBLICATION]["base_run"] = STAMP
+        reader.published[STAMP] = reader.published.pop(cases.BASE)
+        reader.heads[STAMP] = reader.heads.pop(cases.BASE)
+        reader.tables["feature_build_inputs"][0]["features_run_id"] = STAMP
+    if stored == "gold":
+        reader.tables["feature_build_inputs"][0]["gold_run_id"] = STAMP
+    return training_extract.extract(
+        source, tmp_path / "out", cases.RUN, cases.PARAMETERS, "a" * 64, reader, writer_lock_sha256="b" * 64, writer=cases.JsonTableStandIn()
+    )
+
+
+def test_extraction_writes_all_outputs_for_the_redesigned_publication(tmp_path: Path) -> None:
+    done = extraction(tmp_path, None)
+    check(len(done["outputs"]) == 16, f"the control wrote {len(done['outputs'])} outputs, not 16")
+
+
+@pytest.mark.parametrize("stored", ["gold", "base"])
+def test_extraction_does_not_refuse_a_stamp_gold_run_or_base_run_of_a_stored_publication_at_the_identity_checks(tmp_path: Path, stored: str) -> None:
+    from scripts.features import training_extract
+
+    try:
+        extraction(tmp_path, stored)
+    except training_extract.ExtractError as error:
+        refused_identity = [text for text in IDENTITY_REFUSALS if text in str(error)]
+        check(not refused_identity, f"the stored stamp {stored} run is refused at an identity check: {error}")
+    check(re.fullmatch(training_extract.STORED_GOLD_RUN, STAMP) and re.fullmatch(training_extract.STORED_BASE_RUN, STAMP), "the stored patterns refuse a stamp")
+    check(
+        re.fullmatch(training_extract.STORED_GOLD_RUN, "gold_abcdef01") and re.fullmatch(training_extract.STORED_BASE_RUN, "features_abcdef01"),
+        "new form refused",
+    )
+
+
+def test_extraction_still_refuses_a_stored_gold_run_or_base_run_of_neither_form_and_a_stamp_run_of_its_own(tmp_path: Path) -> None:
+    from scripts.features import training_extract
+    from scripts.training import lane_b_cases as cases
+
+    for field in ("gold", "base"):
+        for bad in BAD[:3]:
+            source = tmp_path / f"{field}_{bad}"
+            cases.fixture(source)
+            reader = cases.SyntheticReader(source)
+            if field == "base":
+                reader.published[cases.PUBLICATION]["base_run"] = bad
+            else:
+                reader.tables["feature_build_inputs"][0]["gold_run_id"] = bad
+            refused(
+                lambda reader=reader, source=source: training_extract.extract(
+                    source, source / "out", cases.RUN, cases.PARAMETERS, "a" * 64, reader, writer_lock_sha256="b" * 64, writer=cases.JsonTableStandIn()
+                ),
+                "ExtractError",
+            )
+    source = tmp_path / "own"
+    cases.fixture(source)
+    refused(
+        lambda: training_extract.extract(
+            source,
+            source / "out",
+            STAMP,
+            cases.PARAMETERS,
+            "a" * 64,
+            cases.SyntheticReader(source),
+            writer_lock_sha256="b" * 64,
+            writer=cases.JsonTableStandIn(),
+        ),
+        "ExtractError",
+    )
+
+
 # stored protection records, receipts, holds and file names
 
 
