@@ -5,9 +5,10 @@ Run from the repository root: ``bash scripts/open_ui.sh <name> [--local-port N]`
 same Terraform, and needs neither AWS nor ``.env``.
 
 The profile, the region, the project name and the environment come from ``.env`` through ``load_configuration``. The script finds the one running instance
-tagged ``Name`` ``<PROJECT_NAME>_host_<ENVIRONMENT>`` (it refuses zero or several), prints the browser address and runs ``aws ssm start-session`` as a child
-it owns (started through ``scripts.process.start``) for the document ``<PROJECT_NAME>_<name>_forward_<ENVIRONMENT>``, which fixes the host port. The session
-stays open until you stop it with Ctrl+C or its eight-hour deadline passes. The names it accepts are the keys of the ``web_ui_forwards`` map in
+tagged ``Name`` ``<PROJECT_NAME>_host_<ENVIRONMENT>`` (it refuses zero or several), prints the browser address and gives ``scripts/open_ui.sh`` the
+``aws ssm start-session`` command for the document ``<PROJECT_NAME>_<name>_forward_<ENVIRONMENT>``, which fixes the host port. The wrapper execs that
+command (see "Running a session" below). ``--help`` prints the usage to standard error, so the wrapper gets no command and exits 0 without an exec. The
+names it accepts are the keys of the ``web_ui_forwards`` map in
 ``infra/iam/web_ui_forwards.tf`` and the persistent OpenMetadata document in ``infra/iam/openmetadata_persistent.tf``: the same Terraform declares the
 documents, so a new web interface needs no change here. It refuses every other name before it calls AWS. No output names an account ID or an ARN.
 
@@ -28,7 +29,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from scripts.acquisition.s3_store import AwsCli, StorageError, aws_environment
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
@@ -41,6 +42,9 @@ from scripts.infrastructure.web_ui_terraform import (
     terraform_listeners,
     terraform_text,
 )
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 
 LOCAL_PORT = re.compile(r"[0-9]{1,5}")
 HIGHEST_PORT = 65535
@@ -113,7 +117,12 @@ def session_arguments(settings: dict[str, str], name: str, target: str, local_po
 
 
 class FixedMessageParser(argparse.ArgumentParser):
-    """An argument parser whose error names no input: argparse echoes the rejected text, which could be a document ARN or an account ID."""
+    """An argument parser whose error names no input: argparse echoes the rejected text, which could be a document ARN or an account ID.
+
+    Its help goes to standard error: standard output is the command channel that ``scripts/open_ui.sh`` execs, so ``--help`` must leave it empty."""
+
+    def print_help(self, file: SupportsWrite[str] | None = None) -> None:
+        super().print_help(sys.stderr if file is None else file)
 
     def error(self, message: str) -> NoReturn:
         sys.stderr.write("open_ui: the arguments are not valid. Use: bash scripts/open_ui.sh <name> [--local-port N], or bash scripts/open_ui.sh --list\n")

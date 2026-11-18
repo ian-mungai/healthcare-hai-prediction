@@ -370,20 +370,23 @@ def test_a_ctrl_c_during_validation_exits_130_and_starts_nothing(tmp_path: Path)
     check(workspace.vector() is None, "no command may be printed after an interruption")
 
 
-FORBIDDEN_MODULES = frozenset({"subprocess", "pty", "multiprocessing", "threading", "signal", "asyncio"})
+FORBIDDEN_MODULES = frozenset({"subprocess", "_posixsubprocess", "pty", "multiprocessing", "threading", "signal", "asyncio"})
+OS_MODULES = frozenset({"os", "posix", "nt"})
 FORBIDDEN_OS = re.compile(r"(exec[lv]p?e?|spawn[lv]p?e?|posix_spawnp?|fork|forkpty|system|popen|startfile)")
 FORBIDDEN_CALLS = frozenset({"run_command", "Popen", "start"})
-FORBIDDEN_BARE_CALLS = frozenset({"eval", "exec", "compile"})
+FORBIDDEN_BARE_CALLS = frozenset({"eval", "exec", "compile", "posix_spawn", "posix_spawnp"})
 
 
 def process_uses(source: str) -> list[str]:
     """Every way ``source`` could create or run a process, whatever the alias: an import of a process module (also ``import x as y`` and ``from x import
-    y``), a ``from os import`` or ``os.`` attribute of the spawn, exec, fork or system families (through any alias of ``os``), an import of
-    ``scripts.process``, a call of ``run_command``, ``Popen``, ``start``, ``eval``, ``exec`` or ``compile``, and ``importlib.import_module`` or
-    ``__import__`` of a process module, of ``os`` or of a computed name."""
+    y``), a ``from os import`` or ``os.`` attribute of the spawn, exec, fork or system families (through any alias of ``os``, ``posix`` or ``nt``), an
+    import of ``scripts.process``, a call of ``run_command``, ``Popen``, ``start``, ``eval``, ``exec``, ``compile``, ``posix_spawn`` or ``posix_spawnp``,
+    and ``importlib.import_module`` (also through a ``from importlib import import_module as name`` alias) or ``__import__`` of a process module, of
+    ``os`` or of a computed name."""
     found: list[str] = []
     os_aliases: set[str] = set()
     importlib_aliases: set[str] = set()
+    import_module_aliases: set[str] = {"import_module"}
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -391,8 +394,8 @@ def process_uses(source: str) -> list[str]:
                 top = alias.name.split(".")[0]
                 if top in FORBIDDEN_MODULES or alias.name == "scripts.process":
                     found.append(f"import {alias.name}")
-                if alias.name == "os":
-                    os_aliases.add(alias.asname or "os")
+                if alias.name in OS_MODULES:
+                    os_aliases.add(alias.asname or alias.name)
                 if top == "importlib":
                     importlib_aliases.add(alias.asname or "importlib")
         elif isinstance(node, ast.ImportFrom):
@@ -400,9 +403,11 @@ def process_uses(source: str) -> list[str]:
             if module.split(".")[0] in FORBIDDEN_MODULES or module == "scripts.process" or module.startswith("scripts.process."):
                 found.append(f"from {module} import")
             for alias in node.names:
-                if module == "os" and FORBIDDEN_OS.fullmatch(alias.name):
-                    found.append(f"from os import {alias.name}")
-                if module == "importlib" or (module == "" and alias.name == "importlib"):
+                if module in OS_MODULES and FORBIDDEN_OS.fullmatch(alias.name):
+                    found.append(f"from {module} import {alias.name}")
+                if module == "importlib" and alias.name == "import_module":
+                    import_module_aliases.add(alias.asname or alias.name)
+                elif module == "importlib" or (module == "" and alias.name == "importlib"):
                     importlib_aliases.add(alias.asname or alias.name)
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in os_aliases and FORBIDDEN_OS.fullmatch(node.attr):
@@ -420,7 +425,7 @@ def process_uses(source: str) -> list[str]:
                 and isinstance(function.value, ast.Name)
                 and function.value.id in importlib_aliases
             )
-            if name == "import_module" and isinstance(function, ast.Name):
+            if isinstance(function, ast.Name) and function.id in import_module_aliases:
                 dynamic = True
             if dynamic:
                 argument = node.args[0] if node.args else None
@@ -466,6 +471,13 @@ def test_the_static_check_catches_every_way_to_start_a_process() -> None:
         "a computed import_module": "import importlib\nimportlib.import_module(name)\n",
         "__import__": "__import__('multiprocessing')\n",
         "eval": "eval('1')\n",
+        "an aliased posix module": "import posix as operating\nos.waitpid(operating.posix_spawnp('x', ['x'], {}), 0)\n",
+        "posix.posix_spawn": "import posix\nposix.posix_spawn('x', ['x'], {})\n",
+        "a from-import of posix_spawnp": "from posix import posix_spawnp as launch\nlaunch('x', ['x'], {})\n",
+        "a from-import of posix_spawn": "from posix import posix_spawn\n",
+        "a bare posix_spawnp call": "posix_spawnp('x', ['x'], {})\n",
+        "an alias of import_module": "from importlib import import_module as load\nload('subprocess').run(['true'])\n",
+        "_posixsubprocess": "import _posixsubprocess\n",
     }
     for case, source in planted.items():
         check(process_uses(source) != [], f"{case} was not caught: {source!r}")
@@ -512,6 +524,10 @@ class Checkout:
             command = ["scripts/open_ui.sh", "--emit-command=1", "airflow", "--env-file", ".env"]
         elif kind == "override":  # the removed output-file option: a caller must not be able to redirect anything
             command = ["scripts/open_ui.sh", "airflow", "--exec-args-file", "/nonexistent_hostile_dir/command", "--env-file", ".env"]
+        elif kind == "help":
+            command = ["scripts/open_ui.sh", "--help"]
+        elif kind == "short_help":
+            command = ["scripts/open_ui.sh", "-h"]
         elif kind == "unknown":
             command = ["scripts/open_ui.sh", "nothing_here", "--env-file", ".env"]
         elif kind == "port":
@@ -546,6 +562,18 @@ def test_the_wrapper_replaces_itself_with_aws_and_nothing_supervises_it(tmp_path
     parent = int((tmp_path / "session_ppid.txt").read_text())
     check(parent == os.getpid(), f"no wrapper or supervisor may stand between the caller and aws: aws's parent is {parent}, the caller is {os.getpid()}")
     check(not any(checkout.temporary.iterdir()), f"the wrapper must make no file at all: {list(checkout.temporary.iterdir())}")
+
+
+def test_help_through_the_wrapper_prints_the_usage_and_exits_0_without_exec(tmp_path: Path) -> None:
+    for kind in ("help", "short_help"):
+        (tmp_path / kind).mkdir()
+        checkout = Checkout(tmp_path / kind)
+        result = checkout.run(kind)
+        output = result.stdout + result.stderr
+        check(result.returncode == 0, f"{kind}: help must exit 0: {result.returncode} {output}")
+        check("usage:" in output and "--local-port" in output, f"{kind}: the usage must be printed: {output}")
+        check("command not found" not in output and "No such file" not in output, f"{kind}: the help text must not be run as a command: {output}")
+        check(checkout.workspace.calls() == [], f"{kind}: help must call no aws: {checkout.workspace.calls()}")
 
 
 def test_a_chosen_local_port_reaches_aws_through_the_wrapper(tmp_path: Path) -> None:
