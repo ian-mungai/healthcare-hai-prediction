@@ -242,19 +242,25 @@ def catalog_predecessors(earlier: dict[Path, tuple[bytes, str]]) -> None:
     write_atomic(CONFIG / "legacy_versions.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
 
 
+def require_earlier_match(earlier: dict[Path, tuple[bytes, str]]) -> None:
+    """Refuse a plan or record whose lock is stale unless its rebuilt earlier version is the one that lock names; run before the relock replaces it."""
+    for base, (_, old) in earlier.items():
+        lock_path = base.with_name(base.name.removesuffix(".json") + ".lock.json")
+        locked = json.loads(lock_path.read_text(encoding="utf-8"))[lock_key(lock_path)]
+        if locked != canonical_hash(json.loads(base.read_text(encoding="utf-8"))):
+            require(old == locked, f"the earlier {base.name} rebuilt from the file does not match the lock it had; the file changed after the pin moved")
+
+
 def repin(new_hash: str, before: dict[Path, bytes]) -> list[str]:
     """Move every pin of revision 3 to revision 4, recompute every plan and record lock from its file and catalogue each old plan; safe to rerun."""
     replace_pin(CONFIG, REV3, new_hash)
     done("replace_pin")
     earlier = earlier_versions(new_hash)
+    require_earlier_match(earlier)
     changed = relock_to_fixed_point(ROOT)
     done("relock")
     for old, (base, _, _) in changed.items():
-        if base in earlier:
-            require(
-                earlier[base][1] == old, f"the earlier {base.name} rebuilt from the file does not match the lock it had; the file changed after the pin moved"
-            )
-        else:
+        if base not in earlier:
             body = before[base]
             require(canonical_hash(json.loads(body)) == old, f"cannot rebuild the earlier {base.name} after an interrupted run")
             earlier[base] = (body, old)

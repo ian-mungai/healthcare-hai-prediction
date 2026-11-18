@@ -6,6 +6,7 @@ The test is skipped when that archive or the history is absent, because the arch
 
 from __future__ import annotations
 
+import json
 import shutil
 from contextlib import ExitStack
 from pathlib import Path
@@ -13,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.acquisition import census_acs_tables_contract, nber_hc_contract, reference_download_contract
+from scripts.acquisition import census_acs_tables_contract, legacy_versions, nber_hc_contract, reference_download_contract
 from scripts.acquisition import source_registry as registry
 from scripts.acquisition.one_off.registry_rev4 import build_rev4 as builder
 from scripts.process import run_command
@@ -139,10 +140,28 @@ def test_a_partial_archive_is_completed(before: Path, tmp_path: Path) -> None:
 
 def test_a_plan_changed_after_the_pin_moved_is_refused_not_archived(before: Path, tmp_path: Path) -> None:
     root = sandbox(before, tmp_path)
+    config = root / "config/acquisition"
+    original = registry.canonical_hash(json.loads((before / "config/acquisition/census_acs_tables_plan.json").read_bytes()))
     with pytest.raises(builder.Interrupted):
         run(root, stop="replace_pin")
-    plan = root / "config/acquisition/census_acs_tables_plan.json"
-    plan.write_text(plan.read_text(encoding="utf-8").replace('"model_eligible": false', '"model_eligible": false, "extra": 1', 1), encoding="utf-8")
-    with pytest.raises(registry.RegistryError, match="does not match the lock it had"):
-        run(root)
-    check(not (root / builder.PLANS_ARCHIVE / "census_acs_tables_plan.json").exists(), "the changed plan was not archived as the predecessor")
+    plan = config / "census_acs_tables_plan.json"
+    unedited = plan.read_text(encoding="utf-8")
+    plan.write_text(unedited.replace('"model_eligible": false', '"model_eligible": false, "extra": 1', 1), encoding="utf-8")
+    for attempt in range(3):
+        with pytest.raises(registry.RegistryError, match="does not match the lock it had"):
+            run(root)
+        check(not (root / builder.PLANS_ARCHIVE / plan.name).exists(), f"attempt {attempt + 1}: the changed plan was not archived as the predecessor")
+        check(
+            json.loads(plan.with_suffix(".lock.json").read_bytes()) == {"plan_sha256": original},
+            f"attempt {attempt + 1}: the plan lock still names the real predecessor",
+        )
+    plan.write_text(unedited, encoding="utf-8")
+    run(root)
+    loaders_accept(root)
+    with (
+        patch.object(legacy_versions, "REPO_ROOT", root),
+        patch.object(legacy_versions, "ARCHIVE", root / "data/acquisition_planning/acquisition_legacy_20261009"),
+        patch.object(legacy_versions, "CATALOG_PATH", config / "legacy_versions.json"),
+        patch.object(legacy_versions, "CATALOG_LOCK_PATH", config / "legacy_versions.lock.json"),
+    ):
+        check(legacy_versions.plan_matches(json.loads(plan.read_bytes()), original), "the real historical predecessor still resolves")
