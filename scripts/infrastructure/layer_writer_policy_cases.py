@@ -25,6 +25,9 @@ UPLOADS = ("silver", "gold")
 REGISTRY = f"{BUCKET}/lakehouse/feast/registry.pb"
 REDIS_PARAMETER = PARAMETER + "redis_password"
 PAYLOADS = "bronze_objects/sha256"
+# The folder of each layer's catalog backups (the publish contracts' backup prefix), where a commit also creates its post-commit recovery snapshot once.
+BACKUP_FOLDERS = {"silver": "lakehouse/silver/catalog_backups/", "gold": "lakehouse/catalog_backups/", "features": "lakehouse/features/catalog_backups/"}
+COMMITTED_KEY = "catalog_committed_20261117T120000Z-aaaaaaaa.json"
 LARGEST_BUCKET = f"arn:aws:s3:::{LARGEST_BUCKET_NAME}"
 MANAGED_PREFIX = "storage_bronze_"
 EXTRAS = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_activation")
@@ -69,6 +72,13 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
         for namespace in PREFIXES[layer]:
             add(f"{layer} backup {namespace}", layer, "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}/catalog_backups/head.json", True)
             add(f"{layer} lookalike {namespace}", layer, "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}_other/file", False)
+        for owner, folder in BACKUP_FOLDERS.items():
+            own = owner == layer
+            create = {"s3:if-none-match": ("*",)}
+            add(f"{layer} creates a recovery snapshot in {owner}'s backup folder", layer, "s3:PutObject", f"{BUCKET}/{folder}{COMMITTED_KEY}", own, create)
+            # A layer reads the whole prefix of the layer below it (``INPUTS``), and the silver backup folder is under that prefix.
+            reads = own or (INPUTS.get(layer) == owner and folder.startswith(f"lakehouse/{owner}/"))
+            add(f"{layer} reads a recovery snapshot in {owner}'s backup folder", layer, "s3:GetObject", f"{BUCKET}/{folder}{COMMITTED_KEY}", reads)
         for prefix in ("", "lakehouse/", f"lakehouse/{layer}", f"lakehouse/{layer}_other/"):
             add(f"{layer} list boundary {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
         add(f"{layer} list needs prefix", layer, "s3:ListBucket", BUCKET, False)

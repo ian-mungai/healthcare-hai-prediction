@@ -35,7 +35,15 @@ from typing import Any, Protocol
 CATALOG = "hai_lakehouse"
 
 BACKUP_PREFIXES = ("lakehouse/catalog_backups/", "lakehouse/silver/catalog_backups/", "lakehouse/features/catalog_backups/")
-BACKUP_NAME = re.compile(r"catalog_committed_([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})\.json")
+# The run ID form of orchestration/training_contract.py (RUN_ID). The setup task mounts scripts only, so this module holds a copy that
+# tests/test_run_id_patterns.py keeps equal.
+RUN_ID_PATTERN = (
+    r"(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
+    r"|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
+    r"|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
+    r"|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])"
+)
+BACKUP_NAME = re.compile(rf"catalog_committed_({RUN_ID_PATTERN})\.json")
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SEQUENCE = re.compile(r"/([0-9]{5,})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$")
 SCHEMA = 2
@@ -45,7 +53,7 @@ Request = Callable[..., tuple[int, Any]]
 
 
 class RestoreError(RuntimeError):
-    """A restore failed; ``code`` names the part and the message never holds a credential. ``aws_catalog_setup.RestoreError`` is a subclass, so a request that
+    """A restore failed; ``code`` names the part and the message never holds a credential. ``aws_catalog_setup.SetupError`` is a subclass, so a request that
     passes its deadline inside a restore is handled like any other failure of it."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -76,7 +84,9 @@ class Item:
 class Store(Protocol):
     """The backup folders of the data bucket."""
 
-    def names(self, prefix: str) -> list[str]: ...
+    def names(self, prefix: str) -> list[str]:
+        """The keys under the prefix in the order they were written, the newest last (a run ID holds no time)."""
+        ...
 
     def read(self, key: str) -> bytes: ...
 
@@ -91,7 +101,7 @@ def read_items(store: Store, bucket: str) -> list[Item]:
     items: list[Item] = []
     seen: set[tuple[str, str]] = set()
     for prefix in BACKUP_PREFIXES:
-        runs = sorted((found.group(1), name) for name in store.names(prefix) if (found := BACKUP_NAME.fullmatch(name.rsplit("/", 1)[-1])) is not None)
+        runs = [(found.group(1), name) for name in store.names(prefix) if (found := BACKUP_NAME.fullmatch(name.rsplit("/", 1)[-1])) is not None]
         if not runs:
             continue
         run, key = runs[-1]
@@ -235,13 +245,14 @@ class LiveStore:
         self.client, self.bucket = client, bucket
 
     def names(self, prefix: str) -> list[str]:
-        keys: list[str] = []
+        """The keys under the prefix ordered by the time S3 stored them, the newest last. A snapshot is created once and holds no time itself."""
+        found: list[tuple[Any, str]] = []
         token = None
         while True:
             page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
-            keys += [item["Key"] for item in page.get("Contents", [])]
+            found += [(item["LastModified"], item["Key"]) for item in page.get("Contents", [])]
             if not page.get("IsTruncated"):
-                return keys
+                return [key for _, key in sorted(found)]
             token = page.get("NextContinuationToken")
 
     def read(self, key: str) -> bytes:

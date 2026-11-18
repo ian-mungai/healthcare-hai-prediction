@@ -447,7 +447,11 @@ INTERRUPTS = (
     "commit:after_ff:dim_site",
     "commit:before_publish_runs",
     "commit:after_publish_runs",
+    "commit:after_committed_snapshot_write",
+    "commit:after_committed_snapshot",
 )
+# The points after the run row is merged: a reader already sees the new set, and the recovery snapshot is written (or half written) after them.
+COMMITTED_POINTS = ("commit:after_publish_runs", "commit:after_committed_snapshot_write", "commit:after_committed_snapshot")
 
 
 def interruptions(h: Harness) -> Check:
@@ -468,7 +472,7 @@ def interruptions(h: Harness) -> Check:
             raised = True
         label = f"[{point}]"
         checks[f"{label} the interruption fired"] = raised
-        committed_row = point == "commit:after_publish_runs"
+        committed_row = point in COMMITTED_POINTS
         after = reader_view(ctx)
         if committed_row:
             checks[f"{label} the commit row is the only change: it names the full set"] = (
@@ -480,6 +484,11 @@ def interruptions(h: Harness) -> Check:
             checks[f"{label} main heads still equal the first set"] = {n: int(m) for n, m in mains(ctx).items() if m is not None} == (view_before or {}).get(
                 "set"
             )
+        snapshot_path = ctx.store.root / publish.committed_name(ctx.run_id) if isinstance(ctx.store, FolderStore) else None
+        snapshot_before = snapshot_path.read_bytes() if snapshot_path is not None and snapshot_path.is_file() else None
+        checks[f"{label} the recovery snapshot exists only from the write that the interruption has passed"] = (snapshot_before is not None) == (
+            point in COMMITTED_POINTS[1:]
+        )
         resume = replace(ctx, spark=spark, faults=Faults())
         resumed_ok = True
         try:
@@ -493,12 +502,82 @@ def interruptions(h: Harness) -> Check:
         )
         checks[f"{label} publish_runs holds the second run once"] = runs == [run_id(1), run_id(2)]
         checks[f"{label} no table has the run's branch left"] = all(ctx.branch not in publish.table_refs(resume, n) for n in TEST_PLAN.tables)
+        snapshot_after = snapshot_path.read_bytes() if snapshot_path is not None and snapshot_path.is_file() else None
+        recovery = json.loads(snapshot_after) if snapshot_after else {}
+        checks[f"{label} the resume leaves one recovery snapshot of the second set, and an existing one is not rewritten"] = (
+            recovery.get("run_id") == run_id(2)
+            and recovery.get("snapshot_set") == (view or {}).get("set")
+            and (snapshot_before is None or snapshot_before == snapshot_after)
+        )
         receipt_path = resume.path("commit.json")
         receipt = publish.read_record(receipt_path)[0] if receipt_path.is_file() else {}
         checks[f"{label} the resume leaves a commit receipt that names the second set"] = (
             receipt.get("state") == "committed" and receipt.get("run_id") == run_id(2) and receipt.get("snapshot_set") == (view or {}).get("set")
         )
     checks["the first set is still readable after every resume"] = bool(want1)
+    return checks
+
+
+def recovery_snapshot(h: Harness) -> Check:
+    """The post-commit recovery snapshot (``catalog_committed_<run>.json``): written once after the run row, naming the committed set, and never replaced."""
+    h.fresh()
+    checks = h.begin()
+    ctx = h.context(1, 1)
+    want = expected_content(ctx)
+    run_steps(ctx)
+    store = ctx.store
+    name = publish.committed_name(ctx.run_id)
+    path = store.root / name if isinstance(store, FolderStore) else None
+    document = json.loads(store.get(name)) if store is not None and path is not None and path.is_file() else {}
+    view = reader_view(ctx)
+    checks["the commit leaves one snapshot named for the run"] = bool(document) and sorted(p.name for p in path.parent.glob("catalog_committed_*.json")) == [
+        name
+    ]
+    checks["it is a committed schema 2 snapshot of this run and namespace"] = (
+        document.get("schema"),
+        document.get("kind"),
+        document.get("run_id"),
+        document.get("namespace"),
+    ) == (
+        2,
+        "committed",
+        ctx.run_id,
+        ctx.namespace,
+    )
+    checks["its snapshot set is the run row's set and the main of every table"] = (
+        document.get("snapshot_set") == view["set"] == {n: int(m) for n, m in mains(ctx).items() if m is not None}
+    )
+    tables = document.get("tables", {})
+    columns = {n: [[c.name] for c in h.spark.table(ctx.fq(n)).schema.fields] for n in ctx.plan.tables}
+    checks["each table's main snapshot in it reads the export's rows and fingerprint"] = all(
+        tables.get(n, {}).get("main_snapshot_id") == view["set"][n] and content_at(ctx, n, int(tables[n]["main_snapshot_id"]), columns[n]) == want[n]
+        for n in ctx.plan.tables
+    )
+    checks["each table's file is its newest metadata file"] = all(
+        tables.get(n, {}).get("metadata_file") == publish.metadata_file(ctx, n) for n in (*ctx.plan.tables, ctx.plan.runs_table)
+    )
+    checks["the runs table entry is main of publish_runs and the row digests are the run row's"] = (
+        tables.get(ctx.plan.runs_table, {}).get("main_snapshot_id") == publish.main_head(ctx, ctx.plan.runs_table)
+        and document.get("publish_run", {}).get("backup_sha256") == publish.read_record(ctx.path("backup.json"))[0]["backup_sha256"]
+    )
+    bytes_before = path.read_bytes() if path is not None else b""
+    again = publish.commit_publish(ctx)
+    checks["a rerun leaves the same bytes and reports it was not created"] = (
+        path is not None and path.read_bytes() == bytes_before and again["recovery_snapshot"]["created"] is False
+    )
+    if path is not None:
+        path.write_bytes(bytes_before + b" ")
+        checks["a different snapshot of the run is refused and kept"] = (
+            refuses(lambda: publish.commit_publish(ctx)) and path.read_bytes() == bytes_before + b" "
+        )
+        path.write_bytes(bytes_before)
+    ctx2 = h.context(2, 2)
+    run_steps(ctx2)
+    late = publish.commit_publish(ctx)
+    checks["a rerun after a later commit writes nothing for the old run"] = "main moved" in str(late["recovery_snapshot"].get("skipped")) and (
+        path is None or path.read_bytes() == bytes_before
+    )
+    checks["the later run has its own snapshot"] = path is not None and (path.parent / publish.committed_name(ctx2.run_id)).is_file()
     return checks
 
 
@@ -1341,6 +1420,7 @@ CASES: dict[str, Case] = {
     "happy_path": happy_path,
     "branch_isolation": branch_isolation,
     "interruptions": interruptions,
+    "recovery_snapshot": recovery_snapshot,
     "retry_no_double_commit": retry_no_double_commit,
     "tamper_and_order": tamper_and_order,
     "main_moved_refused": main_moved_refused,

@@ -13,7 +13,7 @@ import pytest
 
 from orchestration import training_contract as contract
 from scripts.acquisition import plan_rebuild, publisher_run, raw_root
-from scripts.lakehouse import gold_publish_record
+from scripts.lakehouse import catalog_restore, gold_publish_record
 from scripts.orchestration import sync_run_id_schemas as sync
 from tests.support import check
 
@@ -120,3 +120,7 @@ def test_the_schemas_take_the_new_form_and_refuse_the_old_one() -> None:
 
 def test_the_gold_publish_copy_of_the_run_id_form_is_the_contracts() -> None:
     check(gold_publish_record.RUN_ID_PATTERN == contract.RUN_ID, "the copy that the gold containers hold differs from the contract's form")
+
+
+def test_the_catalog_restore_copy_of_the_run_id_form_is_the_contracts() -> None:
+    check(catalog_restore.RUN_ID_PATTERN == contract.RUN_ID, "the copy that the catalog restore holds differs from the contract's form")

@@ -28,8 +28,9 @@ from scripts.lakehouse.catalog_setup_state import Deadline
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = REPO_ROOT / "data" / "e2e" / "catalog_restore"
 BUCKET = "example-project-data-dev"
-RUN_A = "20261117T120000Z-aaaaaaaa"
-RUN_B = "20261117T180000Z-bbbbbbbb"
+# A run ID holds no time, so the newest snapshot of a folder is the one stored last: RUN_B is stored after RUN_A and sorts before it.
+RUN_A = "gold_bbbbbbbb"
+RUN_B = "gold_aaaaaaaa"
 ACCESS = "stand-in-token"
 
 
@@ -94,7 +95,7 @@ class StandInStore:
         self.objects = objects
 
     def names(self, prefix: str) -> list[str]:
-        return sorted(key for key in self.objects if key.startswith(prefix) and "/" not in key[len(prefix) :])
+        return [key for key in self.objects if key.startswith(prefix) and "/" not in key[len(prefix) :]]
 
     def read(self, key: str) -> bytes:
         return self.objects[key]

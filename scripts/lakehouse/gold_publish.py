@@ -54,7 +54,9 @@ MODES = ("publish_fixture", "real")
 STEPS = ("candidates", "reconcile", "backup", "commit")
 IDENT = re.compile(rf"[A-Za-z_][A-Za-z0-9_]{{0,{IDENT_MAX - 1}}}")
 BACKUP_NAME = re.compile(rf"catalog_backup_{RUN_ID_PATTERN}\.json")
+COMMITTED_NAME = re.compile(rf"catalog_committed_{RUN_ID_PATTERN}\.json")
 SCHEMA = 1
+COMMITTED_SCHEMA = 2
 
 DEFAULT_PUBLISH_DIR = "/workspace/out/publish"
 
@@ -168,6 +170,14 @@ def backup_name(run_id: str) -> str:
     return name
 
 
+def committed_name(run_id: str) -> str:
+    """The name of the run's post-commit recovery snapshot: the catalog state after ``main`` of every table reached the committed snapshot."""
+    name = f"catalog_committed_{run_id}.json"
+    if not COMMITTED_NAME.fullmatch(name):
+        raise PublishError(f"{run_id!r} is not a run ID")
+    return name
+
+
 @dataclass(frozen=True)
 class Plan:
     """What the gold contract's ``publish`` entry says: the tables with their merge keys, the namespaces by mode and the settings."""
@@ -213,9 +223,12 @@ def load_plan(path: Path = CONTRACT) -> Plan:
 
 
 class BackupStore(Protocol):
-    """Where the catalog backup goes: write a named object and read it back."""
+    """Where the catalog backup goes: write a named object and read it back. ``put_new`` creates an object only when no object of that name exists and answers
+    False, changing nothing, when one does; the recovery snapshot is written this way."""
 
     def put(self, name: str, data: bytes) -> None: ...
+
+    def put_new(self, name: str, data: bytes) -> bool: ...
 
     def get(self, name: str) -> bytes: ...
 
@@ -235,6 +248,23 @@ class FolderStore:
             os.fsync(stream.fileno())
         os.replace(temporary, self.root / name)
 
+    def put_new(self, name: str, data: bytes) -> bool:
+        self.root.mkdir(parents=True, exist_ok=True)
+        handle, temporary = tempfile.mkstemp(dir=self.root, prefix=name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, self.root / name)
+            except FileExistsError:
+                return False
+            return True
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+
     def get(self, name: str) -> bytes:
         return (self.root / name).read_bytes()
 
@@ -253,6 +283,18 @@ class S3Store:
 
     def put(self, name: str, data: bytes) -> None:
         self.client.put_object(Bucket=self.bucket, Key=self.prefix + name, Body=data)
+
+    def put_new(self, name: str, data: bytes) -> bool:
+        """Create the object with a conditional write: S3 refuses a key that exists (412), which answers False. Any other refusal raises."""
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=self.prefix + name, Body=data, IfNoneMatch="*")
+        except Exception as error:
+            response = getattr(error, "response", None)
+            code = str((response or {}).get("Error", {}).get("Code", "")) if isinstance(response, dict) else ""
+            if code in ("PreconditionFailed", "412"):
+                return False
+            raise
+        return True
 
     def get(self, name: str) -> bytes:
         return bytes(self.client.get_object(Bucket=self.bucket, Key=self.prefix + name)["Body"].read())
@@ -608,6 +650,72 @@ def catalog_backup(ctx: Context) -> dict[str, Any]:
     return {"step": "backup", "name": name, "record_sha256": sha}
 
 
+def metadata_file(ctx: Context, name: str) -> str:
+    """The newest metadata file of a table, or an empty text when the table has none."""
+    log = ctx.sql(METADATA_LOG, table=ctx.fq(name)).collect()
+    return str(log[0][0]) if log else ""
+
+
+def committed_document(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
+    """The post-commit recovery snapshot of this run, from the catalog as it is now. Refuses unless ``main`` of every table of the plan is the committed
+    snapshot and the run's ``publish_runs`` row exists and names the same snapshot set. Holds no time, so a rerun builds the same bytes."""
+    row = committed_run(ctx)
+    if row is None:
+        raise PublishError("the run's publish_runs row does not exist, so no recovery snapshot is written")
+    if {name: int(value) for name, value in dict(row["snapshot_set"]).items()} != dict(snapshot_set):
+        raise PublishError("the run's publish_runs row names another snapshot set than the commit")
+    tables: dict[str, Any] = {}
+    for name in sorted(snapshot_set):
+        head = main_head(ctx, name)
+        if head != snapshot_set[name]:
+            raise PublishError(f"{name}: main is not the committed snapshot, so no recovery snapshot is written")
+        tables[name] = {"metadata_file": metadata_file(ctx, name), "main_snapshot_id": head}
+    runs_head = main_head(ctx, ctx.plan.runs_table)
+    if runs_head is None:
+        raise PublishError("the publish_runs table has no snapshot on main")
+    tables[ctx.plan.runs_table] = {"metadata_file": metadata_file(ctx, ctx.plan.runs_table), "main_snapshot_id": runs_head}
+    if any(not entry["metadata_file"] for entry in tables.values()):
+        raise PublishError("a table has no metadata file, so no recovery snapshot is written")
+    return {
+        "schema": COMMITTED_SCHEMA,
+        "kind": "committed",
+        "run_id": ctx.run_id,
+        "namespace": ctx.namespace,
+        "mode": ctx.mode,
+        "runs_table": ctx.plan.runs_table,
+        "snapshot_set": {name: int(value) for name, value in sorted(snapshot_set.items())},
+        "publish_run": {key: row[key] for key in ("sealed_sha256", "export_manifest_sha256", "backup_sha256")},
+        "tables": tables,
+    }
+
+
+def write_committed_snapshot(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
+    """Create ``catalog_committed_<run>.json`` once and read it back. An object that exists with the same bytes is left alone; one with other bytes stops the
+    step, and nothing is ever replaced."""
+    if ctx.store is None:
+        raise PublishError("no backup location is configured")
+    data = canonical(committed_document(ctx, snapshot_set))
+    name = committed_name(ctx.run_id)
+    created = ctx.store.put_new(name, data)
+    ctx.faults.hit("commit:after_committed_snapshot_write")
+    stored = ctx.store.get(name)
+    if stored != data:
+        raise PublishError(
+            "a different recovery snapshot of this run already exists and is never replaced"
+            if not created
+            else "the recovery snapshot read back differs from what was written"
+        )
+    return {"name": name, "snapshot_sha256": sha256_bytes(data), "created": created}
+
+
+def ensure_committed_snapshot(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
+    """The rerun of a committed run: write the snapshot when ``main`` of every table is still this run's set, leave an identical one alone, refuse another.
+    When a later commit moved ``main``, this run's state is no longer the catalog's, so nothing is written."""
+    if any(main_head(ctx, name) != snapshot_set[name] for name in snapshot_set):
+        return {"name": committed_name(ctx.run_id), "skipped": "main moved after this run"}
+    return write_committed_snapshot(ctx, snapshot_set)
+
+
 def runs_view(ctx: Context, row: Mapping[str, Any]) -> str:
     """A one-row temporary view holding the ``publish_runs`` row."""
     committed = datetime.fromisoformat(str(row["committed_at"]))
@@ -693,8 +801,16 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
         }
         if any(existing[key] != value for key, value in identity.items()):
             raise PublishError("this run is committed with a different identity, predecessor hash or snapshot set")
+        recovery = ensure_committed_snapshot(ctx, snapshot_set)
         sha = restore_receipt(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
-        return {"step": "commit", "already_committed": True, "tables": len(snapshot_set), "record_sha256": sha, "mirror": mirror_after_commit(ctx)}
+        return {
+            "step": "commit",
+            "already_committed": True,
+            "tables": len(snapshot_set),
+            "record_sha256": sha,
+            "recovery_snapshot": recovery,
+            "mirror": mirror_after_commit(ctx),
+        }
     heads = {name: main_head(ctx, name) for name in snapshot_set}
     for name, candidate in snapshot_set.items():
         base = candidates["tables"][name]["base_snapshot_id"]
@@ -719,8 +835,17 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
     row = run_record(ctx, manifest_sha, backup, snapshot_set)
     ctx.spark.sql(MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=runs_view(ctx, row)))
     ctx.faults.hit("commit:after_publish_runs")
+    recovery = write_committed_snapshot(ctx, snapshot_set)
+    ctx.faults.hit("commit:after_committed_snapshot")
     sha = write_record(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
-    return {"step": "commit", "already_committed": False, "tables": len(snapshot_set), "record_sha256": sha, "mirror": mirror_after_commit(ctx)}
+    return {
+        "step": "commit",
+        "already_committed": False,
+        "tables": len(snapshot_set),
+        "record_sha256": sha,
+        "recovery_snapshot": recovery,
+        "mirror": mirror_after_commit(ctx),
+    }
 
 
 def mirror_after_commit(ctx: Context, source: Any = None, glue: Any = None, config: Any = None) -> dict[str, Any]:
@@ -825,7 +950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.mode,
                 publish_dir,
                 args.sealed_sha256,
-                build_store(plan, local) if args.step == "backup" else None,
+                build_store(plan, local) if args.step in ("backup", "commit") else None,
                 create_namespace=local is not None,
                 accepted_result_sha256=args.accepted_result_sha256,
             )

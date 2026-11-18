@@ -722,6 +722,7 @@ GOLD_DEFAULT = (
     "happy_path",
     "branch_isolation",
     "interruptions",
+    "recovery_snapshot",
     "retry_no_double_commit",
     "tamper_and_order",
     "main_moved_refused",

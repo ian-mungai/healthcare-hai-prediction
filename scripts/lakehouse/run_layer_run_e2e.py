@@ -489,8 +489,27 @@ def commit(job: Job, publish: Path, namespace: str) -> None:
         (CATALOG[0] / "publish_runs.json").write_text(json.dumps([*runs, {"layer": job.layer, "run_id": job.run}]))
         shared_write("publish_runs", layer=job.layer, run=job.run)
         bucket_write(f"lakehouse/{namespace}/publish_runs/data/{job.run}.parquet")
+    if "committed_snapshot_missing" not in DEFECTS:
+        wanted = {name: value + (1 if "committed_snapshot_set" in DEFECTS else 0) for name, value in snapshot_set.items()}
+        document = {
+            "schema": 2,
+            "kind": "committed",
+            "run_id": job.run,
+            "namespace": namespace,
+            "snapshot_set": wanted,
+            "tables": {name: {"main_snapshot_id": value} for name, value in wanted.items()},
+        }
+        key = f"{plan_backup_prefix(job)}catalog_committed_{job.run}.json"
+        STORED[key] = json.dumps(document, sort_keys=True).encode() + (b" altered" if "committed_snapshot_object" in DEFECTS else b"")
+        shared_write("committed_snapshot", layer=job.layer, run=job.run)
+        bucket_write(key)
     receipt = {"run_id": job.run, "backup_sha256": sha_of(publish / "backup.json"), "snapshot_set": snapshot_set, "state": "committed"}
     (publish / "commit.json").write_text(json.dumps(receipt, sort_keys=True) + "\n")
+
+
+def plan_backup_prefix(job: Job) -> str:
+    """The backup prefix of the job's publish contract, which the stand-in commit step writes its recovery snapshot under."""
+    return str(contract(job.layer, job.mode, job.feature_set)[1].backup_prefix)
 
 
 def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
@@ -1209,6 +1228,53 @@ def case_stored_backup_differs_from_its_record(case: Case) -> None:
     require("publish_runs" not in kinds() and "table" not in kinds(), "a backup that differs from its record stops the publish before the commit")
 
 
+def case_missing_recovery_snapshot_stops_the_acceptance(case: Case) -> None:
+    DEFECTS.add("committed_snapshot_missing")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    require(case.phase("silver", "publish") != 0 and "recovery snapshot" in case.err, case.err)
+    require(case.phase("silver", "upload") != 0, "a run whose recovery snapshot is missing uploads nothing")
+    require(not UPLOADS, UPLOADS)
+
+
+def case_recovery_snapshot_that_differs_from_the_commit_stops_the_acceptance(case: Case) -> None:
+    DEFECTS.add("committed_snapshot_set")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    require(case.phase("silver", "publish") != 0 and "recovery snapshot" in case.err and "snapshot set" in case.err, case.err)
+    require(not UPLOADS, UPLOADS)
+
+
+def case_stored_recovery_snapshot_that_is_not_json_stops_the_acceptance(case: Case) -> None:
+    DEFECTS.add("committed_snapshot_object")
+    for phase in ("pin", "build", "validate", "verify", "export"):
+        require(case.phase("silver", phase) == 0, case.err)
+    require(case.phase("silver", "publish") != 0 and "recovery snapshot" in case.err, case.err)
+    require(not UPLOADS, UPLOADS)
+
+
+def case_a_passing_publish_leaves_one_recovery_snapshot_per_layer(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    require(case.chain("gold") == [0] * 7, case.err)
+    stored = sorted(key for key in STORED if "catalog_committed_" in key)
+    require(len(stored) == 2 and all(key.endswith(".json") for key in stored), stored)
+    require([row["kind"] for row in writes() if row["kind"] == "committed_snapshot"] == ["committed_snapshot"] * 2, writes())
+    commits = [index for index, row in enumerate(writes()) if row["kind"] == "publish_runs"]
+    snapshots = [index for index, row in enumerate(writes()) if row["kind"] == "committed_snapshot"]
+    require(all(snapshot > commit for commit, snapshot in zip(commits, snapshots, strict=True)), "the recovery snapshot is written after the run row")
+
+
+def case_the_dry_run_plan_declares_the_recovery_snapshot(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7, case.err)
+    case.out = ""
+    require(case.chain("gold", extra=["--dry-run"]) == [0] * 7, case.err)
+    plan = json.loads(case.out.split("DRY_RUN_PLAN ", 1)[1].splitlines()[0])
+    kinds_planned = [item["kind"] for item in plan["other_writes"]]
+    declared = next((item for item in plan["other_writes"] if item["kind"] == "catalog_committed_snapshot"), {})
+    require("catalog_backup" in kinds_planned and "catalog_committed_snapshot" in kinds_planned, kinds_planned)
+    require("catalog_committed_" in declared.get("where", "") and "never" in declared.get("overwrites", ""), declared)
+
+
 def started_seconds_ago(case: Case, layer: str, seconds: float) -> None:
     """Move the task's start time, which the init container writes, to a moment in the past."""
     (case.work(layer) / "task_started").write_text(f"{time.time() - seconds:.0f}\n")
@@ -1593,6 +1659,11 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a silver pin that misses a configured bronze table stops publish": case_pin_table_list_must_match_the_bronze_config,
     "a gold pin that misses a silver contract table stops publish": case_gold_pin_table_list_must_match_the_silver_contract,
     "a stored backup that differs from its record stops before the commit": case_stored_backup_differs_from_its_record,
+    "a missing recovery snapshot stops the publish acceptance": case_missing_recovery_snapshot_stops_the_acceptance,
+    "a recovery snapshot of another snapshot set stops the publish acceptance": case_recovery_snapshot_that_differs_from_the_commit_stops_the_acceptance,
+    "a stored recovery snapshot that is not JSON stops the publish acceptance": case_stored_recovery_snapshot_that_is_not_json_stops_the_acceptance,
+    "a passing publish leaves one recovery snapshot per layer, written after the run row": case_a_passing_publish_leaves_one_recovery_snapshot_per_layer,
+    "the dry run plan declares the recovery snapshot": case_the_dry_run_plan_declares_the_recovery_snapshot,
     "a task past its deadline stops at the next phase": case_expired_task_deadline_stops_the_next_phase,
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
     "a phase that passes the task deadline leaves no process behind": case_deadline_leaves_no_descendant_of_the_phase_module,

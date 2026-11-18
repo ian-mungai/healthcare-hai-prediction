@@ -17,6 +17,7 @@ configuration_host_checks() {
   timed "configuration_host_checks: MLflow user one-shot E2E" "$python_bin" -m scripts.infrastructure.run_mlflow_user_e2e
   timed "configuration_host_checks: Postgres backup and restore E2E" "$python_bin" -m scripts.infrastructure.run_postgres_backup_e2e
   timed "configuration_host_checks: catalog restore E2E" "$python_bin" -m scripts.lakehouse.run_catalog_restore_e2e
+  timed "configuration_host_checks: committed snapshot cases" "$python_bin" -m scripts.lakehouse.run_committed_snapshot_cases
   timed "configuration_host_checks: AWS catalog setup E2E" "$python_bin" -m scripts.lakehouse.run_aws_catalog_setup_e2e --out "$quality_output/aws_catalog_setup" --mutations
   timed "configuration_host_checks: Glue mirror E2E" "$python_bin" -m scripts.lakehouse.run_glue_mirror_e2e --out "$quality_output/glue_mirror"
   timed "configuration_host_checks: IAM preflight E2E" "$python_bin" -m scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"

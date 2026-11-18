@@ -477,6 +477,35 @@ def check_stored_backup(job: Job, bucket: str, client: Any) -> None:
         raise StepError("the stored backup differs from the backup record or belongs to another run")
 
 
+def check_stored_committed_snapshot(job: Job, bucket: str, client: Any) -> None:
+    """After the commit and before the upload: the post-commit recovery snapshot of this run is in the bucket and names the committed snapshot set and the main
+    snapshot of each table."""
+    from scripts.lakehouse.gold_publish import committed_name
+
+    prefix = publish_contract(job).backup_prefix
+    commit = read_record(job.publish_folder, "commit.json")[0]
+    if not prefix:
+        raise StepError("the layer's publish contract names no backup prefix, so there is no recovery snapshot")
+    try:
+        stored = client.get_object(Bucket=bucket, Key=f"{prefix}{committed_name(job.run)}")["Body"].read()
+        document = json.loads(stored)
+    except Exception:
+        raise StepError("the recovery snapshot of this run cannot be read from the bucket or is not JSON") from None
+    wanted = commit.get("snapshot_set")
+    tables = document.get("tables") if isinstance(document, dict) else None
+    problems = []
+    if not isinstance(document, dict) or (document.get("schema"), document.get("kind"), document.get("run_id")) != (2, "committed", job.run):
+        problems.append("it is not a committed schema 2 snapshot of this run")
+    elif document.get("snapshot_set") != wanted:
+        problems.append("its snapshot set differs from the commit record")
+    elif not isinstance(tables, dict) or any(
+        not isinstance(tables.get(name), dict) or tables[name].get("main_snapshot_id") != value for name, value in dict(wanted or {}).items()
+    ):
+        problems.append("the main snapshot of a table differs from the snapshot set")
+    if problems:
+        raise StepError("publish acceptance failed: the recovery snapshot " + "; ".join(problems))
+
+
 def bundle(job: Job, archive: Path, code_sha256: str, evidence: dict[str, Any] | None = None) -> None:
     """Check the archive digest, unpack it, copy the dbt project and packages into the snapshot layout and record the code identity."""
     if not SHA256.fullmatch(code_sha256) or digest_file(archive) != code_sha256:
@@ -809,6 +838,8 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
         if step == "commit":
             accept_commit(job)
             layer_metrics.publish_folder(job.publish_folder)
+            if client is not None:
+                check_stored_committed_snapshot(job, bucket, client)
     if job.layer in RECORD_FILE:
         run_publish(
             job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *pin_flags, *job.local_flags]
@@ -830,6 +861,7 @@ def uploadable(job: Job) -> list[Path]:
 def upload(job: Job, bucket: str, client: Any) -> int:
     """Copy the run folder to ``lakehouse/layer_runs/<layer>/<run>/``; a repeat writes the same keys."""
     accepted_publish(job)
+    check_stored_committed_snapshot(job, bucket, client)
     prefix = f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/"
     files = uploadable(job)
     for path in files:
@@ -1054,7 +1086,7 @@ def table_entry(namespace: str, name: str, rows: int, state: object) -> dict[str
 
 def build_plan(job: Job, contract: Any, manifest: dict[str, Any], state: dict[str, Any], catalog_error: str) -> dict[str, Any]:
     """The plan of the real publish: what ``candidates`` and ``commit`` would write, from the export and the catalog state read before it."""
-    from scripts.lakehouse.gold_publish import backup_name, branch_name
+    from scripts.lakehouse.gold_publish import backup_name, branch_name, committed_name
 
     namespace = contract.namespaces[job.mode]
     tables = [table_entry(namespace, name, int(manifest["tables"][name]["rows"]), state.get("tables", {}).get(name)) for name in sorted(contract.tables)]
@@ -1072,8 +1104,14 @@ def build_plan(job: Job, contract: Any, manifest: dict[str, Any], state: dict[st
         unknown.append(runs_entry["table"])
     prefix = contract.backup_prefix or ""
     where = f"{prefix}{backup_name(job.run)}" if job.local is None else f"{job.local.parent}/catalog_backup/{backup_name(job.run)}"
+    committed_where = f"{prefix}{committed_name(job.run)}" if job.local is None else f"{job.local.parent}/catalog_backup/{committed_name(job.run)}"
     others = [
         {"kind": "catalog_backup", "where": where, "overwrites": "only on a repeat of this run ID, with the same name"},
+        {
+            "kind": "catalog_committed_snapshot",
+            "where": committed_where,
+            "overwrites": "never: created once after the commit; a rerun leaves an identical object and refuses a different one",
+        },
         {"kind": "run_branch", "branch": branch_name(contract.branch_prefix, job.run), "tables": len(tables), "dropped_after_commit": True},
         {
             "kind": "layer_run_upload",

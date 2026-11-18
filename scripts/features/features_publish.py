@@ -125,7 +125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.mode,
                 args.publish_dir,
                 args.sealed_sha256,
-                build_store(plan, args.local_warehouse) if args.step == "backup" else None,
+                build_store(plan, args.local_warehouse) if args.step in ("backup", "commit") else None,
                 create_namespace=args.local_warehouse is not None,
                 needs_sealed=publishing,
                 accepted_result_sha256=args.accepted_result_sha256,

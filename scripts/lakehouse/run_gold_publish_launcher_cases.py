@@ -171,7 +171,9 @@ def gold_publish_templates(env: Env) -> dict[str, bool]:
             principal_secret = secrets["POLARIS_READER_CLIENT_SECRET" if reader else "POLARIS_GOLD_WRITER_CLIENT_SECRET"]
             other_secrets = [value for name, value in secrets.items() if name.endswith(("SECRET", "PASSWORD")) and value not in (principal_secret,)]
             extra = (
-                {(str(root / "infra/deployment.auto.tfvars.json"), "/workspace/infra/deployment.auto.tfvars.json", True)} if job == "catalog_backup" else set()
+                {(str(root / "infra/deployment.auto.tfvars.json"), "/workspace/infra/deployment.auto.tfvars.json", True)}
+                if job in ("catalog_backup", "commit_publish")
+                else set()
             )
             checks[f"{job} ({mode}): the principal, the arguments, the mounts and the network"] = (
                 f["env"]["POLARIS_CLIENT_ID"] == principal_id

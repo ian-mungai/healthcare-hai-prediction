@@ -1429,7 +1429,7 @@ GOLD_JOBS: dict[str, dict[str, Any]] = {
     "publish_candidates": {"module": "scripts.lakehouse.gold_publish", "step": "candidates", "principal": "writer", "sealed": True},
     "reconcile_candidates": {"module": "scripts.lakehouse.gold_publish", "step": "reconcile", "principal": "reader", "sealed": True},
     "catalog_backup": {"module": "scripts.lakehouse.gold_publish", "step": "backup", "principal": "writer", "sealed": True, "deployment": True},
-    "commit_publish": {"module": "scripts.lakehouse.gold_publish", "step": "commit", "principal": "writer", "sealed": True},
+    "commit_publish": {"module": "scripts.lakehouse.gold_publish", "step": "commit", "principal": "writer", "sealed": True, "deployment": True},
     "gold_maintenance": {"module": "scripts.lakehouse.gold_maintenance", "step": None, "principal": "writer", "sealed": False},
 }
 SEALED_READERS = ("duckdb_helper", "quality_validate")
