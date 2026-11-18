@@ -1,7 +1,7 @@
 """The revision 4 builder survives an interruption after any write step: a rerun finishes the work and the plan and registry loaders accept the result.
 
 The starting state is the repository as it was before the builder first ran, rebuilt from Git and the local revision 3 archive.
-The collector code version lists come from HEAD: the builder never reads or writes them, and a later relist adds versions to them.
+The collector code version lists come from HEAD: the builder does not regenerate them, and a later collector relist adds versions to them.
 The test is skipped when that archive or the history is absent, because the archive is local-only.
 """
 
