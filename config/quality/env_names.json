@@ -58,6 +58,7 @@
     "PROCESS_GROUP_REGISTRIES": {"category": "test", "reason": "Set and read only by the stand-in programs of scripts/quality/run_process_e2e.py and run_worker_deadline_e2e.py"},
     "PUSH_IMAGES_FAKE_DIGEST": {"category": "test", "reason": "Set and read only by the stand-in registry of scripts/infrastructure/push_images_cases.py"},
     "PUSH_IMAGES_FAKE_PLATFORM": {"category": "test", "reason": "Set and read only by the stand-in registry of scripts/infrastructure/push_images_cases.py"},
+    "PUSH_IMAGES_FAKE_RUN": {"category": "test", "reason": "Set and read only by the stand-in registry of scripts/infrastructure/push_images_cases.py"},
     "PUSH_IMAGES_FAKE_STATE": {"category": "test", "reason": "Set and read only by the stand-in registry of scripts/infrastructure/push_images_cases.py"},
     "SCHEDULING_EVENTS": {"category": "test", "reason": "Set and read only by the stand-ins of scripts/quality/run_ci_groups_e2e.py"},
     "SCHEDULING_FAIL": {"category": "test", "reason": "Set and read only by the stand-ins of scripts/quality/run_ci_groups_e2e.py"},
