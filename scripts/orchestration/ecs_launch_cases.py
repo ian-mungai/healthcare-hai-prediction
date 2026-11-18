@@ -1855,9 +1855,14 @@ def legacy_history_that_cannot_be_read_still_refuses() -> None:
     require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, "a run launched on a historical claim it could not read")
     rig = Rig()
     legacy_history(rig)
-    rig.bucket.faults["get_object"] = [client_error("AccessDenied", "GetObject")] * 20
+    denied = f"{PREFIX}/{LEGACY_RUN}/gold/claim.json"
+    rig.bucket.deny_keys.add(denied)
     error = refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
-    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, f"a run launched on history it may not read: {error}")
+    require(denied in str(error) and "AccessDenied" in str(error), f"the refusal does not name the denied historical claim and its code: {error}")
+    require(
+        not claim_of(rig, RUN) and family_key(RUN) not in rig.bucket.objects and rig.ecs.count("run_task") == 0,
+        f"a run launched on history it may not read: {error}",
+    )
 
 
 def legacy_launch_without_an_end_blocks_the_family() -> None:
@@ -1890,6 +1895,20 @@ def family_index_keys_of_neither_form_refuse() -> None:
         error = refuses(LaunchRefused, partial(rig.launcher().run, spec()))
         require("unexpected key" in str(error) and family_key(name) in str(error), f"the key {name!r} was not refused by its key: {error}")
         require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, f"a run launched with the key {name!r} in the family index")
+
+
+def stamp_form_launch_never_starts_below_attach() -> None:
+    """``attach`` is not the only way in: a launch of a stamp-form run that reaches ``start`` or ``admit`` directly is refused before its first record, its
+    family index entry or any call of the cloud, and the gate settles no other run for it."""
+    for step in ("start", "admit"):
+        rig = Rig()
+        legacy_history(rig, ended=False)
+        before = dict(rig.bucket.objects)
+        launcher = rig.launcher()
+        launch = Launch(spec(run_id=LEGACY_RUN))
+        refuses(LaunchRefused, partial(getattr(launcher, step), launch))
+        require(rig.bucket.objects == before and rig.ecs.count("run_task") == 0, f"{step} wrote a record or started a task for a stamp-form run")
+        require(not rig.ecs.calls, f"{step} called the cloud for a stamp-form run: {rig.ecs.calls[:2]}")
 
 
 def stamp_form_run_never_claims() -> None:
@@ -1952,6 +1971,7 @@ CASES: dict[str, Callable[[], None]] = {
     "legacy_launch_without_an_end_blocks_the_family": legacy_launch_without_an_end_blocks_the_family,
     "family_index_keys_of_neither_form_refuse": family_index_keys_of_neither_form_refuse,
     "stamp_form_run_never_claims": stamp_form_run_never_claims,
+    "stamp_form_launch_never_starts_below_attach": stamp_form_launch_never_starts_below_attach,
     "stopped_task_found_and_ended": stopped_task_found_and_ended,
     "settle_refused_while_the_send_window_is_open": settle_refused_while_the_send_window_is_open,
     "settle_refused_while_a_family_task_is_not_stopped": settle_refused_while_a_family_task_is_not_stopped,

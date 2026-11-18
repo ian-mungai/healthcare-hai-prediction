@@ -815,6 +815,7 @@ class Launcher:
         """Claim the one launch of the run and job with a conditional create, the single step that lets a caller start a task. Returns False when another
         caller holds the claim. The claim that stands is checked against this request before anything else happens."""
         spec = launch.spec
+        self.validate(spec)  # a stamp-form run ID is history to read: no claim or family index entry is ever created under it
         body = {
             "schema_version": 1,
             "event": "claim",
@@ -843,6 +844,7 @@ class Launcher:
         spec = launch.spec
         if launch.outcome is not None or launch.arn is not None:
             return
+        self.validate(spec)  # before the gate settles any other run: a launch that reaches here without ``attach`` takes the run ID form alone too
         if launch.claim is None and self.store.run_record(spec.run_id, spec.job, "claim") is None:
             self.require_family_free(spec)
         if launch.claim is None and not self.admit(launch):
