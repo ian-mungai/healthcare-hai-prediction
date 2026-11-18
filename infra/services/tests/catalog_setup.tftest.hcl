@@ -27,12 +27,13 @@ variables {
   mlflow_artifact_bucket          = "example-project-data-dev"
 
   log_group_names = {
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
-    polaris    = "/example/polaris"
-    airflow    = "/example/airflow"
-    mlflow     = "/example/mlflow"
-    monitoring = "/example/monitoring"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    mlflow       = "/example/mlflow"
+    monitoring   = "/example/monitoring"
+    openmetadata = "/example/openmetadata"
   }
 
   ecr_repository_urls = {
@@ -49,6 +50,18 @@ variables {
     grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
     training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
+    spark                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/spark"
+    analytics              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/analytics"
+    quality                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/quality"
+    egress_proxy           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/egress_proxy"
+    feature_store          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/feature_store"
+    drift                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
+    model_api              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
+    streamlit              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
   }
 
   image_digests = {
@@ -65,7 +78,23 @@ variables {
     grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
     training               = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    spark                  = "sha256:92f473809e5979a7da2b7f52771b3a9e3d7105dcb0f24ae333c5bf279b863d73"
+    analytics              = "sha256:65f98121a162a56ad8ee919ed9ea394b9eabd8714616acf30636c6092ee350b9"
+    quality                = "sha256:acef2c15bcd349db900dffece73e1256e881c4416fc1f2d3a494640183490d9a"
+    egress_proxy           = "sha256:e545c79a1e4fc0be84ef5760d207dbe164a553fa204b4d3b82739fd3ea02089e"
+    feature_store          = "sha256:bf5e4012ff672047c4fad65033f39130413faf09792f6e0d9519d4e9d7f9bba7"
+    drift                  = "sha256:0b7a461fefbb68e518e51884369a4b88baffdb40b7e578921f3f88649ebc6494"
+    pushgateway            = "sha256:12b207391a415f7d41934a6d80bdf3587db3b550b281b29798aa604051fefdab"
+    redis_exporter         = "sha256:6f03db2c8e83e7eef5f97fc80513a6144b9bac96783f2e248d62ca34310520d2"
+    postgres_exporter      = "sha256:f721ed8f824cad593a65ba317743df32afc96ce110805b8e978c993ff40c09f8"
+    node_exporter          = "sha256:a8b8139c6a4a2713aef45c7e88f08e58ca6c2515984c3033f39e25dd9eee1a9f"
+    model_api              = "sha256:bbb1d60d27d44627ec1b5554be177e12bd1ca90a442d01beb8563f9f3a569cc3"
+    streamlit              = "sha256:c4e96ef720ad19a25112b228d0ed40252968bd8b5f7c0fc7158424f4b1a4fe78"
   }
+  model_api_enabled            = false
+  streamlit_enabled            = false
+  airflow_lineage_http_enabled = false
+  alerts_topic_arn             = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 }
 
 # The catalog setup one-shot: the bootstrap catalog setup (aws_catalog_setup) runs on the host under its own task role and reaches Polaris on the host loopback.

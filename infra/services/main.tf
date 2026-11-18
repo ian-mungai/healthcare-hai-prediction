@@ -23,7 +23,7 @@ locals {
   task_tag_source = "TASK_DEFINITION"
 
   image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.evidently_ui_enabled ? ["drift", "training"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], (local.code_fetch_on || local.pg_backup_on || local.pg_restore_on) ? ["training"] : [])
-  image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
+  image      = { for key in distinct(local.image_keys) : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
 

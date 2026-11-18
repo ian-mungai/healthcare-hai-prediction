@@ -41,33 +41,59 @@ variables {
   }
 
   ecr_repository_urls = {
-    postgres          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres"
-    redis             = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis"
-    polaris           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
-    polaris_admin     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
-    airflow           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    prometheus        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
-    grafana           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
-    statsd_exporter   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
-    pushgateway       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
-    redis_exporter    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
-    postgres_exporter = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
-    node_exporter     = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
+    postgres               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres"
+    redis                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis"
+    polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
+    polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
+    airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
+    prometheus             = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
+    grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
+    statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
+    spark                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/spark"
+    analytics              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/analytics"
+    quality                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/quality"
+    egress_proxy           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/egress_proxy"
+    mlflow                 = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/mlflow"
+    training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
+    feature_store          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/feature_store"
+    drift                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    model_api              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
+    streamlit              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
+    openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
+    openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
+    openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
   }
 
   image_digests = {
-    postgres          = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    redis             = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    polaris           = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    polaris_admin     = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    airflow           = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    prometheus        = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    grafana           = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-    statsd_exporter   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-    pushgateway       = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
-    redis_exporter    = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    postgres_exporter = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    node_exporter     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    postgres               = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    redis                  = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    prometheus             = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    pushgateway            = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    redis_exporter         = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    postgres_exporter      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    node_exporter          = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    spark                  = "sha256:92f473809e5979a7da2b7f52771b3a9e3d7105dcb0f24ae333c5bf279b863d73"
+    analytics              = "sha256:65f98121a162a56ad8ee919ed9ea394b9eabd8714616acf30636c6092ee350b9"
+    quality                = "sha256:acef2c15bcd349db900dffece73e1256e881c4416fc1f2d3a494640183490d9a"
+    egress_proxy           = "sha256:e545c79a1e4fc0be84ef5760d207dbe164a553fa204b4d3b82739fd3ea02089e"
+    mlflow                 = "sha256:b1a8f0a4d2aae9e01582f244dadd434276725eb1db0cea11ca8bcfcbef640eb6"
+    training               = "sha256:c2fb788c7deedbeaa296e424d4c2921b871a4f6cb4cf393c1c1105653ab399b4"
+    feature_store          = "sha256:bf5e4012ff672047c4fad65033f39130413faf09792f6e0d9519d4e9d7f9bba7"
+    drift                  = "sha256:0b7a461fefbb68e518e51884369a4b88baffdb40b7e578921f3f88649ebc6494"
+    model_api              = "sha256:bbb1d60d27d44627ec1b5554be177e12bd1ca90a442d01beb8563f9f3a569cc3"
+    streamlit              = "sha256:c4e96ef720ad19a25112b228d0ed40252968bd8b5f7c0fc7158424f4b1a4fe78"
+    openmetadata_server    = "sha256:1f9a365be0362daf900f48bb6cee2a6e815862edbb91690c08f90b42817a938f"
+    openmetadata_ingestion = "sha256:eac100875ddecc0a49cdf5ccd47e69aeac885d0f1cec625bb2384e2a06da7ef8"
+    openmetadata_search    = "sha256:e2201af99b5b7c2d6a4b5820be585145d31a0bcf39d206236063b52becdc9ee4"
   }
 }
 
@@ -1062,7 +1088,9 @@ run "the_evidently_ui_switch_reaches_the_host_state_exporter" {
   command = plan
 
   variables {
-    evidently_ui_enabled = true
+    evidently_ui_enabled       = true
+    evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example_project_evidently_ui_task_dev"
+    evidently_ui_bucket_name   = "example-project-data-dev"
   }
 
   assert {

@@ -26,6 +26,12 @@ variables {
   host_jobs_enabled     = true
   host_jobs             = ["bronze", "bronze_stage"]
   bronze_job_enabled    = true
+  train_enabled         = false
+  drift_enabled         = false
+  promote_enabled       = false
+  serve_enabled         = false
+  layer_jobs_enabled    = false
+  publisher_job_enabled = false
 }
 
 run "the_stage_job_is_one_small_host_task_under_the_bronze_writer_role" {

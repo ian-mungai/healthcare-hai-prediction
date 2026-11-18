@@ -23,10 +23,11 @@ variables {
   data_mount_path             = "/data"
 
   log_group_names = {
-    postgres = "/example/postgres"
-    redis    = "/example/redis"
-    polaris  = "/example/polaris"
-    airflow  = "/example/airflow"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    openmetadata = "/example/openmetadata"
   }
 
   ecr_repository_urls = {
@@ -48,6 +49,12 @@ variables {
     drift         = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     training      = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
   }
+  mlflow_enabled                  = false
+  monitoring_enabled              = false
+  model_api_enabled               = false
+  streamlit_enabled               = false
+  openmetadata_persistent_enabled = false
+  airflow_lineage_http_enabled    = false
 }
 
 run "flag_off_plans_no_evidently_ui" {

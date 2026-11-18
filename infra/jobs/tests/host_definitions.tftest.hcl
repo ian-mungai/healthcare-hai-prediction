@@ -6,7 +6,7 @@ variables {
   host_jobs_enabled      = false
   publisher_job_enabled  = false
   publisher_keys_enabled = false
-  host_jobs              = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  host_jobs              = ["bronze", "bronze_stage", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   aws_profile            = "example_project_dev"
   aws_region             = "us-west-2"
   expected_account_id    = "111111111111"

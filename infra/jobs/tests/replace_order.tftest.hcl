@@ -72,6 +72,8 @@ variables {
   drift_enabled                         = true
   promote_enabled                       = true
   serve_enabled                         = true
+  mlflow_metadata_reader_password_name  = "/example_project/mlflow_metadata_reader_password"
+  host_jobs                             = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
 }
 
 # A jobs apply that replaces a task definition must register the new revision before it retires the old one, so a failed registration leaves the old revision in

@@ -47,12 +47,13 @@ variables {
   model_api_mlflow_uri            = "http://127.0.0.1:5100"
 
   log_group_names = {
-    airflow    = "/example/airflow"
-    mlflow     = "/example/mlflow"
-    monitoring = "/example/monitoring"
-    polaris    = "/example/polaris"
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
+    airflow      = "/example/airflow"
+    mlflow       = "/example/mlflow"
+    monitoring   = "/example/monitoring"
+    polaris      = "/example/polaris"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    openmetadata = "/example/openmetadata"
   }
 
   ecr_repository_urls = {
@@ -71,6 +72,16 @@ variables {
     redis                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis"
     streamlit              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
     training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
+    spark                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/spark"
+    analytics              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/analytics"
+    quality                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/quality"
+    egress_proxy           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/egress_proxy"
+    feature_store          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/feature_store"
+    drift                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
   }
 
   image_digests = {
@@ -89,7 +100,18 @@ variables {
     redis                  = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
     streamlit              = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     training               = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    spark                  = "sha256:92f473809e5979a7da2b7f52771b3a9e3d7105dcb0f24ae333c5bf279b863d73"
+    analytics              = "sha256:65f98121a162a56ad8ee919ed9ea394b9eabd8714616acf30636c6092ee350b9"
+    quality                = "sha256:acef2c15bcd349db900dffece73e1256e881c4416fc1f2d3a494640183490d9a"
+    egress_proxy           = "sha256:e545c79a1e4fc0be84ef5760d207dbe164a553fa204b4d3b82739fd3ea02089e"
+    feature_store          = "sha256:bf5e4012ff672047c4fad65033f39130413faf09792f6e0d9519d4e9d7f9bba7"
+    drift                  = "sha256:0b7a461fefbb68e518e51884369a4b88baffdb40b7e578921f3f88649ebc6494"
+    pushgateway            = "sha256:12b207391a415f7d41934a6d80bdf3587db3b550b281b29798aa604051fefdab"
+    redis_exporter         = "sha256:6f03db2c8e83e7eef5f97fc80513a6144b9bac96783f2e248d62ca34310520d2"
+    postgres_exporter      = "sha256:f721ed8f824cad593a65ba317743df32afc96ce110805b8e978c993ff40c09f8"
+    node_exporter          = "sha256:a8b8139c6a4a2713aef45c7e88f08e58ca6c2515984c3033f39e25dd9eee1a9f"
   }
+  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 }
 
 run "register_every_definition" {

@@ -42,9 +42,8 @@ variables {
   openmetadata_admin_password_name = "/example_project/openmetadata_admin_password"
   openmetadata_db_password_name    = "/example_project/openmetadata_db_password"
   openmetadata_bot_token_names = {
-    lineage    = "/example_project/openmetadata_bot_lineage"
-    ingestion  = "/example_project/openmetadata_bot_ingestion"
-    comparison = "/example_project/openmetadata_bot_comparison"
+    lineage   = "/example_project/openmetadata_bot_lineage"
+    ingestion = "/example_project/openmetadata_bot_ingestion"
   }
 }
 

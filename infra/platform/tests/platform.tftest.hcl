@@ -213,11 +213,11 @@ run "repository_groups_decide_the_gates" {
   assert {
     condition = (
       toset(keys(aws_ecr_repository.image)) == toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group != "monitoring"]) &&
-      toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group == "monitoring"]) == toset(["prometheus", "grafana", "statsd_exporter"]) &&
+      toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group == "monitoring"]) == toset(["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"]) &&
       toset([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : name if image.repository_group == "serving"]) == toset(["model_api", "streamlit"]) &&
       alltrue([for name, image in jsondecode(file("${path.module}/../services/images.json")).images : contains(["always", "monitoring", "serving"], image.repository_group)])
     )
-    error_message = "The monitoring group is three images, the serving group two, and a false flag removes exactly its own group."
+    error_message = "The monitoring group is seven images, the serving group two, and a false flag removes exactly its own group."
   }
 }
 

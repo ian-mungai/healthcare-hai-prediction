@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Saved Terraform state and plan files are artifacts, matched by their final extension only. A tracked one is refused by the credential-files hook.
 ARTIFACT_EXTENSIONS = (".tfstate", ".tfplan", ".tfstate.backup")
 # Files that say a Marquez piece is absent. Everything else names no Marquez at all.
-NEGATIVE_FILES = frozenset({"tests/test_no_marquez_leftovers.py", "infra/platform/tests/platform.tftest.hcl"})
+NEGATIVE_FILES = frozenset({"tests/test_no_marquez_leftovers.py", "infra/platform/tests/platform.tftest.hcl", ".cleanup_allowlist"})
 GONE = (
     "infra/services/marquez.tf",
     "config/metadata/ingestion/marquez.json",

@@ -8,7 +8,7 @@ variable "host_jobs_enabled" {
 variable "host_jobs" {
   description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its containers: the images, the roles, the parameter names and its own enable flag."
   type        = set(string)
-  default     = ["bronze_stage", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  default     = ["drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   nullable    = false
 
   validation {

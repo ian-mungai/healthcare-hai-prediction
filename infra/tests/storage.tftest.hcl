@@ -299,11 +299,11 @@ run "prometheus_history_rules_only_with_their_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 8 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_prometheus_blocks", "clear_prometheus_delete_markers"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_postgres_backups", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_prometheus_blocks", "clear_prometheus_delete_markers"])
     )
-    error_message = "With prometheus_history_retention_enabled the plan must add exactly the two Prometheus rules to the five default rules."
+    error_message = "With prometheus_history_retention_enabled the plan must add exactly the two Prometheus rules to the six default rules."
   }
 
   assert {

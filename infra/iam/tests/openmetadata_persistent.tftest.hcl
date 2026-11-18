@@ -403,9 +403,8 @@ run "job_lineage_flag_follows_a_renamed_token_parameter" {
     openmetadata_persistent_prepared = true
     job_lineage_prepared             = true
     openmetadata_bot_token_names = {
-      lineage    = "/example_project/renamed_lineage"
-      ingestion  = "/example_project/openmetadata_bot_ingestion"
-      comparison = "/example_project/openmetadata_bot_comparison"
+      lineage   = "/example_project/renamed_lineage"
+      ingestion = "/example_project/openmetadata_bot_ingestion"
     }
   }
 
