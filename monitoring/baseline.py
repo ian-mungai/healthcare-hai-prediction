@@ -3,7 +3,9 @@
 ``python -m monitoring.baseline --hai-type HAI_1 --tracking-uri URI --out DIR`` looks up the ``production`` alias of the type's registered model, reads the
 source run's ``bundle/feature_list.json`` and ``extract/manifest_<type>.json`` artifacts, loads the run's training matrix with ``dvc_baseline.load`` and
 writes the three inputs of ``monitoring.drift_check`` into ``DIR``: ``reference.parquet``, ``reference_manifest.json`` and ``features.json`` (the model's
-matrix columns). Nothing is written when any step is refused, and a rerun writes the same bytes.
+matrix columns). The monitored columns are the ``kept_columns`` of the feature list, the features the fitted model uses, for a version that carries them. A
+version trained before they were recorded (``columns`` only) is monitored on every listed column, and the drift check leaves out one that has no reference
+value. Nothing is written when any step is refused, and a rerun writes the same bytes.
 
 Exit codes: 0 written, 2 a refused input (the message names the failure), 3 a package is missing, 4 there is nothing to monitor (no Production model, or a
 model without features). Run it from the repository root as a module, in an environment with MLflow and the pinned DVC.
@@ -33,7 +35,7 @@ NOTHING_TO_MONITOR = 4
 
 @dataclass(frozen=True)
 class Baseline:
-    """What was fetched: the Production version's source run, the manifest of its matrix and the model's feature columns."""
+    """What was fetched: the Production version's source run, the manifest of its matrix and the feature columns that the drift check monitors."""
 
     hai_type: str
     run_id: str
@@ -78,12 +80,24 @@ def fetch(
     run_id = str(version.run_id)
     with tempfile.TemporaryDirectory(prefix="baseline_") as temporary:
         scratch = Path(temporary)
-        columns = artifact(store, run_id, "bundle/feature_list.json", scratch).get("columns")
+        listing = artifact(store, run_id, "bundle/feature_list.json", scratch)
+        columns, kept = listing.get("columns"), listing.get("kept_columns")
         manifest = artifact(store, run_id, f"extract/manifest_{hai_type}.json", scratch)
         if not isinstance(columns, list) or any(not isinstance(name, str) or not name for name in columns):
             raise CheckError("artifact_invalid", f"bundle/feature_list.json of run {run_id} must hold a list of column names")
         if not columns:
             raise CheckError("no_features", f"the production model of run {run_id} has no features", NOTHING_TO_MONITOR)
+        if kept is not None:
+            if (
+                not isinstance(kept, list)
+                or any(not isinstance(name, str) or not name for name in kept)
+                or len(set(kept)) != len(kept)
+                or not set(kept) <= set(columns)
+            ):
+                raise CheckError("artifact_invalid", f"kept_columns of bundle/feature_list.json of run {run_id} must be distinct names from its columns")
+            if not kept:
+                raise CheckError("no_features", f"the production model of run {run_id} kept no feature", NOTHING_TO_MONITOR)
+            columns = kept
         if manifest.get("hai_type") != hai_type or manifest.get("population") not in POPULATIONS or not isinstance(manifest.get("newest_window_year"), int):
             raise CheckError("manifest_invalid", f"the extract manifest of run {run_id} must name {hai_type}, a population and an integer newest_window_year")
         if model is not None and manifest.get("model") != model:

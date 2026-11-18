@@ -1281,6 +1281,37 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                         "mediation compression changed an estimate or interval",
                     )
 
+    def bundle_feature_list_names_the_kept_features() -> None:
+        from scripts.training import bundle
+
+        dead = Feature("feature_matrix_care_compare:dead", "number", "C142", "care_compare")
+        sparse = Feature("feature_matrix_care_compare:sparse", "number", "C145", "care_compare")
+        group = Feature("feature_matrix_hospital_window:control_type_code", "category", family="hospital_window")
+        rows = tuple(dict(row, dead=None, sparse=None if index % 5 < 3 else 1.0 + index % 7) for index, row in enumerate(req.data.rows))
+        data = replace(req.data, rows=rows, features=(*req.data.features, dead, sparse, group))
+        base = tuple(feature.reference for feature in req.data.features)
+        for slot in SLOTS:
+            # The fixed-effects model fits complete cases, so a column that is missing everywhere cannot be on its list; every other slot carries both.
+            listed = (*base, group.reference) if slot == "m6_fixed_effects" else (*base, dead.reference, sparse.reference, group.reference)
+            changed = replace(req, data=data, feature_lists={**req.feature_lists, slot: listed})
+            with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+                result = suite.fit_slot(changed, slot)
+            require(result.status == "fitted", f"{slot} did not fit with a dead column on its list: {result.reason}")
+            document = bundle.feature_list_document(suite.ModelSuite(changed, {slot: result}, slot, slot, {}, {}))
+            require(document["references"] == list(listed), f"{slot}: references no longer hold the slot's whole list")
+            require(document["columns"] == [reference.split(":", 1)[-1] for reference in listed], f"{slot}: columns no longer hold the slot's whole list")
+            kept = document["kept_references"]
+            require(
+                kept == [reference for reference in listed if reference in kept] and set(kept) <= set(listed), f"{slot}: the kept list is not in list order"
+            )
+            require(document["kept_columns"] == [reference.split(":", 1)[-1] for reference in kept], f"{slot}: kept_columns do not follow kept_references")
+            require(dead.reference not in kept and sparse.reference not in kept or slot == "m6_fixed_effects", f"{slot}: a dropped feature is in the kept list")
+            require(set(result.details["selected_references"]) <= set(kept), f"{slot}: the kept list lost a feature the preprocessing kept")
+            require(group.reference in kept, f"{slot}: the ownership column is used by the model and must be in the kept list")
+            require(base[0] in kept and req.cmi_reference in kept, f"{slot}: the kept list lost a complete feature")
+        empty = bundle.feature_list_document(suite.ModelSuite(req, {}, None, None, {}, {}))
+        require(empty == {"slot": None, "references": [], "columns": [], "kept_references": [], "kept_columns": []}, f"a run with no candidate lists {empty}")
+
     def mediation_frozen_category_contrasts() -> None:
         rng = np.random.default_rng(61827)
         categories = np.asarray(["A"] * 480 + ["B"] * 480 + ["C"] * 480 + [None] * 160, dtype=object)
@@ -1823,6 +1854,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("native_shap_failure", native_shap_failure),
         ("mediation_prepares_source_once", mediation_prepares_source_once),
         ("mediation_frozen_category_contrasts", mediation_frozen_category_contrasts),
+        ("bundle_feature_list_names_the_kept_features", bundle_feature_list_names_the_kept_features),
     ]
 
 

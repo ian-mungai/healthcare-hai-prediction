@@ -25,6 +25,7 @@ from scripts.training.run_dvc_baseline_e2e import LocalRunStore, Workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = str(ROOT / ".venv/bin/python")
+EVIDENTLY_PROGRAM = str(ROOT / ".tools/evidently/bin/python")
 Problems = list[str]
 MODEL = "hai_model_HAI_1"
 
@@ -51,8 +52,13 @@ class StoreStandIn:
         return getattr(self.store, name)
 
 
-def feature_document(columns: list[str]) -> dict[str, Any]:
-    return {"slot": "m2_elastic_net" if columns else None, "references": [f"feature_matrix:{name}" for name in columns], "columns": columns}
+def feature_document(columns: list[str], kept: Any = None) -> dict[str, Any]:
+    """A bundle's ``feature_list.json``. Without ``kept`` it has the shape of a version trained before the kept list existed; with it, the new keys."""
+    document: dict[str, Any] = {"slot": "m2_elastic_net" if columns else None, "references": [f"feature_matrix:{name}" for name in columns], "columns": columns}
+    if kept is not None:
+        document["kept_columns"] = kept
+        document["kept_references"] = [f"feature_matrix:{name}" for name in kept] if isinstance(kept, list) else kept
+    return document
 
 
 def manifest_document(**changes: Any) -> dict[str, Any]:
@@ -63,10 +69,18 @@ class Baseline:
     """A recorded baseline in a DVC workspace: matrix, metafile, feature list and manifest artifacts, and a Production alias."""
 
     def __init__(
-        self, top: Path, *, columns: list[str] | None = None, manifest: dict[str, Any] | None = None, artifacts: bool = True, alias: bool = True
+        self,
+        top: Path,
+        *,
+        columns: list[str] | None = None,
+        manifest: dict[str, Any] | None = None,
+        artifacts: bool = True,
+        alias: bool = True,
+        kept: Any = None,
+        null_columns: tuple[str, ...] = (),
     ) -> None:
         self.work = Workspace(top)
-        drift_cases.write_matrix(self.work.matrix, 1500, "2019 + i // 501", (), (), None)
+        drift_cases.write_matrix(self.work.matrix, 1500, "2019 + i // 501", (), null_columns, None)
         self.original = hashlib.sha256(self.work.matrix.read_bytes()).hexdigest()
         self.work.record()
         self.columns = list(drift_cases.FEATURES) if columns is None else columns
@@ -75,7 +89,7 @@ class Baseline:
         scratch.mkdir()
         self.store = StoreStandIn(self.work.store)
         if artifacts:
-            (scratch / "feature_list.json").write_text(json.dumps(feature_document(self.columns)) + "\n")
+            (scratch / "feature_list.json").write_text(json.dumps(feature_document(self.columns, kept)) + "\n")
             (scratch / "manifest_HAI_1.json").write_text(json.dumps(self.manifest) + "\n")
             self.work.store.log_artifact("run1", str(scratch / "feature_list.json"), "bundle")
             self.work.store.log_artifact("run1", str(scratch / "manifest_HAI_1.json"), "extract")
@@ -134,6 +148,62 @@ def baseline_rerun_changes_nothing(folder: Path) -> Problems:
         if first == second and sorted(first) == ["features.json", "reference.parquet", "reference_manifest.json"]
         else ["a rerun changed the files or left others"]
     )
+
+
+def baseline_monitors_the_kept_features(folder: Path) -> Problems:
+    """A version that carries the kept list is monitored on exactly that list, in the stored order; the full list stays what serving reads."""
+    kept = ["f_num_c", "f_num_a", "f_cat"]
+    baseline = Baseline(folder, kept=kept)
+    result = baseline.fetch()
+    problems = [] if json.loads((baseline.out / "features.json").read_text()) == kept else ["features.json is not the kept list"]
+    if result.features != kept:
+        problems.append(f"the result names {result.features}, not the kept list")
+    return problems
+
+
+def baseline_without_the_kept_list_monitors_every_column(folder: Path) -> Problems:
+    """The Production version 4 shape (no kept keys in feature_list.json): every column of the model's list is monitored, as before."""
+    baseline = Baseline(folder)
+    result = baseline.fetch()
+    written = json.loads((baseline.out / "features.json").read_text())
+    return [] if written == baseline.columns == result.features else [f"features.json is {written}, not the full list"]
+
+
+def kept_list_feeds_the_check(with_kept: bool) -> Callable[[Path], Problems]:
+    """A feature that is missing in the whole baseline matrix. With the kept list (training dropped it) the record does not name it at all; without the list
+    the check excludes it and says so."""
+
+    def case(folder: Path) -> Problems:
+        baseline = Baseline(folder, kept=["f_num_a", "f_num_b", "f_num_c", "f_cat"] if with_kept else None, null_columns=("f_num_d",))
+        baseline.fetch()
+        current = folder / "current.parquet"
+        drift_cases.write_matrix(current, 1200, "2022", (), (), None)
+        manifest = folder / "current_manifest.json"
+        manifest.write_text(json.dumps({"hai_type": "HAI_1", "population": "primary"}) + "\n")
+        drift_cases.need_evidently()
+        arguments = [
+            f"--reference-matrix={baseline.out / 'reference.parquet'}",
+            f"--reference-manifest={baseline.out / 'reference_manifest.json'}",
+            f"--features={baseline.out / 'features.json'}",
+            f"--current-matrix={current}",
+            f"--current-manifest={manifest}",
+            f"--run-id={drift_cases.RUN_ID}",
+            f"--out={folder / 'record'}",
+        ]
+        done = run_command(EVIDENTLY_PROGRAM, ["-m", "monitoring.drift_check", *arguments], cwd=ROOT, timeout=600)
+        if done.returncode:
+            return [f"the check refused the reader's files (exit {done.returncode}): {(done.stdout + done.stderr)[:300]}"]
+        record = json.loads((folder / "record/drift_HAI_1.json").read_text())
+        named = {item["name"] for item in record["features"]}
+        problems = [] if record["status"] == "checked" and named == {"f_num_a", "f_num_b", "f_num_c", "f_cat"} else [f"the record compares {sorted(named)}"]
+        expected = [] if with_kept else [{"name": "f_num_d", "reason": "all_missing_in_reference"}]
+        if record["excluded_features"] != expected:
+            problems.append(f"excluded_features is {record['excluded_features']}, expected {expected}")
+        if with_kept and "f_num_d" in json.dumps(record):
+            problems.append("the record names a feature that the model dropped")
+        return problems
+
+    return case
 
 
 def tampered_remote(folder: Path) -> Problems:
@@ -337,6 +407,15 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
             refuses("manifest_invalid", 2, lambda top: Baseline(top, manifest=manifest_document(newest_window_year=None))),
         ),
         ("baseline_refuses_a_tampered_remote", tampered_remote),
+        ("baseline_monitors_the_kept_features", baseline_monitors_the_kept_features),
+        ("baseline_without_the_kept_list_monitors_every_column", baseline_without_the_kept_list_monitors_every_column),
+        ("baseline_kept_list_leaves_a_dropped_feature_out_of_the_record", kept_list_feeds_the_check(True)),
+        ("baseline_without_the_kept_list_excludes_in_the_record", kept_list_feeds_the_check(False)),
+        ("baseline_refuses_a_kept_list_that_is_not_a_list", refuses("artifact_invalid", 2, lambda top: Baseline(top, kept="f_num_a"))),
+        ("baseline_refuses_a_kept_column_the_model_does_not_list", refuses("artifact_invalid", 2, lambda top: Baseline(top, kept=["f_num_a", "f_absent"]))),
+        ("baseline_refuses_a_kept_list_with_a_repeat", refuses("artifact_invalid", 2, lambda top: Baseline(top, kept=["f_num_a", "f_num_a"]))),
+        ("baseline_refuses_a_kept_list_with_an_empty_name", refuses("artifact_invalid", 2, lambda top: Baseline(top, kept=["f_num_a", ""]))),
+        ("baseline_with_an_empty_kept_list_has_nothing_to_monitor", refuses("no_features", 4, lambda top: Baseline(top, kept=[]))),
         ("baseline_cli_names_missing_mlflow", baseline_cli_names_missing_mlflow),
         ("current_rows_after_the_baseline", current_after_the_baseline),
         ("current_follows_the_population", current_follows_the_population),

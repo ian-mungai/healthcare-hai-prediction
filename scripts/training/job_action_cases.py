@@ -658,6 +658,12 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require([row["spine_key"] for row in table] == sorted(row["spine_key"] for row in table), "holdout rows are not sorted by key")
         feature_list = output_of(fixture, f"{BUNDLE}/feature_list.json")
         require(feature_list["slot"] == result["selection"]["registry_candidate"] and feature_list["columns"], f"feature list: {feature_list}")
+        kept = result["fitted_parameters"][feature_list["slot"]]["selected_references"]
+        require(
+            feature_list["kept_references"] == [reference for reference in feature_list["references"] if reference in kept] and kept,
+            f"the kept references are not the fitted preprocessing's, in list order: {feature_list}",
+        )
+        require(feature_list["kept_columns"] == [reference.split(":", 1)[-1] for reference in feature_list["kept_references"]], f"kept columns: {feature_list}")
         verify_done(fixture.out, "fit", DIGEST)
         require(json.loads(out)["action"] == "fit" and json.loads(out)["resumed"] is False, "fit printed no summary")
 

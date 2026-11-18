@@ -116,6 +116,30 @@ def resolved_versions(contract: Mapping[str, Any]) -> dict[str, str | None]:
     return found
 
 
+def feature_list_document(suite: ModelSuite) -> dict[str, Any]:
+    """Return ``feature_list.json`` of the registry candidate.
+
+    ``references`` and ``columns`` are the slot's whole reviewed list, as serving and the promotion check read them. ``kept_references`` and
+    ``kept_columns`` are the features the fitted model uses, in list order: the ones the preprocessing kept (it drops a feature that is missing in more than
+    half the fitting rows) and the ownership column of the mixed model, which groups the rows instead of entering the fixed part. The drift baseline
+    monitors exactly these.
+    """
+    candidate = suite.candidate
+    if candidate is None:
+        return {"slot": None, "references": [], "columns": [], "kept_references": [], "kept_columns": []}
+    features = suite.request.features_for(candidate)
+    details = suite.slots[candidate].details
+    used = {*details["selected_references"], *details.get("excluded_fixed_references", ())}
+    kept = [feature for feature in features if feature.reference in used]
+    return {
+        "slot": candidate,
+        "references": [feature.reference for feature in features],
+        "columns": [feature.name for feature in features],
+        "kept_references": [feature.reference for feature in kept],
+        "kept_columns": [feature.name for feature in kept],
+    }
+
+
 def build(
     suite: ModelSuite,
     hai_type: str,
@@ -146,9 +170,7 @@ def build(
     rows, columns = holdout_table(suite)
     candidate = suite.candidate
     features = suite.request.features_for(candidate) if candidate is not None else ()
-    files[f"{base}/feature_list.json"] = canonical(
-        {"slot": candidate, "references": [feature.reference for feature in features], "columns": [feature.name for feature in features]}
-    )
+    files[f"{base}/feature_list.json"] = canonical(feature_list_document(suite))
     with tempfile.TemporaryDirectory(prefix="bundle_") as scratch:
         table = Path(scratch) / "holdout_predictions.parquet"
         write_table(table, rows, columns)
