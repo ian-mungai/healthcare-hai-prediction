@@ -1,6 +1,6 @@
 # The committed defaults of the services stack are the live settings: given only the inputs the renderer builds from .env and the platform outputs (the
 # profile, the account, the roles, the buckets and addresses, the repositories and the image digests), a plan turns on MLflow, the model API, the page,
-# monitoring, persistent OpenMetadata and HTTP lineage, keeps Marquez off and gives a host job 22800 MiB.
+# monitoring, persistent OpenMetadata and HTTP lineage on and gives a host job 22800 MiB.
 
 mock_provider "aws" {
   override_during = plan
@@ -34,14 +34,14 @@ variables {
   model_api_registry_uri       = "s3://example-project-data-dev/lakehouse/feast/registry.pb"
 
   log_group_names = {
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
-    polaris    = "/example/polaris"
-    airflow    = "/example/airflow"
-    mlflow     = "/example/mlflow"
-    monitoring = "/example/monitoring"
-    marquez    = "/example/marquez"
-    jobs       = "/example/jobs"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    mlflow       = "/example/mlflow"
+    monitoring   = "/example/monitoring"
+    openmetadata = "/example/openmetadata"
+    jobs         = "/example/jobs"
   }
 
   ecr_repository_urls = {
@@ -87,9 +87,9 @@ run "the_defaults_are_the_live_settings" {
   assert {
     condition = (
       var.mlflow_enabled && var.model_api_enabled && var.streamlit_enabled && var.monitoring_enabled && var.openmetadata_persistent_enabled &&
-      var.airflow_lineage_http_enabled && !var.marquez_enabled
+      var.airflow_lineage_http_enabled
     )
-    error_message = "MLflow, the model API, the page, monitoring, persistent OpenMetadata and HTTP lineage are on by default and Marquez is off."
+    error_message = "MLflow, the model API, the page, monitoring, persistent OpenMetadata and HTTP lineage are on by default."
   }
 
   assert {
