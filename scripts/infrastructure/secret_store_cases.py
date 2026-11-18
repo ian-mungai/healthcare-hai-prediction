@@ -839,6 +839,33 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
             check.RUN_SECONDS = run_seconds
         slow_seconds = time.monotonic() - began_slow
         slow_ok = slow_code == 1 and slow_seconds < 3.0 and "deadline" in slow and "mlflow_user: ready" not in slow
+    with (
+        StandIn(values={admin_name: admin, user_name: served, credential_name: "stored-" + admin}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "deleted")}) as server,
+    ):
+        server.users[served] = store.values[credential_name]
+        server.grants[grant_experiment_1] = "DENY"
+        trash_code, trash = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        trash_ok = (
+            trash_code == 1 and server.grants[grant_experiment_1] == "DENY" and experiment_1 in trash and "DENY" in trash and "mlflow_user: ready" not in trash
+        )
+    stalls: list[bool] = []
+    for http11 in (False, True):
+        with (
+            StandIn(values={admin_name: admin, user_name: served, credential_name: "stored-" + admin}, shared={}) as store,
+            MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
+        ):
+            server.users[served] = store.values[credential_name]
+            server.stall_path, server.stall_http11 = "/api/3.0/mlflow/users/permissions/get", http11
+            check = tool.account_check(root)
+            run_seconds = check.RUN_SECONDS
+            check.RUN_SECONDS = 0.4
+            began_stall = time.monotonic()
+            try:
+                stall_code, stall = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+            finally:
+                check.RUN_SECONDS = run_seconds
+            stalls.append(stall_code == 1 and time.monotonic() - began_stall < 0.6 and "deadline" in stall and "mlflow_user: ready" not in stall)
     with StandIn(shared={}) as store, MlflowAuthStandIn(admin) as server:
         no_admin_code, no_admin = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         no_admin_quiet = server.log == []
@@ -907,6 +934,9 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         "an existing user with another password than the stored credential exits 1, changes no password and no grant and is never reported ready": mismatch_ok,
         "the same refusal holds when the credential parameter already existed": stored_ok,
         "a slow answer body ends at the run deadline with exit 1 and no ready line": slow_ok,
+        "an explicit DENY on a deleted experiment refuses with exit 1, names it, stays and is never reported ready": trash_ok,
+        "a closing response that stalls after one byte, as HTTP/1.0 and as HTTP/1.1, ends at the run deadline with exit 1 and no ready line": stalls
+        == [True, True],
         "a missing administrator parameter exits 1, names it and calls no MLflow route": no_admin_code == 1 and admin_name in no_admin and no_admin_quiet,
         "a wrong administrator password exits 1 with the status and without any password": wrong_code == 1 and wrong_text_clean,
         "an address off the loopback, with a user, or with another scheme exits 1 before the administrator parameter is read": len(refused)

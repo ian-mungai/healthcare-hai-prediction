@@ -264,6 +264,18 @@ def a_failed_mlflow_user_task_is_reported_and_start_continues() -> dict[str, boo
     }
 
 
+def a_skipped_mlflow_user_task_is_not_reported_ready_and_start_continues() -> dict[str, bool]:
+    host, session, lines = build({"exit_code:mlflow_user=3"}, mlflow_user=True)
+    session.start()
+    return {
+        "start finishes and the online store is reloaded": host.desired == 1 and bool(host.reloads),
+        "the report says skipped and names the way out": any(
+            line.startswith("mlflow_user_skipped") and "not stored" in line and "start or refresh" in line for line in lines
+        ),
+        "no ready and no failed line is reported": not any(line.startswith(("mlflow_user_ready", "mlflow_user_failed")) for line in lines),
+    }
+
+
 def a_stack_without_the_mlflow_user_task_runs_nothing_for_it() -> dict[str, bool]:
     host, session, lines = build()
     session.start()

@@ -3,10 +3,13 @@
 It answers the routes read from the 3.17.2 wheel (``mlflow/server/auth/routes.py`` and ``__init__.py``; the services ``mlflow_user.py`` cites each line):
 user get and create, user permission get and grant, registered model get and experiment get-by-name, and the registered model and experiment searches that
 any logged-in user may call (the login check). ``slow_body_seconds`` makes every answer of a logged-in user arrive one byte at a time with that pause
-between bytes, so a case can show that a reader stops at its absolute deadline. It answers the per-object permission routes that 3.17.2
-removed (``/api/2.0/mlflow/registered-models/permissions/*`` and ``/api/2.0/mlflow/experiments/permissions/*``) with a 404 HTML page, as the real server
-does, and counts every hit on them. A request needs HTTP Basic credentials of a known user. It keeps the request line of every call, never a body, and keeps
-each body's content type and the keys of its JSON object so a case can show that a credential travels in a body and never in the address.
+between bytes, so a case can show that a reader stops at its absolute deadline. ``stall_path`` makes the answer to that path a closing response
+(``Connection: close``, a declared length) that sends its headers, its first byte after ``first_byte_seconds`` and then stalls until ``release`` is
+set or ``stall_seconds`` pass, as HTTP/1.0 or HTTP/1.1 (``stall_http11``); the stand-in sets ``release`` on exit. It answers the per-object permission
+routes that 3.17.2 removed (``/api/2.0/mlflow/registered-models/permissions/*`` and ``/api/2.0/mlflow/experiments/permissions/*``) with a 404 HTML
+page, as the real server does, and counts every hit on them. A request needs HTTP Basic credentials of a known user. It keeps the request line of every
+call, never a body, and keeps each body's content type and the keys of its JSON object so a case can show that a credential travels in a body and never
+in the address.
 """
 
 from __future__ import annotations
@@ -45,11 +48,27 @@ class MlflowAuthHandler(BaseHTTPRequestHandler):
 
     def send_json(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body).encode()
+        stand_in = cast(StandInServer, self.server).stand_in
+        stalled = bool(stand_in.stall_path) and self.path.partition("?")[0] == stand_in.stall_path
+        if stalled and stand_in.stall_http11:
+            self.protocol_version = "HTTP/1.1"
         self.send_response(status)
+        if stalled:
+            self.send_header("Connection", "close")
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        pause = cast(StandInServer, self.server).stand_in.slow_body_seconds
+        if stalled:
+            try:
+                stand_in.release.wait(stand_in.first_byte_seconds)
+                self.wfile.write(payload[:1])
+                self.wfile.flush()
+                stand_in.release.wait(stand_in.stall_seconds)
+                self.wfile.write(payload[1:])
+            except OSError:
+                return
+            return
+        pause = stand_in.slow_body_seconds
         if not pause:
             self.wfile.write(payload)
             return
@@ -197,6 +216,11 @@ class MlflowAuthStandIn:
         self.grants: dict[tuple[str, str, str], str] = {}
         self.default_permission = "READ"
         self.slow_body_seconds = 0.0
+        self.stall_path = ""
+        self.first_byte_seconds = 0.35
+        self.stall_seconds = 8.0
+        self.stall_http11 = False
+        self.release = threading.Event()
         self.log: list[tuple[str, str]] = []
         self.bodies: list[tuple[str, str, tuple[str, ...]]] = []
         self.removed_hits: list[tuple[str, str]] = []
@@ -217,6 +241,7 @@ class MlflowAuthStandIn:
         return self
 
     def __exit__(self, *_: object) -> None:
+        self.release.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=10)

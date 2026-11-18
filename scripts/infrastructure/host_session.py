@@ -69,6 +69,7 @@ POLARIS_BOOTSTRAP = "polaris_bootstrap"
 OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
 MLFLOW_USER = "mlflow_user"
+MLFLOW_USER_SKIPPED = 3  # the exit code of the task when the model API login is not stored: nothing was checked
 MLFLOW_USER_SECONDS = 300
 CODE_FETCH = "code_fetch"
 CATALOG_SETUP = "catalog_setup"
@@ -141,7 +142,14 @@ class CodeMissing(HostSessionError):
 
 
 class TaskExitError(HostSessionError):
-    """A one-shot task ran to its end and a container exited with a code other than 0. A task that never started has no exit code and is not this error."""
+    """A one-shot task ran to its end and a container exited with a code other than 0. A task that never started has no exit code and is not this error.
+
+    ``exits`` maps each container to its exit code.
+    """
+
+    def __init__(self, message: str, exits: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.exits = exits or {}
 
 
 class TerminationRequested(Exception):
@@ -628,7 +636,7 @@ class Session:
             message = f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}"
             # Only a container that ran to its end with a nonzero exit code proves that its script ran. A task that never started has no exit code.
             ran = bool(exits) and all(isinstance(code, int) for code in exits.values()) and stopped_task.get("stopCode") != "TaskFailedToStart"
-            raise TaskExitError(message) if ran else HostSessionError(message)
+            raise TaskExitError(message, exits) if ran else HostSessionError(message)
         self.step(key, f"exit codes {exits}")
         return str(task)
 
@@ -720,13 +728,26 @@ class Session:
             return
         try:
             self.one_shot(MLFLOW_USER, MLFLOW_USER_SECONDS)
+        except TaskExitError as error:
+            if set(error.exits.values()) == {MLFLOW_USER_SKIPPED}:
+                self.step(
+                    "mlflow_user_skipped",
+                    "the model API login is not stored yet, so no account was checked and the model API cannot load models; create the serving secrets, "
+                    "then run start or refresh again",
+                )
+                return
+            self.mlflow_user_failed(error)
+            return
         except HostSessionError as error:
-            self.step(
-                "mlflow_user_failed",
-                f"{error}; the host stays on and the model API cannot load models until it passes; run start or refresh again to repeat it",
-            )
+            self.mlflow_user_failed(error)
             return
         self.step("mlflow_user_ready")
+
+    def mlflow_user_failed(self, error: HostSessionError) -> None:
+        """Report the failed account check; the session goes on."""
+        self.step(
+            "mlflow_user_failed", f"{error}; the host stays on and the model API cannot load models until it passes; run start or refresh again to repeat it"
+        )
 
     def service_stopped(self, name: str) -> bool:
         """True when ECS shows no running and no pending task for the named service."""

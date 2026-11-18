@@ -149,11 +149,14 @@ def case_a_refused_administrator_login_fails_before_any_write() -> dict[str, boo
 
 def case_a_missing_login_parameter_skips_the_step() -> dict[str, bool]:
     server = stand_in()
+    script = load()
     code, output = run(server, Parameters({NAMES["admin"]: ADMIN}))
     return {
-        "the exit code is 0": code == 0,
+        "the exit code is the distinct skipped code 3, not 0": code == 3 == script.SKIPPED,
         "no call reaches MLflow": server.log == [],
-        "the output says the model API login is not stored yet and no account is reported ready": "not stored" in output and "ready" not in output,
+        "the output says the model API login is not stored yet, that nothing was checked and no account is reported ready": "not stored" in output
+        and "skipped" in output
+        and "ready" not in output,
     }
 
 
@@ -240,6 +243,37 @@ def case_a_slow_answer_body_stops_at_the_run_deadline() -> dict[str, bool]:
     }
 
 
+def case_a_deny_on_an_experiment_in_the_trash_is_refused() -> dict[str, bool]:
+    server = stand_in()
+    server.experiments = {"hai_training_HAI_1": ("7", "deleted")}
+    server.users[USER_NAME] = USER_VALUE
+    server.grants[READ_EXPERIMENT] = "DENY"
+    code, output = run(server, Parameters())
+    permission_lookups = [address for method, address in server.log if "users/permissions/get" in address and "resource_id=7" in address]
+    return {
+        "the exit code is 1": code == 1,
+        "the DENY on the deleted experiment is named": "DENY" in output and "hai_training_HAI_1" in output,
+        "the permission of the deleted experiment was looked up": len(permission_lookups) == 1,
+        "the DENY is unchanged and the experiment is not restored": server.grants[READ_EXPERIMENT] == "DENY"
+        and server.experiments["hai_training_HAI_1"][1] == "deleted",
+        "nothing is reported ready": "mlflow_user: ready" not in output,
+    }
+
+
+def case_a_stalled_closing_response_stops_at_the_run_deadline() -> dict[str, bool]:
+    results: dict[str, bool] = {}
+    for label, http11 in (("HTTP/1.0", False), ("HTTP/1.1", True)):
+        server = stand_in(stall_path="/api/3.0/mlflow/users/permissions/get", stall_http11=http11)
+        server.users[USER_NAME] = USER_VALUE
+        began = time.monotonic()
+        code, output = run(server, Parameters(), run_seconds=0.4)
+        elapsed = time.monotonic() - began
+        results[f"{label} closing response that stalls after one byte: exit 1, deadline named, never ready, ended within 0.2 s of the deadline"] = (
+            code == 1 and "deadline" in output and "mlflow_user: ready" not in output and elapsed < 0.6
+        )
+    return results
+
+
 def case_an_experiment_in_the_trash_is_pending() -> dict[str, bool]:
     server = stand_in()
     server.experiments = {"hai_training_HAI_1": ("7", "deleted")}
@@ -248,6 +282,7 @@ def case_an_experiment_in_the_trash_is_pending() -> dict[str, bool]:
         "the exit code is 0": code == 0,
         "the model is granted and the deleted experiment is not": server.grants == {READ_MODEL: "READ"},
         "the output says the experiment is pending": "experiment hai_training_HAI_1 pending" in output,
+        "the deleted experiment's permission was looked up and not changed": not server.grants.get(READ_EXPERIMENT),
     }
 
 

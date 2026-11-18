@@ -9,11 +9,13 @@ the project creates the user, checks its login or grants it a permission.
 when that fails (an existing user with another password is never overwritten and the step fails by name). It grants the user READ, and only READ, on
 the registered model ``hai_model_<type>`` and the experiment ``hai_training_<type>`` of each served type. A grant of USE, EDIT or MANAGE is reported
 and kept. A DENY, or a NO_PERMISSIONS row that a grant cannot replace, is a refusal: the account is never reported ready while it cannot read a served
-object. A model or experiment that does not exist yet, or one in the trash, is reported as pending: run the step again after a training run. A login
-that is not stored yet skips the step.
+object. A model or experiment that does not exist yet is reported as pending: run the step again after a training run. An experiment in the trash is
+reported as pending too, but its permission is read like any other and a DENY on it is a refusal (it is never restored). A login that is not stored yet
+skips the step: the task exits with ``SKIPPED`` (3), never 0, so that no caller reports an account that was not checked as ready.
 
 Every HTTP call, its connection, its headers and the reading of its body end at one absolute run deadline (``RUN_SECONDS`` from the start of the run):
-a watchdog closes the socket at the deadline and every read checks the clock. Output names steps, users and models and never a password.
+a watchdog shuts the connection's own socket at the deadline (the socket is kept across the hand-over to the response, which a closing response takes) and
+every read checks the clock. Output names steps, users and models and never a password.
 
 Wheel citations (mlflow-3.17.2-py3-none-any.whl, SHA-256 4e44c03791beb518d8b0a40b0982d958c2634d902f46d67d7907c82107f21fac, under mlflow/server/auth/):
 routes.py:7 CREATE_USER is /api/2.0/mlflow/users/create. __init__.py:7264 create_user needs a JSON body with username and password (:7265), is routed
@@ -54,6 +56,7 @@ from typing import Any
 
 SECONDS = 30
 RUN_SECONDS = 120
+SKIPPED = 3
 MAX_BYTES = 1024 * 1024
 CHUNK_BYTES = 8192
 TYPE = re.compile(r"HAI_[1-6]")
@@ -85,17 +88,21 @@ def call(url: str, method: str, path: str, login: tuple[str, str], deadline: flo
     headers = {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
     connection = http.client.HTTPConnection(parts.hostname or "", parts.port, timeout=min(SECONDS, remaining(deadline, what)))
     expired = threading.Event()
-    watchdog = threading.Timer(remaining(deadline, what), shut, (connection, expired))
+    held: list[socket.socket] = []
+    watchdog = threading.Timer(remaining(deadline, what), shut, (held, expired))
     watchdog.daemon = True
     watchdog.start()
+    reply: http.client.HTTPResponse | None = None
     try:
         connection.connect()
+        if connection.sock is not None:
+            held.append(connection.sock)
         remaining(deadline, what)
         connection.request(method, path, None if body is None else json.dumps(body), headers)
         reply = connection.getresponse()
         status, chunks, size = reply.status, [], 0
         while True:
-            reply_timeout(connection, deadline, what)
+            reply_timeout(held, deadline, what)
             piece = reply.read1(CHUNK_BYTES)
             if not piece:
                 break
@@ -104,12 +111,15 @@ def call(url: str, method: str, path: str, login: tuple[str, str], deadline: flo
             if size > MAX_BYTES:
                 raise Refused(f"{what} answered more than {MAX_BYTES} bytes")
         raw = b"".join(chunks)
+        remaining(deadline, what)
     except (OSError, http.client.HTTPException) as error:
         if expired.is_set() or time.monotonic() >= deadline:
             raise Refused(f"{what} did not finish before the run deadline") from None
         raise Refused(f"MLflow did not answer ({type(error).__name__})") from None
     finally:
         watchdog.cancel()
+        if reply is not None:
+            reply.close()
         connection.close()
     try:
         return status, json.loads(raw) if raw else {}
@@ -117,22 +127,28 @@ def call(url: str, method: str, path: str, login: tuple[str, str], deadline: flo
         return status, {}
 
 
-def reply_timeout(connection: http.client.HTTPConnection, deadline: float, what: str) -> None:
-    """Limit the next read of the reply to the time left; a deadline already passed is refused."""
+def reply_timeout(held: list[socket.socket], deadline: float, what: str) -> None:
+    """Limit the next read of the reply to the time left on the connection's own socket; a deadline already passed is refused.
+
+    ``held`` is the socket kept from ``connect``: ``getresponse`` clears ``connection.sock`` for a closing response and the response then reads from the
+    socket alone.
+    """
     left = remaining(deadline, what)
-    if connection.sock is not None:
-        connection.sock.settimeout(min(SECONDS, left))
+    for sock in held:
+        try:
+            sock.settimeout(min(SECONDS, left))
+        except OSError:
+            continue  # the response closed the socket after its last byte: the next read answers end of data
 
 
-def shut(connection: http.client.HTTPConnection, expired: threading.Event) -> None:
-    """The watchdog: at the deadline close both directions of the socket so that a blocked read returns."""
+def shut(held: list[socket.socket], expired: threading.Event) -> None:
+    """The watchdog: at the deadline close both directions of the connection's own socket so that a blocked read returns."""
     expired.set()
-    sock = connection.sock
-    if sock is not None:
+    for sock in held:
         try:
             sock.shutdown(socket.SHUT_RDWR)
         except OSError:
-            return
+            continue
 
 
 def parameter(ssm: Any, name: str) -> str | None:
@@ -162,17 +178,23 @@ def ensure_user(url: str, admin: tuple[str, str], user: str, credential: str, de
         raise Refused(f"the login of {user} with the stored credential was refused (HTTP {status}); the password is not overwritten")
 
 
-def ensure_read(url: str, admin: tuple[str, str], user: str, kind: str, identifier: str, label: str, deadline: float) -> None:
-    """READ on one resource for the user: granted when there is none, kept when it is READ or stronger, refused when it is DENY."""
+def permission_of(url: str, admin: tuple[str, str], user: str, kind: str, identifier: str, label: str, deadline: float) -> str:
+    """The effective permission of the user on one resource; a DENY is refused by name, in every lifecycle stage."""
     query = urllib.parse.urlencode({"username": user, "resource_type": kind, "resource_id": identifier})
     status, held = call(url, "GET", f"/api/3.0/mlflow/users/permissions/get?{query}", admin, deadline)
     have = held.get("permission") if status == 200 and isinstance(held, dict) else None
     if not isinstance(have, str) or not have:
         raise Refused(f"reading the permission on {label} failed (HTTP {status})")
+    if have == "DENY":
+        raise Refused(f"{user} holds DENY on {label}, which blocks the model API; left unchanged")
+    return have
+
+
+def ensure_read(url: str, admin: tuple[str, str], user: str, kind: str, identifier: str, label: str, deadline: float) -> None:
+    """READ on one resource for the user: granted when there is none, kept when it is READ or stronger, refused when it is DENY."""
+    have = permission_of(url, admin, user, kind, identifier, label, deadline)
     if have == "READ":
         sys.stdout.write(f"mlflow_user: READ on {label} already\n")
-    elif have == "DENY":
-        raise Refused(f"{user} holds DENY on {label}, which blocks the model API; left unchanged")
     elif have != "NO_PERMISSIONS":
         sys.stdout.write(f"mlflow_user: {have} on {label} kept\n")
     else:
@@ -209,6 +231,7 @@ def ensure_account(url: str, admin: tuple[str, str], user: str, credential: str,
         record = ((found or {}).get("experiment") or {}) if status == 200 and isinstance(found, dict) else {}
         identifier = str(record.get("experiment_id", ""))
         if status == 200 and re.fullmatch(r"[0-9]+", identifier) and record.get("lifecycle_stage") == "deleted":
+            permission_of(url, admin, user, "experiment", identifier, f"experiment {experiment} (in the trash)", deadline)
             sys.stdout.write(f"mlflow_user: experiment {experiment} pending: in the trash\n")
         elif status == 200 and re.fullmatch(r"[0-9]+", identifier):
             ensure_read(url, admin, user, "experiment", identifier, f"experiment {experiment}", deadline)
@@ -220,7 +243,7 @@ def ensure_account(url: str, admin: tuple[str, str], user: str, credential: str,
 
 
 def run(environment: Mapping[str, str], ssm: Any, run_seconds: float = RUN_SECONDS) -> int:
-    """Run the step once; returns 0 (also when it skips or something is pending) or 1 with the reason on standard error."""
+    """Run the step once; returns 0 (also when something is pending), ``SKIPPED`` when no login is stored, or 1 with the reason on standard error."""
     deadline = time.monotonic() + run_seconds
     url = environment.get("MLFLOW_URL", "")
     types = tuple(environment.get("MODEL_API_HAI_TYPES", "HAI_1").split(","))
@@ -231,8 +254,8 @@ def run(environment: Mapping[str, str], ssm: Any, run_seconds: float = RUN_SECON
         user = parameter(ssm, environment["USER_PARAMETER"])
         credential = parameter(ssm, environment["CREDENTIAL_PARAMETER"])
         if user is None or credential is None:
-            sys.stdout.write("mlflow_user: the model API login is not stored yet; nothing to do\n")
-            return 0
+            sys.stdout.write("mlflow_user: skipped: the model API login is not stored yet, so no account was checked\n")
+            return SKIPPED
         password = parameter(ssm, environment["ADMIN_PASSWORD_PARAMETER"])
         if password is None or not USER.fullmatch(user):
             raise Refused("the administrator password is missing or the stored user name has another form")
