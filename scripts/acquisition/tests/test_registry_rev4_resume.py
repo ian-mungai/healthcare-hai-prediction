@@ -1,6 +1,7 @@
 """The revision 4 builder survives an interruption after any write step: a rerun finishes the work and the plan and registry loaders accept the result.
 
 The starting state is the repository as it was before the builder first ran, rebuilt from Git and the local revision 3 archive.
+The collector code version lists come from HEAD: the builder never reads or writes them, and a later relist adds versions to them.
 The test is skipped when that archive or the history is absent, because the archive is local-only.
 """
 
@@ -53,7 +54,7 @@ def before(tmp_path_factory: pytest.TempPathFactory) -> Path:
     for line in git("ls-tree", f"{added}^", "config/acquisition/").splitlines():
         meta, name = line.split("\t")
         if meta.split()[1] == "blob" and name.endswith(".json"):
-            body = git("show", f"{added}^:{name}")
+            body = git("show", f"HEAD:{name}") if name.endswith("_code_versions.json") else git("show", f"{added}^:{name}")
             source = archived / Path(name).name
             keep = body.startswith("version https://git-lfs") and source.is_file()
             (root / name).write_bytes(source.read_bytes() if keep else body.encode())
