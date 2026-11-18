@@ -1,4 +1,7 @@
-"""Synthetic faults that the isolation tests install in the startup check's child process, each one a way a dependency can write a marker to a sink."""
+"""Synthetic faults that the isolation tests install in the startup check's child process, each one a way a dependency can write a marker to a sink.
+
+tests/startup_check_child_faults.py is the child entry that installs one of them.
+"""
 
 from __future__ import annotations
 

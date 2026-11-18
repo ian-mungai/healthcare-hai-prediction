@@ -96,12 +96,15 @@
         "orchestration"
       ],
       "code": [
+        "airflow_plugins/hai_timetables.py",
         "dags/*.py",
         "orchestration/dag_runtime.py",
         "orchestration/ecs_launch_provider.py",
+        "orchestration/ingestion_timetables.py",
         "orchestration/training_contract.py",
         "scripts/orchestration/in_image_checks.py",
         "scripts/orchestration/real_image_dags.py",
+        "scripts/orchestration/schedule_timetable_cases.py",
         "scripts/orchestration/xcom_dump.py",
         "services/lineage/http_transport.py",
         "scripts/orchestration/lineage_http_cases.py"
