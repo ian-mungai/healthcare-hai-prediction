@@ -125,8 +125,7 @@ class World:
         self.write_code_root(folder)
         self.write_plan(folder)
         monkeypatch.setattr(contract, "PLANS", {self.plan_sha: PLAN_FILE})
-        monkeypatch.setattr(contract, "CURRENT_PLANS", contract.PLANS)
-        monkeypatch.setattr(collector, "CURRENT_PLANS", contract.PLANS)
+        monkeypatch.setattr(collector, "PLANS", contract.PLANS)
         monkeypatch.setattr(contract, "PLAN_PATH", PLAN_FILE)
         monkeypatch.setattr(collector, "TEMPLATE", TEMPLATE_FILE)
         approved = [contract.current_code_hashes()]

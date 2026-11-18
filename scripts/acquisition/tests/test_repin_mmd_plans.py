@@ -28,7 +28,7 @@ def test_a_plan_moves_to_the_new_registry_page_digest_and_additions_lock() -> No
 
 
 def test_the_bundle_holds_the_plans_and_references_the_contract_pins() -> None:
-    for sha, path in contract.CURRENT_PLANS.items():
+    for sha, path in contract.PLANS.items():
         raw = (BUNDLE / path).read_bytes()
         check(hashlib.sha256(raw).hexdigest() == sha, f"bundle plan digest differs from the contract constant for {path.name}")
         plan = json.loads(raw)

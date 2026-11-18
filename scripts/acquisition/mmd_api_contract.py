@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
-from scripts.acquisition.data_paths import current, moved
+from scripts.acquisition.data_paths import current
 from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, ADDITIONS_PATH, load_registry_additions
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 
@@ -19,17 +19,14 @@ PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/
 PLAN_SHA256 = "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
 ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
 ADDITIONS_PLAN_SHA256 = "afc4a6f2a71d1a451dfeb2e05c16738fc31600e4153445fe60a9055a6f6e0af5"
-# The plans before the registry rewrite. Captures made under them record these hashes and stay valid, so the rewrite added the new plans and kept these.
-# Their bytes and the unredacted publisher page they pin sit in the local archive of the rewrite; a file that is missing or differs is refused.
-LEGACY_PLAN_SHA256 = "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
-LEGACY_ADDITIONS_PLAN_SHA256 = "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
-LEGACY_ARCHIVE = Path("data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/mmd_api_history")
-LEGACY_MOVES = {"data/e2e/mmd_api_comparison/20260925/references/map.html": str(LEGACY_ARCHIVE / "references/map.html")}
-# Each capture records the hash of the plan that authorized it, so adding a plan never touches earlier captures.
-CURRENT_PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
-LEGACY_PLANS = {LEGACY_PLAN_SHA256: LEGACY_ARCHIVE / "collection_plan.json", LEGACY_ADDITIONS_PLAN_SHA256: LEGACY_ARCHIVE / "collection_plan_additions.json"}
-PLANS = {**CURRENT_PLANS, **LEGACY_PLANS}
-ADDITIONS_PLANS = {ADDITIONS_PLAN_SHA256, LEGACY_ADDITIONS_PLAN_SHA256}
+# The two plans before the registry rewrite are retired. Captures made under them record these hashes and stay as history: no collector, check or table reads
+# the plan of a stored capture, and the plan bytes are not kept in the repository. The upload gate refuses them by name.
+RETIRED_PLAN_SHA256S = frozenset(
+    {"97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4", "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"}
+)
+RETIRED_MESSAGE = "MMD plan retired with the registry rewrite; its captures stay as history and are not stored again"
+# Each capture records the hash of the plan that authorized it.
+PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
 FIELDS = {"agecat", "condition", "dencat", "dual", "eligcat", "fips", "fltr", "geography", "measure", "racecat", "rate", "sexcat", "year"}
 ENDPOINT = "https://data.cms.gov/data-api/v1/mmd-tool/"
 PAGE_SIZE = 500000
@@ -68,6 +65,7 @@ def reviewed_code_versions() -> list[dict[str, str]]:
 
 def load_plan(plan_sha256: str = PLAN_SHA256) -> dict:
     """Verify one narrowly authorized plan and all retained publisher references."""
+    require(plan_sha256 not in RETIRED_PLAN_SHA256S, RETIRED_MESSAGE)
     require(plan_sha256 in PLANS, "MMD authorization binding differs")
     raw = PLANS[plan_sha256].read_bytes()
     require(digest(raw) == plan_sha256, "MMD collection plan changed")
@@ -75,11 +73,10 @@ def load_plan(plan_sha256: str = PLAN_SHA256) -> dict:
     require(plan["endpoint"] == ENDPOINT and plan["model_eligible"] is False, "MMD scope changed")
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "MMD registry changed")
     require(digest(Path(plan["comparison_report"]).read_bytes()) == plan["comparison_report_sha256"], "AMI parity evidence changed")
-    moves = {**LEGACY_MOVES, **moved()} if plan_sha256 in LEGACY_PLANS else None
     for ref in plan["references"].values():
-        path = Path(current(ref["path"], moves))
+        path = Path(current(ref["path"]))
         require(not path.is_symlink() and digest(path.read_bytes()) == ref["sha256"], "MMD reference changed")
-    if plan_sha256 in ADDITIONS_PLANS:
+    if plan_sha256 == ADDITIONS_PLAN_SHA256:
         verify_additions(plan)
     return plan
 
@@ -108,7 +105,7 @@ def verify_additions(plan: dict) -> None:
 
 def plan_for(measure_id: str) -> tuple[str, dict]:
     """Return the hash and contents of the single approved plan that lists this measure."""
-    found = [(sha, plan) for sha in CURRENT_PLANS for plan in [load_plan(sha)] if any(c["measure_id"] == measure_id for c in plan["conditions"])]
+    found = [(sha, plan) for sha in PLANS for plan in [load_plan(sha)] if any(c["measure_id"] == measure_id for c in plan["conditions"])]
     require(bool(found), "Condition is not in the approved locked registry")
     require(len(found) == 1, "Condition is not in exactly one approved plan")
     return found[0]
@@ -261,6 +258,7 @@ def code_binding_complete(code_sha256: dict) -> bool:
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
     """Recompute MMD scope, completeness and derivation before the existing uploader."""
     require(source["source_id"] == "MMD" and not evidence_only, "Only complete approved MMD captures use this route")
+    require(lineage.get("plan_sha256") not in RETIRED_PLAN_SHA256S, RETIRED_MESSAGE)
     require(lineage.get("plan_sha256") in PLANS and lineage.get("mode") == "mmd_api", "MMD authorization binding differs")
     plan = load_plan(lineage["plan_sha256"])
     require(lineage.get("model_eligible") is False and lineage.get("review_decision", "").startswith("hold_"), "MMD review hold differs")
