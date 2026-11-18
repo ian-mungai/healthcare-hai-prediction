@@ -232,7 +232,8 @@ def repository_groups() -> dict[str, bool]:
 
     return {
         "the list is valid with a group on every image": push_images.check(base) == [],
-        "the monitoring group is the three monitoring images": groups("monitoring") == {"prometheus", "grafana", "statsd_exporter"},
+        "the monitoring group is the seven monitoring images": groups("monitoring")
+        == {"prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"},
         "the serving group is the model API and the page": groups("serving") == {"model_api", "streamlit"},
         "every other image is in the always group": {name for name in images if name not in groups("monitoring") | groups("serving")} == groups("always"),
         "a missing group is refused with the image name": "postgres" in problems(missing) and "repository_group is required" in problems(missing),

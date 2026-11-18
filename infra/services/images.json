@@ -234,6 +234,7 @@
       "tag": "v1.11.2-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Nov 17 2026: sha256:175450c3f356564a2256772b9d084ee62884a50b81bfbaa172c314810291b8d3); new pin, not used by the local stack; the busybox base has the wget the health check uses (to confirm when the image runs on the host)",
+      "entry_check": {"program": "/bin/pushgateway", "arguments": ["--version"], "expect": "pushgateway"},
       "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: host jobs push their own metrics to it"
     },
@@ -243,6 +244,7 @@
       "tag": "v1.97.0-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "entry_check": {"program": "/redis_exporter", "arguments": ["--version"], "expect": "1.97.0"},
       "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: Redis metrics, as the Redis user exporter"
     },
@@ -252,6 +254,7 @@
       "tag": "v0.20.1-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "entry_check": {"program": "/bin/postgres_exporter", "arguments": ["--version"], "expect": "postgres_exporter"},
       "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: Postgres metrics, as the role postgres_exporter"
     },
@@ -261,6 +264,7 @@
       "tag": "v1.12.1-arm64",
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (verification run, Nov 17 2026); the image has no shell, so the container has no health check",
+      "entry_check": {"program": "/bin/node_exporter", "arguments": ["--version"], "expect": "node_exporter"},
       "repository_group": "monitoring",
       "runs_as": "ECS service on the host when monitoring_enabled is true: host CPU, memory, load, disk and kernel counters, with no privilege"
     },

@@ -72,6 +72,8 @@ variables {
   drift_enabled                         = true
   promote_enabled                       = true
   serve_enabled                         = true
+  host_jobs                             = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  mlflow_metadata_reader_password_name  = "/example_project/mlflow_metadata_reader_password"
 }
 
 # The removal transition. scripts/infrastructure/run_retired_definitions_e2e.py copies retired_history/fargate_history.tf.txt next to the stack, so the first run

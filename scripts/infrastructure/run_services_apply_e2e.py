@@ -747,7 +747,7 @@ def finish_needs_every_expected_host_family() -> None:
         require(is_pending(aws.value) and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
     code, err, aws = finish_over_ecs(selected, everything, names)
     require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with every expected family did not clear both: exit {code} {err} {aws.value!r}")
-    default_families = [name for name in ALL_FAMILIES if name != "bronze"] + ["publisher"]
+    default_families = [name for name in ALL_FAMILIES if name not in ("bronze", "bronze_stage")] + ["publisher"]
     nine = {f"{PREFIX}{name}_host": host_revision(*set_revision(name)) for name in default_families}
     default = rendered_values({})
     code, err, aws = finish_over_ecs(default, {**nine, f"{PREFIX}train_host": None}, default_families)
