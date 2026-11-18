@@ -39,15 +39,14 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
 from scripts.infrastructure import secret_store
-from scripts.infrastructure.render_platform_config import PREPARATION_SCHEMAS
 from scripts.sdk_logs import quiet_sdk_logs
 from scripts.serving import keys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT_CHECK = "infra/services/scripts/mlflow_user.py"
+# Read by path: this tool stays light and imports nothing from the render modules.
+SERVICES_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/services_preparation.schema.json"
 MLFLOW_USER_VALUE = "model_api"
 ADMIN_USER = "admin"
 PAGE_KEY_ID = "streamlit"
@@ -66,9 +65,13 @@ def new_page_key() -> str:
 
 def reviewed_types(inputs: Path) -> str:
     """The ``model_api_hai_types`` setting, under ``variables``, of a services input file that must follow the services preparation schema."""
+    # Imported here: at the top of the module it enlarges the heap, and the resulting garbage collections push the stalled-response case of
+    # secret_store_cases past its 0.6 s limit.
+    from jsonschema import Draft202012Validator
+
     try:
         document = json.loads(inputs.read_text())
-        schema = json.loads(PREPARATION_SCHEMAS["services"].read_text(encoding="utf-8"))
+        schema = json.loads(SERVICES_SCHEMA.read_text(encoding="utf-8"))
         if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
             raise ServingSecretsError("the services input file does not follow the services preparation schema")
         return str(document["variables"]["model_api_hai_types"])
