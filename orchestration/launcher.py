@@ -6683,8 +6683,8 @@ class Launcher:
     def maintenance_protection(state: Mapping[str, Any]) -> list[dict[str, str]]:
         """The items the maintenance job must protect, from the readers of the registry; refuses when the fence is held or a reader cannot be named.
 
-        A reservation is a pending item from the time it was taken. A registration names a snapshot set; the set must be a gold run ID, because the job
-        keeps sets by committed run and cannot keep a set it cannot name.
+        A reservation is a pending item from the time it was taken. A registration names a snapshot set; the set must be a gold run ID (the stamp form of before
+        the run ID redesign too, which the protected file reader takes), because the job keeps sets by committed run and cannot keep a set it cannot name.
         """
         Launcher.require_no_maintenance_fence(state)
         items = []
@@ -6694,7 +6694,7 @@ class Launcher:
             if not gold_publish_record.READER_NAME.fullmatch(name):
                 raise LauncherError(f"reader {name} has a name the maintenance job cannot list; maintenance is refused", "refused")
             if reader["state"] == "registered":
-                if not gold_publish_record.RUN_ID.fullmatch(str(reader["snapshot_set"])):
+                if not gold_publish_record.STORED_RUN.fullmatch(str(reader["snapshot_set"])):
                     raise LauncherError(
                         f"reader {name} is registered on {reader['snapshot_set']!r}, which is not a gold run ID; maintenance is refused", "refused"
                     )

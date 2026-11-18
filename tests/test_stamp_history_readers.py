@@ -330,6 +330,21 @@ def test_extraction_still_refuses_a_stored_gold_run_or_base_run_of_neither_form_
     )
 
 
+# maintenance: the registration of a reader on a stamp-form gold run
+
+
+@pytest.mark.parametrize("snapshot_set", [STAMP, "gold_abcdef01"])
+def test_maintenance_protects_a_reader_registered_on_a_stamp_or_redesigned_gold_run(snapshot_set: str) -> None:
+    from orchestration import launcher
+
+    state = {"guards": {}, "readers": {"gold:r1": {"namespace": "gold", "state": "registered", "snapshot_set": snapshot_set, "at": "2026-11-18T00:00:00Z"}}}
+    items = launcher.Launcher.maintenance_protection(state)
+    check(items == [{"kind": "registration", "id": "gold:r1", "run_id": snapshot_set}], f"the registration on {snapshot_set} is not protected: {items}")
+    for bad in BAD:
+        state["readers"]["gold:r1"]["snapshot_set"] = bad
+        refused(lambda: launcher.Launcher.maintenance_protection(state), "LauncherError")
+
+
 # stored protection records, receipts, holds and file names
 
 
