@@ -17,7 +17,6 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -826,7 +825,6 @@ class FakeS3:
         self.objects = objects or {}
         self.calls: list[tuple[str, str]] = []
         self.delay = delay
-        self.modified: dict[str, datetime] = {}
 
     def put(self, key: str, document: Any) -> None:
         self.objects[key] = document if isinstance(document, bytes) else json.dumps(document).encode()
@@ -843,10 +841,7 @@ class FakeS3:
                 outer.calls.append(("list_objects_v2", Prefix))
                 time.sleep(outer.delay)
                 keys = sorted(key for key in outer.objects if key.startswith(Prefix))
-                return [
-                    {"Contents": [{"Key": key, **({"LastModified": outer.modified[key]} if key in outer.modified else {})} for key in keys[index : index + 2]]}
-                    for index in range(0, len(keys), 2)
-                ] or [{}]
+                return [{"Contents": [{"Key": key} for key in keys[index : index + 2]]} for index in range(0, len(keys), 2)] or [{}]
 
         return Pages()
 
@@ -1154,13 +1149,18 @@ def case_register_command_covers_bronze_and_check_refuses_it() -> Check:
     }
 
 
-def bronze_run_record(loaded: Sequence[str], skipped: Sequence[str]) -> dict[str, Any]:
+def bronze_run_record(run: str, loaded: Sequence[str], skipped: Sequence[str]) -> dict[str, Any]:
+    """A complete record as the bronze check phase writes it (the shape ``raw_lineage.loaded_objects`` checks)."""
     return {
         "schema_version": 1,
-        "run_id": "bronze_00000001",
+        "run_id": run,
         "target": "real",
         "namespaces": ["bronze", "bronze_dictionary"],
         "tables": list(loaded),
+        "report_sha256": "a" * 64,
+        "metadata_generation": "7",
+        "snapshots": {name: 100 + number for number, name in enumerate(loaded)},
+        "objects": [{"table": name, "bucket": BUCKET, "key": f"raw/{name}/1.csv", "version_id": "v1", "sha256": "b" * 64, "byte_count": 1} for name in loaded],
         "skipped_tables": [{"table": name, "reason": "no source object"} for name in skipped],
     }
 
@@ -1172,30 +1172,73 @@ def register_bronze_command(s3: FakeS3, glue: FakeGlue) -> tuple[int, str]:
     return code, out.getvalue()
 
 
-def case_bronze_register_leaves_out_the_table_the_newest_bronze_run_skipped() -> Check:
-    names, absent = glue_mirror.layer_tables("bronze"), "hcai_util_workbook_sheet_rows"
+ABSENT = "hcai_util_workbook_sheet_rows"
+
+
+def bronze_bucket(skip_in: str | None = None) -> FakeS3:
+    """Metadata for every bronze table except ``ABSENT``, and a complete run record that skips it when ``skip_in`` names a run."""
+    names = glue_mirror.layer_tables("bronze")
     s3 = FakeS3()
     for name in names:
-        if name != absent:
+        if name != ABSENT:
             s3.put(metadata_key(name, 1, layer="bronze"), metadata_document(name, 10, layer="bronze"))
-    glue = FakeGlue()
-    without_record, text_without = register_bronze_command(s3, glue)
-    key = "lakehouse/bronze_runs/bronze_00000001/check.json"
-    s3.put(key, bronze_run_record([name for name in names if name != absent], [absent]))
-    s3.modified[key] = datetime(2026, 11, 18, 22, tzinfo=UTC)
-    glue = FakeGlue()
+    if skip_in:
+        s3.put(f"lakehouse/bronze_runs/{skip_in}/check.json", bronze_run_record(skip_in, [name for name in names if name != ABSENT], [ABSENT]))
+    return s3
+
+
+def case_bronze_register_leaves_out_the_table_the_committed_run_skipped() -> Check:
+    names = glue_mirror.layer_tables("bronze")
+    without_record, text_without = register_bronze_command(bronze_bucket(), FakeGlue())
+    s3, glue = bronze_bucket("bronze_00000001"), FakeGlue()
     code, text = register_bronze_command(s3, glue)
     registered = {name for _, name in glue.tables}
     again, _ = register_bronze_command(s3, glue)
-    s3.put("lakehouse/bronze_runs/bronze_00000002/check.json", bronze_run_record(names, []))
-    s3.modified["lakehouse/bronze_runs/bronze_00000002/check.json"] = datetime(2026, 11, 19, 9, tzinfo=UTC)
+    s3.put("lakehouse/bronze_runs/bronze_ffffffff/check.json", bronze_run_record("bronze_ffffffff", names, []))
     later, text_later = register_bronze_command(s3, FakeGlue())
     return {
-        "without_a_run_record_the_absent_table_fails_the_command_as_before": without_record == 1 and f"bronze.{absent}: failed" in text_without,
-        "with_the_record_the_command_succeeds": code == 0 and f"bronze.{absent}: left out" in text and "no source object" in text,
-        "every_other_table_is_registered_and_the_absent_one_is_not": registered == set(names) - {absent},
+        "without_a_run_record_the_absent_table_fails_the_command_as_before": without_record == 1 and f"bronze.{ABSENT}: failed" in text_without,
+        "with_the_record_the_command_succeeds": code == 0 and f"bronze.{ABSENT}: left out" in text and "no source object" in text,
+        "every_other_table_is_registered_and_the_absent_one_is_not": registered == set(names) - {ABSENT},
         "a_rerun_changes_nothing": again == 0 and len(glue.writes()) == len(names) - 1,
-        "a_later_run_that_loaded_the_table_requires_it_again": later == 1 and f"bronze.{absent}: failed" in text_later and "left out" not in text_later,
+        "a_record_that_loaded_the_table_requires_it_again_whatever_the_run_names": later == 1
+        and f"bronze.{ABSENT}: failed" in text_later
+        and "left out" not in text_later,
+    }
+
+
+def case_bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record() -> Check:
+    """Review round 2 (High). Valid metadata for every table, then a record that skips one of them: first a complete record, then the reviewer's forged body."""
+    names = glue_mirror.layer_tables("bronze")
+    control = FakeGlue()
+    s3 = bronze_bucket()
+    s3.put(metadata_key(ABSENT, 1, layer="bronze"), metadata_document(ABSENT, 10, layer="bronze"))
+    control_code, _ = register_bronze_command(s3, control)
+    s3.put("lakehouse/bronze_runs/bronze_00000001/check.json", bronze_run_record("bronze_00000001", [name for name in names if name != ABSENT], [ABSENT]))
+    skipped, text = FakeGlue(), ""
+    code, text = register_bronze_command(s3, skipped)
+    forged = bronze_bucket()
+    forged.put(metadata_key(ABSENT, 1, layer="bronze"), metadata_document(ABSENT, 10, layer="bronze"))
+    forged.put(
+        "lakehouse/bronze_runs/not_a_run/check.json",
+        {"schema_version": 1, "target": "real", "tables": [], "skipped_tables": [{"table": ABSENT, "reason": None}]},
+    )
+    forged_glue = FakeGlue()
+    forged_code, _ = register_bronze_command(forged, forged_glue)
+    bad = bronze_bucket()
+    bad.put(metadata_key(ABSENT, 1, layer="bronze"), metadata_document(ABSENT, 10, layer="bronze"))
+    bad.put(
+        "lakehouse/bronze_runs/bronze_00000002/check.json",
+        {"schema_version": 1, "target": "real", "tables": [], "skipped_tables": [{"table": ABSENT, "reason": None}]},
+    )
+    bad_glue = FakeGlue()
+    bad_code, bad_text = register_bronze_command(bad, bad_glue)
+    return {
+        "control_registers_every_table": control_code == 0 and ("bronze", ABSENT) in control.tables and len(control.tables) == len(names),
+        "a_complete_record_cannot_hide_a_table_that_has_metadata": code == 0 and ("bronze", ABSENT) in skipped.tables and len(skipped.tables) == len(names),
+        "the_command_says_the_record_and_the_metadata_disagree": f"bronze.{ABSENT}" in text and "metadata exists" in text,
+        "a_forged_body_under_a_wrong_key_is_not_evidence": forged_code == 0 and ("bronze", ABSENT) in forged_glue.tables,
+        "a_forged_body_under_a_run_key_fails_the_layer_and_registers_nothing": bad_code == 1 and not bad_glue.tables and "run record" in bad_text,
     }
 
 
@@ -1460,7 +1503,10 @@ CASES: dict[str, Callable[[], Check]] = {
     "s3_register_refuses_a_parent_that_the_metadata_does_not_list": case_s3_register_refuses_a_parent_that_the_metadata_does_not_list,
     "s3_register_registers_bronze_in_its_own_database": case_s3_register_registers_bronze_in_its_own_database,
     "register_command_covers_bronze_and_check_refuses_it": case_register_command_covers_bronze_and_check_refuses_it,
-    "bronze_register_leaves_out_the_table_the_newest_bronze_run_skipped": case_bronze_register_leaves_out_the_table_the_newest_bronze_run_skipped,
+    "bronze_register_leaves_out_the_table_the_committed_run_skipped": case_bronze_register_leaves_out_the_table_the_committed_run_skipped,
+    "bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record": (
+        case_bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record
+    ),
 }
 
 

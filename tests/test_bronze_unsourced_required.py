@@ -1,19 +1,25 @@
-"""A declared bronze table that the committed bronze run left out for lack of a source object is not required by the steps that read "every mapped table".
+"""A declared bronze table that no run loaded is not required by the steps that read "every mapped table", on evidence a forged record cannot fake.
 
-Live finding of Nov 18 2026: the bronze load now leaves ``hcai_util_workbook_sheet_rows`` out until its workbooks arrive, so no Iceberg table exists for it.
+Live finding of Nov 18 2026: the bronze load leaves ``hcai_util_workbook_sheet_rows`` out until its workbooks arrive, so no Iceberg table exists for it.
 ``register_aws_catalog.required_tables`` and ``glue_mirror register --layer bronze`` listed every table of ``config/lakehouse/bronze_tables.json`` and would
-refuse for the absent table. A table that has sources, a table that a later run loaded and a table that a silver model reads stay required.
+refuse for the absent table.
 
-Failure modes: a record that is not JSON, not a real run's, or has a malformed skipped list; a skipped table that is also loaded; records read in the wrong
-order; a skipped name the map does not declare; a silver reader of a skipped table; a record that cannot be read for the mirror (the layer fails, nothing is
-guessed).
+Review round 2 (Codex, High): a record the reader accepted was not bound to anything. The rule is now:
+
+- a record is a complete bronze run record (the shape ``raw_lineage.loaded_objects`` checks) whose run ID is the one in its key and whose skipped reasons are
+  the stage's reason; a key that is not a run's record key is not evidence, and any other defect refuses the read (nothing is guessed);
+- a table is unsourced when some record skips it and no record loaded it, whatever the order of the records, the write times or the argument order;
+- a table that has Iceberg metadata in S3, a registration in Glue or a table in the source catalog is never left out, whatever a record says.
+
+Failure modes: a body with missing fields; a record under a wrong key or whose body names another run; a skipped reason that is not the stage's; a table that
+a record skipped and another loaded, in either write order; a record that skips a table whose metadata exists; a silver reader of a skipped table; records
+that cannot be read (the layer fails).
 """
 
 from __future__ import annotations
 
 import io
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,26 +32,39 @@ from tests.support import check
 ROOT = Path(__file__).resolve().parents[1]
 BUCKET = "example-bucket"
 TABLE = "hcai_util_workbook_sheet_rows"
+RUN_A, RUN_B = "bronze_00000001", "bronze_ffffffff"
 
 
-def record(loaded: list[str], skipped: list[str], **changes: Any) -> bytes:
-    body = {
+def record(run: str, loaded: list[str], skipped: list[str], **changes: Any) -> bytes:
+    """A complete run record as the check phase writes it (``bronze_run.run_record``)."""
+    body: dict[str, Any] = {
         "schema_version": 1,
-        "run_id": "bronze_3f9a1c07",
+        "run_id": run,
         "target": "real",
         "namespaces": ["bronze", "bronze_dictionary"],
         "tables": loaded,
+        "report_sha256": "a" * 64,
+        "metadata_generation": "7",
+        "snapshots": {name: 100 + number for number, name in enumerate(loaded)},
+        "objects": [{"table": name, "bucket": BUCKET, "key": f"raw/{name}/1.csv", "version_id": "v1", "sha256": "b" * 64, "byte_count": 1} for name in loaded],
         "skipped_tables": [{"table": name, "reason": "no source object"} for name in skipped],
-    } | changes
-    return json.dumps(body).encode()
+    }
+    return json.dumps(body | changes).encode()
 
 
-def test_a_record_names_the_tables_it_loaded_and_the_tables_it_skipped() -> None:
-    loaded, skipped = bronze_unsourced.record_tables(record(["a", "b"], ["c"]))
+def key_of(run: str) -> str:
+    return f"lakehouse/bronze_runs/{run}/check.json"
+
+
+def test_a_complete_record_names_the_tables_it_loaded_and_the_tables_it_skipped() -> None:
+    loaded, skipped = bronze_unsourced.record_tables(record(RUN_A, ["a", "b"], ["c"]), key_of(RUN_A), RUN_A)
     check(loaded == {"a", "b"} and skipped == {"c"}, f"{loaded} {skipped}")
-    older = json.loads(record(["a"], []))
+    older = json.loads(record(RUN_A, ["a"], []))
     del older["skipped_tables"]
-    check(bronze_unsourced.record_tables(json.dumps(older).encode()) == ({"a"}, frozenset()), "an older record skipped something")
+    check(bronze_unsourced.record_tables(json.dumps(older).encode(), key_of(RUN_A), RUN_A) == ({"a"}, frozenset()), "an older record skipped something")
+
+
+FORGED = json.dumps({"schema_version": 1, "target": "real", "tables": [], "skipped_tables": [{"table": TABLE, "reason": None}]}).encode()
 
 
 @pytest.mark.parametrize(
@@ -53,31 +72,54 @@ def test_a_record_names_the_tables_it_loaded_and_the_tables_it_skipped() -> None
     [
         b"not json",
         b"[]",
-        record(["a"], [], schema_version=2),
-        record(["a"], [], target="qualify"),
-        record(["a"], ["a"]),
-        record(["a"], ["c", "c"]),
-        record(["a"], [], skipped_tables="c"),
-        record(["a"], [], skipped_tables=[{"table": "c"}]),
-        record("a", []),
+        FORGED,
+        record(RUN_A, ["a"], [], schema_version=2),
+        record(RUN_A, ["a"], [], target="qualify"),
+        record(RUN_A, ["a"], [], namespaces=["x"]),
+        record(RUN_A, ["a"], ["a"]),
+        record(RUN_A, ["a"], ["c", "c"]),
+        record(RUN_A, ["a"], [], skipped_tables="c"),
+        record(RUN_A, ["a"], [], skipped_tables=[{"table": "c"}]),
+        record(RUN_A, ["a"], [], skipped_tables=[{"table": "c", "reason": None}]),
+        record(RUN_A, ["a"], [], skipped_tables=[{"table": "c", "reason": "because"}]),
+        record(RUN_B, ["a"], []),
+        record(RUN_A, ["a"], [], objects=[]),
+        record(RUN_A, ["a"], [], snapshots={}),
+        record(RUN_A, "a", []),
+    ],
+    ids=[
+        "not json",
+        "not an object",
+        "the reviewer's forged body",
+        "another schema version",
+        "not a real run",
+        "another namespace list",
+        "skipped and loaded",
+        "skipped twice",
+        "skipped not a list",
+        "a skipped table with no reason",
+        "a null reason",
+        "a reason that is not the stage's",
+        "the body names another run",
+        "no loaded object",
+        "no snapshot",
+        "tables not a list",
     ],
 )
-def test_a_record_that_is_not_a_real_run_record_with_a_clean_skipped_list_is_refused(body: bytes) -> None:
+def test_a_body_that_is_not_a_complete_record_of_its_own_run_is_refused(body: bytes) -> None:
     with pytest.raises(bronze_unsourced.UnsourcedError):
-        bronze_unsourced.record_tables(body)
+        bronze_unsourced.record_tables(body, key_of(RUN_A), RUN_A)
 
 
-def test_the_newest_record_that_names_a_table_decides_whether_it_is_unsourced() -> None:
-    first = (frozenset({"a"}), frozenset({"c"}))
-    second = (frozenset({"a", "b"}), frozenset())
-    third = (frozenset({"a"}), frozenset({"d"}))
-    check(bronze_unsourced.unsourced_after([first]) == {"c"}, "a skipped table is not unsourced")
-    check(bronze_unsourced.unsourced_after([first, second]) == {"c"}, "a record that does not name the table changed it")
-    check(
-        bronze_unsourced.unsourced_after([first, (frozenset({"c"}), frozenset())]) == frozenset(), "a later run that loaded the table did not require it again"
-    )
-    check(bronze_unsourced.unsourced_after([first, second, third]) == {"c", "d"}, "two skipped tables")
-    check(bronze_unsourced.unsourced_after([]) == frozenset(), "no record leaves a table out")
+def test_a_table_is_unsourced_when_a_record_skips_it_and_no_record_loaded_it_in_any_order() -> None:
+    skip = (frozenset({"a"}), frozenset({"c"}))
+    load = (frozenset({"a", "c"}), frozenset())
+    other = (frozenset({"a", "b"}), frozenset({"d"}))
+    check(bronze_unsourced.unsourced_in([skip]) == {"c"}, "a skipped table is not unsourced")
+    check(bronze_unsourced.unsourced_in([skip, other]) == {"c", "d"}, "two skipped tables")
+    for records in ([skip, load], [load, skip]):
+        check(bronze_unsourced.unsourced_in(records) == frozenset(), "a table that a record loaded was left out")
+    check(bronze_unsourced.unsourced_in([]) == frozenset(), "no record leaves a table out")
 
 
 def test_a_silver_reader_of_a_skipped_table_keeps_it_required_and_an_undeclared_name_is_ignored() -> None:
@@ -96,68 +138,61 @@ def test_the_catalog_registration_does_not_require_the_unsourced_table_but_requi
 
 
 def test_the_catalog_registration_still_requires_a_table_a_silver_model_reads_even_when_a_record_skips_it() -> None:
-    readers = sorted(
-        glue_mirror.silver_bronze_sources() & {entry["table"] for entry in json.loads((ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"]}
-    )
+    mapped = {entry["table"] for entry in json.loads((ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"]}
+    readers = sorted(glue_mirror.silver_bronze_sources() & mapped)
     check(bool(readers), "no mapped table is read by silver")
     kept = register_aws_catalog.required_tables(ROOT, frozenset({readers[0]}))
     check(("bronze", readers[0]) in kept, f"{readers[0]} is read by silver but was left out")
 
 
-def test_the_registration_reads_the_unsourced_tables_from_the_run_records_given_oldest_first() -> None:
-    check(register_aws_catalog.unsourced_from_records([record(["a"], ["c"])]) == {"c"}, "the skipped table was not read")
-    check(
-        register_aws_catalog.unsourced_from_records([record(["a"], ["c"]), record(["a", "c"], [])]) == frozenset(),
-        "a later load did not require the table again",
-    )
-    with pytest.raises(register_aws_catalog.RegistrationError) as error:
-        register_aws_catalog.unsourced_from_records([b"not json"])
-    check(error.value.code == "coverage", f"{error.value.code}")
+def test_the_registration_reads_the_unsourced_tables_from_records_given_with_their_run_in_any_order() -> None:
+    skip, load = (RUN_A, record(RUN_A, ["a"], ["c"])), (RUN_B, record(RUN_B, ["a", "c"], []))
+    check(register_aws_catalog.unsourced_from_records([skip]) == {"c"}, "the skipped table was not read")
+    for records in ([skip, load], [load, skip]):
+        check(register_aws_catalog.unsourced_from_records(records) == frozenset(), "a record that loaded the table did not require it, in one argument order")
+    for bad in ([(RUN_A, b"not json")], [(RUN_A, FORGED)], [(RUN_B, record(RUN_A, ["a"], ["c"]))], [("not_a_run", record(RUN_A, ["a"], ["c"]))]):
+        with pytest.raises(register_aws_catalog.RegistrationError) as error:
+            register_aws_catalog.unsourced_from_records(bad)
+        check(error.value.code == "coverage", f"{error.value.code}")
 
 
 class Bucket:
-    """The read calls the record reader may use. Every record carries its write time, as the listing of S3 gives it."""
+    """The read calls the readers may use: a listing by prefix and a read by key. It holds run records and table metadata files."""
 
-    def __init__(self, records: dict[str, bytes], times: dict[str, datetime], broken: bool = False) -> None:
-        self.records, self.times, self.broken = records, times, broken
+    def __init__(self, objects: dict[str, bytes], broken: bool = False) -> None:
+        self.objects, self.broken = objects, broken
 
     def get_paginator(self, operation: str) -> Any:
         outer = self
 
         class Pages:
             def paginate(self, Bucket: str, Prefix: str) -> list[dict[str, Any]]:
-                keys = sorted(key for key in outer.records if key.startswith(Prefix))
-                return [{"Contents": [{"Key": key, "LastModified": outer.times.get(key)} for key in keys]}]
+                keys = sorted(key for key in outer.objects if key.startswith(Prefix))
+                return [{"Contents": [{"Key": key} for key in keys]}] if keys else [{}]
 
         return Pages()
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         if self.broken:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "stand-in"}}, "GetObject")
-        return {"Body": io.BytesIO(self.records[Key])}
+        return {"Body": io.BytesIO(self.objects[Key])}
 
 
-def key_of(run: str) -> str:
-    return f"lakehouse/bronze_runs/{run}/check.json"
+def test_the_run_records_are_read_without_regard_to_their_names_write_times_or_order() -> None:
+    skipped_then_loaded = Bucket({key_of(RUN_B): record(RUN_B, ["a"], ["c"]), key_of(RUN_A): record(RUN_A, ["a", "c"], [])})
+    check(bronze_unsourced.read_unsourced(skipped_then_loaded, BUCKET) == frozenset(), "a record that loaded the table did not require it")
+    only_skipped = Bucket({key_of(RUN_B): record(RUN_B, ["a"], ["c"])})
+    check(bronze_unsourced.read_unsourced(only_skipped, BUCKET) == {"c"}, "the skipped table was not read")
 
 
-def moment(hour: int) -> datetime:
-    return datetime(2026, 11, 18, hour, tzinfo=UTC)
-
-
-def test_the_run_records_are_read_in_the_order_they_were_written_not_the_order_of_their_names() -> None:
-    older, newer = key_of("bronze_ffffffff"), key_of("bronze_00000001")
-    skipped_then_loaded = Bucket({older: record(["a"], ["c"]), newer: record(["a", "c"], [])}, {older: moment(9), newer: moment(10)})
-    loaded_then_skipped = Bucket({older: record(["a", "c"], []), newer: record(["a"], ["c"])}, {older: moment(9), newer: moment(10)})
-    check(bronze_unsourced.read_unsourced(skipped_then_loaded, BUCKET) == frozenset(), "the later load did not win")
-    check(bronze_unsourced.read_unsourced(loaded_then_skipped, BUCKET) == {"c"}, "the later skip did not win")
-    other = Bucket({"lakehouse/bronze_runs/bronze_00000001/carried_over.json": b"{}", key_of("x") + "/nested/check.json": b"{}"}, {})
-    check(bronze_unsourced.read_unsourced(other, BUCKET) == frozenset(), "a file that is not a run record was read")
-
-
-def test_a_listing_without_write_times_is_refused_and_never_guessed() -> None:
-    with pytest.raises(bronze_unsourced.UnsourcedError, match="write time"):
-        bronze_unsourced.read_unsourced(Bucket({key_of("bronze_00000001"): record(["a"], [])}, {}), BUCKET)
+def test_a_file_under_another_key_is_not_evidence_and_a_wrong_record_under_a_run_key_refuses_the_read() -> None:
+    forged = Bucket({"lakehouse/bronze_runs/not_a_run/check.json": FORGED, "lakehouse/bronze_runs/bronze_00000001/carried_over.json": b"{}"})
+    check(bronze_unsourced.read_unsourced(forged, BUCKET) == frozenset(), "a key that is not a run record was read")
+    wrong = Bucket({key_of(RUN_A): record(RUN_B, ["a"], ["c"])})
+    with pytest.raises(bronze_unsourced.UnsourcedError, match="run"):
+        bronze_unsourced.read_unsourced(wrong, BUCKET)
+    with pytest.raises(bronze_unsourced.UnsourcedError):
+        bronze_unsourced.read_unsourced(Bucket({key_of(RUN_A): FORGED}), BUCKET)
 
 
 class Registered:
@@ -181,30 +216,47 @@ def run_register(s3: Bucket, capsys: pytest.CaptureFixture[str]) -> tuple[int, s
 
 def test_the_bronze_register_leaves_out_the_unsourced_table_and_says_so(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     registered = Registered(monkeypatch)
-    older = key_of("bronze_00000001")
-    code, out, _ = run_register(Bucket({older: record(["alpha", "beta"], ["gamma"])}, {older: moment(9)}), capsys)
+    code, out, _ = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["alpha", "beta"], ["gamma"])}), capsys)
     check(code == 0 and registered.tables == [["alpha", "beta"]], f"{code} {registered.tables}")
     check("bronze.gamma: left out" in out and "no source object" in out, out)
+
+
+def test_the_bronze_register_never_leaves_out_a_table_that_has_metadata_whatever_a_record_says(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The reviewer's reproduction: valid metadata for every table, then a record that skips one of them."""
+    registered = Registered(monkeypatch)
+    metadata = {"lakehouse/bronze/gamma/metadata/00001-0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f.metadata.json": b"{}"}
+    code, out, _ = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["alpha", "beta"], ["gamma"]), **metadata}), capsys)
+    check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"a table with metadata was left out: {registered.tables}")
+    check("bronze.gamma" in out and "metadata exists" in out, out)
+    forged = Registered(monkeypatch)
+    code, _, _ = run_register(
+        Bucket({"lakehouse/bronze_runs/not_a_run/check.json": FORGED.replace(b"hcai_util_workbook_sheet_rows", b"gamma"), **metadata}), capsys
+    )
+    check(code == 0 and forged.tables == [["alpha", "beta", "gamma"]], f"{forged.tables}")
 
 
 def test_the_bronze_register_still_registers_a_table_that_silver_reads_even_when_a_record_skips_it(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     registered = Registered(monkeypatch)
-    older = key_of("bronze_00000001")
-    code, _, _ = run_register(Bucket({older: record(["beta"], ["alpha"])}, {older: moment(9)}), capsys)
+    code, _, _ = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["beta"], ["alpha"])}), capsys)
     check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"{registered.tables}")
 
 
 def test_the_bronze_register_with_no_run_record_registers_every_table_as_before(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     registered = Registered(monkeypatch)
-    code, _, _ = run_register(Bucket({}, {}), capsys)
+    code, _, _ = run_register(Bucket({}), capsys)
     check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"{registered.tables}")
 
 
-def test_the_bronze_register_fails_the_layer_when_the_run_records_cannot_be_read(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_bronze_register_fails_the_layer_when_a_run_record_cannot_be_read_or_is_not_a_complete_record(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     registered = Registered(monkeypatch)
-    older = key_of("bronze_00000001")
-    code, out, err = run_register(Bucket({older: record(["alpha"], ["gamma"])}, {older: moment(9)}, broken=True), capsys)
+    code, out, err = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["alpha"], ["gamma"])}, broken=True), capsys)
     check(code == 1 and registered.tables == [], f"a layer whose records cannot be read registered tables: {registered.tables}")
     check("bronze" in out + err and "run record" in out + err, out + err)
+    code, out, _ = run_register(Bucket({key_of(RUN_A): FORGED}), capsys)
+    check(code == 1 and registered.tables == [] and "run record" in out, out)

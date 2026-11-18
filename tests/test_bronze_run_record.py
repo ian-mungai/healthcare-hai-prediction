@@ -231,6 +231,7 @@ def test_another_failure_reading_the_stage_report_is_raised_and_never_read_as_no
         staged_report(skipped_tables=[{"table": "alpha_data", "reason": "no source object"}], skipped_count=1),
         staged_report(skipped_tables="x"),
         staged_report(requested_tables=["alpha_data"]),
+        staged_report(skipped_tables=[{"table": "gamma_data", "reason": "another reason"}]),
     ],
 )
 def test_a_stage_report_of_another_run_or_with_a_wrong_count_or_naming_a_requested_table_is_refused(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:

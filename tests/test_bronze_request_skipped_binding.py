@@ -138,7 +138,7 @@ def pin_job(tmp_path: Path, request: bytes) -> bronze_run.Job:
 class Pinning:
     """The pin phase over staged inputs, with the live listing of the skipped tables replaced by ``found``."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, objects: dict[str, bytes], found: list[dict[str, Any]]) -> None:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, objects: dict[str, bytes], found: list[dict[str, Any]], unselected: list[Any] | None = None) -> None:
         self.asked: list[list[str]] = []
         keys = {key.rsplit("/", 1)[-1]: body for key, body in objects.items()}
 
@@ -157,7 +157,7 @@ class Pinning:
             storage: Any, bucket: str, config: dict[str, Any], names: list[str], *rest: Any, **keywords: Any
         ) -> tuple[list[dict[str, Any]], list[Any]]:
             self.asked.append(list(names))
-            return found, []
+            return found, list(unselected or [])
 
         monkeypatch.setattr(bronze, "discover", discover)
 
@@ -198,11 +198,68 @@ def test_the_pin_refuses_a_request_that_skips_a_table_when_the_stage_report_is_m
             bronze_run.pin(pin_job(tmp_path, request), tmp_path / "code.tar.gz", "d" * 64)
 
 
-def test_the_owner_side_inventory_request_names_no_skipped_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def owner_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tables: str, target: str, found: list[str], history: list[str] | None = None
+) -> dict[str, Any]:
+    """The owner-side ``inventory`` phase over a map of three tables, with discovery of the unrequested tables replaced: ``found`` have a source object."""
     monkeypatch.setattr(bronze_run, "table_map", lambda code: CONFIG)
     monkeypatch.setattr(bronze_run, "owner_storage", lambda: object())
     monkeypatch.setattr(bronze, "load_retired", lambda path: None)
-    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: INVENTORY)
-    bronze_run.stage_inputs(tmp_path, BUCKET, "alpha_data,beta_data", "real", False, tmp_path / "out")
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: {**INVENTORY, "tables": sorted(tables.split(","))})
+    monkeypatch.setattr(bronze_pin, "require_objects", lambda inventory: None)
+    asked: list[list[str]] = []
+
+    def discover(storage: Any, bucket: str, config: dict[str, Any], names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        asked.append(list(names))
+        return [{"table": name} for name in names if name in found], [{"copy": {"table": name}} for name in names if name in (history or [])]
+
+    monkeypatch.setattr(bronze, "discover", discover)
+    bronze_run.stage_inputs(tmp_path, BUCKET, tables, target, False, tmp_path / "out", RUN)
+    return {"asked": asked}
+
+
+def test_the_owner_staging_of_a_full_request_skips_nothing_and_reads_no_other_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen = owner_stage(monkeypatch, tmp_path, "alpha_data,beta_data,gamma_data", "real", [])
     request = json.loads((tmp_path / "out" / bronze_run.REQUEST_FILE).read_text())
-    check(request["skipped_tables"] == [] and set(request) == bronze_run.REQUEST_KEYS, f"{request}")
+    check(request["skipped_tables"] == [] and set(request) == bronze_run.REQUEST_KEYS and seen["asked"] == [], f"{request} {seen}")
+    check(not (tmp_path / "out" / bronze_run.STAGE_REPORT_FILE).exists(), "a request that skips nothing wrote a stage report")
+
+
+def test_the_owner_staging_of_a_partial_run_names_the_unrequested_tables_with_no_source_object_and_writes_the_stage_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Review round 2 (Medium): the owner command could not carry an accepted absence, so a partial reload after a skipped generation was refused."""
+    seen = owner_stage(monkeypatch, tmp_path, "alpha_data", "real", found=["beta_data"])
+    out = tmp_path / "out"
+    request = json.loads((out / bronze_run.REQUEST_FILE).read_text())
+    check(seen["asked"] == [["beta_data", "gamma_data"]], f"the unrequested tables were not read: {seen}")
+    check(request["skipped_tables"] == ["gamma_data"], f"an unrequested table with sources or the absent one is wrong: {request}")
+    report = json.loads((out / bronze_run.STAGE_REPORT_FILE).read_text())
+    check(report["bronze_run"] == RUN and report["requested_tables"] == ["alpha_data"] and report["skipped_count"] == 1, f"{report}")
+
+
+def test_the_owner_staging_never_skips_a_table_that_has_stored_objects_with_only_rejected_or_retired_observations_or_a_qualification_table(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    owner_stage(monkeypatch, tmp_path, "alpha_data", "real", found=[], history=["beta_data"])
+    request = json.loads((tmp_path / "out" / bronze_run.REQUEST_FILE).read_text())
+    check(request["skipped_tables"] == ["gamma_data"], f"a table with observation history was skipped: {request}")
+    other = tmp_path / "other"
+    other.mkdir()
+    seen = owner_stage(monkeypatch, other, "alpha_data", "qualify", found=[])
+    check(
+        json.loads((other / "out" / bronze_run.REQUEST_FILE).read_text())["skipped_tables"] == [] and seen["asked"] == [],
+        "a qualification run read or skipped tables",
+    )
+
+
+def test_the_pin_says_a_source_object_appeared_after_staging_and_refuses_a_table_with_only_rejected_or_retired_observations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    request = encoded(GOOD)
+    Pinning(monkeypatch, staged_keys(request), [{"table": "gamma_data", "key": "raw/c/3.csv"}])
+    with pytest.raises(bronze.BronzeError, match="appeared after the stage listed|stage a new run"):
+        bronze_run.pin(pin_job(tmp_path, request), tmp_path / "code.tar.gz", "d" * 64)
+    Pinning(monkeypatch, staged_keys(request), [], [{"copy": {"table": "gamma_data"}}])
+    with pytest.raises(bronze.BronzeError, match="rejected, retired or superseded observations"):
+        bronze_run.pin(pin_job(tmp_path, request), tmp_path / "code.tar.gz", "d" * 64)

@@ -281,6 +281,30 @@ def successful_inventory() -> None:
     require(second.inventory.sha256 == hashlib.sha256(reg.canonical(second.inventory.document())).hexdigest(), "repeat: inventory digest changed")
 
 
+def an_unsourced_table_that_exists_in_the_source_catalog_is_refused() -> None:
+    """Review round 2 (High): a record that skips a table is no evidence when the source catalog holds a table of that name."""
+    ghost = ("bronze", "ghost_table")
+    fixture = Fixture()
+    fixture.source.tables[ghost] = copy.deepcopy(fixture.source.tables[("bronze", "source_table")])
+    for call in ("prepare", "register"):
+        arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({ghost})}
+        try:
+            if call == "prepare":
+                reg.prepare_read_inventory(fixture.io, REQUIRED, fixture.receipts, **arguments)
+            else:
+                reg.register_read_catalog(fixture.io, REQUIRED, fixture.receipts, **arguments)
+        except reg.RegistrationError as error:
+            require(error.code == "coverage", f"{call}: expected coverage, received {error.code}")
+        else:
+            raise AssertionError(f"{call}: a table that exists in the catalog was left out on a record's word")
+        require(not fixture.destination.posts and not fixture.destination.namespace_posts, f"{call}: the destination changed before the refusal")
+    clean = Fixture()
+    inventory = reg.prepare_read_inventory(
+        clean.io, REQUIRED, clean.receipts, bucket="synthetic-bucket", reservation_prefix="synthetic_aws_reader", deadline=100, unsourced=frozenset({ghost})
+    )
+    require({pin.identifier for pin in inventory.tables} == REQUIRED, "an unsourced table that has no catalog table changed the coverage")
+
+
 def empty_destination() -> None:
     fixture = Fixture()
     fixture.destination.namespaces.clear()
@@ -806,6 +830,7 @@ def conflict_diagnostic(kind: str) -> None:
 def cases() -> list[tuple[str, Callable[[], None]]]:
     result: list[tuple[str, Callable[[], None]]] = [
         ("successful retained inventory and exact repeat", successful_inventory),
+        ("an unsourced table that exists in the source catalog is refused", an_unsourced_table_that_exists_in_the_source_catalog_is_refused),
         ("empty destination namespaces", empty_destination),
         ("failed namespace preparation", namespace_failure),
         ("late namespace reply stops mutation", late_namespace_reply),

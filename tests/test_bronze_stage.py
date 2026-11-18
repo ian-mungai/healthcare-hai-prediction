@@ -71,6 +71,7 @@ class Setup:
         monkeypatch.setattr(bronze_run, "table_map", lambda code: CONFIG)
         monkeypatch.setattr(bronze, "load_retired", lambda path: [])
         monkeypatch.setattr(bronze_pin, "build_inventory", self.build)
+        monkeypatch.setattr(bronze, "discover", lambda *arguments, **keywords: ([], []))
 
     @staticmethod
     def refuse_owner() -> Any:
@@ -301,3 +302,14 @@ def test_the_load_phase_keeps_the_engine_floor(monkeypatch: pytest.MonkeyPatch, 
     two_gib_task(monkeypatch)
     check(bronze_run.main(["load", "--run", RUN, "--work", str(tmp_path), "--bucket", BUCKET, "--tables", "alpha_data", "--target", "real"]) == 1, "load ran")
     check("below the floor of 2 GiB" in capsys.readouterr().err, "the load phase did not name the floor")
+
+
+def test_a_table_with_stored_objects_but_only_rejected_or_retired_observations_is_not_left_out_and_nothing_is_staged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review round 2 (Medium): such a table has no loadable object, but its failure observations belong in the generation, so the stage refuses by name."""
+    store = Store()
+    Setup(monkeypatch, store)
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: ONE_TABLE)
+    monkeypatch.setattr(bronze, "discover", lambda *arguments, **keywords: ([], [{"copy": {"table": "beta_data", "failed_attempt": True}}]))
+    with pytest.raises(bronze.BronzeError, match="beta_data.*rejected, retired or superseded observations"):
+        stage(store)
+    check(not store.puts, f"a refused stage wrote {[put['Key'] for put in store.puts]}")

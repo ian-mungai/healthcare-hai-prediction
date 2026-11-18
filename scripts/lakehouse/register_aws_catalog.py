@@ -477,7 +477,14 @@ def capture_table(io: RegistrationIO, identifier: TableId, retained: int | None,
 
 
 def prepare_read_inventory(
-    io: RegistrationIO, required: Set[TableId], receipts: Mapping[str, bytes], *, bucket: str, reservation_prefix: str, deadline: float
+    io: RegistrationIO,
+    required: Set[TableId],
+    receipts: Mapping[str, bytes],
+    *,
+    bucket: str,
+    reservation_prefix: str,
+    deadline: float,
+    unsourced: Collection[TableId] = (),
 ) -> Inventory:
     """Capture exact catalog metadata after both real publishes, retaining their source snapshots.
 
@@ -485,10 +492,13 @@ def prepare_read_inventory(
     publication service must read authoritative committed rows. Reservations stay
     held after success and failure, until the read view is explicitly retired.
     The bucket comes from the verified deployment. Every supplied I/O service
-    must enforce the same absolute deadline.
+    must enforce the same absolute deadline. ``unsourced`` names the tables that
+    the caller left out of ``required`` on a bronze run record's word: each must
+    have no table in the source catalog.
     """
     check_deadline(deadline, io.clock)
     documents = checked_receipts(receipts, required)
+    check_unsourced_absent(io, unsourced, deadline)
     publications = publication_pins(documents, receipts, reservation_prefix)
     for pin in publications:
         bounded(partial(io.reservations.ensure, pin.reservation, pin.run_id, deadline=deadline), deadline, io.clock)
@@ -549,6 +559,7 @@ def register_read_catalog(
     deadline: float,
     inventory: Inventory | None = None,
     inventory_sha256: str | None = None,
+    unsourced: Collection[TableId] = (),
 ) -> RegistrationResult:
     """Preflight, register and accept a complete retained read view.
 
@@ -559,9 +570,10 @@ def register_read_catalog(
     """
     check_deadline(deadline, io.clock)
     documents = checked_receipts(receipts, required)
+    check_unsourced_absent(io, unsourced, deadline)
     expected_publications = publication_pins(documents, receipts, reservation_prefix)
     if inventory is None:
-        inventory = prepare_read_inventory(io, required, receipts, bucket=bucket, reservation_prefix=reservation_prefix, deadline=deadline)
+        inventory = prepare_read_inventory(io, required, receipts, bucket=bucket, reservation_prefix=reservation_prefix, deadline=deadline, unsourced=unsourced)
     elif not isinstance(inventory_sha256, str) or not SHA256.fullmatch(inventory_sha256) or inventory.sha256 != inventory_sha256:
         raise RegistrationError("inventory", "the resumed inventory differs from its independently frozen digest")
     if inventory.publications != expected_publications:
@@ -622,12 +634,31 @@ def required_tables(root: Path, unsourced: Collection[str] = ()) -> frozenset[Ta
     return frozenset(result)
 
 
-def unsourced_from_records(records: Sequence[bytes]) -> frozenset[str]:
-    """The bronze tables left unsourced by the given run records (``lakehouse/bronze_runs/<run>/check.json``), oldest first."""
+def unsourced_from_records(records: Sequence[tuple[str, bytes]]) -> frozenset[str]:
+    """The bronze tables left unsourced by the given run records, each as (run ID, body of ``lakehouse/bronze_runs/<run>/check.json``), in any order.
+
+    A record is evidence only when it is a complete record of its own run. A table is unsourced when some record skips it and no record loaded it.
+    """
     try:
-        return bronze_unsourced.unsourced_after([bronze_unsourced.record_tables(raw) for raw in records])
+        return bronze_unsourced.records_of(records)
     except bronze_unsourced.UnsourcedError:
-        raise RegistrationError("coverage", "a bronze run record cannot be read as a real run record") from None
+        raise RegistrationError("coverage", "a bronze run record is not a complete record of its run") from None
+
+
+def bronze_record_argument(text: str) -> tuple[str, bytes]:
+    """A ``RUN=PATH`` argument as the run and the bytes of the file."""
+    run, separator, path = text.partition("=")
+    if not separator or not run or not path:
+        raise RegistrationError("coverage", "a bronze run record is given as RUN=PATH")
+    return run, Path(path).read_bytes()
+
+
+def check_unsourced_absent(io: RegistrationIO, unsourced: Collection[TableId], deadline: float) -> None:
+    """A table that a record leaves out must have no table in the source catalog: an existing table is never left out on a record's word."""
+    for identifier in sorted(unsourced):
+        plain_identifier(identifier)
+        if bounded(lambda identifier=identifier: io.source.load(identifier, deadline=deadline), deadline, io.clock) is not None:
+            raise RegistrationError("coverage", "a table that a bronze run record leaves out exists in the source catalog")
 
 
 def inventory_from_document(document: Mapping[str, Any], required: Set[TableId]) -> Inventory:
@@ -766,14 +797,14 @@ def main() -> int:
     parser.add_argument("--sha256", required=True)
     parser.add_argument(
         "--bronze-run-record",
-        type=Path,
         action="append",
         default=[],
-        help="a bronze run record check.json, oldest first; a table the newest record naming it skipped (no source object) is not required",
+        metavar="RUN=PATH",
+        help="a bronze run record check.json with the run it belongs to, in any order: a table that some record skips and no record loaded is not required",
     )
     args = parser.parse_args()
     try:
-        unsourced = unsourced_from_records([path.read_bytes() for path in args.bronze_run_record])
+        unsourced = unsourced_from_records([bronze_record_argument(text) for text in args.bronze_run_record])
         inventory = inventory_from_document(
             read_document(args.inventory.read_bytes(), "inventory"), required_tables(Path(__file__).resolve().parents[2], unsourced)
         )

@@ -1331,8 +1331,9 @@ def check_unsourced(
 ) -> None:
     """Refuse a table the run leaves out unless it is a table of the map, not requested, never published and has no source object in the pinned inventory.
 
-    The stage leaves a table out when no object matches it. The loader reads the same pinned manifests for the left-out tables again, so a request that drops
-    a table whose manifests the inventory holds fails here instead of publishing a generation without that table.
+    The stage leaves a table out when no object matches it. The loader reads the same manifests for the left-out tables again, so a request that drops a table
+    whose manifests it holds fails here instead of publishing a generation without that table. A table that has stored objects whose observations are rejected,
+    retired or superseded has no loadable object but its observations belong in the generation, so it is never left out.
     """
     declared = {table["table"] for table in config["tables"]}
     if len(set(unsourced)) != len(unsourced):
@@ -1346,11 +1347,34 @@ def check_unsourced(
             raise BronzeError(f"{name}: has published observations, so it cannot be left out of the load")
     if not unsourced:
         return
-    found, _ = discover(storage, bucket, config, unsourced, retired)
+    found, excluded = discover(storage, bucket, config, unsourced, retired)
     if found:
         raise BronzeError(
-            f"{found[0]['table']}: the pinned inventory has a source object for this table ({len(found)} found), so it cannot be left out of the load"
+            f"{found[0]['table']}: a source object exists for this table ({len(found)} found), so it cannot be left out of the load: "
+            "it appeared after the stage listed the sources, or the request dropped it. Stage a new run"
         )
+    history = sorted({entry["copy"]["table"] for entry in excluded if "copy" in entry and entry["copy"]["table"] in unsourced})
+    if history:
+        raise BronzeError(
+            f"{history[0]}: stored objects of this table have rejected, retired or superseded observations but no loadable object "
+            f"({len(history)} such tables), so it cannot be left out of the load: those observations belong in the metadata generation"
+        )
+
+
+def selected_names(config: dict[str, Any], args: Any) -> list[str]:
+    """The tables a run loads: every table of a bootstrap, the tables of a group or the named tables.
+
+    A bootstrap or repair run that names the tables left out for lack of a source object (``--unsourced-tables``) requests every other table, because a
+    table cannot be both loaded and left out. A group or a table list is taken as given, so naming a left-out table in it is refused later.
+    """
+    left_out = set(args.unsourced_tables.split(",")) if args.unsourced_tables else set()
+    return (
+        [table["table"] for table in config["tables"] if table["table"] not in left_out]
+        if args.bootstrap_all
+        else [table["table"] for table in config["tables"] if table.get("group") == args.group]
+        if args.group
+        else args.tables.split(",")
+    )
 
 
 def metadata_tables(config: dict[str, Any], names: list[str], namespace: str) -> list[str]:
@@ -1384,12 +1408,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qualification-tables", help="comma-separated loaded tables for removal on the two test twins only")
     parser.add_argument("--inventory", type=Path, help="read only the manifest and object versions of this pinned source inventory")
     parser.add_argument("--selected-metadata", action="store_true", help="bronze_e2e only: publish metadata for the selected tables instead of the full map")
-    parser.add_argument("--unsourced-tables", help="comma-separated declared tables the stage left out because they have no source object yet")
+    parser.add_argument(
+        "--unsourced-tables",
+        help="comma-separated declared tables that have no source object yet and stay out of the load; a bootstrap or repair run requests the others",
+    )
     args = parser.parse_args(argv)
     if args.selected_metadata and args.namespace != "bronze_e2e":
         parser.error("--selected-metadata is valid only with --namespace bronze_e2e")
-    if args.unsourced_tables is not None and (args.selected_metadata or not args.task_role or args.inventory is None):
-        parser.error("--unsourced-tables requires --task-role and --inventory and excludes --selected-metadata")
+    if args.unsourced_tables is not None and args.selected_metadata:
+        parser.error("--unsourced-tables excludes --selected-metadata")
     if args.diagnose and (not args.bootstrap_all or args.copies_only):
         parser.error("--diagnose requires --bootstrap-all and excludes --copies-only")
     if args.repair_tables is not None and (not args.bootstrap_all or args.copies_only or args.diagnose):
@@ -1412,13 +1439,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("qualification table selection is valid only with --drop-removed")
     if args.task_role and not args.bucket:
         parser.error("task-role loads require the source bucket from the run binding")
-    names = (
-        [table["table"] for table in config["tables"]]
-        if args.bootstrap_all
-        else [table["table"] for table in config["tables"] if table.get("group") == args.group]
-        if args.group
-        else args.tables.split(",")
-    )
+    names = selected_names(config, args)
     if not names or any(name not in {table["table"] for table in config["tables"]} for name in names):
         sys.stderr.write("bronze: unknown group or table\n")
         return 1

@@ -11,6 +11,9 @@ as a real load) to ``lakehouse/run_stage/<run>/inputs/``. The launch preflight o
 The request also names the tables it leaves out (``skipped_tables``) under the digest that every phase checks. The pin lists the sources of those tables
 again with the task identity and refuses the run when one has a source object, so a request and a stage report that both drop such a table do not run. The
 load and check phases read the list from the request, and the stage report must name the same tables.
+A table with stored objects that only have rejected or retired observations is not absent: it has no loadable object, but its observations belong in the
+metadata generation, so the stage and the pin refuse it by name instead of leaving it out. The owner ``inventory`` phase of a partial real run names, in the
+same way, the unrequested tables that have no source object at all, and writes the stage report beside the request (upload both).
 
 Two values change from run to run and arrive at dispatch: the tables and the target (``BRONZE_TARGET``). The preflight checks them before it starts the task.
 The tables are not in the container environment, because a full run names 330 of them and a RunTask call takes at most 8192 characters of overrides. With no
@@ -50,7 +53,7 @@ from orchestration.training_contract import run_id_pattern
 from scripts import metrics_push, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
-from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch, check_skipped
+from scripts.lakehouse.bronze_dispatch import NAMESPACES, SKIPPED_REASON, DispatchError, check_dispatch, check_skipped
 from scripts.process import TimeoutExpired, run_command
 
 PHASES = ("pin", "load", "check")
@@ -60,7 +63,6 @@ ENGINE_PHASES = ("load",)
 REQUEST_FILE = "bronze_request.json"
 INVENTORY_FILE = "bronze_inventory.json"
 STAGE_REPORT_FILE = "bronze_stage_report.json"
-SKIPPED_REASON = "no source object"
 ABSENT_CODES = ("NoSuchKey", "404", "AccessDenied", "403")
 STAGE_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256", "skipped_tables"}
@@ -222,21 +224,39 @@ def pin(job: Job, archive: Path, code_sha256: str) -> None:
     )
 
 
-def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: bool, out: Path) -> tuple[str, str]:
-    """Owner side: list the current sources once and write the inventory and the request that names its digest. Stage both beside the code archive."""
+def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: bool, out: Path, run: str) -> tuple[str, str]:
+    """Owner side: list the current sources once and write the inventory and the request that names its digest. Stage both beside the code archive.
+
+    A real run that requests only some tables also names the other tables that have no source object at all (no loadable object and no rejected or
+    retired observation), as the stage job does for a full run: after a generation that left such a table out, a partial load needs that absence in its
+    bound request. The tables that have sources are not named, and the stage report for ``run`` is written beside the request when any table is named.
+    """
     config = table_map(code)
     names = check_dispatch(tables, target, collections_of(config))
-    inventory = bronze_pin.build_inventory(owner_storage(), bucket, config, list(names), bronze.load_retired(code / bronze.RETIRED))
+    retired = bronze.load_retired(code / bronze.RETIRED)
+    inventory = bronze_pin.build_inventory(owner_storage(), bucket, config, list(names), retired)
     bronze_pin.require_objects(inventory)
     raw = bronze_pin.inventory_bytes(inventory)
     digest = hashlib.sha256(raw).hexdigest()
+    others = [name for name in collections_of(config) if name not in names] if target == "real" else []
+    skipped: list[str] = []
+    if others:
+        found, excluded = bronze.discover(owner_storage(), bucket, config, others, retired)
+        known = {item["table"] for item in found} | {entry["copy"]["table"] for entry in excluded if "copy" in entry}
+        skipped = [name for name in others if name not in known]
     request = json.dumps(
-        {"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest, "skipped_tables": []}, sort_keys=True
+        {"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest, "skipped_tables": skipped}, sort_keys=True
     ).encode()
     out.mkdir(parents=True, exist_ok=True)
     (out / INVENTORY_FILE).write_bytes(raw)
+    if skipped:
+        items = [{"table": name, "reason": SKIPPED_REASON} for name in skipped]
+        report = {"schema": 1, "bronze_run": run, "requested_tables": list(names), "skipped_tables": items, "skipped_count": len(items)}
+        (out / STAGE_REPORT_FILE).write_bytes(json_bytes(report))
     (out / REQUEST_FILE).write_bytes(request)
     sys.stdout.write(f"staged {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests: inventory {digest}\n")
+    if skipped:
+        sys.stdout.write(f"skipped_tables {len(skipped)}: {','.join(skipped)}\n")
     return hashlib.sha256(request).hexdigest(), digest
 
 
@@ -269,6 +289,8 @@ def stage_run(code: Path, bucket: str, run: str) -> dict[str, Any]:
     present = {row[0] for row in listed["objects"]}
     left_out = [name for name in names if name not in present]
     if left_out and present:
+        # A table with stored objects that only have rejected or retired observations has no loadable object but is not absent: it is never left out.
+        bronze.check_unsourced(storage(), bucket, config, [name for name in names if name in present], left_out, [], bronze.load_retired(code / bronze.RETIRED))
         listed = {**listed, "tables": [name for name in listed["tables"] if name in present]}
     bronze_pin.require_objects(listed)
     raw = put_stage_object(client, bucket, inventory_key, bronze_pin.inventory_bytes(listed))
@@ -418,6 +440,8 @@ def staged_skipped(job: Job) -> list[dict[str, str]]:
         raise StepError("the stage report describes another request than the one this run loads")
     if sorted(listed) != sorted(names):
         raise StepError("the stage report names other skipped tables than the staged request")
+    if any(item["reason"] != SKIPPED_REASON for item in skipped):
+        raise StepError(f"the stage report gives a reason other than {SKIPPED_REASON!r} for a skipped table")
     reasons = {item["table"]: item["reason"] for item in skipped}
     return [{"table": name, "reason": reasons[name]} for name in names]
 
@@ -634,7 +658,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.phase == "inventory":
             if args.out is None:
                 raise StepError("the inventory phase needs --out")
-            stage_inputs(args.code, args.bucket, args.tables, args.target, dry, args.out)
+            stage_inputs(args.code, args.bucket, args.tables, args.target, dry, args.out, args.run)
             return 0
         if args.phase == "stage":
             stage_run(work / "code", args.bucket, args.run)

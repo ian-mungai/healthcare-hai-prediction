@@ -14,8 +14,9 @@ It writes nothing.
 ``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|bronze|all [--dry-run] [--bucket NAME]`` registers the tables
 that are already published, without Spark and without Polaris. The bronze layer has no publish step, so it has no publish-time registration and no
 ``check``: ``register`` is its only route, for the tables that ``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt
-sources name (so every silver input resolves; not the ``bronze_dictionary`` namespace). A bronze table that the newest bronze run record naming it
-skipped for lack of a source object (``lakehouse/bronze_runs/<run>/check.json``) has no table yet and is named as left out, unless silver reads it.
+sources name (so every silver input resolves; not the ``bronze_dictionary`` namespace). A bronze table that a complete bronze run record
+(``lakehouse/bronze_runs/<run>/check.json``) skipped for lack of a source object, that no record loaded and that has no metadata file in S3 has no table yet and
+is named as left out, unless silver reads it.
 It reads each table's metadata files in S3 and registers the snapshot that the main branch of the newest metadata file points to, never a staged or audit
 branch snapshot. A table whose metadata cannot be resolved
 without doubt is refused and named: no file, two files with one version number, a file name that is not numbered, a location that is not the table folder,
@@ -595,21 +596,34 @@ def layer_tables(layer: str) -> list[str]:
     return list(layer_plan(layer).tables)
 
 
-def bronze_register_tables(s3: Any, bucket: str) -> tuple[list[str], list[str]]:
-    """The bronze tables ``register`` registers and the declared tables it leaves out.
+def has_metadata(s3: Any, bucket: str, table: str) -> bool:
+    """Whether the bronze table has any metadata file in S3: a table with one exists in the catalog, whatever a bronze run record says."""
+    prefix = f"lakehouse/bronze/{table}/metadata/"
+    return any(
+        item["Key"].endswith(".metadata.json")
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
+        for item in page.get("Contents", [])
+    )
 
-    A table is left out when the newest bronze run record that names it skipped it for lack of a source object (no run loaded it, so no table exists), unless
-    a silver model reads it. Raises ``MirrorError`` when a run record cannot be read: nothing is guessed.
+
+def bronze_register_tables(s3: Any, bucket: str) -> tuple[list[str], list[str], list[str]]:
+    """The bronze tables ``register`` registers, the declared tables it leaves out and the tables a record skips although their metadata exists.
+
+    A table is left out when some bronze run record skips it for lack of a source object, no record loaded it, no silver model reads it and it has no
+    metadata file in S3. A table that has metadata is registered whatever a record says (the third list names it, so the disagreement is visible). Raises
+    ``MirrorError`` when a run record cannot be read as evidence or S3 cannot be listed: nothing is guessed.
     """
     from scripts.lakehouse import bronze_unsourced
 
     listed = layer_tables("bronze")
     try:
         unsourced = bronze_unsourced.read_unsourced(s3, bucket)
+        candidates = bronze_unsourced.left_out(listed, unsourced, silver_bronze_sources())
+        existing = sorted(name for name in candidates if has_metadata(s3, bucket, name))
     except Exception as error:
-        raise MirrorError(f"the bronze run records cannot be read: {explain(error)}") from error
-    left_out = bronze_unsourced.left_out(listed, unsourced, silver_bronze_sources())
-    return [name for name in listed if name not in left_out], sorted(left_out)
+        raise MirrorError(f"the bronze run records cannot be read as evidence: {explain(error)}") from error
+    left_out = candidates - set(existing)
+    return [name for name in listed if name not in left_out], sorted(left_out), existing
 
 
 def layer_plan(layer: str) -> Any:
@@ -643,13 +657,15 @@ def register_main(args: argparse.Namespace, parser: argparse.ArgumentParser, glu
         wanted = tables
         if wanted is None and layer == "bronze":
             try:
-                wanted, left_out = bronze_register_tables(s3, bucket)
+                wanted, left_out, existing = bronze_register_tables(s3, bucket)
             except MirrorError as error:
                 sys.stdout.write(f"{layer}: failed: {error}\n")
                 failed = True
                 continue
             for table in left_out:
-                sys.stdout.write(f"{layer}.{table}: left out: the newest bronze run record that names it skipped it (no source object yet)\n")
+                sys.stdout.write(f"{layer}.{table}: left out: a bronze run record skipped it and no run loaded it (no source object yet)\n")
+            for table in existing:
+                sys.stdout.write(f"{layer}.{table}: required: a bronze run record skips it but its table metadata exists in S3\n")
         report = register_from_s3(config, layer, wanted if wanted is not None else layer_tables(layer), s3, bucket, glue, dry_run=args.dry_run)
         if report["status"] == "skipped":
             sys.stdout.write(f"{layer}: skipped: {report['reason']}\n")

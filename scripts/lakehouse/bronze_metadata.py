@@ -299,7 +299,8 @@ def build(
     """Retain every observation and untouched table, transferring canonical lineage only through a validated correction.
 
     ``unsourced`` names declared tables that the run left out because they have no source object yet. Such a table has no observation row in the
-    generation, so the generation holds exactly the other declared tables. A table that is requested, undeclared or already published cannot be left out.
+    generation, so the generation holds exactly the other declared tables. A table that is requested, undeclared, already published or holds failed or
+    retired observations of stored objects cannot be left out.
     """
     rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced)
     validate(rows)
@@ -318,6 +319,8 @@ def _build_rows(
         validate(previous)
     chosen, declared = set(names), set(all_tables)
     left_out = _left_out(list(unsourced), chosen, declared, previous)
+    if any("copy" in entry and entry["copy"]["table"] in left_out for entry in excluded):
+        raise MetadataError("a table with failed or retired observations cannot be left out of the load: the generation keeps those observations")
     complete_tables = declared - left_out
     if not previous and chosen != complete_tables:
         raise MetadataError("first metadata publication requires the full committed bronze table map")

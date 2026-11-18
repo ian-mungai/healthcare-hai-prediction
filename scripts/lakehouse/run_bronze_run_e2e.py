@@ -389,6 +389,39 @@ def case_a_changed_request_or_report_is_refused(case: Case) -> None:
     require(case.phase("load", tables=tables, staged=True) == 1 and "stage report" in case.err and LOADS == [], f"{case.err} {LOADS}")
 
 
+def case_a_table_with_only_a_rejected_capture_is_not_left_out(case: Case) -> None:
+    """Review round 2 (Medium). ``empty_data`` has a stored object whose manifest was rejected: no load takes it, but its failure observation belongs in the
+    generation. The stage must refuse by name instead of leaving the table out, and stage nothing."""
+    key, version = store(case.storage, "org_c/set_three", "empty", "snap_empty", b"id,value\n7,failed\n")
+    manifest_key, manifest_version = next((name, found) for name, found in case.storage.objects if name.startswith("org_c/set_three/manifests/"))
+    manifest = json.loads(case.storage.objects.pop((manifest_key, manifest_version)))
+    manifest["snapshot_status"] = "rejected"
+    case.storage.put(manifest_key, json.dumps(manifest).encode())
+    config = bronze.load_table_map(case.root / "src/config/lakehouse/bronze_tables.json")
+    names = [entry["table"] for entry in config["tables"]]
+    inputs, excluded = bronze.discover(case.storage, BUCKET, config, names, bronze.RetiredObjects())
+    kept = bronze_metadata.build(names, inputs, excluded, [], names)
+    require(any(row["table_name"] == "empty_data" and row["failed_attempt"] for row in kept), "the complete generation does not keep the failed observation")
+    require(case.phase("stage", staged=True) != 0 and "empty_data" in case.err and "rejected, retired or superseded" in case.err, case.err)
+    require(not STORAGE[0].client.puts and (key, version) in case.storage.objects, f"a refused stage wrote {sorted(STORAGE[0].client.puts)}")
+
+
+def case_the_owner_stages_a_partial_run_that_names_the_absent_table_and_every_phase_accepts_it(case: Case) -> None:
+    """Review round 2 (Medium). After a generation that skipped ``empty_data``, a hand-started partial reload of ``alpha_data`` needs the absence in its bound
+    request and report. The owner ``inventory`` phase finds it (it has no source object) and leaves ``beta_data`` and ``gamma_data`` (which have) alone."""
+    out = case.root / "staged_partial"
+    arguments = ["inventory", "--run", RUN, "--code", str(case.root / "src"), "--bucket", BUCKET, "--tables", "alpha_data", "--target", "real"]
+    require(bronze_run.main([*arguments, "--out", str(out)]) == 0, "the inventory phase failed")
+    request = json.loads((out / bronze_run.REQUEST_FILE).read_text())
+    require(request["tables"] == ["alpha_data"] and request["skipped_tables"] == ["empty_data"], f"{request}")
+    for name in (bronze_run.REQUEST_FILE, bronze_run.INVENTORY_FILE, bronze_run.STAGE_REPORT_FILE):
+        STAGED[name] = (out / name).read_bytes()
+    case.shas = (hashlib.sha256(STAGED[bronze_run.REQUEST_FILE]).hexdigest(), hashlib.sha256(STAGED[bronze_run.INVENTORY_FILE]).hexdigest())
+    case.key = ("alpha_data", "real", False)
+    require(case.chain(tables="alpha_data", staged=True) == [0, 0, 0], case.err)
+    require(LOADS[0][LOADS[0].index("--unsourced-tables") + 1] == "empty_data", f"the loader was not told the absence: {LOADS[0]}")
+
+
 def case_the_phases_read_their_tables_from_the_staged_request(case: Case) -> None:
     """The launch passes no table list (it would not fit the RunTask overrides of a full run). With no ``--tables`` and no ``BRONZE_TABLES`` each phase takes
     the tables from the staged request, after checking its bytes against ``BRONZE_REQUEST_SHA256``."""
@@ -805,6 +838,8 @@ CASES: dict[str, Callable[[Case], None]] = {
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
     "a changed request or a report changed alone is refused by every phase": case_a_changed_request_or_report_is_refused,
+    "a table with only a rejected capture is not left out": case_a_table_with_only_a_rejected_capture_is_not_left_out,
+    "the owner stages a partial run that names the absent table": case_the_owner_stages_a_partial_run_that_names_the_absent_table_and_every_phase_accepts_it,
     "the phases read their tables from the staged request when none is passed": case_the_phases_read_their_tables_from_the_staged_request,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,

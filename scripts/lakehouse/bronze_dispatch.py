@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 
 NAMESPACES = {"real": ("bronze", "bronze_dictionary"), "qualify": ("bronze_e2e", "bronze_dictionary_e2e")}
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]*")
+SKIPPED_REASON = "no source object"
 
 
 class DispatchError(ValueError):

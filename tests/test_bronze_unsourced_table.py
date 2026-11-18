@@ -129,12 +129,12 @@ def test_the_table_appears_normally_in_the_run_where_its_first_source_object_arr
 CONFIG = {"namespace": "bronze", "tables": [{"table": name, "collection": f"c_{name}", "roles": ["data"]} for name in DECLARED]}
 
 
-def stub_discover(monkeypatch: pytest.MonkeyPatch, found: list[dict[str, Any]]) -> list[list[str]]:
+def stub_discover(monkeypatch: pytest.MonkeyPatch, found: list[dict[str, Any]], unselected: list[Any] | None = None) -> list[list[str]]:
     asked: list[list[str]] = []
 
     def discover(storage: Any, bucket: str, config: dict[str, Any], names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
         asked.append(list(names))
-        return found, []
+        return found, list(unselected or [])
 
     monkeypatch.setattr(bronze, "discover", discover)
     return asked
@@ -203,3 +203,68 @@ def test_the_check_phase_refuses_a_loader_report_whose_left_out_tables_differ_fr
     with pytest.raises(bronze_run.StepError, match="left out"):
         bronze_run.accepted_unsourced({k: v for k, v in report.items() if k != "unsourced_tables"}, [{"table": "third", "reason": bronze_run.SKIPPED_REASON}])
     check(bronze_run.accepted_unsourced({k: v for k, v in report.items() if k != "unsourced_tables"}, []) is None, "a run that left nothing out was refused")
+
+
+def failed_copy(name: str) -> dict[str, Any]:
+    """The observation of a stored object that no load takes: its manifest was rejected, so discovery returns it as an excluded copy."""
+    return {"copy": {**item(name), "failed_attempt": True}}
+
+
+def test_a_table_with_failed_capture_observations_keeps_them_in_the_generation_and_cannot_be_left_out() -> None:
+    """Review round 2 (Medium): a table with no loadable object can still hold rejected or retired observations that the generation must keep."""
+    names = ["first", "second", "third"]
+    complete = bronze_metadata.build(names, [item("first"), item("second")], [failed_copy("third")], [], DECLARED)
+    kept = [row for row in complete if row["table_name"] == "third"]
+    check(len(kept) == 1 and kept[0]["failed_attempt"] is True and kept[0]["kind"] == "observation", f"the failed observation was not kept: {kept}")
+    with pytest.raises(bronze_metadata.MetadataError, match="failed or retired observations"):
+        bronze_metadata.build(["first", "second"], [item("first"), item("second")], [failed_copy("third")], [], DECLARED, unsourced=["third"])
+
+
+def test_the_loader_guard_refuses_a_table_whose_stored_objects_have_only_rejected_or_retired_observations(monkeypatch: pytest.MonkeyPatch) -> None:
+    for entry in (failed_copy("third"), {"copy": {**item("third"), "retired": True}}, {"copy": item("third"), "superseded": True}):
+        stub_discover(monkeypatch, [], [entry])
+        with pytest.raises(bronze.BronzeError, match="rejected, retired or superseded observations"):
+            bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
+    stub_discover(monkeypatch, [], [{"collection": "c_third", "dataset_id": "x", "file_name": "x.csv"}])
+    bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
+
+
+def test_a_partial_reload_after_a_generation_that_skipped_a_table_needs_the_absence_named_and_keeps_every_other_table() -> None:
+    """Review round 2 (Medium): generation N skipped ``third``; a partial reload of ``first`` expects observations for the whole map again."""
+    before = generation(["first", "second"], earlier(), unsourced=["third"])
+    with pytest.raises(bronze_metadata.MetadataError, match="missing a committed bronze table"):
+        generation(["first"], before)
+    rows = generation(["first"], before, unsourced=["third"])
+    check(tables_of(rows) == {"first", "second"}, f"{tables_of(rows)}")
+    bronze_metadata.validate_successor(before, rows)
+
+
+def test_a_partial_reload_after_the_table_first_loaded_needs_no_absence_and_a_loaded_table_still_cannot_be_left_out() -> None:
+    before = generation(["first", "second"], earlier(), unsourced=["third"])
+    after = generation(["first", "second", "third"], before, unsourced=[])
+    rows = generation(["first"], after)
+    check(tables_of(rows) == set(DECLARED), f"{tables_of(rows)}")
+    with pytest.raises(bronze_metadata.MetadataError, match="published observations"):
+        generation(["first"], after, unsourced=["third"])
+
+
+class Arguments:
+    def __init__(self, **values: Any) -> None:
+        self.bootstrap_all, self.group, self.tables, self.unsourced_tables = False, None, None, None
+        self.__dict__.update(values)
+
+
+def test_a_bootstrap_or_repair_run_names_every_table_except_the_ones_the_absence_names() -> None:
+    config = {"tables": [{"table": name, "group": "g" if name == "first" else "h"} for name in DECLARED]}
+    check(bronze.selected_names(config, Arguments(bootstrap_all=True)) == DECLARED, "a bootstrap run lost a table")
+    check(bronze.selected_names(config, Arguments(bootstrap_all=True, unsourced_tables="third")) == ["first", "second"], "the absent table was requested")
+    check(bronze.selected_names(config, Arguments(group="h", unsourced_tables="third")) == ["second", "third"], "a group run changed its tables")
+    check(bronze.selected_names(config, Arguments(tables="first", unsourced_tables="third")) == ["first"], "a table list changed")
+
+
+def test_the_loader_accepts_the_absence_without_a_pinned_inventory_for_a_hand_started_run(capsys: pytest.CaptureFixture[str]) -> None:
+    """A hand-started partial load names the absence directly: no inventory and no task role are needed. An unknown table still stops it by name."""
+    code = bronze.main(["--tables", "no_such_table", "--unsourced-tables", "hcai_util_workbook_sheet_rows"])
+    check(code == 1 and "unknown group or table" in capsys.readouterr().err, "the run did not reach the table check")
+    with pytest.raises(SystemExit):
+        bronze.main(["--tables", "a", "--unsourced-tables", "b", "--namespace", "bronze_e2e", "--selected-metadata"])
