@@ -39,12 +39,13 @@ variables {
   host_job_cap_mib                 = 22592
 
   log_group_names = {
-    postgres   = "/example/postgres"
-    redis      = "/example/redis"
-    polaris    = "/example/polaris"
-    airflow    = "/example/airflow"
-    mlflow     = "/example/mlflow"
-    monitoring = "/example/monitoring"
+    postgres     = "/example/postgres"
+    redis        = "/example/redis"
+    polaris      = "/example/polaris"
+    airflow      = "/example/airflow"
+    mlflow       = "/example/mlflow"
+    monitoring   = "/example/monitoring"
+    openmetadata = "/example/openmetadata"
   }
 
   ecr_repository_urls = {
@@ -274,7 +275,7 @@ run "history_needs_monitoring" {
   variables {
     monitoring_enabled = false
     alerts_topic_arn   = null
-    host_job_cap_mib   = 22800
+    host_job_cap_mib   = 22128
   }
 
   expect_failures = [var.prometheus_history_task_role_arn]

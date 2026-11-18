@@ -2121,18 +2121,18 @@ OWN_SIZES = {
 }
 SET_PEAKS_MIB = {"m1": 1348, "m2": 8976, "m3": 1844, "m4": 8969, "m5": 1613, "m6": 2215}
 # The capacity of the r7g.xlarge host as the services stack computes it: 4096 CPU units less the services' 1024 leave 3072 for jobs; 32768 MiB usable less
-# the 2048 system reserve and the 7920 service reservations (every default service on) leave the 22800 MiB job cap (22640 with monitoring, 22384 with the
-# Evidently UI too). A pool slot is 64 CPU units, so the pool has 48 slots.
+# the 2048 system reserve and the 8592 service reservations (every service on, the optional ones included) leave the 22128 MiB job cap (22640 with only
+# the default services). A pool slot is 64 CPU units, so the pool has 48 slots.
 POOL_SLOTS = 48
 POOL_ENVIRONMENT = {
     "HAI_LAUNCH_POOL": "host_jobs",
     "HAI_LAUNCH_POOL_SLOTS": str(POOL_SLOTS),
     "HAI_LAUNCH_POOL_SLOT_CPU_UNITS": "64",
-    "HAI_LAUNCH_HOST_JOB_CAP_MIB": "22800",
+    "HAI_LAUNCH_HOST_JOB_CAP_MIB": "22128",
 }
-JOB_CAPS_MIB = (22800, 22640, 22384)
+JOB_CAPS_MIB = (22128, 22640, 22384)
 JOB_ROOM_CPU = 3072
-JOB_ROOM_MIB = 22800
+JOB_ROOM_MIB = 22128
 # How long one set's job ran on the host, in minutes: the gaps between the task start times of the one-at-a-time run 20261113T192848Z-* (describe.json of
 # evidence_run_m<n>_20261113T195509Z), which include the launch. The run of m6 has no recorded start of a successor, so m6 takes the small-set value.
 SET_MINUTES = {"m1": 3.4, "m2": 4.9, "m3": 3.6, "m4": 4.9, "m5": 3.5, "m6": 3.5}

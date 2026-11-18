@@ -1,6 +1,6 @@
 # The committed defaults of the services stack are the live settings: given only the inputs the renderer builds from .env and the platform outputs (the
 # profile, the account, the roles, the buckets and addresses, the repositories and the image digests), a plan turns on MLflow, the model API, the page,
-# monitoring, persistent OpenMetadata and HTTP lineage on and gives a host job 22800 MiB.
+# monitoring, persistent OpenMetadata and HTTP lineage on and gives a host job 22128 MiB.
 
 mock_provider "aws" {
   override_during = plan
@@ -60,6 +60,16 @@ variables {
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
     training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
+    spark                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/spark"
+    analytics              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/analytics"
+    quality                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/quality"
+    egress_proxy           = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/egress_proxy"
+    feature_store          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/feature_store"
+    drift                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    pushgateway            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/pushgateway"
+    redis_exporter         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/redis_exporter"
+    postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
+    node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
   }
 
   image_digests = {
@@ -78,7 +88,18 @@ variables {
     openmetadata_ingestion = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     openmetadata_search    = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     training               = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    spark                  = "sha256:92f473809e5979a7da2b7f52771b3a9e3d7105dcb0f24ae333c5bf279b863d73"
+    analytics              = "sha256:65f98121a162a56ad8ee919ed9ea394b9eabd8714616acf30636c6092ee350b9"
+    quality                = "sha256:acef2c15bcd349db900dffece73e1256e881c4416fc1f2d3a494640183490d9a"
+    egress_proxy           = "sha256:e545c79a1e4fc0be84ef5760d207dbe164a553fa204b4d3b82739fd3ea02089e"
+    feature_store          = "sha256:bf5e4012ff672047c4fad65033f39130413faf09792f6e0d9519d4e9d7f9bba7"
+    drift                  = "sha256:0b7a461fefbb68e518e51884369a4b88baffdb40b7e578921f3f88649ebc6494"
+    pushgateway            = "sha256:12b207391a415f7d41934a6d80bdf3587db3b550b281b29798aa604051fefdab"
+    redis_exporter         = "sha256:6f03db2c8e83e7eef5f97fc80513a6144b9bac96783f2e248d62ca34310520d2"
+    postgres_exporter      = "sha256:f721ed8f824cad593a65ba317743df32afc96ce110805b8e978c993ff40c09f8"
+    node_exporter          = "sha256:a8b8139c6a4a2713aef45c7e88f08e58ca6c2515984c3033f39e25dd9eee1a9f"
   }
+  alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
 }
 
 run "the_defaults_are_the_live_settings" {
@@ -98,7 +119,7 @@ run "the_defaults_are_the_live_settings" {
   }
 
   assert {
-    condition     = var.host_job_cap_mib == 22800 && output.reserved_memory_mib == 7920 && output.host_job_memory_mib == 22800
-    error_message = "A host job gets 22800 MiB beside the services of the defaults, which reserve 7920 MiB."
+    condition     = var.host_job_cap_mib == 22128 && output.reserved_memory_mib == 8080 && output.host_job_memory_mib == 22128 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib <= 32768
+    error_message = "A host job gets 22128 MiB beside the services of the defaults, which reserve 8080 MiB."
   }
 }

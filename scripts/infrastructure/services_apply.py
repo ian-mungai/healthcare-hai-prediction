@@ -29,7 +29,7 @@ only when the services are stable, the services give the frozen binding and ever
 its job memory. It never takes a later render as the selection: it refuses when the rendered jobs inputs (``infra/jobs/deployment.auto.tfvars.json``, which
 step 5 wrote) disagree with the frozen selection, binding or identity.
 
-Before step 1, choose the cap. The committed default of ``host_job_cap_mib`` is 22800, the room the services leave with every default service on. To
+Before step 1, choose the cap. The committed default of ``host_job_cap_mib`` is 22128, the largest cap that fits with every service on. To
 change the cap for good, change that default in infra/services/variables.tf and commit it, and save SERVICES_INPUTS with an empty ``variables`` object. To
 try one other cap, save SERVICES_INPUTS as a Git-ignored overrides file with ``"host_job_cap_mib": 22528`` (or your cap) in its ``variables``; an
 overrides file never reaches main. Save the jobs overrides as JOBS_INPUTS, with an empty ``variables`` object when you override nothing: the hold freezes

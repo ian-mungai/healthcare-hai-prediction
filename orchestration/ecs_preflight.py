@@ -85,7 +85,7 @@ CAPTURE_ROOT = re.compile(rf"raw/|ingestion_test/{INGESTION_RUN_PATTERN}/")
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 # The job room that a family without reserve takes at task level: the services defaults job_cpu_units and host_job_cap_mib (a case compares them).
 JOB_ROOM_CPU_UNITS = 3072
-JOB_ROOM_MEMORY_MIB = 22800
+JOB_ROOM_MEMORY_MIB = 22128
 GATE = "@gate"
 CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features")

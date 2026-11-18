@@ -12,8 +12,8 @@ variables {
   environment           = "dev"
   data_bucket_name      = "example-project-data-dev"
   log_group_name        = "healthcare_hai_prediction_jobs_dev"
-  host_job_memory_mib   = 22800
-  host_capacity_binding = "job_memory_mib=22800 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=7920"
+  host_job_memory_mib   = 22128
+  host_capacity_binding = "job_memory_mib=22128 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=8592"
   host_private_ip       = "10.0.1.20"
   alerts_topic_arn      = "arn:aws:sns:us-west-2:111111111111:healthcare_hai_prediction_alerts_dev"
   images = {

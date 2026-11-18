@@ -385,12 +385,12 @@ run "the_host_job_cap_is_rendered_into_every_airflow_container" {
   }
 }
 
-run "the_default_cap_is_the_job_room_the_committed_default_services_leave" {
+run "the_default_cap_fits_beside_the_committed_default_services" {
   command = plan
 
   # The committed defaults run MLflow, the model API, the page, monitoring and persistent OpenMetadata on the 32768 MiB host: the services
-  # reserve 7920 MiB, so one job has 32768 - 2048 - 7920 = 22800 MiB. The default of host_job_cap_mib is that figure (one host job at a time, set from the
-  # Airflow pool of one slot).
+  # reserve 8080 MiB, so one job could have 32768 - 2048 - 8080 = 22640 MiB. The default of host_job_cap_mib is 22128 MiB, the cap that also fits with every optional
+  # service on (all_services_memory.tftest.hcl), at one host job at a time set from the Airflow pool of one slot.
   variables {
     mlflow_enabled                  = true
     model_api_enabled               = true
@@ -404,25 +404,25 @@ run "the_default_cap_is_the_job_room_the_committed_default_services_leave" {
   }
 
   assert {
-    condition     = var.host_job_cap_mib == 22800 && output.reserved_memory_mib == 7920 && output.host_job_memory_mib == 22800 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
-    error_message = "The default cap is 22800 MiB, the job room the services leave with every committed default on."
+    condition     = var.host_job_cap_mib == 22128 && output.reserved_memory_mib == 8080 && output.host_job_memory_mib == 22128 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib <= 32768
+    error_message = "The default cap is 22128 MiB and fits beside the services of every committed default."
   }
 
   assert {
     condition = alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=22800") if startswith(container.name, "airflow")
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=22128") if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "Every Airflow container carries the default cap of 22800 MiB."
+    error_message = "Every Airflow container carries the default cap of 22128 MiB."
   }
 }
 
 run "a_cap_above_the_job_room_is_refused" {
   command = plan
 
-  # The committed default services leave 22800 MiB on the 32768 MiB host, so a cap one MiB larger is refused.
+  # The committed default services leave 22640 MiB on the 32768 MiB host, so a cap one MiB larger is refused.
   variables {
     mlflow_enabled                  = true
     model_api_enabled               = true
@@ -432,7 +432,7 @@ run "a_cap_above_the_job_room_is_refused" {
     openmetadata_persistent_enabled = true
     airflow_lineage_http_enabled    = true
     host_usable_memory_mib          = null
-    host_job_cap_mib                = 22801
+    host_job_cap_mib                = 22641
   }
 
   expect_failures = [output.host_job_memory_mib]
@@ -479,19 +479,19 @@ run "a_cap_at_or_above_the_host_memory_is_refused" {
 }
 
 # The Evidently UI (evidently_ui_enabled) reserves 272 MiB (the UI 256 and its restore step 16), which the job room gives up: the cap the owner sets for the live
-# stack falls from 22640 to 22368 MiB.
-# The fixture below has the room of that stack (32320 usable MiB less the 2048 MiB reserve and the 7632 MiB the services reserve is 22640 MiB).
+# stack falls from 23088 to 22816 MiB.
+# The fixture below has the room of that stack (32320 usable MiB less the 2048 MiB reserve and the 7184 MiB the services reserve is 23088 MiB).
 run "the_job_room_before_the_evidently_ui" {
   command = plan
 
   variables {
     host_usable_memory_mib = 32320
-    host_job_cap_mib       = 22640
+    host_job_cap_mib       = 23088
   }
 
   assert {
-    condition     = output.reserved_memory_mib == 7632 && output.host_job_memory_mib == 22640 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
-    error_message = "Without the UI the cap of 22640 MiB is exactly the room of this fixture."
+    condition     = output.reserved_memory_mib == 7184 && output.host_job_memory_mib == 23088 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
+    error_message = "Without the UI the cap of 23088 MiB is exactly the room of this fixture."
   }
 }
 
@@ -503,21 +503,21 @@ run "the_evidently_ui_takes_272_mib_from_the_job_room" {
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
     evidently_ui_bucket_name   = "example-project-data-dev"
     host_usable_memory_mib     = 32320
-    host_job_cap_mib           = 22368
+    host_job_cap_mib           = 22816
   }
 
   assert {
-    condition     = output.reserved_memory_mib == run.the_job_room_before_the_evidently_ui.reserved_memory_mib + 272 && output.reserved_memory_mib == 7904
-    error_message = "The UI and its restore step reserve 272 MiB together, so the service reservations grow from 7632 to 7904 MiB."
+    condition     = output.reserved_memory_mib == run.the_job_room_before_the_evidently_ui.reserved_memory_mib + 272 && output.reserved_memory_mib == 7456
+    error_message = "The UI and its restore step reserve 272 MiB together, so the service reservations grow from 7184 to 7456 MiB."
   }
 
   assert {
-    condition     = output.host_job_memory_mib == 22368 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
-    error_message = "With the UI on, a cap of 22368 MiB (22640 less 272) is exactly the room that is left."
+    condition     = output.host_job_memory_mib == 22816 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
+    error_message = "With the UI on, a cap of 22816 MiB (23088 less 272) is exactly the room that is left."
   }
 
   assert {
-    condition     = output.host_capacity_binding == "job_memory_mib=22368 usable_memory_mib=32320 system_reserve_mib=2048 service_reservations_mib=7904"
+    condition     = output.host_capacity_binding == "job_memory_mib=22816 usable_memory_mib=32320 system_reserve_mib=2048 service_reservations_mib=7456"
     error_message = "The capacity binding names the lowered cap and the larger service reservations."
   }
 }
@@ -530,7 +530,7 @@ run "the_old_cap_no_longer_fits_with_the_evidently_ui_on" {
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
     evidently_ui_bucket_name   = "example-project-data-dev"
     host_usable_memory_mib     = 32320
-    host_job_cap_mib           = 22640
+    host_job_cap_mib           = 23088
   }
 
   expect_failures = [output.host_job_memory_mib]

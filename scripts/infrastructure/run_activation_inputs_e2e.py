@@ -443,7 +443,7 @@ def completeness() -> dict[str, bool]:
     cap_contract = json.loads((ROOT / "data_contracts/infrastructure/services_preparation.schema.json").read_text())["properties"]["variables"]["properties"]
     checks["the services contract admits a whole-number host job cap below the nominal host memory"] = (
         cap is not None
-        and int(cap.group(1)) == 22800
+        and int(cap.group(1)) == 22128
         and cap_contract.get("host_job_cap_mib", {}).get("type") == "integer"
         and cap_contract["host_job_cap_mib"].get("maximum", 32768) < 32768
     )
