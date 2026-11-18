@@ -21,6 +21,9 @@
           "evidently_version": {
             "type": "null"
           },
+          "excluded_features": {
+            "maxItems": 0
+          },
           "feature_count": {
             "const": 0
           },
@@ -109,6 +112,27 @@
         "string",
         "null"
       ]
+    },
+    "excluded_features": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "const": "all_missing_in_reference"
+          }
+        },
+        "required": [
+          "name",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": "array",
+      "uniqueItems": true
     },
     "feature_count": {
       "minimum": 0,
@@ -227,6 +251,7 @@
     "reference",
     "current",
     "features",
+    "excluded_features",
     "feature_count",
     "drifted_count",
     "drift_share",

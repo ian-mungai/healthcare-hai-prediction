@@ -66,7 +66,7 @@ class Baseline:
         self, top: Path, *, columns: list[str] | None = None, manifest: dict[str, Any] | None = None, artifacts: bool = True, alias: bool = True
     ) -> None:
         self.work = Workspace(top)
-        drift_cases.write_matrix(self.work.matrix, 1500, "2019 + i // 501", (), None, None)
+        drift_cases.write_matrix(self.work.matrix, 1500, "2019 + i // 501", (), (), None)
         self.original = hashlib.sha256(self.work.matrix.read_bytes()).hexdigest()
         self.work.record()
         self.columns = list(drift_cases.FEATURES) if columns is None else columns
@@ -155,7 +155,7 @@ def baseline_feeds_the_check(folder: Path) -> Problems:
     baseline = Baseline(folder)
     baseline.fetch()
     current = folder / "current.parquet"
-    drift_cases.write_matrix(current, 1200, "2021", (), None, None)
+    drift_cases.write_matrix(current, 1200, "2021", (), (), None)
     manifest = folder / "current_manifest.json"
     manifest.write_text(json.dumps({"hai_type": "HAI_1", "population": "primary"}) + "\n")
     arguments = [

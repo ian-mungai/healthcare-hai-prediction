@@ -151,7 +151,15 @@ def loaded_dag() -> Any:
             sys.modules["orchestration.dag_runtime"] = previous
 
 
-def record(hai_type: str, *, run: str = DRIFT_RUN, status: str = "checked", triggered: bool = False, population: str = "primary") -> dict[str, Any]:
+def record(
+    hai_type: str,
+    *,
+    run: str = DRIFT_RUN,
+    status: str = "checked",
+    triggered: bool = False,
+    population: str = "primary",
+    excluded: tuple[str, ...] = (),
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "kind": "drift_record",
@@ -161,6 +169,7 @@ def record(hai_type: str, *, run: str = DRIFT_RUN, status: str = "checked", trig
         "status": status,
         "skip_reason": "no_new_window" if status == "skipped" else None,
         "triggered": triggered,
+        "excluded_features": [{"name": name, "reason": "all_missing_in_reference"} for name in excluded],
     }
 
 
@@ -368,6 +377,35 @@ def a_skip_names_its_reason(folder: Path) -> Problems:
     )
 
 
+def a_notice_names_the_excluded_features(folder: Path) -> Problems:
+    """A record with excluded features starts no extra run and is told in the task log, by type, feature name and reason."""
+    lines: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, entry: logging.LogRecord) -> None:
+            lines.append(entry.getMessage())
+
+    with loaded_dag() as module:
+        logger = logging.getLogger(module.__name__)
+        handler = Capture(level=logging.INFO)
+        previous = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            requests = decide(module, bucket_with([record("HAI_1", excluded=("c142__value__number", "c145__value__number")), record("HAI_2")]))
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous)
+    named = [
+        line for line in lines if "HAI_1" in line and "c142__value__number" in line and "c145__value__number" in line and "all_missing_in_reference" in line
+    ]
+    problems = [] if requests == [] else [f"quiet records started {requests}"]
+    problems += [] if named else [f"the log does not name the type, the excluded features and the reason: {lines}"]
+    return problems + (
+        [f"the log names excluded features of a type that has none: {lines}"] if any("HAI_2" in line and "excluded" in line for line in lines) else []
+    )
+
+
 def with_gate(s3: MemoryS3, **changes: Any) -> MemoryS3:
     """The bucket with the marker's gate decision changed, as a marker that was edited or written by another version would hold."""
     key = (BUCKET, f"drift/{DRIFT_RUN}/_complete.json")
@@ -451,6 +489,19 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("dag_a_model_without_a_production_model_trains_every_type", a_model_without_a_production_model_trains_every_type),
         ("dag_a_changed_schema_trains_beside_a_drifted_type", a_changed_schema_trains_beside_a_drifted_type),
         ("dag_a_skip_names_its_reason", a_skip_names_its_reason),
+        ("dag_a_notice_names_the_excluded_features", a_notice_names_the_excluded_features),
+        (
+            "dag_refuses_a_record_without_its_excluded_features",
+            refuses("excluded features", lambda: bucket_with([{key: value for key, value in record("HAI_1").items() if key != "excluded_features"}])),
+        ),
+        (
+            "dag_refuses_an_exclusion_for_another_reason",
+            refuses("excluded features", lambda: bucket_with([record("HAI_1") | {"excluded_features": [{"name": "c142__value__number", "reason": "other"}]}])),
+        ),
+        (
+            "dag_refuses_excluded_features_that_are_not_a_list",
+            refuses("excluded features", lambda: bucket_with([record("HAI_1") | {"excluded_features": "c142"}])),
+        ),
         ("dag_refuses_a_marker_without_the_gate_decision", refuses("no gate decision", lambda: bucket_with([record("HAI_1", triggered=True)], gated=False))),
         (
             "dag_refuses_the_gate_decision_of_another_model",

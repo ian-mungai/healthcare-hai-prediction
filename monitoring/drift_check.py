@@ -4,8 +4,12 @@
 reads two Parquet matrices (the Production run's DVC baseline and the latest features), the manifests that name their HAI type and population, and the
 JSON list of the model's feature columns. The current rows are those of a window year after the baseline's ``newest_window_year``. The check refuses mixed
 HAI types and mixed populations, skips (and never triggers) for a population that is not monitored, with no newer window or with too few current rows, and
-otherwise runs Evidently's dataset drift report. Retraining is triggered when the share of drifted features reaches the configured share. The record
-``drift_<HAI type>.json`` in ``--out`` is written atomically and holds no clock value, so a rerun on the same inputs writes the same bytes.
+otherwise runs Evidently's dataset drift report on the compared features. A listed feature with no value in any reference row is not compared: the model cannot
+have learned it (training drops a feature that is missing in more than half the rows), so the record names it under ``excluded_features`` with the reason
+``all_missing_in_reference``. A feature that has reference values and none in the current window is refused by name (``feature_all_missing``), and a list with
+nothing left to compare is refused (``no_comparable_feature``). ``feature_count``, ``drifted_count`` and ``drift_share`` count the compared features only.
+Retraining is triggered when the share of drifted features reaches the configured share. The record ``drift_<HAI type>.json`` in ``--out`` is written
+atomically and holds no clock value, so a rerun on the same inputs writes the same bytes.
 
 Exit codes: 0 record written (checked or skipped), 2 an input is refused (the message names the failure and the column or file), 3 a package is missing.
 Run it from the repository root as a module, in an environment with DuckDB and, for a real report, Evidently.
@@ -35,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RECORD_SCHEMA = ROOT / "data_contracts/monitoring/drift_record.schema.json"
 NUMERIC_TYPES = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "FLOAT", "DOUBLE", "DECIMAL")
 CATEGORICAL_TYPES = ("VARCHAR", "BOOLEAN")
+ALL_MISSING_IN_REFERENCE = "all_missing_in_reference"
 YEAR = "window_year"
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
 POPULATIONS = ("primary", "sensitivity")
@@ -111,14 +116,19 @@ def kind_of(column_type: Any) -> str | None:
     return "categorical" if text.startswith(CATEGORICAL_TYPES) else None
 
 
+def require_columns(reference: DuckDBPyRelation, current: DuckDBPyRelation, features: list[str]) -> None:
+    """Refuse a listed feature that is not a column of both matrices."""
+    for side, matrix in (("reference", reference), ("current", current)):
+        for name in features:
+            if name not in matrix.columns:
+                raise CheckError("feature_missing", f"{name} is not a column of the {side} matrix")
+
+
 def feature_kinds(reference: DuckDBPyRelation, current: DuckDBPyRelation, features: list[str]) -> dict[str, str]:
-    """Name each feature's kind and refuse a feature that is absent, of another type or of a type Evidently's tests do not cover."""
+    """Name each feature's kind and refuse a feature of another type or of an uncovered type. The columns must be there (``require_columns``)."""
     types = {"reference": dict(zip(reference.columns, reference.types, strict=True)), "current": dict(zip(current.columns, current.types, strict=True))}
     kinds: dict[str, str] = {}
     for name in features:
-        for side, known in types.items():
-            if name not in known:
-                raise CheckError("feature_missing", f"{name} is not a column of the {side} matrix")
         kind = kind_of(types["reference"][name])
         if kind is None or kind != kind_of(types["current"][name]):
             raise CheckError(
@@ -139,11 +149,27 @@ def window_of(matrix: DuckDBPyRelation, newest: int | None) -> tuple[DuckDBPyRel
     return rows, count, years
 
 
-def refuse_all_missing(rows: DuckDBPyRelation, features: list[str], side: str) -> None:
+def present_in(rows: DuckDBPyRelation, features: list[str]) -> dict[str, bool]:
+    """Say for each feature whether any of the rows holds a value of it."""
     counts = rows.aggregate(", ".join(f"count({quote(name)})" for name in features)).fetchone()
-    for name, present in zip(features, counts or (), strict=True):
-        if not present:
-            raise CheckError("feature_all_missing", f"{name} has no value in any {side} row, so no test can compare it")
+    return {name: bool(present) for name, present in zip(features, counts or (), strict=True)}
+
+
+def comparable_features(reference: DuckDBPyRelation, window: DuckDBPyRelation, features: list[str]) -> tuple[list[str], list[dict[str, str]]]:
+    """Split the list into the features to compare and the excluded ones (with their reason), and refuse what cannot be judged.
+
+    A feature with no value in any reference row is excluded. A feature with reference values and none in the current window is refused by name, and so is a
+    list in which nothing is left to compare. The columns must be there (``require_columns``)."""
+    in_reference = present_in(reference, features)
+    compared = [name for name in features if in_reference[name]]
+    excluded = [{"name": name, "reason": ALL_MISSING_IN_REFERENCE} for name in features if not in_reference[name]]
+    if not compared:
+        raise CheckError("no_comparable_feature", f"none of the {len(features)} listed features has a value in any reference row, so no test can compare one")
+    in_window = present_in(window, compared)
+    for name in compared:
+        if not in_window[name]:
+            raise CheckError("feature_all_missing", f"{name} has no value in any current row, so no test can compare it")
+    return compared, excluded
 
 
 def write_record(out: Path, record: dict[str, Any]) -> Path:
@@ -191,6 +217,7 @@ def build_record(arguments: argparse.Namespace, on_report: Callable[[Any], None]
         "reference": {"matrix_sha256": sha256_of(arguments.reference_matrix), "newest_window_year": newest, "rows": reference_rows},
         "current": {"matrix_sha256": sha256_of(arguments.current_matrix), "rows": current_rows, "window_years": years},
         "features": [],
+        "excluded_features": [],
         "feature_count": 0,
         "drifted_count": 0,
         "drift_share": None,
@@ -203,29 +230,30 @@ def build_record(arguments: argparse.Namespace, on_report: Callable[[Any], None]
     elif current_rows < config["minimum_current_rows"]:
         record["skip_reason"] = "too_few_current_rows"
     if record["skip_reason"] is None:
-        kinds = feature_kinds(reference, current, features)
-        refuse_all_missing(reference, features, "reference")
-        refuse_all_missing(window, features, "current")
+        require_columns(reference, current, features)
+        compared, excluded = comparable_features(reference, window, features)
+        kinds = feature_kinds(reference, current, compared)
         try:
             evidently_report.ensure()
-            frames = [rows.project(", ".join(quote(name) for name in features)).df() for rows in (reference, window)]
+            frames = [rows.project(", ".join(quote(name) for name in compared)).df() for rows in (reference, window)]
             version, found = evidently_report.run(
                 frames[0],
                 frames[1],
-                [name for name in features if kinds[name] == "numerical"],
-                [name for name in features if kinds[name] == "categorical"],
+                [name for name in compared if kinds[name] == "numerical"],
+                [name for name in compared if kinds[name] == "categorical"],
                 config,
                 on_report,
             )
         except evidently_report.DependencyMissing as error:
             raise CheckError("dependency_missing", f"the report needs Evidently and pandas: {error}", 3) from None
-        listed = [{"name": name, **found[name]} for name in features]
+        listed = [{"name": name, **found[name]} for name in compared]
         drifted = sum(item["drifted"] for item in listed)
         share = drifted / len(listed)
         record |= {
             "status": "checked",
             "evidently_version": version,
             "features": listed,
+            "excluded_features": excluded,
             "feature_count": len(listed),
             "drifted_count": drifted,
             "drift_share": share,

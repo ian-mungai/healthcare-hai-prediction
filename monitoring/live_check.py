@@ -14,9 +14,11 @@ workspace keeps the first record and report under ``.live_runs/<run ID>/``. A re
 computes nothing, so a completed run is a no-op; a rerun with other inputs is refused as ``run_inputs_changed``, before any file or snapshot changes. Snapshot
 files are written atomically, and a snapshot file that an interrupted write left incomplete is set aside under ``.incomplete``.
 
-A check that cannot compare is refused with exit 2 and writes nothing: a baseline with no row of the manifest's newest year, with rows newer than it, with
-fewer rows of it than the drift configuration's minimum, with no row before it or of a population that is not monitored. Exit 3 means that Evidently is
-missing. ``record_sinks`` is the one place where the drift metrics push is wired: each sink gets the record once, when it is first computed.
+A feature with no value in any reference row is not compared: the record lists it under ``excluded_features`` and the snapshot's metadata names it. A check
+that cannot compare is refused with exit 2 and writes nothing: a baseline with no row of the manifest's newest year, with rows newer than it, with fewer rows
+of it than the drift configuration's minimum, with no row before it or of a population that is not monitored, with a feature that has reference values and
+none in the newest year, or with no feature that has a reference value. Exit 3 means that Evidently is missing. ``record_sinks`` is the one place where
+the drift metrics push is wired: each sink gets the record once, when it is first computed.
 """
 
 from __future__ import annotations
@@ -240,9 +242,10 @@ def atomic_snapshot_writes(storage: Any) -> Iterator[None]:
             object.__setattr__(storage, "put_blob", previous)
 
 
-def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, inputs_sha256: str) -> None:
+def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, inputs_sha256: str, excluded: Sequence[str] = ()) -> None:
     """Add the report as a snapshot of the project ``name`` in the Evidently UI workspace, creating the workspace and the project when they are not there. A
-    snapshot of the same run is never added twice."""
+    snapshot of the same run is never added twice. The snapshot's metadata names the features the check excluded (no value in any reference row), because the
+    report shows only the compared ones."""
     set_aside_incomplete_snapshots(workspace)
     store = importlib.import_module("evidently.legacy.ui.workspace").Workspace.create(str(workspace))
     with atomic_snapshot_writes(store.project_manager.blob_storage):
@@ -252,6 +255,8 @@ def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, input
             return
         report.metadata["run_id"] = run_id
         report.metadata["inputs_sha256"] = inputs_sha256
+        if excluded:
+            report.metadata["excluded_features"] = ", ".join(excluded)
         store.add_report(project.id, report)
 
 
@@ -287,7 +292,7 @@ def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Pat
         write_binding(arguments.workspace, arguments.run_id, identity, parts)
     drift_check.write_record(arguments.out, record)
     write_html(reports[0], arguments.out / names[1])
-    add_to_workspace(reports[0], arguments.workspace, name, arguments.run_id, identity)
+    add_to_workspace(reports[0], arguments.workspace, name, arguments.run_id, identity, [item["name"] for item in record["excluded_features"]])
     project_file, snapshot_file = export_run_files(arguments.workspace, name, arguments.run_id)
     write_bytes(arguments.out / names[3], project_file)
     write_bytes(arguments.out / names[2], snapshot_file)

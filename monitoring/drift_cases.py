@@ -50,7 +50,9 @@ class Fixture:
     hai_type: str = "HAI_1"
     current_hai_type: str = "HAI_1"
     features: tuple[str, ...] = FEATURES
-    null_feature: str | None = None
+    null_in_reference: tuple[str, ...] = ()
+    null_in_current: tuple[str, ...] = ()
+    mostly_null_in_reference: str | None = None
     drop_from_current: str | None = None
     drop_from_reference: str | None = None
     cat_as_number_in_current: bool = False
@@ -67,12 +69,23 @@ def column_sql(name: str, shifted: bool) -> str:
     return f"{unit} + 0.5" if shifted else unit
 
 
-def write_matrix(path: Path, rows: int, year_of: str, shifted: tuple[str, ...], null_feature: str | None, drop: str | None, numeric_cat: bool = False) -> None:
+def write_matrix(
+    path: Path,
+    rows: int,
+    year_of: str,
+    shifted: tuple[str, ...],
+    null: tuple[str, ...],
+    drop: str | None,
+    numeric_cat: bool = False,
+    mostly_null: str | None = None,
+) -> None:
     columns = []
     for name in FEATURES:
         if name == drop:
             continue
-        expression = "NULL::DOUBLE" if name == null_feature else column_sql(name, name in shifted)
+        expression = ("NULL::VARCHAR" if name == "f_cat" else "NULL::DOUBLE") if name in null else column_sql(name, name in shifted)
+        if name == mostly_null:
+            expression = f"CASE WHEN i % 10 = 0 THEN {expression} ELSE NULL END"
         if numeric_cat and name == "f_cat":
             expression = "(hash('f_cat' || i::VARCHAR) % 3)::DOUBLE"
         columns.append(f"{expression} AS {name}")
@@ -90,13 +103,21 @@ def corrupt(path: Path, mode: str) -> None:
 def write_inputs(folder: Path, fixture: Fixture) -> dict[str, Path]:
     start = fixture.reference_newest_year - 2
     reference, current = folder / "reference.parquet", folder / "current.parquet"
-    write_matrix(reference, fixture.reference_rows, f"{start} + i // ({fixture.reference_rows} // 3 + 1)", (), None, fixture.drop_from_reference)
+    write_matrix(
+        reference,
+        fixture.reference_rows,
+        f"{start} + i // ({fixture.reference_rows} // 3 + 1)",
+        (),
+        fixture.null_in_reference,
+        fixture.drop_from_reference,
+        mostly_null=fixture.mostly_null_in_reference,
+    )
     write_matrix(
         current,
         fixture.current_rows,
         str(fixture.current_year),
         fixture.shifted,
-        fixture.null_feature,
+        fixture.null_in_current,
         fixture.drop_from_current,
         fixture.cat_as_number_in_current,
     )
@@ -202,7 +223,9 @@ def evidently_missing(folder: Path) -> Problems:
     return problems
 
 
-def checked(fixture: Fixture, expect_triggered: bool, expect_drifted: int | None = None) -> Callable[[Path], Problems]:
+def checked(fixture: Fixture, expect_triggered: bool, expect_drifted: int | None = None, excluded: tuple[str, ...] = ()) -> Callable[[Path], Problems]:
+    """Run the check on the fixture: the record must be checked, cover the compared features (the list minus ``excluded``) and name the excluded ones."""
+
     def case(folder: Path) -> Problems:
         code, text, out = run_check(folder, fixture, evidently=need_evidently())
         if code != 0:
@@ -215,9 +238,17 @@ def checked(fixture: Fixture, expect_triggered: bool, expect_drifted: int | None
             problems.append(f"triggered is {record['triggered']}, expected {expect_triggered}, share {record['drift_share']}")
         if expect_drifted is not None and record["drifted_count"] != expect_drifted:
             problems.append(f"{record['drifted_count']} features drifted, expected {expect_drifted}")
+        compared = [name for name in fixture.features if name not in excluded]
         names = {item["name"] for item in record["features"]}
-        if names != set(fixture.features):
-            problems.append(f"the record covers {sorted(names)}, not the feature list")
+        if names != set(compared):
+            problems.append(f"the record covers {sorted(names)}, not the compared features {sorted(compared)}")
+        if record["feature_count"] != len(compared):
+            problems.append(f"feature_count is {record['feature_count']}, expected the {len(compared)} compared features")
+        expected_excluded = [{"name": name, "reason": "all_missing_in_reference"} for name in fixture.features if name in excluded]
+        if record["excluded_features"] != expected_excluded:
+            problems.append(f"excluded_features is {record['excluded_features']}, expected {expected_excluded}")
+        if record["drift_share"] is not None and record["drifted_count"] != round(record["drift_share"] * record["feature_count"]):
+            problems.append(f"the drift share {record['drift_share']} is not drifted_count over feature_count")
         return problems
 
     return case
@@ -237,7 +268,15 @@ def tests_are_the_decided_ones(folder: Path) -> Problems:
 
 
 def rerun_is_identical(folder: Path) -> Problems:
-    fixture = Fixture(shifted=NUMERIC[:2])
+    return rerun_with(folder, Fixture(shifted=NUMERIC[:2]))
+
+
+def rerun_with_an_excluded_feature_is_identical(folder: Path) -> Problems:
+    problems = rerun_with(folder, Fixture(shifted=NUMERIC[:2], null_in_reference=("f_num_d",)))
+    return problems or ([] if read_record(folder / "out")["excluded_features"] else ["the rerun fixture excluded no feature"])
+
+
+def rerun_with(folder: Path, fixture: Fixture) -> Problems:
     evidently = need_evidently()
     code, text, out = run_check(folder, fixture, evidently=evidently)
     if code != 0:
@@ -250,6 +289,39 @@ def rerun_is_identical(folder: Path) -> Problems:
     if sorted(path.name for path in out.iterdir()) != ["drift_HAI_1.json"]:
         problems.append(f"the output folder holds more than the record: {sorted(path.name for path in out.iterdir())}")
     return problems
+
+
+def excluded_feature_is_not_a_type_check(folder: Path) -> Problems:
+    """A feature with no reference value is excluded before its type is judged: an all-missing text column against a numeric one is no type mismatch."""
+    code, text, out = run_check(folder, Fixture(null_in_reference=("f_cat",), cat_as_number_in_current=True), evidently=need_evidently())
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    record = read_record(out)
+    return [] if [item["name"] for item in record["excluded_features"]] == ["f_cat"] else [f"excluded_features is {record['excluded_features']}"]
+
+
+def a_feature_the_list_leaves_out_does_not_appear(folder: Path) -> Problems:
+    """A column that is all missing but not on the feature list (training dropped it) is neither compared nor excluded: the record does not name it at all."""
+    code, text, out = run_check(
+        folder, Fixture(null_in_reference=("f_num_d",), null_in_current=("f_num_d",), features=FEATURES[:3]), evidently=need_evidently()
+    )
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    record = read_record(out)
+    problems = schema_problems(record)
+    if "f_num_d" in json.dumps(record):
+        problems.append("the record names a feature that the list does not hold")
+    if record["excluded_features"] != [] or record["feature_count"] != 3:
+        problems.append(f"expected no exclusion and 3 compared features, got {record['excluded_features']} and {record['feature_count']}")
+    return problems
+
+
+def skipped_record_excludes_nothing(folder: Path) -> Problems:
+    code, text, out = run_check(folder, Fixture(current_rows=10, null_in_reference=("f_num_a",)))
+    if code != 0:
+        return [f"exit {code}: {text[:300]}"]
+    record = read_record(out)
+    return schema_problems(record) + ([] if record["excluded_features"] == [] else [f"a skipped record names excluded features {record['excluded_features']}"])
 
 
 def record_names_its_inputs(folder: Path) -> Problems:
@@ -283,7 +355,12 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("refuses_a_feature_missing_from_current", refused("feature_missing", Fixture(drop_from_current="f_num_b"), "f_num_b")),
         ("refuses_a_feature_missing_from_reference", refused("feature_missing", Fixture(drop_from_reference="f_cat"), "f_cat")),
         ("refuses_a_feature_of_another_type", refused("feature_type_differs", Fixture(cat_as_number_in_current=True), "f_cat")),
-        ("refuses_an_all_missing_feature", refused("feature_all_missing", Fixture(null_feature="f_num_a"), "f_num_a")),
+        ("refuses_a_feature_missing_only_in_current", refused("feature_all_missing", Fixture(null_in_current=("f_num_a",)), "f_num_a")),
+        ("refuses_when_every_feature_is_missing_in_reference", refused("no_comparable_feature", Fixture(null_in_reference=FEATURES))),
+        (
+            "refuses_a_kept_feature_that_loses_its_values_in_current",
+            refused("feature_all_missing", Fixture(null_in_current=("f_num_b",), null_in_reference=("f_num_a",)), "f_num_b"),
+        ),
         ("refuses_an_empty_feature_list", refused("features_empty", Fixture(features=()))),
         ("refuses_a_garbage_reference_matrix", refused("matrix_unreadable", Fixture(corrupt_reference="garbage"), "reference")),
         ("refuses_a_truncated_reference_matrix", refused("matrix_unreadable", Fixture(corrupt_reference="truncated"), "reference")),
@@ -296,7 +373,28 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("triggers_at_exactly_half", checked(Fixture(shifted=NUMERIC[:2], features=NUMERIC), True, 2)),
         ("checks_at_exactly_the_minimum_of_100_rows", checked(Fixture(current_rows=100, shifted=FEATURES), True, len(FEATURES))),
         ("stays_quiet_below_half", checked(Fixture(shifted=NUMERIC[:1], features=NUMERIC), False, 1)),
+        (
+            "excludes_a_feature_missing_in_every_reference_row",
+            checked(Fixture(null_in_reference=("f_num_a",)), False, 0, excluded=("f_num_a",)),
+        ),
+        (
+            "excludes_a_feature_missing_in_the_whole_baseline",
+            checked(Fixture(null_in_reference=("f_num_a",), null_in_current=("f_num_a",)), False, 0, excluded=("f_num_a",)),
+        ),
+        (
+            "excludes_several_features_in_list_order",
+            checked(Fixture(null_in_reference=("f_num_c", "f_num_a")), False, 0, excluded=("f_num_a", "f_num_c")),
+        ),
+        (
+            "judges_the_share_on_the_compared_features",
+            checked(Fixture(shifted=("f_num_a",), features=NUMERIC[:3], null_in_reference=("f_num_c",)), True, 1, excluded=("f_num_c",)),
+        ),
+        ("compares_a_mostly_missing_feature", checked(Fixture(mostly_null_in_reference="f_num_a"), False, None)),
+        ("excluded_feature_is_not_a_type_check", excluded_feature_is_not_a_type_check),
+        ("a_feature_the_list_leaves_out_does_not_appear", a_feature_the_list_leaves_out_does_not_appear),
+        ("skipped_record_excludes_nothing", skipped_record_excludes_nothing),
         ("uses_the_decided_tests_above_1000_rows", tests_are_the_decided_ones),
         ("rerun_changes_nothing", rerun_is_identical),
+        ("rerun_with_an_excluded_feature_changes_nothing", rerun_with_an_excluded_feature_is_identical),
         ("record_names_its_inputs", record_names_its_inputs),
     ]

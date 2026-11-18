@@ -7,9 +7,10 @@ a record of another run, a changed or inconsistent record, a marker without the 
 are not the types of its records and a decision that differs in any field from the one the gate rule (``decide_drift_gate``) gives for the marker's types and
 records. It builds at most one request for ``training_dag``: the model's own training run for the types the gate trains (the model drifted, its feature schema
 changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
-``trigger=drift:<this run>``. A type the gate skips is logged with its reason. The trigger is mapped over that list, so a model that does not train starts
-nothing. The training run id and the trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of
-a retrained model is automatic through the promotion rule and the canary. A run whose check failed does not start again: its launch is terminal, so
+``trigger=drift:<this run>``. A type the gate skips is logged with its reason, and a type whose check left features out of the comparison (no value in any
+reference row) is logged with their names. The trigger is mapped over that list, so a model that does not train starts nothing. The training run id and the
+trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of a retrained model is automatic through the
+promotion rule and the canary. A run whose check failed does not start again: its launch is terminal, so
 ``trigger_dag --drift-attempt`` starts the same model run's check as a run of its own that runs the code staged for it."""
 
 from __future__ import annotations
@@ -84,8 +85,22 @@ def read_marker(s3: Any, bucket: str, drift_run: str) -> tuple[dict[str, Any], l
             raise RuntimeError(f"the drift record {name} belongs to another run, {record.get('run_id')}")
         if record["triggered"] and (record.get("status") != "checked" or record.get("population") != "primary"):
             raise RuntimeError(f"the drift record {name} is inconsistent: only a checked record of the primary population may trigger")
+        excluded_names(record)
         records.append(record)
     return marker, sorted(records, key=lambda item: HAI_TYPES.index(item["hai_type"]))
+
+
+def excluded_names(record: dict[str, Any]) -> list[str]:
+    """The names of the features the drift check left out of its comparison. A record whose list is missing or not a list of a name and the reason
+    ``all_missing_in_reference`` is refused: it was not written by the drift check of this repository."""
+    name = f"drift_{record['hai_type']}.json"
+    excluded = record.get("excluded_features")
+    if not isinstance(excluded, list) or any(
+        not isinstance(item, dict) or set(item) != {"name", "reason"} or not isinstance(item["name"], str) or item["reason"] != "all_missing_in_reference"
+        for item in excluded
+    ):
+        raise RuntimeError(f"the drift record {name} has no well-formed list of excluded features (a name and the reason all_missing_in_reference each)")
+    return [item["name"] for item in excluded]
 
 
 def gate_types(marker: dict[str, Any], model: str, records: list[dict[str, Any]]) -> tuple[list[str], dict[str, str]]:
@@ -164,6 +179,15 @@ with DAG(
             raise RuntimeError("HAI_LAUNCH_BUCKET (the data bucket of the launched jobs) is not set in the Airflow service environment")
         marker, records = read_marker(s3_client(), bucket, params["run_id"])
         types, skipped = gate_types(marker, params["model"], records)
+        for record in records:
+            if names := excluded_names(record):
+                LOG.info(
+                    "drift check of %s for %s did not compare %d features (all_missing_in_reference): %s",
+                    params["model"],
+                    record["hai_type"],
+                    len(names),
+                    ", ".join(names),
+                )
         for hai_type, reason in skipped.items():
             LOG.info("no training of %s for %s: %s", params["model"], hai_type, reason)
         return training_requests(params["run_id"], params["mlflow"], params["model"], params["features_run"], types)

@@ -163,12 +163,12 @@ def run_check(work: Path, extra: list[str] | None = None, *, evidently: bool = F
     return done.returncode, done.stdout + done.stderr
 
 
-def prepared_workspace(folder: Path, *, population: str = "primary", current_year: int = 2022) -> Path:
-    """A workspace as the baseline and current phases leave it, for HAI_1, written from the drift fixtures."""
+def prepared_workspace(folder: Path, *, population: str = "primary", current_year: int = 2022, fixture: drift_cases.Fixture | None = None) -> Path:
+    """A workspace as the baseline and current phases leave it, for HAI_1, written from the drift fixtures (or from ``fixture``)."""
     work = folder / "work"
     type_folder = work / "drift" / RUN / "HAI_1"
     type_folder.mkdir(parents=True)
-    fixture = drift_cases.Fixture(population=population, current_population=population, current_year=current_year)
+    fixture = fixture or drift_cases.Fixture(population=population, current_population=population, current_year=current_year)
     paths = drift_cases.write_inputs(folder, fixture)
     for name, target in (
         ("reference-matrix", "reference.parquet"),
@@ -211,6 +211,32 @@ def check_phase_checks_with_evidently(folder: Path) -> Problems:
     code, text = run_check(work, evidently=drift_cases.need_evidently())
     path = work / "drift" / RUN / "records" / "drift_HAI_1.json"
     return [] if code == 0 and json.loads(path.read_text())["status"] == "checked" else [f"exit {code}: {text[:300]}"]
+
+
+def check_phase_excludes_a_feature_and_the_gate_still_decides(folder: Path) -> Problems:
+    """The scheduled gate on a baseline whose feature has no reference value: the record names the exclusion, the marker carries the record and the gate reads
+    ``triggered`` as before (here a drifted compared feature trains the type)."""
+    fixture = drift_cases.Fixture(null_in_reference=("f_num_d",), shifted=drift_cases.NUMERIC[:3], features=drift_cases.NUMERIC)
+    work = prepared_workspace(folder, fixture=fixture)
+    path = work / "drift" / RUN / "baseline.done.json"
+    path.write_text(json.dumps(json.loads(path.read_text()) | {"model": "m2"}) + "\n")
+    code, text = run_check(work, evidently=drift_cases.need_evidently())
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    s3 = MemoryS3()
+    aws_run().publish_phase(s3, "bucket-for-tests", work, RUN)
+    record = json.loads(s3.objects[("bucket-for-tests", f"drift/{RUN}/drift_HAI_1.json")])
+    marker = json.loads(s3.objects[("bucket-for-tests", f"drift/{RUN}/_complete.json")])
+    problems = (
+        []
+        if record["excluded_features"] == [{"name": "f_num_d", "reason": "all_missing_in_reference"}]
+        else [f"excluded_features {record['excluded_features']}"]
+    )
+    if (record["feature_count"], record["drifted_count"], record["triggered"]) != (3, 3, True):
+        problems.append(f"the counts are {record['feature_count']} compared, {record['drifted_count']} drifted, triggered {record['triggered']}")
+    if marker["gate"]["decisions"] != {"HAI_1": {"train": True, "reason": "drifted"}}:
+        problems.append(f"the gate decision is {marker['gate']['decisions']}")
+    return problems
 
 
 def check_phase_without_evidently_names_it(folder: Path) -> Problems:
@@ -536,6 +562,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("task_check_names_a_missing_phase", check_phase_names_a_missing_phase),
         ("task_check_without_evidently_names_it", check_phase_without_evidently_names_it),
         ("task_check_checks_with_evidently", check_phase_checks_with_evidently),
+        ("task_check_excludes_a_feature_and_the_gate_still_decides", check_phase_excludes_a_feature_and_the_gate_still_decides),
         ("task_publish_writes_records_then_the_marker", publish_writes_records_then_the_marker),
         ("task_publish_repeats_to_the_same_result", publish_repeats_to_the_same_result),
         ("task_publish_with_no_records_still_marks_the_run", publish_with_no_records_still_marks_the_run),

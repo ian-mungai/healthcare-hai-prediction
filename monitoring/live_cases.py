@@ -51,13 +51,21 @@ def write_baseline(
     population: str = "primary",
     features: tuple[str, ...] = FEATURES,
     hai_type: str = "HAI_1",
+    null_before_newest: tuple[str, ...] = (),
+    null_in_newest: tuple[str, ...] = (),
 ) -> dict[str, Path]:
     """A baseline matrix of ``years`` with ``per_year`` rows each plus ``current_rows`` rows of 2024, the manifest that names 2024 as its newest year and the
-    feature list. A feature in ``shifted`` moves only in the 2024 rows."""
+    feature list. A feature in ``shifted`` moves only in the 2024 rows. A feature in ``null_before_newest`` has no value before 2024 (the shape of a measure
+    first published in the newest year) and one in ``null_in_newest`` has none in 2024."""
     reference_rows = per_year * len(years)
     year = f"CASE WHEN i < {reference_rows} THEN ({years[0] if years else 2024} + i // {per_year}) ELSE 2024 END" if years else "2024"
+
+    def missing(name: str) -> str:
+        return "NULL::VARCHAR" if name == "f_cat" else "NULL::DOUBLE"
+
     columns = [
-        f"CASE WHEN i >= {reference_rows} THEN {drift_cases.column_sql(name, name in shifted)} ELSE {drift_cases.column_sql(name, False)} END AS {name}"
+        f"CASE WHEN i >= {reference_rows} THEN {missing(name) if name in null_in_newest else drift_cases.column_sql(name, name in shifted)} "
+        f"ELSE {missing(name) if name in null_before_newest else drift_cases.column_sql(name, False)} END AS {name}"
         for name in FEATURES
     ]
     projection = f"'k' || i::VARCHAR AS spine_key, {year} AS window_year, (hash('label' || i::VARCHAR) % 1000) / 500.0 AS label_value, {', '.join(columns)}"
@@ -127,7 +135,15 @@ def splits_by_year_and_checks(folder: Path) -> Problems:
         return [f"exit {code}: {text[:400]}"]
     record = drift_cases.read_record(out)
     problems = drift_cases.schema_problems(record)
-    expected = {"status": "checked", "triggered": False, "drifted_count": len(FEATURES), "feature_count": len(FEATURES), "run_id": RUN, "hai_type": "HAI_1"}
+    expected = {
+        "status": "checked",
+        "triggered": False,
+        "drifted_count": len(FEATURES),
+        "feature_count": len(FEATURES),
+        "excluded_features": [],
+        "run_id": RUN,
+        "hai_type": "HAI_1",
+    }
     problems += [f"{key} is {record[key]!r}, expected {value!r}" for key, value in expected.items() if record[key] != value]
     if record["reference"]["newest_window_year"] != 2023 or record["reference"]["rows"] != 1500:
         problems.append(f"the reference is {record['reference']}, expected 1500 rows up to 2023")
@@ -136,6 +152,41 @@ def splits_by_year_and_checks(folder: Path) -> Problems:
     if not record["evidently_version"] or record["drift_share"] != 1.0:
         problems.append(f"Evidently did not compute the drift: version {record['evidently_version']}, share {record['drift_share']}")
     return problems
+
+
+def excludes_a_feature_without_reference_values(folder: Path) -> Problems:
+    """The live shape of drift_elastic_net_d6045404: a feature first published in the newest year has no value in any year before it. The check compares the
+    other features, names the feature as excluded in the record and in the UI snapshot, and the Evidently report holds only the compared features."""
+    paths = write_baseline(folder, shifted=NUMERIC[:2], null_before_newest=("f_num_d",))
+    code, text, out, workspace = run_live(folder, paths, evidently=drift_cases.need_evidently())
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    record = drift_cases.read_record(out)
+    problems = drift_cases.schema_problems(record)
+    if record["status"] != "checked" or record["feature_count"] != 4 or "f_num_d" in {item["name"] for item in record["features"]}:
+        problems.append(f"expected a checked record of 4 compared features without f_num_d, got {record['status']} {record['feature_count']}")
+    if record["excluded_features"] != [{"name": "f_num_d", "reason": "all_missing_in_reference"}]:
+        problems.append(f"excluded_features is {record['excluded_features']}")
+    snapshot = json.loads((out / "snapshot_HAI_1.json").read_text())
+    if snapshot["metadata"].get("excluded_features") != "f_num_d":
+        problems.append(f"the UI snapshot does not name the excluded feature: {snapshot['metadata']}")
+    if "f_num_d" in (out / "report_HAI_1.html").read_text():
+        problems.append("the Evidently report holds the excluded feature")
+    if projects_of(workspace) != {"m2 Elastic Net HAI_1 CLABSI": [RUN]}:
+        problems.append(f"the workspace holds {projects_of(workspace)}")
+    return problems
+
+
+def a_rerun_with_an_excluded_feature_reuses_the_bytes(folder: Path) -> Problems:
+    paths, evidently = write_baseline(folder, null_before_newest=("f_num_d",)), drift_cases.need_evidently()
+    code, text, out, _ = run_live(folder, paths, evidently=evidently)
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    first = {name: (out / name).read_bytes() for name in OUTPUTS}
+    code, text, _, _ = run_live(folder, paths, evidently=evidently)
+    if code != 0:
+        return [f"the rerun exited {code}: {text[:300]}"]
+    return [] if first == {name: (out / name).read_bytes() for name in OUTPUTS} else ["a rerun of a run with an excluded feature changed an output"]
 
 
 def stays_below_the_share_without_a_shift(folder: Path) -> Problems:
@@ -1170,9 +1221,19 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     ]
     return [
         *refusals,
+        (
+            "live_refuses_a_feature_that_loses_its_values_in_the_newest_year",
+            refused("feature_all_missing", lambda f: write_baseline(f, null_in_newest=("f_num_b",)), "f_num_b"),
+        ),
+        (
+            "live_refuses_when_no_feature_has_a_reference_value",
+            refused("no_comparable_feature", lambda f: write_baseline(f, null_before_newest=FEATURES)),
+        ),
         ("live_refuses_an_unknown_model", refuses_an_unknown_model),
         ("live_names_the_missing_dependency", names_the_missing_dependency),
         ("live_splits_by_year_and_checks", splits_by_year_and_checks),
+        ("live_excludes_a_feature_without_reference_values", excludes_a_feature_without_reference_values),
+        ("live_rerun_with_an_excluded_feature_reuses_the_bytes", a_rerun_with_an_excluded_feature_reuses_the_bytes),
         ("live_stays_below_the_share_without_a_shift", stays_below_the_share_without_a_shift),
         ("live_writes_the_record_and_html_to_the_demo_folder_only", writes_the_record_and_the_html_to_the_demo_folder_only),
         ("live_rerun_adds_nothing", rerun_adds_nothing),
