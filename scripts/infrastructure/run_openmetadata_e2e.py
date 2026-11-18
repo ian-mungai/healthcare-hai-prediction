@@ -289,7 +289,80 @@ def ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest() -> None:
         seen.clear()
         del keys["metadata/dbt/manifest.json"]
         code, _, err = run_ingest(["dbt", *args], env, seen.append, s3_client=FakeS3(keys))
-    require(code == 1 and seen == [] and "manifest.json" in err, (code, err))
+    require(code == 3 and seen == [] and "manifest.json" in err, (code, err))
+
+
+MISSING_MANIFEST_EXIT = 3  # the exit code of a dbt ingestion that skipped a batch with no manifest.json (the Airflow task fails on any nonzero code)
+
+
+class DeniedS3(FakeS3):
+    """A FakeS3 that refuses the read of one key, as a role without the permission would."""
+
+    def download_file(self, bucket: str, key: str, target: str) -> None:
+        from botocore.exceptions import ClientError
+
+        if key in self.deny:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "HeadObject")
+        super().download_file(bucket, key, target)
+
+
+def layer_ingest(keys: dict[str, bytes], s3: type[FakeS3] = FakeS3, **extra: Any) -> tuple[int, str, str, list[str], FakeS3]:
+    """Run the dbt ingestion over the three layer runs of the chain with the repository config; return the code, stdout, stderr, the layers whose workflow ran
+    (read from the manifest each workflow was given) and the S3 stand-in."""
+    read: list[str] = []
+
+    def workflow(config: dict[str, Any]) -> None:
+        read.append(json.loads(Path(config["source"]["sourceConfig"]["config"]["dbtConfigSource"]["dbtManifestFilePath"]).read_text())["layer"])
+
+    client = s3(keys, **extra)
+    layers = [item for layer, run in (("silver", SILVER_RUN), ("gold", GOLD_RUN), ("features", FEATURES_RUN)) for item in ("--dbt-run", f"{layer}={run}")]
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = ingest_environment(Path(folder))
+        code, out, err = run_ingest(["dbt", *args, *layers], env, workflow, s3_client=client)
+    return code, out, err, read, client
+
+
+def ingest_dbt_skips_a_layer_without_a_manifest_and_fails_after_the_others() -> None:
+    """A layer run with no manifest.json is skipped and named, with its prefix, on one line each. The other layers still ingest in chain order. The exit code
+    is the distinct nonzero code 3 (not 1, the code of a failed run), so the Airflow metadata task fails and its failure alert fires. Nothing about the
+    missing layer reaches a workflow."""
+    for missing in ("silver", "gold", "features"):
+        run = {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}[missing]
+        keys = chain_keys()
+        del keys[f"metadata/dbt/{missing}/{run}/manifest.json"]
+        code, out, err, read, _ = layer_ingest(keys)
+        require(code == MISSING_MANIFEST_EXIT, f"{missing} missing: code {code}, {err}")
+        require(read == [layer for layer in ("silver", "gold", "features") if layer != missing], f"{missing} missing: ingested {read}")
+        lines = [line for line in err.splitlines() if "manifest.json" in line]
+        require(len(lines) == 1 and missing in lines[0] and f"metadata/dbt/{missing}/{run}/" in lines[0], f"{missing} missing: {err!r}")
+        require("dbt done" not in out, f"{missing} missing: the run must not say it is done: {out!r}")
+
+
+def ingest_dbt_with_every_manifest_missing_sends_nothing_and_fails_the_same_way() -> None:
+    """When no layer has a manifest.json, no workflow runs, each layer is named once and the code is the same 3."""
+    keys = chain_keys()
+    for layer, run in (("silver", SILVER_RUN), ("gold", GOLD_RUN), ("features", FEATURES_RUN)):
+        del keys[f"metadata/dbt/{layer}/{run}/manifest.json"]
+    code, _, err, read, _ = layer_ingest(keys)
+    lines = [line for line in err.splitlines() if "manifest.json" in line]
+    require(code == MISSING_MANIFEST_EXIT and read == [], f"all missing: code {code}, ingested {read}")
+    require(len(lines) == 3 and all(layer in line for layer, line in zip(("silver", "gold", "features"), lines, strict=True)), f"all missing: {err!r}")
+
+
+def ingest_dbt_still_stops_on_a_fetch_failure_or_stale_artifacts_before_sending_anything() -> None:
+    """A skipped layer changes no other refusal. A refused read (any layer, before or after the missing one) and a stale copy still return 1 before any
+    workflow runs, so a layer that has a manifest is never ingested beside a failure that makes the set untrustworthy."""
+    keys = chain_keys()
+    del keys[f"metadata/dbt/silver/{SILVER_RUN}/manifest.json"]
+    for denied in (f"metadata/dbt/gold/{GOLD_RUN}/catalog.json", f"metadata/dbt/features/{FEATURES_RUN}/manifest.json"):
+        code, _, err, read, _ = layer_ingest(keys | {denied: b"{}"}, DeniedS3, deny={denied})
+        require(code == 1 and read == [] and "cannot be read" in err, f"{denied}: code {code}, ingested {read}, {err!r}")
+    stale = json.dumps({"layer": "features", "nodes": {"model.hai.int_x": {"resource_type": "model", "schema": "hai_mirror_features"}}}).encode()
+    code, _, err, read, _ = layer_ingest(keys | {f"metadata/dbt/features/{FEATURES_RUN}/manifest.json": stale})
+    require(code == 1 and read == [] and "before the mirror rename" in err, f"stale copy after a missing layer: code {code}, ingested {read}, {err!r}")
+    stale_first = keys | {f"metadata/dbt/gold/{GOLD_RUN}/manifest.json": stale}
+    code, _, err, read, _ = layer_ingest(stale_first)
+    require(code == 1 and read == [], f"stale copy: code {code}, ingested {read}")
 
 
 def glue_config_reads_the_two_mirror_databases_with_the_task_role() -> None:
@@ -959,7 +1032,7 @@ def host_ingest_ingests_the_three_recorded_layers() -> None:
 
 
 def host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas() -> None:
-    """A chain run saved before the mirror rename fails the dbt step like a missing manifest does: exit 1, no dbt workflow and no raw files write. The steps
+    """A chain run saved before the mirror rename fails the dbt step: exit 1, no dbt workflow and no raw files write. The steps
     before the dbt downloads still run: the chain pin reads, the bronze run lookup and the Glue source (it reads nothing of the dbt copies). Each form of the
     old name is refused: a node placement, three-part and two-part SQL, the raw SQL fields and a key."""
     forms = {
@@ -992,6 +1065,36 @@ def host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas() -> None:
         require(code == 1 and types == ["DatabaseMetadata"], f"{label}: glue ran, dbt did not: code {code}, workflows {types}")
         require(not catalog.calls, f"{label}: the raw files step ran after the refusal: {catalog.calls}")
         require(f"silver/{SILVER_RUN}" in err.getvalue() and "model.hai.int_x" in err.getvalue() and "hai_mirror_silver" in err.getvalue(), err.getvalue())
+
+
+def host_ingest_keeps_going_after_a_layer_without_a_manifest_and_exits_with_its_code() -> None:
+    """A recorded layer run with no manifest.json does not stop the host task early: the other layers' dbt lineage ingests, the raw files step still writes
+    its bronze files, and the task ends with the missing-manifest code 3, so the task fails and the alert fires."""
+    from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+
+    keys = chain_keys(**{f"metadata/dbt/silver/{SILVER_RUN}/manifest.json": None}) | {
+        SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN),
+        BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode(),
+    }
+    read: list[str] = []
+    types: list[str] = []
+
+    def workflow(config: dict[str, Any]) -> None:
+        types.append(config["source"]["sourceConfig"]["config"]["type"])
+        source = config["source"]["sourceConfig"]["config"].get("dbtConfigSource")
+        if source is not None:
+            read.append(json.loads(Path(source["dbtManifestFilePath"]).read_text())["layer"])
+
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        env["DATA_BUCKET_NAME"] = "example-project-data-dev"
+        with quiet() as (_, err):
+            code = host_ingest.main([*args, "raw_files"], env=env, workflow=workflow, s3_client=FakeS3(keys), http=catalog)
+    require(code == MISSING_MANIFEST_EXIT, f"code {code}, {err.getvalue()}")
+    require(read == ["gold", "features"] and types[0] == "DatabaseMetadata", f"glue then the two layers with a manifest: {types}, {read}")
+    require(catalog.patches() == 1, f"the raw files step ran after the skipped layer: {catalog.calls}")
+    require(f"silver/{SILVER_RUN}" in err.getvalue(), err.getvalue())
 
 
 def host_ingest_never_falls_back_to_latest() -> None:
@@ -1531,6 +1634,9 @@ CASES: list[Callable[[], None]] = [
     ingest_names_a_missing_variable_but_not_a_value,
     ingest_fails_when_the_workflow_fails_without_echoing_the_config,
     ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest,
+    ingest_dbt_skips_a_layer_without_a_manifest_and_fails_after_the_others,
+    ingest_dbt_with_every_manifest_missing_sends_nothing_and_fails_the_same_way,
+    ingest_dbt_still_stops_on_a_fetch_failure_or_stale_artifacts_before_sending_anything,
     raw_files_are_written_onto_each_bronze_table,
     raw_files_write_is_idempotent_and_keeps_other_text,
     raw_files_list_is_capped,
@@ -1550,6 +1656,7 @@ CASES: list[Callable[[], None]] = [
     chain_refuses_a_missing_or_mismatched_pin,
     host_ingest_ingests_the_three_recorded_layers,
     host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas,
+    host_ingest_keeps_going_after_a_layer_without_a_manifest_and_exits_with_its_code,
     host_ingest_never_falls_back_to_latest,
     host_ingest_aims_both_sources_at_the_persistent_catalog,
     host_ingest_refuses_an_unusable_catalog_address,

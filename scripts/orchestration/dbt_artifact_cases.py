@@ -546,7 +546,7 @@ def ingestion_runs_once_per_layer() -> None:
         missing = WriteOnceBucket()
         seen.clear()
         code = openmetadata_ingest.main(arguments, environment, seen.append, s3_client=missing)
-        require(code == 1 and not seen, "a layer run without its manifest fails before any workflow runs")
+        require(code == 3 and not seen, "layer runs without any manifest send nothing and end with the missing-manifest code 3")
 
 
 def ingestion_fails_on_an_unreadable_artifact() -> None:

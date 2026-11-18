@@ -8,7 +8,12 @@ A saved dbt copy that still names a ``hai_mirror_<layer>`` schema anywhere (a ru
 exit 1 before any workflow starts, and is never translated. It refuses a configuration that profiles, samples or reads rows before it fills any
 placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside the Public research-data scope, which is
 why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
-Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
+A layer run whose dbt artifacts have no ``manifest.json`` is skipped and never fails the other layers' ingestion (owner decision of Nov 17 2026): each layer
+with a manifest is ingested, then one line names each skipped layer and its prefix and the run ends with exit 3, so the Airflow metadata task fails
+(it passes only on exit 0) and its failure alert fires and the gap is never silent. A refused read or a stale copy still stops with exit 1 before
+anything is sent.
+Exit codes: 0 done, 1 the run failed, 2 the configuration was refused, 3 done for the layers with a manifest and at least one layer skipped for want of one
+(every layer skipped sends nothing). Output names variables and exception classes and never prints a value.
 """
 
 from __future__ import annotations
@@ -66,6 +71,7 @@ DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, i
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
 OLD_MIRROR_PREFIX = "hai_mirror_"  # the Glue databases of the mirror before the rename of Nov 17 2026 (hai_mirror_<layer>)
 DBT_RUN = re.compile(r"^(silver|gold|features)=([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")
+MISSING_MANIFEST_EXIT = 3  # at least one dbt batch had no manifest.json and was skipped; the others were ingested
 
 
 def explicitly_off(value: Any) -> bool:
@@ -123,7 +129,7 @@ class FetchFailed(RuntimeError):
 
 
 def fetch_dbt(s3: Any, bucket: str, folder: Path, prefix: str = DBT_PREFIX) -> list[str]:
-    """Download the dbt artifacts under ``prefix`` into ``folder`` and return the names that do not exist. A missing manifest is a failure for the caller.
+    """Download the dbt artifacts under ``prefix`` into ``folder`` and return the names that do not exist. A missing manifest makes the caller skip the batch.
 
     Only a genuine not-found is absent. A refused read, a timeout or any other failure raises ``FetchFailed``, so the ingestion never runs on a partial set
     of files that it took for complete."""
@@ -352,6 +358,14 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     if options.server_url is not None:
         config["workflowConfig"]["openMetadataServerConfig"]["hostPort"] = options.server_url
     configs: list[tuple[str, dict[str, Any]]] = [(options.source, config)]
+    skipped: list[tuple[str, str]] = []
+
+    def report_skipped() -> None:
+        for label, prefix in skipped:
+            sys.stderr.write(
+                f"openmetadata_ingest: skipped {label} ({prefix}): manifest.json is missing from its dbt artifacts, so nothing of it was ingested\n"
+            )
+
     if options.source == "dbt":
         client = s3_client
         if client is None:
@@ -369,8 +383,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
                 sys.stderr.write(f"openmetadata_ingest: {error}\n")
                 return 1
             if "manifest.json" in absent:
-                sys.stderr.write(f"openmetadata_ingest: manifest.json is missing from the dbt artifacts of {label} ({prefix})\n")
-                return 1
+                skipped.append((label, prefix))
+                continue
             if mapping is not None:
                 try:
                     check_current_names(folder, mapping)
@@ -407,7 +421,11 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
             run(filled)
         except Exception as error:
             sys.stderr.write(f"openmetadata_ingest: {label} failed: {type(error).__name__}\n")
+            report_skipped()
             return 1
+    report_skipped()
+    if skipped:
+        return MISSING_MANIFEST_EXIT
     sys.stdout.write(f"openmetadata_ingest: {options.source} done\n")
     return 0
 

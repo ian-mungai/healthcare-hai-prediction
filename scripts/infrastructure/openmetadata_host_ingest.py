@@ -6,8 +6,10 @@ copy. The ``raw_files`` source, last, writes the raw files of the bronze run tha
 onto the bronze tables (``openmetadata_raw_files``); a silver run started on ``latest`` names none, which is said and not an error. The job is a bridge
 task that holds only this one container, so the catalog is not on loopback: ``OM_API`` names the catalog API on the host's private address, and the bot token
 arrives in ``OM_INGESTION_TOKEN`` as a task secret. The token is never written to a file. Each source goes through ``openmetadata_ingest.main``, so its refusal
-of a profiling or sampling configuration, its variable check and its dbt download stay the ones of the catalog task. Exit codes: 0 done, 1 a source failed,
-2 refused. Output names variables and exception classes and never prints a value.
+of a profiling or sampling configuration, its variable check and its dbt download stay the ones of the catalog task. A dbt layer run without a
+``manifest.json`` is skipped by that source (exit 3 there); the later sources still run and the task then ends with 3, so the task fails and its alert fires.
+Exit codes: 0 done, 1 a source failed, 2 refused, 3 done but a dbt layer was skipped for want of its manifest.json.
+Output names variables and exception classes and never prints a value.
 """
 
 from __future__ import annotations
@@ -101,6 +103,7 @@ def main(
         server["securityConfig"]["jwtToken"] = token
         run(config)
 
+    skipped_layers = False
     for source in options.sources:
         if source == RAW_FILES:
             if bronze is None:
@@ -130,9 +133,11 @@ def main(
             workflow=aimed,
             s3_client=s3_client,
         )
-        if code:
+        if code == ingest.MISSING_MANIFEST_EXIT:
+            skipped_layers = True
+        elif code:
             return code
-    return 0
+    return ingest.MISSING_MANIFEST_EXIT if skipped_layers else 0
 
 
 if __name__ == "__main__":
