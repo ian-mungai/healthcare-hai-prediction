@@ -22,6 +22,10 @@ RUN_ID_PATTERN = (
     r"|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])"
 )
 RUN_ID = re.compile(RUN_ID_PATTERN)
+# The run ID of a run before the run ID redesign (``training_contract.CODE_STAMP_RUN``), which stored records still name. A reader of stored history takes
+# ``STORED_RUN``; a request and a writer take ``RUN_ID`` alone.
+STORED_RUN_PATTERN = rf"(?:[0-9]{{8}}T[0-9]{{6}}Z-[a-f0-9]{{8}}|{RUN_ID_PATTERN})"
+STORED_RUN = re.compile(STORED_RUN_PATTERN)
 SHA256 = re.compile(r"[a-f0-9]{64}")
 RESULT_NAME = "consumer_result.json"
 READER_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,128}")

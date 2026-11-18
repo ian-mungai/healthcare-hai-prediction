@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import STORED_RUN as STORED_RUN_PATTERN
 from scripts.features import retired_publications
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,8 @@ S3_PROXY = "http://hai-egress:3128"
 S3_CONNECT_TIMEOUT = 5
 S3_REQUEST_TIMEOUT = 30
 RUN_ID = re.compile(RUN_ID_PATTERN)
+# The run IDs that a stored row names, the stamp form of before the run ID redesign too: a reader of rows takes ``STORED_RUN``, a request takes ``RUN_ID``.
+STORED_RUN = re.compile(STORED_RUN_PATTERN)
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
@@ -160,7 +163,7 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
     parsed = []
     for row in rows:
         identity = row.get("run_id")
-        if not isinstance(identity, str) or not RUN_ID.fullmatch(identity):
+        if not isinstance(identity, str) or not STORED_RUN.fullmatch(identity):
             raise ReadError(f"{namespace}.{RUNS_TABLE} holds a row whose run_id is not a run ID")
         try:
             committed = as_utc(row.get("committed_at"))
@@ -183,7 +186,7 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
         if len(matches) != 1:
             raise ReadError(f"{namespace}.{RUNS_TABLE} has {len(matches)} rows for run {run_id}; exactly one is required")
         committed, identity, raw, base = matches[0]
-    if base is not None and (not isinstance(base, str) or not RUN_ID.fullmatch(base)):
+    if base is not None and (not isinstance(base, str) or not STORED_RUN.fullmatch(base)):
         raise ReadError(f"publish run {identity}: base_run is not a run ID")
     return Publication(namespace, identity, committed.isoformat(), parse_snapshot_set(identity, raw), base)
 

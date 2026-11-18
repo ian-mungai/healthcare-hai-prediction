@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.lakehouse.gold_publish_record import IDENT_MAX, RUN_ID, SHA256, PublishError, accept_consumer
+from scripts.lakehouse.gold_publish_record import IDENT_MAX, SHA256, STORED_RUN, PublishError, accept_consumer
 
 LAYERS = ("silver", "gold", "features")
 SILVER_NAMESPACE = {"publish_fixture": "silver_e2e", "real": "silver"}
@@ -285,7 +285,7 @@ def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str
     wanted = source_namespace(source, mode)
     if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
         raise PipelineError(f"the {source} pin has an unsupported shape")
-    if record["run_id"] != run_id or record["mode"] != mode or record["namespace"] != wanted or not RUN_ID.fullmatch(str(record["source_run_id"])):
+    if record["run_id"] != run_id or record["mode"] != mode or record["namespace"] != wanted or not STORED_RUN.fullmatch(str(record["source_run_id"])):
         raise PipelineError(f"the {source} pin identity does not match this consumer")
     snapshots = record["snapshot_set"]
     if not isinstance(snapshots, dict) or set(snapshots) != tables:

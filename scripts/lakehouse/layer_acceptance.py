@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import STORED_RUN as STORED_RUN_PATTERN
 from scripts.lakehouse import pins, version_listing
 from scripts.process import run_command
 
@@ -76,6 +77,8 @@ WRITE_PREFIXES = {
 PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
 FEATURES_RECORD, FEAST_APPLY, FEAST_LOAD = "features_snapshot.json", "feast_apply.json", "feast_materialize.json"
 RUN_ID = re.compile(RUN_ID_PATTERN)
+# The runs that stored records and listings name, the stamp form of before the run ID redesign too. The run of a report takes ``RUN_ID``.
+STORED_RUN = re.compile(STORED_RUN_PATTERN)
 JOB_NAME = re.compile(r"[a-z][a-z0-9_]{1,40}")  # the job grammar of orchestration/ecs_launch.py
 SHA256 = re.compile(r"[a-f0-9]{64}")
 REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -237,7 +240,7 @@ def other_runs_claims(listings: Sequence[Sequence[tuple[str, str, str, int]]]) -
         for key, _, _, _ in versions:
             parts = key.split("/")
             named = len(parts) == 5 and parts[:2] == ["lakehouse", "launch_records"] and parts[4] == "claim.json"
-            if named and RUN_ID.fullmatch(parts[2]) and JOB_NAME.fullmatch(parts[3]):
+            if named and STORED_RUN.fullmatch(parts[2]) and JOB_NAME.fullmatch(parts[3]):
                 claimed.setdefault(parts[2], set()).add(parts[3])
     return claimed
 
@@ -467,7 +470,7 @@ def producer_checks(
             pinned.get("namespace"),
         )
         == (run, "real", namespace)
-        and bool(RUN_ID.fullmatch(str(source)))
+        and bool(STORED_RUN.fullmatch(str(source)))
         and set(snapshots) == tables
         and all(count(value) and value > 0 for value in snapshots.values()),
         f"H3: the pin names the {below} run and its complete snapshot set": named,

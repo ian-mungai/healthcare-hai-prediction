@@ -87,7 +87,7 @@ def evidence_of(model: str, run: str, set_hash: str, mode: str, holds: feast_set
         if released is None:
             return None, True
         record = feast_sets.bound_release(released, hold, model, run)
-        if not reads.RUN_ID.fullmatch(record["base_run"]):
+        if not reads.STORED_RUN.fullmatch(record["base_run"]):
             raise ReadError(f"the release record of run {run} carries a base_run that is no run ID; nothing was loaded")
         if not SHA256.fullmatch(record["set_schema_sha256"]):
             raise ReadError(f"the release record of run {run} carries a set_schema_sha256 that is not a SHA-256; nothing was loaded")
@@ -111,7 +111,7 @@ def check_held_run(model: str, run: str, set_hash: str, holds: feast_sets.HoldSt
     if hold is None:
         raise ReadError(f"run {run} has no hold record, so it cannot excuse the schema change of set {model}; nothing was loaded")
     problems = feast_sets.record_problems(hold, {"feature_set": model, "run_id": run, "set_schema_sha256": set_hash}, ("base_run", "set_schema_sha256"))
-    if not problems and not reads.RUN_ID.fullmatch(hold["base_run"]):
+    if not problems and not reads.STORED_RUN.fullmatch(hold["base_run"]):
         problems = ["base_run"]
     if problems:
         raise ReadError(

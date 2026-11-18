@@ -25,7 +25,7 @@ from scripts.lakehouse.gold_publish import (
     published_runs,
     reconcile_candidates,
 )
-from scripts.lakehouse.gold_publish_record import RUN_ID, PublishError, read_record
+from scripts.lakehouse.gold_publish_record import STORED_RUN, PublishError, read_record
 
 CONTRACT = Path(__file__).resolve().parents[2] / "data_contracts/lakehouse/silver_publish.json"
 SNAPSHOT_QUERY = "SELECT snapshot_id FROM {table}.snapshots WHERE snapshot_id = {snapshot}"
@@ -66,7 +66,7 @@ def write_once(path: Path, document: Mapping[str, Any]) -> None:
 
 def checked_set(ctx: Context, row: Mapping[str, Any]) -> dict[str, int]:
     """Validate a committed set's complete table membership and each snapshot's catalog existence."""
-    if row.get("mode") != ctx.mode or not RUN_ID.fullmatch(str(row.get("run_id", ""))):
+    if row.get("mode") != ctx.mode or not STORED_RUN.fullmatch(str(row.get("run_id", ""))):
         raise PublishError("the committed silver set belongs to another mode or has no run identity")
     snapshots = row.get("snapshot_set")
     if not isinstance(snapshots, dict) or set(snapshots) != set(ctx.plan.tables):
@@ -84,7 +84,7 @@ def checked_set(ctx: Context, row: Mapping[str, Any]) -> dict[str, int]:
 
 def pin(ctx: Context, path: Path, source_run: str | None = None) -> dict[str, Any]:
     """Pin a selected committed silver set once, preserving that choice on retries after the published head moves."""
-    if source_run is not None and not RUN_ID.fullmatch(source_run):
+    if source_run is not None and not STORED_RUN.fullmatch(source_run):
         raise PublishError("the selected silver run ID is invalid")
     if path.exists() or path.is_symlink():
         if path.is_symlink():

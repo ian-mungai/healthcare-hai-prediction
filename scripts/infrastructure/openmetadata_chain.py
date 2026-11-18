@@ -17,8 +17,10 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import STORED_RUN as STORED_RUN_PATTERN
 
 RUN_ID = re.compile(RUN_ID_PATTERN)
+STORED_RUN = re.compile(STORED_RUN_PATTERN)  # the runs that stored pins and launch claims name, the stamp form of before the run ID redesign too
 PIN_KEYS = {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"}
 PIN_KEY = "lakehouse/layer_runs/{layer}/{run}/{name}"
 PIN_BYTES = 2 * 1024**2
@@ -64,7 +66,7 @@ def source_run(s3: Any, bucket: str, layer: str, run: str, name: str, namespace:
     if record["namespace"] != namespace:
         raise ChainError(f"{key}: names namespace {record['namespace']!r}, not {namespace}")
     source = record["source_run_id"]
-    if not isinstance(source, str) or not RUN_ID.fullmatch(source):
+    if not isinstance(source, str) or not STORED_RUN.fullmatch(source):
         raise ChainError(f"{key}: names {source!r}, which is not a run ID")
     return source
 
@@ -94,7 +96,7 @@ def bronze_run(s3: Any, bucket: str, silver_run: str) -> str | None:
     bound = claim["bound"].get("input_run")
     if bound == "latest":
         return None
-    if not isinstance(bound, str) or not RUN_ID.fullmatch(bound):
+    if not isinstance(bound, str) or not STORED_RUN.fullmatch(bound):
         raise ChainError(f"{key}: binds {bound!r}, which is not a run ID")
     return bound
 

@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse.gold_publish import MODES, Context, Plan, ident, load_plan, published_runs, table_exists, table_refs, write_record
-from scripts.lakehouse.gold_publish_record import READER_NAME, RUN_ID, PublishError
+from scripts.lakehouse.gold_publish_record import READER_NAME, RUN_ID, STORED_RUN, PublishError
 
 SCHEMA = 1
 TOP_KEYS = frozenset({"schema", "fence", "items"})
@@ -137,7 +137,7 @@ def load_protected(path: Path | None) -> Protected:
                 "the protected file holds an item that is neither a registration of a run nor a pending reservation, or has a field it does not define"
             )
         if raw["kind"] == "registration":
-            if not isinstance(raw["run_id"], str) or not RUN_ID.fullmatch(raw["run_id"]):
+            if not isinstance(raw["run_id"], str) or not STORED_RUN.fullmatch(raw["run_id"]):
                 raise PublishError("the protected file holds a registration that names no run")
             items.append(Item("registration", raw["id"], run_id=raw["run_id"]))
         else:

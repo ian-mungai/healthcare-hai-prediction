@@ -45,7 +45,10 @@ RUN_ID = (
 )
 # The run ID of a code run is its own form (a commit time and eight digits of the commit, staged by CI) or, in development, the run ID the code is staged under.
 CODE_STAMP_RUN = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
-CODE_RUN = f"(?:{CODE_STAMP_RUN}|{RUN_ID})"
+# A run ID that stored data names, whether a record, a row, a pin or a file name: the run ID form or, for a run before the run ID redesign, the stamp form. A
+# reader of stored history takes ``STORED_RUN``. A new run, a request and a writer take ``RUN_ID`` alone, so nothing new is ever created in the stamp form.
+STORED_RUN = f"(?:{CODE_STAMP_RUN}|{RUN_ID})"
+CODE_RUN = STORED_RUN
 # The shape of a code run ID that the standalone scripts of the images and the host check (they import nothing of the repository). It is a safe path component
 # that holds every code run ID and is wider than ``CODE_RUN`` in the names it takes.
 CODE_RUN_SHAPE = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}|[a-z]+(?:_[a-z]+)*_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}"
@@ -252,10 +255,20 @@ RECORD_KINDS = ("research", "replay", "canary", "notice")
 
 
 def record_key(kind: str, research_run: str, hai_type: str) -> str:
-    """The data bucket key of one record of a type after a research run."""
+    """The data bucket key of one record of a type after a research run, for a research run of the run ID form (the key a writer uses)."""
     if kind not in RECORD_KINDS:
         raise ValueError(f"kind must be one of {', '.join(RECORD_KINDS)}")
     if hai_type not in INFECTION_NAMES or not re.fullmatch(run_id_pattern("research"), research_run):
+        raise ValueError("a record names a research run ID and a supported HAI type")
+    return f"research/{research_run}/{kind}_{hai_type}.json"
+
+
+def stored_record_key(kind: str, research_run: str, hai_type: str) -> str:
+    """The key of a stored record to read: ``record_key`` for a research run of the run ID form, and for a research run of the stamp form of before the run ID
+    redesign the key it was stored under."""
+    if re.fullmatch(CODE_STAMP_RUN, research_run) is None:
+        return record_key(kind, research_run, hai_type)
+    if kind not in RECORD_KINDS or hai_type not in INFECTION_NAMES:
         raise ValueError("a record names a research run ID and a supported HAI type")
     return f"research/{research_run}/{kind}_{hai_type}.json"
 

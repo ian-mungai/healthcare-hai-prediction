@@ -480,7 +480,7 @@ def direct_load_record(feature_set: str, run: str, mode: str, set_hash: str, hol
         raise ReadError(f"run {run} has no online hold record and no {MATERIALIZE_NAME}, so there is nothing to release")
     expected = {"step": "materialize", "feature_set": feature_set, "run_id": run, "mode": mode, "online": feature_sets.LOAD, "set_schema_sha256": set_hash}
     problems = record_problems(record, expected, ("load_id", "base_run"))
-    if not problems and not reads.RUN_ID.fullmatch(record["base_run"]):
+    if not problems and not reads.STORED_RUN.fullmatch(record["base_run"]):
         problems = ["base_run"]
     if problems:
         raise ReadError(

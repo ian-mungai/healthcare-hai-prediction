@@ -52,7 +52,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from orchestration.training_contract import PROMOTION_MODELS, RUN_ID, chain_run_id, record_key, trained_run_id
+from orchestration.training_contract import PROMOTION_MODELS, STORED_RUN, chain_run_id, stored_record_key, trained_run_id
 
 TRAIN_JOB = "train"
 Launch = Callable[[str, str, dict[str, Any]], None]
@@ -117,7 +117,7 @@ def parse(read: Read, key: str) -> dict[str, Any]:
 
 def research_document(read: Read, research_run: str, hai_type: str) -> tuple[str, dict[str, Any]]:
     """The key and the document of the type's research record, which must be a record of that type."""
-    key = record_key("research", research_run, hai_type)
+    key = stored_record_key("research", research_run, hai_type)
     document = parse(read, key)
     if document.get("hai_type") != hai_type:
         raise RecordRefused(f"{key} is a record of {document.get('hai_type')}")
@@ -157,7 +157,7 @@ def challenger_of(read: Read, research_run: str, hai_type: str) -> Challenger | 
         return None
     runs = document.get("features_runs")
     features_run = runs.get(named[0]) if isinstance(runs, dict) else None
-    if not isinstance(features_run, str) or not re.fullmatch(RUN_ID, features_run):
+    if not isinstance(features_run, str) or not re.fullmatch(STORED_RUN, features_run):
         raise RecordRefused(f"{key} names no features run for {named[0]}")
     promotion = document["promotion"]
     if (
@@ -176,7 +176,7 @@ def canary_decision(read: Read, research_run: str, challenger: Challenger) -> st
 
 def stored_decision(read: Read, research_run: str, hai_type: str, model: str, version: str) -> str:
     """The stored decision, promote or hold, of the canary check of one research run, type, model and version."""
-    key = record_key("canary", research_run, hai_type)
+    key = stored_record_key("canary", research_run, hai_type)
     document = parse(read, key)
     expected = {"research_run": research_run, "hai_type": hai_type, "model": model, "version": version}
     other = {name: document.get(name) for name in expected if document.get(name) != expected[name]}

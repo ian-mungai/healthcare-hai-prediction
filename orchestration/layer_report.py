@@ -389,7 +389,7 @@ def evidence_files(access: ReportAccess, layer: str, run: str, target: Path) -> 
 def silver_input(access: ReportAccess, pin: Mapping[str, Any], target: Path) -> tuple[Path, Path]:
     """The silver records and the passed silver report that a gold report reads."""
     source = str(pin.get("source_run_id"))
-    if not acceptance.RUN_ID.fullmatch(source):
+    if not acceptance.STORED_RUN.fullmatch(source):
         raise ReportError("the gold pin names no silver run")
     report = access.directory / "silver" / source / "report.json"
     private_bytes(report, "silver report of the pinned run", acceptance.LIMIT)

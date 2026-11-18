@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 HEX = "deadbeef"
 # The run ID of a code run keeps a commit time form; every other parser and schema refuses it.
 DATE_FORM = "20261116T201053Z-b10a4f2d"
+# The parsers that also take the stamp form of before the run ID redesign: a code run and the readers of stored history.
+STAMP_READERS = ("contract.CODE_RUN", "contract.STORED_RUN", "gold_publish_record.STORED_RUN_PATTERN")
 VALID = [
     f"ingestion_{HEX}",
     f"ingestion_{HEX}_2",
@@ -184,6 +186,8 @@ def parsers() -> list[tuple[str, Callable[[str], bool], str]]:
         ("contract.RUN_ID", full_match(contract.RUN_ID), "every run ID"),
         ("contract.run_id_parts", parts, "every run ID"),
         ("contract.CODE_RUN", full_match(contract.CODE_RUN), "every run ID"),
+        ("contract.STORED_RUN", full_match(contract.STORED_RUN), "every run ID"),
+        ("gold_publish_record.STORED_RUN_PATTERN", full_match(gold_publish_record.STORED_RUN_PATTERN), "every run ID"),
         ("gold_publish_record.RUN_ID_PATTERN", full_match(gold_publish_record.RUN_ID_PATTERN), "every run ID"),
         ("run_id_pattern('ingestion')", full_match(contract.run_id_pattern("ingestion")), "an original ingestion run"),
         ("run_id_pattern('ingestion_retry')", full_match(contract.run_id_pattern("ingestion_retry")), "a retry run"),
@@ -200,7 +204,7 @@ def test_every_python_parser_accepts_the_valid_run_ids_of_its_names_and_refuses_
     for label, accepts_run, scope in parsers():
         applies = SCOPES[scope]
         for run in [*VALID, *INVALID, *NEWLINE_INVALID]:
-            wanted = (run in VALID and applies(run)) or (label == "contract.CODE_RUN" and run == DATE_FORM)
+            wanted = (run in VALID and applies(run)) or (label in STAMP_READERS and run == DATE_FORM)
             if bool(accepts_run(run)) != wanted:
                 problems.append(f"{label} {'refuses' if wanted else 'accepts'} {run!r}")
     check(not problems, f"{len(problems)} parser answers are wrong: {problems[:8]}")

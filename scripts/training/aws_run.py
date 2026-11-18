@@ -293,7 +293,7 @@ def sns_client() -> Any:
 
 def chain_record(client: Any, destination: str, kind: str, parameters: dict[str, Any]) -> dict[str, Any] | None:
     """Read one stored record of the type after the research run, or None when it is not stored; a record that is not a JSON object is refused."""
-    key = training_contract.record_key(kind, parameters["research_run"], parameters["hai_type"])
+    key = training_contract.stored_record_key(kind, parameters["research_run"], parameters["hai_type"])
     try:
         body = promote_receipt.read(client, destination, key)
         document = None if body is None else json.loads(body)

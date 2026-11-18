@@ -29,7 +29,7 @@ from orchestration.pipeline_protocol import PipelineError, digest_file, read_rec
 from scripts.features import feature_schema, feature_sets, features_publish
 from scripts.lakehouse import silver_publish
 from scripts.lakehouse.gold_publish import MODES, Context, Plan, load_plan, published_head, published_runs, remove_tree, write_record
-from scripts.lakehouse.gold_publish_record import RUN_ID, PublishError
+from scripts.lakehouse.gold_publish_record import STORED_RUN, PublishError
 
 PIN_NAME = "gold_pins.json"
 INPUT_NAME = "gold_input"
@@ -91,7 +91,7 @@ def check_pin(
         or record["mode"] != mode
         or mode not in namespaces
         or record["namespace"] != namespaces[mode]
-        or not RUN_ID.fullmatch(str(record["source_run_id"]))
+        or not STORED_RUN.fullmatch(str(record["source_run_id"]))
     ):
         raise PipelineError(f"the {label} pin identity does not match this consumer")
     snapshots = record["snapshot_set"]

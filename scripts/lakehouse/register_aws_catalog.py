@@ -29,7 +29,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.lakehouse.gold_publish_record import READER_NAME, RUN_ID, SHA256
+from scripts.lakehouse.gold_publish_record import READER_NAME, SHA256, STORED_RUN
 
 MAX_RECORD = 32 * 1024 * 1024
 MAX_SNAPSHOT = (1 << 63) - 1
@@ -402,7 +402,7 @@ def checked_receipts(receipts: Mapping[str, bytes], required: Set[TableId]) -> d
             type(document.get("schema")) is not int
             or document["schema"] != 1
             or document.get("state") != "committed"
-            or not RUN_ID.fullmatch(str(document.get("run_id", "")))
+            or not STORED_RUN.fullmatch(str(document.get("run_id", "")))
             or not SHA256.fullmatch(str(document.get("backup_sha256", "")))
             or not isinstance(pins, dict)
             or not expected
@@ -636,7 +636,7 @@ def inventory_from_document(document: Mapping[str, Any], required: Set[TableId])
     for publication in publications:
         if (
             not all(isinstance(value, str) for value in asdict(publication).values())
-            or not RUN_ID.fullmatch(publication.run_id)
+            or not STORED_RUN.fullmatch(publication.run_id)
             or not SHA256.fullmatch(publication.receipt_sha256)
             or not READER_NAME.fullmatch(publication.reservation)
         ):
@@ -719,7 +719,7 @@ class LauncherReservations:
 
     def ensure(self, reader: str, publish_run: str, *, deadline: float) -> None:
         """Reserve this publication once, accepting only an identical existing entry."""
-        if not READER_NAME.fullmatch(reader) or not RUN_ID.fullmatch(publish_run):
+        if not READER_NAME.fullmatch(reader) or not STORED_RUN.fullmatch(publish_run):
             raise RegistrationError("reservation", "the source reservation identity is invalid")
         if self.entry(reader, deadline) is None:
             self.call("reserve", {"reader": reader, "domain": "transform", "publish_run": publish_run, "pid": self.pid}, deadline)

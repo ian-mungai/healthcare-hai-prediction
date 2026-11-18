@@ -85,6 +85,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from orchestration.ecs_launch import LaunchError, LaunchStore, S3LaunchStore, launch_record_prefix
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import STORED_RUN as STORED_RUN_PATTERN
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTE = "/api/v1/openlineage/lineage"
@@ -128,6 +129,7 @@ MODE = "real"
 EVIDENCE_BYTES = 2 * 1024**2
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}")
 RUN_ID = re.compile(RUN_ID_PATTERN)
+STORED_RUN = re.compile(STORED_RUN_PATTERN)  # the input run that a stored pin names, the stamp form of before the run ID redesign too
 BRONZE_JOB = "bronze"  # the one job whose lineage comes from its run record (raw_lineage.bronze_run_events)
 PIN_TEMPLATES = ("pin_silver", "pin_gold")  # the only templates whose invocation names an input run (submission_request.schema.json)
 TERMINAL = {"succeeded": "COMPLETE", "cancelled": "ABORT"}  # every other outcome is FAIL
@@ -596,7 +598,7 @@ def input_pins(
     if facts.model and not (isinstance(record["base_row_sha256"], str) and DIGEST.fullmatch(record["base_row_sha256"])):
         raise LineageRefused(f"{key}: the digest of the base run's ledger row is not a SHA-256")
     source = record["source_run_id"]
-    if not isinstance(source, str) or not RUN_ID.fullmatch(source):
+    if not isinstance(source, str) or not STORED_RUN.fullmatch(source):
         raise LineageRefused(f"{key}: the input run {source!r} is not a run ID")
     if facts.input_run != "latest" and source != facts.input_run:
         raise LineageRefused(f"{key}: pins run {source}, not the input run {facts.input_run} bound at launch")

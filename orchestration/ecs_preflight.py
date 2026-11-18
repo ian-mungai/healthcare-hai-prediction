@@ -48,11 +48,11 @@ from orchestration.training_contract import (
     model_features_run_id,
     model_training_run_id,
     parameters_for,
-    record_key,
     release_parameters_for,
     research_attempt_of,
     run_id_parts,
     serving_parameters_for,
+    stored_record_key,
     trained_run_id,
 )
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
@@ -364,7 +364,7 @@ def serving_values(
         if named is None:
             raise TaskRefused(f"serving_candidate_refused: the research record of {closed['hai_type']} has no challenger to deploy")
         try:
-            held = read(record_key("canary", research_run, closed["hai_type"])) is not None and (
+            held = read(stored_record_key("canary", research_run, closed["hai_type"])) is not None and (
                 stored_decision(read, research_run, closed["hai_type"], named[0], named[1]) == "hold"
             )
         except (RecordRefused, ValueError) as error:
