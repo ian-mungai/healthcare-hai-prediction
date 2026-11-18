@@ -1627,8 +1627,8 @@ def case_images(c: Checker) -> None:
     platform = (ROOT / "infra/platform/main.tf").read_text()
     c.check(
         "the platform stack keeps the serving group of images.json only behind serving_enabled",
-        "var.serving_enabled" in platform
-        and 'image.repository_group == "serving"' in platform
+        'name if group == "serving"' in platform
+        and "var.serving_enabled ? toset([]) : local.serving_images" in platform
         and {name for name, image in config["images"].items() if image.get("repository_group") == "serving"} == {"model_api", "streamlit"},
     )
 
