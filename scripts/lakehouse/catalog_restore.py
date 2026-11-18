@@ -96,11 +96,15 @@ def sequence_of(location: str) -> int | None:
     return int(found.group(1)) if found else None
 
 
-def read_items(store: Store, bucket: str) -> list[Item]:
-    """The tables of the newest committed snapshot of each folder. A malformed snapshot stops the run; a folder with no snapshot contributes nothing."""
+def read_items(store: Store, bucket: str, *, deadline: float | None = None, clock: Callable[[], float] = time.monotonic) -> list[Item]:
+    """The tables of the newest committed snapshot of each folder. A malformed snapshot stops the run; a folder with no snapshot contributes nothing.
+    With a ``deadline`` the time is checked before each folder and after the last one, so a run that used its whole budget on reading the folders never
+    answers success, empty folders included."""
     items: list[Item] = []
     seen: set[tuple[str, str]] = set()
     for prefix in BACKUP_PREFIXES:
+        if deadline is not None:
+            check_deadline(deadline, clock)
         runs = [(found.group(1), name) for name in store.names(prefix) if (found := BACKUP_NAME.fullmatch(name.rsplit("/", 1)[-1])) is not None]
         if not runs:
             continue
@@ -133,6 +137,8 @@ def read_items(store: Store, bucket: str) -> list[Item]:
                 raise RestoreError("backup", f"table {namespace}.{table} is in two snapshot folders")
             seen.add((namespace, table))
             items.append(Item(namespace, table, str(location), number, run, main))
+    if deadline is not None:
+        check_deadline(deadline, clock)
     return items
 
 
@@ -229,7 +235,7 @@ def restore_catalog(
     store: Store, bucket: str, request: Request, access: str, *, apply: bool, deadline: float, clock: Callable[[], float] = time.monotonic
 ) -> dict[str, Any]:
     """Read the newest committed snapshot of each folder and bring the catalog to it: the reply of the ``restore`` step (outcomes and counts)."""
-    items = read_items(store, bucket)
+    items = read_items(store, bucket, deadline=deadline, clock=clock)
     results = restore_items(request, access, items, apply=apply, deadline=deadline, clock=clock)
     counts: dict[str, int] = {}
     for row in results:

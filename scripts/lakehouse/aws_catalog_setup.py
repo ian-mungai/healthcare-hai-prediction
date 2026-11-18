@@ -478,10 +478,25 @@ def step_inspect(services: Services, seconds: float, clock: Clock = time.monoton
     return result
 
 
+class BoundedStore:
+    """The backup folders with every listing and read ended at the absolute deadline of the step (``run_bounded``): a client timeout bounds one request, not
+    a paginated listing or a body that keeps sending, so the whole call is bounded here. A call that outlasts the deadline raises ``StateError`` (``deadline``)
+    and its thread ends with the client's own timeouts; nothing is written by the reads."""
+
+    def __init__(self, store: catalog_restore.Store, window: Deadline) -> None:
+        self.store, self.window = store, window
+
+    def names(self, prefix: str) -> list[str]:
+        return run_bounded(lambda: self.store.names(prefix), self.window, f"listing {prefix}")
+
+    def read(self, key: str) -> bytes:
+        return run_bounded(lambda: self.store.read(key), self.window, f"reading {key.rsplit('/', 1)[-1]}")
+
+
 def step_restore(services: Services, seconds: float, *, apply: bool, clock: Clock = time.monotonic) -> dict[str, Any]:
     """Bring the catalog tables to the newest publish backup of each folder; ``apply`` false reports what would change and writes nothing."""
     deadline = clock() + seconds
-    store = services.backup_store(seconds)
+    store = BoundedStore(services.backup_store(seconds), Deadline(deadline, clock))
     request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
     access = root_token(request, services.root_secret())
     return catalog_restore.restore_catalog(store, services.bucket, request, access, apply=apply, deadline=deadline, clock=clock)

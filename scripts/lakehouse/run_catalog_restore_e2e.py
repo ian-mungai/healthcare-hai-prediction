@@ -13,6 +13,7 @@ import io
 import json
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -531,6 +532,74 @@ def case_the_restore_step_refuses_a_caller_that_is_not_the_task_role() -> dict[s
         "no backup was read and the catalog was not called": services.reads == 0 and polaris.calls == [],
         "nothing is printed as a result": out == "",
     }
+
+
+class SlowStore:
+    """A backup store whose listing takes ``seconds`` of real time and holds no snapshot: the folders are empty, so nothing is left to restore."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    def names(self, prefix: str) -> list[str]:
+        time.sleep(self.seconds)
+        return []
+
+    def read(self, key: str) -> bytes:
+        raise AssertionError("an empty folder has nothing to read")
+
+
+class SlowServices(StandInServices):
+    """The services of the step with a store that lists slowly."""
+
+    def __init__(self, port: int, seconds: float) -> None:
+        super().__init__({}, port)
+        self.seconds = seconds
+
+    def backup_store(self, left: float) -> Any:
+        return SlowStore(self.seconds)
+
+
+def case_an_empty_restore_whose_listings_use_the_whole_budget_is_refused() -> dict[str, bool]:
+    started = time.monotonic()
+    with served(StandInPolaris(("gold", "silver", "features"))) as port:
+        code, out, err = run_step(["--seconds", "0.1", "restore"], SlowServices(port, 0.08))
+    return {
+        "the exit code is 1": code == 1,
+        "the refusal names the deadline": "(deadline)" in err and err.startswith("aws catalog setup restore"),
+        "no success reply is printed": out == "",
+        "the step ends close to its deadline": time.monotonic() - started < 1.5,
+    }
+
+
+def case_a_listing_that_never_returns_ends_at_the_deadline() -> dict[str, bool]:
+    started = time.monotonic()
+    with served(StandInPolaris(("gold", "silver", "features"))) as port:
+        code, out, err = run_step(["--seconds", "0.3", "restore"], SlowServices(port, 5.0))
+    return {
+        "the exit code is 1": code == 1,
+        "the refusal names the deadline": "(deadline)" in err,
+        "no success reply is printed": out == "",
+        "the step ends at its deadline, not when the listing ends": time.monotonic() - started < 2.5,
+    }
+
+
+def case_an_empty_restore_checks_the_deadline_after_reading_the_folders() -> dict[str, bool]:
+    ticks = {"now": 0.0}
+
+    class ClockStore:
+        def names(self, prefix: str) -> list[str]:
+            ticks["now"] += 2.0
+            return []
+
+        def read(self, key: str) -> bytes:
+            raise AssertionError("an empty folder has nothing to read")
+
+    try:
+        restore.restore_catalog(ClockStore(), BUCKET, StandInPolaris(("gold",)), ACCESS, apply=True, deadline=1.0, clock=lambda: ticks["now"])
+        refused = ""
+    except RestoreError as error:
+        refused = str(error)
+    return {"the restore is refused with the deadline named": "deadline" in refused}
 
 
 def case_a_failed_restore_step_prints_its_refusal_line() -> dict[str, bool]:
