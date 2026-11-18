@@ -18,6 +18,8 @@ from tests.support import check
 
 ARCHIVE = "data/acquisition_planning/acquisition_legacy_20261009/pre_seed_plan_versions_20261112"
 V1_CANONICAL = "72c2f5b5e38e6b07dfee74216b9cfd4be4b19673513919032d53bf9a1ba4af1c"
+# The version 2 plan as it was before registry revision 4: it pinned revision 3 and is the second predecessor.
+V2_REVISION_3_CANONICAL = "4173be2f8879637869b0289a10b03c6d343189499545009814bfa284fcfc7633"
 V1 = {"version": 1, "model_eligible": False, "registry_sha256": "1" * 64, "files": [{"file_name": "a.txt"}]}
 SHIPPED = "2" * 64
 
@@ -86,7 +88,10 @@ def test_the_committed_plan_is_version_2_with_the_catalogued_version_1_predecess
     plan = contract.load_plan()
     check(plan["version"] == 2 and plan["files"] == [], "committed plan holds no file")
     entries = catalog()["plans"][canonical_hash(plan)]
-    check([e["canonical_sha256"] for e in entries] == [V1_CANONICAL], "version 1 is the only predecessor")
+    check(
+        [e["canonical_sha256"] for e in entries] == [V1_CANONICAL, V2_REVISION_3_CANONICAL],
+        "the predecessors are version 1, then version 2 as registry revision 3 pinned it",
+    )
     check(entries[0]["archive_path"] == f"{ARCHIVE}/{step.PLAN}", "archived beside the other predecessors of this round")
 
 

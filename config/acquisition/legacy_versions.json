@@ -169,18 +169,35 @@
         "canonical_sha256": "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f"
       }
     ],
-    "4173be2f8879637869b0289a10b03c6d343189499545009814bfa284fcfc7633": [
+    "9b86056a9eb82898a592f70adf59148c1493fac48480b86161c721be7fcdec84": [
       {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_seed_plan_versions_20261112/reference_downloads_plan.json",
-        "sha256": "0fd7af8a45922119a6d85034389e23fc31e103e1507358f14704ce8daa6642d7",
-        "canonical_sha256": "72c2f5b5e38e6b07dfee74216b9cfd4be4b19673513919032d53bf9a1ba4af1c"
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rev4_20261117/census_acs_tables_plan.json",
+        "sha256": "62297a37e3913a763db6d7432911760719fcfebaa1dc0a6337fca67df7017064",
+        "canonical_sha256": "845ed760aee05f28143a963e301e64180b92bd4ffe4696c1d453fbc92275b191"
       }
     ],
-    "dec1ca5e7eab908bf64a25296a2ce17cb931695588c836700ef375e387de6fe5": [
+    "9c7d7aa9197ce53dad007b81338bad5ed47492ea18ec96a68ecc1f46c229c58c": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_nber_201710_plan_20261113/nber_hospital_compare_plan.json",
         "sha256": "56a10255ace05f6b75968ab8915b68d80f1bbd4a9447af4aa4afda1e23061b7e",
         "canonical_sha256": "685c1f6bb0476572022736c6dd07735c20b66d86063d20c9bc5b72663eec8f63"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rev4_20261117/nber_hospital_compare_plan.json",
+        "sha256": "4a9700ced7431355527c35e6156ead17f8446e834522b2203c2d4d7ac9ad2dbd",
+        "canonical_sha256": "dec1ca5e7eab908bf64a25296a2ce17cb931695588c836700ef375e387de6fe5"
+      }
+    ],
+    "449735006275aee736e1665ce0ee2ba66ce39469ecf1f17b65969fea4c08bd04": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_seed_plan_versions_20261112/reference_downloads_plan.json",
+        "sha256": "0fd7af8a45922119a6d85034389e23fc31e103e1507358f14704ce8daa6642d7",
+        "canonical_sha256": "72c2f5b5e38e6b07dfee74216b9cfd4be4b19673513919032d53bf9a1ba4af1c"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rev4_20261117/reference_downloads_plan.json",
+        "sha256": "8611ad26d6a722769716660ba0bed823f66e213e3b2d0e76d593119d7d60b478",
+        "canonical_sha256": "4173be2f8879637869b0289a10b03c6d343189499545009814bfa284fcfc7633"
       }
     ]
   },

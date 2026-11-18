@@ -16,7 +16,7 @@ from scripts.acquisition.bls_api_contract import digest
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.collection_layout import load_routes
-from scripts.acquisition.legacy_versions import plan_matches
+from scripts.acquisition.legacy_versions import plan_matches, predecessor_plan
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
 
@@ -193,7 +193,9 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(not evidence_only and source["source_id"] == RECEIPT_SOURCE and lineage.get("mode") == MODE, "NBER storage source differs")
     plan = load_plan()
     require(plan_matches(plan, lineage["plan_sha256"]), "NBER capture plan differs")
-    require(lineage["registry_sha256"] == plan["registry_sha256"], "NBER registry differs")
+    # A capture made under an earlier plan recorded the registry that plan pinned, so read it from that plan.
+    captured_plan = predecessor_plan(plan, lineage["plan_sha256"]) or plan
+    require(lineage["registry_sha256"] == captured_plan["registry_sha256"], "NBER registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "NBER schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "NBER modeling hold differs")
     require_code(lineage["code_sha256"])

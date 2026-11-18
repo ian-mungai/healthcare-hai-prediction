@@ -10,6 +10,9 @@ from unittest.mock import patch
 from scripts.acquisition import source_registry as registry
 from scripts.acquisition.s3_store import encoded_json, fingerprint, write_once
 
+# Revision 3 of the registry, replaced by revision 4 on Nov 17 2026: receipts that recorded it must keep verifying through the catalog.
+REVISION_3 = "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25"
+
 
 def exercise() -> list[dict]:
     """Read exact current and legacy versions, rejecting unknown hashes and modified legacy bytes."""
@@ -20,8 +23,10 @@ def exercise() -> list[dict]:
         lock = registry.read_json(registry.LOCK_PATH)
         catalog = registry.read_json(registry.VERSION_CATALOG_PATH)
         legacy = catalog["legacy_versions"][0]
+        revision_3 = [item for item in catalog["legacy_versions"] if item["registry_sha256"] == REVISION_3]
         paths = [registry.REGISTRY_PATH, registry.LOCK_PATH, registry.VERSION_CATALOG_PATH, registry.VERSION_CATALOG_LOCK_PATH]
         paths.extend(registry.REPO_ROOT / item["path"] for item in legacy["files"].values())
+        paths.extend(registry.REPO_ROOT / item["path"] for version in revision_3 for item in version["files"].values())
         for path in paths:
             target = root / path.relative_to(registry.REPO_ROOT)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +44,13 @@ def exercise() -> list[dict]:
             results.append({"name": "current_exact_lock", "passed": loaded == current and registry.canonical_hash(loaded) == lock["registry_sha256"]})
             historic = registry.load_registry(selected, selected_lock, expected_sha256=legacy["registry_sha256"])
             results.append({"name": "legacy_exact_hash", "passed": registry.canonical_hash(historic) == legacy["registry_sha256"]})
+            earlier = registry.load_registry(selected, selected_lock, expected_sha256=REVISION_3) if revision_3 else {}
+            results.append(
+                {
+                    "name": "revision_3_resolves_through_the_catalog_and_is_not_current",
+                    "passed": bool(revision_3) and registry.canonical_hash(earlier) == REVISION_3 != registry.canonical_hash(loaded),
+                }
+            )
             for name, expected, mutate in [("unknown_hash", "0" * 64, False), ("modified_legacy", legacy["registry_sha256"], True)]:
                 if mutate:
                     path = root / legacy["registry_path"]
