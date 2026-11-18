@@ -13,7 +13,7 @@ import json
 import re
 import threading
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -1815,6 +1815,91 @@ def family_index_write_with_a_lost_reply() -> None:
     require("family index" in str(error) and not claim_of(rig, RUN), f"a malformed index entry was accepted or the run was claimed: {error}")
 
 
+LEGACY_RUN = "20261111T224035Z-3f1a9c7d"
+
+
+def legacy_history(rig: Rig, run: str = LEGACY_RUN, ended: bool = True, send_token: bool = False) -> None:
+    """The records of an earlier gold run under the stamp run ID of before the run ID redesign, as the live family index holds them."""
+    base = {"schema_version": 1, "job": "gold", "run_id": run, "attempt": 1, "at": iso(START_TIME)}
+    claim = {**base, "event": "claim", "bound": BOUND, "deadline_seconds": 3600, "acceptance": ["verify"], "need": asdict(NEED)}
+    records = {family_key(run): {**base, "event": "family"}, f"{PREFIX}/{run}/gold/claim.json": claim}
+    if ended:
+        records[f"{PREFIX}/{run}/gold/01/end.json"] = {**base, "event": "end", "outcome": "succeeded", "exit_code": 0, "reason": "", "task_arn": "arn:stand-in"}
+    if send_token:
+        records[f"{PREFIX}/{run}/gold/decision.json"] = {**base, "event": "decision", "decision": "send", "holder": "earlier-process"}
+    rig.bucket.objects |= {key: json.dumps(record, sort_keys=True).encode() for key, record in records.items()}
+
+
+def legacy_run_ids_in_the_family_index_are_history() -> None:
+    """The live family index holds runs of the stamp form (``20261111T224035Z-3f1a9c7d``) that ended before the run ID redesign. They are history to read: a
+    new run of the family launches beside them, and their records are not written again."""
+    rig = Rig()
+    legacy_history(rig)
+    history = dict(rig.bucket.objects)
+    done = rig.launcher().run(spec())
+    require(done.ok and claim_of(rig, RUN), f"an ended run of the stamp form in the family index refused the launch: {done}")
+    require(all(rig.bucket.objects[key] == value for key, value in history.items()), "a launch changed the records of the historical run")
+    require(
+        sorted(key for key in rig.bucket.objects if "/families/" in key) == sorted([family_key(LEGACY_RUN), family_key(RUN)]),
+        "the index is not one key per run",
+    )
+
+
+def legacy_history_that_cannot_be_read_still_refuses() -> None:
+    """A listed historical run whose records cannot be read refuses with the reason, and the new run is not claimed."""
+    rig = Rig()
+    legacy_history(rig)
+    rig.bucket.objects[f"{PREFIX}/{LEGACY_RUN}/gold/claim.json"] = b"not json"
+    error = refuses(LaunchError, lambda: rig.launcher().run(spec()))
+    require(LEGACY_RUN in str(error) and "is not JSON" in str(error), f"the refusal does not name the unreadable historical claim: {error}")
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, "a run launched on a historical claim it could not read")
+    rig = Rig()
+    legacy_history(rig)
+    rig.bucket.faults["get_object"] = [client_error("AccessDenied", "GetObject")] * 20
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(spec()))
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, f"a run launched on history it may not read: {error}")
+
+
+def legacy_launch_without_an_end_blocks_the_family() -> None:
+    """A historical launch that may have sent a task and has no end record is not skipped for its form: the gate settles it as for any run and refuses with
+    its reason while no task of it is found."""
+    rig = Rig()
+    legacy_history(rig, ended=False, send_token=True)
+    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec()))
+    require(LEGACY_RUN in str(error) and "was not claimed" in str(error), f"the refusal does not name the historical launch: {error}")
+    require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, "a run launched beside a historical launch that may be live")
+
+
+def family_index_keys_of_neither_form_refuse() -> None:
+    """Only the redesigned run ID form and the stamp form of before it are listed history: any other key stops the launch, whatever else the index holds."""
+    for name in (
+        "20261111T224035Z-3f1a9c7",
+        "20261111T224035Z-3F1A9C7D",
+        "20261111T224035-3f1a9c7d",
+        "x20261111T224035Z-3f1a9c7d",
+        "20261111T224035Z-3f1a9c7d0",
+        "gold_abcdef0",
+        "gold_abcdef01x",
+        "silver-abcdef01",
+        "not-a-run",
+        "",
+    ):
+        rig = Rig()
+        legacy_history(rig)
+        rig.bucket.objects[family_key(name)] = b"{}"
+        error = refuses(LaunchRefused, partial(rig.launcher().run, spec()))
+        require("unexpected key" in str(error) and family_key(name) in str(error), f"the key {name!r} was not refused by its key: {error}")
+        require(not claim_of(rig, RUN) and rig.ecs.count("run_task") == 0, f"a run launched with the key {name!r} in the family index")
+
+
+def stamp_form_run_never_claims() -> None:
+    """The stamp form is history only: a new launch with a stamp run ID is refused as a malformed request, before any record or cloud call."""
+    rig = Rig()
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(spec(run_id=LEGACY_RUN)))
+    require("run_id" in str(error), f"the refusal does not name the run ID: {error}")
+    require(not rig.ecs.calls and not rig.bucket.calls and not rig.bucket.objects, "a stamp-form run reached the cloud or wrote a record")
+
+
 def unresolved_gold(rig: Rig) -> None:
     """A launch whose every RunTask call lost its reply before ECS created anything: the send token is held, no task exists, and the launch stays
     unresolved after its window."""
@@ -1862,6 +1947,11 @@ CASES: dict[str, Callable[[], None]] = {
     "fit_without_a_usage_reader_counts_free_space_only": fit_without_a_usage_reader_counts_free_space_only,
     "family_busy_while_a_task_of_the_family_is_stopping": family_busy_while_a_task_of_the_family_is_stopping,
     "family_index_write_with_a_lost_reply": family_index_write_with_a_lost_reply,
+    "legacy_run_ids_in_the_family_index_are_history": legacy_run_ids_in_the_family_index_are_history,
+    "legacy_history_that_cannot_be_read_still_refuses": legacy_history_that_cannot_be_read_still_refuses,
+    "legacy_launch_without_an_end_blocks_the_family": legacy_launch_without_an_end_blocks_the_family,
+    "family_index_keys_of_neither_form_refuse": family_index_keys_of_neither_form_refuse,
+    "stamp_form_run_never_claims": stamp_form_run_never_claims,
     "stopped_task_found_and_ended": stopped_task_found_and_ended,
     "settle_refused_while_the_send_window_is_open": settle_refused_while_the_send_window_is_open,
     "settle_refused_while_a_family_task_is_not_stopped": settle_refused_while_a_family_task_is_not_stopped,

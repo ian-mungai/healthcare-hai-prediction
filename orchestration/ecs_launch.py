@@ -79,10 +79,14 @@ from orchestration.ecs_adapter import (
     classify,
     scrub,
 )
+from orchestration.training_contract import CODE_STAMP_RUN
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 BOUND_FIELDS = ("code_digest", "request_hash", "input_run")
 RUN_ID = re.compile(RUN_ID_PATTERN)
+# The run ID of before the run ID redesign: a commit time and eight hex digits, the form ``CODE_STAMP_RUN`` names. Earlier launches of a family are indexed
+# and recorded under it. It is read as history only (the family index listing); a request (``validate``) and a family index write take ``RUN_ID`` alone.
+LEGACY_RUN_ID = re.compile(CODE_STAMP_RUN)
 JOB = re.compile(r"[a-z][a-z0-9_]{1,40}")
 EVENTS = ("claim", "decision", "cancel", "intent", "started", "end")
 RUN_EVENTS = ("claim", "decision", "cancel")
@@ -529,7 +533,7 @@ class S3LaunchStore:
                 page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
                 for item in page.get("Contents", []):
                     name = str(item["Key"])[len(prefix) :].removesuffix(".json")
-                    if not RUN_ID.fullmatch(name):
+                    if not (RUN_ID.fullmatch(name) or LEGACY_RUN_ID.fullmatch(name)):
                         raise LaunchRefused(f"the family index of {job} holds an unexpected key: {item['Key']}")
                     runs.append(name)
                 if not page.get("IsTruncated"):
