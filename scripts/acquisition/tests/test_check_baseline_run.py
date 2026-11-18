@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,8 +13,8 @@ import pytest
 
 from scripts.acquisition import build_bootstrap_queue as build
 from scripts.acquisition import check_baseline_run as check_run
+from scripts.acquisition import host_inputs, hud_xlsx_contract, legacy_versions, manual_content, s3_store, wonder_export_contract
 from scripts.acquisition import hud_api_contract as hud_api
-from scripts.acquisition import hud_xlsx_contract, legacy_versions, manual_content, s3_store, wonder_export_contract
 from scripts.acquisition.history_routes import lineage_bindings
 from scripts.acquisition.run_hud_xlsx_e2e import rows as hud_rows
 from scripts.acquisition.run_hud_xlsx_e2e import workbook as hud_workbook
@@ -491,6 +492,24 @@ def test_every_path_of_the_committed_seed_manifest_is_stored_through_git_lfs() -
 
 def test_the_committed_bundle_and_seed_pass_the_whole_check() -> None:
     check(check_run.problems() == [], f"{check_run.problems()[:3]}")
+
+
+def test_the_committed_checkout_holds_every_seed_file_a_plan_reads_and_the_host_inputs_are_prepared_from_it(tmp_path: Path) -> None:
+    """The host build starts from a checkout: ``prepare`` refuses a plan input the seed lacks or holds as an LFS pointer, before any request."""
+    manifest = json.loads((check_run.SEED_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    wanted = sorted(item["path"] for item in manifest["files"] if "plan_input" in item)
+    check(len(wanted) == 16, f"the seed manifest names {len(wanted)} plan input files, not 16")
+    shutil.copytree(check_run.ROOT, tmp_path / check_run.ROOT)
+    shutil.copytree(check_run.SEED_ROOT, tmp_path / check_run.SEED_ROOT)
+    try:
+        host_inputs.prepare(tmp_path)
+    except host_inputs.InputsError as error:
+        raise AssertionError(f"the checkout's seed is not usable: {error}") from None
+    present = [path for path in wanted if (tmp_path / check_run.SEED_ROOT / path).is_file()]
+    check(present == wanted, f"missing from the checkout: {sorted(set(wanted) - set(present))}")
+    check(
+        all((tmp_path / item["plan_input"]).is_file() for item in manifest["files"] if "plan_input" in item), "every plan input is a real file in the code root"
+    )
 
 
 def test_the_secrets_the_code_reads_are_the_shared_publisher_keys() -> None:

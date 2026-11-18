@@ -1,6 +1,6 @@
 # Bootstrap seed
 
-The files a bootstrap run in an empty environment cannot fetch from a publisher or from S3: public captures that only a person could download. Git LFS stores them (`.gitattributes`). `scripts/quality/repo_checks.py` declares this folder as the one data folder besides the test fixtures and the dbt seeds. It admits data files there and no other kind of file: the writing, front matter and link checks still read the Markdown here. No file of the folder is added yet. They are added after the owner's read-only download of the stored copies from S3.
+The files a bootstrap run in an empty environment cannot fetch from a publisher or from S3: public captures that only a person could download. Git LFS stores them (`.gitattributes`). `scripts/quality/repo_checks.py` declares this folder as the one data folder besides the test fixtures and the dbt seeds. It admits data files there and no other kind of file: the writing, front matter and link checks still read the Markdown here. The 16 plan input files (the 12 MMD browser-history captures, the 3 MMD reference files and `county_adjacency2010.txt`) are in the folder, so a host build reads them from the code archive. The 50 manual-unit originals are not added yet. The check passes without them unless `--require-files` is set. The bootstrap's manual download and upload steps are the fallback for them.
 
 `manifest.json` lists every expected file, the queue it belongs to and a SHA-256 where a tracked source holds one:
 
