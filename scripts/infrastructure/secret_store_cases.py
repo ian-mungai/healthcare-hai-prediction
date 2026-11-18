@@ -7,11 +7,15 @@ one process, take seconds and start no container. ``scripts/infrastructure/run_s
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
+import functools
 import io
 import json
+import logging
 import os
 import re
+import socket
 import stat
 import sys
 import tempfile
@@ -24,6 +28,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from scripts.infrastructure import render_project_config, secret_store
+from scripts.infrastructure.mlflow_auth_stand_in import MlflowAuthStandIn
 from scripts.infrastructure.secret_store_stand_in import StandIn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -606,6 +611,286 @@ def postgres_exporter_password(root: Path) -> dict[str, bool]:
     return password_tool(root, tool, secret_store.POSTGRES_EXPORTER_PASSWORD)
 
 
+class RecordedLogs(logging.Handler):
+    """Keeps the text of every log record that reaches the root logger at any level."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+def captured(call: Callable[[], int]) -> tuple[int, str]:
+    """The exit code of a tool call and everything it printed or logged, standard error included."""
+    handler, logger, level, output = RecordedLogs(), logging.getLogger(), logging.getLogger().level, io.StringIO()
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            code = call()
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+    return code, output.getvalue() + "\n".join(handler.lines)
+
+
+def serving_secrets_store(root: Path) -> dict[str, bool]:
+    """The serving secrets tool creates each Parameter Store value once, keeps the model API key hashes consistent with the page key and never overwrites."""
+    from scripts.infrastructure import create_serving_secrets as tool
+    from scripts.serving import keys
+
+    began = time.time() - 1
+    prefix = secret_store.PREFIX
+    grafana, page_key, hashes, user, credential = (
+        secret_store.GRAFANA_ADMIN_PASSWORD,
+        secret_store.STREAMLIT_MODEL_API_KEY,
+        secret_store.MODEL_API_KEY_HASHES,
+        secret_store.MODEL_API_MLFLOW_USER,
+        secret_store.MODEL_API_MLFLOW_CREDENTIAL,
+    )
+    five = {grafana, page_key, hashes, user, credential}
+    other = keys.hash_key("another-caller-" + os.urandom(4).hex())
+    with tempfile.TemporaryDirectory(prefix="serving_secrets_cases_") as scratch, StandIn(shared={}) as stand_in:
+        first_code, first = captured(lambda: tool.run(root, stand_in.endpoint))
+        stored = dict(stand_in.values)
+        first_changes, first_writes = stand_in.changed(), stand_in.writes()
+        second_code, second = captured(lambda: tool.run(root, stand_in.endpoint))
+        rerun_quiet = stand_in.writes() == first_writes and stand_in.values == stored
+        never_read_admin = all(name != secret_store.MLFLOW_ADMIN_PASSWORD for _, name in stand_in.requests())
+        written_types = {(item["type"], item["tier"]) for item in stand_in.writes_seen}
+        seen = [stored.get(grafana, ""), stored.get(page_key, ""), stored.get(credential, "")]
+        leaked = files_holding([value for value in seen if value], [Path(scratch), root / "data"], began) if all(seen) else ["unchecked"]
+        try:
+            ring = keys.KeyRing.from_hashes(json.loads(stored[hashes]))
+            ring_names_page = ring.identify(stored[page_key]) == "streamlit"
+        except (KeyError, ValueError, keys.KeyRingInvalid):
+            ring_names_page = False
+    with StandIn(values={hashes: json.dumps({"other": other})}, shared={}) as stand_in:
+        missing_code, missing = captured(lambda: tool.run(root, stand_in.endpoint))
+        missing_kept = stand_in.values[hashes] == json.dumps({"other": other}) and page_key not in stand_in.values
+        independent_created = {grafana, user, credential} <= set(stand_in.values)
+    wrong_hashes = json.dumps({"streamlit": other})
+    with StandIn(values={hashes: wrong_hashes, page_key: "page-key-" + os.urandom(4).hex()}, shared={}) as stand_in:
+        kept_key = stand_in.values[page_key]
+        wrong_code, wrong = captured(lambda: tool.run(root, stand_in.endpoint))
+        wrong_kept = stand_in.values[hashes] == wrong_hashes and stand_in.values[page_key] == kept_key
+    shared = json.dumps({"other": other, "streamlit": keys.hash_key("page-key-fixed")})
+    with StandIn(values={hashes: shared, page_key: "page-key-fixed"}, shared={}) as stand_in:
+        match_code, match = captured(lambda: tool.run(root, stand_in.endpoint))
+        match_kept = stand_in.values[hashes] == shared and stand_in.values[page_key] == "page-key-fixed"
+    with StandIn(values={page_key: "page-key-only"}, shared={}) as stand_in:
+        late_code, _ = captured(lambda: tool.run(root, stand_in.endpoint))
+        late_hashes = json.loads(stand_in.values.get(hashes, "{}"))
+        late_kept = stand_in.values[page_key] == "page-key-only"
+    with StandIn(values={hashes: "not json"}, shared={}) as stand_in:
+        garbled_code, garbled = captured(lambda: tool.run(root, stand_in.endpoint))
+        garbled_kept = stand_in.values[hashes] == "not json"
+    with StandIn(denied={"CreateParameter"}, shared={}) as stand_in:
+        denied_code, denied = captured(lambda: tool.run(root, stand_in.endpoint))
+        denied_values = dict(stand_in.values)
+    options = {option for action in tool.parser()._actions for option in action.option_strings}
+    return {
+        "the first run exits 0 and creates the five values with one create each": first_code == 0
+        and set(stored) == five
+        and first_changes == [("CreateParameter", name) for _, name in first_changes]
+        and {name for _, name in first_changes} == five
+        and first_writes == 5,
+        "every value is a SecureString on the standard tier": written_types == {("SecureString", "Standard")},
+        "the Grafana password, the page key and the credential are long random values": len(stored.get(grafana, "")) >= 32
+        and len(stored.get(credential, "")) >= 32
+        and len(set(seen)) == 3
+        and len(stored.get(page_key, "")) >= 32,
+        "the MLflow user value is model_api": stored.get(user) == "model_api" == tool.MLFLOW_USER_VALUE,
+        "the key hashes hold the streamlit entry, the SHA-256 of the stored page key, and the key ring accepts them": json.loads(stored.get(hashes, "{}"))
+        == {"streamlit": keys.hash_key(stored.get(page_key, "-"))}
+        and ring_names_page,
+        "a second run exits 0, writes nothing and says present for each value": second_code == 0
+        and rerun_quiet
+        and all(f"{name}: present" in second for name in five),
+        "the first run says created for each value": all(f"{name}: created" in first for name in five),
+        "a run without an MLflow address never reads the MLflow administrator password": never_read_admin,
+        "no output or log line holds a generated value": all(seen) and not any(value in first + second for value in seen),
+        "no file written since the run holds a generated value": leaked == [],
+        "hashes without a streamlit entry and no page key: exit 1, named, nothing overwritten, no page key created": missing_code == 1
+        and hashes in missing
+        and "streamlit" in missing
+        and missing_kept,
+        "a refusal does not stop the independent values from being created": independent_created,
+        "hashes with another streamlit hash: exit 1, names the hashes, the hashes and the key stay": wrong_code == 1
+        and hashes in wrong
+        and "streamlit" in wrong
+        and wrong_kept,
+        "hashes with other callers and the matching streamlit entry stay and the run says present": match_code == 0
+        and f"{hashes}: present" in match
+        and match_kept,
+        "a page key without hashes gets hashes made from that key and the key stays": late_code == 0
+        and late_hashes == {"streamlit": keys.hash_key("page-key-only")}
+        and late_kept,
+        "hashes that are not a JSON object of key identifiers: exit 1, named, unchanged": garbled_code == 1 and hashes in garbled and garbled_kept,
+        "a denied create exits 1, names a secret and stores nothing": denied_code == 1 and prefix in denied and not denied_values,
+        "the command line has no option that takes a secret": options <= {"-h", "--help", "--root", "--hai-types", "--preparation-inputs", "--mlflow-url"},
+    }
+
+
+def free_loopback_address() -> str:
+    """A loopback address that nothing listens on."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{probe.getsockname()[1]}"
+
+
+def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
+    """The tool makes the model API's MLflow user and READ grants with the 3.17 user grant API; a missing object is pending and no removed route is called."""
+    from scripts.infrastructure import create_serving_secrets as tool
+
+    began = time.time() - 1
+    admin = "admin-" + os.urandom(8).hex()
+    types = ("HAI_1", "HAI_2")
+    admin_name, credential_name = secret_store.MLFLOW_ADMIN_PASSWORD, secret_store.MODEL_API_MLFLOW_CREDENTIAL
+    served = "model_api"
+    model_1, model_2, experiment_1, experiment_2 = "hai_model_HAI_1", "hai_model_HAI_2", "hai_training_HAI_1", "hai_training_HAI_2"
+    grant_model_1, grant_experiment_1 = (served, "registered_model", model_1), (served, "experiment", "7")
+    routes = {
+        ("POST", "/api/2.0/mlflow/users/create"),
+        ("GET", "/api/2.0/mlflow/registered-models/get"),
+        ("GET", "/api/2.0/mlflow/experiments/get-by-name"),
+        ("GET", "/api/3.0/mlflow/users/permissions/get"),
+        ("POST", "/api/3.0/mlflow/users/permissions/grant"),
+    }
+    with (
+        tempfile.TemporaryDirectory(prefix="serving_mlflow_cases_") as scratch,
+        StandIn(values={admin_name: admin}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active"), experiment_2: ("8", "deleted")}) as server,
+    ):
+        first_code, first = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        credential = store.values.get(credential_name, "")
+        first_grants = dict(server.grants)
+        first_users = list(server.created_users)
+        first_routes = {(method, address.partition("?")[0]) for method, address in server.log}
+        create_bodies = [(kind, names) for path, kind, names in server.bodies if path == "/api/2.0/mlflow/users/create"]
+        in_address = any(admin in address or credential in address for _, address in server.log)
+        password_sent = server.users.get(served) == credential
+        second_code, second = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        rerun_quiet = server.created_users == first_users and server.grants == first_grants
+        server.models.add(model_2)
+        server.experiments[experiment_2] = ("8", "active")
+        third_code, third = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        later_grants = {(served, "registered_model", model_2), (served, "experiment", "8")}
+        late_ok = third_code == 0 and later_grants <= set(server.grants) and {key for key in server.grants if key not in later_grants} == set(first_grants)
+        server.grants[grant_model_1] = "EDIT"
+        edit_before = dict(server.grants)
+        edit_code, edit = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        edit_kept = server.grants == edit_before
+        server.grants[grant_experiment_1] = "DENY"
+        deny_code, deny = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        deny_kept = server.grants[grant_experiment_1] == "DENY"
+        removed_after_all = list(server.removed_hits)
+        leaked = files_holding([admin, credential], [Path(scratch), root / "data"], began) if credential else ["unchecked"]
+    with (
+        StandIn(values={admin_name: admin}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
+    ):
+        server.default_permission = "NO_PERMISSIONS"
+        none_code, none = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        none_ok = none_code == 0 and server.grants.get(grant_model_1) == "READ" and server.grants.get(grant_experiment_1) == "READ"
+    with StandIn(shared={}) as store, MlflowAuthStandIn(admin) as server:
+        no_admin_code, no_admin = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        no_admin_quiet = server.log == []
+    with StandIn(values={admin_name: "not-" + admin}, shared={}) as store, MlflowAuthStandIn(admin) as server:
+        wrong_code, wrong = captured(lambda: tool.run(root, store.endpoint, server.url, types))
+        wrong_text_clean = admin not in wrong and "not-" + admin not in wrong and "401" in wrong
+    refused_addresses = (
+        "http://10.0.0.5:5000",
+        "https://mlflow.example.invalid",
+        "http://user:pass@127.0.0.1:5000",
+        "http://127.0.0.1.evil.example:5000",
+        "ftp://127.0.0.1:5000",
+    )
+    refused: list[bool] = []
+    for address in refused_addresses:
+        with StandIn(values={admin_name: admin}, shared={}) as store:
+            code, text = captured(functools.partial(tool.run, root, store.endpoint, address, types))
+            refused.append(code == 1 and "loopback" in text and admin not in text and all(name != admin_name for _, name in store.requests()))
+    with StandIn(values={admin_name: admin}, shared={}) as store:
+        down_code, down = captured(lambda: tool.run(root, store.endpoint, free_loopback_address(), types))
+        bad_type_code, bad_type = captured(lambda: tool.run(root, store.endpoint, free_loopback_address(), ("HAI_9",)))
+    with MlflowAuthStandIn(admin) as server:
+        old_route_answered = old_route_status(server.url, admin) == (404, True) and len(server.removed_hits) == 1
+    with tempfile.TemporaryDirectory(prefix="serving_types_cases_") as folder:
+        inputs = Path(folder) / "services.json"
+        inputs.write_text(json.dumps({"model_api_hai_types": "HAI_1,HAI_2", "streamlit_hai_types": "HAI_1"}))
+        from_file = tool.served_types(None, inputs, {})
+        from_flag = tool.served_types("HAI_3", inputs, {"MODEL_API_HAI_TYPES": "HAI_4"})
+        from_environment = tool.served_types(None, None, {"MODEL_API_HAI_TYPES": "HAI_4,HAI_5"})
+        bad_inputs: list[tuple[str | None, Path | None, dict[str, str]]] = [(None, None, {}), ("HAI_9", None, {}), ("HAI_1,HAI_1", None, {}), ("", None, {})]
+        types_refused = [refusal_of(functools.partial(tool.served_types, *arguments)) for arguments in bad_inputs]
+    return {
+        "the first run exits 0 and creates the MLflow user with the stored credential": first_code == 0
+        and first_users == [served]
+        and bool(credential)
+        and password_sent,
+        "READ is granted on each existing served model and experiment, the experiment by its ID": first_grants
+        == {grant_model_1: "READ", grant_experiment_1: "READ"},
+        "a model or experiment that does not exist, or is deleted, is reported pending": all(f"{name}: pending" in first for name in (model_2, experiment_2)),
+        "the grant lines name each object and say granted": f"{model_1}: READ granted" in first and f"{experiment_1}: READ granted" in first,
+        "only the 3.17 routes and the registered model and experiment lookups were called": first_routes <= routes
+        and ("POST", "/api/3.0/mlflow/users/permissions/grant") in first_routes,
+        "the removed per-object permission routes were never called": removed_after_all == [] and old_route_answered,
+        "the credential travels in a JSON body and never in an address": create_bodies == [("application/json", ("password", "username"))] and not in_address,
+        "no output, log line or file holds the administrator password or the credential": bool(credential)
+        and not any(secret in first + second + third + edit + deny for secret in (admin, credential))
+        and leaked == [],
+        "a rerun exits 0, creates no user, changes no grant and says present": second_code == 0
+        and rerun_quiet
+        and f"mlflow user {served}: present" in second
+        and f"{model_1}: READ present" in second,
+        "after the first training run a rerun grants the missing objects and leaves the first grants": late_ok,
+        "an existing grant of another permission is reported and left unchanged, with exit 0": edit_code == 0
+        and edit_kept
+        and f"{model_1}: holds EDIT, left unchanged" in edit,
+        "an explicit DENY refuses with exit 1, names the object and stays": deny_code == 1 and deny_kept and experiment_1 in deny and "DENY" in deny,
+        "a server default of NO_PERMISSIONS still gets an explicit READ grant": none_ok,
+        "a missing administrator parameter exits 1, names it and calls no MLflow route": no_admin_code == 1 and admin_name in no_admin and no_admin_quiet,
+        "a wrong administrator password exits 1 with the status and without any password": wrong_code == 1 and wrong_text_clean,
+        "an address off the loopback, with a user, or with another scheme exits 1 before the administrator parameter is read": len(refused)
+        == len(refused_addresses)
+        and all(refused),
+        "an MLflow server that is not there exits 1 within the deadline and names the address": down_code == 1 and "127.0.0.1" in down,
+        "an unsupported served type exits 1 before any request": bad_type_code == 1 and "HAI_9" in bad_type,
+        "the served types come from the flag, then the services input file, then the environment": from_file == ("HAI_1", "HAI_2")
+        and from_flag == ("HAI_3",)
+        and from_environment == ("HAI_4", "HAI_5"),
+        "no served type, an unknown one, a repeat and an empty list are refused": all(message is not None for message in types_refused),
+    }
+
+
+def refusal_of(call: Callable[[], Any]) -> str | None:
+    """The text of the tool's refusal, or ``None`` when the call succeeds."""
+    from scripts.infrastructure import create_serving_secrets as tool
+
+    try:
+        call()
+    except tool.ServingSecretsError as error:
+        return str(error)
+    return None
+
+
+def old_route_status(url: str, admin: str) -> tuple[int, bool]:
+    """The status and HTML flag of one call to a per-object permission route that MLflow 3.17.2 removed, so a case knows the stand-in would show a call."""
+    import http.client
+
+    token = base64.b64encode(f"admin:{admin}".encode()).decode()
+    connection = http.client.HTTPConnection("127.0.0.1", int(url.rpartition(":")[2]), timeout=5)
+    try:
+        connection.request("GET", "/api/2.0/mlflow/registered-models/permissions/get?name=x", headers={"Authorization": "Basic " + token})
+        answer = connection.getresponse()
+        return answer.status, answer.read().startswith(b"<!doctype html>")
+    finally:
+        connection.close()
+
+
 def release_pipe(pipe: Path, seconds: float = 5.0) -> None:
     """Open the write end of a pipe so that a reader blocked on it returns; give up after ``seconds`` when no reader is waiting."""
     end = time.monotonic() + seconds
@@ -649,6 +934,8 @@ CASES: dict[str, Case] = {
     "model_api_redis_password": model_api_redis_password,
     "redis_exporter_password": redis_exporter_password,
     "postgres_exporter_password": postgres_exporter_password,
+    "serving_secrets_store": serving_secrets_store,
+    "serving_secrets_mlflow": serving_secrets_mlflow,
     "scan_with_pipe": scan_with_pipe,
 }
 
