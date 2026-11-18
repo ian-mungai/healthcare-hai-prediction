@@ -15,7 +15,9 @@ import re
 import shlex
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from scripts.process import TimeoutExpired, find_program, run_command
 from scripts.quality.repo_checks import load_yaml
@@ -464,6 +466,16 @@ def build_contexts() -> int:
 OCTAL_MODE = re.compile(r"[0-7]{3,4}")
 CONTROL_OPERATORS = {"&&", "||", ";", "|", "&"}
 ENTERABLE = 0o005  # read and search permission for other users: COPY writes root-owned files and the image runs as another user
+VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+ATTACHED_MODE = re.compile(r"^-[A-Za-z]*m(.+)$")
+# Folders that every base image holds and that other users can enter; any other folder, a first-level one included, exists only when the Dockerfile makes it.
+PRESENT = frozenset(
+    {"/opt", "/usr", "/usr/local", "/usr/local/bin", "/usr/bin", "/usr/share", "/usr/lib", "/etc", "/var", "/var/lib", "/home", "/srv", "/mnt", "/run"}
+)
+
+
+class Unresolved(ValueError):
+    """A path of the image that holds a variable which the Dockerfile never sets with ENV or ARG."""
 
 
 def instruction_words(body: str) -> list[str]:
@@ -495,18 +507,15 @@ def shell_commands(body: str) -> list[list[str]]:
     return [command for command in commands if command]
 
 
-def image_folder(path: str, workdir: str, where: str) -> str:
-    """The absolute form of a path of the image; a path that holds a variable cannot be followed."""
-    joined = posixpath.normpath(posixpath.join(workdir, path))
-    if "$" in joined or "`" in joined:
-        raise ValueError(f"{where}: copy-mode checking cannot resolve {path}; write the folder in full")
-    return joined
+def expand(text: str, variables: dict[str, str]) -> str:
+    """The text with each variable that ENV or ARG set replaced; any other variable stays in the text."""
+    return VARIABLE.sub(lambda match: variables.get(match.group(1) or match.group(2), match.group(0)), text)
 
 
 def folder_chain(folder: str) -> list[str]:
-    """The folder and each parent below the first level, which every image has: the folders that a COPY may create."""
+    """The folder and each parent that a COPY may create: every folder except the root and the folders that each base image holds."""
     parts = PurePosixPath(folder).parts
-    return ["/" + "/".join(parts[1:index]) for index in range(len(parts), 2, -1)]
+    return [created for created in ("/" + "/".join(parts[1:index]) for index in range(len(parts), 1, -1)) if created not in PRESENT]
 
 
 def opens(mode: str) -> bool:
@@ -515,115 +524,236 @@ def opens(mode: str) -> bool:
 
 
 def command_mode(words: list[str]) -> int | None:
-    """The octal mode that a mkdir, install or chmod command names, or None when it names none."""
+    """The mode that mkdir or install names (``-m 0700``, ``--mode=0700`` or ``-m0700``): 0 when it is not octal, None when there is none."""
     for index, word in enumerate(words):
-        value = word.split("=", 1)[1] if word.startswith("--mode=") else words[index + 1] if word in {"-m", "--mode"} and index + 1 < len(words) else ""
+        attached = ATTACHED_MODE.match(word)
+        value = (
+            word.split("=", 1)[1]
+            if word.startswith("--mode=")
+            else words[index + 1]
+            if word in {"-m", "--mode"} and index + 1 < len(words)
+            else attached.group(1)
+            if attached
+            else ""
+        )
         if value:
             return int(value, 8) if OCTAL_MODE.fullmatch(value) else 0
     return None
 
 
+@dataclass
+class Closed:
+    """A folder that a COPY --chmod created closed to other users: where, with which mode, and whether its unknown contents may hold more closed folders."""
+
+    number: int
+    mode: str
+    subtree: bool
+
+
 class StageModes:
     """The folders of one build stage: those known to be enterable, and those that a COPY --chmod created without search permission."""
 
-    def __init__(self, name: str) -> None:
-        self.name, self.workdir = name, "/"
+    def __init__(self, name: str, tracked: list[str], contexts: list[str]) -> None:
+        self.name = name
+        self.workdir: str | None = "/"
+        self.variables: dict[str, str] = {}
         self.known: set[str] = set()
-        self.pending: dict[str, tuple[int, str]] = {}
+        self.pending: dict[str, Closed] = {}
+        self.nonroot = False
+        self.tracked, self.contexts = tracked, contexts
 
     def folder(self, path: str, number: int) -> str:
-        return image_folder(path, self.workdir, f"{self.name}:{number}")
+        """The absolute folder that a path of the image names, with the variables that ENV and ARG set."""
+        text = expand(path, self.variables)
+        if self.workdir is None and not text.startswith("/"):
+            raise Unresolved(f"{self.name}:{number}: copy-mode checking cannot resolve {path}; the working folder is not known")
+        joined = posixpath.normpath(posixpath.join(self.workdir or "/", text))
+        if "$" in joined or "`" in joined:
+            raise Unresolved(f"{self.name}:{number}: copy-mode checking cannot resolve {path}; write the folder in full or set the variable with ENV before")
+        return joined
+
+    def set_variables(self, operation: str, body: str) -> None:
+        try:
+            words = shlex.split(body)
+        except ValueError:
+            return
+        if operation == "ENV" and words and "=" not in words[0]:
+            self.variables[words[0]] = expand(" ".join(words[1:]), self.variables)
+            return
+        for word in words:
+            key, separator, value = word.partition("=")
+            if separator:
+                self.variables[key] = expand(value, self.variables)
+
+    def source_kind(self, source: str) -> tuple[str, set[str]]:
+        """``file``, or ``dir`` with the folders below it, for a source that Git tracks in a build context; ``unknown`` for anything else."""
+        if re.search(r"[*?\[]", source) or "$" in source or source.startswith("/"):
+            return "unknown", set()
+        for context in self.contexts:
+            base = posixpath.normpath(posixpath.join(context, source))
+            if base in self.tracked:
+                return "file", set()
+            prefix = "" if base == "." else base + "/"
+            below = [name[len(prefix) :] for name in self.tracked if name.startswith(prefix)]
+            if below:
+                return "dir", {"/".join(PurePosixPath(name).parts[:depth]) for name in below for depth in range(1, len(PurePosixPath(name).parts))}
+        return "unknown", set()
 
     def copy(self, number: int, words: list[str]) -> None:
         flags = [word for word in words if word.startswith("--")]
-        paths = [word for word in words if not word.startswith("--")]
+        paths = [word for index, word in enumerate(words) if not word.startswith("--") and not (index and words[index - 1] == "--from")]
         if len(paths) < 2:
             return
         mode = next((flag.split("=", 1)[1] for flag in flags if flag.startswith("--chmod=")), "")
         if mode and not OCTAL_MODE.fullmatch(mode):
             raise ValueError(f"{self.name}:{number}: copy-mode checking cannot read the mode {mode}; write it as an octal number")
-        destination = self.folder(paths[-1], number)
-        # The destination is a folder when it ends with a slash or when several sources go to it; otherwise it names the file.
-        folder = destination if paths[-1].endswith("/") or len(paths) > 2 else posixpath.dirname(destination)
-        chain = folder_chain(folder)
+        try:
+            destination = self.folder(paths[-1], number)
+        except Unresolved:
+            if mode and not opens(mode):
+                raise
+            return
+        sources = paths[:-1]
+        kinds = [
+            ("unknown", set()) if any(flag.startswith("--from") for flag in flags) or "--from" in words else self.source_kind(source) for source in sources
+        ]
+        # A source not proved to be a file may be a folder, so its destination is a folder; one file to a named destination makes only the folders above.
+        made: dict[str, bool] = {}
+        if paths[-1].endswith("/") or len(sources) > 1 or any(kind != "file" for kind, _ in kinds):
+            unknown = any(kind == "unknown" for kind, _ in kinds)
+            made.update({folder: False for folder in folder_chain(destination)})
+            made[destination] = unknown
+            for _, nested in kinds:
+                made.update({posixpath.join(destination, name): False for name in nested})
+        else:
+            made.update({folder: False for folder in folder_chain(posixpath.dirname(destination))})
         if mode and not opens(mode):
-            self.pending.update({created: (number, mode) for created in chain if created not in self.known})
-        self.known.update(chain)
+            self.pending.update({folder: Closed(number, mode, subtree) for folder, subtree in made.items() if folder not in self.known})
+        self.known.update(made)
 
     def operands(self, number: int, arguments: list[str]) -> list[str]:
-        return [self.folder(word, number) for word in arguments if not word.startswith("-") and not OCTAL_MODE.fullmatch(word) and "$" not in word]
+        found = []
+        for word in arguments:
+            if not word.startswith("-") and not OCTAL_MODE.fullmatch(word):
+                try:
+                    found.append(self.folder(word, number))
+                except Unresolved:
+                    continue
+        return found
 
     def run(self, number: int, body: str) -> None:
         for command in shell_commands(body):
             program, arguments = posixpath.basename(command[0]), command[1:]
             if program == "mkdir" or (program == "install" and {"-d", "--directory"} & set(arguments)):
-                mode = command_mode(arguments)
+                made_mode = command_mode(arguments)
                 paths = self.operands(number, arguments)
                 made = [folder for path in paths for folder in folder_chain(path)]
-                self.known.update(made if mode is None or mode & ENTERABLE == ENTERABLE else [folder for folder in made if folder not in paths])
+                self.known.update(made if made_mode is None or made_mode & ENTERABLE == ENTERABLE else [folder for folder in made if folder not in paths])
             elif program == "chmod":
-                if any(opens(word) for word in arguments[:3]):
+                mode = next((word for word in arguments if OCTAL_MODE.fullmatch(word)), "")
+                if opens(mode):
                     self.cover(self.operands(number, arguments), any(word in {"-R", "--recursive"} for word in arguments))
             elif program == "find":
                 self.find(number, arguments)
 
     def find(self, number: int, arguments: list[str]) -> None:
-        """A ``find ROOT -type d -exec chmod MODE {} +`` command covers every folder below each ROOT."""
-        if "-type" not in arguments or "-exec" not in arguments:
+        """Only ``find ROOT -type d -exec chmod MODE {} +`` with no other test covers every folder below each ROOT; a filter leaves folders closed."""
+        start = next((index for index, word in enumerate(arguments) if word.startswith("-") or word in {"(", "!"}), len(arguments))
+        test = arguments[start:]
+        if test[:4] != ["-type", "d", "-exec", "chmod"] or len(test) < 6 or not opens(test[4]) or test[5:] not in (["{}", "+"], ["{}"]):
             return
-        kind, start = arguments.index("-type"), arguments.index("-exec")
-        chmod = arguments[start + 1 : start + 3]
-        if arguments[kind + 1 : kind + 2] != ["d"] or len(chmod) != 2 or chmod[0] != "chmod" or not opens(chmod[1]):
-            return
-        roots: list[str] = []
-        for word in arguments:
-            if word.startswith("-") or word in {"(", "!"}:
-                break
-            roots.append(self.folder(word, number))
-        self.cover(roots, True)
+        self.cover(self.operands(number, arguments[:start]), True)
 
     def cover(self, roots: list[str], recursive: bool) -> None:
-        for folder in list(self.pending):
-            if any(folder == root or (recursive and folder.startswith(root.rstrip("/") + "/")) for root in roots):
+        for folder, closed in list(self.pending.items()):
+            if (folder in roots and (recursive or not closed.subtree)) or (recursive and any(folder.startswith(root.rstrip("/") + "/") for root in roots)):
                 del self.pending[folder]
 
     def report(self) -> bool:
-        for folder, (number, mode) in sorted(self.pending.items(), key=lambda item: item[1][0]):
+        for folder, closed in sorted(self.pending.items(), key=lambda item: item[1].number):
             sys.stderr.write(
-                f"{self.name}:{number}: COPY --chmod={mode} gives the folder {folder} that it creates the same mode, so the image user cannot enter it. "
-                f"Make the folder first with RUN install -d -m 0755 {folder}, or give every folder a mode with search permission before USER, "
-                "for example RUN find /app -type d -exec chmod 0555 {} +.\n"
+                f"{self.name}:{closed.number}: COPY --chmod={closed.mode} gives the folder {folder} that it creates the same mode, "
+                "so the image user cannot enter it. "
+                f"Make the folder first with RUN install -d -m 0755 {folder} (when the source is one file), "
+                "or give every folder a mode with search permission before USER, "
+                "with exactly RUN find /app -type d -exec chmod 0555 {} + (a find with another test is not accepted).\n"
             )
         failed = bool(self.pending)
         self.pending = {}
         return failed
+
+    def finish(self) -> bool:
+        """Report the closed folders at the end of a stage, but only when the stage ends as another user than root."""
+        if self.nonroot:
+            return self.report()
+        self.pending = {}
+        return False
+
+
+def build_folders() -> dict[str, list[str]]:
+    """The build context folder of each Dockerfile that Compose or the image list builds; a file that is absent or malformed names none."""
+    found: dict[str, list[str]] = {}
+
+    def add(context: object, filename: object) -> None:
+        if isinstance(context, str) and isinstance(filename, str):
+            found.setdefault(posixpath.normpath(posixpath.join(context, filename)), []).append(posixpath.normpath(context))
+
+    try:
+        project: Any = load_yaml(safe_source("docker-compose.yaml").read_text())
+        for settings in project["services"].values():
+            build = settings.get("build") if isinstance(settings, dict) else None
+            if isinstance(build, str):
+                add(build, "Dockerfile")
+            elif isinstance(build, dict):
+                add(build.get("context", "."), build.get("dockerfile", "Dockerfile"))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    try:
+        for image in json.loads(safe_source("infra/services/images.json").read_text())["images"].values():
+            if image.get("kind") == "build":
+                add(image.get("context"), image.get("dockerfile", "Dockerfile"))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return found
 
 
 def copy_modes(selected: list[str]) -> int:
     """Flag a COPY --chmod whose mode leaves a folder it creates closed to the image user, unless a folder step before USER opens it.
 
     Docker 29 gives each folder that COPY --chmod creates the mode of the file, so ``--chmod=0444`` made /app/scripts closed and the
-    non-root model API and page tasks exited 1 (Nov 15 2026). A destination without a trailing slash and with one source names a file;
-    the folders that it needs below the first level count as created unless an earlier instruction made or copied into them. Files are root-owned.
+    non-root model API and page tasks exited 1 (Nov 15 2026). The check assumes the worst for everything it cannot prove. A source that Git does
+    not track in the build context may be a folder, so its destination and everything below it count as created closed; a folder source also creates its
+    nested folders; a folder that no earlier instruction made (a first-level one included, apart from the folders of the base image) counts as created.
+    Only an exact repair clears a folder: ``install -d`` or ``mkdir`` with an open mode (``-m``, ``-m0755`` or ``--mode=``) before the COPY, ``chmod`` with
+    an open mode, or ``find ROOT -type d -exec chmod MODE {} +`` with no other test. A stage is checked only when it ends as a user other than root.
     """
     sys.stdout.write(f"Image folder modes: {len(selected)} tracked Dockerfiles\n")
+    tracked, folders = set(paths(tracked=True)), build_folders()
     failed = False
     for name in selected:
-        stage = StageModes(name)
+        contexts = [*dict.fromkeys([*folders.get(name, []), posixpath.dirname(name) or "."])]
+        stage = StageModes(name, sorted(tracked), contexts)
         for number, operation, body in docker_bodies(name):
             if operation == "FROM":
-                failed |= stage.report()
-                stage = StageModes(name)
+                failed |= stage.finish()
+                stage = StageModes(name, sorted(tracked), contexts)
+            elif operation in {"ENV", "ARG"}:
+                stage.set_variables(operation, body)
             elif operation == "WORKDIR":
-                stage.workdir = stage.folder(body, number)
-                stage.known.update(folder_chain(stage.workdir))
+                try:
+                    stage.workdir = stage.folder(body, number)
+                    stage.known.update(folder_chain(stage.workdir))
+                except Unresolved:
+                    stage.workdir = None
             elif operation == "COPY":
                 stage.copy(number, instruction_words(body))
             elif operation == "RUN":
                 stage.run(number, body)
-            elif operation == "USER" and body.split(":")[0].strip() not in {"root", "0"}:
-                failed |= stage.report()
-        failed |= stage.report()
+            elif operation == "USER":
+                stage.nonroot = body.split(":")[0].strip() not in {"root", "0"}
+                if stage.nonroot:
+                    failed |= stage.report()
+        failed |= stage.finish()
     return int(failed)
 
 

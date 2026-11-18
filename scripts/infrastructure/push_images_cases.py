@@ -22,9 +22,10 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from scripts.infrastructure import push_images
 from scripts.infrastructure import push_images_fake_cloud as fake_cloud
@@ -380,9 +381,44 @@ def publisher_analytics_image() -> dict[str, bool]:
     }
 
 
+def synthesize(folder: Path, entry: dict[str, Any] | None, absent: Sequence[str], unreadable: Sequence[str]) -> None:
+    """The files of a stand-in image: ``entry_root`` holds each module and file of the entry check, except the absent ones, and closes the unreadable ones.
+
+    A form of the entry check that runs a program instead (``program``, ``arguments``, ``expect``) has no files; the stand-in prints its ``expect`` text.
+    """
+    root = folder / "entry_root"
+    root.mkdir()
+    entry = entry or {}
+    (folder / "entry_output").write_text(str(entry.get("expect", "ok")) + "\n", encoding="utf-8")
+    targets: dict[str, Path] = {}
+    for module in entry.get("modules", []):
+        parts = module.split(".")
+        for depth in range(1, len(parts)):
+            (root.joinpath(*parts[:depth])).mkdir(exist_ok=True)
+            (root.joinpath(*parts[:depth]) / "__init__.py").touch()
+        targets[f"module:{module}"] = root.joinpath(*parts).with_suffix(".py")
+    for name in entry.get("files", []):
+        targets[f"file:{name}"] = root / name.lstrip("/")
+    for label, target in targets.items():
+        if label in absent:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("synthetic\n", encoding="utf-8")
+        if label in unreadable:
+            target.chmod(0)
+
+
 @contextlib.contextmanager
-def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "linux/arm64", run: str = "ok") -> Iterator[tuple[Path, dict[str, str]]]:
-    """A scratch folder with the stand-in ``aws`` and ``docker`` first on a PATH that holds only ``/usr/bin`` and ``/bin`` besides, and a registry."""
+def sandbox(
+    images: list[dict[str, str]],
+    pushed_digest: str,
+    platform: str = "linux/arm64",
+    run: str = "ok",
+    entry: dict[str, Any] | None = None,
+    absent: Sequence[str] = (),
+    unreadable: Sequence[str] = (),
+) -> Iterator[tuple[Path, dict[str, str]]]:
+    """A scratch folder with the stand-in ``aws`` and ``docker`` first on a PATH that holds only ``/usr/bin`` and ``/bin`` besides, a registry, image files."""
     with tempfile.TemporaryDirectory(prefix="push_images_shell_") as directory:
         folder = Path(directory)
         bin_directory = folder / "bin"
@@ -392,6 +428,7 @@ def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "l
             shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -I "{Path(fake_cloud.__file__).resolve()}" {command} "$@"\n', encoding="utf-8")
             shim.chmod(0o755)
         (folder / "ecr.json").write_text(json.dumps(images), encoding="utf-8")
+        synthesize(folder, entry, absent, unreadable)
         environment = {
             "PATH": f"{bin_directory}:/usr/bin:/bin",
             "PUSH_IMAGES_FAKE_STATE": str(folder),
@@ -402,20 +439,61 @@ def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "l
         yield folder, environment
 
 
+class PlanRun(NamedTuple):
+    """The result of a printed plan run as shell: the first three fields are the exit code, the commands the stand-in saw and the registry afterwards."""
+
+    code: int
+    commands: list[str]
+    registry: list[dict[str, str]]
+    containers: list[str]
+    seconds: float
+    errors: str
+
+
+@contextlib.contextmanager
+def patched(name: str, value: object) -> Iterator[None]:
+    """Replace a setting of ``push_images`` while a plan is printed."""
+    previous = getattr(push_images, name)
+    setattr(push_images, name, value)
+    try:
+        yield
+    finally:
+        setattr(push_images, name, previous)
+
+
 def run_plan(
-    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64", run: str = "ok"
-) -> tuple[int, list[str], list[dict[str, str]]]:
+    images: list[dict[str, str]],
+    pushed_digest: str,
+    name: str = "openmetadata_server",
+    platform: str = "linux/arm64",
+    run: str = "ok",
+    *,
+    config: dict[str, Any] | None = None,
+    errexit: bool = True,
+    absent: Sequence[str] = (),
+    unreadable: Sequence[str] = (),
+    deadline: int | None = None,
+) -> PlanRun:
     """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards.
 
+    ``errexit`` is the ``-e`` option of the caller's shell: on by default, and off in the cases that prove that the plan does not rely on it.
     The line that writes the requirement files from the lock is left out: it needs the repository, and the plan runs in a scratch folder."""
-    with sandbox(images, pushed_digest, platform, run) as (folder, environment):
+    config = config or real_config()
+    with sandbox(images, pushed_digest, platform, run, config["images"][name].get("entry_check"), absent, unreadable) as (folder, environment):
         urls = push_images.repository_urls(repository_urls(folder))
-        lines = [line for line in push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name]) if "scripts.quality.lock_env" not in line]
+        with patched("ENTRY_DEADLINE_SECONDS", deadline or push_images.ENTRY_DEADLINE_SECONDS):
+            lines = [line for line in push_images.plan(config, urls, "example_profile", "us-west-2", [name]) if "scripts.quality.lock_env" not in line]
         (folder / "plan.sh").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        result = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
+        started = time.monotonic()
+        if errexit:
+            result = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
+        else:
+            result = run_command("sh", ["plan.sh"], cwd=folder, env=environment, timeout=60)
+        seconds = time.monotonic() - started
         commands = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
         registry = json.loads((folder / "ecr.json").read_text(encoding="utf-8"))
-    return result.returncode, commands, registry
+        left = sorted(item.name for item in (folder / "containers").iterdir()) if (folder / "containers").exists() else []
+    return PlanRun(result.returncode, commands, registry, left, seconds, result.stderr)
 
 
 def held(name: str, tag: str, digest: str | None = None) -> dict[str, str]:
@@ -502,7 +580,7 @@ def registry_file() -> dict[str, bool]:
         stress = run_command("bash", ["-e", "-o", "pipefail", "stress.sh"], cwd=folder, env=environment, timeout=120)
         after_stress = fingerprint(registry)
         logged = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
-    with sandbox([], UPSTREAM[name]) as (folder, environment):
+    with sandbox([], UPSTREAM[name], entry=real_config()["images"][name].get("entry_check")) as (folder, environment):
         registry = folder / "ecr.json"
         before_push = fingerprint(registry)
         urls = push_images.repository_urls(repository_urls(folder))
@@ -657,12 +735,27 @@ ENTRY_IMAGES = {
 }
 
 
+def printed(name: str, config: dict[str, Any] | None = None) -> list[str]:
+    """The printed plan lines of one image of the real list (or of ``config``)."""
+    with tempfile.TemporaryDirectory(prefix="push_images_entry_") as directory:
+        urls = push_images.repository_urls(repository_urls(Path(directory)))
+    return push_images.plan(config or real_config(), urls, "example_profile", "us-west-2", [name])
+
+
+def docker_ran(commands: Sequence[str], *words: str) -> bool:
+    """Whether the stand-in saw a docker command that starts with one of the words."""
+    return any(line.startswith(tuple(f"docker {word}" for word in words)) for line in commands)
+
+
+def stopped_before_push(result: PlanRun) -> bool:
+    """A plan that exited non-zero, ran the entry check once, tagged and pushed nothing and left the registry empty."""
+    return result.code != 0 and docker_ran(result.commands, "run") and not docker_ran(result.commands, "tag", "push") and result.registry == []
+
+
 def entry_checks() -> dict[str, bool]:
     """An image that sets file modes with COPY --chmod names the entries that its user must reach, and the plan runs the image as that user."""
     config = real_config()
-    with tempfile.TemporaryDirectory(prefix="push_images_entry_") as directory:
-        urls = push_images.repository_urls(repository_urls(Path(directory)))
-    plans = {name: push_images.plan(config, urls, "example_profile", "us-west-2", [name]) for name in (*ENTRY_IMAGES, "drift")}
+    plans = {name: printed(name, config) for name in (*ENTRY_IMAGES, "drift")}
 
     def runs(name: str) -> list[str]:
         return [line for line in plans[name] if "docker run" in line]
@@ -671,9 +764,9 @@ def entry_checks() -> dict[str, bool]:
         return next(iter(runs(name)), "")
 
     def order(name: str) -> list[int]:
-        """The line numbers of the platform check, the run and the tag assignment of one plan, or an empty list when the plan lacks one."""
-        starts = ("docker image inspect --format '{{.Os}}", "[", "TAG_")
-        found = [next((i for i, line in enumerate(plans[name]) if line.startswith(start) and (start != "[" or "docker run" in line)), -1) for start in starts]
+        """The line numbers of the platform check, the entry call and the tag assignment of one plan, or an empty list when the plan lacks one."""
+        starts = ("docker image inspect --format '{{.Os}}", f"entry_check_{name} ", "TAG_")
+        found = [next((i for i, line in enumerate(plans[name]) if line.startswith(start)), -1) for start in starts]
         return found if -1 not in found else []
 
     def problems(changed: dict[str, Any]) -> str:
@@ -687,8 +780,6 @@ def entry_checks() -> dict[str, bool]:
     empty["images"]["streamlit"]["entry_check"] = {"files": []}
     unknown_key = copy.deepcopy(config)
     unknown_key["images"]["streamlit"].setdefault("entry_check", {})["user"] = "root"
-    on_mirror = copy.deepcopy(config)
-    on_mirror["images"]["redis"]["entry_check"] = {"files": ["/etc/redis"]}
     ok = run_plan([], OTHER, "model_api", run="ok")
     closed = run_plan([], OTHER, "model_api", run="closed")
     return {
@@ -704,20 +795,102 @@ def entry_checks() -> dict[str, bool]:
             "--user" not in first(name) and "--network none" in first(name) and "--entrypoint python" in first(name) for name in ENTRY_IMAGES
         ),
         "the run reads each entry of the list": all(all(entry in first(name) for entry in ENTRY_IMAGES[name]) for name in ENTRY_IMAGES),
-        "the plan stops unless the run prints ok": all(
-            '"$(docker run' in first(name) and first(name).lstrip().startswith("[") and "= ok ]" in first(name) for name in ENTRY_IMAGES
-        ),
-        "an image without entries has no run": runs("drift") == [],
+        "an image that needs no file mode still has a run": len(runs("drift")) == 1,
         "a Dockerfile with COPY --chmod and no entries is refused": "model_api" in problems(without) and "entry_check" in problems(without),
         "entries that are not lists of names are refused": "model_api" in problems(string_modules) and "modules" in problems(string_modules),
         "an entry check with nothing to read is refused": "streamlit" in problems(empty) and "entry_check" in problems(empty),
         "an unknown key of the entry check is refused": "streamlit" in problems(unknown_key) and "user" in problems(unknown_key),
-        "an entry check on a mirror is refused": "redis" in problems(on_mirror) and "entry_check" in problems(on_mirror),
-        "a run that prints ok lets the plan push once": ok[0] == 0 and sum(line.startswith("docker run") for line in ok[1]) == 1 and len(ok[2]) == 1,
-        "a run that cannot enter a folder stops the plan before the tag and the push": closed[0] != 0
-        and sum(line.startswith("docker run") for line in closed[1]) == 1
-        and not any(line.startswith(("docker tag", "docker push")) for line in closed[1])
-        and closed[2] == [],
+        "a run that reads every entry lets the plan push once": ok[0] == 0 and sum(line.startswith("docker run") for line in ok[1]) == 1 and len(ok[2]) == 1,
+        "a run that cannot enter a folder stops the plan before the tag and the push": stopped_before_push(closed),
+    }
+
+
+def entry_run_status() -> dict[str, bool]:
+    """The plan stops on the exit status of the entry run and on its output, whatever shell options the caller sets."""
+    exit_with_output = {errexit: run_plan([], OTHER, "model_api", run="exit23", errexit=errexit) for errexit in (True, False)}
+    closed = {errexit: run_plan([], OTHER, "model_api", run="closed", errexit=errexit) for errexit in (True, False)}
+    plain = run_plan([], OTHER, "model_api", errexit=False)
+    return {
+        "a run that prints ok and exits 23 stops the plan under sh -e": stopped_before_push(exit_with_output[True]),
+        "a run that prints ok and exits 23 stops the plan under plain sh": stopped_before_push(exit_with_output[False]),
+        "a run that fails stops the plan under plain sh, without errexit": stopped_before_push(closed[False]),
+        "a run that fails stops the plan under sh -e": stopped_before_push(closed[True]),
+        "a run that reads every entry and exits zero pushes once under plain sh": plain[0] == 0 and docker_ran(plain[1], "push") and len(plain[2]) == 1,
+    }
+
+
+def entry_deadline() -> dict[str, bool]:
+    """A hanging entry run is stopped at a finite deadline: no tag, no push and no container of the plan is left."""
+    hung = run_plan([], OTHER, "model_api", run="hang", errexit=False, deadline=2)
+    stuck = run_plan([], OTHER, "model_api", run="stuck", errexit=False, deadline=2)
+    text = "\n".join(printed("model_api"))
+    return {
+        "the printed plan names a finite deadline for the entry run": f"-lt {push_images.ENTRY_DEADLINE_SECONDS}" in text
+        and push_images.ENTRY_DEADLINE_SECONDS > 0,
+        "a hanging run stops the plan before the tag and the push": stopped_before_push(hung),
+        "the stop comes within a bound of the deadline": hung.seconds < 30,
+        "the plan removed the container by name": docker_ran(hung.commands, "rm"),
+        "no container of the plan is left": hung.containers == [],
+        "a run that ignores the stop signal and cannot be removed still stops the plan before the tag and the push": stopped_before_push(stuck),
+        "the plan names the container that it could not remove": len(stuck.containers) == 1
+        and stuck.containers[0] in stuck.errors
+        and "still there" in stuck.errors,
+        "the plan kills the run that ignores the stop signal, so the stop stays within a bound": stuck.seconds < 30,
+    }
+
+
+def entry_required() -> dict[str, bool]:
+    """Every image that the plan can push needs a non-empty entry check, whatever its Dockerfile does with COPY."""
+    config = real_config()
+    pushable = [name for name, image in config["images"].items() if image["kind"] != "blocked"]
+    lacks: dict[str, bool] = {}
+    for name in pushable:
+        changed = copy.deepcopy(config)
+        changed["images"][name].pop("entry_check", None)
+        lacks[name] = any(line.startswith(f"{name}:") and "entry_check" in line for line in push_images.check(changed))
+    with tempfile.TemporaryDirectory(prefix="push_images_required_") as directory:
+        root = scratch_root(Path(directory))
+        document = read(root, SERVICES_FILE)
+        document["images"]["drift"].pop("entry_check", None)
+        document["images"]["redis"].pop("entry_check", None)
+        (root / SERVICES_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        urls = repository_urls(Path(directory))
+        refused = run(root, "plan", "--repository-urls", str(urls), "--profile", "p", "--region", "us-west-2", "--only", "drift", "redis")
+    return {
+        "the list is valid and gives each pushable image an entry check": push_images.check(config) == []
+        and all(config["images"][name].get("entry_check") for name in pushable),
+        "each image without an entry check is a list error that names it": all(lacks.values()),
+        "a build without COPY --chmod (drift) and a mirror (redis) are refused by the plan command": refused[0] == 1
+        and "drift" in refused[2]
+        and "redis" in refused[2],
+    }
+
+
+def entry_program() -> dict[str, bool]:
+    """The stand-in executes the exact entry program of the plan on synthetic readable and missing entries; a program that reads nothing would pass them."""
+    readable = run_plan([], OTHER, "model_api", errexit=False)
+    no_file = run_plan([], OTHER, "model_api", errexit=False, absent=["file:data_contracts/serving/predictions.json"])
+    no_module = run_plan([], OTHER, "model_api", errexit=False, absent=["module:scripts.serving.main"])
+    closed_file = run_plan([], OTHER, "model_api", errexit=False, unreadable=["file:feature_store/feature_store_aws.yaml"])
+    no_absolute = run_plan([], OTHER, "mlflow", errexit=False, absent=["file:/opt/mlflow/start_server.py"])
+    with patched("ENTRY_PROGRAM", 'print("ok")'):
+        mutant = run_plan([], OTHER, "model_api", errexit=False, absent=["file:data_contracts/serving/predictions.json"])
+    return {
+        "every entry readable: the program prints ok and the plan pushes once": readable[0] == 0 and len(readable[2]) == 1,
+        "a missing file stops the plan before the tag and the push": stopped_before_push(no_file),
+        "a missing module stops the plan before the tag and the push": stopped_before_push(no_module),
+        "a file that the user cannot read stops the plan before the tag and the push": stopped_before_push(closed_file),
+        "a missing file at an absolute path stops the plan before the tag and the push": stopped_before_push(no_absolute),
+        "the no-read mutant lets the missing file through, so these cases catch a program that reads nothing": mutant[0] == 0 and len(mutant[2]) == 1,
+    }
+
+
+def stand_in_switch_scope() -> dict[str, bool]:
+    """``.env.example`` lists only settings of the real ``.env``; the test-only switch of the stand-in ``docker run`` is not among them."""
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    return {
+        "PUSH_IMAGES_FAKE_RUN is not in .env.example": "PUSH_IMAGES_FAKE_RUN" not in example,
+        "the stand-in reads the switch": 'os.environ.get("PUSH_IMAGES_FAKE_RUN"' in Path(fake_cloud.__file__).read_text(encoding="utf-8"),
     }
 
 
@@ -731,6 +904,11 @@ CASES: dict[str, Case] = {
     "plan_lines": plan_lines,
     "drift_image": drift_image,
     "entry_checks": entry_checks,
+    "entry_run_status": entry_run_status,
+    "entry_deadline": entry_deadline,
+    "entry_required": entry_required,
+    "entry_program": entry_program,
+    "stand_in_switch_scope": stand_in_switch_scope,
     "publisher_analytics_image": publisher_analytics_image,
     "plan_execution": plan_execution,
     "registry_file": registry_file,

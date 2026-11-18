@@ -5,8 +5,15 @@ It keeps the images of one fake registry in ``ecr.json`` under the folder named 
 nothing matches. Only a successful ``docker push`` changes the registry: it adds the pushed tag with the digest in ``PUSH_IMAGES_FAKE_DIGEST`` and
 replaces ``ecr.json`` by rename, so a concurrent reader never sees a partial file. A push is refused for a tag that exists, as an immutable
 repository does, and for an image that was not tagged first, as docker does. ``docker login --password-stdin`` reads its input to the end, as docker
-does. ``docker image inspect`` prints ``PUSH_IMAGES_FAKE_PLATFORM`` (default linux/arm64). ``docker run`` prints ``ok``, or fails with a permission error
-when ``PUSH_IMAGES_FAKE_RUN`` is ``closed``. Every other docker command succeeds.
+does. ``docker image inspect`` prints ``PUSH_IMAGES_FAKE_PLATFORM`` (default linux/arm64).
+
+``docker run`` follows ``PUSH_IMAGES_FAKE_RUN``. ``ok`` (the default) stands for an image whose files are the synthetic folder ``entry_root`` of the state
+folder: a run with ``--entrypoint python`` executes the exact program of the plan in that folder (the working folder of the image, with the folder on the
+import path; an absolute ``file:`` name is read below it) and so prints ``ok`` only when every named module and file can be read. Any other run prints the
+text of the state file ``entry_output``. ``closed`` fails with a permission error and exit 1, ``exit23`` prints ``ok`` and exits 23, and ``hang`` ends only
+when ``docker rm -f`` or ``docker kill`` names its container (a run without ``--name`` never ends before 120 s). ``stuck`` ignores the TERM signal and
+cannot be removed or killed by name. A run with ``--name`` keeps a file in the state folder ``containers`` while it lives, which ``docker container inspect``,
+``docker rm`` and ``docker kill`` read. Every other docker command succeeds.
 It decides nothing that the cases prove: whether a plan skips, pushes or stops comes only from
 the shell lines of the plan. It imports nothing from the repository, so it runs with ``python -I push_images_fake_cloud.py aws|docker <arguments>``.
 """
@@ -15,9 +22,15 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import signal
 import sys
 import tempfile
+import time
+import traceback
 from pathlib import Path
+
+HANG_SECONDS = 120
 
 
 def option(arguments: list[str], name: str) -> str:
@@ -65,13 +78,88 @@ def docker(arguments: list[str], images: list[dict[str, str]]) -> int:
     elif arguments[:1] == ["login"] and "--password-stdin" in arguments:
         sys.stdin.read()
     elif arguments[:1] == ["run"]:
-        if os.environ.get("PUSH_IMAGES_FAKE_RUN") == "closed":
-            sys.stderr.write("PermissionError: [Errno 13] Permission denied: '/app/scripts/serving'\n")
-            return 1
-        sys.stdout.write("ok\n")
+        return run(arguments[1:])
+    elif arguments[:1] in (["kill"], ["rm"]) or arguments[:2] == ["container", "inspect"]:
+        return container_command(arguments)
     elif arguments[:2] == ["image", "inspect"]:
         sys.stdout.write(os.environ.get("PUSH_IMAGES_FAKE_PLATFORM", "linux/arm64") + "\n")
     return 0
+
+
+def containers() -> Path:
+    """The folder that holds one file per live container."""
+    folder = Path(os.environ["PUSH_IMAGES_FAKE_STATE"]) / "containers"
+    folder.mkdir(exist_ok=True)
+    return folder
+
+
+def container_command(arguments: list[str]) -> int:
+    """``docker container inspect NAME`` fails for an unknown container; ``docker rm -f NAME`` and ``docker kill NAME`` end the container that has the name."""
+    name = arguments[-1]
+    live = containers() / name
+    if os.environ.get("PUSH_IMAGES_FAKE_RUN") == "stuck" and arguments[0] in ("rm", "kill"):
+        sys.stderr.write(f"Error: cannot remove container {name}: it does not stop\n")
+        return 1
+    if arguments[0] == "container":
+        return 0 if live.exists() else 1
+    if not live.exists():
+        sys.stderr.write(f"Error: No such container: {name}\n")
+        return 1
+    live.unlink()
+    return 0
+
+
+def read_entries(names: list[str], root: Path, program: str) -> int:
+    """Run the program of the plan on the synthetic image folder: the exit code it would have inside the image."""
+    mapped = [f"file:{root}{name[5:]}" if name.startswith("file:/") else name for name in names]
+    (root.parent / "entry_program.py").write_text(program, encoding="utf-8")
+    previous = (os.getcwd(), list(sys.argv), list(sys.path))
+    os.chdir(root)
+    sys.argv = ["entry", *mapped]
+    sys.path.insert(0, str(root))
+    try:
+        runpy.run_path(str(root.parent / "entry_program.py"), run_name="__main__")
+    except Exception:
+        traceback.print_exc()
+        return 1
+    finally:
+        os.chdir(previous[0])
+        sys.argv, sys.path[:] = previous[1], previous[2]
+    return 0
+
+
+def run(arguments: list[str]) -> int:
+    """Answer ``docker run`` as ``PUSH_IMAGES_FAKE_RUN`` says."""
+    mode = os.environ.get("PUSH_IMAGES_FAKE_RUN", "ok")
+    state = Path(os.environ["PUSH_IMAGES_FAKE_STATE"])
+    name = option(arguments, "--name") if "--name" in arguments else ""
+    live = containers() / name if name else None
+    if live is not None:
+        live.write_text("running\n", encoding="utf-8")
+    try:
+        if mode == "closed":
+            sys.stderr.write("PermissionError: [Errno 13] Permission denied: '/app/scripts/serving'\n")
+            return 1
+        if mode == "exit23":
+            sys.stdout.write("ok\n")
+            return 23
+        if mode == "stuck":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            time.sleep(HANG_SECONDS)
+            return 137
+        if mode == "hang":
+            deadline = time.monotonic() + HANG_SECONDS
+            while (live is None or live.exists()) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            return 137
+        tail = arguments[arguments.index("--entrypoint") + 2 :]
+        if arguments[arguments.index("--entrypoint") + 1] == "python" and tail[1:3] == ["-B", "-c"]:
+            return read_entries(tail[4:], state / "entry_root", tail[3])
+        sys.stdout.write((state / "entry_output").read_text(encoding="utf-8"))
+        return 0
+    finally:
+        if live is not None:
+            live.unlink(missing_ok=True)
 
 
 def save(images: list[dict[str, str]]) -> None:

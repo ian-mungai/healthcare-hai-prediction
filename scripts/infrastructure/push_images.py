@@ -21,10 +21,12 @@ only a digest equal to the pin for these images and writes it to the variable fi
 --require-resolved`` is the activation check: it fails while a digest in that file is still ``TO_RESOLVE`` or the two files disagree. The finite catalog
 task's database image is not part of this list.
 
-A built image whose Dockerfile gives COPY --chmod a mode without read and search permission for other users names its ``entry_check`` in the list: the
-modules and files that its non-root user must read. ``check`` refuses such an image without one, and ``plan`` prints a ``docker run`` line after the build
-that runs the image as its own user, with no network, and stops the plan unless every named module and file can be read. Docker 29 gave the folders that
-``COPY --chmod=0444`` created the mode 0444, and the model API and page tasks exited 1 at start (Nov 15 2026).
+Every image that the plan pushes names an ``entry_check``, and ``check`` refuses one without it. The check has one of two forms. ``modules`` and ``files`` name
+what the user of a Python image must read; ``program``, ``arguments`` and ``expect`` give a program that any other image runs, with the text it must print.
+The plan prints the run after the platform check and before the tag: the image runs as its own user, with no network, under a finite deadline
+(``ENTRY_DEADLINE_SECONDS``), and the plan stops unless the run exits with status 0 and prints what the check expects. The plan stops with an explicit
+``exit`` or ``return``, never through the shell options of the caller, and it removes the container that it names when the deadline passes. Docker 29 gave the
+folders that ``COPY --chmod=0444`` created the mode 0444, and the model API and page tasks exited 1 at start (Nov 15 2026).
 """
 
 from __future__ import annotations
@@ -59,8 +61,11 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 URL = re.compile(r"^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+$")
 MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
-CHMOD_COPY = re.compile(r"^\s*COPY\s+(?:\S+\s+)*?--chmod=([0-7]{3,4})\b", re.IGNORECASE | re.MULTILINE)
-ENTRY_KEYS = ("modules", "files")
+PROGRAM = re.compile(r"^[A-Za-z0-9_./-]+$")
+FILE_KEYS = ("modules", "files")
+PROGRAM_KEYS = ("program", "arguments", "expect")
+ENTRY_KEYS = (*FILE_KEYS, *PROGRAM_KEYS)
+ENTRY_DEADLINE_SECONDS = 60
 # The program of the entry run: it reads the first byte of each named file and of the file of each named module, as the user of the image.
 ENTRY_PROGRAM = (
     'import importlib.util as u, sys; [open(u.find_spec(a[7:]).origin if a.startswith("module:") else a[5:], "rb").read(1) for a in sys.argv[1:]]; print("ok")'
@@ -99,38 +104,93 @@ def dockerfile_problems(context: Path, root: Path, name: str = "Dockerfile") -> 
     return problems
 
 
-def entry_problems(name: str, image: dict[str, Any], dockerfile: Path | None) -> list[str]:
-    """The ``entry_check`` of an image names the modules and files its user must read; a Dockerfile that sets modes with COPY --chmod needs one."""
+def entry_problems(name: str, image: dict[str, Any]) -> list[str]:
+    """The ``entry_check`` of an image that the plan pushes: modules and files to read, or a program to run with its output."""
     entry = image.get("entry_check")
+    if image.get("kind") == "blocked":
+        return [] if entry is None else [f"{name}: entry_check belongs to an image that the plan pushes, and a blocked image is not pushed"]
     if entry is None:
-        closed = (
-            dockerfile is not None
-            and dockerfile.is_file()
-            and any(int(mode, 8) & 0o005 != 0o005 for mode in CHMOD_COPY.findall(dockerfile.read_text(encoding="utf-8")))
-        )
-        message = f"{name}: a COPY --chmod mode has no read and search permission for other users, so entry_check must name what the image user reads"
-        return [message] if closed else []
-    if image.get("kind") not in ("build", "source"):
-        return [f"{name}: entry_check belongs to an image that the list builds"]
+        return [f"{name}: entry_check is required: name the modules and files that the image user must read, or a program to run with the text it prints"]
     if not isinstance(entry, dict):
-        return [f"{name}: entry_check must be an object with modules and files"]
+        return [f"{name}: entry_check must be an object with modules and files, or with program, arguments and expect"]
     problems = [f"{name}: entry_check has the unknown key {key}" for key in entry if key not in ENTRY_KEYS]
-    for key in ENTRY_KEYS:
+    for key in FILE_KEYS:
         values = entry.get(key, [])
         if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
             problems.append(f"{name}: entry_check {key} must be a list of names")
         elif key == "modules" and not all(MODULE.match(value) for value in values):
             problems.append(f"{name}: entry_check modules must be dotted module names")
-    if not problems and not any(entry.get(key) for key in ENTRY_KEYS):
-        problems.append(f"{name}: entry_check names no module or file to read")
+    if "program" in entry:
+        arguments = entry.get("arguments", [])
+        if not isinstance(entry["program"], str) or not PROGRAM.match(entry["program"]):
+            problems.append(f"{name}: entry_check program must be the name or path of a program")
+        if not isinstance(arguments, list) or not all(isinstance(value, str) for value in arguments):
+            problems.append(f"{name}: entry_check arguments must be a list of text")
+        if not isinstance(entry.get("expect"), str) or not entry["expect"]:
+            problems.append(f"{name}: entry_check expect must be the text that the program prints")
+        if any(entry.get(key) for key in FILE_KEYS):
+            problems.append(f"{name}: entry_check names a program and modules or files; use one form")
+    elif not problems and not any(entry.get(key) for key in FILE_KEYS):
+        problems.append(f"{name}: entry_check names no module, file or program to run")
+    elif any(key in entry for key in PROGRAM_KEYS):
+        problems.append(f"{name}: entry_check arguments and expect need a program")
     return problems
 
 
-def entry_line(local: str, entry: dict[str, Any]) -> str:
-    """The plan line that runs the built image as its own user and stops the plan unless every named module and file can be read."""
-    names = [f"module:{value}" for value in entry.get("modules", [])] + [f"file:{value}" for value in entry.get("files", [])]
-    command = f"docker run --rm --network none --entrypoint python {local} -B -c {shlex.quote(ENTRY_PROGRAM)} {' '.join(shlex.quote(name) for name in names)}"
-    return f'[ "$({command})" = ok ]   # it runs as the image USER; a closed folder or file stops the plan before the tag'
+def entry_function(name: str, local: str, entry: dict[str, Any]) -> list[str]:
+    """The shell function that runs the image as its own user and returns 1 unless the run ended in time with status 0 and the expected output.
+
+    The run is a named background job, so that the function can wait for it with a deadline. When the deadline passes the function removes the container by name
+    and stops the job (TERM, then KILL after 5 s), the way ``bounded`` in ``scripts/lakehouse/cutover_route.py`` does. It then confirms that no container of
+    that name is left. It never relies on ``errexit``: every failure is an explicit ``return 1``.
+    """
+    if "program" in entry:
+        command = f"--entrypoint {shlex.quote(entry['program'])} {local} {' '.join(shlex.quote(value) for value in entry.get('arguments', []))}".rstrip()
+        expected = f'grep -qF -- {shlex.quote(entry["expect"])} "$ENTRY_OUT" "$ENTRY_ERR"'
+    else:
+        names = [f"module:{value}" for value in entry.get("modules", [])] + [f"file:{value}" for value in entry.get("files", [])]
+        command = f"--entrypoint python {local} -B -c {shlex.quote(ENTRY_PROGRAM)} {' '.join(shlex.quote(value) for value in names)}"
+        expected = '[ "$(cat "$ENTRY_OUT")" = ok ]'
+    limit = ENTRY_DEADLINE_SECONDS
+    return [
+        f"entry_check_{name}() {{   # the image runs as its own USER with no network; a closed folder or file, a failed run or a hung run stops the plan",
+        f'  ENTRY_NAME="hai_entry_{name}_$$"',
+        "  ENTRY_OUT=$(mktemp) && ENTRY_ERR=$(mktemp) || return 1",
+        f'  docker run --rm --name "$ENTRY_NAME" --network none {command} >"$ENTRY_OUT" 2>"$ENTRY_ERR" &',
+        "  ENTRY_PID=$!",
+        "  ENTRY_WAITED=0",
+        f'  while kill -0 "$ENTRY_PID" 2>/dev/null && [ "$ENTRY_WAITED" -lt {limit} ]; do sleep 1; ENTRY_WAITED=$((ENTRY_WAITED + 1)); done',
+        "  ENTRY_STATUS=0",
+        '  if kill -0 "$ENTRY_PID" 2>/dev/null; then',
+        f'    echo "{name}: the entry check ran longer than {limit} s; its container is removed" >&2',
+        '    docker rm -f "$ENTRY_NAME" >/dev/null 2>&1',
+        '    kill "$ENTRY_PID" 2>/dev/null',
+        "    ENTRY_REAPED=0",
+        '    while kill -0 "$ENTRY_PID" 2>/dev/null && [ "$ENTRY_REAPED" -lt 25 ]; do sleep 0.2; ENTRY_REAPED=$((ENTRY_REAPED + 1)); done',
+        '    kill -0 "$ENTRY_PID" 2>/dev/null && kill -9 "$ENTRY_PID" 2>/dev/null',
+        '    wait "$ENTRY_PID" 2>/dev/null',
+        "    ENTRY_STATUS=124",
+        "  else",
+        '    wait "$ENTRY_PID" || ENTRY_STATUS=$?',
+        "  fi",
+        '  if docker container inspect "$ENTRY_NAME" >/dev/null 2>&1; then',
+        '    docker rm -f "$ENTRY_NAME" >/dev/null 2>&1',
+        '    if docker container inspect "$ENTRY_NAME" >/dev/null 2>&1; then',
+        f'      echo "{name}: the container $ENTRY_NAME of the entry check is still there" >&2',
+        '      rm -f "$ENTRY_OUT" "$ENTRY_ERR"',
+        "      return 1",
+        "    fi",
+        "  fi",
+        f'  if [ "$ENTRY_STATUS" -eq 0 ] && {expected}; then',
+        '    rm -f "$ENTRY_OUT" "$ENTRY_ERR"',
+        "    return 0",
+        "  fi",
+        f'  echo "{name}: the entry check failed with status $ENTRY_STATUS" >&2',
+        '  cat "$ENTRY_ERR" >&2',
+        '  rm -f "$ENTRY_OUT" "$ENTRY_ERR"',
+        "  return 1",
+        "}",
+    ]
 
 
 def openmetadata_problems(images: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> list[str]:
@@ -214,15 +274,12 @@ def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
                 if context.is_dir()
                 else [f"{name}: build context {image.get('context')} does not exist"]
             )
-            dockerfile = context / str(image.get("dockerfile", "Dockerfile")) if context.is_dir() else None
-            problems.extend(entry_problems(name, image, dockerfile))
             for build_name, path in dict(image.get("build_contexts", {})).items():
                 if not (root / str(path)).is_dir():
                     problems.append(f"{name}: build context {build_name} points to {path}, which does not exist")
             if not isinstance(image.get("local_tag"), str) or not image["local_tag"]:
                 problems.append(f"{name}: local_tag is required")
-        if image.get("kind") in ("mirror", "blocked") and "entry_check" in image:
-            problems.extend(entry_problems(name, image, None))
+        problems.extend(entry_problems(name, image))
         owner = seen_tags.setdefault(f"{name}:{image.get('tag')}", name)
         if owner != name:
             problems.append(f"{name}: repeats a tag of {owner}")
@@ -265,8 +322,8 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
         )
         tag = ""
     lines.append(f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {local}   # must print {PLATFORM}")
-    if image.get("entry_check"):
-        lines.append(entry_line(local, image["entry_check"]))
+    lines.extend(entry_function(name, local, image["entry_check"]))
+    lines.append(f"entry_check_{name} || exit 1")
     if tag:
         lines.append(f"{tag_variable}={tag}")
     else:
@@ -295,9 +352,11 @@ def mirror_lines(name: str, image: dict[str, Any], url: str, profile: str, regio
     describe = f"aws ecr describe-images --profile {profile} --region {region} --repository-name {repository} --image-ids imageDigest={digest}"
     inspect = f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {source}"
     return [
+        *entry_function(name, source, image["entry_check"]),
         f"{tag_variable}={tag}",
         f"{describe} >/dev/null 2>&1 || {{ docker pull --platform {PLATFORM} {source} "
-        f'&& [ "$({inspect})" = {PLATFORM} ] && docker tag {source} {target} && docker push {target}; }}   # skipped when ECR holds the digest under any tag',
+        f'&& [ "$({inspect})" = {PLATFORM} ] && entry_check_{name} && docker tag {source} {target} && docker push {target}; }} '
+        "|| exit 1   # skipped when ECR holds the digest under any tag",
         f"[ \"$({describe} --query 'imageDetails[0].imageDigest' --output text 2>/dev/null)\" = {digest} ] "
         f'|| {{ echo "{name}: ECR does not hold the pinned upstream digest" >&2; exit 1; }}   # the digest to record for {name} is {digest}',
     ]

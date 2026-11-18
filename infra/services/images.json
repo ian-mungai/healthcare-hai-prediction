@@ -8,7 +8,12 @@
       "tag": "17-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
       "repository_group": "always",
-      "runs_as": "ECS service on the host (P7d)"
+      "runs_as": "ECS service on the host (P7d)",
+      "entry_check": {
+        "program": "postgres",
+        "arguments": ["--version"],
+        "expect": "postgres (PostgreSQL) 17"
+      }
     },
     "redis": {
       "kind": "mirror",
@@ -17,7 +22,12 @@
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026); new pin, not used by the local stack",
       "repository_group": "always",
-      "runs_as": "ECS service on the host (P7d)"
+      "runs_as": "ECS service on the host (P7d)",
+      "entry_check": {
+        "program": "redis-server",
+        "arguments": ["--version"],
+        "expect": "Redis server"
+      }
     },
     "polaris": {
       "kind": "mirror",
@@ -25,7 +35,12 @@
       "tag": "1.8.0-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
       "repository_group": "always",
-      "runs_as": "ECS service on the host (P7d)"
+      "runs_as": "ECS service on the host (P7d)",
+      "entry_check": {
+        "program": "java",
+        "arguments": ["-version"],
+        "expect": "version"
+      }
     },
     "airflow": {
       "kind": "build",
@@ -37,7 +52,10 @@
       "tag": "3.4.0-python3.12-arm64",
       "arm64": "base and builder pins list linux/arm64; built on Apple silicon, so the local image is arm64 until docker image inspect says otherwise",
       "repository_group": "always",
-      "runs_as": "ECS services on the host (P7d)"
+      "runs_as": "ECS services on the host (P7d)",
+      "entry_check": {
+        "files": ["/opt/hai/deadline_run"]
+      }
     },
     "polaris_admin": {
       "kind": "build",
@@ -49,7 +67,12 @@
       "tag": "1.8.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "repository_group": "always",
-      "runs_as": "one-shot Polaris bootstrap task on the host (P7d)"
+      "runs_as": "one-shot Polaris bootstrap task on the host (P7d)",
+      "entry_check": {
+        "program": "java",
+        "arguments": ["-version"],
+        "expect": "version"
+      }
     },
     "spark": {
       "kind": "build",
@@ -61,7 +84,10 @@
       "tag": "4.1.2-iceberg1.11.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "repository_group": "always",
-      "runs_as": "job task (P7b)"
+      "runs_as": "job task (P7b)",
+      "entry_check": {
+        "files": ["/opt/requirements.txt", "/opt/hai/deadline_run"]
+      }
     },
     "analytics": {
       "kind": "build",
@@ -76,7 +102,10 @@
       "tag": "duckdb1.5.6-dbt1.11.15-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "repository_group": "always",
-      "runs_as": "job task (P7b) and the Run 3 publisher host task, which needs the publisher packages the build argument installs"
+      "runs_as": "job task (P7b) and the Run 3 publisher host task, which needs the publisher packages the build argument installs",
+      "entry_check": {
+        "files": ["/opt/analytics/requirements.txt", "/opt/analytics/bronze.sql", "/opt/analytics/ui.sh", "/opt/hai/deadline_run"]
+      }
     },
     "quality": {
       "kind": "build",
@@ -88,7 +117,10 @@
       "tag": "gx1.23.2-duckdb1.5.6-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "repository_group": "always",
-      "runs_as": "job task (P7b)"
+      "runs_as": "job task (P7b)",
+      "entry_check": {
+        "files": ["/opt/quality/requirements.txt", "/opt/hai/deadline_run"]
+      }
     },
     "egress_proxy": {
       "kind": "mirror",
@@ -96,7 +128,12 @@
       "tag": "squid-arm64",
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 22 2026)",
       "repository_group": "always",
-      "runs_as": "job network class with closed egress (P7b)"
+      "runs_as": "job network class with closed egress (P7b)",
+      "entry_check": {
+        "program": "squid",
+        "arguments": ["-v"],
+        "expect": "Squid Cache"
+      }
     },
     "mlflow": {
       "kind": "build",
@@ -132,7 +169,10 @@
       "tag": "feast0.67.0-arm64",
       "arm64": "base and builder pins list linux/arm64",
       "repository_group": "always",
-      "runs_as": "job task, extract step"
+      "runs_as": "job task, extract step",
+      "entry_check": {
+        "files": ["/opt/feature_store/requirements.txt", "/opt/hai/deadline_run"]
+      }
     },
     "drift": {
       "kind": "build",
@@ -141,7 +181,10 @@
       "tag": "evidently0.7.23-arm64",
       "arm64": "base pin lists linux/arm64; the linux/arm64 build has not been run yet",
       "repository_group": "always",
-      "runs_as": "job task, drift check step"
+      "runs_as": "job task, drift check step",
+      "entry_check": {
+        "files": ["/opt/drift/requirements.txt"]
+      }
     },
     "prometheus": {
       "kind": "mirror",
@@ -150,7 +193,12 @@
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the busybox variant, which has the shell and wget the preparation and health check containers use",
       "repository_group": "monitoring",
-      "runs_as": "ECS service on the host when monitoring_enabled is true"
+      "runs_as": "ECS service on the host when monitoring_enabled is true",
+      "entry_check": {
+        "program": "/bin/prometheus",
+        "arguments": ["--version"],
+        "expect": "prometheus, version"
+      }
     },
     "grafana": {
       "kind": "mirror",
@@ -159,7 +207,12 @@
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack; the Ubuntu variant, which has the bash the health check uses",
       "repository_group": "monitoring",
-      "runs_as": "ECS service on the host when monitoring_enabled is true"
+      "runs_as": "ECS service on the host when monitoring_enabled is true",
+      "entry_check": {
+        "program": "/usr/share/grafana/bin/grafana",
+        "arguments": ["--version"],
+        "expect": "version"
+      }
     },
     "statsd_exporter": {
       "kind": "mirror",
@@ -168,7 +221,12 @@
       "local_reference": false,
       "arm64": "the pinned index lists linux/arm64 (registry read, Oct 30 2026); new pin, not used by the local stack",
       "repository_group": "monitoring",
-      "runs_as": "ECS service on the host when monitoring_enabled is true"
+      "runs_as": "ECS service on the host when monitoring_enabled is true",
+      "entry_check": {
+        "program": "/bin/statsd_exporter",
+        "arguments": ["--version"],
+        "expect": "statsd_exporter"
+      }
     },
     "pushgateway": {
       "kind": "mirror",
@@ -242,7 +300,12 @@
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
       "repository_group": "always",
-      "runs_as": "the persistent catalog server and its migration step on the host (openmetadata_persistent_enabled)"
+      "runs_as": "the persistent catalog server and its migration step on the host (openmetadata_persistent_enabled)",
+      "entry_check": {
+        "program": "java",
+        "arguments": ["-version"],
+        "expect": "version"
+      }
     },
     "openmetadata_ingestion": {
       "kind": "mirror",
@@ -253,7 +316,12 @@
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
       "repository_group": "always",
-      "runs_as": "the one-shot catalog bootstrap on the host (openmetadata_persistent_enabled)"
+      "runs_as": "the one-shot catalog bootstrap on the host (openmetadata_persistent_enabled)",
+      "entry_check": {
+        "program": "python",
+        "arguments": ["--version"],
+        "expect": "Python 3"
+      }
     },
     "openmetadata_search": {
       "kind": "mirror",
@@ -264,7 +332,12 @@
       "read_back": "equal",
       "arm64": "the pinned digest is the linux/arm64 entry of the selected release (Docker Hub registry API, Nov 3 2026)",
       "repository_group": "always",
-      "runs_as": "the persistent catalog's OpenSearch single node on the host (openmetadata_persistent_enabled)"
+      "runs_as": "the persistent catalog's OpenSearch single node on the host (openmetadata_persistent_enabled)",
+      "entry_check": {
+        "program": "/usr/share/opensearch/bin/opensearch",
+        "arguments": ["--version"],
+        "expect": "Version:"
+      }
     }
   }
 }

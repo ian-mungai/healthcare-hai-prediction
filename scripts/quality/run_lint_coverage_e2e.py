@@ -64,6 +64,11 @@ class Sample:
     good_diagnostic: str | None = None
 
 
+def copy_mode(name: str, bad: str, good: str, *tracked: str, diagnostic: str = "cannot enter") -> Sample:
+    """A Dockerfile sample for the COPY --chmod rule: both bodies follow a base image and a working folder; each tracked path is a source file."""
+    return Sample(name, "hadolint", "Dockerfile", HEAD + bad, HEAD + good, diagnostic, support=tuple((path, "x = 1\n") for path in tracked))
+
+
 SAMPLES = (
     *(
         Sample(f"ruff_{folder}", "ruff", f"{folder}/lint sample.py", "value: int = missing_name\n", "value: int = 1\n", "F821")
@@ -153,62 +158,113 @@ SAMPLES = (
         'FROM ubuntu:24.04\nSHELL ["/bin/bash", "-o", "pipefail", "-c"]\nRUN echo ok | cat\n',
         "DL4006",
     ),
-    *(
-        Sample(name, "hadolint", "Dockerfile", HEAD + bad, HEAD + good, "cannot enter")
-        for name, bad, good in (
-            # The model API layout of Nov 15 2026: Docker 29 gave every folder that COPY --chmod=0444 created the mode 0444.
-            (
-                "copy_mode_created_folder",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
-            ),
-            (
-                "copy_mode_nested_folders_after_a_missing_cover",
-                "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\nUSER 10010\n",
-                "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\n" + COVER + "USER 10010\n",
-            ),
-            ("copy_mode_enterable_mode", "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n", "COPY --chmod=0555 pkg/main.py /app/pkg/\nUSER 10010\n"),
-            (
-                "copy_mode_chmod_after_user",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n" + COVER,
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
-            ),
-            (
-                "copy_mode_chmod_of_another_folder",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /srv\nUSER 10010\n",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_chmod_without_search_bit",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0600 {} +\nUSER 10010\n",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0755 {} +\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_folder_made_first",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-                "RUN install -d -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_folder_made_with_a_closed_mode",
-                "RUN mkdir -m 0700 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-                "RUN mkdir -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_folder_made_by_an_earlier_copy",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-                "COPY pkg/__init__.py /app/pkg/\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_relative_destination",
-                "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nUSER 10010\n",
-                "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nRUN chmod -R 0755 /app/pkg\nUSER 10010\n",
-            ),
-            (
-                "copy_mode_cover_in_a_later_stage",
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\nFROM debian:12\n" + COVER,
-                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
-            ),
-        )
+    # The model API layout of Nov 15 2026: Docker 29 gave every folder that COPY --chmod=0444 created the mode 0444.
+    copy_mode(
+        "copy_mode_created_folder",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+    ),
+    copy_mode(
+        "copy_mode_nested_folders_after_a_missing_cover",
+        "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\nUSER 10010\n",
+        "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\n" + COVER + "USER 10010\n",
+    ),
+    copy_mode("copy_mode_enterable_mode", "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n", "COPY --chmod=0555 pkg/main.py /app/pkg/\nUSER 10010\n"),
+    copy_mode(
+        "copy_mode_chmod_after_user",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n" + COVER,
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+    ),
+    copy_mode(
+        "copy_mode_chmod_of_another_folder",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /srv\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
+    ),
+    copy_mode(
+        "copy_mode_chmod_without_search_bit",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0600 {} +\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0755 {} +\nUSER 10010\n",
+    ),
+    copy_mode(
+        "copy_mode_folder_made_first",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "RUN install -d -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_folder_made_with_a_closed_mode",
+        "RUN mkdir -m 0700 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "RUN mkdir -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_folder_made_by_an_earlier_copy",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "COPY pkg/__init__.py /app/pkg/\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "pkg/main.py",
+        "pkg/__init__.py",
+    ),
+    copy_mode(
+        "copy_mode_relative_destination",
+        "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nUSER 10010\n",
+        "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nRUN chmod -R 0755 /app/pkg\nUSER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_cover_in_a_later_stage",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\nFROM debian:12\n" + COVER,
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+    ),
+    # The five layouts that the round 1 review planted: each passed the first version of the check.
+    copy_mode(
+        "copy_mode_folder_source_without_a_trailing_slash",
+        "COPY --chmod=0444 pkg /app/pkg\nUSER 10010\n",
+        "COPY --chmod=0444 pkg /app/pkg\n" + COVER + "USER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_nested_folder_of_a_folder_source",
+        "COPY --chmod=0444 pkg/ /app/\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/ /app/\n" + COVER + "USER 10010\n",
+        "pkg/nested/main.py",
+    ),
+    copy_mode(
+        "copy_mode_new_first_level_folder",
+        "COPY --chmod=0444 pkg/main.py /closed/\nUSER 10010\n",
+        "RUN install -d -m 0755 /closed\nCOPY --chmod=0444 pkg/main.py /closed/\nUSER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_find_with_another_test",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -name unrelated -exec chmod 0555 {} +\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_attached_mkdir_mode",
+        "RUN mkdir -m0700 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "RUN mkdir -m0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+        "pkg/main.py",
+    ),
+    # Valid layouts that the first version refused or flagged: a variable path with no mode, a variable that ENV sets and an image that runs as root.
+    copy_mode(
+        "copy_mode_variable_destination_without_a_mode",
+        "COPY --chmod=0444 pkg/main.py ${APP}/pkg/main.py\nUSER 10010\n",
+        "ENV APP=/app\nCOPY pkg/main.py ${APP}/pkg/main.py\nUSER 10010\n",
+        "pkg/main.py",
+        diagnostic="cannot resolve",
+    ),
+    copy_mode(
+        "copy_mode_variable_set_by_env",
+        "ENV APP=/app\nCOPY --chmod=0444 pkg/main.py ${APP}/pkg/\nUSER 10010\n",
+        "ENV APP=/app\nCOPY --chmod=0444 pkg/main.py ${APP}/pkg/\n" + COVER + "USER 10010\n",
+        "pkg/main.py",
+    ),
+    copy_mode(
+        "copy_mode_image_that_runs_as_root",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\n",
+        "pkg/main.py",
     ),
     Sample(
         "copy_mode_from_stage",
@@ -218,13 +274,11 @@ SAMPLES = (
         "FROM debian:12 AS base\nFROM debian:12\nWORKDIR /app\nCOPY --from=base --chmod=0555 /etc/hostname /app/pkg/hostname\nUSER 10010\n",
         "cannot enter",
     ),
-    Sample(
+    copy_mode(
         "copy_mode_variable_destination",
-        "hadolint",
-        "Dockerfile",
-        HEAD + "COPY --chmod=0444 pkg/main.py $APP/pkg/\nUSER 10010\n",
-        HEAD + "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
-        "cannot resolve",
+        "COPY --chmod=0444 pkg/main.py $APP/pkg/\nUSER 10010\n",
+        "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
+        diagnostic="cannot resolve",
     ),
     Sample(
         "build_stage_reference",
