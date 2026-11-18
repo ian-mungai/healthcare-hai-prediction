@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
@@ -24,5 +26,18 @@ def prepare_checkout(folder: Path) -> None:
     platform = json.loads(PLATFORM_FILE.read_text())
     shutil.copy2(ROOT / platform["compose"]["file"], folder / platform["compose"]["file"])
     shutil.copy2(ROOT / "scripts" / "orchestration" / "xcom_dump.py", folder / "scripts" / "orchestration" / "xcom_dump.py")
-    for name in ("__init__.py", "interface.py", "dag_runtime.py", "training_contract.py"):
+    for name in mounted_modules(platform):
         shutil.copy2(ROOT / "orchestration" / name, folder / "orchestration" / name)
+
+
+def mounted_modules(platform: dict[str, Any]) -> list[str]:
+    """The ``orchestration/`` modules that the Airflow services of the platform file mount, read from their Compose file so the copy follows the stack."""
+    document = importlib.import_module("yaml").safe_load((ROOT / platform["compose"]["file"]).read_bytes())
+    prefix = "${HAI_ORCH_REPO}/orchestration/"
+    names = {
+        source.removeprefix(prefix)
+        for service in platform["compose"]["services"]
+        for source in (str(volume).split(":")[0] for volume in document["services"][service].get("volumes", []))
+        if source.startswith(prefix) and source.endswith(".py")
+    }
+    return sorted(names)
