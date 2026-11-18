@@ -250,7 +250,11 @@ def repin(new_hash: str, before: dict[Path, bytes]) -> list[str]:
     changed = relock_to_fixed_point(ROOT)
     done("relock")
     for old, (base, _, _) in changed.items():
-        if base not in earlier:
+        if base in earlier:
+            require(
+                earlier[base][1] == old, f"the earlier {base.name} rebuilt from the file does not match the lock it had; the file changed after the pin moved"
+            )
+        else:
             body = before[base]
             require(canonical_hash(json.loads(body)) == old, f"cannot rebuild the earlier {base.name} after an interrupted run")
             earlier[base] = (body, old)

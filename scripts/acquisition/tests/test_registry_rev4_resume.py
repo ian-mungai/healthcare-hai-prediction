@@ -135,3 +135,14 @@ def test_a_partial_archive_is_completed(before: Path, tmp_path: Path) -> None:
     loaders_accept(root)
     for name in ("source_registry.json", "source_registry_lock.json", "registry_additions.json", "registry_additions_lock.json"):
         check((archive / name).read_bytes() == (builder.REV3_ARCHIVE / name).read_bytes(), f"the archived {name} is the revision 3 file")
+
+
+def test_a_plan_changed_after_the_pin_moved_is_refused_not_archived(before: Path, tmp_path: Path) -> None:
+    root = sandbox(before, tmp_path)
+    with pytest.raises(builder.Interrupted):
+        run(root, stop="replace_pin")
+    plan = root / "config/acquisition/census_acs_tables_plan.json"
+    plan.write_text(plan.read_text(encoding="utf-8").replace('"model_eligible": false', '"model_eligible": false, "extra": 1', 1), encoding="utf-8")
+    with pytest.raises(registry.RegistryError, match="does not match the lock it had"):
+        run(root)
+    check(not (root / builder.PLANS_ARCHIVE / "census_acs_tables_plan.json").exists(), "the changed plan was not archived as the predecessor")
