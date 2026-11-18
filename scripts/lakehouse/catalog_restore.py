@@ -25,12 +25,18 @@ would otherwise load a second copy of itself.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from botocore.exceptions import BotoCoreError, ClientError
+
+from scripts.lakehouse.catalog_setup_state import hang_up
 
 CATALOG = "hai_lakehouse"
 
@@ -48,6 +54,7 @@ IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SEQUENCE = re.compile(r"/([0-9]{5,})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$")
 SCHEMA = 2
 MAX_BACKUP_BYTES = 8 * 1024 * 1024
+CHUNK_BYTES = 64 * 1024
 
 Request = Callable[..., tuple[int, Any]]
 
@@ -244,25 +251,75 @@ def restore_catalog(
     return {"step": "restore", "applied": apply, "tables": results, "counts": counts}
 
 
-class LiveStore:
-    """The backup folders of the data bucket through an S3 client of the task role."""
+def refusal_reason(error: Exception) -> str:
+    """What a failed S3 call says: the error code and the HTTP status, never the response text."""
+    if isinstance(error, ClientError):
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        return f"{error.response.get('Error', {}).get('Code', 'error')}, HTTP {status}"
+    return type(error).__name__
 
-    def __init__(self, client: Any, bucket: str) -> None:
-        self.client, self.bucket = client, bucket
+
+class LiveStore:
+    """The backup folders of the data bucket through an S3 client of the task role (one attempt per request, timeouts no longer than the time left).
+
+    With a ``deadline`` (absolute, on ``clock``) no listing page and no body chunk is requested after it, and ``abort`` (called by the caller that gave up at
+    the deadline) stops the loops at their next step and hangs up a body that is being read, so no read continues after the refusal. A failed S3 call is a
+    ``RestoreError`` that names the code and status."""
+
+    def __init__(self, client: Any, bucket: str, *, deadline: float | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+        self.client, self.bucket, self.deadline, self.clock = client, bucket, deadline, clock
+        self.stopped = threading.Event()
+        self.body: Any = None
+
+    def alive(self) -> None:
+        """Raise when the store was told to stop or its deadline has passed; every request of a loop starts here."""
+        if self.stopped.is_set():
+            raise RestoreError("deadline", "the catalog restore stopped reading the backup folders")
+        if self.deadline is not None:
+            check_deadline(self.deadline, self.clock)
+
+    def abort(self) -> None:
+        self.stopped.set()
+        body = self.body
+        if body is not None:
+            hang_up(body)
 
     def names(self, prefix: str) -> list[str]:
         """The keys under the prefix ordered by the time S3 stored them, the newest last. A snapshot is created once and holds no time itself."""
         found: list[tuple[Any, str]] = []
         token = None
         while True:
-            page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
+            self.alive()
+            try:
+                page = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
+            except (ClientError, BotoCoreError) as error:
+                raise RestoreError("backup", f"listing {prefix} failed ({refusal_reason(error)})") from None
             found += [(item["LastModified"], item["Key"]) for item in page.get("Contents", [])]
             if not page.get("IsTruncated"):
                 return [key for _, key in sorted(found)]
             token = page.get("NextContinuationToken")
 
     def read(self, key: str) -> bytes:
-        body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read(MAX_BACKUP_BYTES + 1)
-        if len(body) > MAX_BACKUP_BYTES:
-            raise RestoreError("backup", "a catalog backup is larger than the limit")
-        return bytes(body)
+        self.alive()
+        chunks: list[bytes] = []
+        size = 0
+        try:
+            self.body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
+            while True:
+                self.alive()
+                chunk = self.body.read(CHUNK_BYTES)
+                if not chunk:
+                    return b"".join(chunks)
+                size += len(chunk)
+                if size > MAX_BACKUP_BYTES:
+                    raise RestoreError("backup", "a catalog backup is larger than the limit")
+                chunks.append(chunk)
+        except (ClientError, BotoCoreError) as error:
+            raise RestoreError("backup", f"reading {key.rsplit('/', 1)[-1]} failed ({refusal_reason(error)})") from None
+        finally:
+            body, self.body = self.body, None
+            if body is not None and self.stopped.is_set():
+                hang_up(body)
+            elif body is not None:
+                with contextlib.suppress(Exception):
+                    body.close()

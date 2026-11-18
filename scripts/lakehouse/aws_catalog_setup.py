@@ -435,7 +435,7 @@ class Services(Protocol):
 
     def vault(self) -> PairVault: ...
 
-    def backup_store(self, left: float) -> catalog_restore.Store: ...
+    def backup_store(self, window: Deadline) -> catalog_restore.Store: ...
 
 
 def step_catalog(services: Services, seconds: float, clock: Clock = time.monotonic) -> dict[str, Any]:
@@ -479,24 +479,30 @@ def step_inspect(services: Services, seconds: float, clock: Clock = time.monoton
 
 
 class BoundedStore:
-    """The backup folders with every listing and read ended at the absolute deadline of the step (``run_bounded``): a client timeout bounds one request, not
-    a paginated listing or a body that keeps sending, so the whole call is bounded here. A call that outlasts the deadline raises ``StateError`` (``deadline``)
-    and its thread ends with the client's own timeouts; nothing is written by the reads."""
+    """The backup folders with every listing and read ended at the absolute deadline of the step (``run_bounded``) for a store that holds no deadline of
+    its own: a client timeout bounds one request, not a paginated listing or a body that keeps sending. At the deadline the store is told to ``abort``
+    (the live store then stops at its next page or chunk and hangs up its body) and the caller gets ``StateError`` (``deadline``). The reads write nothing."""
 
     def __init__(self, store: catalog_restore.Store, window: Deadline) -> None:
         self.store, self.window = store, window
 
+    def abort(self) -> None:
+        stop = getattr(self.store, "abort", None)
+        if callable(stop):
+            stop()
+
     def names(self, prefix: str) -> list[str]:
-        return run_bounded(lambda: self.store.names(prefix), self.window, f"listing {prefix}")
+        return run_bounded(lambda: self.store.names(prefix), self.window, f"listing {prefix}", abort=self.abort)
 
     def read(self, key: str) -> bytes:
-        return run_bounded(lambda: self.store.read(key), self.window, f"reading {key.rsplit('/', 1)[-1]}")
+        return run_bounded(lambda: self.store.read(key), self.window, f"reading {key.rsplit('/', 1)[-1]}", abort=self.abort)
 
 
 def step_restore(services: Services, seconds: float, *, apply: bool, clock: Clock = time.monotonic) -> dict[str, Any]:
     """Bring the catalog tables to the newest publish backup of each folder; ``apply`` false reports what would change and writes nothing."""
     deadline = clock() + seconds
-    store = BoundedStore(services.backup_store(seconds), Deadline(deadline, clock))
+    window = Deadline(deadline, clock)
+    store = BoundedStore(services.backup_store(window), window)
     request = CatalogRequest(services.polaris_port, deadline=deadline, clock=clock)
     access = root_token(request, services.root_secret())
     return catalog_restore.restore_catalog(store, services.bucket, request, access, apply=apply, deadline=deadline, clock=clock)
@@ -867,8 +873,8 @@ class HostServices:
     def vault(self) -> PairVault:
         return PairVault(self.client("ssm"))
 
-    def backup_store(self, left: float) -> catalog_restore.Store:
-        return catalog_restore.LiveStore(self.bounded_client("s3", left), self.bucket)
+    def backup_store(self, window: Deadline) -> catalog_restore.Store:
+        return catalog_restore.LiveStore(self.bounded_client("s3", window.left("the backup store")), self.bucket, deadline=window.end, clock=window.clock)
 
 
 def parser() -> argparse.ArgumentParser:

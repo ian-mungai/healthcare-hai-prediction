@@ -24,7 +24,7 @@ from typing import Any, cast
 from scripts.lakehouse import aws_catalog_setup as setup
 from scripts.lakehouse import catalog_restore as restore
 from scripts.lakehouse.catalog_restore import CATALOG, RestoreError
-from scripts.lakehouse.catalog_setup_state import Deadline
+from scripts.lakehouse.catalog_setup_state import Deadline, StateError, client_options
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = REPO_ROOT / "data" / "e2e" / "catalog_restore"
@@ -476,7 +476,7 @@ class StandInServices:
     def root_secret(self) -> str:
         return "stand-in-root-secret"
 
-    def backup_store(self, left: float) -> StandInStore:
+    def backup_store(self, window: Deadline) -> StandInStore:
         self.reads += 1
         return StandInStore(self.objects)
 
@@ -555,7 +555,7 @@ class SlowServices(StandInServices):
         super().__init__({}, port)
         self.seconds = seconds
 
-    def backup_store(self, left: float) -> Any:
+    def backup_store(self, window: Deadline) -> Any:
         return SlowStore(self.seconds)
 
 
@@ -600,6 +600,126 @@ def case_an_empty_restore_checks_the_deadline_after_reading_the_folders() -> dic
     except RestoreError as error:
         refused = str(error)
     return {"the restore is refused with the deadline named": "deadline" in refused}
+
+
+class LoopbackS3:
+    """A loopback HTTP server that answers like S3 and counts what the client does. Every listing page names a next page after ``delay`` seconds (an endless
+    listing) and an object body sends ``chunk`` bytes every ``delay`` seconds for a long body (a body that keeps sending inside every socket timeout).
+    ``fail`` answers every request with HTTP 500 instead. ``requests`` counts the requests received, ``chunks`` the body chunks written and ``hung_up`` is set
+    when the client closed the connection during the body."""
+
+    def __init__(self, delay: float = 0.01, fail: bool = False) -> None:
+        self.delay, self.fail = delay, fail
+        self.requests, self.chunks, self.hung_up = 0, 0, threading.Event()
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                owner.requests += 1
+                time.sleep(owner.delay)
+                if owner.fail:
+                    self.send_response(500)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if "list-type" in self.path:
+                    page = owner.requests
+                    body = (
+                        '<?xml version="1.0"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>b</Name><Prefix>p/</Prefix>'
+                        f"<KeyCount>1</KeyCount><MaxKeys>1</MaxKeys><IsTruncated>true</IsTruncated><NextContinuationToken>t{page}</NextContinuationToken>"
+                        f"<Contents><Key>p/k{page}</Key><LastModified>2026-11-18T00:00:00.000Z</LastModified><Size>1</Size></Contents></ListBucketResult>"
+                    ).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/xml")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(4 * 1024 * 1024))
+                self.end_headers()
+                try:
+                    for _ in range(2000):
+                        self.wfile.write(b"x" * 1024)
+                        self.wfile.flush()
+                        owner.chunks += 1
+                        time.sleep(owner.delay)
+                except OSError:
+                    owner.hung_up.set()
+
+            def log_message(self, format: str, *args: Any) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> LoopbackS3:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=10)
+
+    def client(self, left: float) -> Any:
+        """A real boto3 S3 client with the options of ``HostServices.bounded_client`` (limits no longer than the time left, one attempt), unsigned."""
+        import boto3
+        from botocore import UNSIGNED
+        from botocore.config import Config
+
+        config = Config(signature_version=UNSIGNED, s3={"addressing_style": "path"}, **client_options(left))
+        return boto3.client("s3", region_name="us-west-2", endpoint_url=f"http://127.0.0.1:{self.server.server_address[1]}", config=config)
+
+
+def deadline_refusal(call: Callable[[], object]) -> str:
+    """What a call that has to end at the deadline raised: the text of the refusal, or an empty text when it returned."""
+    try:
+        call()
+    except (RestoreError, StateError) as error:
+        return f"{getattr(error, 'code', '')}: {error}"
+    return ""
+
+
+def case_a_paginated_listing_starts_no_page_after_the_deadline() -> dict[str, bool]:
+    with LoopbackS3() as s3:
+        store = setup.BoundedStore(restore.LiveStore(s3.client(0.05), "b", deadline=time.monotonic() + 0.05), Deadline.after(0.05))
+        refused = deadline_refusal(lambda: store.names("p/"))
+        at_return = s3.requests
+        time.sleep(0.2)
+        after = s3.requests
+    return {
+        "the listing is refused with the deadline named": refused.startswith("deadline"),
+        "more than one page was asked for before the deadline": at_return > 1,
+        "no page request started after the refusal": after <= at_return + 1,
+    }
+
+
+def case_a_partial_body_is_interrupted_at_the_deadline() -> dict[str, bool]:
+    with LoopbackS3() as s3:
+        store = setup.BoundedStore(restore.LiveStore(s3.client(0.05), "b", deadline=time.monotonic() + 0.05), Deadline.after(0.05))
+        refused = deadline_refusal(lambda: store.read("p/snapshot.json"))
+        at_return = s3.chunks
+        hung_up = s3.hung_up.wait(1.0)
+        time.sleep(0.2)
+        after = s3.chunks
+    return {
+        "the read is refused with the deadline named": refused.startswith("deadline"),
+        "the body was streaming when the deadline came": at_return > 1,
+        "the body was closed, so the server saw the client hang up": hung_up,
+        "no further chunk was read after the refusal": after <= at_return + 2,
+    }
+
+
+def case_a_failed_store_request_is_not_retried_and_is_a_named_refusal() -> dict[str, bool]:
+    with LoopbackS3(fail=True) as s3:
+        store = restore.LiveStore(s3.client(5.0), "b", deadline=time.monotonic() + 5.0)
+        refused = deadline_refusal(lambda: store.names("p/"))
+    return {
+        "the refusal is a named restore refusal with no response text": refused.startswith("backup") and "HTTP 500" in refused,
+        "the request was sent once": s3.requests == 1,
+    }
 
 
 def case_a_failed_restore_step_prints_its_refusal_line() -> dict[str, bool]:
