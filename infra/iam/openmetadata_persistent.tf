@@ -49,9 +49,9 @@ variable "mlflow_metadata_reader_password_name" {
 
   validation {
     condition = (
-      length(var.mlflow_metadata_reader_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.mlflow_metadata_reader_password_name)) && !can(regex("^/(?i:aws|ssm)", var.mlflow_metadata_reader_password_name))
-      && !contains([var.mlflow_admin_password_name, var.openmetadata_admin_password_name, var.openmetadata_db_password_name], var.mlflow_metadata_reader_password_name)
-      && !contains(values(var.openmetadata_bot_token_names), var.mlflow_metadata_reader_password_name)
+      length(var.mlflow_metadata_reader_password_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.mlflow_metadata_reader_password_name)) && !can(regex("^/(?i:aws|ssm)", var.mlflow_metadata_reader_password_name)) &&
+      !contains([var.mlflow_admin_password_name, var.openmetadata_admin_password_name, var.openmetadata_db_password_name], var.mlflow_metadata_reader_password_name) &&
+      !contains(values(var.openmetadata_bot_token_names), var.mlflow_metadata_reader_password_name)
     )
     error_message = "Use its own parameter path of letters, digits and underscores that starts with a slash, never the MLflow administrator password, a catalog password or a bot token."
   }
