@@ -66,7 +66,7 @@ variable "prometheus_history_bucket_name" {
 }
 
 variable "prometheus_history_memory_mib" {
-  description = "Hard limit and reservation in MiB of the Prometheus history shipper (Python and boto3 in the Airflow image, as the host state exporter, 128 and 56). The reservation counts in the service reservations only while the shipper is planned, and it lowers the host job cap by the same amount (with every service on, 8080 + 48 = 8128 MiB, so the cap is at most 32768 - 2048 - 8128 = 22592 MiB). An estimate, not a measurement: replace it after the chain run shows the real peak."
+  description = "Hard limit and reservation in MiB of the Prometheus history shipper (Python and boto3 in the training image, 128 and 56). The reservation counts in the service reservations only while the shipper is planned, and it lowers the host job cap by the same amount (with every service on, 8080 + 48 = 8128 MiB, so the cap is at most 32768 - 2048 - 8128 = 22592 MiB). An estimate, not a measurement: replace it after the chain run shows the real peak."
   type        = object({ limit = number, reservation = number })
   default     = { limit = 128, reservation = 48 }
   nullable    = false

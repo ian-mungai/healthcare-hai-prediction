@@ -54,6 +54,7 @@ variables {
     polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
+    training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
@@ -75,6 +76,7 @@ variables {
     polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    training               = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
@@ -164,6 +166,18 @@ run "the_restore_one_shot_is_the_read_only_role_and_runs_before_prometheus" {
       == toset(["/host:false", "/opt/hai/monitoring:true"])
     )
     error_message = "The restore writes the data volume (scratch and the Prometheus folder, one volume) and reads the code only."
+  }
+}
+
+run "both_history_tasks_run_in_the_training_image_that_holds_boto3" {
+  command = plan
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.service["prometheus_history"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      && jsondecode(aws_ecs_task_definition.one_shot["prometheus_restore"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    )
+    error_message = "The shipper and the restore run in the training image, whose own virtual environment holds boto3 for the module; the Airflow image failed at start with no module named boto3."
   }
 }
 

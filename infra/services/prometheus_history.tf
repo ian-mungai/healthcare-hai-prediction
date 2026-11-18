@@ -13,11 +13,12 @@ locals {
   ]
 
   # The shipper reads the Prometheus data folder read only and creates each finished block once in S3 (monitoring/prometheus_history.py, from the code checkout in the
-  # Airflow image). It is its own service so that its task role is the only one with the write. It exits when a pass fails, and ECS restarts it.
+  # training image: its own /opt/venv holds boto3 and is on PATH, and the module imports nothing else outside the standard library; in the Airflow image the service
+  # failed at start with no module named boto3 under this user, Nov 18 2026). It is its own service so that its task role is the only one with the write. It exits when a pass fails, and ECS restarts it.
   prometheus_history_containers = [
     merge(local.container_defaults, {
       name                   = "prometheus_history"
-      image                  = lookup(local.image, "airflow", "")
+      image                  = lookup(local.image, "training", "")
       user                   = "65534:65534"
       readonlyRootFilesystem = true
       memory                 = var.prometheus_history_memory_mib.limit
@@ -52,7 +53,7 @@ locals {
     containers = [
       merge(local.container_defaults, {
         name                   = "prometheus_restore"
-        image                  = lookup(local.image, "airflow", "")
+        image                  = lookup(local.image, "training", "")
         user                   = "0"
         readonlyRootFilesystem = true
         memory                 = 256

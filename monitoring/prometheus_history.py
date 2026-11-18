@@ -3,7 +3,7 @@
     python -m monitoring.prometheus_history ship --data-dir /prometheus [--interval 300] [--once]
     python -m monitoring.prometheus_history restore --data-dir /host/prometheus --scratch-dir /host/prometheus_restore [--owner 65534:65534]
 
-Environment: ``HISTORY_BUCKET_NAME`` and ``AWS_REGION``. Both run in the Airflow image (boto3 and the standard library only).
+Environment: ``HISTORY_BUCKET_NAME`` and ``AWS_REGION``. Both run in the training image (its own venv holds boto3).
 
 A finished block is a folder named by its ULID that Prometheus renamed into place after it wrote every file (``meta.json``, ``index``, ``tombstones`` and
 ``chunks/NNNNNN``); the data folder also holds the WAL, the head chunks and ``<ULID>.tmp-for-creation`` folders, which are never shipped. With min and max block
