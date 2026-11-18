@@ -141,6 +141,7 @@ def main(
             env=environment,
             workflow=aimed,
             s3_client=s3_client,
+            stored_layer_runs=True,
         )
         if code == ingest.MISSING_MANIFEST_EXIT:
             skipped_layers = True

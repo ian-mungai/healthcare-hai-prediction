@@ -429,6 +429,67 @@ def test_the_pin_source_and_launch_claim_input_run_of_the_openmetadata_chain_are
     refused(lambda: chain.source_run(s3, "bucket", "gold", "gold_abcdef02", "silver_pins.json", "silver"), "ChainError")
 
 
+def metadata_ingest(tmp_path: Path, gold: str) -> tuple[int, list[str], str]:
+    """The exit code, the dbt layers that were ingested and the standard error of the host ingestion of the dbt source for a features run that pins ``gold``."""
+    from scripts.infrastructure import run_openmetadata_e2e as e2e
+
+    features, silver = "features_abcdef02", "silver_abcdef03"
+
+    def pin(run: str, source: str, namespace: str) -> bytes:
+        return json.dumps({"schema": 1, "run_id": run, "mode": "real", "namespace": namespace, "source_run_id": source, "snapshot_set": {"t": 1}}).encode()
+
+    keys = {
+        f"lakehouse/layer_runs/features/{features}/gold_pins.json": pin(features, gold, "gold"),
+        f"lakehouse/layer_runs/gold/{gold}/silver_pins.json": pin(gold, silver, "silver"),
+    }
+    for layer, run in (("silver", silver), ("gold", gold), ("features", features)):
+        keys[f"metadata/dbt/{layer}/{run}/manifest.json"] = json.dumps({"layer": layer}).encode()
+    seen: list[str] = []
+
+    def workflow(config: dict[str, Any]) -> None:
+        source = config["source"]["sourceConfig"]["config"].get("dbtConfigSource")
+        if source is not None:
+            seen.append(json.loads(Path(source["dbtManifestFilePath"]).read_text())["layer"])
+
+    args, env = e2e.host_ingest_environment(tmp_path, FEATURES_RUN=features)
+    args = [*args[:-2], "dbt"]
+    code, _, err = e2e.run_host_ingest(args, env, workflow, s3_client=e2e.FakeS3(keys))
+    return code, seen, err
+
+
+@pytest.mark.parametrize("gold", [STAMP, "gold_abcdef01"])
+def test_the_host_ingestion_forwards_the_stored_layer_runs_a_pin_resolved_in_either_form(tmp_path: Path, gold: str) -> None:
+    code, seen, err = metadata_ingest(tmp_path, gold)
+    check(code == 0 and seen == ["silver", "gold", "features"], f"the chain with the gold run {gold} is not ingested: exit {code}, layers {seen}, {err}")
+
+
+def dbt_run_refused(tmp_path: Path, *items: str, **internal: Any) -> bool:
+    """True when ``openmetadata_ingest dbt`` refuses the ``--dbt-run`` items with exit 2. A run that passes reaches the config read, which finds none."""
+    from scripts.infrastructure import openmetadata_ingest as ingest
+
+    arguments = ["dbt", "--config-dir", str(tmp_path / "missing"), "--work-dir", str(tmp_path), "--token-env", "TOKEN"]
+    for item in items:
+        arguments += ["--dbt-run", item]
+    try:
+        return ingest.main(arguments, **internal) == 2
+    except FileNotFoundError:
+        return False
+
+
+def test_the_public_ingest_command_and_the_features_run_input_stay_strict(tmp_path: Path) -> None:
+    from scripts.infrastructure import run_openmetadata_e2e as e2e
+
+    check(dbt_run_refused(tmp_path, f"gold={STAMP}"), "the public command takes a stamp layer run")
+    check(dbt_run_refused(tmp_path, "gold=gold_abcdef0"), "the public command takes a malformed layer run")
+    check(not dbt_run_refused(tmp_path, "gold=gold_abcdef01"), "the public command refuses a layer run of the run ID form")
+    check(dbt_run_refused(tmp_path, "gold=gold_abcdef01", "gold=gold_abcdef02", stored_layer_runs=True), "a duplicate layer is taken")
+    check(not dbt_run_refused(tmp_path, f"gold={STAMP}", stored_layer_runs=True), "an internally resolved stored stamp run is refused")
+    check(dbt_run_refused(tmp_path, "gold=gold_abcdef0", "silver=latest", stored_layer_runs=True), "an internal malformed run is taken")
+    args, env = e2e.host_ingest_environment(tmp_path, FEATURES_RUN=STAMP)
+    code, _, err = e2e.run_host_ingest([*args[:-2], "dbt"], env, lambda config: None, s3_client=e2e.FakeS3({}))
+    check(code == 2 and "FEATURES_RUN must be" in err, f"a stamp FEATURES_RUN input is not refused: {code} {err}")
+
+
 def test_a_gold_report_reads_the_stamp_run_its_pin_names(tmp_path: Path) -> None:
     from orchestration import layer_report
 

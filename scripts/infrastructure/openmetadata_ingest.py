@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
+from orchestration.training_contract import STORED_RUN as STORED_RUN_PATTERN
 from scripts.infrastructure import openmetadata_metrics
 
 SOURCES = ("glue", "dbt", "mlflow")
@@ -75,6 +76,8 @@ DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, i
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
 OLD_MIRROR_PREFIX = "hai_mirror_"  # the Glue databases of the mirror before the rename of Nov 17 2026 (hai_mirror_<layer>)
 DBT_RUN = re.compile(rf"^(silver|gold|features)=({RUN_ID_PATTERN})$")
+# The layer runs that the host ingestion resolves from stored pins, the stamp form of before the run ID redesign too (the command takes ``DBT_RUN``).
+STORED_DBT_RUN = re.compile(rf"^(silver|gold|features)=({STORED_RUN_PATTERN})$")
 MISSING_MANIFEST_EXIT = 3  # at least one dbt batch had no manifest.json and was skipped; the others were ingested
 
 
@@ -311,7 +314,15 @@ def run_workflow(config: dict[str, Any]) -> None:
     workflow.stop()
 
 
-def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callable[[dict[str, Any]], None] | None = None, s3_client: Any = None) -> int:
+def main(
+    argv: list[str],
+    env: Mapping[str, str] | None = None,
+    workflow: Callable[[dict[str, Any]], None] | None = None,
+    s3_client: Any = None,
+    stored_layer_runs: bool = False,
+) -> int:
+    """Ingest one source. ``stored_layer_runs`` is for the host ingestion, which names the layer runs of the stored pins of a chain: they may be of the stamp
+    form of before the run ID redesign. The command line takes the run ID form alone."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", choices=SOURCES)
     parser.add_argument("--config-dir", type=Path, required=True)
@@ -329,7 +340,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     options = parser.parse_args(argv)
     layer_runs: dict[str, str] = {}
     for item in options.dbt_run:
-        match = DBT_RUN.fullmatch(item)
+        match = (STORED_DBT_RUN if stored_layer_runs else DBT_RUN).fullmatch(item)
         if options.source != "dbt" or match is None or match.group(1) in layer_runs:
             sys.stderr.write(f"openmetadata_ingest: --dbt-run {item!r} must be LAYER=RUN, once per layer of {', '.join(DBT_LAYERS)}, for the dbt source only\n")
             return 2
