@@ -16,18 +16,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.legacy_versions import ARCHIVE
 from scripts.acquisition.registry_additions import additions_lock, canonical_json
-from scripts.acquisition.repin_registry import legacy_catalog, pin_files, relock_policies, relock_to_fixed_point, replace_pin
+from scripts.acquisition.repin_registry import LOCK_KEYS, catalog_bytes, digest, pin_files, relock_policies, relock_to_fixed_point, replace_pin
+from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, require
 
-CONFIG = REPO_ROOT / "config/acquisition"
+ROOT = REPO_ROOT
+CONFIG = ROOT / "config/acquisition"
 REV3_ARCHIVE = ARCHIVE / "registry_rev3"
+# A test names a write step here to stop the run right after it, as an interruption would.
+STOP_AFTER: str | None = None
 PLANS_ARCHIVE = "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rev4_20261117"
 REV3 = "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25"
 FILES = {
@@ -99,17 +102,36 @@ def archived() -> dict[str, Any]:
     return documents
 
 
+class Interrupted(Exception):
+    """The run was stopped after a named write step (a test's stand-in for an interruption)."""
+
+
+def done(step: str) -> None:
+    """Mark a write step as finished; stop here when a test asked for it."""
+    if step == STOP_AFTER:
+        raise Interrupted(step)
+
+
+def write_atomic(path: Path, body: bytes) -> None:
+    """Write a file so that an interruption leaves the old file or the whole new one, never a part."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(path.name + ".part")
+    part.write_bytes(body)
+    part.replace(path)
+
+
 def archive_revision_3() -> None:
-    """Copy the four revision 3 files into the archive once, from the tracked files while they still are revision 3."""
-    if REV3_ARCHIVE.is_dir():
-        return
-    require(
-        canonical_hash(json.loads((CONFIG / FILES["registry"]).read_text(encoding="utf-8"))) == REV3,
-        "the tracked registry is not revision 3; no archive to make",
-    )
-    REV3_ARCHIVE.mkdir(parents=True)
+    """Make the revision 3 archive complete: copy each missing or different file from the tracked files while they still are revision 3."""
+    tracked_registry = CONFIG / FILES["registry"]
+    tracked_is_rev3 = canonical_hash(json.loads(tracked_registry.read_text(encoding="utf-8"))) == REV3
     for name in FILES.values():
-        shutil.copyfile(CONFIG / name, REV3_ARCHIVE / name)
+        target = REV3_ARCHIVE / name
+        if tracked_is_rev3:
+            if not target.is_file() or target.read_bytes() != (CONFIG / name).read_bytes():
+                write_atomic(target, (CONFIG / name).read_bytes())
+        else:
+            require(target.is_file(), f"the revision 3 archive lacks {name} and the tracked registry is no longer revision 3")
+    archived()
 
 
 def apply_notes(registry: dict[str, Any]) -> dict[str, Any]:
@@ -158,10 +180,10 @@ def build() -> dict[Path, str]:
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     rev3 = {
         "registry_sha256": REV3,
-        "registry_path": str((REV3_ARCHIVE / FILES["registry"]).relative_to(REPO_ROOT)),
-        "lock_path": str((REV3_ARCHIVE / FILES["lock"]).relative_to(REPO_ROOT)),
+        "registry_path": str((REV3_ARCHIVE / FILES["registry"]).relative_to(ROOT)),
+        "lock_path": str((REV3_ARCHIVE / FILES["lock"]).relative_to(ROOT)),
         "files": {
-            key: {"path": str((REV3_ARCHIVE / name).relative_to(REPO_ROOT)), "sha256": hashlib.sha256((REV3_ARCHIVE / name).read_bytes()).hexdigest()}
+            key: {"path": str((REV3_ARCHIVE / name).relative_to(ROOT)), "sha256": hashlib.sha256((REV3_ARCHIVE / name).read_bytes()).hexdigest()}
             for key, name in FILES.items()
         },
     }
@@ -177,13 +199,79 @@ def build() -> dict[Path, str]:
     }
 
 
+def lock_key(lock_path: Path) -> str | None:
+    """The key of a plan or record lock, or None for any other lock."""
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    return next((key for key in LOCK_KEYS if set(lock) == {key}), None)
+
+
+def earlier_versions(new_hash: str) -> dict[Path, tuple[bytes, str]]:
+    """Each plan or record that pins revision 4, with its bytes and canonical hash from before the pin moved, found by moving the pin back."""
+    found = {}
+    for lock_path in sorted(CONFIG.glob("*.lock.json")):
+        base = lock_path.with_name(lock_path.name.removesuffix(".lock.json") + ".json")
+        text = base.read_text(encoding="utf-8") if lock_key(lock_path) and base.is_file() else ""
+        if new_hash in text:
+            earlier = text.replace(new_hash, REV3).encode()
+            found[base] = (earlier, canonical_hash(json.loads(earlier)))
+    return found
+
+
+def archive_plans(earlier: dict[Path, tuple[bytes, str]]) -> None:
+    """Make the archive of the old plans and records complete: write each missing or different file."""
+    for base, (body, _) in earlier.items():
+        target = ROOT / PLANS_ARCHIVE / base.name
+        if not target.is_file() or target.read_bytes() != body:
+            write_atomic(target, body)
+
+
+def catalog_predecessors(earlier: dict[Path, tuple[bytes, str]]) -> None:
+    """List each old plan or record as a predecessor of the new one, once, and write the catalog lock from the catalog."""
+    path = CONFIG / "legacy_versions.json"
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    for base, (body, old) in earlier.items():
+        entry = {"archive_path": f"{PLANS_ARCHIVE}/{base.name}", "sha256": digest(body), "canonical_sha256": old}
+        fresh = canonical_hash(json.loads(base.read_text(encoding="utf-8")))
+        if lock_key(base.with_name(base.name.removesuffix(".json") + ".lock.json")) == "plan_sha256":
+            kept = [*catalog["plans"].pop(old, []), *catalog["plans"].get(fresh, [])]
+            catalog["plans"][fresh] = [*kept, *([] if any(item["canonical_sha256"] == old for item in kept) else [entry])]
+        else:
+            records = catalog["records"].setdefault(base.relative_to(ROOT).as_posix(), [])
+            records.extend([] if any(item["canonical_sha256"] == old for item in records) else [entry])
+    write_atomic(path, catalog_bytes(catalog))
+    write_atomic(CONFIG / "legacy_versions.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+
+
 def repin(new_hash: str, before: dict[Path, bytes]) -> list[str]:
-    """Move every pin of revision 3 to revision 4, re-lock what changed and catalogue each old plan as a predecessor; return the changed plan names."""
+    """Move every pin of revision 3 to revision 4, recompute every plan and record lock from its file and catalogue each old plan; safe to rerun."""
     replace_pin(CONFIG, REV3, new_hash)
-    changed = relock_to_fixed_point(REPO_ROOT)
-    legacy_catalog(REPO_ROOT, changed, before, PLANS_ARCHIVE)
+    done("replace_pin")
+    earlier = earlier_versions(new_hash)
+    changed = relock_to_fixed_point(ROOT)
+    done("relock")
+    for old, (base, _, _) in changed.items():
+        if base not in earlier:
+            body = before[base]
+            require(canonical_hash(json.loads(body)) == old, f"cannot rebuild the earlier {base.name} after an interrupted run")
+            earlier[base] = (body, old)
+    archive_plans(earlier)
+    done("archive_plans")
+    catalog_predecessors(earlier)
+    done("legacy_catalog")
     relock_policies(CONFIG)
-    return sorted(base.name for base, _, _ in changed.values())
+    done("policies")
+    return sorted(base.name for base in earlier)
+
+
+def stale_locks() -> list[str]:
+    """The plans and records whose lock no longer matches the file it locks."""
+    stale = []
+    for lock_path in sorted(CONFIG.glob("*.lock.json")):
+        key = lock_key(lock_path)
+        base = lock_path.with_name(lock_path.name.removesuffix(".lock.json") + ".json")
+        if key and base.is_file() and json.loads(lock_path.read_text(encoding="utf-8"))[key] != canonical_hash(json.loads(base.read_text(encoding="utf-8"))):
+            stale.append(base.name)
+    return stale
 
 
 def pending_pins() -> list[str]:
@@ -191,37 +279,46 @@ def pending_pins() -> list[str]:
     return [path.name for path in pin_files(CONFIG) if REV3 in path.read_text(encoding="utf-8")]
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--write", action="store_true", help="write the files; without it, report which would change")
-    args = parser.parse_args()
-    if not args.write and not REV3_ARCHIVE.is_dir():
+def run(write: bool) -> int:
+    """Check, or with WRITE bring the repository to revision 4; every step derives its result from the files on disk, so a rerun finishes an interrupted run."""
+    if not write and not REV3_ARCHIVE.is_dir():
         sys.stdout.write("the revision 3 archive does not exist yet; run with --write once\n")
         return 1
     current = canonical_hash(json.loads((CONFIG / FILES["registry"]).read_text(encoding="utf-8")))
-    if args.write and current == REV3:
+    if write:
         archive_revision_3()
+        done("archive")
     outputs = build()
     new_hash = canonical_hash(json.loads(outputs[CONFIG / FILES["registry"]]))
     changed = [path for path, text in outputs.items() if not path.exists() or path.read_text(encoding="utf-8") != text]
-    pins = pending_pins()
+    pins, stale = pending_pins(), stale_locks()
     for path in changed:
-        sys.stdout.write(f"{'wrote' if args.write else 'would change'} {path.relative_to(REPO_ROOT)}\n")
+        sys.stdout.write(f"{'wrote' if write else 'would change'} {path.relative_to(ROOT)}\n")
     for name in pins:
-        sys.stdout.write(f"{'re-pinning' if args.write else 'would re-pin'} {name}\n")
-    if args.write:
+        sys.stdout.write(f"{'re-pinning' if write else 'would re-pin'} {name}\n")
+    for name in stale:
+        sys.stdout.write(f"{'re-locking' if write else 'would re-lock'} {name}\n")
+    if write:
         require(current in (REV3, new_hash), "the tracked registry is neither revision 3 nor revision 4")
         before = {path: path.read_bytes() for path in CONFIG.rglob("*.json")}
         for path in changed:
-            path.write_text(outputs[path], encoding="utf-8")
-        if pins:
-            sys.stdout.write(f"locks changed: {repin(new_hash, before)}\n")
-        loaded = load_registry()
-        require(canonical_hash(load_registry(expected_sha256=REV3)) == REV3, "revision 3 no longer resolves")
+            write_atomic(path, outputs[path].encode())
+            done(f"write:{path.name}")
+        sys.stdout.write(f"plans and records re-pinned: {repin(new_hash, before)}\n")
+        loaded = load_registry(CONFIG / FILES["registry"], CONFIG / FILES["lock"])
+        require(
+            canonical_hash(load_registry(CONFIG / FILES["registry"], CONFIG / FILES["lock"], expected_sha256=REV3)) == REV3, "revision 3 no longer resolves"
+        )
         sys.stdout.write(f"registry revision {loaded['registry_revision']} {canonical_hash(loaded)[:12]}; revision 3 resolves\n")
-    elif not changed and not pins:
+    elif not changed and not pins and not stale:
         sys.stdout.write("no file changes\n")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--write", action="store_true", help="write the files; without it, report which would change")
+    return run(parser.parse_args().write)
 
 
 if __name__ == "__main__":
