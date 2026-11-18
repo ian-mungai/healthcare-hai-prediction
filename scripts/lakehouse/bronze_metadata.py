@@ -289,20 +289,36 @@ def canonical_transfer(old: dict[str, Any], new: dict[str, Any], observations: d
 
 
 def build(
-    names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
+    names: Iterable[str],
+    inputs: list[dict[str, Any]],
+    excluded: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    all_tables: Iterable[str],
+    unsourced: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
-    """Retain every observation and untouched table, transferring canonical lineage only through a validated correction."""
-    rows = _build_rows(names, inputs, excluded, previous, all_tables)
+    """Retain every observation and untouched table, transferring canonical lineage only through a validated correction.
+
+    ``unsourced`` names declared tables that the run left out because they have no source object yet. Such a table has no observation row in the
+    generation, so the generation holds exactly the other declared tables. A table that is requested, undeclared or already published cannot be left out.
+    """
+    rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced)
     validate(rows)
     return sorted(rows, key=lambda row: (row["kind"], row["sha256"], row["observation_id"] or ""))
 
 
 def _build_rows(
-    names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
+    names: Iterable[str],
+    inputs: list[dict[str, Any]],
+    excluded: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    all_tables: Iterable[str],
+    unsourced: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     if previous:
         validate(previous)
-    chosen, complete_tables = set(names), set(all_tables)
+    chosen, declared = set(names), set(all_tables)
+    left_out = _left_out(list(unsourced), chosen, declared, previous)
+    complete_tables = declared - left_out
     if not previous and chosen != complete_tables:
         raise MetadataError("first metadata publication requires the full committed bronze table map")
     rows = [observation(item, True) for item in inputs] + [observation(entry["copy"], False) for entry in excluded if "copy" in entry]
@@ -363,6 +379,20 @@ def _build_rows(
     for row in rows:
         row["generation"] = digest
     return rows
+
+
+def _left_out(unsourced: list[str], chosen: set[str], declared: set[str], previous: list[dict[str, Any]]) -> set[str]:
+    """The declared tables a run leaves out for lack of a source object. Only a declared, unrequested table with no published observation qualifies."""
+    left_out = set(unsourced)
+    if len(left_out) != len(unsourced):
+        raise MetadataError("a table is left out of the load twice")
+    if left_out - declared:
+        raise MetadataError("a table left out of the load is not a committed bronze table")
+    if left_out & chosen:
+        raise MetadataError("a table left out of the load is also requested")
+    if any(row["kind"] == "observation" and row["table_name"] in left_out for row in previous):
+        raise MetadataError("a table with published observations cannot be left out of the load")
+    return left_out
 
 
 def _checksum_reasons(matches: list[dict[str, Any]], obj: dict[str, Any] | None, ownership: dict[str, dict[str, Any]] | None = None) -> list[str]:
@@ -500,12 +530,17 @@ def diagnose_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def diagnose(
-    names: Iterable[str], inputs: list[dict[str, Any]], excluded: list[dict[str, Any]], previous: list[dict[str, Any]], all_tables: Iterable[str]
+    names: Iterable[str],
+    inputs: list[dict[str, Any]],
+    excluded: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    all_tables: Iterable[str],
+    unsourced: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build the ordinary candidate without publishing and report preparation, checksum or successor failures."""
     counts = {"inputs": len(inputs), "excluded_copies": sum("copy" in entry for entry in excluded), "previous_rows": len(previous)}
     try:
-        rows = _build_rows(names, inputs, excluded, previous, all_tables)
+        rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced)
     except MetadataError as error:
         return {
             "schema_version": 1,

@@ -173,6 +173,8 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     inputs, _ = bronze.discover(source, BUCKET, config, names, bronze.RetiredObjects())
     if "--inventory" in values:
         bronze_pin.verify_replay(inventory, inputs)
+    unsourced = values[values.index("--unsourced-tables") + 1].split(",") if "--unsourced-tables" in values else []
+    bronze.check_unsourced(source, BUCKET, config, names, unsourced, [], bronze.RetiredObjects())
     tables = catalog()
     for item in inputs:
         tables.setdefault(f"{namespace}.{item['table']}", {})[item["object_key"]] = item["sha256"]
@@ -185,6 +187,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     shown = [name for name in names if name != "beta_data"] if "report_missing_table" in DEFECTS else names
     snapshots = {name: 100 + position for position, name in enumerate(names)}
     report = {"mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
+    report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
@@ -336,6 +339,7 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
         require(case.chain(tables=",".join(tables)) == [0, 0, 0], case.err)
         require(case.phase("check", tables=",".join(tables)) == 0, f"a repeated check failed: {case.err}")
     require(len(LOADS) == 1 and LOADS[0][LOADS[0].index("--tables") + 1] == ",".join(tables), LOADS)
+    require(LOADS[0][LOADS[0].index("--unsourced-tables") + 1] == "empty_data", f"the loader was not told which table the stage left out: {LOADS[0]}")
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
     require(record["skipped_tables"] == report["skipped_tables"], f"the check record does not name the skipped table: {record['skipped_tables']}")
     claim = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over.json"])
@@ -343,6 +347,18 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     require(len(notices.calls) == 1 and "empty_data" in notices.calls[0]["Message"], f"the owner notice: {notices.calls}")
     outcome = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"])
     require(outcome["notice"] == "sent", f"{outcome}")
+
+
+def case_a_dropped_table_with_sources_is_refused(case: Case) -> None:
+    """The stage report is staged beside the request, so a request and report that agree on dropping ``beta_data`` (whose manifests the pinned inventory holds
+    through ``alpha_data``'s collection) must not publish a generation without it: the loader reads the pinned manifests for the left-out table again."""
+    case.shas = case.stage("alpha_data", "real", False)
+    report = {"schema": 1, "bronze_run": RUN, "requested_tables": ["alpha_data"], "skipped_count": 1}
+    STAGED[bronze_run.STAGE_REPORT_FILE] = json.dumps(report | {"skipped_tables": [{"table": "beta_data", "reason": bronze_run.SKIPPED_REASON}]}).encode()
+    codes = case.chain(tables="alpha_data", staged=True)
+    require(codes == [0, 1], f"{codes} {case.err}")
+    require("beta_data" in case.err and "cannot be left out" in case.err, case.err)
+    require(not any(name.startswith("bronze.") for name in catalog()), f"the refused load wrote bronze tables: {sorted(catalog())}")
 
 
 def case_the_phases_read_their_tables_from_the_staged_request(case: Case) -> None:
@@ -757,6 +773,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
+    "a request that drops a table with sources is refused even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
     "the phases read their tables from the staged request when none is passed": case_the_phases_read_their_tables_from_the_staged_request,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,

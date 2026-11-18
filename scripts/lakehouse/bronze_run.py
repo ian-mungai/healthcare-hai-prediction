@@ -19,7 +19,9 @@ and takes the tables of one collection. No other namespace can be named.
 
 ``load`` runs the loader ``scripts.lakehouse.bronze``, which reads the versioned manifests of the acquisition bucket, checks every object against its recorded
 version, SHA-256 and size, replaces each object's rows in place and publishes one metadata generation, so a retry of one run writes the same rows and no
-second generation. ``check`` accepts the loader report: one report, a pass, the requested tables only. Any failed check exits 1 and names the phase.
+second generation. A table the stage left out (no source object yet) is named to the loader with ``--unsourced-tables``: the loader reads the pinned manifests
+for it again, publishes a generation without its observations and lists it in its report, and ``check`` compares that list with the stage report. ``check``
+accepts the loader report: one report, a pass, the requested tables only. Any failed check exits 1 and names the phase.
 
 With ``--dry-run`` or ``BRONZE_DRY_RUN=1`` ``pin`` runs as usual, because it writes only the task's own folder. ``load`` then reads the manifests and
 every object version, checks each hash and size, prints and saves the plan and starts no loader: it needs no catalog and writes nothing shared. ``check``
@@ -320,6 +322,10 @@ def load(job: Job) -> None:
     arguments += ["--inventory", str(job.folder / INVENTORY_FILE)]
     if job.target == "qualify":
         arguments.append("--selected-metadata")
+    else:
+        left_out = [item["table"] for item in staged_skipped(job)]
+        if left_out:
+            arguments += ["--unsourced-tables", ",".join(left_out)]
     run_module(job, "scripts.lakehouse.bronze", arguments)
 
 
@@ -345,6 +351,12 @@ def accept_report(job: Job) -> tuple[dict[str, Any], bytes]:
     if not isinstance(checks, dict) or set(checks) != set(job.tables) or not all(table_check_passed(check) for check in checks.values()):
         raise StepError("a table check of the loader report did not pass")
     return report, body
+
+
+def accepted_unsourced(report: dict[str, Any], skipped: Sequence[dict[str, str]]) -> None:
+    """The loader left out exactly the tables the stage report names: its report lists them, and a run that left none out lists none."""
+    if sorted(report.get("unsourced_tables", [])) != sorted(item["table"] for item in skipped):
+        raise StepError("the loader report left out other tables than the stage report names")
 
 
 def staged_skipped(job: Job) -> list[dict[str, str]]:
@@ -522,6 +534,7 @@ def check(job: Job) -> None:
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
     if job.target == "real":
         skipped = staged_skipped(job)
+        accepted_unsourced(report, skipped)
         stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job), skipped))
         sys.stdout.write(f"run record {stored}; skipped_tables {len(skipped)}\n")
         topic = os.environ.get("ALERTS_TOPIC_ARN", "")

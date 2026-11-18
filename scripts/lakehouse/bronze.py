@@ -1320,6 +1320,39 @@ def drop_removed_job(config: dict[str, Any], dictionary_namespace: str = DICTION
     return 0
 
 
+def check_unsourced(
+    storage: Storage,
+    bucket: str,
+    config: dict[str, Any],
+    names: list[str],
+    unsourced: list[str],
+    previous: list[dict[str, Any]],
+    retired: RetiredObjects | None = None,
+) -> None:
+    """Refuse a table the run leaves out unless it is a table of the map, not requested, never published and has no source object in the pinned inventory.
+
+    The stage leaves a table out when no object matches it. The loader reads the same pinned manifests for the left-out tables again, so a request that drops
+    a table whose manifests the inventory holds fails here instead of publishing a generation without that table.
+    """
+    declared = {table["table"] for table in config["tables"]}
+    if len(set(unsourced)) != len(unsourced):
+        raise BronzeError("a table is left out of the load twice")
+    for name in unsourced:
+        if name not in declared:
+            raise BronzeError(f"{name}: not a table of the table map, so it cannot be left out of the load")
+        if name in names:
+            raise BronzeError(f"{name}: also requested, so it cannot be left out of the load")
+        if any(row["kind"] == "observation" and row["table_name"] == name for row in previous):
+            raise BronzeError(f"{name}: has published observations, so it cannot be left out of the load")
+    if not unsourced:
+        return
+    found, _ = discover(storage, bucket, config, unsourced, retired)
+    if found:
+        raise BronzeError(
+            f"{found[0]['table']}: the pinned inventory has a source object for this table ({len(found)} found), so it cannot be left out of the load"
+        )
+
+
 def metadata_tables(config: dict[str, Any], names: list[str], namespace: str) -> list[str]:
     """The tables whose metadata must be complete. Production needs the whole committed map. The qualification namespace needs only the selected tables."""
     if namespace == "bronze_e2e":
@@ -1351,9 +1384,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qualification-tables", help="comma-separated loaded tables for removal on the two test twins only")
     parser.add_argument("--inventory", type=Path, help="read only the manifest and object versions of this pinned source inventory")
     parser.add_argument("--selected-metadata", action="store_true", help="bronze_e2e only: publish metadata for the selected tables instead of the full map")
+    parser.add_argument("--unsourced-tables", help="comma-separated declared tables the stage left out because they have no source object yet")
     args = parser.parse_args(argv)
     if args.selected_metadata and args.namespace != "bronze_e2e":
         parser.error("--selected-metadata is valid only with --namespace bronze_e2e")
+    if args.unsourced_tables is not None and (args.selected_metadata or not args.task_role or args.inventory is None):
+        parser.error("--unsourced-tables requires --task-role and --inventory and excludes --selected-metadata")
     if args.diagnose and (not args.bootstrap_all or args.copies_only):
         parser.error("--diagnose requires --bootstrap-all and excludes --copies-only")
     if args.repair_tables is not None and (not args.bootstrap_all or args.copies_only or args.diagnose):
@@ -1394,6 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
     if inventory is not None:
         storage = bronze_pin.PinnedStorage(storage, inventory)
     everything = metadata_tables(config, names, config["namespace"]) if args.selected_metadata else [table["table"] for table in config["tables"]]
+    unsourced = args.unsourced_tables.split(",") if args.unsourced_tables else []
 
     spark = spark_session("bronze", memory=job_memory())
     dictionaries: dict[str, int] = {}
@@ -1420,8 +1457,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         if inventory is not None:
             bronze_pin.verify_replay(inventory, inputs)
+        check_unsourced(storage, bucket, config, names, unsourced, previous, load_retired())
         if args.diagnose:
-            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, everything)
+            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, everything, unsourced)
             path = REPORT_ROOT / "diagnostic.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n")
@@ -1429,7 +1467,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps({"report": str(path), "passed": diagnostic["passed"], "failing_checksum_count": diagnostic["failing_checksum_count"]}) + "\n"
             )
             return 0 if diagnostic["passed"] else 1
-        metadata = bronze_metadata.build(names, inputs, unselected, previous, everything)
+        metadata = bronze_metadata.build(names, inputs, unselected, previous, everything, unsourced)
         bronze_metadata.validate_successor(previous, metadata)
         load_inputs = [item for item in inputs if item["table"] in repair_names] if repair_names else inputs
         # A retry whose complete metadata generation equals the published one changes nothing: a plain load writes no table and loads no data.
@@ -1479,6 +1517,7 @@ def main(argv: list[str] | None = None) -> int:
         "snapshots": snapshots,
         "dictionaries": dictionaries,
         "unselected": unloaded,
+        "unsourced_tables": sorted(unsourced),
         "passed": passed,
     }
     if freshness := freshness_report(inputs):
