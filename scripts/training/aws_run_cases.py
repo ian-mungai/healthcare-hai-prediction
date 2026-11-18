@@ -853,7 +853,11 @@ def mlflow_restart(service: MlflowService) -> Iterator[None]:
     clock = host_session.Clock
     names = host_session.Names(CLUSTER, "stand-in-group", "stand-in-provider", "stand-in-project", {"mlflow": SERVICE}, {})
     with (
-        mock.patch.object(host_session, "load_configuration", return_value=({"aws_profile": PROFILE, "aws_region": REGION}, None)),
+        mock.patch.object(
+            host_session,
+            "load_configuration",
+            return_value=({"aws_profile": PROFILE, "aws_region": REGION, "project_name": "stand_in", "environment": "dev"}, None),
+        ),
         mock.patch.object(host_session, "load_names", return_value=names),
         mock.patch.object(host_session, "tolerant_runner", service.runner),
         mock.patch.object(host_session, "Clock", side_effect=lambda: clock(lambda: service.now, service.advance)),
