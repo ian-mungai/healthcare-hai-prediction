@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
@@ -59,8 +60,8 @@ def before(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
-def run(root: Path, stop: str | None = None) -> None:
-    """Run the builder's write mode inside the sandbox, stopping after the named step."""
+def run(root: Path, stop: str | None = None, cli: bool = False) -> None:
+    """Run the builder's write mode inside the sandbox, stopping after the named step; with CLI, through the command line entry point."""
     config = root / "config/acquisition"
     with ExitStack() as stack:
         for module, name, value in [
@@ -75,7 +76,8 @@ def run(root: Path, stop: str | None = None) -> None:
             (registry, "VERSION_CATALOG_LOCK_PATH", config / "registry_versions.lock.json"),
         ]:
             stack.enter_context(patch.object(module, name, value))
-        check(builder.run(True) == 0, "the builder reports success")
+        stack.enter_context(patch.object(sys, "argv", ["build_rev4", "--write"]))
+        check((builder.main() if cli else builder.run(True)) == 0, "the builder reports success")
 
 
 def loaders_accept(root: Path) -> None:
@@ -165,3 +167,28 @@ def test_a_plan_changed_after_the_pin_moved_is_refused_not_archived(before: Path
         patch.object(legacy_versions, "CATALOG_LOCK_PATH", config / "legacy_versions.lock.json"),
     ):
         check(legacy_versions.plan_matches(json.loads(plan.read_bytes()), original), "the real historical predecessor still resolves")
+
+
+def test_a_plan_outside_the_pins_changed_after_the_pin_moved_is_refused_before_any_lock_moves(before: Path, tmp_path: Path) -> None:
+    """census_acs_api_plan_dp02pr.json pins census_acs_api_plan.json, and neither names the registry, so the relock would cascade into the dependent pin."""
+    root = sandbox(before, tmp_path)
+    config = root / "config/acquisition"
+    with pytest.raises(builder.Interrupted):
+        run(root, stop="replace_pin")
+    upstream, dependent = config / "census_acs_api_plan.json", config / "census_acs_api_plan_dp02pr.json"
+    unedited = upstream.read_text(encoding="utf-8")
+    upstream.write_text(unedited.replace('"model_eligible": false', '"model_eligible": false, "extra": 1', 1), encoding="utf-8")
+    check(upstream.read_text(encoding="utf-8") != unedited, "the planted edit changed the upstream plan")
+    held = {path: path.read_bytes() for path in (upstream.with_suffix(".lock.json"), dependent.with_suffix(".lock.json"), dependent, upstream)}
+    original = registry.canonical_hash(json.loads((before / "config/acquisition" / dependent.name).read_bytes()))
+    for attempt in range(4):
+        with pytest.raises(registry.RegistryError, match="outside the plans that pin the registry"):
+            run(root, cli=attempt == 3)
+        moved = [path.name for path, body in held.items() if path.read_bytes() != body]
+        check(not moved, f"attempt {attempt + 1}: these files changed: {moved}")
+        archived = [name for name in (upstream.name, dependent.name) if (root / builder.PLANS_ARCHIVE / name).exists()]
+        check(not archived, f"attempt {attempt + 1}: these predecessors were archived: {archived}")
+    check(json.loads(dependent.with_suffix(".lock.json").read_bytes()) == {"plan_sha256": original}, "the dependent plan lock still names its real predecessor")
+    upstream.write_text(unedited, encoding="utf-8")
+    run(root)
+    loaders_accept(root)

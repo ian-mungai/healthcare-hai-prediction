@@ -243,7 +243,9 @@ def catalog_predecessors(earlier: dict[Path, tuple[bytes, str]]) -> None:
 
 
 def require_earlier_match(earlier: dict[Path, tuple[bytes, str]]) -> None:
-    """Refuse a plan or record whose lock is stale unless its rebuilt earlier version is the one that lock names; run before the relock replaces it."""
+    """Before the relock moves any lock, refuse a stale lock outside the plans that pin the registry and a plan whose rebuilt earlier version differs."""
+    outside = [name for name in stale_locks() if name not in {base.name for base in earlier}]
+    require(not outside, f"{outside} changed after the pin moved and are outside the plans that pin the registry; restore them before a rerun")
     for base, (_, old) in earlier.items():
         lock_path = base.with_name(base.name.removesuffix(".json") + ".lock.json")
         locked = json.loads(lock_path.read_text(encoding="utf-8"))[lock_key(lock_path)]
