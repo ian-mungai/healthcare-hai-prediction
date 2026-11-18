@@ -49,6 +49,7 @@ from typing import Any
 from orchestration import ecs_lineage
 from orchestration.ecs_lineage import EVIDENCE_BYTES, DeliveryFailed, EvidenceUnavailable, JobLineage, LaunchFacts, LineageRefused, S3Evidence
 from orchestration.snapshots import SnapshotError, checked_input_record, checked_snapshot_record
+from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 INVOCATION_VARIABLE = "LINEAGE_INVOCATION"
 START_SECONDS = 10.0  # the whole send of the task's START or FAIL, builder included
@@ -59,7 +60,7 @@ JOB_CHECKS = ecs_lineage.Checks(inputs=checked_input_record, outputs=checked_sna
 DAG_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,249}")  # the patterns of data_contracts/orchestration/submission_request.schema.json
 DAG_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+~=-]{0,249}")
 TEMPLATE = re.compile(r"[a-z][a-z0-9_]{1,40}")
-INPUT_RUN = re.compile(r"latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+INPUT_RUN = re.compile(f"latest|{RUN_ID_PATTERN}")  # an input run is a layer run of the one run ID form of training_contract, or "latest"
 UNSET_SETS = ("", "base")  # the feature sets that run in the features family itself
 
 

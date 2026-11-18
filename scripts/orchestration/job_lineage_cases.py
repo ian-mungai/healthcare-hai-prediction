@@ -14,6 +14,7 @@ import importlib
 import inspect
 import io
 import json
+import re
 import sys
 import tempfile
 import threading
@@ -291,6 +292,37 @@ def the_invocation_variable_is_closed() -> None:
     refuses(ecs_lineage.LineageRefused, lambda: job_lineage.job_run(json.dumps(good), "gold", "not-a-run", "", Path("/x"), base.START))
     refuses(ecs_lineage.LineageRefused, lambda: job_lineage.job_run(json.dumps(good), "bronze", run, "", Path("/x"), base.START))
     refuses(ecs_lineage.LineageRefused, lambda: job_lineage.job_run(json.dumps(good), "gold", run, "m9", Path("/x"), base.START))
+
+
+def the_input_run_is_a_run_id_of_the_one_form_or_latest() -> None:
+    """The input run of ``LINEAGE_INVOCATION`` is what the launch binds (``request.input_run_id or "latest"``): ``latest`` or a run ID of the one form of
+    ``training_contract`` (``<name>_<8 hex>[_<attempt>]``, qualified by a model or an infection for the runs that are). The job takes exactly what the
+    submission request schema takes for ``input_run_id``, so a copy of the old stamp form cannot come back and refuse every live launch."""
+    schema = json.loads((ROOT / "data_contracts/orchestration/submission_request.schema.json").read_text())
+    request_form = re.compile(schema["properties"]["input_run_id"]["pattern"])
+    good = json.loads(text_of(request_of("gold", base.RUN_OF["silver"])))
+    run, _, _ = TEXT_FOR["gold"]
+    taken = (
+        "latest",
+        "ingestion_abcdef01",
+        "silver_abcdef01",
+        "gold_abcdef01_2",
+        "features_abcdef01",
+        "features_elastic_net_abcdef01_3",
+        "training_spatial_abcdef01",
+        "drift_ols_abcdef01",
+        "ingestion_retry_abcdef01_2_2",
+    )
+    refused = ("", "yesterday", "20261116T201053Z-b10a4f2d", "silver_abcdef0", "Silver_abcdef01", "silver_abcdef01_1", "silver_abcdef01\n", "latest2")
+    for text in (*taken, *refused):
+        expected = text == "latest" or request_form.fullmatch(text) is not None
+        require(expected == (text in taken), f"the fixture lists {text!r} wrongly against the submission request schema")
+        invocation = json.dumps({**good, "input_run": text})
+        if expected:
+            found = job_lineage.job_run(invocation, "gold", run, "", Path("/nonexistent"), base.START)
+            require(found.input_run == text, f"the input run {text!r} was changed to {found.input_run!r}")
+        else:
+            refuses(ecs_lineage.LineageRefused, partial(job_lineage.job_run, invocation, "gold", run, "", Path("/nonexistent"), base.START))
 
 
 def start_and_failure_events_name_no_dataset() -> None:
@@ -1070,6 +1102,7 @@ CASES: dict[str, Callable[[], None]] = {
     "a_failed_send_never_fails_the_job": a_failed_send_never_fails_the_job,
     "nothing_is_read_or_sent_without_the_settings": nothing_is_read_or_sent_without_the_settings,
     "the_invocation_variable_is_closed": the_invocation_variable_is_closed,
+    "the_input_run_is_a_run_id_of_the_one_form_or_latest": the_input_run_is_a_run_id_of_the_one_form_or_latest,
     "start_and_failure_events_name_no_dataset": start_and_failure_events_name_no_dataset,
     "record_checks_without_jsonschema_equal_the_schema_checks": record_checks_without_jsonschema_equal_the_schema_checks,
     "the_job_images_need_no_jsonschema": the_job_images_need_no_jsonschema,
