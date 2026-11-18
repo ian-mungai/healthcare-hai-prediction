@@ -1,7 +1,7 @@
 """Keep the run ID patterns of the JSON schemas equal to the canonical contract (``orchestration/training_contract.py``).
 
 A JSON schema cannot import Python, so each schema that checks a run ID holds a copy of the contract's pattern. This tool finds every copy (a pattern that
-holds the pattern of a run ID or of a drift run ID), compares it with the contract and rewrites it from the contract. Run from the repository root:
+holds the pattern of a run ID, of a drift run ID or of a stored run ID), compares it with the contract and rewrites it from it. Run from the repository root:
 
     .venv/bin/python -m scripts.orchestration.sync_run_id_schemas          # list the copies that differ and exit 1 when there is one
     .venv/bin/python -m scripts.orchestration.sync_run_id_schemas --write  # rewrite them from the contract
@@ -22,9 +22,10 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_FOLDERS = ("data_contracts", "services", "config")
-# A copy starts where the pattern of a run ID or of a drift run ID starts and ends at its closing parenthesis. The first two are the forms of the contract.
-CORE_STARTS = {"run": "(?:(?:ingestion|", "drift": "(?:drift_(?:"}
-CANONICAL = {"run": contract.RUN_ID, "drift": contract.DRIFT_RUN}
+# A copy starts where the pattern of a run ID, of a drift run ID or of a stored run ID starts and ends at its closing parenthesis. They are the forms of the
+# contract. A stored run is the run ID form or the stamp form of before the run ID redesign: only a schema field that names a run a stored record made has it.
+CORE_STARTS = {"run": "(?:(?:ingestion|", "drift": "(?:drift_(?:", "stored": f"(?:{contract.CODE_STAMP_RUN}|(?:(?:ingestion|"}
+CANONICAL = {"run": contract.RUN_ID, "drift": contract.DRIFT_RUN, "stored": contract.STORED_RUN}
 
 
 def schema_files(root: Path = ROOT) -> list[Path]:

@@ -131,7 +131,7 @@ def test_every_schema_copy_of_a_run_id_pattern_is_the_contracts() -> None:
 
 def wrapped(held: str) -> str:
     """The pattern of a copy with each run ID part replaced by ``<RUN>``."""
-    return sync.substituted(held, {"run": "<RUN>", "drift": "<RUN>"})
+    return sync.substituted(held, {"run": "<RUN>", "drift": "<RUN>", "stored": "<RUN>"})
 
 
 def test_every_schema_copy_has_a_wrapper_this_test_knows() -> None:
@@ -147,6 +147,8 @@ def schema_cases() -> list[Any]:
 def test_every_schema_copy_accepts_the_valid_run_ids_and_refuses_the_invalid_ones(pattern: str, wrapper: str, kind: str) -> None:
     sample = SAMPLES[wrapper]
     valid, invalid = (DRIFT_VALID, DRIFT_INVALID) if kind.startswith("drift") else (VALID, INVALID)
+    if kind == "stored":
+        valid, invalid = [*VALID, DATE_FORM], [run for run in INVALID if run != DATE_FORM]
     refused_valid = [run for run in valid if not accepts(pattern, sample(run))]
     accepted_invalid = [run for run in invalid if accepts(pattern, sample(run)) and not (run == "latest" and wrapper == "^(latest|<RUN>)$")]
     check(not refused_valid, f"the schema refuses valid run IDs: {refused_valid}")

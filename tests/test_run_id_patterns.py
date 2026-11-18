@@ -29,6 +29,7 @@ OLD_FORM_ALLOWED = {
     "services/training/fetch_code.py": "the code run shape of the image's code fetch",
     "infra/jobs/layers.tf": "the code run shape of the layer code fetch",
     "scripts/infrastructure/code_installer_before/fetch_code.py.txt": "the fetch script before the code installer, kept as a fixture",
+    "data_contracts/training/extract_manifest.schema.json": "the stored runs of a publication (the stored run pattern of the contract)",
     "tests/test_run_id_patterns.py": "this test",
 }
 VALID = [
@@ -107,8 +108,27 @@ def test_every_run_id_pattern_of_a_schema_is_the_contracts() -> None:
     check(not wrong, f"{len(wrong)} schema patterns differ from the contract; run scripts.orchestration.sync_run_id_schemas --write: {wrong[:2]}")
     held = sync.copies()
     check(len(held) >= 35, f"only {len(held)} run ID patterns were found in the schemas")
-    for path, where, _, pattern, _ in held:
-        check(OLD_FORM not in pattern, f"{path.name}{where}: a pattern still holds the old form")
+    for path, where, kind, pattern, _ in held:
+        check(OLD_FORM not in pattern or kind == "stored", f"{path.name}{where}: a pattern still holds the old form")
+
+
+# The schema fields that name a run a stored record made (the stamp form of before the run ID redesign too). Every other copy takes the run ID form alone.
+STORED_FIELDS = {
+    ("data_contracts/training/extract_manifest.schema.json", "/properties/publication_run_id"),
+    ("data_contracts/training/extract_manifest.schema.json", "/properties/gold_run_id"),
+    ("data_contracts/training/extract_manifest.schema.json", "/properties/base_run"),
+}
+
+
+def test_only_the_stored_fields_of_the_extract_manifest_take_the_stamp_form_and_their_pattern_is_the_contracts() -> None:
+    stored = {(str(path.relative_to(ROOT)), where) for path, where, kind, _, _ in sync.copies() if kind == "stored"}
+    check(stored == STORED_FIELDS, f"the schema fields that take a stored run differ: {sorted(stored ^ STORED_FIELDS)}")
+    schema = json.loads((ROOT / "data_contracts/training/extract_manifest.schema.json").read_text())
+    for name in ("publication_run_id", "gold_run_id", "base_run"):
+        pattern = schema["properties"][name]["pattern"]
+        check(pattern == f"^{contract.STORED_RUN}$", f"{name} does not hold the contract's stored run pattern")
+    own = schema["properties"]["run_id"]["pattern"]
+    check(re.match(own, f"silver_{HEX}") is not None and re.match(own, OLD_RUN) is None, "the manifest's own run takes a stamp form or refuses a new one")
 
 
 def test_the_schemas_take_the_new_form_and_refuse_the_old_one() -> None:

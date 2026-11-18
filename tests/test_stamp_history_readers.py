@@ -256,8 +256,6 @@ def test_a_challenger_whose_features_run_is_of_the_run_id_form_runs_its_whole_ch
 
 # training extraction: the stored gold run and base run of a publication
 
-IDENTITY_REFUSALS = ("no valid gold run identity", "carries no base_run", "input identity or schema differs")
-
 
 def extraction(tmp_path: Path, stored: str | None) -> dict[str, Any]:
     """Extract through the real ``training_extract.extract`` over the synthetic publication of the lane B cases, naming the stamp form in the stored field
@@ -280,20 +278,15 @@ def extraction(tmp_path: Path, stored: str | None) -> dict[str, Any]:
     )
 
 
-def test_extraction_writes_all_outputs_for_the_redesigned_publication(tmp_path: Path) -> None:
-    done = extraction(tmp_path, None)
-    check(len(done["outputs"]) == 16, f"the control wrote {len(done['outputs'])} outputs, not 16")
-
-
-@pytest.mark.parametrize("stored", ["gold", "base"])
-def test_extraction_does_not_refuse_a_stamp_gold_run_or_base_run_of_a_stored_publication_at_the_identity_checks(tmp_path: Path, stored: str) -> None:
+@pytest.mark.parametrize("stored", [None, "gold", "base"])
+def test_extraction_writes_all_outputs_for_a_publication_whose_stored_gold_run_or_base_run_is_a_stamp(tmp_path: Path, stored: str | None) -> None:
     from scripts.features import training_extract
 
-    try:
-        extraction(tmp_path, stored)
-    except training_extract.ExtractError as error:
-        refused_identity = [text for text in IDENTITY_REFUSALS if text in str(error)]
-        check(not refused_identity, f"the stored stamp {stored} run is refused at an identity check: {error}")
+    done = extraction(tmp_path, stored)
+    check(len(done["outputs"]) == 16, f"the extraction wrote {len(done['outputs'])} outputs, not 16")
+    manifest = json.loads((tmp_path / "out" / "manifest_HAI_1.json").read_bytes())
+    wanted = {"gold": ("gold_run_id", STAMP), "base": ("base_run", STAMP)}.get(stored or "")
+    check(wanted is None or manifest[wanted[0]] == wanted[1], f"the manifest does not carry the stored stamp run: {wanted}")
     check(re.fullmatch(training_extract.STORED_GOLD_RUN, STAMP) and re.fullmatch(training_extract.STORED_BASE_RUN, STAMP), "the stored patterns refuse a stamp")
     check(
         re.fullmatch(training_extract.STORED_GOLD_RUN, "gold_abcdef01") and re.fullmatch(training_extract.STORED_BASE_RUN, "features_abcdef01"),
