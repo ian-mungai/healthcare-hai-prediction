@@ -109,7 +109,7 @@ RELOAD_CONTAINER = (
 )
 RELOAD_VARIABLE = "RELEASE_MODEL"
 POLARIS_PORT = 8181
-CODE_RECORD = re.compile(r"([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}) ([a-f0-9]{64})")
+CODE_RECORD = re.compile(rf"({CODE_RUN}) ([a-f0-9]{{64}})")
 SETUP_CONTAINERS = ("postgres_restore_fetch", "postgres_databases")  # the setup containers of the postgres task, in the order they run
 SETUP_REASON_WORDS = ("refused", "failed")
 SETUP_REASON_LIMIT = 240

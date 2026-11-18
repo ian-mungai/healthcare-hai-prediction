@@ -154,6 +154,18 @@ def start_on_a_fresh_volume_uses_the_stored_record() -> dict[str, bool]:
     }
 
 
+def start_on_a_fresh_volume_uses_a_stored_record_of_a_run_named_by_the_one_form() -> dict[str, bool]:
+    """A code run staged under a pipeline run's ID (``<name>_<8 hex>``, ``training_contract.CODE_RUN``) is a code run record, like the commit time form."""
+    run = "gold_abcdef01_2"
+    host, session, lines = build(checkout=None, code_run=None, record=f"{run} {SHA_NEW}")
+    session.start()
+    return {
+        "the stored archive is installed": host.checkout == SHA_NEW and host.code_run == run,
+        "the report says the stored record was used": f"code_record_used: {run}" in lines,
+        "the record is unchanged in content": host.parameters.get(RECORD_NAME) == f"{run} {SHA_NEW}",
+    }
+
+
 def start_prefers_the_record_of_the_checkout_over_the_stored_one() -> dict[str, bool]:
     host, session, lines = build(record=f"{RUN_NEW} {SHA_NEW}")
     session.start()
