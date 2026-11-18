@@ -145,6 +145,7 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_quality_checks_failed": ("Quality checks of the gate that failed.", ("kind",)),
     "hai_quality_checks_warned": ("Quality checks of the gate that warned.", ("kind",)),
     "hai_publish_tables": ("Tables the latest publish of the layer committed.", ()),
+    "hai_bronze_stage_skipped_tables": ("Tables the latest bronze stage left out of the pipeline run.", ()),
     "hai_publish_rows": ("Rows in the tables of the latest publish of the layer.", ()),
     "hai_publish_tables_changed": ("Tables of the latest publish of the layer whose snapshot moved, a new table included.", ()),
     "hai_publish_tables_empty": ("Tables of the latest publish of the layer with no rows.", ()),

@@ -308,6 +308,52 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "row",
+      "title": "Bronze stage",
+      "id": 11,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Tables the latest bronze stage left out",
+      "description": "Tables of the pipeline run that the bronze stage left out because they have no raw files.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 28
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max (hai_bronze_stage_skipped_tables{job=\"bronze\", phase=\"stage\"})",
+          "legendFormat": "skipped tables"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     }
   ]
 }

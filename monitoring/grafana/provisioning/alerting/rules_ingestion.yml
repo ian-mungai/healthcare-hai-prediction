@@ -1,4 +1,4 @@
-# Ingestion alert, from the counts that the publisher task pushes at its exit.
+# Ingestion alerts, from the counts that the publisher task and the bronze stage job push at their exit.
 # The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
 apiVersion: 1
 
@@ -43,3 +43,38 @@ groups:
           severity: warning
         annotations:
           summary: A publisher retry run ended with files that were not captured, so the month's capture is incomplete.
+      - uid: bronze_stage_skipped_tables
+        title: BronzeStageSkippedTables
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'max(hai_bronze_stage_skipped_tables{job="bronze", phase="stage"}) > bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: The latest bronze stage left tables out of the pipeline run, so those tables are not loaded in it.

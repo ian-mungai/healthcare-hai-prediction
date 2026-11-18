@@ -39,7 +39,7 @@ from typing import Any
 
 from orchestration import ingestion_schedule
 from orchestration.training_contract import run_id_pattern
-from scripts import resource_peaks
+from scripts import metrics_push, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
@@ -250,6 +250,7 @@ def stage_run(code: Path, bucket: str, run: str) -> dict[str, Any]:
     sys.stdout.write(
         f"staged for {run}: {len(inventory['objects'])} objects from {len(inventory['manifests'])} manifests, inventory {digest}, request {request_digest}\n"
     )
+    metrics_push.add("hai_bronze_stage_skipped_tables", len(skipped))
     return {"request_sha256": request_digest, "inventory_sha256": digest, "skipped_count": len(skipped)}
 
 
