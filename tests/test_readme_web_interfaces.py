@@ -10,9 +10,11 @@ needs no change. This check compares:
   service container declares in a port mapping (or the OpenSearch setting).
 - The health path ``open_ui --list`` shows for a port is the path the container health check calls on that port, or "None" when it calls none.
 - No document forwards a port of ``infra/services`` that belongs to another container, so a port without a web page cannot be forwarded.
-- Each optional service is gated in ``main.tf`` by a switch that defaults to off. Only the services in ``ALWAYS_ON`` have no switch.
+- Each optional service is gated in ``main.tf`` by a switch with a literal ``true`` or ``false`` default. The default is the Terraform's to set (the live stack
+  settings are the Terraform defaults), so the check does not fix its value. Only the services in ``ALWAYS_ON`` have no switch.
 - The project policy allows exactly the documents plus each older document (the on-demand catalog task's), the Terraform defines each older document, and its
   fixed port is the port of a document. The generic port forward document is never allowed.
+- The README states no default of a switch that differs from the Terraform's (it states none today).
 - The README section shows the three commands, names only web interfaces that exist, holds no table, no port number and no ``aws`` line, and the scripts it
   names exist. The scripts themselves are tested in ``tests/test_open_ui.py`` and ``tests/test_script_entry_points.py``.
 
@@ -44,6 +46,8 @@ WEB_INTERFACES = {
     "prometheus": ("monitoring", "prometheus"),
 }
 ALWAYS_ON = {"airflow_apiserver"}
+# A README sentence that gives the default of a service switch: "`monitoring_enabled` defaults to false" or "monitoring_enabled is off by default".
+SWITCH_CLAIM = re.compile(r"`?\b(\w+_enabled)\b`?\s+(?:defaults to|is)\s+(true|false|on|off)\b")
 OPEN_COMMAND = re.compile(r"^\s*bash scripts/open_ui\.sh (\S+)$", re.MULTILINE)
 HOST_COMMAND = "bash scripts/host.sh start"
 LIST_COMMAND = "bash scripts/open_ui.sh --list"
@@ -85,7 +89,9 @@ def switch_gates(main_text: str, texts: dict[str, str]) -> dict[str, str]:
     gates = dict(re.findall(r"for key, service in \{\s+(\w+) = \{.*?\} : key => service if (\S+)\n", main_text, re.DOTALL))
     for key, gate in gates.items():
         if gate.startswith("local."):
-            alias = re.search(rf"\b{gate.removeprefix('local.')}\s*=\s*(var\.\w+)", texts["openmetadata.tf"])
+            alias = next(
+                (found for text in texts.values() if (found := re.search(rf"^\s*{gate.removeprefix('local.')}\s*=\s*(var\.\w+)", text, re.MULTILINE))), None
+            )
             gates[key] = alias.group(1) if alias else gate
     return {key: gate.removeprefix("var.") for key, gate in gates.items()}
 
@@ -107,6 +113,7 @@ class Sources:
         self.listeners, self.owners = terraform_listeners(self.texts)
         self.documents = forward_documents()
         self.gates = switch_gates(self.texts["main.tf"], self.texts)
+        self.defaults = {gate: variable_default(gate, self.texts) for gate in self.gates.values()}
         self.older = older_documents()
         self.allowed = policy_documents()
         self.rows = interface_rows(self.documents, self.listeners)
@@ -141,8 +148,8 @@ def source_problems(sources: Sources) -> list[str]:
         if gate is None:
             if service not in ALWAYS_ON:
                 found.append(f"{name}: the service {service} has no gate in main.tf, and only {sorted(ALWAYS_ON)} may have none")
-        elif variable_default(gate, sources.texts) != "false":
-            found.append(f"{name}: the switch {gate} must default to false")
+        elif variable_default(gate, sources.texts) not in ("true", "false"):
+            found.append(f"{name}: the switch {gate} must have a literal true or false default")
     web_ports = {documents.get(name) for name in WEB_INTERFACES}
     internal = {key[2] for key in listeners} - web_ports
     for name, port in sorted(documents.items()):
@@ -157,12 +164,16 @@ def source_problems(sources: Sources) -> list[str]:
     return found
 
 
-def readme_problems(readme: str, documents: dict[str, int]) -> list[str]:
-    """Every difference between the README section and the scripts and web interfaces, as messages."""
+def readme_problems(readme: str, documents: dict[str, int], defaults: dict[str, str | None]) -> list[str]:
+    """Every difference between the README and the scripts, web interfaces and switch defaults of the Terraform, as messages."""
+    found: list[str] = []
+    for switch, claimed in SWITCH_CLAIM.findall(readme):
+        shown = {"on": "true", "off": "false"}.get(claimed, claimed)
+        if switch in defaults and defaults[switch] != shown:
+            found.append(f"the README says the switch {switch} defaults to {claimed} but the Terraform default is {defaults[switch]}")
     section = readme_section(readme)
     if not section:
-        return [f"README.md has no {SECTION!r} section"]
-    found: list[str] = []
+        return [*found, f"README.md has no {SECTION!r} section"]
     for command in (HOST_COMMAND, LIST_COMMAND):
         if command not in section:
             found.append(f"the section must show {command!r}")
@@ -192,7 +203,7 @@ def test_the_terraform_the_list_and_the_policy_agree() -> None:
 
 
 def test_the_readme_names_the_scripts_and_holds_no_port_table() -> None:
-    differences = readme_problems((ROOT / "README.md").read_text(), forward_documents())
+    differences = readme_problems((ROOT / "README.md").read_text(), forward_documents(), Sources().defaults)
     check(not differences, "README.md differs from the web interface scripts:\n" + "\n".join(differences))
 
 
@@ -209,9 +220,10 @@ def planted(sources: Sources, change: str) -> Sources:
         sources.documents["internal"] = next(key[2] for key in sorted(sources.listeners) if key[0] not in web_services)
     elif change == "a wrong health path":
         sources.rows = [(name, port, "/api/ready" if name == "grafana" else path) for name, port, path in sources.rows]
-    elif change == "a service with a switch on":
+    elif change == "a switch without a default":
         sources.texts = {
-            name: re.sub(r'(variable "monitoring_enabled" \{.*?default\s*=\s*)false', r"\1true", text, flags=re.DOTALL) for name, text in sources.texts.items()
+            name: re.sub(r'(variable "monitoring_enabled" \{.*?)\n\s*default\s*=\s*\w+', r"\1", text, count=1, flags=re.DOTALL)
+            for name, text in sources.texts.items()
         }
     elif change == "a gate that names no variable":
         sources.gates["monitoring"] = "monitoring_wrong"
@@ -237,8 +249,8 @@ def test_a_source_defect_is_caught() -> None:
         "a missing document": "differ from the reviewed web interfaces",
         "a document for an internal port": "service port without a web page",
         "a wrong health path": "health path",
-        "a service with a switch on": "must default to false",
-        "a gate that names no variable": "must default to false",
+        "a switch without a default": "literal true or false default",
+        "a gate that names no variable": "literal true or false default",
         "an optional service without a gate": "has no gate",
         "an older document with another port": "port of no web interface document",
         "a document the policy lacks": "project policy allows",
@@ -258,6 +270,8 @@ def replaced(readme: str, old: str, new: str) -> str:
 def test_a_readme_defect_is_caught() -> None:
     readme = (ROOT / "README.md").read_text()
     documents = forward_documents()
+    defaults = Sources().defaults
+    wrong = "false" if defaults["monitoring_enabled"] == "true" else "true"
     airflow = "bash scripts/open_ui.sh airflow"
     cases = {
         "a missing host start": (replaced(readme, HOST_COMMAND, "bash scripts/host.sh status"), "must show"),
@@ -272,8 +286,12 @@ def test_a_readme_defect_is_caught() -> None:
         "a port number in the text": (replaced(readme, "Every other port of the host is internal.", "Airflow uses port 8080."), "names the port 8080"),
         "an aws command": (replaced(readme, airflow, "aws ssm start-session --target i-0123"), "must be a script command"),
         "a placeholder": (replaced(readme, airflow, "bash scripts/open_ui.sh <UI>"), "placeholder"),
-        "the generic document in the text": (readme + f"\n{GENERIC_DOCUMENT}\n", "generic document"),
+        "the generic document in the text": (
+            replaced(readme, "Every other port of the host is internal.", f"Every other port of the host is internal. {GENERIC_DOCUMENT}"),
+            "generic document",
+        ),
+        "a wrong switch default": (readme + f"\nThe switch `monitoring_enabled` defaults to {wrong}.\n", "the Terraform default is"),
     }
     for name, (text, expected) in cases.items():
-        found = readme_problems(text, documents)
+        found = readme_problems(text, documents, defaults)
         check(any(expected in message for message in found), f"{name} was not reported as {expected!r}: {found}")
