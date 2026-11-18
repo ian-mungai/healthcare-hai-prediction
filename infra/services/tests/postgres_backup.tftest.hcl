@@ -19,7 +19,6 @@ variables {
   control_plane_task_role_arn     = "arn:aws:iam::111111111111:role/example-control"
   openmetadata_task_role_arn      = "arn:aws:iam::111111111111:role/example-openmetadata"
   data_mount_path                 = "/mnt/example-data"
-  marquez_enabled                 = true
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
   mlflow_enabled                  = true
@@ -32,7 +31,6 @@ variables {
     redis      = "/example/redis"
     polaris    = "/example/polaris"
     airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
     mlflow     = "/example/mlflow"
     monitoring = "/example/monitoring"
   }
@@ -43,8 +41,6 @@ variables {
     polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
@@ -61,8 +57,6 @@ variables {
     polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez                = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web            = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
@@ -133,8 +127,8 @@ run "restore_adds_the_fetch_container_and_the_restore_script" {
 
   assert {
     condition = (
-      contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_DATABASES", value = "polaris:polaris airflow:airflow marquez:marquez mlflow:mlflow mlflow_auth:mlflow openmetadata_db:openmetadata_user" })
-      && contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_ROLES", value = "airflow:AIRFLOW_DB_PASSWORD marquez:MARQUEZ_DB_PASSWORD mlflow:MLFLOW_DB_PASSWORD openmetadata_user:OPENMETADATA_DB_PASSWORD" })
+      contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_DATABASES", value = "polaris:polaris airflow:airflow mlflow:mlflow mlflow_auth:mlflow openmetadata_db:openmetadata_user" })
+      && contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_ROLES", value = "airflow:AIRFLOW_DB_PASSWORD mlflow:MLFLOW_DB_PASSWORD openmetadata_user:OPENMETADATA_DB_PASSWORD" })
       && contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[2].environment, { name = "DATA_BUCKET_NAME", value = "example-project-data-dev" })
     )
     error_message = "The restore covers the same databases and roles that the task creates, and the fetch reads the named bucket."
@@ -158,8 +152,8 @@ run "restore_without_mlflow_and_the_catalog_lists_only_the_core_databases" {
   }
 
   assert {
-    condition     = contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_DATABASES", value = "polaris:polaris airflow:airflow marquez:marquez" })
-    error_message = "Without MLflow and the catalog the restore names only polaris, airflow and marquez."
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["postgres"].container_definitions)[1].environment, { name = "PG_DATABASES", value = "polaris:polaris airflow:airflow" })
+    error_message = "Without MLflow and the catalog the restore names only polaris and airflow."
   }
 }
 
@@ -189,7 +183,7 @@ run "backup_adds_its_own_service_with_a_write_only_role" {
       jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].entryPoint == ["sh", "-ec"]
       && strcontains(jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].command[0], "pg_dump --format=custom")
       && contains(jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].environment, { name = "BACKUP_INTERVAL_SECONDS", value = "3600" })
-      && contains(jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].environment, { name = "PG_DATABASES", value = "polaris airflow marquez mlflow mlflow_auth openmetadata_db" })
+      && contains(jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].environment, { name = "PG_DATABASES", value = "polaris airflow mlflow mlflow_auth openmetadata_db" })
       && jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].secrets[0].name == "PGPASSWORD"
       && jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[1].entryPoint == ["python", "-I", "-c"]
       && jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[1].readonlyRootFilesystem == true

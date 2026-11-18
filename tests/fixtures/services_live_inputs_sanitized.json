@@ -17,8 +17,6 @@
     "egress_proxy": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_egress_proxy_dev",
     "feature_store": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_feature_store_dev",
     "grafana": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_grafana_dev",
-    "marquez": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_marquez_dev",
-    "marquez_web": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_marquez_web_dev",
     "mlflow": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_mlflow_dev",
     "model_api": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_model_api_dev",
     "openmetadata_ingestion": "<account>.dkr.ecr.us-west-2.amazonaws.com/healthcare_hai_prediction_openmetadata_ingestion_dev",
@@ -43,7 +41,6 @@
   "log_group_names": {
     "airflow": "healthcare_hai_prediction_airflow_dev",
     "jobs": "healthcare_hai_prediction_jobs_dev",
-    "marquez": "healthcare_hai_prediction_marquez_dev",
     "mlflow": "healthcare_hai_prediction_mlflow_dev",
     "monitoring": "healthcare_hai_prediction_monitoring_dev",
     "polaris": "healthcare_hai_prediction_polaris_dev",

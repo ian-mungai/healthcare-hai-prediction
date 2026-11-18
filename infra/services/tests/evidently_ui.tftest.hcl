@@ -27,7 +27,6 @@ variables {
     redis    = "/example/redis"
     polaris  = "/example/polaris"
     airflow  = "/example/airflow"
-    marquez  = "/example/marquez"
   }
 
   ecr_repository_urls = {

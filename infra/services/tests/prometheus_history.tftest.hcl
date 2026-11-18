@@ -22,7 +22,6 @@ variables {
   model_api_task_role_arn          = "arn:aws:iam::111111111111:role/example-model-api"
   streamlit_task_role_arn          = "arn:aws:iam::111111111111:role/example-streamlit"
   data_mount_path                  = "/mnt/example-data"
-  marquez_enabled                  = false
   openmetadata_persistent_enabled  = true
   monitoring_enabled               = true
   alerts_topic_arn                 = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
@@ -44,7 +43,6 @@ variables {
     redis      = "/example/redis"
     polaris    = "/example/polaris"
     airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
     mlflow     = "/example/mlflow"
     monitoring = "/example/monitoring"
   }

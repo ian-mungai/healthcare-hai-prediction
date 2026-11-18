@@ -71,16 +71,16 @@ locals {
   pg_restore_on = var.postgres_restore_enabled
   pg_bucket     = coalesce(var.postgres_backup_bucket_name, "unset")
 
-  # The database and owner of each database the task manages, in the order the setup handles them. Marquez has always been created here; the list names exactly what the task
+  # The database and owner of each database the task manages, in the order the setup handles them. The list names exactly what the task
   # creates, so a dump and a restore cover the same databases.
   postgres_database_pairs = concat(
-    ["polaris:polaris", "airflow:airflow", "marquez:marquez"],
+    ["polaris:polaris", "airflow:airflow"],
     var.mlflow_enabled ? ["mlflow:mlflow", "mlflow_auth:mlflow"] : [],
     local.om_on ? ["openmetadata_db:openmetadata_user"] : [],
   )
   postgres_database_names = [for pair in local.postgres_database_pairs : split(":", pair)[0]]
   postgres_role_pairs = concat(
-    ["airflow:AIRFLOW_DB_PASSWORD", "marquez:MARQUEZ_DB_PASSWORD"],
+    ["airflow:AIRFLOW_DB_PASSWORD"],
     var.mlflow_enabled ? ["mlflow:MLFLOW_DB_PASSWORD"] : [],
     local.om_on ? ["openmetadata_user:OPENMETADATA_DB_PASSWORD"] : [],
   )

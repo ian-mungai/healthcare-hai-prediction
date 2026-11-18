@@ -48,7 +48,6 @@ variables {
 
   log_group_names = {
     airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
     mlflow     = "/example/mlflow"
     monitoring = "/example/monitoring"
     polaris    = "/example/polaris"

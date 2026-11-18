@@ -847,8 +847,6 @@ run "a_missing_pushgateway_digest_is_refused" {
       polaris         = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow         = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-      marquez         = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      marquez_web     = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       prometheus      = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       grafana         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       statsd_exporter = "sha256:4444444444444444444444444444444444444444444444444444444444444444"

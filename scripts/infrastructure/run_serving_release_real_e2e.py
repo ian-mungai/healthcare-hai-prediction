@@ -47,7 +47,7 @@ OFFLINE_PROVIDER = """provider "aws" {
   skip_region_validation      = true
 }
 """
-IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow", "marquez", "marquez_web", "mlflow", "model_api", "streamlit")
+IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow", "mlflow", "model_api", "streamlit")
 
 
 def variables() -> dict[str, Any]:
@@ -79,9 +79,9 @@ def variables() -> dict[str, Any]:
         "model_api_manifest_uri": "s3://example-data/serving/deployments",
         "model_api_registry_uri": "s3://example-data/lakehouse/feast/registry.pb",
         "model_api_mlflow_uri": "http://127.0.0.1:5100",
-        "log_group_names": {name: f"/example/{name}" for name in ("postgres", "redis", "polaris", "airflow", "marquez", "mlflow")},
+        "log_group_names": {name: f"/example/{name}" for name in ("postgres", "redis", "polaris", "airflow", "mlflow")},
         "ecr_repository_urls": {name: f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project/{name}" for name in IMAGES},
-        "image_digests": {name: "sha256:" + digit * 64 for name, digit in zip(IMAGES, "abcdef0123", strict=True)},
+        "image_digests": {name: "sha256:" + digit * 64 for name, digit in zip(IMAGES, "abcdef01", strict=True)},
     }
 
 

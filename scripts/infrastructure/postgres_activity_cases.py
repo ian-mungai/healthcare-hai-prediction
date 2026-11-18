@@ -26,7 +26,6 @@ MAIN_BLOCK = re.compile(r"postgres_databases_main = <<-EOT\n(.*?)\n  EOT", re.DO
 HEADER = "exec psql -X <<'SQL'"
 OFF = "SET track_activities = off;"
 AIRFLOW_PROBE = "synthetic-airflow-probe-text"
-MARQUEZ_PROBE = "synthetic-marquez-probe-text"
 LIMIT_SECONDS = 60.0
 SEARCH = (
     "/opt/homebrew/opt/postgresql@17/bin",
@@ -56,7 +55,7 @@ psql -X -d postgres -q -c "CREATE DATABASE polaris" -c "CREATE ROLE airflow LOGI
 export PGDATABASE=polaris
 psql -X -q -c "BEGIN; SELECT 1 FROM pg_authid WHERE rolname = 'airflow' FOR UPDATE; SELECT pg_sleep(8); COMMIT;" >/dev/null 2>&1 &
 sleep 1.5
-AIRFLOW_DB_PASSWORD="$HAI_AIRFLOW" MARQUEZ_DB_PASSWORD="$HAI_MARQUEZ" psql -X -q -f "$HAI_SQL" >/dev/null 2>&1 &
+AIRFLOW_DB_PASSWORD="$HAI_AIRFLOW" psql -X -q -f "$HAI_SQL" >/dev/null 2>&1 &
 sleep 2
 query="SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%${HAI_AIRFLOW}%' AND pid <> pg_backend_pid()"
 seen=$(PGUSER=postgres_exporter psql -X -d postgres -At -c "$query" 2>&1 | head -1)
@@ -95,7 +94,6 @@ def probe(sql: str) -> dict[str, str]:
             "HAI_PORT": str(free_port()),
             "HAI_SQL": str(path),
             "HAI_AIRFLOW": AIRFLOW_PROBE,
-            "HAI_MARQUEZ": MARQUEZ_PROBE,
         }
         done = run_command("bash", ["-c", SCRIPT], env=env, timeout=LIMIT_SECONDS)
     return {name: value for name, _, value in (line.partition("=") for line in done.stdout.splitlines()) if name}

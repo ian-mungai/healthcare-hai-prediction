@@ -19,7 +19,6 @@ variables {
   control_plane_task_role_arn     = "arn:aws:iam::111111111111:role/example-control"
   openmetadata_task_role_arn      = "arn:aws:iam::111111111111:role/example-openmetadata"
   data_mount_path                 = "/mnt/example-data"
-  marquez_enabled                 = true
   openmetadata_persistent_enabled = true
   monitoring_enabled              = true
   mlflow_enabled                  = true
@@ -32,7 +31,6 @@ variables {
     redis      = "/example/redis"
     polaris    = "/example/polaris"
     airflow    = "/example/airflow"
-    marquez    = "/example/marquez"
     mlflow     = "/example/mlflow"
     monitoring = "/example/monitoring"
   }
@@ -43,8 +41,6 @@ variables {
     polaris                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris"
     polaris_admin          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
-    marquez                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez"
-    marquez_web            = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/marquez_web"
     openmetadata_server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_server"
     openmetadata_ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_ingestion"
     openmetadata_search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/openmetadata_search"
@@ -61,8 +57,6 @@ variables {
     polaris                = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     polaris_admin          = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow                = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-    marquez                = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    marquez_web            = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     openmetadata_server    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     openmetadata_ingestion = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     openmetadata_search    = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
