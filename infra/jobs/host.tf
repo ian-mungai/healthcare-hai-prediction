@@ -248,7 +248,7 @@ locals {
     for family in keys(local.host_selected) : family => var.host_private_ip == null ? [] : concat(
       [
         { name = "PUSHGATEWAY_URL", value = "http://${var.host_private_ip}:9091" },
-        { name = "HAI_JOB", value = lookup(local.host_set_families, family, family) },
+        { name = "HAI_JOB", value = family == "bronze_stage" ? "bronze" : lookup(local.host_set_families, family, family) },
       ],
       contains(keys(local.host_set_families), family) ? [{ name = "HAI_JOB_SET", value = trimprefix(family, "features_") }] : []
     )

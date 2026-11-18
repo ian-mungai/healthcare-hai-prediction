@@ -558,7 +558,8 @@ def phase_table_matches_the_code_and_terraform(root: Path) -> dict[str, bool]:
         "the families are the Terraform host job families plus the publisher": set(table) == terraform | {"publisher"},
         "drift phases equal the drift entry module": set(table["drift"]) == set(literal("monitoring/aws_run.py", "PHASES")),
         "bronze phases equal the bronze entry module": set(table["bronze"])
-        == set(literal("scripts/lakehouse/bronze_run.py", "PHASES")) | {"inventory", "spark"},
+        == set(literal("scripts/lakehouse/bronze_run.py", "PHASES")) | {"inventory", "spark", "stage"},
+        "the bronze stage container command reads as the stage phase": metrics_push.phase_of("bronze", ["bronze_run.py", "stage", "--run", "x"]) == "stage",
         "each layer's phases equal layer_run": all(set(layers[layer]) <= set(table[layer]) for layer in layers),
         "the features family also names the release and reload container": "feast" in table["features"],
         "train and promote phases are in the training entry module": (set(table["train"]) | set(table["promote"]))

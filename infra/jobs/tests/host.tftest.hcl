@@ -1115,7 +1115,7 @@ run "every_host_container_pushes_its_metrics_to_the_pushgateway_with_its_family_
       for family, definition in aws_ecs_task_definition.host : [
         for container in jsondecode(definition.container_definitions) : (
           contains(container.environment, { name = "PUSHGATEWAY_URL", value = "http://10.0.1.20:9091" })
-          && contains(container.environment, { name = "HAI_JOB", value = startswith(family, "features_m") ? "features" : family })
+          && contains(container.environment, { name = "HAI_JOB", value = startswith(family, "features_m") ? "features" : (family == "bronze_stage" ? "bronze" : family) })
         )
       ]
     ]))

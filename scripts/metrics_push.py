@@ -48,7 +48,7 @@ HEARTBEAT_SECONDS = 30.0
 OUTCOMES = ("running", "succeeded", "failed", "interrupted")
 FINAL_OUTCOMES = OUTCOMES[1:]
 JOB_PHASES: dict[str, tuple[str, ...]] = {
-    "bronze": ("pin", "load", "check", "inventory", "spark"),
+    "bronze": ("pin", "load", "check", "inventory", "spark", "stage"),
     "silver": ("pin", "build", "validate", "verify", "export", "publish", "upload"),
     "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast", "reload"),
