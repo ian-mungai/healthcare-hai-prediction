@@ -50,3 +50,5 @@ The `postgres_backup` service runs two containers on the host. The dump containe
 - Backups expire after 30 days. A project idle for more than 30 days has none left.
 - A dump is written every six hours while the host is on, so a restore returns the state of the last completed set.
 - The MLflow and OpenMetadata routes in the new steps are unproven against the live servers.
+- The catalog restore step is proven against a stand-in Polaris and stand-in snapshots and by policy evaluation of the task role. It is unproven against the live Polaris and the live data bucket.
+- The newest snapshot of a folder is the one that S3 stored last, because a run ID holds no time. Under the task role the step reads the three backup folders only. It writes nothing to S3.
