@@ -164,10 +164,3 @@ class Ledger:
     def runs(self) -> list[str]:
         """Run IDs with a ledger file."""
         return sorted(path.stem for path in self.folder.glob("*.jsonl") if RUN_ID.fullmatch(path.stem))
-
-    def submissions(self, run_id: str) -> dict[str, list[dict[str, Any]]]:
-        """The run's lines grouped by submission ID, in ledger order."""
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for line in self.read(run_id):
-            grouped.setdefault(line["submission_id"], []).append(line)
-        return grouped

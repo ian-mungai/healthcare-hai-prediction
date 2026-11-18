@@ -37,7 +37,7 @@ SERVING_ADDRESS = re.compile(r'^aws_ecs_service\.serving\["[a-z0-9_]+"\]$')
 EXPECTED_DEFINITIONS = 16
 EXPECTED_SERVICES = 12
 EXPECTED_SERVING = 2
-CREATE_FIRST, DESTROY_FIRST = ["create", "delete"], ["delete", "create"]
+CREATE_FIRST = ["create", "delete"]
 CREATE_BEFORE_DESTROY = re.compile(r"^(\s*)create_before_destroy(\s*)=(\s*)true\s*\n", re.MULTILINE)
 PLANTED_DEFINITION = """
 resource "aws_ecs_task_definition" "planted" {

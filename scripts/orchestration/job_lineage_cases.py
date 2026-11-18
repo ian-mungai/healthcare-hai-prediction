@@ -43,7 +43,6 @@ TEXT_FOR = {
     "gold": (base.RUN_OF["gold"], base.RUN_OF["silver"], ""),
     "features": (base.RUN_OF["features"], base.RUN_OF["gold"], ""),
 }
-PHASE_FILES = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
 
 
 def request_of(layer: str, input_run: str | None = None, task_id: str = "job") -> dict[str, Any]:

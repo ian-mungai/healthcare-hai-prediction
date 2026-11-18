@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -234,6 +233,3 @@ def server_state(path: Path) -> dict[str, Any]:
 def log_lines(path: Path) -> list[str]:
     """The statements the fake programs logged, in order."""
     return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-
-
-SAFE_NAME = re.compile(r"[a-z][a-z0-9_]*")
