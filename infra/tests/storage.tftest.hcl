@@ -234,12 +234,12 @@ run "ingestion_test_folder_expires_and_nothing_else_does" {
     condition = alltrue([
       for key, expected in {
         "ingestion_test/ingestion_abcd1234/raw/a.csv" = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
-        "ingestion_test/"                                    = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
-        "ingestion_test"                                     = ""
-        "ingestion_tests/a.csv"                              = ""
-        "raw/ingestion_test/a.csv"                           = ""
-        "raw/example/collection/datasets/t/a.csv"            = ""
-        "lakehouse/gold/dim_state/data/a.parquet"            = "expire_replaced_lakehouse_versions"
+        "ingestion_test/"                             = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
+        "ingestion_test"                              = ""
+        "ingestion_tests/a.csv"                       = ""
+        "raw/ingestion_test/a.csv"                    = ""
+        "raw/example/collection/datasets/t/a.csv"     = ""
+        "lakehouse/gold/dim_state/data/a.parquet"     = "expire_replaced_lakehouse_versions"
         } : join(",", [
           for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id
           if rule.id != "abort_incomplete_uploads" && startswith(key, one(rule.filter).prefix)
