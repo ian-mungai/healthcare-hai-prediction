@@ -46,6 +46,9 @@ from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_d
 from scripts.process import TimeoutExpired, run_command
 
 PHASES = ("pin", "load", "check")
+# The phases that start an engine (the loader runs Spark). Only they derive the engine limits and meet the floor of ``task_capacity``: the stage job holds
+# 2 GiB and its stage and inventory phases only list sources and write JSON, and pin and check read and compare files.
+ENGINE_PHASES = ("load",)
 REQUEST_FILE = "bronze_request.json"
 INVENTORY_FILE = "bronze_inventory.json"
 STAGE_REPORT_FILE = "bronze_stage_report.json"
@@ -558,7 +561,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     dry = args.dry_run or os.environ.get("BRONZE_DRY_RUN", "") in DRY_VALUES
     try:
         startup_check.check_phase("bronze_stage" if args.phase == "stage" else "bronze", args.phase)
-        task_capacity.apply()
+        if args.phase in ENGINE_PHASES:
+            task_capacity.apply()
         if not args.bucket:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
         if args.phase == "inventory":

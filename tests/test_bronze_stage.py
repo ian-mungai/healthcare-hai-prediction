@@ -229,3 +229,27 @@ def test_the_stage_phase_checks_the_task_environment_as_its_own_job(monkeypatch:
     check(bronze_run.main(["stage", "--run", RUN, "--work", str(tmp_path), "--bucket", BUCKET]) == 0, "the stage phase failed")
     check(calls == [("bronze_stage", "stage")], f"{calls}")
     check("stage" in startup_check.JOB_PHASES["bronze_stage"], "the startup check table has no row for the stage phase")
+
+
+def two_gib_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The container of the bronze_stage task definition as the live run saw it: 2 GiB, 0.5 CPU and no other container."""
+    monkeypatch.setenv("AWS_EXECUTION_ENV", "AWS_ECS_EC2")
+    monkeypatch.delenv("HAI_DUCKDB_TEMP_DIRECTORY", raising=False)
+    metadata = {"container": {"Name": "stage"}, "task": {"Limits": {"Memory": 2048, "CPU": 0.5}, "Containers": []}}
+    monkeypatch.setattr(bronze_run.task_capacity, "fetch_metadata", lambda environ: metadata)
+    monkeypatch.setattr(bronze_run.startup_check, "check_phase", lambda job, phase: None)
+
+
+def test_the_stage_phase_runs_in_its_two_gib_task_because_it_starts_no_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    Setup(monkeypatch, Store())
+    two_gib_task(monkeypatch)
+    check(bronze_run.main(["stage", "--run", RUN, "--work", str(tmp_path), "--bucket", BUCKET]) == 0, capsys.readouterr().err)
+
+
+def test_the_load_phase_keeps_the_engine_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    Setup(monkeypatch, Store())
+    two_gib_task(monkeypatch)
+    check(bronze_run.main(["load", "--run", RUN, "--work", str(tmp_path), "--bucket", BUCKET, "--tables", "alpha_data", "--target", "real"]) == 1, "load ran")
+    check("below the floor of 2 GiB" in capsys.readouterr().err, "the load phase did not name the floor")
