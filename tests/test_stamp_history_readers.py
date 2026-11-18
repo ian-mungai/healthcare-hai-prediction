@@ -213,6 +213,47 @@ def test_the_features_run_of_a_research_record_is_read_in_either_form() -> None:
     refused(lambda: promotion_chain.challenger_of(stored.get, STAMP, "HAI_1"), "RecordRefused")
 
 
+def chain_launches(features_run: str, production: str | None) -> tuple[list[str], list[tuple[str, str, dict[str, Any]]]]:
+    """The failures and the launches of the promotion chain of a redesigned research run whose record names ``features_run`` for its challenger."""
+    from orchestration import promotion_chain
+
+    research = "research_abcdef01"
+    record = {
+        "hai_type": "HAI_1",
+        "features_runs": {"m2": features_run},
+        "promotion": {"challenger": {"model": "m2", "version": "3"}, "production_version": production},
+    }
+    canary = {"research_run": research, "hai_type": "HAI_1", "model": "m2", "version": "3", "decision": "promote"}
+    stored = {
+        contract.record_key("research", research, "HAI_1"): json.dumps(record).encode(),
+        contract.record_key("canary", research, "HAI_1"): json.dumps(canary).encode(),
+    }
+    launches: list[tuple[str, str, dict[str, Any]]] = []
+    failures = promotion_chain.run_types(research, ("HAI_1",), launch=lambda template, run, params: launches.append((template, run, params)), read=stored.get)
+    return failures, launches
+
+
+def test_a_challenger_whose_features_run_is_a_stamp_is_refused_before_any_deployment_or_promotion() -> None:
+    failures, launches = chain_launches(STAMP, "2")
+    check(len(failures) == 1 and "release" in failures[0], f"the stamp-form features run is not refused by the release binding: {failures}")
+    effects = [template for template, _, _ in launches if template != "owner_notice"]
+    check(effects == [], f"a deployment, check or promotion ran before the release binding was refused: {effects}")
+    notices = [params["outcome"] for template, _, params in launches if template == "owner_notice"]
+    check(notices == ["held"], f"the owner is not told the challenger is held: {notices}")
+
+
+def test_a_challenger_whose_features_run_is_of_the_run_id_form_runs_its_whole_chain_and_a_first_champion_needs_no_release_binding() -> None:
+    failures, launches = chain_launches("features_elastic_net_0a0a0a02", "2")
+    check(failures == [], f"the redesigned features run is refused: {failures}")
+    check(
+        [template for template, _, _ in launches] == ["serve_deploy", "canary_check", "promote", "release_online", "serve_deploy", "owner_notice"],
+        f"{launches}",
+    )
+    failures, launches = chain_launches(STAMP, None)
+    check(failures == [], f"a first champion, which launches no release, is refused for its features run: {failures}")
+    check("release_online" not in [template for template, _, _ in launches], "a first champion launched a release")
+
+
 # stored protection records, receipts, holds and file names
 
 

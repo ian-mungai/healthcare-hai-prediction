@@ -39,6 +39,9 @@ The features run of the challenger is the one its training run read, which the r
 run, because the training runs read the run IDs the features DAGs chose. The release launch runs under the chain run of its own and names that features run
 in its closed parameters (``training_contract.release_parameters_for``), so a retry joins it.
 
+The release binding is checked first: a challenger (not a first champion) whose recorded features run is of the stamp form of before the run ID redesign could
+not be released, so the chain deploys nothing and promotes nothing for it, reports the refusal and tells the owner the challenger is held.
+
 One type failing never stops another type's chain. A failed promotion is not announced, because the Production alias may have moved: the failure is the signal,
 and the owner resolves it with the promotion tooling. A failed release or rollout leaves the promotion standing, is announced as such and is reported as a
 failure; a release the phase refuses fails by name and stops the rollout. ``run_types`` returns every failure; the caller fails the DAG task with them.
@@ -52,7 +55,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from orchestration.training_contract import PROMOTION_MODELS, STORED_RUN, chain_run_id, stored_record_key, trained_run_id
+from orchestration.training_contract import PROMOTION_MODELS, STORED_RUN, chain_run_id, release_parameters_for, stored_record_key, trained_run_id
 
 TRAIN_JOB = "train"
 Launch = Callable[[str, str, dict[str, Any]], None]
@@ -216,19 +219,32 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
     outcome = "held"
     decision: list[str] = []
 
+    def release_request() -> dict[str, str]:
+        return {"hai_type": hai_type, "model": challenger.model, "features_run": challenger.features_run}
+
+    # The research record is history and may name a features run of the stamp form, which the release takes no more (a request takes the run ID form alone).
+    # The release binding is checked before any deployment or promotion, so a challenger that could not be released is held and nothing is deployed or moved.
+    release_refused = None
+    if not challenger.first_champion:
+        try:
+            release_parameters_for(release_request())
+        except ValueError as error:
+            release_refused = error
+            failures.append(f"{hai_type} release binding: {error} ({challenger.features_run}); nothing was deployed or promoted")
+
     def canary() -> None:
         steps.launch("canary_check", run_of("canary"), {"research_run": research_run, "hai_type": hai_type, "mlflow": "aws"})
         decision.append(canary_decision(steps.read, research_run, challenger))
 
     if challenger.first_champion:
         decision.append("promote")
-    elif step("canary deploy", serve("canary", "canary_deploy")):
+    elif release_refused is None and step("canary deploy", serve("canary", "canary_deploy")):
         step("canary check", canary)
 
     def release() -> None:
         if challenger.first_champion:
             return
-        steps.launch("release_online", run_of("release"), {"hai_type": hai_type, "model": challenger.model, "features_run": challenger.features_run})
+        steps.launch("release_online", run_of("release"), release_request())
 
     if decision == ["promote"]:
         promotion = {"hai_type": hai_type, "model_version": challenger.version, "promotion_mode": "promote", "mlflow": "aws"}
