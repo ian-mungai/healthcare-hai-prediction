@@ -31,7 +31,7 @@ import time
 import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -52,6 +52,8 @@ ISSUED = "issued-token"
 LOCAL_YAML_SHA256 = "d534a5b5ae3c615401fb28efb11c7e7ce65d9181a7de2a1df73abeb09269704f"
 # A run of the real namespace must follow the retirement cutover (``retired_publications``); the fixture cases keep the October run IDs.
 RUN = "features_0a1b2c3d"
+# The namespace "features" ignores every publication committed before the cutover in data_contracts/features/retired_publications.json (2026-11-12).
+COMMITTED = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 PORT_OF_NOTHING = "http://127.0.0.1:9/api/catalog"
 
 
@@ -297,7 +299,7 @@ def session_for(
 
 def runs_catalog(namespace: str) -> feast_cases.StubCatalog:
     catalog = feast_cases.StubCatalog(namespace)
-    catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(RUN, online_cases.T0, {"t": 5})])
+    catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(RUN, COMMITTED, {"t": 5})])
     catalog.tables["t"] = feast_cases.StubTable("t", 5)
     return catalog
 
@@ -322,7 +324,7 @@ def consumed_registry(mode: str) -> tuple[str, str]:
     """Run a full AWS apply in ``mode`` and return the registry path and the registry bootstrap setting the backend consumed."""
     schema = feast_cases.synthetic_schema()
     with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
-        catalog, _ = feast_cases.stub_features(schema, run=RUN)
+        catalog, _ = feast_cases.stub_features(schema, run=RUN, committed=COMMITTED)
         catalog.namespace = reads.NAMESPACES[mode]
         environ, store, server = prepared(FEAST_RUN_FOLDER=raw)
         backend = PathBackend(schema, [], environ)
@@ -384,7 +386,7 @@ def case_fa3(c: Checker) -> None:
     schema = feast_cases.synthetic_schema()
     with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
         folder = Path(raw)
-        catalog, _ = feast_cases.stub_features(schema, run=RUN)
+        catalog, _ = feast_cases.stub_features(schema, run=RUN, committed=COMMITTED)
         catalog.namespace = "features"
         guarded = GuardedCatalog(catalog)
         environ, store, server = prepared(FEAST_RUN_FOLDER=str(folder))
@@ -828,7 +830,7 @@ def case_fa14(c: Checker) -> None:
         catalog.tables[reads.SPINE_TABLE] = feast_cases.StubTable(reads.SPINE_TABLE, 11, {}, rows)
         catalog.tables[window] = feast_cases.StubTable(window, 12, {}, stamps)
         snapshots = {reads.SPINE_TABLE: 11, window: 12}
-        catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 99, {}, [feast_cases.runs_row(RUN, online_cases.T0, snapshots)])
+        catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 99, {}, [feast_cases.runs_row(RUN, COMMITTED, snapshots)])
         guarded = GuardedCatalog(catalog)
         schema = feast_cases.synthetic_schema()
         with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
@@ -1352,8 +1354,8 @@ def case_fa23(c: Checker) -> None:
 # (``open_catalog``), the redis and feast modules, the Feast store (``historical.default_store``), the Feast side of a set load (``SetHooks``) and the data
 # bucket that holds the Production records (``promote_receipt.s3_client``).
 
-SET_BASE_RUN = "features_0000b001"
-SET_RUN = "features_elastic_net_0000a001"
+SET_BASE_RUN = "features_elastic_net_0000b001"
+SET_RUN = "features_0000a001"
 SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
 FEATURE_BUCKET = "example-feature-bucket"
 # The fixed variables and the secrets that infra/jobs/layers.tf gives the feast container of the features job (layers.tftest.hcl checks the same list).
@@ -1423,7 +1425,7 @@ class Deployed:
 
     def __init__(self, folder: Path, bucket: ProductionBucket) -> None:
         self.folder, self.bucket = folder, bucket
-        self.catalog, self.schema, _, _ = feast_cases.set_catalog("m1")
+        self.catalog, self.schema, _, _ = feast_cases.set_catalog("m1", committed=COMMITTED)
         entry = self.schema["model_sets"]["m1"]
         self.catalog.tables[entry["table"]].rows = [{"spine_key": key, "event_timestamp": online_cases.T0} for key in SET_KEYS]
         self.guarded = GuardedCatalog(self.catalog)
@@ -1674,7 +1676,7 @@ def case_fa27(c: Checker) -> None:
     """FA27: ``FEATURE_SET=all``, the value the broker and the override generator give a run of the single path, reaches ``feast_job`` from the environment
     (the layer driver passes no flag for it) and runs the single path on the AWS profile."""
     schema = feast_cases.synthetic_schema()
-    catalog, _ = feast_cases.stub_features(schema, run=RUN)
+    catalog, _ = feast_cases.stub_features(schema, run=RUN, committed=COMMITTED)
     with tempfile.TemporaryDirectory(prefix="feast_aws_all_") as raw:
         world = Deployed(Path(raw), ProductionBucket())
         world.guarded = GuardedCatalog(catalog)

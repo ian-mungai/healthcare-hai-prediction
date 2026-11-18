@@ -152,7 +152,12 @@ def runs_row(run_id: str, committed: datetime | str, snapshot_set: Any) -> dict[
 
 
 def stub_features(
-    schema: dict[str, Any] | None = None, *, runs: list[dict[str, Any]] | None = None, log: list[str] | None = None, run: str = RUN_A
+    schema: dict[str, Any] | None = None,
+    *,
+    runs: list[dict[str, Any]] | None = None,
+    log: list[str] | None = None,
+    run: str = RUN_A,
+    committed: datetime = T0,
 ) -> tuple[StubCatalog, dict[str, int]]:
     """A catalog holding the schema's tables, the spine and a ``publish_runs`` table whose head (the run ``run``) names every table's main snapshot."""
     schema = schema or synthetic_schema()
@@ -171,7 +176,7 @@ def stub_features(
     for index, name in enumerate(("int_spine_validation_measures", "int_county_adjacency"), start=2100):
         snapshots[name] = index
         catalog.tables[name] = StubTable(name, index, {"support_key": "string"}, [{"support_key": "synthetic"}])
-    rows = runs if runs is not None else [runs_row(run, T0, snapshots)]
+    rows = runs if runs is not None else [runs_row(run, committed, snapshots)]
     catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, {}, rows)
     return catalog, snapshots
 
@@ -733,7 +738,7 @@ def case_e31_model_views(c: Checker) -> None:
 
 
 def set_catalog(
-    feature_set: str = "m1", *, label_drift: bool = False, model_drift: bool = False, base_names_label: bool = True
+    feature_set: str = "m1", *, label_drift: bool = False, model_drift: bool = False, base_names_label: bool = True, committed: datetime = T0
 ) -> tuple[StubCatalog, dict[str, Any], str, str]:
     """A catalog of the committed schema's model table and label table with two publications: a base run that names the label table and the spine, and the
     run of the model set that names its own table. Returns the catalog, the schema, the base run and the set run."""
@@ -751,7 +756,7 @@ def set_catalog(
     catalog.tables[reads.SPINE_TABLE] = StubTable(reads.SPINE_TABLE, 2000, {"spine_key": "string"})
     base_set = {reads.SPINE_TABLE: 2000, **({"label_matrix_hai_outcomes": 2001} if base_names_label else {})}
     base_run, set_run = "features_elastic_net_0000b001", "features_0000a001"
-    rows = [runs_row(base_run, T0, base_set), runs_row(set_run, T0 + timedelta(hours=1), {entry["table"]: 4001})]
+    rows = [runs_row(base_run, committed, base_set), runs_row(set_run, committed + timedelta(hours=1), {entry["table"]: 4001})]
     catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, {}, rows)
     return catalog, schema, base_run, set_run
 
