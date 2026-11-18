@@ -156,6 +156,18 @@ def archive(folder: Path) -> tuple[Path, str]:
     return path, sha_of(path)
 
 
+def stand_in_mirror(namespace: str, names: list[str]) -> dict[str, Any]:
+    """The ``mirror`` section of the loader report: a real run's tables are registered, the qualification twin mirrors nothing, a failure is reported."""
+    if "mirror_malformed" in DEFECTS:
+        return {"status": "great", "tables": names}
+    if namespace != "bronze":
+        return {"status": "skipped", "reason": "mode qualify is a test mode", "tables": {}}
+    if "mirror_failed" in DEFECTS:
+        reason = "alpha_data failed: AccessDeniedException from Glue"
+        return {"status": "failed", "reason": reason, "tables": {names[0]: "failed: AccessDeniedException from Glue", **dict.fromkeys(names[1:], "created")}}
+    return {"status": "ok", "tables": dict.fromkeys(names, "created")}
+
+
 def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> None:
     """Stand-in for ``scripts.lakehouse.bronze``: it discovers the real inputs, replaces each object's rows in place and writes the counts-only report."""
     require(module == "scripts.lakehouse.bronze", module)
@@ -164,6 +176,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     if "loader_fails" in DEFECTS:
         raise bronze_run.StepError("scripts.lakehouse.bronze exited 1")
     namespace, dictionary = values[values.index("--namespace") + 1], values[values.index("--dictionary-namespace") + 1]
+    require("--run-id" in values and values[values.index("--run-id") + 1] == job.run, f"the loader is not told the bronze run: {values}")
     names = values[values.index("--tables") + 1].split(",")
     config = bronze.load_table_map(job.code / "config/lakehouse/bronze_tables.json")
     source: Any = STORAGE[0]
@@ -189,6 +202,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     report = {"mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
     report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
+    report["mirror"] = stand_in_mirror(namespace, names)
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if "no_report" not in DEFECTS:
@@ -313,6 +327,32 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     require(arguments[arguments.index("--bucket") + 1] == BUCKET, arguments)
     require(set(catalog()) == {"bronze.alpha_data", "bronze.beta_data", "bronze_dictionary.alpha_data", "bronze_dictionary.beta_data"}, sorted(catalog()))
     require("bronze_chain_dag" in case.out and RUN in case.out, "the success line names the chain trigger for this run")
+    record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
+    require(
+        record["mirror"] == {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "created"}}, f"the run record lacks the mirror outcome: {record}"
+    )
+    require("glue mirror ok" in case.out, "the check phase does not show the mirror outcome")
+    raw_lineage.loaded_objects(record, "check.json", RUN)
+
+
+def case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown(case: Case) -> None:
+    """The load is committed before the mirror runs: a Glue failure fails no phase, is kept in the run record and is shown by name."""
+    DEFECTS.add("mirror_failed")
+    require(case.chain() == [0, 0, 0], case.err)
+    record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
+    require(record["mirror"]["status"] == "failed" and "AccessDeniedException" in record["mirror"]["reason"], f"{record.get('mirror')}")
+    require(record["snapshots"] == {"alpha_data": 100, "beta_data": 101} and "bronze_chain_dag" in case.out, "the failed mirror held back the committed run")
+    require("glue mirror FAILED" in case.err and "alpha_data" in case.err, f"the failed mirror is not shown: {case.err}")
+    raw_lineage.loaded_objects(record, "check.json", RUN)
+
+
+def case_a_loader_report_with_a_malformed_mirror_outcome_is_refused(case: Case) -> None:
+    DEFECTS.add("mirror_malformed")
+    require(case.chain() == [0, 0, 1], case.err)
+    require(
+        "mirror" in case.err and f"lakehouse/bronze_runs/{RUN}/check.json" not in STORAGE[0].client.puts,
+        f"a record was written for a report with a bad mirror: {case.err}",
+    )
 
 
 def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) -> None:
@@ -834,6 +874,8 @@ def case_the_owner_cannot_stage_an_inventory_with_an_empty_table(case: Case) -> 
 
 CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
+    "a failed Glue mirror leaves the run passed and is recorded and shown": case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown,
+    "a loader report with a malformed mirror outcome is refused": case_a_loader_report_with_a_malformed_mirror_outcome_is_refused,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,

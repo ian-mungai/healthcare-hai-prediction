@@ -1,7 +1,7 @@
 """Mirror published Iceberg tables into read-only Glue registrations for Athena. Polaris stays the catalog and the source of truth.
 
 After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``; the silver and features publishes commit through the same engine
-(``gold_publish.commit_publish``), so they call it too.
+(``gold_publish.commit_publish``), so they call it too. After a bronze load commits, ``bronze_mirror.mirror_after_load`` calls it for the loaded tables.
 For every table that the publish contract names, all Public research data, the mirror makes one Glue table. Its ``metadata_location`` is the metadata
 file of the table's committed snapshot, taken from the newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode
 ``real`` and the layers of ``config/lakehouse/athena_mirror.json`` are mirrored, so test namespaces and the runs
@@ -12,11 +12,11 @@ OpenMetadata 2.0.7 has no Iceberg connector. The mirror never raises and stops a
 It writes nothing.
 
 ``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|bronze|all [--dry-run] [--bucket NAME]`` registers the tables
-that are already published, without Spark and without Polaris. The bronze layer has no publish step, so it has no publish-time registration and no
-``check``: ``register`` is its only route, for the tables that ``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt
-sources name (so every silver input resolves; not the ``bronze_dictionary`` namespace). A bronze table that a complete bronze run record
-(``lakehouse/bronze_runs/<run>/check.json``) skipped for lack of a source object, that no record loaded and that has no metadata file in S3 has no table yet and
-is named as left out, unless silver reads it.
+that are already published, without Spark and without Polaris. The bronze layer has no publish step and no ``publish_runs`` table, so it has no
+``check``. Its load registers its own tables when it commits (``bronze_mirror``), and ``register`` fills or repairs it, for the tables that
+``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt sources name (so every silver input resolves; not the
+``bronze_dictionary`` namespace). A bronze table that a complete bronze run record (``lakehouse/bronze_runs/<run>/check.json``) skipped for lack of a
+source object, that no record loaded and that has no metadata file in S3 has no table yet and is named as left out, unless silver reads it.
 It reads each table's metadata files in S3 and registers the snapshot that the main branch of the newest metadata file points to, never a staged or audit
 branch snapshot. A table whose metadata cannot be resolved
 without doubt is refused and named: no file, two files with one version number, a file name that is not numbered, a location that is not the table folder,
@@ -44,8 +44,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
 # The layers with a publish contract and a publish_runs table: their publishes register tables and ``check`` compares them with Polaris.
 PUBLISHED_LAYERS = ("silver", "gold", "features")
-# Bronze has no publish step, so no hook and no check. Its tables are the ones that ``config/lakehouse/bronze_tables.json`` lists and the ones that silver's
-# dbt sources read, registered by ``register``.
+# Bronze has no publish_runs table, so no check; its load registers the loaded tables itself (``bronze_mirror``). ``register`` covers the tables that
+# ``config/lakehouse/bronze_tables.json`` lists and the ones that silver's dbt sources read.
 MIRRORED_LAYERS = ("bronze", *PUBLISHED_LAYERS)
 BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 SILVER_BRONZE_SOURCES = REPO_ROOT / "dbt/models/silver/staging/_bronze__sources.yml"

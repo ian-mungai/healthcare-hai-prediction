@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from orchestration.training_contract import run_id_pattern
 from scripts.acquisition.raw_root import RAW_ROOT, read_roots, strip_root
 from scripts.lakehouse import person_fields
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
@@ -157,6 +158,13 @@ LINEAGE = (
     "_source_encoding",
     "_row_number",
 )
+
+
+def bronze_run_id(text: str) -> str:
+    """The argument type of ``--run-id``: a bronze run ID such as ``bronze_0a1b2c3d``."""
+    if not re.fullmatch(run_id_pattern("bronze"), text):
+        raise argparse.ArgumentTypeError("the run ID must look like bronze_0a1b2c3d")
+    return text
 
 
 class BronzeError(ValueError):
@@ -1427,6 +1435,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--diagnose", action="store_true", help="report bootstrap metadata conflicts without writing to the catalog or S3")
     parser.add_argument("--repair-tables", help="with --bootstrap-all, load these comma-separated tables before full-map verification")
     parser.add_argument("--namespace", type=namespace_name)
+    parser.add_argument("--run-id", type=bronze_run_id, help="the bronze run ID that the Glue mirror registrations name (a loader started by hand names none)")
     parser.add_argument("--dictionary-namespace", type=namespace_name, default=DICTIONARY_NAMESPACE)
     parser.add_argument("--bucket", help="source bucket supplied by the AWS run binding")
     parser.add_argument("--task-role", action="store_true", help="use the AWS task identity without a local profile")
@@ -1470,7 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     bucket = args.bucket if args.bucket is not None else str(json.loads(DEPLOYMENT.read_text())["data_bucket_name"])
     storage: Storage = S3Storage(task_role=args.task_role)
-    from scripts.lakehouse import bronze_metadata, bronze_pin, dictionary
+    from scripts.lakehouse import bronze_metadata, bronze_mirror, bronze_pin, dictionary
 
     inventory = bronze_pin.read_inventory(args.inventory.read_bytes()) if args.inventory else None
     if inventory is not None:
@@ -1483,6 +1492,7 @@ def main(argv: list[str] | None = None) -> int:
     pruned: dict[str, int] = {}
     copies = 0
     metadata_index: dict[str, str] = {}
+    mirror: dict[str, Any] = {"status": "skipped", "reason": "the load did not pass its checks, so nothing is committed to mirror", "tables": {}}
     try:
         previous = bronze_metadata.read(spark, config["namespace"])
         canonical_keys = {(row["table_name"], row["sha256"]): row["_object_key"] for row in previous if row["kind"] == "object"}
@@ -1537,6 +1547,8 @@ def main(argv: list[str] | None = None) -> int:
             index_path = REPORT_ROOT / "object_index" / f"{generation}.json"
             index_sha256 = bronze_metadata.write_bootstrap(metadata, index_path)
             metadata_index = {"generation": generation, "path": str(index_path), "sha256": index_sha256}
+            # The load and its metadata generation are committed. The mirror reports its own failure and never undoes them.
+            mirror = bronze_mirror.mirror_after_load(spark, config["namespace"], names, snapshots, args.run_id)
     except (BronzeError, bronze_metadata.MetadataError) as error:
         sys.stderr.write(f"bronze: {error}\n")
         return 1
@@ -1562,6 +1574,7 @@ def main(argv: list[str] | None = None) -> int:
         "metadata_index": metadata_index,
         "snapshots": snapshots,
         "dictionaries": dictionaries,
+        "mirror": mirror,
         "unselected": unloaded,
         "unsourced_tables": sorted(unsourced),
         "passed": passed,

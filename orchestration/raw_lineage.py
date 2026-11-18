@@ -78,9 +78,24 @@ BRONZE_RECORD_KEYS = {
     "objects",
     "skipped_tables",
 }
+# The Glue mirror outcome of the load (scripts.lakehouse.bronze_mirror): optional, because a record written before the hook has none.
+BRONZE_OPTIONAL_KEYS = {"mirror"}
+BRONZE_MIRROR_STATUSES = ("ok", "unchanged", "failed", "skipped")
 BRONZE_OBJECT_KEYS = {"table", "bucket", "key", "version_id", "sha256", "byte_count"}
 BRONZE_NAMESPACES = ["bronze", "bronze_dictionary"]
 SHA256 = re.compile(r"[a-f0-9]{64}")
+
+
+def mirror_outcome(outcome: Any) -> bool:
+    """The Glue mirror outcome of a bronze run record: a status, one outcome text per table and, for a failure or a skip, the reason."""
+    if not isinstance(outcome, dict) or not {"status", "tables"} <= set(outcome) <= {"status", "tables", "reason"}:
+        return False
+    tables = outcome["tables"]
+    if outcome["status"] not in BRONZE_MIRROR_STATUSES or not isinstance(tables, dict):
+        return False
+    if not all(isinstance(name, str) and isinstance(text, str) for name, text in tables.items()):
+        return False
+    return isinstance(outcome.get("reason"), str) if outcome["status"] in ("failed", "skipped") else "reason" not in outcome
 
 
 def loaded_objects(record: Any, key: str, run_id: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -90,8 +105,12 @@ def loaded_objects(record: Any, key: str, run_id: str) -> tuple[list[dict[str, A
             f"{key}: has the older shape without skipped_tables, which the bronze check phase wrote before it named the tables it skipped; "
             "a record of that shape is not read, so run bronze again to write a new one"
         )
-    if not isinstance(record, dict) or set(record) != BRONZE_RECORD_KEYS or record["schema_version"] != 1:
-        raise LineageRefused(f"{key}: does not have exactly the keys {sorted(BRONZE_RECORD_KEYS)} of schema version 1")
+    if not isinstance(record, dict) or not BRONZE_RECORD_KEYS <= set(record) <= BRONZE_RECORD_KEYS | BRONZE_OPTIONAL_KEYS or record["schema_version"] != 1:
+        raise LineageRefused(
+            f"{key}: does not have exactly the keys {sorted(BRONZE_RECORD_KEYS)} (and optionally {sorted(BRONZE_OPTIONAL_KEYS)}) of schema version 1"
+        )
+    if "mirror" in record and not mirror_outcome(record["mirror"]):
+        raise LineageRefused(f"{key}: the Glue mirror outcome is not a status, the outcome of each table and, for a failure or a skip, the reason")
     if record["run_id"] != run_id:
         raise LineageRefused(f"{key}: belongs to another run ({record['run_id']})")
     if record["target"] != "real" or record["namespaces"] != BRONZE_NAMESPACES:

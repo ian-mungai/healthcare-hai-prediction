@@ -76,6 +76,8 @@ PLAN_PREFIX = "DRY_RUN_PLAN "
 RUN_ID = re.compile(run_id_pattern("bronze"))
 SHA256 = re.compile(r"[a-f0-9]{64}")
 DRY_VALUES = ("1", "true", "yes")
+# The outcomes of the Glue mirror hook in the loader report (scripts.lakehouse.bronze_mirror); orchestration.raw_lineage holds the same list for the run record.
+MIRROR_STATUSES = ("ok", "unchanged", "failed", "skipped")
 
 
 class StepError(RuntimeError):
@@ -361,7 +363,7 @@ def load(job: Job) -> None:
     namespace, dictionary = job.namespaces
     pinned_inventory(job)
     arguments = ["--tables", ",".join(job.tables), "--namespace", namespace, "--dictionary-namespace", dictionary, "--bucket", job.bucket, "--task-role"]
-    arguments += ["--inventory", str(job.folder / INVENTORY_FILE)]
+    arguments += ["--inventory", str(job.folder / INVENTORY_FILE), "--run-id", job.run]
     if job.target == "qualify":
         arguments.append("--selected-metadata")
     else:
@@ -392,6 +394,8 @@ def accept_report(job: Job) -> tuple[dict[str, Any], bytes]:
     checks = report.get("checks", {})
     if not isinstance(checks, dict) or set(checks) != set(job.tables) or not all(table_check_passed(check) for check in checks.values()):
         raise StepError("a table check of the loader report did not pass")
+    if "mirror" in report and not mirror_outcome_shaped(report["mirror"]):
+        raise StepError("the loader report holds a malformed Glue mirror outcome")
     return report, body
 
 
@@ -399,6 +403,20 @@ def accepted_unsourced(report: dict[str, Any], skipped: Sequence[dict[str, str]]
     """The loader left out exactly the tables the stage report names: its report lists them, and a run that left none out lists none."""
     if sorted(report.get("unsourced_tables", [])) != sorted(item["table"] for item in skipped):
         raise StepError("the loader report left out other tables than the stage report names")
+
+
+def mirror_outcome_shaped(outcome: object) -> bool:
+    """The Glue mirror outcome of a loader report: a status, one outcome text per table and, for a failure or a skip, the reason."""
+    if not isinstance(outcome, dict) or not {"status", "tables"} <= set(outcome) <= {"status", "tables", "reason"}:
+        return False
+    tables = outcome["tables"]
+    if (
+        outcome["status"] not in MIRROR_STATUSES
+        or not isinstance(tables, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in tables.items())
+    ):
+        return False
+    return isinstance(outcome.get("reason"), str) if outcome["status"] in ("failed", "skipped") else "reason" not in outcome
 
 
 def staged_skipped(job: Job) -> list[dict[str, str]]:
@@ -473,6 +491,7 @@ def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory:
         "snapshots": snapshots,
         "objects": objects,
         "skipped_tables": list(skipped),
+        **({"mirror": report["mirror"]} if "mirror" in report else {}),
     }
 
 
@@ -589,9 +608,23 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
     return document
 
 
+def show_mirror(report: dict[str, Any]) -> None:
+    """Name the Glue mirror outcome of the load. A failure fails no phase, because the load is committed, but it is shown on standard error."""
+    outcome = report.get("mirror")
+    if outcome is None:
+        return
+    detail = f": {outcome['reason']}" if "reason" in outcome else ""
+    sys.stdout.write(f"glue mirror {outcome['status']}{detail}\n")
+    if outcome["status"] == "failed":
+        sys.stderr.write(
+            f"bronze_run: glue mirror FAILED, the run stays committed{detail}. Rerun the load phase to register the tables, or run glue_mirror register.\n"
+        )
+
+
 def check(job: Job) -> None:
     report, body = accept_report(job)
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
+    show_mirror(report)
     if job.target == "real":
         skipped = staged_skipped(job)
         accepted_unsourced(report, skipped)

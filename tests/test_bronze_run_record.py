@@ -238,3 +238,59 @@ def test_a_stage_report_of_another_run_or_with_a_wrong_count_or_naming_a_request
     staged(monkeypatch, staged_request(), body)
     with pytest.raises(bronze_run.StepError):
         bronze_run.staged_skipped(bound())
+
+
+MIRROR = {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "unchanged"}}
+
+
+def test_the_record_carries_the_glue_mirror_outcome_of_the_loader_report_and_the_lineage_reader_accepts_it() -> None:
+    document = record(report={"mirror": MIRROR})
+    check(document["mirror"] == MIRROR, f"{document.get('mirror')}")
+    raw_lineage.loaded_objects(document, "check.json", RUN)
+    failed = {"status": "failed", "reason": "alpha_data failed: AccessDeniedException from Glue", "tables": {"alpha_data": "failed: x"}}
+    raw_lineage.loaded_objects(record(report={"mirror": failed}), "check.json", RUN)
+
+
+def test_a_report_without_a_mirror_outcome_gives_a_record_without_one_and_the_reader_still_accepts_it() -> None:
+    document = record()
+    check("mirror" not in document, "a report with no mirror outcome gave a record with one")
+    raw_lineage.loaded_objects(document, "check.json", RUN)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        None,
+        "ok",
+        {"status": "ok"},
+        {"tables": {}},
+        {"status": "great", "tables": {}},
+        {"status": "ok", "tables": ["alpha_data"]},
+        {"status": "ok", "tables": {"alpha_data": 1}},
+        {"status": "ok", "tables": {}, "extra": 1},
+        {"status": "failed", "tables": {}},
+        {"status": "skipped", "tables": {}},
+        {"status": "ok", "tables": {}, "reason": "why"},
+        {"status": "failed", "tables": {}, "reason": 3},
+    ],
+)
+def test_a_malformed_mirror_outcome_is_refused_by_the_check_phase_and_by_the_lineage_reader(bad: Any) -> None:
+    check(not bronze_run.mirror_outcome_shaped(bad), f"the driver accepts {bad!r}")
+    document = record()
+    document["mirror"] = bad
+    with pytest.raises(LineageRefused):
+        raw_lineage.loaded_objects(document, "check.json", RUN)
+
+
+def test_the_driver_and_the_lineage_reader_name_the_same_mirror_statuses() -> None:
+    check(bronze_run.MIRROR_STATUSES == raw_lineage.BRONZE_MIRROR_STATUSES, f"{bronze_run.MIRROR_STATUSES} {raw_lineage.BRONZE_MIRROR_STATUSES}")
+
+
+def test_the_loader_is_told_the_bronze_run_it_registers_the_tables_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[list[str]] = []
+    monkeypatch.setattr(bronze_run, "pinned_inventory", lambda job: {})
+    monkeypatch.setattr(bronze_run, "staged_skipped", lambda job: [])
+    monkeypatch.setattr(bronze_run, "run_module", lambda job, module, arguments, environment=None: started.append([str(item) for item in arguments]))
+    bronze_run.load(bound())
+    arguments = started[0]
+    check(arguments[arguments.index("--run-id") + 1] == RUN, f"{arguments}")
