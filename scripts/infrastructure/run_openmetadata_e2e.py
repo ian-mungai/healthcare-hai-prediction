@@ -1055,7 +1055,7 @@ def host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas() -> None:
     """A chain run saved before the mirror rename fails the dbt step: exit 1, no dbt workflow and no raw files write. The steps
     before the dbt downloads still run: the chain pin reads, the bronze run lookup and the Glue source (it reads nothing of the dbt copies). Each form of the
     old name is refused: a node placement, three-part and two-part SQL, the raw SQL fields and a key."""
-    forms = {
+    forms: dict[str, dict[str, Any]] = {
         "node placement": {
             "schema": "hai_mirror_silver",
             "compiled_code": 'select * from "hai_lakehouse"."hai_mirror_silver"."t"',

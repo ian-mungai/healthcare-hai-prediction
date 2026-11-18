@@ -43,7 +43,7 @@ MAPPING = "monitoring/statsd/mapping.yml"
 DATASOURCE = "monitoring/grafana/provisioning/datasources/prometheus.yml"
 TERRAFORM = "infra/services/monitoring.tf"
 TEMPLATES = f"{ALERTING}/templates.yml"
-Plant = Callable[[Path], None]
+Plant = Callable[[Path], object]
 
 
 def scratch_copy(root: Path, destination: Path) -> Path:

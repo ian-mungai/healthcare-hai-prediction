@@ -191,7 +191,13 @@ def an_unreachable_gateway_never_fails_the_job(root: Path) -> dict[str, bool]:
         metrics_push.Pusher(url, "bronze", "spark", request_timeout=0.5, total_timeout=1.0), spark_progress.Progress(scenario()), interval=0.05
     )
     started = time.monotonic()
-    _, text = quiet(lambda: (reporter.start(), time.sleep(0.3), reporter.stop()))
+
+    def run_reporter() -> None:
+        reporter.start()
+        time.sleep(0.3)
+        reporter.stop()
+
+    _, text = quiet(run_reporter)
     return {
         "stop returns quickly": time.monotonic() - started < 4.0,
         "the failure is named, and not once per heartbeat": 1 <= text.count("event=metrics_push_failed") <= 4,
@@ -203,7 +209,12 @@ def a_failing_tracker_is_logged_once_and_the_reporter_goes_on(root: Path) -> dic
     tracker.fail = True
     with StandIn() as stand_in:
         reporter = spark_progress.Reporter(metrics_push.Pusher(stand_in.url, "bronze", "spark"), spark_progress.Progress(tracker), interval=0.05)
-        stream_text = quiet(lambda: (reporter.start(), time.sleep(0.4)))[1]
+
+        def run_reporter() -> None:
+            reporter.start()
+            time.sleep(0.4)
+
+        stream_text = quiet(run_reporter)[1]
         tracker.fail = False
         deadline = time.monotonic() + 5
         while RUNNING not in stand_in.groups and time.monotonic() < deadline:

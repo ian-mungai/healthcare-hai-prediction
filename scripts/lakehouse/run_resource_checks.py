@@ -16,7 +16,7 @@ import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from scripts.lakehouse.run_launcher_e2e import GIB, CaseFailure, Env, creates, host_tools
 from scripts.process import run_command
@@ -39,7 +39,7 @@ def delay_probe_events(env: Env, seconds: float) -> None:
         else:
             publish(action, container, **extra)
 
-    env.daemon.publish = delayed
+    cast(Any, env.daemon).publish = delayed
 
 
 def scenario(

@@ -21,7 +21,7 @@ REQUEST_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_request.json"
 INVENTORY_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_inventory.json"
 REPORT_KEY = f"lakehouse/run_stage/{RUN}/inputs/bronze_stage_report.json"
 CONFIG = {"tables": [{"table": "alpha_data", "collection": "first"}, {"table": "beta_data", "collection": "second"}]}
-SOURCES = {
+SOURCES: dict[str, Any] = {
     "version": 1,
     "tables": ["alpha_data", "beta_data"],
     "manifests": [],
@@ -64,7 +64,8 @@ class Store:
 
 class Setup:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, store: Store) -> None:
-        self.store, self.builds = store, []
+        self.store = store
+        self.builds: list[Any] = []
         self.task_storage = SimpleNamespace(client=store)
         monkeypatch.setattr(bronze_run, "storage", lambda: self.task_storage)
         monkeypatch.setattr(bronze_run, "owner_storage", self.refuse_owner)

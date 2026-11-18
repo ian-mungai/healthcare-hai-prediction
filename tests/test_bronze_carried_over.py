@@ -38,7 +38,9 @@ class Bucket:
     records) and keeps every call the notice service receives."""
 
     def __init__(self, objects: dict[str, bytes], fail_publish: bool = False) -> None:
-        self.objects, self.published, self.fail_publish, self.puts = dict(objects), [], fail_publish, []
+        self.objects, self.fail_publish = dict(objects), fail_publish
+        self.published: list[Any] = []
+        self.puts: list[Any] = []
 
     def list_object_versions(self, **arguments: str) -> dict[str, Any]:
         return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}

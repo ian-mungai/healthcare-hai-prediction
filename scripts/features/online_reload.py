@@ -159,7 +159,7 @@ def reload_checked(
         request = feast_sets.LoadRequest(model, run, str(record["base_run"]), set_hash)
         recovered = loader.recover(request) if isinstance(loader, feast_sets.SetLoader) else None
         load_id = recovered if recovered else loader(request)
-        record: dict[str, Any] = {
+        record = {
             "outcome": ALREADY_LOADED if recovered else LOADED,
             "feature_set": model,
             "run_id": run,

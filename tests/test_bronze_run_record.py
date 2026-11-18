@@ -79,7 +79,8 @@ def test_the_record_a_reader_refuses_never_leaves_the_phase() -> None:
 
 class Client:
     def __init__(self, existing: bytes | None = None) -> None:
-        self.existing, self.puts = existing, []
+        self.existing = existing
+        self.puts: list[Any] = []
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
         from botocore.exceptions import ClientError

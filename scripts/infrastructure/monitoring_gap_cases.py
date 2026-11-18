@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -433,7 +434,7 @@ def the_grouping_key_is_bounded(root: Path) -> dict[str, bool]:
             with mock.patch.dict(os.environ, {"PUSHGATEWAY_URL": gateway.url}):
                 from scripts.features import feature_metrics
 
-                failures.append(bool(quiet(lambda value=bad: feature_metrics.push_reload(value, LOADED, 1.0))[0]))
+                failures.append(bool(quiet(partial(feature_metrics.push_reload, bad, LOADED, 1.0))[0]))
         try:
             metrics_push.Pusher(gateway.url, "features", "reload", group={"run_id": RUN})
             other_key = False
@@ -699,7 +700,12 @@ def opensearch_resolves_no_name_and_connects_once_within_the_deadline(root: Path
             found = {}
         prompt = time.monotonic() - started
     resolved_for_name: list[str] = []
-    with mock.patch.object(socket, "getaddrinfo", lambda host, *a, **k: resolved_for_name.append(str(host)) or []):
+
+    def resolve(host: object, *_: object, **__: object) -> list[Any]:
+        resolved_for_name.append(str(host))
+        return []
+
+    with mock.patch.object(socket, "getaddrinfo", resolve):
         try:
             exporter.deadline_get("http://localhost:9200/_cluster/health", 1.0)
             name_refused = False

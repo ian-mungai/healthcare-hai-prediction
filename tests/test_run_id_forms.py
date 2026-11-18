@@ -172,7 +172,7 @@ def full_match(pattern: str) -> Callable[[str], bool]:
     return lambda text: re.fullmatch(pattern, text) is not None
 
 
-def parsers() -> list[tuple[str, Callable[[str], bool], str]]:
+def parsers() -> list[tuple[str, Callable[[str], object], str]]:
     """Each Python parser of a run ID, with the scope of the names it takes."""
     from scripts.acquisition import plan_rebuild, publisher_run, raw_root
     from scripts.lakehouse import bronze_run, gold_publish_record

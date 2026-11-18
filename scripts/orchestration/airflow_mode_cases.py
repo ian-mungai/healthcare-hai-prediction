@@ -71,7 +71,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import jinja2
@@ -124,7 +124,7 @@ CONTRACT_NAMES = {
 def static_value(node: ast.expr) -> Any:
     """The value of a DAG form's constant expression: a literal, or an f-string over the contract's run ID patterns and the DAG's own constants."""
     if isinstance(node, ast.JoinedStr):
-        return "".join(str(static_value(part.value)) if isinstance(part, ast.FormattedValue) else str(part.value) for part in node.values)
+        return "".join(str(static_value(part.value)) if isinstance(part, ast.FormattedValue) else str(cast(ast.Constant, part).value) for part in node.values)
     if isinstance(node, ast.Name):
         return {**CONTRACT_NAMES, "MODEL": "m1", "RETRY_FIRST_DAY": training_contract.RETRY_FIRST_DAY, "RETRY_LAST_DAY": training_contract.RETRY_LAST_DAY}[
             node.id

@@ -291,7 +291,7 @@ def changed_inputs_under_the_same_run_are_refused(folder: Path) -> Problems:
     manifest_changed["manifest"].write_text(manifest_changed["manifest"].read_text().replace("}", ', "note": "other"}'))
     configuration = json.loads((ROOT / "config/monitoring/drift.json").read_text()) | {"deadline_seconds": 601}
     (folder / "drift_other.json").write_text(json.dumps(configuration) + "\n")
-    variants = {
+    variants: dict[str, tuple[dict[str, Path], dict[str, Any], str]] = {
         "baseline matrix": (baseline_in(folder, "matrix"), {}, "matrix_sha256"),
         "manifest": (manifest_changed, {}, "manifest_sha256"),
         "feature list": (baseline_in(folder, "features", shifted=FEATURES, features=FEATURES[:3]), {}, "features_sha256"),

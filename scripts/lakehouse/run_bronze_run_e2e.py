@@ -42,7 +42,7 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 RUN = "bronze_0a1b2c3d"
 PIPELINE = f"{PIPELINE_RUN}_0a1b2c3d"
 BUCKET = "hai-test-bucket"
-TABLES = [
+TABLES: list[dict[str, Any]] = [
     {"table": "alpha_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["alpha"]},
     {"table": "beta_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["beta"]},
     {"table": "gamma_data", "collection": "org_b/set_two", "format": "csv", "dataset_ids": ["gamma"]},

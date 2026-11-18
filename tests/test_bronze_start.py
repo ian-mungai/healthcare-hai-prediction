@@ -100,6 +100,7 @@ def test_a_file_no_run_of_the_period_captured_is_carried_over() -> None:
 
 
 def test_a_record_without_its_units_is_refused() -> None:
+    bad: dict[str, Any]
     for bad in ({}, {"units": {}}, {"units": {"failed": [{"no_id": 1}], "paused_not_attempted": []}}):
         with pytest.raises(ValueError, match="run record"):
             schedule.carried_over(bad, [])
@@ -117,7 +118,9 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
 
     class Client:
         def __init__(self, objects: dict[str, bytes]) -> None:
-            self.objects, self.puts, self.published = objects, {}, []
+            self.objects = objects
+            self.puts: dict[str, Any] = {}
+            self.published: list[Any] = []
 
         def list_object_versions(self, **arguments: str) -> dict[str, Any]:
             return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}
