@@ -445,6 +445,10 @@ def single_copy_cases() -> Iterator[Case]:
         yield s3_case(f"no {action} on a legacy capture key", action, "raw/x", True, False)
         yield s3_case(f"no {action} outside lakehouse", action, "other/x", True, False)
     yield s3_case("lakehouse tables are managed", "DeleteObject", "lakehouse/silver/t/data/x.parquet", False, True)
+    for key in ("lakehouse/host_state/code_run_record.json", "lakehouse/host_state/catalog_recovery_pending.json"):
+        for action in ("GetObject", "PutObject", "DeleteObject"):
+            yield s3_case(f"host_session state object {key.rsplit('/', 1)[-1]}: {action}", action, key, False, True)
+    yield s3_case("no host_session state object outside lakehouse", "PutObject", "host_state/code_run_record.json", False, False)
     yield s3_case("no whole-bucket object write", "PutObject", "unlisted/x", False, False)
 
 
@@ -1027,6 +1031,12 @@ def parameter_cases() -> Iterator[Case]:
         request("ssm:PutParameter", parameter("airflow_admin"), region=None),
         False,
     )
+    yield Case(
+        "parameter: the code run record is an S3 object, so its old parameter name is not granted",
+        request("ssm:PutParameter", parameter("code_run_record"), region=None),
+        False,
+    )
+    yield Case("parameter: the code run record parameter is not readable either", request("ssm:GetParameter", parameter("code_run_record"), region=None), False)
     yield Case("parameter: read another name in the project folder", request("ssm:GetParameter", parameter("other_secret"), region=None), False)
     yield Case("parameter: write another name in the project folder", request("ssm:PutParameter", parameter("other_secret"), region=None), False)
     yield Case("parameter: read a name without the project folder", request("ssm:GetParameter", arn("ssm", "parameter/postgres_password"), region=None), False)
