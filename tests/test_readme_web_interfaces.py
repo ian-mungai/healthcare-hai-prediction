@@ -101,7 +101,9 @@ def variable_default(name: str, texts: dict[str, str]) -> str | None:
     for text in texts.values():
         block = re.search(rf'variable "{name}" \{{(.*?)\n\}}', text, re.DOTALL)
         if block:
-            default = re.search(r"^\s*default\s*=\s*(.*?)\s*(?:#.*)?$", block.group(1), re.MULTILINE)
+            body = re.sub(r"/\*.*?\*/", " ", block.group(1), flags=re.DOTALL)
+            body = re.sub(r"(?:#|//).*$", "", body, flags=re.MULTILINE)
+            default = re.search(r"^\s*default\s*=\s*(.*?)\s*$", body, re.MULTILINE)
             return default.group(1) if default else None
     return None
 
@@ -232,6 +234,13 @@ def planted(sources: Sources, change: str) -> Sources:
             name: re.sub(r'(variable "monitoring_enabled" \{.*?\n\s*default\s*=\s*)\w+', r"\1true ? false : true", text, count=1, flags=re.DOTALL)
             for name, text in sources.texts.items()
         }
+    elif change == "a commented conditional default":
+        sources.texts = {
+            name: re.sub(
+                r'(variable "monitoring_enabled" \{.*?\n\s*default\s*=\s*)\w+', r"\1true /* kept */ ? false : true // c", text, count=1, flags=re.DOTALL
+            )
+            for name, text in sources.texts.items()
+        }
     elif change == "a gate that names no variable":
         sources.gates["monitoring"] = "monitoring_wrong"
     elif change == "an optional service without a gate":
@@ -258,6 +267,7 @@ def test_a_source_defect_is_caught() -> None:
         "a wrong health path": "health path",
         "a switch without a default": "literal true or false default",
         "a conditional default": "literal true or false default",
+        "a commented conditional default": "literal true or false default",
         "a gate that names no variable": "literal true or false default",
         "an optional service without a gate": "has no gate",
         "an older document with another port": "port of no web interface document",
@@ -268,6 +278,19 @@ def test_a_source_defect_is_caught() -> None:
     for change, expected in cases.items():
         found = source_problems(planted(Sources(), change))
         check(any(expected in message for message in found), f"{change} was not reported as {expected!r}: {found}")
+
+
+def test_a_commented_literal_default_is_a_literal() -> None:
+    for comment in ("# selected default", "// selected default", "/* selected default */", "/* selected\n     default */"):
+        for value in ("true", "false"):
+            sources = Sources()
+            sources.texts = {
+                name: re.sub(r'(variable "monitoring_enabled" \{.*?\n\s*default\s*=\s*)\w+', rf"\g<1>{value} {comment}", text, count=1, flags=re.DOTALL)
+                for name, text in sources.texts.items()
+            }
+            check(variable_default("monitoring_enabled", sources.texts) == value, f"{value} {comment!r} is not read as {value}")
+            found = [message for message in source_problems(sources) if "literal true or false default" in message]
+            check(not found, f"{value} {comment!r} was reported: {found}")
 
 
 def replaced(readme: str, old: str, new: str) -> str:
