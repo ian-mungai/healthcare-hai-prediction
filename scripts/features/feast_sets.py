@@ -317,7 +317,7 @@ def base_run_of(folder: Path) -> str:
         run = json.loads(path.read_text()).get("base_run")
     except (OSError, ValueError, AttributeError):
         raise ReadError(f"{SNAPSHOT_RECORD} of the run folder is missing or unreadable") from None
-    if not isinstance(run, str) or not reads.RUN_ID.fullmatch(run):
+    if not isinstance(run, str) or not reads.STORED_RUN.fullmatch(run):
         raise ReadError(f"{SNAPSHOT_RECORD} names no base run: a model set run records the base run it read")
     return run
 

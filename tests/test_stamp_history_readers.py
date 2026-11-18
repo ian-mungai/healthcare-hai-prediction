@@ -403,6 +403,17 @@ def test_the_holds_and_loads_of_a_stamp_base_run_are_read() -> None:
     )
 
 
+@pytest.mark.parametrize("base", [STAMP, "features_abcdef01"])
+def test_the_feast_set_reads_the_stored_base_run_of_its_snapshot_record_in_either_form(tmp_path: Path, base: str) -> None:
+    from scripts.features import feast_sets
+
+    (tmp_path / feast_sets.SNAPSHOT_RECORD).write_text(json.dumps({"base_run": base}))
+    check(feast_sets.base_run_of(tmp_path) == base, f"the stored base run {base} is not read")
+    for bad in BAD:
+        (tmp_path / feast_sets.SNAPSHOT_RECORD).write_text(json.dumps({"base_run": bad}))
+        refused(lambda: feast_sets.base_run_of(tmp_path), "ReadError")
+
+
 def test_the_pin_source_and_launch_claim_input_run_of_the_openmetadata_chain_are_read_in_either_form() -> None:
     from scripts.infrastructure import openmetadata_chain as chain
 
