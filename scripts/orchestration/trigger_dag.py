@@ -27,7 +27,7 @@ does not accept: after the direct ECS launch every workflow here accepts only ``
 ``--promotion-mode``).
 
 ``drift_live_check_dag`` starts the on-demand live drift check of the Production baseline of ``--model`` and ``--hai-type``. Its form is the run ID (a new
-one when absent), the mode ``real``, the model and the type, and no other option. The run runs the code staged for its own run
+``drift_<model>_<hex>`` when absent), the mode ``real``, the model and the type, and no other option. The run runs the code staged for its own run
 (``lakehouse/run_stage/<run ID>/inputs/code.tar.gz`` and ``code.sha256``), so name the run ID of the staged code with ``--run-id``. It starts no other DAG.
 
 ``--base-run`` names the run of ``features_base_dag`` whose model set a training or research run uses. The runs of the chain derive from it
@@ -177,7 +177,12 @@ HAND_START_NAMES = {
 
 
 def new_run_id(dag: str, model: str | None = None) -> str:
-    """The run ID of a run started by hand: the workflow's name and a fresh random hex (a training run adds its model's name)."""
+    """The run ID of a run started by hand: the workflow's name and a fresh random hex (a training run adds its model's name, and so does the live drift
+    check, which is a drift run of its model: ``drift_<model>_<hex>``)."""
+    if dag == LIVE_DAG:
+        if model not in MODELS:
+            raise TriggerError(live_refusal())
+        return compose_run_id("drift", new_run_hex(), 1, MODEL_NAMES[model])
     if dag == "training_dag":
         if model not in MODELS:
             raise TriggerError(f"refused: a training run needs --model, one of {', '.join(MODELS)}")
@@ -269,8 +274,12 @@ def live_conf(given: dict[str, Any]) -> dict[str, str]:
     """The form of the live drift check: the model and the HAI type of the Production baseline it checks, each of the contract (the form's own choices)."""
     model, hai_type = given.get("model"), given.get("hai_type")
     if model not in MODELS or hai_type not in HAI_TYPES:
-        raise TriggerError(f"refused: the live drift check needs --model, one of {', '.join(MODELS)}, and --hai-type, one of {', '.join(HAI_TYPES)}")
+        raise TriggerError(live_refusal())
     return {"model": str(model), "hai_type": str(hai_type)}
+
+
+def live_refusal() -> str:
+    return f"refused: the live drift check needs --model, one of {', '.join(MODELS)}, and --hai-type, one of {', '.join(HAI_TYPES)}"
 
 
 def base_run_plan(

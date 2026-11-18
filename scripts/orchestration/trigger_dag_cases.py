@@ -633,7 +633,8 @@ def live_check_cases() -> dict[str, bool]:
         and printed is not None
         and printed["state"] == "success"
         and api.confs == [{"run_id": first(api).get("run_id"), "mode": "real", "model": "m2", "hai_type": HAI_TYPE}]
-        and re.fullmatch(trigger_dag.RUN_ID.pattern, str(first(api).get("run_id"))) is not None,
+        and re.fullmatch(trigger_dag.RUN_ID.pattern, str(first(api).get("run_id"))) is not None
+        and re.fullmatch("drift_elastic_net_[a-f0-9]{8}", str(first(api).get("run_id"))) is not None,
         "a named run ID is used as given": named_code == 0 and named.confs == [{"run_id": RUN, "mode": "real", "model": "m2", "hai_type": HAI_TYPE}],
         "the conf keys are exactly the parameters of the DAG's form": set(first(api)) == declared == {"run_id", "mode", "model", "hai_type"},
         "a run ID that is not a run ID is refused before any call": refused_quietly([*start, "--run-id", "latest"], "run ID"),
