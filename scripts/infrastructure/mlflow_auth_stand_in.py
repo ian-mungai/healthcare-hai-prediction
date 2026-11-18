@@ -1,7 +1,9 @@
 """A loopback stand-in for the routes of the MLflow 3.17.2 basic-auth server that the serving secrets tool calls, for offline end-to-end cases.
 
-It answers the routes read from the 3.17.2 wheel (``mlflow/server/auth/routes.py`` and ``__init__.py``; ``create_serving_secrets`` cites each line):
-user create, user permission get and grant, registered model get and experiment get-by-name. It answers the per-object permission routes that 3.17.2
+It answers the routes read from the 3.17.2 wheel (``mlflow/server/auth/routes.py`` and ``__init__.py``; the services ``mlflow_user.py`` cites each line):
+user get and create, user permission get and grant, registered model get and experiment get-by-name, and the registered model and experiment searches that
+any logged-in user may call (the login check). ``slow_body_seconds`` makes every answer of a logged-in user arrive one byte at a time with that pause
+between bytes, so a case can show that a reader stops at its absolute deadline. It answers the per-object permission routes that 3.17.2
 removed (``/api/2.0/mlflow/registered-models/permissions/*`` and ``/api/2.0/mlflow/experiments/permissions/*``) with a 404 HTML page, as the real server
 does, and counts every hit on them. A request needs HTTP Basic credentials of a known user. It keeps the request line of every call, never a body, and keeps
 each body's content type and the keys of its JSON object so a case can show that a credential travels in a body and never in the address.
@@ -12,11 +14,14 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
+GET_USER = "/api/2.0/mlflow/users/get"
 CREATE_USER = "/api/2.0/mlflow/users/create"
+SEARCH_PATHS = ("/api/2.0/mlflow/registered-models/search", "/api/2.0/mlflow/experiments/search")
 GET_PERMISSION = "/api/3.0/mlflow/users/permissions/get"
 GRANT_PERMISSION = "/api/3.0/mlflow/users/permissions/grant"
 GET_MODEL = "/api/2.0/mlflow/registered-models/get"
@@ -44,7 +49,17 @@ class MlflowAuthHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        pause = cast(StandInServer, self.server).stand_in.slow_body_seconds
+        if not pause:
+            self.wfile.write(payload)
+            return
+        try:
+            for index in range(len(payload)):
+                self.wfile.write(payload[index : index + 1])
+                self.wfile.flush()
+                time.sleep(pause)
+        except OSError:
+            return
 
     def send_error_code(self, status: int, code: str) -> None:
         self.send_json(status, {"error_code": code, "message": code.lower()})
@@ -90,6 +105,8 @@ class MlflowAuthHandler(BaseHTTPRequestHandler):
             caller = self.caller(stand_in)
             if caller is None:
                 self.send_error_code(401, "UNAUTHENTICATED")
+            elif method == "GET" and parsed.path in SEARCH_PATHS:
+                self.send_json(200, {})
             elif caller != "admin":
                 self.send_error_code(403, "PERMISSION_DENIED")
             else:
@@ -97,7 +114,12 @@ class MlflowAuthHandler(BaseHTTPRequestHandler):
 
     def route(self, stand_in: MlflowAuthStandIn, method: str, path: str, query: dict[str, str], body: dict[str, Any]) -> None:
         """The known routes; the caller holds the lock and has been authenticated as the administrator."""
-        if (method, path) == ("POST", CREATE_USER):
+        if (method, path) == ("GET", GET_USER):
+            if query.get("username") in stand_in.users:
+                self.send_json(200, {"user": {"username": query["username"], "is_admin": query["username"] == "admin"}})
+            else:
+                self.send_error_code(404, "RESOURCE_DOES_NOT_EXIST")
+        elif (method, path) == ("POST", CREATE_USER):
             username, password = body.get("username"), body.get("password")
             if "json" not in self.headers.get("Content-Type", ""):
                 self.send_error_code(400, "BAD_REQUEST")
@@ -164,7 +186,8 @@ class MlflowAuthStandIn:
 
     ``users`` maps a user name to its password and starts with the administrator. ``log`` keeps method and address (path and query) of every request; ``bodies``
     keeps path, content type and the sorted keys of the JSON object; ``removed_hits`` keeps each call of a removed route. ``default_permission`` is what a user
-    without a grant gets. ``created_users`` and ``granted`` list what succeeded, in order.
+    without a grant gets. ``created_users`` and ``granted`` list what succeeded, in order. ``slow_body_seconds`` is the pause between the bytes of an
+    answer (zero sends the answer at once).
     """
 
     def __init__(self, admin_password: str, models: set[str] | None = None, experiments: dict[str, tuple[str, str]] | None = None) -> None:
@@ -173,6 +196,7 @@ class MlflowAuthStandIn:
         self.experiments: dict[str, tuple[str, str]] = dict(experiments or {})
         self.grants: dict[tuple[str, str, str], str] = {}
         self.default_permission = "READ"
+        self.slow_body_seconds = 0.0
         self.log: list[tuple[str, str]] = []
         self.bodies: list[tuple[str, str, tuple[str, ...]]] = []
         self.removed_hits: list[tuple[str, str]] = []

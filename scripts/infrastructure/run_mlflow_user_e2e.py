@@ -1,25 +1,25 @@
 """Run the MLflow user one-shot against a loopback stand-in of the MLflow auth routes and keep the report under data/e2e/mlflow_user/.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.run_mlflow_user_e2e``. The script is the one the services stack puts in the task
-definition (``infra/services/scripts/mlflow_user.py``). A threaded HTTP server on 127.0.0.1 answers the routes it uses, as the author knew them for MLflow 3.17
-(unproven against the live server), and a dictionary stands in for Parameter Store. No AWS service is contacted and no container starts.
+definition (``infra/services/scripts/mlflow_user.py``), which also holds the one check of the model API login and its READ grants that the serving secrets tool
+calls. The shared MLflow auth stand-in (``scripts/infrastructure/mlflow_auth_stand_in.py``, the MLflow 3.17.2 routes) answers on 127.0.0.1
+and a dictionary stands in for Parameter Store. No AWS service is contacted and no container starts.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import importlib.util
 import io
 import json
 import sys
-import threading
-import urllib.parse
-from collections.abc import Callable, Iterator
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from scripts.infrastructure.mlflow_auth_stand_in import MlflowAuthStandIn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "mlflow_user.py"
@@ -39,93 +39,13 @@ def load() -> Any:
     return module
 
 
-class State:
-    """The stand-in server's data and the calls it saw."""
-
-    def __init__(self) -> None:
-        self.users: dict[str, str] = {}
-        self.permissions: dict[tuple[str, str, str], str] = {}
-        self.models = {"hai_model_HAI_1"}
-        self.experiments = {"hai_training_HAI_1": "7"}
-        self.calls: list[tuple[str, str]] = []
-        self.refuse_admin = False
-
-
-@contextlib.contextmanager
-def server(state: State) -> Iterator[str]:
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, _format: str, *args: Any) -> None:
-            """Keep synthetic requests out of the console."""
-
-        def reply(self, status: int, body: dict[str, Any] | None = None) -> None:
-            data = json.dumps(body or {}).encode()
-            self.send_response(status)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def login(self) -> tuple[str, str] | None:
-            header = self.headers.get("Authorization", "")
-            if not header.startswith("Basic "):
-                return None
-            name, _, secret = base64.b64decode(header[6:]).decode().partition(":")
-            return name, secret
-
-        def handle_request(self, method: str) -> None:
-            parts = urllib.parse.urlsplit(self.path)
-            query = {key: values[0] for key, values in urllib.parse.parse_qs(parts.query).items()}
-            length = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(length)) if length else {}
-            state.calls.append((method, parts.path))
-            who = self.login()
-            is_admin = who == ("admin", ADMIN) and not state.refuse_admin
-            is_user = who is not None and state.users.get(who[0]) == who[1]
-            if not (is_admin or is_user):
-                return self.reply(401)
-            path = parts.path
-            if path.endswith("/registered-models/search") or path.endswith("/experiments/search"):
-                return self.reply(200)
-            if not is_admin:
-                return self.reply(403)
-            if path == "/api/2.0/mlflow/users/get":
-                return (
-                    self.reply(200, {"user": {"username": query["username"]}})
-                    if query["username"] in state.users
-                    else self.reply(404, {"error_code": "RESOURCE_DOES_NOT_EXIST"})
-                )
-            if path == "/api/2.0/mlflow/users/create":
-                if body["username"] in state.users:
-                    return self.reply(400, {"error_code": "RESOURCE_ALREADY_EXISTS"})
-                state.users[body["username"]] = body["password"]
-                return self.reply(200, {"user": {"username": body["username"]}})
-            if path == "/api/2.0/mlflow/registered-models/get":
-                return self.reply(200) if query["name"] in state.models else self.reply(404, {"error_code": "RESOURCE_DOES_NOT_EXIST"})
-            if path == "/api/2.0/mlflow/experiments/get-by-name":
-                found = state.experiments.get(query["experiment_name"])
-                return self.reply(200, {"experiment": {"experiment_id": found}}) if found else self.reply(404, {"error_code": "RESOURCE_DOES_NOT_EXIST"})
-            if path == "/api/3.0/mlflow/users/permissions/get":
-                key = (query["username"], query["resource_type"], query["resource_id"])
-                return self.reply(200, {"permission": state.permissions.get(key, "NO_PERMISSIONS")})
-            if path == "/api/3.0/mlflow/users/permissions/grant":
-                state.permissions[(body["username"], body["resource_type"], body["resource_id"])] = body["permission"]
-                return self.reply(200)
-            return self.reply(404)
-
-        def do_GET(self) -> None:
-            self.handle_request("GET")
-
-        def do_POST(self) -> None:
-            self.handle_request("POST")
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, name="mlflow_standin")
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{httpd.server_port}"
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=5)
+def stand_in(**changes: Any) -> MlflowAuthStandIn:
+    """The shared MLflow auth stand-in with one registered model and one experiment, as a server whose default for a user is no permission."""
+    server = MlflowAuthStandIn(ADMIN, models={"hai_model_HAI_1"}, experiments={"hai_training_HAI_1": ("7", "active")})
+    server.default_permission = "NO_PERMISSIONS"
+    for name, value in changes.items():
+        setattr(server, name, value)
+    return server
 
 
 class Parameters:
@@ -157,11 +77,12 @@ def environment(url: str, types: str = "HAI_1") -> dict[str, str]:
     }
 
 
-def run(state: State, parameters: Parameters, types: str = "HAI_1") -> tuple[int, str]:
+def run(server: MlflowAuthStandIn, parameters: Parameters, types: str = "HAI_1", run_seconds: float | None = None) -> tuple[int, str]:
     script = load()
     out, err = io.StringIO(), io.StringIO()
-    with server(state) as url, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = script.run(environment(url, types), parameters)
+    arguments = () if run_seconds is None else (run_seconds,)
+    with contextlib.nullcontext() if server.thread.is_alive() else server, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = script.run(environment(server.url, types), parameters, *arguments)
     return code, out.getvalue() + err.getvalue()
 
 
@@ -169,100 +90,191 @@ def no_values(text: str) -> bool:
     return ADMIN not in text and USER_VALUE not in text
 
 
+READ_MODEL, READ_EXPERIMENT = (USER_NAME, "registered_model", "hai_model_HAI_1"), (USER_NAME, "experiment", "7")
+
+
+def posts(server: MlflowAuthStandIn, since: int = 0) -> list[tuple[str, str]]:
+    return [call for call in server.log[since:] if call[0] == "POST"]
+
+
 def case_creates_the_user_and_grants_read() -> dict[str, bool]:
-    state = State()
-    code, output = run(state, Parameters())
+    server = stand_in()
+    code, output = run(server, Parameters())
     return {
         "the exit code is 0": code == 0,
-        "the user exists with the stored credential": state.users.get(USER_NAME) == USER_VALUE,
-        "the registered model and the experiment are readable by the user": state.permissions
-        == {(USER_NAME, "registered_model", "hai_model_HAI_1"): "READ", (USER_NAME, "experiment", "7"): "READ"},
-        "the output reports created": "user created" in output,
+        "the user exists with the stored credential": server.users.get(USER_NAME) == USER_VALUE,
+        "the registered model and the experiment are readable by the user": server.grants == {READ_MODEL: "READ", READ_EXPERIMENT: "READ"},
+        "the output reports created and ready": "user created" in output and "mlflow_user: ready" in output,
         "no password reaches the output": no_values(output),
     }
 
 
 def case_a_rerun_changes_nothing() -> dict[str, bool]:
-    state = State()
-    run(state, Parameters())
-    before = (dict(state.users), dict(state.permissions))
-    calls = len(state.calls)
-    code, output = run(state, Parameters())
-    writes = [call for call in state.calls[calls:] if call[0] == "POST"]
+    server = stand_in()
+    with server:
+        run(server, Parameters())
+        before = (dict(server.users), dict(server.grants))
+        calls = len(server.log)
+        code, output = run(server, Parameters())
     return {
         "the exit code is 0": code == 0,
-        "nothing was created or granted again": writes == [] and (dict(state.users), dict(state.permissions)) == before,
+        "nothing was created or granted again": posts(server, calls) == [] and (dict(server.users), dict(server.grants)) == before,
         "the output says the user and the grants are current": "user current" in output and "already" in output,
     }
 
 
 def case_a_user_with_another_password_is_never_overwritten() -> dict[str, bool]:
-    state = State()
-    state.users[USER_NAME] = "another-password-value"
-    code, output = run(state, Parameters())
+    server = stand_in()
+    server.users[USER_NAME] = "another-password-value"
+    code, output = run(server, Parameters())
     return {
         "the exit code is 1": code == 1,
-        "the password is unchanged": state.users[USER_NAME] == "another-password-value",
+        "the password is unchanged": server.users[USER_NAME] == "another-password-value",
         "the output names the refused login": "login" in output and "not overwritten" in output,
-        "no grant was written": not state.permissions,
+        "no grant was written and nothing is reported ready": not server.grants and "ready" not in output,
         "no password reaches the output": no_values(output) and "another-password-value" not in output,
     }
 
 
 def case_a_refused_administrator_login_fails_before_any_write() -> dict[str, bool]:
-    state = State()
-    state.refuse_admin = True
-    code, output = run(state, Parameters())
+    server = stand_in()
+    code, output = run(server, Parameters({**Parameters().values, NAMES["admin"]: "not-" + ADMIN}))
     return {
         "the exit code is 1": code == 1,
-        "nothing is written": not state.users and not [call for call in state.calls if call[0] == "POST"],
+        "nothing is written": set(server.users) == {"admin"} and not posts(server),
         "the output names the administrator login": "administrator login" in output,
+        "nothing is reported ready": "ready" not in output,
     }
 
 
 def case_a_missing_login_parameter_skips_the_step() -> dict[str, bool]:
-    state = State()
-    code, output = run(state, Parameters({NAMES["admin"]: ADMIN}))
+    server = stand_in()
+    code, output = run(server, Parameters({NAMES["admin"]: ADMIN}))
     return {
         "the exit code is 0": code == 0,
-        "no call reaches MLflow": state.calls == [],
-        "the output says the model API login is not stored yet": "not stored" in output,
+        "no call reaches MLflow": server.log == [],
+        "the output says the model API login is not stored yet and no account is reported ready": "not stored" in output and "ready" not in output,
     }
 
 
 def case_a_model_not_registered_yet_is_pending() -> dict[str, bool]:
-    state = State()
-    state.models, state.experiments = set(), {}
-    code, output = run(state, Parameters())
+    server = stand_in()
+    server.models, server.experiments = set(), {}
+    code, output = run(server, Parameters())
     return {
         "the exit code is 0": code == 0,
-        "the user is still created": state.users.get(USER_NAME) == USER_VALUE,
-        "no grant is written": not state.permissions,
+        "the user is still created": server.users.get(USER_NAME) == USER_VALUE,
+        "no grant is written": not server.grants,
         "the output says pending for the model and the experiment": output.count("pending") >= 2,
     }
 
 
 def case_every_served_type_is_covered() -> dict[str, bool]:
-    state = State()
-    state.models |= {"hai_model_HAI_2"}
-    state.experiments["hai_training_HAI_2"] = "9"
-    code, _ = run(state, Parameters(), types="HAI_1,HAI_2")
+    server = stand_in()
+    server.models |= {"hai_model_HAI_2"}
+    server.experiments["hai_training_HAI_2"] = ("9", "active")
+    code, _ = run(server, Parameters(), types="HAI_1,HAI_2")
     return {
         "the exit code is 0": code == 0,
-        "both types get a model and an experiment grant": len(state.permissions) == 4,
+        "both types get a model and an experiment grant": len(server.grants) == 4,
     }
 
 
 def case_a_stronger_grant_is_reported_and_kept() -> dict[str, bool]:
-    state = State()
-    state.users[USER_NAME] = USER_VALUE
-    state.permissions[(USER_NAME, "registered_model", "hai_model_HAI_1")] = "MANAGE"
-    code, output = run(state, Parameters())
+    server = stand_in()
+    server.users[USER_NAME] = USER_VALUE
+    server.grants[READ_MODEL] = "MANAGE"
+    code, output = run(server, Parameters())
     return {
         "the exit code is 0": code == 0,
-        "the stronger grant is kept": state.permissions[(USER_NAME, "registered_model", "hai_model_HAI_1")] == "MANAGE",
+        "the stronger grant is kept": server.grants[READ_MODEL] == "MANAGE",
         "the output reports it": "MANAGE" in output and "kept" in output,
     }
+
+
+def case_a_deny_grant_is_refused_and_never_reported_ready() -> dict[str, bool]:
+    results: dict[str, bool] = {}
+    for label, kind in (("model", READ_MODEL), ("experiment", READ_EXPERIMENT)):
+        server = stand_in()
+        server.users[USER_NAME] = USER_VALUE
+        server.grants[kind] = "DENY"
+        code, output = run(server, Parameters())
+        results[f"a DENY on the {label}: exit 1, DENY named, grant unchanged, never ready"] = (
+            code == 1 and "DENY" in output and server.grants[kind] == "DENY" and "mlflow_user: ready" not in output
+        )
+    return results
+
+
+def case_an_explicit_no_permission_row_is_refused() -> dict[str, bool]:
+    server = stand_in()
+    server.users[USER_NAME] = USER_VALUE
+    server.grants[READ_MODEL] = "NO_PERMISSIONS"
+    code, output = run(server, Parameters())
+    return {
+        "the exit code is 1": code == 1,
+        "the row is unchanged": server.grants[READ_MODEL] == "NO_PERMISSIONS",
+        "nothing is reported ready": "mlflow_user: ready" not in output,
+    }
+
+
+def case_a_server_default_of_read_needs_no_write() -> dict[str, bool]:
+    server = stand_in(default_permission="READ")
+    server.users[USER_NAME] = USER_VALUE
+    code, output = run(server, Parameters())
+    return {
+        "the exit code is 0 and the account is ready": code == 0 and "mlflow_user: ready" in output,
+        "no grant row is written": posts(server) == [] and not server.grants,
+    }
+
+
+def case_a_slow_answer_body_stops_at_the_run_deadline() -> dict[str, bool]:
+    server = stand_in(slow_body_seconds=0.03)
+    began = time.monotonic()
+    code, output = run(server, Parameters(), run_seconds=0.6)
+    elapsed = time.monotonic() - began
+    return {
+        "the exit code is 1": code == 1,
+        "the run ends within a second of its deadline": elapsed < 2.5,
+        "the output names the deadline": "deadline" in output,
+        "nothing is reported ready": "mlflow_user: ready" not in output,
+    }
+
+
+def case_an_experiment_in_the_trash_is_pending() -> dict[str, bool]:
+    server = stand_in()
+    server.experiments = {"hai_training_HAI_1": ("7", "deleted")}
+    code, output = run(server, Parameters())
+    return {
+        "the exit code is 0": code == 0,
+        "the model is granted and the deleted experiment is not": server.grants == {READ_MODEL: "READ"},
+        "the output says the experiment is pending": "experiment hai_training_HAI_1 pending" in output,
+    }
+
+
+def case_an_unsupported_type_is_refused_before_any_request() -> dict[str, bool]:
+    server = stand_in()
+    script = load()
+    with server:
+        refusal = ""
+        try:
+            script.ensure_account(server.url, ("admin", ADMIN), USER_NAME, USER_VALUE, ("HAI_9",), time.monotonic() + 30)
+        except script.Refused as error:
+            refusal = str(error)
+        calls = list(server.log)
+    return {"the type is refused by name": "HAI_9" in refusal, "no request reached MLflow": calls == []}
+
+
+def case_an_expired_deadline_sends_no_request() -> dict[str, bool]:
+    server = stand_in()
+    script = load()
+    with server:
+        refusal = ""
+        try:
+            script.ensure_account(server.url, ("admin", ADMIN), USER_NAME, USER_VALUE, ("HAI_1",), time.monotonic() - 1)
+        except script.Refused as error:
+            refusal = str(error)
+        calls = list(server.log)
+    return {"the call is refused as past its deadline": "deadline" in refusal, "no request reached MLflow": calls == []}
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {

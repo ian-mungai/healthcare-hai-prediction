@@ -742,18 +742,21 @@ def free_loopback_address() -> str:
 
 
 def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
-    """The tool makes the model API's MLflow user and READ grants with the 3.17 user grant API; a missing object is pending and no removed route is called."""
+    """The tool calls the shared account check after the secrets: user and READ grants made, a wrong password and DENY refused, deadline kept."""
     from scripts.infrastructure import create_serving_secrets as tool
 
     began = time.time() - 1
     admin = "admin-" + os.urandom(8).hex()
     types = ("HAI_1", "HAI_2")
-    admin_name, credential_name = secret_store.MLFLOW_ADMIN_PASSWORD, secret_store.MODEL_API_MLFLOW_CREDENTIAL
+    admin_name, credential_name, user_name = secret_store.MLFLOW_ADMIN_PASSWORD, secret_store.MODEL_API_MLFLOW_CREDENTIAL, secret_store.MODEL_API_MLFLOW_USER
     served = "model_api"
     model_1, model_2, experiment_1, experiment_2 = "hai_model_HAI_1", "hai_model_HAI_2", "hai_training_HAI_1", "hai_training_HAI_2"
     grant_model_1, grant_experiment_1 = (served, "registered_model", model_1), (served, "experiment", "7")
     routes = {
+        ("GET", "/api/2.0/mlflow/experiments/search"),
+        ("GET", "/api/2.0/mlflow/users/get"),
         ("POST", "/api/2.0/mlflow/users/create"),
+        ("GET", "/api/2.0/mlflow/registered-models/search"),
         ("GET", "/api/2.0/mlflow/registered-models/get"),
         ("GET", "/api/2.0/mlflow/experiments/get-by-name"),
         ("GET", "/api/3.0/mlflow/users/permissions/get"),
@@ -764,6 +767,7 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         StandIn(values={admin_name: admin}, shared={}) as store,
         MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active"), experiment_2: ("8", "deleted")}) as server,
     ):
+        server.default_permission = "NO_PERMISSIONS"
         first_code, first = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         credential = store.values.get(credential_name, "")
         first_grants = dict(server.grants)
@@ -783,6 +787,7 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         edit_before = dict(server.grants)
         edit_code, edit = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         edit_kept = server.grants == edit_before
+        server.grants[grant_model_1] = "READ"
         server.grants[grant_experiment_1] = "DENY"
         deny_code, deny = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         deny_kept = server.grants[grant_experiment_1] == "DENY"
@@ -792,9 +797,48 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         StandIn(values={admin_name: admin}, shared={}) as store,
         MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
     ):
-        server.default_permission = "NO_PERMISSIONS"
-        none_code, none = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
-        none_ok = none_code == 0 and server.grants.get(grant_model_1) == "READ" and server.grants.get(grant_experiment_1) == "READ"
+        read_code, read = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        read_ok = read_code == 0 and server.grants == {} and "mlflow_user: ready" in read and f"user created {served}" in read
+    other_password = "another-" + os.urandom(8).hex()
+    with (
+        StandIn(values={admin_name: admin}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
+    ):
+        server.users[served] = other_password
+        mismatch_code, mismatch = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        mismatch_ok = (
+            mismatch_code == 1
+            and server.users[served] == other_password
+            and store.values.get(credential_name) not in (None, other_password)
+            and server.grants == {}
+            and "not overwritten" in mismatch
+            and "mlflow_user: ready" not in mismatch
+            and other_password not in mismatch
+            and store.values.get(credential_name, "-") not in mismatch
+        )
+    with (
+        StandIn(values={admin_name: admin, user_name: served, credential_name: other_password + "-stored"}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
+    ):
+        server.users[served] = other_password
+        stored_code, stored = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        stored_ok = stored_code == 1 and server.users[served] == other_password and server.grants == {} and "mlflow_user: ready" not in stored
+    with (
+        StandIn(values={admin_name: admin}, shared={}) as store,
+        MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
+    ):
+        server.users[served] = "x"
+        server.slow_body_seconds = 0.03
+        check = tool.account_check(root)
+        run_seconds = check.RUN_SECONDS
+        check.RUN_SECONDS = 0.6
+        began_slow = time.monotonic()
+        try:
+            slow_code, slow = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+        finally:
+            check.RUN_SECONDS = run_seconds
+        slow_seconds = time.monotonic() - began_slow
+        slow_ok = slow_code == 1 and slow_seconds < 3.0 and "deadline" in slow and "mlflow_user: ready" not in slow
     with StandIn(shared={}) as store, MlflowAuthStandIn(admin) as server:
         no_admin_code, no_admin = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         no_admin_quiet = server.log == []
@@ -814,7 +858,8 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
             code, text = captured(functools.partial(tool.run, root, store.endpoint, address, types))
             refused.append(code == 1 and "loopback" in text and admin not in text and all(name != admin_name for _, name in store.requests()))
     with StandIn(values={admin_name: admin}, shared={}) as store:
-        down_code, down = captured(lambda: tool.run(root, store.endpoint, free_loopback_address(), types))
+        down_address = free_loopback_address()
+        down_code, down = captured(lambda: tool.run(root, store.endpoint, down_address, types))
         bad_type_code, bad_type = captured(lambda: tool.run(root, store.endpoint, free_loopback_address(), ("HAI_9",)))
     with MlflowAuthStandIn(admin) as server:
         old_route_answered = old_route_status(server.url, admin) == (404, True) and len(server.removed_hits) == 1
@@ -826,6 +871,7 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         from_environment = tool.served_types(None, None, {"MODEL_API_HAI_TYPES": "HAI_4,HAI_5"})
         bad_inputs: list[tuple[str | None, Path | None, dict[str, str]]] = [(None, None, {}), ("HAI_9", None, {}), ("HAI_1,HAI_1", None, {}), ("", None, {})]
         types_refused = [refusal_of(functools.partial(tool.served_types, *arguments)) for arguments in bad_inputs]
+    tool_source = Path(tool.__file__).read_text()
     return {
         "the first run exits 0 and creates the MLflow user with the stored credential": first_code == 0
         and first_users == [served]
@@ -833,36 +879,49 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         and password_sent,
         "READ is granted on each existing served model and experiment, the experiment by its ID": first_grants
         == {grant_model_1: "READ", grant_experiment_1: "READ"},
-        "a model or experiment that does not exist, or is deleted, is reported pending": all(f"{name}: pending" in first for name in (model_2, experiment_2)),
-        "the grant lines name each object and say granted": f"{model_1}: READ granted" in first and f"{experiment_1}: READ granted" in first,
-        "only the 3.17 routes and the registered model and experiment lookups were called": first_routes <= routes
+        "a model or experiment that does not exist, or is deleted, is reported pending": all(f"{name} pending" in first for name in (model_2, experiment_2)),
+        "the output names each granted object and ends with ready": f"READ on registered model {model_1} granted" in first
+        and f"READ on experiment {experiment_1} granted" in first
+        and "mlflow_user: ready" in first,
+        "only the 3.17 routes and the lookups of the shared check were called": first_routes <= routes
         and ("POST", "/api/3.0/mlflow/users/permissions/grant") in first_routes,
         "the removed per-object permission routes were never called": removed_after_all == [] and old_route_answered,
         "the credential travels in a JSON body and never in an address": create_bodies == [("application/json", ("password", "username"))] and not in_address,
         "no output, log line or file holds the administrator password or the credential": bool(credential)
-        and not any(secret in first + second + third + edit + deny for secret in (admin, credential))
+        and not any(secret in first + second + third + edit + deny + mismatch + stored + slow for secret in (admin, credential, other_password))
         and leaked == [],
-        "a rerun exits 0, creates no user, changes no grant and says present": second_code == 0
+        "a rerun exits 0, creates no user, changes no grant and says current and already": second_code == 0
         and rerun_quiet
-        and f"mlflow user {served}: present" in second
-        and f"{model_1}: READ present" in second,
+        and f"user current {served}" in second
+        and f"READ on registered model {model_1} already" in second,
         "after the first training run a rerun grants the missing objects and leaves the first grants": late_ok,
         "an existing grant of another permission is reported and left unchanged, with exit 0": edit_code == 0
         and edit_kept
-        and f"{model_1}: holds EDIT, left unchanged" in edit,
-        "an explicit DENY refuses with exit 1, names the object and stays": deny_code == 1 and deny_kept and experiment_1 in deny and "DENY" in deny,
-        "a server default of NO_PERMISSIONS still gets an explicit READ grant": none_ok,
+        and f"EDIT on registered model {model_1} kept" in edit,
+        "an explicit DENY refuses with exit 1, names the object, stays and is never reported ready": deny_code == 1
+        and deny_kept
+        and experiment_1 in deny
+        and "DENY" in deny
+        and "mlflow_user: ready" not in deny,
+        "a server default of READ is accepted without any grant row and the account is ready": read_ok,
+        "an existing user with another password than the stored credential exits 1, changes no password and no grant and is never reported ready": mismatch_ok,
+        "the same refusal holds when the credential parameter already existed": stored_ok,
+        "a slow answer body ends at the run deadline with exit 1 and no ready line": slow_ok,
         "a missing administrator parameter exits 1, names it and calls no MLflow route": no_admin_code == 1 and admin_name in no_admin and no_admin_quiet,
         "a wrong administrator password exits 1 with the status and without any password": wrong_code == 1 and wrong_text_clean,
         "an address off the loopback, with a user, or with another scheme exits 1 before the administrator parameter is read": len(refused)
         == len(refused_addresses)
         and all(refused),
-        "an MLflow server that is not there exits 1 within the deadline and names the address": down_code == 1 and "127.0.0.1" in down,
+        "an MLflow server that is not there exits 1 within the deadline and names the address": down_code == 1 and down_address.removeprefix("http://") in down,
         "an unsupported served type exits 1 before any request": bad_type_code == 1 and "HAI_9" in bad_type,
         "the served types come from the flag, then the services input file, then the environment": from_file == ("HAI_1", "HAI_2")
         and from_flag == ("HAI_3",)
         and from_environment == ("HAI_4", "HAI_5"),
         "no served type, an unknown one, a repeat and an empty list are refused": all(message is not None for message in types_refused),
+        "the tool holds no account or grant logic of its own": not hasattr(tool, "MlflowAuth")
+        and "users/permissions" not in tool_source
+        and "users/create" not in tool_source
+        and "http.client" not in tool_source,
     }
 
 
