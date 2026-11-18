@@ -1,11 +1,12 @@
 """Fetch step of the Postgres restore: write the dumps of the newest completed backup set to RESTORE_DIR, checked against its marker.
 
 It is the command of the ``postgres_restore_fetch`` container of the postgres task (training image, ``python -I -c``). It reads the markers under
-``pg_backups/complete/`` and takes the newest set whose every requested dump exists with the size and SHA-256 its marker records. A set that fails the
-check is skipped and the next older one is tried (at most FALLBACKS sets). A dump with no marker is never read, because the dump step writes the marker last.
-When no marker exists it writes nothing and exits 0: there is nothing to restore. When markers exist and none passes, it exits 1 with the reason, and the
-databases step then creates and starts nothing. It writes each dump as ``<database>.dump`` and the run ID as ``RUN``; only the databases named in
-PG_DATABASES are read. The whole fetch has a deadline and every S3 call has timeouts.
+``pg_backups/complete/`` and takes the newest set whose marker is well formed (schema 1, its own run, at least one requested database, every entry checked)
+and whose every requested dump exists with the size and SHA-256 its marker records. A dump streams to disk in 1 MiB chunks, so its size is not held in
+memory. A set that fails a check is skipped and the next older one is tried (at most FALLBACKS sets). A dump with no marker is never read, because the dump
+step writes the marker last. When no marker exists it writes nothing and exits 0: there is nothing to restore. When markers exist and none passes, it exits 1
+with the reason, and the databases step then creates and starts nothing. It writes each dump as ``<database>.dump`` and the run ID as ``RUN``; only the
+databases named in PG_DATABASES are read. The whole fetch has a deadline and every S3 call has timeouts.
 """
 
 from __future__ import annotations
@@ -25,6 +26,9 @@ RUN = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 DATABASE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 FALLBACKS = 5
+CHUNK = 1 << 20
+MARKER_LIMIT = 1 << 20
+HEX = re.compile(r"[a-f0-9]{64}")
 FETCH_SECONDS = 900
 MAX_BYTES = 4 * 1024**3
 
@@ -46,33 +50,75 @@ def marker_keys(client: Any, bucket: str) -> list[str]:
         token = page.get("NextContinuationToken")
 
 
+def read_marker(client: Any, bucket: str, key: str, run: str, databases: list[str]) -> dict[str, dict[str, Any]]:
+    """The checked entries of one marker. Raises Refused unless the marker is schema 1, names its own run, lists at least one requested database and
+    every entry has the expected key, a whole-number size within the limit, a SHA-256 and at least one table."""
+    try:
+        raw = client.get_object(Bucket=bucket, Key=key)["Body"].read(MARKER_LIMIT + 1)
+        marker = json.loads(raw) if len(raw) <= MARKER_LIMIT else None
+    except ValueError:
+        marker = None
+    if not isinstance(marker, dict) or marker.get("schema") != 1 or marker.get("run") != run or not isinstance(marker.get("databases"), dict):
+        raise Refused(f"the marker of {run} is not a marker of this run")
+    entries = marker["databases"]
+    if not entries:
+        raise Refused(f"the marker of {run} lists no database")
+    for name, item in entries.items():
+        size, tables = (item.get("bytes"), item.get("tables")) if isinstance(item, dict) else (None, None)
+        good = (
+            DATABASE.fullmatch(str(name))
+            and isinstance(item, dict)
+            and item.get("key") == f"{PREFIX}/{name}/{run}.dump"
+            and type(size) is int
+            and 0 < size <= MAX_BYTES
+            and isinstance(item.get("sha256"), str)
+            and HEX.fullmatch(item["sha256"])
+            and type(tables) is int
+            and tables >= 1
+        )
+        if not good:
+            raise Refused(f"the marker of {run} has a malformed entry for {name}")
+    if not any(name in entries for name in databases):
+        raise Refused(f"the marker of {run} lists none of the requested databases")
+    return entries
+
+
+def download(client: Any, bucket: str, item: dict[str, Any], path: Path, label: str, clock: Callable[[], float], deadline: float) -> None:
+    """Stream one dump to ``path`` in bounded chunks, hashing it. It stops as soon as the body is longer than the marker says."""
+    try:
+        body = client.get_object(Bucket=bucket, Key=item["key"])["Body"]
+    except Exception as error:
+        if type(error).__name__ == "ClientError":
+            raise Refused(f"the dump of {label} cannot be read") from None
+        raise
+    digest, total = hashlib.sha256(), 0
+    with path.open("wb") as target:
+        while block := body.read(CHUNK):
+            total += len(block)
+            if total > item["bytes"]:
+                raise Refused(f"the dump of {label} is longer than its marker says")
+            if clock() > deadline:
+                raise Refused(f"the deadline of {FETCH_SECONDS} seconds passed")
+            digest.update(block)
+            target.write(block)
+    if total != item["bytes"] or digest.hexdigest() != item["sha256"]:
+        raise Refused(f"the dump of {label} differs from its marker")
+
+
 def read_set(client: Any, bucket: str, key: str, databases: list[str], target: Path, clock: Callable[[], float], deadline: float) -> str:
     """Write the requested dumps of one set into a ``.partial`` folder and return its run ID; raises Refused when the set is not whole."""
     run = key.rsplit("/", 1)[-1].removesuffix(".json")
-    try:
-        marker = json.loads(client.get_object(Bucket=bucket, Key=key)["Body"].read())
-        entries = marker["databases"]
-    except (ValueError, KeyError, TypeError):
-        raise Refused(f"the marker of {run} is not readable") from None
+    entries = read_marker(client, bucket, key, run, databases)
     staging = target / f"{run}.partial"
     staging.mkdir(parents=True, exist_ok=True)
-    for name in databases:
-        if name not in entries:
-            continue
-        if clock() > deadline:
-            raise Refused(f"the deadline of {FETCH_SECONDS} seconds passed")
-        entry = entries[name]
-        if entry.get("key") != f"{PREFIX}/{name}/{run}.dump" or not 0 < int(entry.get("bytes", 0)) <= MAX_BYTES:
-            raise Refused(f"the marker of {run} names a wrong key or size for {name}")
-        try:
-            data = client.get_object(Bucket=bucket, Key=entry["key"])["Body"].read()
-        except Exception as error:
-            if type(error).__name__ == "ClientError":
-                raise Refused(f"the dump of {name} in {run} cannot be read") from None
-            raise
-        if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
-            raise Refused(f"the dump of {name} in {run} differs from its marker")
-        (staging / f"{name}.dump").write_bytes(data)
+    try:
+        for name in databases:
+            if name in entries:
+                download(client, bucket, entries[name], staging / f"{name}.dump", f"{name} in {run}", clock, deadline)
+    except Refused:
+        for leftover in staging.glob("*"):
+            leftover.unlink(missing_ok=True)
+        raise
     return run
 
 

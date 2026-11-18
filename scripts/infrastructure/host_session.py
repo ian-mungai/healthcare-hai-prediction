@@ -115,6 +115,8 @@ CODE_RECORD = re.compile(rf"({CODE_RUN}) ([a-f0-9]{{64}})")
 SETUP_CONTAINERS = ("postgres_restore_fetch", "postgres_databases")  # the setup containers of the postgres task, in the order they run
 SETUP_REASON_WORDS = ("refused", "failed")
 SETUP_REASON_LIMIT = 240
+SETUP_RESTORED_WORDS = "restored database"
+CATALOG_RESTORE_SECONDS = 900
 # The reviewed installer. Every code task carries its text as the container command, so the registered task definition, which may still hold an older
 # installer, never decides how the code is installed, verified or restored.
 CODE_FETCH_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
@@ -409,6 +411,7 @@ class Session:
         """``job_prefix`` is the start of the job task families of the project and environment; ``refresh`` needs it to find the running job tasks."""
         self.cli, self.names, self.clock, self.marker, self.job_prefix = cli, names, clock or Clock(), marker, job_prefix
         self.deadline: float | None = None
+        self.setup_task, self.setup_state = "", ""
         self.launch_tokens: dict[str, str] = {}
         self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
@@ -671,7 +674,10 @@ class Session:
             count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE or key in PROMETHEUS_SERVICES else []
             self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, *count, "--force-new-deployment"])
         self.step("services_deployment_forced", ", ".join(self.names.services.values()))
-        self.wait("services stable", self.stable_and_set_up, SERVICES_STABLE_SECONDS, POLL_SECONDS)
+        try:
+            self.wait("services stable", self.stable_and_set_up, SERVICES_STABLE_SECONDS, POLL_SECONDS)
+        except HostSessionError as error:
+            raise HostSessionError(f"{error}; postgres setup unfinished: {self.setup_state}" if self.setup_state else str(error)) from None
         self.step("services_stable", ", ".join(f"{item['serviceName']}={item['runningCount']}" for item in self.service_states()))
 
     def restart_service(self, key: str, seconds: int = SERVICE_RESTART_SECONDS) -> None:
@@ -1078,31 +1084,75 @@ class Session:
         found = [line for line in lines if any(word in line for word in SETUP_REASON_WORDS)]
         return (found[-1] if found else "its log names no reason")[:SETUP_REASON_LIMIT]
 
-    def postgres_setup(self) -> None:
-        """Raise when a setup container of the postgres task (the backup fetch, the roles and databases with their restore) ended with a failure. The
-        databases a failed setup did not finish are never made visible, so no service can start on half-restored data; start then stops the host. A stack
-        whose postgres task has no such container is not checked."""
+    def primary_task_definition(self, service: str) -> str:
+        """The task definition of the PRIMARY deployment of a service, or an empty text when ECS names none (a task is then not filtered by it)."""
+        found = self.call("ecs", "describe-services", ["--cluster", self.names.cluster, "--services", service]).get("services", [])
+        for item in found[:1]:
+            for deployment in item.get("deployments", []):
+                if deployment.get("status") == "PRIMARY" and isinstance(deployment.get("taskDefinition"), str):
+                    return str(deployment["taskDefinition"])
+        return ""
+
+    def postgres_setup(self) -> bool:
+        """True when every setup container of the postgres task of the current deployment (the backup fetch, the roles and databases with their restore) ended
+        with exit code 0. It raises when one ended with a failure: the databases a failed setup did not finish are never made visible, so no service can start
+        on half-restored data, and start then stops the host. A container that is pending or running, or a task of an older task definition, is not completion:
+        the answer is False and ``setup_state`` names what is unfinished. A stack whose postgres task has no such container is not checked."""
         name = self.names.services.get(FIRST_SERVICE)
         if name is None:
-            return
+            return True
         listed = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--service-name", name, "--desired-status", "RUNNING"]).get("taskArns", [])
         if not listed:
-            return
+            return True
         described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *listed[:DESCRIBE_TASKS_LIMIT]])
+        current = self.primary_task_definition(name)
+        unfinished: list[str] = []
         for task in described.get("tasks", []):
-            ended = {item.get("name"): item.get("exitCode") for item in task.get("containers", []) if item.get("lastStatus") == "STOPPED"}
-            for container in SETUP_CONTAINERS:
-                if ended.get(container) not in (0, None):
+            if current and task.get("taskDefinitionArn") not in (None, current):
+                continue
+            containers = {str(item.get("name")): item for item in task.get("containers", [])}
+            for container in (item for item in SETUP_CONTAINERS if item in containers):
+                state = containers[container]
+                if state.get("lastStatus") == "STOPPED" and state.get("exitCode") not in (0, None):
                     reason = self.setup_reason(str(task.get("taskArn", "")), container)
                     raise HostSessionError(
-                        f"postgres setup failed: container {container} exited with code {ended[container]}: {reason}; "
+                        f"postgres setup failed: container {container} exited with code {state['exitCode']}: {reason}; "
                         "no database was made visible, so no service can start on half-restored data"
                     )
+                if state.get("lastStatus") == "STOPPED" and state.get("exitCode") == 0:
+                    self.setup_task = str(task.get("taskArn", ""))
+                else:
+                    unfinished.append(f"{container} {state.get('lastStatus', 'UNKNOWN')}")
+        self.setup_state = ", ".join(unfinished)
+        return not unfinished
 
     def stable_and_set_up(self) -> bool:
-        """True when the postgres setup has not failed and every service is settled."""
-        self.postgres_setup()
-        return self.services_stable()
+        """True when the postgres setup has completed and every service is settled."""
+        return self.postgres_setup() and self.services_stable()
+
+    def setup_restored(self) -> bool:
+        """True when the databases container of the current postgres task logged a restore (``restored database``)."""
+        if not self.setup_task or not self.names.postgres_log_group:
+            return False
+        stream = f"postgres_databases/postgres_databases/{self.setup_task.rsplit('/', 1)[-1]}"
+        try:
+            events = self.call("logs", "get-log-events", ["--log-group-name", self.names.postgres_log_group, "--log-stream-name", stream, "--start-from-head"])
+        except HostSessionError:
+            return False
+        return any(SETUP_RESTORED_WORDS in str(event.get("message", "")) for event in events.get("events", []))
+
+    def catalog_recovery(self) -> None:
+        """After a start whose database setup restored a database, bring the catalog to the newest committed snapshot of each layer: the ``restore`` step of the
+        catalog setup one-shot, which runs on the host under its own role with the root credential. A failure fails the start, because the catalog would
+        otherwise show an older committed set."""
+        if not self.setup_restored():
+            return
+        try:
+            lines = self.catalog_setup("restore", seconds=CATALOG_RESTORE_SECONDS)
+        except HostSessionError as error:
+            raise HostSessionError(f"catalog restore failed: {error}") from None
+        counts = restore_counts(lines)
+        self.step("catalog_restored", ", ".join(f"{word} {count}" for word, count in sorted(counts.items())) or "no table to restore")
 
     def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
         """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch
@@ -1224,6 +1274,7 @@ class Session:
             identity = self.place_recorded_code(code)
             self.restore_prometheus()
             self.deploy_services()
+            self.catalog_recovery()
             self.mlflow_user()
             self.reload_online_store(identity)
             self.openmetadata_bootstrap()
@@ -1337,7 +1388,7 @@ class Session:
             lines = self.wait("catalog setup log", lambda: self.catalog_lines(self.last_task[CATALOG_SETUP]), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
             for line in lines:
                 self.step("catalog_setup_refused", line)
-            raise error from None
+            raise TaskExitError(f"{error}: {lines[-1]}", error.exits) from None
         lines = self.wait("catalog setup log", lambda: self.catalog_lines(task), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
         for line in lines:
             self.step("catalog_setup_result", line)
@@ -1389,6 +1440,18 @@ def catalog_command(step: str, identity: str | None, approval: str | None, secon
     if dry_run:
         command.append("--dry-run")
     return command
+
+
+def restore_counts(lines: list[str]) -> dict[str, int]:
+    """The outcome counts of the restore step's result line (the last JSON object of its log). A line that is not that reply fails the restore."""
+    try:
+        reply = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        reply = None
+    counts = reply.get("counts") if isinstance(reply, dict) and reply.get("step") == "restore" else None
+    if not isinstance(counts, dict) or not all(isinstance(word, str) and type(count) is int for word, count in counts.items()):
+        raise HostSessionError("catalog restore failed: the task's result line is not the restore reply")
+    return counts
 
 
 def online_sets() -> list[str]:

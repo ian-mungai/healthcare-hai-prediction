@@ -8,14 +8,17 @@ A start on a fresh data volume finds no code record on the host, so it reads the
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import HostSessionError, Session
-from scripts.infrastructure.host_session_stand_in import PROFILE, REGION, SERVICES, StandInError, StandInHost
+from scripts.infrastructure.host_session_stand_in import CATALOG_SETUP_FAMILY, PROFILE, REGION, SERVICES, StandInError, StandInHost
 
+TASK_DEFINITION_NEW = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:9"
+TASK_DEFINITION_OLD = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:8"
+OLD_TASK = "arn:aws:ecs:stand-in:111111111111:task/stand-in-cluster/postgrestask0000"
 RECORD_BUCKET = "stand-in-data-bucket"
 RECORD_KEY = "lakehouse/host_state/code_run_record.json"
 MLFLOW_USER_FAMILY = "stand-in-mlflow-user"
@@ -29,13 +32,22 @@ CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError
 
 
 class RecordHost(StandInHost):
-    """A stand-in host with a parameter store and a postgres task. ``setup_exits`` maps a setup container of the postgres task to its exit code."""
+    """A stand-in host with the code record object and a postgres task. ``setup_exits`` maps a setup container of the postgres task to its exit code, to
+    None while it runs or to "PENDING" while it has not started. ``old_setup`` adds a task of an older task definition whose setup containers all ended well.
+    ``restored`` makes the databases container log a restore."""
 
-    def __init__(self, faults: set[str] | None = None, setup_exits: dict[str, int] | None = None, **fields: Any) -> None:
+    def __init__(
+        self,
+        faults: set[str] | None = None,
+        setup_exits: Mapping[str, int | str | None] | None = None,
+        old_setup: bool = False,
+        restored: bool = False,
+        **fields: Any,
+    ) -> None:
         super().__init__(faults, code_fetch=True, **fields)
         self.record: str | None = None
         self.puts: list[dict[str, list[str]]] = []
-        self.setup_exits = setup_exits
+        self.setup_exits, self.old_setup, self.restored = setup_exits, old_setup, restored
         self.handlers[("s3api", "get-object")] = self.s3_get_object
         self.handlers[("s3api", "put-object")] = self.s3_put_object
 
@@ -57,15 +69,34 @@ class RecordHost(StandInHost):
 
     def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         if self.setup_exits is not None and options.get("--service-name") == [SERVICES["postgres"]]:
-            return {"taskArns": [POSTGRES_TASK]}
+            return {"taskArns": [*([OLD_TASK] if self.old_setup else []), POSTGRES_TASK]}
         return super().ecs_list_tasks(options)
 
+    def ecs_describe_services(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        described = super().ecs_describe_services(options)
+        if self.setup_exits is not None:
+            for service in described.get("services", []):
+                if service["serviceName"] == SERVICES["postgres"]:
+                    service["deployments"] = [{**item, "status": "PRIMARY", "taskDefinition": TASK_DEFINITION_NEW} for item in service["deployments"]]
+        return described
+
+    def containers_of(self, states: Mapping[str, int | str | None]) -> list[dict[str, Any]]:
+        containers: list[dict[str, Any]] = [{"name": "postgres", "lastStatus": "RUNNING"}]
+        for name, state in states.items():
+            if isinstance(state, int):
+                containers.append({"name": name, "lastStatus": "STOPPED", "exitCode": state})
+            else:
+                containers.append({"name": name, "lastStatus": "PENDING" if state == "PENDING" else "RUNNING"})
+        return containers
+
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        if self.setup_exits is not None and options["--tasks"] == [POSTGRES_TASK]:
-            containers: list[dict[str, Any]] = [{"name": "postgres", "lastStatus": "RUNNING"}]
-            for name, code in self.setup_exits.items():
-                containers.append({"name": name, "lastStatus": "STOPPED", "exitCode": code})
-            return {"tasks": [{"taskArn": POSTGRES_TASK, "lastStatus": "RUNNING", "containers": containers}], "failures": []}
+        if self.setup_exits is not None and options["--tasks"] and set(options["--tasks"]) <= {POSTGRES_TASK, OLD_TASK}:
+            found = []
+            for arn in options["--tasks"]:
+                states = {name: 0 for name in self.setup_exits} if arn == OLD_TASK else self.setup_exits
+                definition = TASK_DEFINITION_OLD if arn == OLD_TASK else TASK_DEFINITION_NEW
+                found.append({"taskArn": arn, "taskDefinitionArn": definition, "lastStatus": "RUNNING", "containers": self.containers_of(states)})
+            return {"tasks": found, "failures": []}
         return super().ecs_describe_tasks(options)
 
     def logs_get_log_events(self, options: dict[str, list[str]]) -> dict[str, Any]:
@@ -78,6 +109,8 @@ class RecordHost(StandInHost):
             name = stream.split("/")[0]
             if name not in reasons or not stream.endswith("/postgrestask0001"):
                 raise StandInError("ResourceNotFoundException")
+            if self.restored and (self.setup_exits or {}).get(name) == 0:
+                return {"events": [{"message": "postgres_databases: restored database polaris in place"}], "nextForwardToken": "f/0"}
             return {"events": [{"message": "unrelated line"}, {"message": reasons[name]}], "nextForwardToken": "f/0"}
         return super().logs_get_log_events(options)
 
@@ -88,16 +121,20 @@ def build(
     checkout: str | None = SHA_OLD,
     code_run: str | None = RUN_OLD,
     record: str | None = None,
-    setup_exits: dict[str, int] | None = None,
+    setup_exits: Mapping[str, int | str | None] | None = None,
     named: bool = True,
     mlflow_user: bool = False,
+    old_setup: bool = False,
+    restored: bool = False,
+    catalog_setup: bool = True,
 ) -> tuple[RecordHost, Session, list[str]]:
-    """A session over the stand-in. ``record`` is the value of the code run record; ``named`` gives the session the parameter and log group names."""
+    """A session over the stand-in. ``record`` is the value of the code run record; ``named`` gives the session the parameter and log group names;
+    ``catalog_setup`` gives the stack the catalog setup one-shot, which the restore step runs in."""
     from dataclasses import replace
 
     cases = importlib.import_module("scripts.infrastructure.host_session_cases")
     module = importlib.import_module("scripts.infrastructure.host_session")  # the module as it is loaded now: a plant replaces it in sys.modules
-    host, lines = RecordHost(faults, setup_exits, checkout=checkout, code_run=code_run), list[str]()
+    host, lines = RecordHost(faults, setup_exits, old_setup, restored, checkout=checkout, code_run=code_run, catalog_setup=catalog_setup), list[str]()
     if mlflow_user:
         host.families["mlflow_user"] = MLFLOW_USER_FAMILY
     host.record = record
@@ -105,6 +142,8 @@ def build(
     names = replace(cases.names(), code_record_bucket=RECORD_BUCKET, postgres_log_group=POSTGRES_LOG_GROUP) if named else cases.names()
     if mlflow_user:
         names = replace(names, one_shot={**names.one_shot, "mlflow_user": MLFLOW_USER_FAMILY})
+    if catalog_setup:
+        names = replace(names, one_shot={**names.one_shot, "catalog_setup": CATALOG_SETUP_FAMILY})
     marker = cases.Path(cases.tempfile.mkdtemp(prefix="host_session_restore_")) / "polaris_bootstrap.launched"
     return host, module.Session(cli, names, module.Clock(lambda: host.now, host.advance), marker, lines.append), lines
 
@@ -250,7 +289,11 @@ def start_passes_when_the_setup_ended_well() -> dict[str, bool]:
     session.start()
     return {
         "start finishes": bool(host.reloads) and host.desired == 1,
-        "no setup log was read": not any(entry["service"] == "logs" and entry["options"]["--log-group-name"] == [POSTGRES_LOG_GROUP] for entry in host.log),
+        "only the databases container log is read, to see whether a restore ran": all(
+            entry["options"]["--log-stream-name"][0].startswith("postgres_databases/")
+            for entry in host.log
+            if entry["service"] == "logs" and entry["options"]["--log-group-name"] == [POSTGRES_LOG_GROUP]
+        ),
     }
 
 
@@ -293,6 +336,95 @@ def a_stack_without_the_mlflow_user_task_runs_nothing_for_it() -> dict[str, bool
     host, session, lines = build()
     session.start()
     return {"no mlflow_user step is reported": not any(line.startswith("mlflow_user") for line in lines)}
+
+
+def start_waits_for_a_running_fetch_and_a_pending_setup() -> dict[str, bool]:
+    host, session, _ = build(setup_exits={"postgres_restore_fetch": None, "postgres_databases": "PENDING"})
+    message = failure(session.start)
+    return {
+        "start does not call the services stable while the setup has not completed": message is not None and "services stable" in message,
+        "the message names the unfinished containers and their states": message is not None
+        and "postgres_restore_fetch" in message
+        and "RUNNING" in message
+        and "postgres_databases" in message
+        and "PENDING" in message,
+        "nothing is reloaded and the host is turned off": host.reloads == [] and host.desired == 0,
+    }
+
+
+def start_needs_both_setup_containers_to_have_ended_well() -> dict[str, bool]:
+    checks = {}
+    for name, states in (
+        ("fetch ended, databases still running", {"postgres_restore_fetch": 0, "postgres_databases": None}),
+        ("databases ended, fetch still running", {"postgres_restore_fetch": None, "postgres_databases": 0}),
+    ):
+        host, session, _ = build(setup_exits=states)
+        message = failure(session.start)
+        checks[f"{name}: start fails and reloads nothing"] = message is not None and "services stable" in message and host.reloads == []
+    return checks
+
+
+def a_setup_that_ended_in_an_older_task_definition_does_not_count() -> dict[str, bool]:
+    host, session, _ = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": None}, old_setup=True)
+    message = failure(session.start)
+    return {"start fails although the older task finished its setup": message is not None and "services stable" in message and host.reloads == []}
+
+
+def a_setup_of_the_current_task_definition_with_an_older_task_still_listed_passes() -> dict[str, bool]:
+    host, session, _ = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, old_setup=True)
+    session.start()
+    return {"start finishes": bool(host.reloads) and host.desired == 1}
+
+
+def start_restores_the_catalog_after_a_restored_database() -> dict[str, bool]:
+    host, session, lines = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=True)
+    host.restore_counts = {"advanced": 1, "registered": 2}
+    session.start()
+    return {
+        "the catalog restore runs once as the restore step of the catalog setup one-shot": host.catalog_launches == [["--seconds", "900", "restore"]],
+        "it runs before the online store reload": host.catalog_launch_reloads == [0] and bool(host.reloads),
+        "the report names the counts": any(line.startswith("catalog_restored") and "advanced 1" in line and "registered 2" in line for line in lines),
+    }
+
+
+def start_does_not_touch_the_catalog_when_nothing_was_restored() -> dict[str, bool]:
+    host, session, lines = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=False)
+    session.start()
+    return {"no catalog restore launch": host.catalog_launches == [], "no catalog report line": not any(line.startswith("catalog_restored") for line in lines)}
+
+
+def a_failed_catalog_restore_fails_start_by_name_and_stops_the_host() -> dict[str, bool]:
+    host, session, lines = build({"restore_refuses"}, setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=True)
+    message = failure(session.start)
+    return {
+        "start fails and names the catalog restore and its reason": message is not None and "catalog restore failed" in message and "namespace gold" in message,
+        "the refusal line is shown": any(line.startswith("catalog_setup_refused:") and "namespace gold" in line for line in lines),
+        "nothing is reloaded and the host is off": host.reloads == [] and host.desired == 0,
+    }
+
+
+def a_failed_catalog_restore_keeps_the_host_with_keep_on() -> dict[str, bool]:
+    host, session, lines = build({"restore_refuses"}, setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=True)
+    message = failure(lambda: session.start(keep_on=True))
+    return {"start fails": message is not None, "the host is left on": host.desired == 1 and any(line.startswith("host_kept_on") for line in lines)}
+
+
+def a_restored_database_on_a_stack_without_the_one_shot_fails_start_by_name() -> dict[str, bool]:
+    host, session, _ = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=True, catalog_setup=False)
+    message = failure(session.start)
+    return {
+        "start fails and names the missing one-shot": message is not None
+        and "catalog restore failed" in message
+        and "catalog_setup one-shot is missing" in message,
+        "nothing is launched and nothing is reloaded": host.catalog_launches == [] and host.reloads == [],
+    }
+
+
+def a_result_line_that_is_not_the_restore_reply_fails_start() -> dict[str, bool]:
+    host, session, _ = build(setup_exits={"postgres_restore_fetch": 0, "postgres_databases": 0}, restored=True)
+    host.restore_counts = {"registered": "many"}
+    message = failure(session.start)
+    return {"start fails and says the line is not the restore reply": message is not None and "not the restore reply" in message}
 
 
 def a_stack_without_setup_containers_is_not_checked() -> dict[str, bool]:

@@ -6,28 +6,28 @@ last_updated: 2026-11-18
 
 # Restore after a teardown
 
-After a teardown or the loss of the host data volume, `host_session start` brings back the state that matters without hand steps. Creating the data volume from a snapshot stays a documented manual step. Airflow logs and Grafana edits are not restored.
+After a teardown or the loss of the host data volume, `host_session start` brings back the state that matters without hand steps once the owner steps below are done and the commit snapshot (see the catalog item) is written by every publish. Creating the data volume from a snapshot stays a documented manual step. Airflow logs and Grafana edits are not restored.
 
 ## What is kept
 
-- **Postgres:** each database (`polaris`, `airflow`, `marquez`, `mlflow`, `mlflow_auth` and `openmetadata_db` where they exist) is dumped with `pg_dump -Fc` and uploaded to `pg_backups/<database>/<UTC>.dump` in the data bucket.
+- **Postgres:** each database that holds tables (`polaris`, `airflow`, `mlflow`, `mlflow_auth` and `openmetadata_db` where they exist) is dumped with `pg_dump -Fc` and uploaded to `pg_backups/<database>/<UTC>.dump` in the data bucket.
 - **Completion marker:** after every dump of a set is uploaded, `pg_backups/complete/<UTC>.json` lists each dump with its size, SHA-256 and table count. A dump without a marker is never restored.
 - **Write once:** every key is created with `If-None-Match: *` under a role that can only create objects under `pg_backups/`. Nothing is replaced and nothing is deleted by the project. A bucket rule expires the prefix after 30 days.
-- **Catalog backups:** each publish already writes `catalog_backup_<run>.json` under `lakehouse/catalog_backups/`, `lakehouse/silver/catalog_backups/` and `lakehouse/features/catalog_backups/`.
+- **Catalog snapshots:** each publish writes `catalog_backup_<run>.json` before it commits, so it is not a recovery source. The recovery reads `catalog_committed_<run>.json`, written after the commit under the same folders, which the publish code does not write yet (an open decision).
 - **Code run record:** `host_session` writes the run ID and digest of the code it placed to the object `lakehouse/host_state/code_run_record.json` in the data bucket, which the project user can already write. The record is a plain text line.
 
 ## How the backup runs
 
-The `postgres_backup` service runs two containers on the host. The dump container waits 15 minutes after it starts and then dumps every six hours. A run is refused and nothing is uploaded when a dump does not read back completely, lists no table or passes its 15 minute deadline. The upload container checks every dump again, uploads the set and writes the marker last. The last result of each step is in `last_result.json` and `upload_result.json` in the backup folder of the host for the monitoring push that merges separately.
+The `postgres_backup` service runs two containers on the host. The dump container waits 15 minutes after it starts and then dumps every six hours. A run is refused and nothing is uploaded when a dump does not read back completely, lists no table or passes its 15 minute deadline. An empty database refuses the run. The upload container checks every dump again, uploads the set and writes the marker last. The last result of each step is in `last_result.json` and `upload_result.json` in the backup folder of the host for the monitoring push that merges separately.
 
 ## How start restores
 
 1. `host_prepare`, then the code checkout. Without `--code-run`, a host that has no checkout or no record reads the code run record from the data bucket and installs that archive.
-2. The postgres task starts. `postgres_restore_fetch` reads the newest marker whose every dump matches its size and SHA-256. It falls back to an older set when the newest is damaged.
+2. The postgres task starts. `postgres_restore_fetch` reads the newest marker that is well formed (schema 1, its own run, at least one requested database, every entry checked) and whose every requested dump matches its size and SHA-256. It streams each dump to disk in 1 MiB chunks. It falls back to an older set when the newest is malformed or damaged.
 3. `postgres_databases` creates the roles. A database that has data is never touched. A missing database that has a dump is restored in one transaction into `<database>__restore`, checked against the table list of the dump and renamed only after every database passed. `polaris` exists empty from the image, so it is restored in place in one transaction. A missing database with no dump is created empty, as before.
-4. A failed fetch or restore makes `host_session start` stop with the named reason and turn the host off. No database was made visible, so no service starts on half-restored data.
+4. `host_session start` does not call the services stable until the fetch container and the databases container of the current deployment have both ended with exit code 0. A pending or running container is not completion. A task of an older task definition is not completion either. A failed fetch or restore makes `start` stop with the named reason and turn the host off. No database was made visible, so no service starts on half-restored data.
 5. After the services are stable, the `mlflow_user` task creates or checks the model API user and its READ grants. The OpenMetadata bootstrap starts one search reindex when the catalog has tables and the index is empty.
-6. The catalog restore runs as the catalog setup one-shot, the `restore` step of `aws_catalog_setup`, under that task's own role. It reads the newest catalog backup of each folder from the data bucket. It registers tables published after the dump and advances tables whose catalog file is older than the newest backup. To see what it would change first, run `python -m scripts.infrastructure.host_session catalog-setup restore --dry-run` once the host is on and the services are stable, read the result line, then run it without `--dry-run`.
+6. When the databases container logged a restore, `start` launches the catalog restore as the catalog setup one-shot (the `restore` step of `aws_catalog_setup`, under that task's own role) before the online store reload. It reads the newest post-commit snapshot `catalog_committed_<run>.json` of the gold, silver and features folders from the data bucket, never the pre-commit `catalog_backup_<run>.json`. It registers absent tables. It advances tables whose catalog file is older. It checks that every table resolves to the committed snapshot. A failure fails `start`. Until every publish writes the post-commit snapshot there is nothing to read. The restore then registers nothing. You can also run it by hand: `python -m scripts.infrastructure.host_session catalog-setup restore --dry-run` once the host is on and the services are stable, then without `--dry-run`.
 
 ## Turn it on (owner order)
 

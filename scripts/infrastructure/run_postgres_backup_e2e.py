@@ -236,6 +236,16 @@ def put_set(client: StandInS3, run: str, tables: dict[str, int], *, skip: str = 
     client.objects[f"pg_backups/complete/{run}.json"] = body
 
 
+def put_marker(client: StandInS3, run: str, document: Any, *, run_in_key: str | None = None) -> None:
+    """A marker object with exactly the given document, for the malformed-marker cases."""
+    client.objects[f"pg_backups/complete/{run_in_key or run}.json"] = json.dumps(document).encode()
+
+
+def entry(run: str, name: str, data: bytes, **changes: Any) -> dict[str, Any]:
+    """The marker entry of a dump, with its dump stored in the bucket; ``changes`` replace fields."""
+    return {"key": f"pg_backups/{name}/{run}.dump", "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "tables": 3, **changes}
+
+
 def fetch(client: StandInS3, databases: list[str], clock: Callable[[], float] | None = None) -> tuple[int, Path]:
     script = load("pg_restore_fetch")
     target = Path(tempfile.mkdtemp(prefix="pg_restore_"))
@@ -289,6 +299,70 @@ def case_fetch_falls_back_to_the_older_set_when_the_newest_is_damaged() -> dict[
         "nothing of the damaged set stays": not any(
             (target / f"{name}.dump").read_bytes() == fake_dump(count) for name, count in (("airflow", 4), ("polaris", 6))
         ),
+    }
+
+
+def case_fetch_skips_a_newest_marker_with_an_empty_manifest() -> dict[str, bool]:
+    client = StandInS3()
+    put_set(client, RUN_A, {"airflow": 3, "mlflow": 2})
+    put_marker(client, RUN_B, {"schema": 1, "run": RUN_B, "databases": {}})
+    code, target = fetch(client, ["airflow", "mlflow"])
+    return {
+        "the exit code is 0": code == 0,
+        "the older whole set is used": (target / "RUN").read_text(encoding="utf-8").strip() == RUN_A,
+        "its dumps are written": (target / "airflow.dump").read_bytes() == fake_dump(3),
+    }
+
+
+def case_fetch_skips_malformed_markers_and_falls_back() -> dict[str, bool]:
+    checks = {}
+    data = fake_dump(3)
+    bad = {
+        "another run in the body": lambda c: put_marker(c, RUN_B, {"schema": 1, "run": RUN_A, "databases": {"airflow": entry(RUN_B, "airflow", data)}}),
+        "another schema": lambda c: put_marker(c, RUN_B, {"schema": 2, "run": RUN_B, "databases": {"airflow": entry(RUN_B, "airflow", data)}}),
+        "databases is a list": lambda c: put_marker(c, RUN_B, {"schema": 1, "run": RUN_B, "databases": []}),
+        "a digest that is not hex": lambda c: put_marker(
+            c, RUN_B, {"schema": 1, "run": RUN_B, "databases": {"airflow": entry(RUN_B, "airflow", data, sha256="zz")}}
+        ),
+        "a size that is text": lambda c: put_marker(c, RUN_B, {"schema": 1, "run": RUN_B, "databases": {"airflow": entry(RUN_B, "airflow", data, bytes="9")}}),
+        "no table counted": lambda c: put_marker(c, RUN_B, {"schema": 1, "run": RUN_B, "databases": {"airflow": entry(RUN_B, "airflow", data, tables=0)}}),
+        "none of the requested databases": lambda c: put_marker(c, RUN_B, {"schema": 1, "run": RUN_B, "databases": {"other": entry(RUN_B, "other", data)}}),
+    }
+    for name, make in bad.items():
+        client = StandInS3()
+        put_set(client, RUN_A, {"airflow": 3})
+        client.objects[f"pg_backups/airflow/{RUN_B}.dump"] = data
+        make(client)
+        code, target = fetch(client, ["airflow"])
+        checks[f"{name}: the older set is used"] = code == 0 and (target / "RUN").read_text(encoding="utf-8").strip() == RUN_A
+    return checks
+
+
+def case_fetch_reads_each_dump_in_bounded_chunks() -> dict[str, bool]:
+    client = StandInS3()
+    big = b"PGDMP" + b"x" * (3 * 1024 * 1024)
+    client.objects[f"pg_backups/airflow/{RUN_A}.dump"] = big
+    put_marker(client, RUN_A, {"schema": 1, "run": RUN_A, "databases": {"airflow": entry(RUN_A, "airflow", big)}})
+    code, target = fetch(client, ["airflow"])
+    dump_reads = client.reads[1:]
+    return {
+        "the exit code is 0 and the dump is whole": code == 0 and (target / "airflow.dump").read_bytes() == big,
+        "no read asks for the whole body": bool(dump_reads) and all(size is not None and 0 < size <= 1024 * 1024 for size in dump_reads),
+        "the marker is read with a bound too": client.reads[0] is not None and client.reads[0] > 0,
+    }
+
+
+def case_fetch_stops_a_dump_longer_than_its_marker_says() -> dict[str, bool]:
+    client = StandInS3()
+    declared = b"PGDMP" + b"x" * 100
+    client.objects[f"pg_backups/airflow/{RUN_A}.dump"] = declared + b"y" * (5 * 1024 * 1024)
+    put_marker(client, RUN_A, {"schema": 1, "run": RUN_A, "databases": {"airflow": entry(RUN_A, "airflow", declared)}})
+    code, target = fetch(client, ["airflow"])
+    return {
+        "the exit code is 1": code == 1,
+        "no dump is written": not list(target.glob("*.dump")) and not list(target.glob("*.partial/*")),
+        "the reads stopped soon after the declared size": all(size is not None for size in client.reads[1:])
+        and sum(size or 0 for size in client.reads[1:]) <= 2 * 1024 * 1024,
     }
 
 

@@ -136,6 +136,17 @@ else:
 """
 
 
+class TrackedBody:
+    """A response body that records the size of every read, so a case can prove that a dump is read in bounded chunks."""
+
+    def __init__(self, data: bytes, reads: list[int | None]) -> None:
+        self.stream, self.reads = io.BytesIO(data), reads
+
+    def read(self, size: int | None = None) -> bytes:
+        self.reads.append(size)
+        return self.stream.read() if size is None or size < 0 else self.stream.read(size)
+
+
 class StandInS3:
     """An S3 client with the calls of the backup scripts: a key may be created once under ``IfNoneMatch="*"``, and a call can be made to fail."""
 
@@ -144,6 +155,7 @@ class StandInS3:
         self.metadata: dict[str, dict[str, str]] = {}
         self.puts: list[dict[str, Any]] = []
         self.gets: list[str] = []
+        self.reads: list[int | None] = []
         self.heads = 0
         self.fail_put_after: int | None = None
         self.put_error: Exception | None = None
@@ -182,7 +194,7 @@ class StandInS3:
             raise ConnectionError("stand-in connection lost")
         if key not in self.objects:
             raise self.error("NoSuchKey", "GetObject")
-        return {"Body": io.BytesIO(self.objects[key]), "ContentLength": len(self.objects[key])}
+        return {"Body": TrackedBody(self.objects[key], self.reads), "ContentLength": len(self.objects[key])}
 
     def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
         if self.fail_list:

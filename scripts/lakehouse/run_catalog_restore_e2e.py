@@ -33,12 +33,49 @@ RUN_B = "20261117T180000Z-bbbbbbbb"
 ACCESS = "stand-in-token"
 
 
+MAIN: dict[str, int] = {}
+RUNS_AT: dict[str, dict[str, Any]] = {}
+
+
+def snapshot_id(namespace: str, table: str, sequence: int, variant: str = "") -> int:
+    return int(hashlib.sha256(f"{namespace}.{table}.{sequence}{variant}".encode()).hexdigest()[:12], 16)
+
+
 def location(namespace: str, table: str, sequence: int, variant: str = "") -> str:
     name = uuid.uuid5(uuid.NAMESPACE_URL, f"{namespace}.{table}.{sequence}{variant}")
-    return f"s3://{BUCKET}/lakehouse/{namespace}/{table}/metadata/{sequence:05d}-{name}.metadata.json"
+    found = f"s3://{BUCKET}/lakehouse/{namespace}/{table}/metadata/{sequence:05d}-{name}.metadata.json"
+    MAIN[found] = snapshot_id(namespace, table, sequence, variant)
+    return found
+
+
+def committed(run: str, namespace: str, tables: dict[str, int | None], *, wrong_main: str = "") -> bytes:
+    """The post-commit recovery snapshot of one publish: per table the metadata file whose main is the committed snapshot, and the snapshot set."""
+    entries: dict[str, Any] = {}
+    snapshot_set: dict[str, int] = {}
+    for name, seq in tables.items():
+        if seq is None:
+            entries[name] = {"metadata_file": None, "main_snapshot_id": None}
+            continue
+        found = location(namespace, name, seq)
+        entries[name] = {"metadata_file": found, "main_snapshot_id": MAIN[found]}
+        if name != "publish_runs":
+            snapshot_set[name] = MAIN[found] + (1 if name == wrong_main else 0)
+    if "publish_runs" in entries and entries["publish_runs"]["metadata_file"]:
+        RUNS_AT[entries["publish_runs"]["metadata_file"]] = {"run_id": run, "snapshot_set": dict(snapshot_set)}
+    document = {
+        "schema": 2,
+        "kind": "committed",
+        "run_id": run,
+        "namespace": namespace,
+        "runs_table": "publish_runs",
+        "snapshot_set": snapshot_set,
+        "tables": entries,
+    }
+    return json.dumps(document).encode()
 
 
 def backup(run: str, namespace: str, tables: dict[str, int | None]) -> bytes:
+    """The older pre-commit backup (schema 1): its metadata files are captured before the fast-forward, so the restore must never use it."""
     body = {
         "schema": 1,
         "run_id": run,
@@ -89,7 +126,10 @@ class StandInPolaris:
             return 200, {"namespace": [namespace]}
         if parts[1] == "tables" and method == "GET":
             found = self.tables.get((namespace, parts[2]))
-            return (200, {"metadata-location": found}) if found else (404, None)
+            if not found:
+                return 404, None
+            main = MAIN.get(found)
+            return 200, {"metadata-location": found, "metadata": {"current-snapshot-id": main, "refs": {"main": {"snapshot-id": main, "type": "branch"}}}}
         if parts[1] == "tables" and method == "DELETE":
             if self.refuse_drop or (namespace, parts[2]) not in self.tables:
                 return 403, None
@@ -113,13 +153,13 @@ class StandInPolaris:
     refused_locations: set[str] = set()
 
 
-def folder(objects: dict[str, bytes], prefix: str, run: str, namespace: str, tables: dict[str, int | None]) -> None:
-    objects[f"{prefix}catalog_backup_{run}.json"] = backup(run, namespace, tables)
+def folder(objects: dict[str, bytes], prefix: str, run: str, namespace: str, tables: dict[str, int | None], *, wrong_main: str = "") -> None:
+    objects[f"{prefix}catalog_committed_{run}.json"] = committed(run, namespace, tables, wrong_main=wrong_main)
 
 
 def standard_store() -> dict[str, bytes]:
     objects: dict[str, bytes] = {}
-    folder(objects, "lakehouse/catalog_backups/", RUN_A, "gold", {"dim_county": 3, "publish_runs": 9})
+    folder(objects, "lakehouse/catalog_backups/", RUN_A, "gold", {"dim_county": 3, "dim_site": 4, "publish_runs": 9})
     folder(objects, "lakehouse/silver/catalog_backups/", RUN_A, "silver", {"stg_hospital": 5})
     folder(objects, "lakehouse/features/catalog_backups/", RUN_A, "features", {"feature_m1": 2})
     return objects
@@ -147,6 +187,7 @@ def case_registers_every_absent_table() -> dict[str, bool]:
         "every table is registered at the backup's file": polaris.tables
         == {
             ("gold", "dim_county"): location("gold", "dim_county", 3),
+            ("gold", "dim_site"): location("gold", "dim_site", 4),
             ("gold", "publish_runs"): location("gold", "publish_runs", 9),
             ("silver", "stg_hospital"): location("silver", "stg_hospital", 5),
             ("features", "feature_m1"): location("features", "feature_m1", 2),
@@ -281,23 +322,91 @@ def case_a_table_with_no_metadata_file_is_skipped() -> dict[str, bool]:
     return {"the exit code is 0": code == 0, "only the table with a file is registered": list(polaris.tables) == [("gold", "dim_county")] and len(rows) == 1}
 
 
-def case_malformed_backups_are_refused() -> dict[str, bool]:
+def case_malformed_snapshots_are_refused() -> dict[str, bool]:
     checks = {}
+    key = "lakehouse/catalog_backups/catalog_committed_" + RUN_A + ".json"
     bad_bucket = standard_store()
-    bad_bucket["lakehouse/catalog_backups/catalog_backup_" + RUN_A + ".json"] = backup(RUN_A, "gold", {"dim_county": 3}).replace(
-        BUCKET.encode(), b"other-bucket"
-    )
+    bad_bucket[key] = committed(RUN_A, "gold", {"dim_county": 3}).replace(BUCKET.encode(), b"other-bucket")
     wrong_run = standard_store()
-    wrong_run["lakehouse/catalog_backups/catalog_backup_" + RUN_A + ".json"] = backup(RUN_B, "gold", {"dim_county": 3})
+    wrong_run[key] = committed(RUN_B, "gold", {"dim_county": 3})
     not_json = standard_store()
-    not_json["lakehouse/catalog_backups/catalog_backup_" + RUN_A + ".json"] = b"{"
+    not_json[key] = b"{"
     duplicate = standard_store()
     folder(duplicate, "lakehouse/silver/catalog_backups/", RUN_A, "gold", {"dim_county": 1})
-    for name, objects in (("another bucket", bad_bucket), ("another run id", wrong_run), ("not JSON", not_json), ("a table in two folders", duplicate)):
+    wrong_main = standard_store()
+    folder(wrong_main, "lakehouse/catalog_backups/", RUN_A, "gold", {"dim_county": 3, "dim_site": 4, "publish_runs": 9}, wrong_main="dim_site")
+    not_committed = standard_store()
+    not_committed[key] = json.dumps({**json.loads(committed(RUN_A, "gold", {"dim_county": 3})), "kind": "candidate"}).encode()
+    for name, objects in (
+        ("another bucket", bad_bucket),
+        ("another run id", wrong_run),
+        ("not JSON", not_json),
+        ("a table in two folders", duplicate),
+        ("a snapshot set that differs from the table mains", wrong_main),
+        ("a snapshot that is not marked committed", not_committed),
+    ):
         polaris = StandInPolaris(("gold", "silver", "features"))
         code, _, _ = run_all(polaris, objects)
         checks[f"{name}: refused and nothing written"] = code == 1 and polaris.tables == {}
     return checks
+
+
+def case_pre_commit_backups_are_never_used() -> dict[str, bool]:
+    objects = {"lakehouse/catalog_backups/catalog_backup_" + RUN_A + ".json": backup(RUN_A, "gold", {"dim_county": 3, "publish_runs": 9})}
+    polaris = StandInPolaris(("gold", "silver", "features"))
+    code, rows, _ = run_all(polaris, objects)
+    return {
+        "the exit code is 0": code == 0,
+        "nothing is registered from a backup that was captured before the commit": polaris.tables == {} and rows == [],
+        "the catalog was not even read": polaris.calls == [],
+    }
+
+
+def reader_sees_one_committed_set(polaris: StandInPolaris, namespace: str = "gold", tables: tuple[str, ...] = ("dim_county", "dim_site")) -> bool:
+    """What a reader does: read the newest publish_runs row, then read only the snapshots it names. True when every table's main is that set."""
+    runs = polaris.tables.get((namespace, "publish_runs"))
+    head = RUNS_AT.get(str(runs))
+    if head is None:
+        return False
+    mains = {name: MAIN.get(polaris.tables.get((namespace, name), "")) for name in tables}
+    return mains == {name: head["snapshot_set"].get(name) for name in tables}
+
+
+def case_a_reader_sees_the_committed_set_after_the_restore() -> dict[str, bool]:
+    objects = standard_store()
+    folder(objects, "lakehouse/catalog_backups/", RUN_B, "gold", {"dim_county": 5, "dim_site": 6, "publish_runs": 11})
+    polaris = StandInPolaris(
+        ("gold", "silver", "features"),
+        {
+            ("gold", "dim_county"): location("gold", "dim_county", 3),
+            ("gold", "dim_site"): location("gold", "dim_site", 4),
+            ("gold", "publish_runs"): location("gold", "publish_runs", 9),
+        },
+    )
+    before = reader_sees_one_committed_set(polaris)
+    code, rows, _ = run_all(polaris, objects)
+    head = RUNS_AT[str(polaris.tables[("gold", "publish_runs")])]
+    return {
+        "the catalog before the restore shows the older committed set": before and RUNS_AT[location("gold", "publish_runs", 9)]["run_id"] == RUN_A,
+        "the exit code is 0": code == 0,
+        "the newest committed run is the one a reader finds": head["run_id"] == RUN_B,
+        "every table's main is the snapshot that run names": reader_sees_one_committed_set(polaris),
+        "the restore advanced all three gold tables": {row["table"]: row["outcome"].split(" (")[0] for row in rows if row["table"].startswith("gold.")}
+        == {"gold.dim_county": "advanced", "gold.dim_site": "advanced", "gold.publish_runs": "advanced"},
+    }
+
+
+def case_a_table_whose_main_differs_from_the_set_is_not_left_visible() -> dict[str, bool]:
+    objects = standard_store()
+    registered = location("gold", "dim_county", 3)
+    MAIN[registered] = MAIN[registered] + 7
+    polaris = StandInPolaris(("gold", "silver", "features"))
+    code, _, message = run_all(polaris, objects)
+    return {
+        "the exit code is 1": code == 1,
+        "the message names the table and the two snapshots": "dim_county" in message and "main snapshot" in message,
+        "the wrongly resolved table is not left in the catalog": ("gold", "dim_county") not in polaris.tables,
+    }
 
 
 def case_no_backup_means_nothing_to_do() -> dict[str, bool]:
@@ -309,7 +418,7 @@ def case_no_backup_means_nothing_to_do() -> dict[str, bool]:
 def case_the_deadline_stops_the_run() -> dict[str, bool]:
     polaris = StandInPolaris(("gold", "silver", "features"))
     code, rows, message = run_all(polaris, standard_store(), seconds=3.0)
-    return {"the exit code is 1": code == 1, "the message names the deadline": "deadline" in message, "not every table was registered": len(polaris.tables) < 4}
+    return {"the exit code is 1": code == 1, "the message names the deadline": "deadline" in message, "not every table was registered": len(polaris.tables) < 5}
 
 
 @contextlib.contextmanager
@@ -387,10 +496,10 @@ def case_the_restore_step_reports_counts_and_exits() -> dict[str, bool]:
         code, out, err = run_step(["--seconds", "100", "restore"], services)
     reply = json.loads(out) if out else {}
     return {
-        "the exit code is 0 and the reply holds the counts": code == 0 and reply.get("counts") == {"advanced": 1, "registered": 3},
+        "the exit code is 0 and the reply holds the counts": code == 0 and reply.get("counts") == {"advanced": 1, "registered": 4},
         "the reply names the step and says it applied": reply.get("step") == "restore" and reply.get("applied") is True,
         "the task identity was checked once before the backups were read": services.verified == 1 and services.reads == 1,
-        "the tables are at the backup's files": polaris.tables[("gold", "dim_county")] == location("gold", "dim_county", 3) and len(polaris.tables) == 4,
+        "the tables are at the backup's files": polaris.tables[("gold", "dim_county")] == location("gold", "dim_county", 3) and len(polaris.tables) == 5,
         "no credential or digest in the output": "stand-in-token" not in out + err
         and "stand-in-root-secret" not in out + err
         and hashlib.sha256(b"x").hexdigest() not in out,
@@ -406,7 +515,7 @@ def case_the_restore_step_dry_run_writes_nothing() -> dict[str, bool]:
         "the exit code is 0": code == 0,
         "the reply says nothing was applied": reply.get("applied") is False,
         "no write reached the catalog": all(call[0] == "GET" for call in polaris.calls),
-        "the report says would": reply.get("counts") == {"would advance": 1, "would register": 3},
+        "the report says would": reply.get("counts") == {"would advance": 1, "would register": 4},
     }
 
 

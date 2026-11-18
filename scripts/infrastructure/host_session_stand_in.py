@@ -155,6 +155,8 @@ class StandInHost:
         self.pending_endless = False
         self.reloads: list[dict[str, Any]] = []
         self.catalog_launches: list[list[str]] = []
+        self.catalog_launch_reloads: list[int] = []
+        self.restore_counts: dict[str, Any] = {"registered": 2}
         self.online: dict[str, tuple[str, str]] = {}
         self.now = 0.0
         self.desired = 0
@@ -441,16 +443,27 @@ class StandInHost:
         return 0 if self.checkout is not None else 1
 
     def catalog_setup_exit(self, options: dict[str, list[str]], code: int) -> int:
-        """The exit code and log of a catalog setup launch: it records its command, logs one result line (a JSON object) on exit 0 and one refusal line
-        on exit 1. Fault ``catalog_setup_refuses`` makes it exit 1 with a refusal line that holds an ARN; ``no_catalog_log`` leaves the log empty."""
+        """The exit code and log of a catalog setup launch. It records its command and the number of reloads so far. It logs one result line (a JSON
+        object) on exit 0 and one refusal line on exit 1. Fault ``catalog_setup_refuses`` makes it exit 1 with a refusal line that holds an ARN and
+        ``no_catalog_log`` leaves the log empty. The restore step answers ``restore_counts`` and exits 1 with its own refusal line under ``restore_refuses``."""
         containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
         command: list[str] = next((container.get("command", []) for container in containers if container["name"] == "catalog_setup"), [])
         self.catalog_launches.append(command)
+        self.catalog_launch_reloads.append(len(self.reloads))
+        step = command[2] if len(command) > 2 else ""
         if "catalog_setup_refuses" in self.faults:
             self.pending_output = f"aws catalog setup principal (credentials): refused for {ACCOUNT_MARK}role/stand-in\nnoise that is not a result"
             return 1
+        if step == "restore" and "restore_refuses" in self.faults:
+            self.pending_output = (
+                "aws catalog setup restore (namespace): namespace gold is not in the catalog (HTTP 404); create it with aws_catalog_setup principal first"
+            )
+            return 1
         if "no_catalog_log" not in self.faults:
-            self.pending_output = "noise that is not a result\n" + json.dumps({"step": command[2] if len(command) > 2 else "", "ok": True})
+            reply = {"step": step, "ok": True}
+            if step == "restore":
+                reply = {"step": "restore", "applied": "--dry-run" not in command, "counts": self.restore_counts, "tables": []}
+            self.pending_output = "noise that is not a result\n" + json.dumps(reply)
         return code
 
     def reload_exit(self, options: dict[str, list[str]], code: int) -> int:

@@ -181,8 +181,10 @@ PLANTS: dict[str, tuple[str, str]] = {
     "any describe-services failure counts as an absent service": ('any(item.get("reason") != MISSING for item in described.get("failures", []))', "False"),
     "prints the task ARN": ('self.step(key, f"exit codes {exits}")', 'self.step(key, f"exit codes {exits} {task}")'),
     "reloads the online store before the services are stable": (
-        "            self.deploy_services()\n            self.mlflow_user()\n            self.reload_online_store(identity)",
-        "            self.reload_online_store(identity)\n            self.mlflow_user()\n            self.deploy_services()",
+        "            self.deploy_services()\n            self.catalog_recovery()\n            self.mlflow_user()\n"
+        "            self.reload_online_store(identity)",
+        "            self.reload_online_store(identity)\n            self.catalog_recovery()\n            self.mlflow_user()\n"
+        "            self.deploy_services()",
     ),
     "never reloads the online store": ("            self.reload_online_store(identity)\n", ""),
     "reloads only the first online set": ("for model in online_sets():", "for model in online_sets()[:1]:"),
@@ -233,8 +235,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "launches the reload without its phase": ('"LAYER_PHASE": RELOAD_PHASE,', '"LAYER_PHASE": "",'),
     "takes a running features task for the reload": (
-        "if key.startswith(ONLINE_RELOAD):\n            return False",
-        "if key.startswith(ONLINE_RELOAD):\n            return True",
+        "if key.startswith(ONLINE_RELOAD) or key == CATALOG_SETUP:\n            return False",
+        "if key.startswith(ONLINE_RELOAD):\n            return True\n        if key == CATALOG_SETUP:\n            return False",
     ),
     "reads the identity without the log": (
         'found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)',
@@ -247,8 +249,25 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "never writes the code record": ("        self.write_code_record(identity)\n        return identity", "        return identity"),
     "never reads the stored code record": ("            recorded = self.read_code_record()\n", "            recorded = None\n"),
-    "never checks the postgres setup": ("        self.postgres_setup()\n        return self.services_stable()", "        return self.services_stable()"),
-    "ignores the exit code of a setup container": ("if ended.get(container) not in (0, None):", "if False:"),
+    "never checks the postgres setup": ("return self.postgres_setup() and self.services_stable()", "return self.services_stable()"),
+    "ignores the exit code of a setup container": ('if state.get("lastStatus") == "STOPPED" and state.get("exitCode") not in (0, None):', "if False:"),
+    "treats an unfinished setup as complete": ("        return not unfinished", "        return True"),
+    "counts a task of an older task definition": ('if current and task.get("taskDefinitionArn") not in (None, current):', "if False:"),
+    "never runs the catalog recovery": ("            self.catalog_recovery()\n", ""),
+    "recovers the catalog although no database was restored": ("        if not self.setup_restored():\n            return\n", ""),
+    "ignores a failed catalog restore": (
+        '        except HostSessionError as error:\n            raise HostSessionError(f"catalog restore failed: {error}") from None\n'
+        "        counts = restore_counts(lines)",
+        "        except HostSessionError:\n            return\n        counts = restore_counts(lines)",
+    ),
+    "runs another catalog setup step as the restore": (
+        'self.catalog_setup("restore", seconds=CATALOG_RESTORE_SECONDS)',
+        'self.catalog_setup("check", seconds=CATALOG_RESTORE_SECONDS)',
+    ),
+    "takes any result line as the restore reply": (
+        '        raise HostSessionError("catalog restore failed: the task\'s result line is not the restore reply")\n    return counts',
+        "        return {}\n    return counts",
+    ),
 }
 
 
