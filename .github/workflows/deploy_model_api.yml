@@ -5,7 +5,8 @@ name: Deploy model API
 # .github/scripts/serving_release.sh renders the revision and refuses it, before and after the registration, if it names any role, secret or image
 # repository the serving tasks may not use. Off until the owner sets the repository variable OIDC_DELIVERY_ENABLED to true (project guide: OIDC
 # delivery). The model-api-deploy environment holds the owner's approval. The deploy role can register only the two serving families, pass only the
-# two serving task roles and the serving execution role, and update only the services named in github_oidc_deploy_services.
+# two serving task roles and the serving execution role, and update only the two serving services (github_oidc_deploy_serving_enabled) and the
+# services named in github_oidc_deploy_services.
 on:
   workflow_dispatch:
     inputs:

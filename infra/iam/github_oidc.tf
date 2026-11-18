@@ -1,8 +1,8 @@
-# GitHub Actions delivery roles. The whole file is off by default (var.github_oidc_enabled): with the flag off every resource
-# below has no instance, so the stack plans no change. The owner applies it with the administrator profile like every other
+# GitHub Actions delivery roles. The whole file is on by default (var.github_oidc_enabled): with the flag off every resource
+# below has no instance, so the stack plans their removal. The owner applies it with the administrator profile like every other
 # role of this stack, because the project profile may not create roles.
 #
-# Four roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
+# Four roles, one per purpose. Each trusts exact web identity subjects of the one repository in the ID form of its immutable subject (var.github_oidc_subject_prefix), with no pattern:
 #   image_push       environment image-push           pushes images to the project repositories
 #   deploy           environment model-api-deploy     registers the next serving task definition revision and updates the named serving services
 #   terraform_plan   pull requests, environment terraform-plan   read-only, plans without a lock
@@ -16,7 +16,7 @@
 # actions of the same files.
 locals {
   github_issuer       = "token.actions.githubusercontent.com"
-  github_subject_base = "repo:${var.github_repository}"
+  github_subject_base = var.github_oidc_subject_prefix
   # Every delivery role carries a permissions boundary that the administrator creates at bootstrap from infra/iam/boundary/. The boundary policies must
   # exist before the owner applies this file with the flag on. The delivery boundary holds exactly the grants of the image push and plan roles. The deploy
   # role has a boundary of its own (owner decision D18): registering the serving families and passing the serving roles do not fit beside the push and plan
@@ -86,8 +86,11 @@ locals {
   github_state_bucket = "arn:aws:s3:::${var.data_bucket_name}"
   # D18 model releases: the families the deploy role registers, and the roles it passes. The names follow the services stack (<project>_<environment>_<service>)
   # and this stack (the serving task roles in model_api.tf and the serving execution role in serving_execution.tf).
-  github_serving_families = [for service in ["model_api", "streamlit"] : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:task-definition/${var.project_name}_${var.environment}_${service}:*"]
-  github_serving_roles    = [for name in ["model_api_task", "streamlit_task", "serving_execution"] : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, name)}"]
+  github_serving_services = [for service in ["model_api", "streamlit"] : "${var.project_name}_${var.environment}_${service}"]
+  github_serving_families = [for service in local.github_serving_services : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:task-definition/${service}:*"]
+  # The services the deploy role may update: the two serving services unless the switch is off, then the extra names, each once.
+  github_deploy_services = distinct(concat(var.github_oidc_deploy_serving_enabled ? local.github_serving_services : [], var.github_oidc_deploy_services))
+  github_serving_roles   = [for name in ["model_api_task", "streamlit_task", "serving_execution"] : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, name)}"]
   # D18 saved plans: CI saves each plan and its digest here. The plan role may put objects under this prefix and do nothing else with it.
   github_plans_objects = "${local.github_state_bucket}/terraform_plans/*"
 
@@ -110,8 +113,11 @@ locals {
     }
   } : {}
 
+  # The plan role waits for its own switch: it reads Terraform state from the project bucket, which the remote state protection and the state move come first.
+  github_active_roles = { for key, role in local.github_roles : key => role if key != "terraform_plan" || var.github_oidc_plan_role_enabled }
+
   github_trust = {
-    for key, role in local.github_roles : key => jsonencode({
+    for key, role in local.github_active_roles : key => jsonencode({
       Version = "2012-10-17"
       Statement = [{
         Effect    = "Allow"
@@ -235,7 +241,7 @@ locals {
     # PostgreSQL and Polaris root secrets for the tasks that name them, so a role that registers any definition and passes any role could pull them into a
     # crafted task. This role registers only the two serving families, with the Project tag, and passes only the two serving task roles and the dedicated
     # serving execution role, to ECS tasks. .github/scripts/serving_release.sh also refuses a definition that names any other role, secret or image
-    # repository. Until the services stack names the serving services through the variable, the role can only look at the project cluster.
+    # repository. It updates the two serving services (var.github_oidc_deploy_serving_enabled) and the extra names of var.github_oidc_deploy_services.
     deploy = concat(
       [
         {
@@ -272,12 +278,12 @@ locals {
           Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
         }
       ],
-      length(var.github_oidc_deploy_services) == 0 ? [] : [
+      length(local.github_deploy_services) == 0 ? [] : [
         {
           Sid      = "UpdateNamedServices"
           Effect   = "Allow"
           Action   = ["ecs:UpdateService"]
-          Resource = [for name in var.github_oidc_deploy_services : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:service/${local.cluster_name}/${name}"]
+          Resource = [for name in local.github_deploy_services : "arn:aws:ecs:${var.aws_region}:${var.expected_account_id}:service/${local.cluster_name}/${name}"]
         }
       ]
     )
@@ -409,7 +415,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 resource "aws_iam_role" "github" {
-  for_each = local.github_roles
+  for_each = local.github_active_roles
 
   name                 = format(local.platform_name, "gh_${each.key}")
   description          = each.value.description
@@ -419,7 +425,7 @@ resource "aws_iam_role" "github" {
 }
 
 resource "aws_iam_role_policy" "github" {
-  for_each = local.github_roles
+  for_each = local.github_active_roles
 
   name   = "${format(local.platform_name, "gh_${each.key}")}_access"
   role   = aws_iam_role.github[each.key].name
@@ -444,7 +450,7 @@ output "github_oidc_contract" {
     enabled     = var.github_oidc_enabled
     repository  = var.github_repository
     roles       = { for key, role in aws_iam_role.github : key => role.name }
-    subjects    = { for key, role in local.github_roles : key => role.subjects }
+    subjects    = { for key, role in local.github_active_roles : key => role.subjects }
     state_stack = local.github_state_stacks
   }
 }

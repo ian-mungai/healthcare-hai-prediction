@@ -338,7 +338,11 @@ ROWS: list[Row] = [
         ),
     ),
 ]
-COMMITTED_DEFAULTS = [Row("iam", "github_oidc_enabled", True, "true", False)]
+COMMITTED_DEFAULTS = [
+    Row("iam", "github_oidc_enabled", False, "false", True),
+    Row("iam", "github_oidc_plan_role_enabled", True, "true", False),
+    Row("iam", "github_oidc_deploy_serving_enabled", False, "false", True),
+]
 # Inputs that no row needs, with the reason. The storage retention flags have their own wrapper options and cases in run_e2e.
 EXEMPT = {
     "mlflow_retention_enabled": "wrapper option --mlflow-retention, covered by run_e2e",

@@ -1,7 +1,7 @@
 variable "github_oidc_enabled" {
-  description = "Create the GitHub OpenID Connect provider and the four delivery roles. Off by default: with it off the stack plans no change. The owner turns it on in a reviewed commit that changes this default."
+  description = "Create the GitHub OpenID Connect provider and the four delivery roles. On by default: the committed default is the live setting, and false plans the removal of all of them."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 
@@ -17,6 +17,27 @@ variable "github_repository" {
   }
 }
 
+variable "github_oidc_subject_prefix" {
+  description = "The subject prefix GitHub sends for this repository since its immutable subject setting is on: repo:<owner>@<owner id>/<name>@<repository id>. Every role trusts <prefix>:environment:<name> and the plan role also <prefix>:pull_request. Read it from the repository's sub_claim_prefix. The name form repo:<owner>/<name> never matches an immutable-subject token."
+  type        = string
+  default     = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^repo:[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", var.github_oidc_subject_prefix))
+    error_message = "Use the ID form repo:<owner>@<owner id>/<name>@<repository id>, with digits for both ids and no pattern characters or trailing claim."
+  }
+
+  validation {
+    condition = (
+      !can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository)) ||
+      !can(regex("^repo:([A-Za-z0-9_.-]+)@[0-9]+/([A-Za-z0-9_.-]+)@[0-9]+$", var.github_oidc_subject_prefix)) ||
+      join("/", regex("^repo:([A-Za-z0-9_.-]+)@[0-9]+/([A-Za-z0-9_.-]+)@[0-9]+$", var.github_oidc_subject_prefix)) == var.github_repository
+    )
+    error_message = "The owner and repository names in github_oidc_subject_prefix must be exactly those of github_repository. Change both together."
+  }
+}
+
 variable "github_oidc_provider_arn" {
   description = "ARN of a GitHub OpenID Connect provider that already exists in the account (AWS allows one per issuer). Empty creates it."
   type        = string
@@ -29,8 +50,22 @@ variable "github_oidc_provider_arn" {
   }
 }
 
+variable "github_oidc_plan_role_enabled" {
+  description = "Create the read-only Terraform plan role, its policy and its trust of pull requests and the terraform-plan environment. Off until the remote state protection and the state move to the project bucket are done: the role reads state there. Needs github_oidc_enabled."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "github_oidc_deploy_serving_enabled" {
+  description = "Let the deploy role update the two serving services of the project cluster, named <project>_<environment>_model_api and <project>_<environment>_streamlit as the services stack names them. False removes that grant. github_oidc_deploy_services adds further names."
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "github_oidc_deploy_services" {
-  description = "Names of the ECS services in the project cluster that the deploy role may update. The deploy boundary allows only <project>_<environment>_model_api and <project>_<environment>_streamlit, the services stack naming of the two serving services. Empty until the model API names its service."
+  description = "Names of further ECS services in the project cluster that the deploy role may update, besides the two serving services that github_oidc_deploy_serving_enabled grants. The deploy boundary allows only <project>_<environment>_model_api and <project>_<environment>_streamlit, so any other name fails the plan."
   type        = list(string)
   default     = []
   nullable    = false
