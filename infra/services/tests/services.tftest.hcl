@@ -1160,16 +1160,16 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "fe70a0d34111463aeea11ad1f1563a1b39482bd160a1b2f8436eb52a878347ab"
-      "airflow_apiserver/airflow_migrate"           = "3a209cd64edd1b9b68f4a4482c74754471b23e9a91fd7b50577cad84c267b6e8"
-      "airflow_dag_processor/airflow_dag_processor" = "6cf602c7d852dcb5893bcb854c2ace43957d852cf6d2af46149f2b4024ab97a7"
-      "airflow_scheduler/airflow_scheduler"         = "adb0e3f5f1a0d999ae3bccb0138081cab224022723e71fd2ce9f787cd0b9ab81"
-      "airflow_triggerer/airflow_triggerer"         = "a29a38f3ce0e7fd3360dc7f9260065e6972dfcb31b8457f9af50b0820f488c07"
-      "host_prepare/host_prepare"                   = "4d8c9dad92ef904aa63c94480dd49e17225cbedad17021fb0a5da1b4a25b80ca"
-      "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"
+      "airflow_apiserver/airflow_apiserver"         = "ae95b22001c49466136357870eb80cde9156e62ad4f224364406cceeb7e00472"
+      "airflow_apiserver/airflow_migrate"           = "22f125818c2d4f5eab048e24d1f8ba1c44b94d2d8b45bc2f8fa6ef1784357e8b"
+      "airflow_dag_processor/airflow_dag_processor" = "6b22523c697075c73ebbc4825c83011f5b0ec9ff6cce997a58627839f071f588"
+      "airflow_scheduler/airflow_scheduler"         = "5c9f9fa4ab07bff2beccb77431dc78153c78f25ac5c403af1ebfb8fc675b4e43"
+      "airflow_triggerer/airflow_triggerer"         = "621cf569084f1970fd3048a7f437edd243b3158aabf2d73b581e4e857a748f27"
+      "host_prepare/host_prepare"                   = "33fff97f60bfc76a31264008e7107cb8d780ac4987afbcdff6404991f6a300bf"
+      "polaris/polaris"                             = "de7a7450aa4985626aad46bb62da2920caab4877b4a2dbbe43ab306074ed05a0"
       "polaris_bootstrap/polaris_bootstrap"         = "1a0bffac42991a144cec7b17cc7809f2316317c916bd9af2f3271f62ec7899c5"
       "postgres/postgres"                           = "84ffdb77ff2045be5b3abcf4437443a9a14b42cd406a155da052da8c5c4d860f"
-      "postgres/postgres_databases"                 = "94c5b4ec2e22acf596ee7dd810208adac6532012542450d6a1d0b2a58690fe55"
+      "postgres/postgres_databases"                 = "2737d7a550bf057c21d55056fad6fee406dd747c6d63c070ec4ece6c13e1de9d"
       "redis/redis"                                 = "65ca3d65c4cf5e89cb31edbdbbc2eda34fb067c7ed8b58bfc4c078ff25f447be"
     }
     error_message = "A container script changed from its reviewed version. Review the change, then record its digest here. Current digests: ${jsonencode(output.execution_digests)}"
