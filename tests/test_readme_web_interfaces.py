@@ -46,8 +46,9 @@ WEB_INTERFACES = {
     "prometheus": ("monitoring", "prometheus"),
 }
 ALWAYS_ON = {"airflow_apiserver"}
-# A README sentence that gives the default of a service switch: "`monitoring_enabled` defaults to false" or "monitoring_enabled is off by default".
-SWITCH_CLAIM = re.compile(r"`?\b(\w+_enabled)\b`?\s+(?:defaults to|is)\s+(true|false|on|off)\b")
+# A README sentence that gives the default of a service switch: "`monitoring_enabled` defaults to `false`" or "monitoring_enabled is off by default".
+# Only default wording counts: "is false" alone describes a configured value, not the default.
+SWITCH_CLAIM = re.compile(r"`?\b(\w+_enabled)\b`?\s+(?:defaults to\s+`?(true|false|on|off)\b`?|is\s+`?(true|false|on|off)\b`?\s+by default)")
 OPEN_COMMAND = re.compile(r"^\s*bash scripts/open_ui\.sh (\S+)$", re.MULTILINE)
 HOST_COMMAND = "bash scripts/host.sh start"
 LIST_COMMAND = "bash scripts/open_ui.sh --list"
@@ -100,7 +101,7 @@ def variable_default(name: str, texts: dict[str, str]) -> str | None:
     for text in texts.values():
         block = re.search(rf'variable "{name}" \{{(.*?)\n\}}', text, re.DOTALL)
         if block:
-            default = re.search(r"\bdefault\s*=\s*(\S+)", block.group(1))
+            default = re.search(r"^\s*default\s*=\s*(.*?)\s*(?:#.*)?$", block.group(1), re.MULTILINE)
             return default.group(1) if default else None
     return None
 
@@ -167,7 +168,8 @@ def source_problems(sources: Sources) -> list[str]:
 def readme_problems(readme: str, documents: dict[str, int], defaults: dict[str, str | None]) -> list[str]:
     """Every difference between the README and the scripts, web interfaces and switch defaults of the Terraform, as messages."""
     found: list[str] = []
-    for switch, claimed in SWITCH_CLAIM.findall(readme):
+    for switch, stated, by_default in SWITCH_CLAIM.findall(readme):
+        claimed = stated or by_default
         shown = {"on": "true", "off": "false"}.get(claimed, claimed)
         if switch in defaults and defaults[switch] != shown:
             found.append(f"the README says the switch {switch} defaults to {claimed} but the Terraform default is {defaults[switch]}")
@@ -225,6 +227,11 @@ def planted(sources: Sources, change: str) -> Sources:
             name: re.sub(r'(variable "monitoring_enabled" \{.*?)\n\s*default\s*=\s*\w+', r"\1", text, count=1, flags=re.DOTALL)
             for name, text in sources.texts.items()
         }
+    elif change == "a conditional default":
+        sources.texts = {
+            name: re.sub(r'(variable "monitoring_enabled" \{.*?\n\s*default\s*=\s*)\w+', r"\1true ? false : true", text, count=1, flags=re.DOTALL)
+            for name, text in sources.texts.items()
+        }
     elif change == "a gate that names no variable":
         sources.gates["monitoring"] = "monitoring_wrong"
     elif change == "an optional service without a gate":
@@ -250,6 +257,7 @@ def test_a_source_defect_is_caught() -> None:
         "a document for an internal port": "service port without a web page",
         "a wrong health path": "health path",
         "a switch without a default": "literal true or false default",
+        "a conditional default": "literal true or false default",
         "a gate that names no variable": "literal true or false default",
         "an optional service without a gate": "has no gate",
         "an older document with another port": "port of no web interface document",
@@ -291,7 +299,17 @@ def test_a_readme_defect_is_caught() -> None:
             "generic document",
         ),
         "a wrong switch default": (readme + f"\nThe switch `monitoring_enabled` defaults to {wrong}.\n", "the Terraform default is"),
+        "a wrong formatted switch default": (readme + f"\nThe switch `monitoring_enabled` defaults to `{wrong}`.\n", "the Terraform default is"),
+        "a wrong default in by-default wording": (readme + f"\n`monitoring_enabled` is `{wrong}` by default.\n", "the Terraform default is"),
     }
     for name, (text, expected) in cases.items():
         found = readme_problems(text, documents, defaults)
         check(any(expected in message for message in found), f"{name} was not reported as {expected!r}: {found}")
+    right = defaults["monitoring_enabled"]
+    allowed = {
+        "a matching formatted default": readme + f"\nThe switch `monitoring_enabled` defaults to `{right}`.\n",
+        "a configured override, not a default": readme + f"\nFor this run, `monitoring_enabled` is {wrong}.\n",
+    }
+    for name, text in allowed.items():
+        found = readme_problems(text, documents, defaults)
+        check(not found, f"{name} was reported: {found}")
