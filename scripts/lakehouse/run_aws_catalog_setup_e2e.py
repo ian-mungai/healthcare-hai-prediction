@@ -1692,6 +1692,7 @@ def case_import_closure(_: Path) -> dict[str, bool]:
         "scripts.lakehouse.aws_catalog_setup",
         "scripts.lakehouse.catalog_restore",
         "scripts.lakehouse.catalog_setup_state",
+        "orchestration.training_contract",
         "scripts.lakehouse.polaris_writer",
         "scripts.lakehouse.principal_credentials",
         "scripts.lakehouse.bronze_writer",

@@ -36,20 +36,14 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
+from orchestration.training_contract import RUN_ID
 from scripts.lakehouse.catalog_setup_state import hang_up
 
 CATALOG = "hai_lakehouse"
 
 BACKUP_PREFIXES = ("lakehouse/catalog_backups/", "lakehouse/silver/catalog_backups/", "lakehouse/features/catalog_backups/")
-# The run ID form of orchestration/training_contract.py (RUN_ID). The setup task mounts scripts only, so this module holds a copy that
-# tests/test_run_id_patterns.py keeps equal.
-RUN_ID_PATTERN = (
-    r"(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
-    r"|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
-    r"|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
-    r"|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])"
-)
-BACKUP_NAME = re.compile(rf"catalog_committed_({RUN_ID_PATTERN})\.json")
+# The run ID form of the contract. The task runs in the Airflow image from the whole repository checkout, so the contract module is on its path.
+BACKUP_NAME = re.compile(rf"catalog_committed_({RUN_ID})\.json")
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SEQUENCE = re.compile(r"/([0-9]{5,})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$")
 SCHEMA = 2

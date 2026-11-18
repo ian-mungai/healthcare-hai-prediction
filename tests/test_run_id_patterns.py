@@ -122,5 +122,7 @@ def test_the_gold_publish_copy_of_the_run_id_form_is_the_contracts() -> None:
     check(gold_publish_record.RUN_ID_PATTERN == contract.RUN_ID, "the copy that the gold containers hold differs from the contract's form")
 
 
-def test_the_catalog_restore_copy_of_the_run_id_form_is_the_contracts() -> None:
-    check(catalog_restore.RUN_ID_PATTERN == contract.RUN_ID, "the copy that the catalog restore holds differs from the contract's form")
+def test_the_catalog_restore_reads_a_snapshot_name_of_every_run_id_shape_and_refuses_the_old_form() -> None:
+    for run in (f"silver_{HEX}", f"gold_{HEX}_2", f"research_ols_{HEX}", f"canary_deploy_clabsi_{HEX}", f"ingestion_retry_{HEX}_2"):
+        check(catalog_restore.BACKUP_NAME.fullmatch(f"catalog_committed_{run}.json") is not None, f"the catalog restore refuses the snapshot of {run}")
+    check(catalog_restore.BACKUP_NAME.fullmatch(f"catalog_committed_{OLD_RUN}.json") is None, "the catalog restore accepts the old run ID form")
