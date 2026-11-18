@@ -6,7 +6,8 @@ out. A record is evidence only when it is a complete run record whose run ID is 
 checks, with the stage's reason for every skip). A table is unsourced when some record skips it and no record loaded it, whatever the order of the records,
 their write times or the order of the arguments. A table that a silver model reads is never left out, because silver would fail without it. A table that
 already exists in the catalog is never left out either, whatever a record says: the callers check that (``glue_mirror`` in S3 and Glue,
-``register_aws_catalog`` in the source catalog).
+``register_aws_catalog`` in the source catalog). A record alone never authorizes an omission: each route also lists the table's own source collection with
+its own credentials (``source_evidence``) and leaves the table out only when that finds no source object and no observation history.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Any
 
 from orchestration import raw_lineage
 from orchestration.training_contract import run_id_pattern
+from scripts.lakehouse import bronze
 from scripts.lakehouse.bronze_dispatch import SKIPPED_REASON
 
 RECORD_PREFIX = "lakehouse/bronze_runs/"
@@ -90,3 +92,19 @@ def left_out(declared: Iterable[str], unsourced: Collection[str], readers: Colle
 def records_of(runs: Sequence[tuple[str, bytes]]) -> frozenset[str]:
     """The unsourced tables of records given as (run ID, body) pairs, in any order."""
     return unsourced_in(record_tables(raw, f"{RECORD_PREFIX}{run}/{RECORD_NAME}", run) for run, raw in runs)
+
+
+READ_ROOTS = ("", "raw/")
+
+
+def source_evidence(storage: bronze.Storage, bucket: str, config: dict[str, Any], tables: Collection[str]) -> frozenset[str]:
+    """The tables, of ``tables``, that have a source object or observation history in the table map's own collection.
+
+    This is the loader's own discovery (collection, manifests, member pattern or dataset IDs, retirement) over both read roots, so a loadable object, an
+    object whose capture was rejected, a retired object and a superseded copy all count. A listing or read that fails raises: nothing is guessed.
+    """
+    names = list(tables)
+    if not names:
+        return frozenset()
+    found, excluded = bronze.discover(storage, bucket, config, names, bronze.RetiredObjects(), roots=READ_ROOTS)
+    return frozenset({item["table"] for item in found} | {entry["copy"]["table"] for entry in excluded if "copy" in entry})

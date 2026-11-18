@@ -11,6 +11,10 @@ Review round 2 (Codex, High): a record the reader accepted was not bound to anyt
 - a table is unsourced when some record skips it and no record loaded it, whatever the order of the records, the write times or the argument order;
 - a table that has Iceberg metadata in S3, a registration in Glue or a table in the source catalog is never left out, whatever a record says.
 
+Review round 3 (Codex, two Mediums): a complete record alone still authorized an omission, and an existing Glue entry without S3 metadata was left out.
+The routes now reconcile every candidate omission themselves: the table map's own source collection and selectors (both read roots, excluded observation
+history included) must show no source object, and Glue must answer table-not-found; a listing or Glue call that fails fails the layer.
+
 Failure modes: a body with missing fields; a record under a wrong key or whose body names another run; a skipped reason that is not the stage's; a table that
 a record skipped and another loaded, in either write order; a record that skips a table whose metadata exists; a silver reader of a skipped table; records
 that cannot be read (the layer fails).
@@ -21,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -195,36 +200,115 @@ def test_a_file_under_another_key_is_not_evidence_and_a_wrong_record_under_a_run
         bronze_unsourced.read_unsourced(Bucket({key_of(RUN_A): FORGED}), BUCKET)
 
 
+class Glue:
+    """The one Glue call the omission check may use. ``tables`` holds existing entries; ``error`` is raised as a service error for every table."""
+
+    def __init__(self, tables: set[str] | None = None, error: str | None = None) -> None:
+        self.tables, self.error, self.calls = tables or set(), error, []
+
+    def get_table(self, DatabaseName: str, Name: str) -> dict[str, Any]:
+        self.calls.append((DatabaseName, Name))
+        if self.error:
+            raise ClientError({"Error": {"Code": self.error, "Message": "stand-in"}}, "GetTable")
+        if Name not in self.tables:
+            raise ClientError({"Error": {"Code": "EntityNotFoundException", "Message": "stand-in"}}, "GetTable")
+        return {"Table": {"Name": Name, "Parameters": {"metadata_location": f"s3://{BUCKET}/lakehouse/bronze/{Name}/metadata/00001-lost.metadata.json"}}}
+
+
 class Registered:
-    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bronze register with the table map, the listing of silver readers, discovery and the registration of each table replaced."""
+
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, found: list[str] | None = None, history: list[str] | None = None, discovery_error: str | None = None
+    ) -> None:
         self.tables: list[list[str]] = []
+        self.discoveries: list[tuple[list[str], Any]] = []
         monkeypatch.setattr(glue_mirror, "layer_tables", lambda layer: ["alpha", "beta", "gamma"])
         monkeypatch.setattr(glue_mirror, "silver_bronze_sources", lambda *arguments: {"alpha"})
+        monkeypatch.setattr(
+            glue_mirror, "bronze_table_map", lambda: {"namespace": "bronze", "tables": [{"table": name} for name in ("alpha", "beta", "gamma")]}
+        )
 
         def register_from_s3(config: Any, layer: str, tables: list[str], *rest: Any, **keywords: Any) -> dict[str, Any]:
             self.tables.append(list(tables))
             return {"status": "ok", "tables": {name: "created" for name in tables}}
 
+        def discover(storage: Any, bucket: str, config: Any, names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+            self.discoveries.append((list(names), keywords.get("roots")))
+            if discovery_error:
+                raise ClientError({"Error": {"Code": discovery_error, "Message": "stand-in"}}, "ListObjectVersions")
+            return [{"table": name} for name in names if name in (found or [])], [{"copy": {"table": name}} for name in names if name in (history or [])]
+
         monkeypatch.setattr(glue_mirror, "register_from_s3", register_from_s3)
+        monkeypatch.setattr(bronze_unsourced.bronze, "discover", discover)
 
 
-def run_register(s3: Bucket, capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
-    code = glue_mirror.main(["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=object(), s3=s3, config=object())
+CONFIG = SimpleNamespace(layers={"bronze": SimpleNamespace(database="bronze")})
+
+
+def run_register(s3: Bucket, capsys: pytest.CaptureFixture[str], glue: Glue | None = None) -> tuple[int, str, str]:
+    code = glue_mirror.main(
+        ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue or Glue(), s3=s3, config=CONFIG, sources=object()
+    )
     out = capsys.readouterr()
     return code, out.out, out.err
 
 
-def test_the_bronze_register_leaves_out_the_unsourced_table_and_says_so(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def skipping(*names: str) -> Bucket:
+    return Bucket({key_of(RUN_A): record(RUN_A, ["alpha", "beta"], list(names))})
+
+
+def test_the_bronze_register_leaves_out_the_unsourced_table_only_when_its_own_checks_find_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     registered = Registered(monkeypatch)
-    code, out, _ = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["alpha", "beta"], ["gamma"])}), capsys)
+    glue = Glue()
+    code, out, _ = run_register(skipping("gamma"), capsys, glue)
     check(code == 0 and registered.tables == [["alpha", "beta"]], f"{code} {registered.tables}")
     check("bronze.gamma: left out" in out and "no source object" in out, out)
+    check(registered.discoveries == [(["gamma"], ("", "raw/"))], f"discovery must read the candidate only, from both read roots: {registered.discoveries}")
+    check(glue.calls == [("bronze", "gamma")], f"Glue was not asked about the candidate: {glue.calls}")
+
+
+def test_a_complete_record_alone_never_authorizes_an_omission_when_the_source_collection_holds_an_object_or_its_history(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review round 3, M1: a complete record for a table whose collection holds a matching object, with no metadata and no Glue entry."""
+    for found, history in ((["gamma"], []), ([], ["gamma"])):
+        registered = Registered(monkeypatch, found=found, history=history)
+        code, out, _ = run_register(skipping("gamma"), capsys)
+        check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"{found} {history}: the table was left out: {registered.tables}")
+        check("bronze.gamma: required" in out and "source collection" in out and "left out" not in out, out)
+
+
+def test_a_listing_that_fails_fails_the_layer_and_registers_nothing(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    registered = Registered(monkeypatch, discovery_error="AccessDenied")
+    code, out, err = run_register(skipping("gamma"), capsys)
+    check(code == 1 and registered.tables == [], f"a layer whose source listing failed registered tables: {registered.tables}")
+    check("bronze" in out + err and "source" in out + err, out + err)
+
+
+def test_an_existing_glue_entry_stays_required_even_without_s3_metadata(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """Review round 3, M2: the entry points at metadata that is gone. It must flow to normal metadata resolution, which fails clearly, and never be left out."""
+    registered = Registered(monkeypatch)
+    code, out, _ = run_register(skipping("gamma"), capsys, Glue({"gamma"}))
+    check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"an existing Glue entry was left out: {registered.tables}")
+    check("bronze.gamma: required" in out and "Glue" in out and "left out" not in out, out)
+
+
+@pytest.mark.parametrize("error", ["AccessDeniedException", "InternalServiceException", "ThrottlingException"])
+def test_only_a_glue_table_not_found_response_supports_absence_and_any_other_failure_fails_the_layer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: str
+) -> None:
+    registered = Registered(monkeypatch)
+    code, out, err = run_register(skipping("gamma"), capsys, Glue(error=error))
+    check(code == 1 and registered.tables == [], f"{error}: {registered.tables}")
+    check("bronze" in out + err and "Glue" in out + err, out + err)
 
 
 def test_the_bronze_register_never_leaves_out_a_table_that_has_metadata_whatever_a_record_says(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The reviewer's reproduction: valid metadata for every table, then a record that skips one of them."""
     registered = Registered(monkeypatch)
     metadata = {"lakehouse/bronze/gamma/metadata/00001-0f0f0f0f-0f0f-0f0f-0f0f-0f0f0f0f0f0f.metadata.json": b"{}"}
     code, out, _ = run_register(Bucket({key_of(RUN_A): record(RUN_A, ["alpha", "beta"], ["gamma"]), **metadata}), capsys)
@@ -248,7 +332,7 @@ def test_the_bronze_register_still_registers_a_table_that_silver_reads_even_when
 def test_the_bronze_register_with_no_run_record_registers_every_table_as_before(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     registered = Registered(monkeypatch)
     code, _, _ = run_register(Bucket({}), capsys)
-    check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]], f"{registered.tables}")
+    check(code == 0 and registered.tables == [["alpha", "beta", "gamma"]] and registered.discoveries == [], f"{registered.tables} {registered.discoveries}")
 
 
 def test_the_bronze_register_fails_the_layer_when_a_run_record_cannot_be_read_or_is_not_a_complete_record(
@@ -260,3 +344,18 @@ def test_the_bronze_register_fails_the_layer_when_a_run_record_cannot_be_read_or
     check("bronze" in out + err and "run record" in out + err, out + err)
     code, out, _ = run_register(Bucket({key_of(RUN_A): FORGED}), capsys)
     check(code == 1 and registered.tables == [] and "run record" in out, out)
+
+
+def test_the_source_evidence_is_real_discovery_over_both_read_roots_and_counts_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Any] = []
+
+    def discover(storage: Any, bucket: str, config: Any, names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        seen.append((list(names), keywords.get("roots")))
+        return [{"table": "a"}], [{"copy": {"table": "b"}}, {"collection": "c", "file_name": "x.csv"}]
+
+    monkeypatch.setattr(bronze_unsourced.bronze, "discover", discover)
+    check(
+        bronze_unsourced.source_evidence(object(), BUCKET, {"tables": []}, ["a", "b", "c"]) == {"a", "b"}, "the evidence is the loadable and the history tables"
+    )
+    check(seen == [(["a", "b", "c"], ("", "raw/"))], f"{seen}")
+    check(bronze_unsourced.source_evidence(object(), BUCKET, {"tables": []}, []) == frozenset() and len(seen) == 1, "an empty candidate list listed the bucket")

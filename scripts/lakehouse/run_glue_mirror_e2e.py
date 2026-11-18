@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib
 import io
 import json
@@ -1165,10 +1166,52 @@ def bronze_run_record(run: str, loaded: Sequence[str], skipped: Sequence[str]) -
     }
 
 
-def register_bronze_command(s3: FakeS3, glue: FakeGlue) -> tuple[int, str]:
+class FakeSources:
+    """The versioned source bucket the route lists with its own credentials (the ``Storage`` the loader reads): objects by key and version."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put(self, key: str, data: bytes) -> str:
+        version = f"v-{hashlib.sha256(key.encode() + data).hexdigest()[:12]}"
+        self.objects[(key, version)] = data
+        return version
+
+    def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+        return sorted(identity for identity in self.objects if identity[0].startswith(prefix) and identity[0].endswith("/manifest.json"))
+
+    def list_current(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+        return sorted(identity for identity in self.objects if identity[0].startswith(prefix))
+
+    def get(self, bucket: str, key: str, version_id: str) -> bytes:
+        return self.objects[(key, version_id)]
+
+    def download(self, bucket: str, key: str, version_id: str, path: Path) -> None:
+        path.write_bytes(self.objects[(key, version_id)])
+
+
+def store_source(sources: FakeSources, collection: str, file_name: str, *, status: str | None = None) -> None:
+    """One stored data object and its manifest, as the acquisition storage step writes them; ``status`` rejects the manifest's capture."""
+    payload = b"synthetic source bytes for discovery only"
+    digest = hashlib.sha256(payload).hexdigest()
+    key = f"{collection}/datasets/synthetic/release_date=2026-01-01/{digest}/{file_name}"
+    version = sources.put(key, payload)
+    entry = {
+        "role": "data",
+        "dataset_id": "synthetic",
+        "object": {"bucket": BUCKET, "key": key, "version_id": version, "sha256": digest, "byte_count": len(payload)},
+    }
+    manifest = {"snapshot_id": "synthetic_capture", "source_id": "SYNTHETIC", "dataset_id": "synthetic", "release_id": "2026-01-01", "objects": [entry]}
+    if status:
+        manifest["snapshot_status"] = status
+    sources.put(f"{collection}/manifests/release_date=2026-01-01/synthetic_capture/synthetic/manifest.json", json.dumps(manifest).encode())
+
+
+def register_bronze_command(s3: FakeS3, glue: FakeGlue, sources: FakeSources | None = None) -> tuple[int, str]:
     out = io.StringIO()
+    arguments = ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-        code = glue_mirror.main(["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled())
+        code = glue_mirror.main(arguments, glue=glue, s3=s3, config=enabled(), sources=sources or FakeSources())
     return code, out.getvalue()
 
 
@@ -1239,6 +1282,68 @@ def case_bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_
         "the_command_says_the_record_and_the_metadata_disagree": f"bronze.{ABSENT}" in text and "metadata exists" in text,
         "a_forged_body_under_a_wrong_key_is_not_evidence": forged_code == 0 and ("bronze", ABSENT) in forged_glue.tables,
         "a_forged_body_under_a_run_key_fails_the_layer_and_registers_nothing": bad_code == 1 and not bad_glue.tables and "run record" in bad_text,
+    }
+
+
+def bronze_table_entry() -> dict[str, Any]:
+    return next(entry for entry in json.loads((REPO_ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"] if entry["table"] == ABSENT)
+
+
+def case_bronze_register_never_trusts_a_complete_record_over_the_source_collection() -> Check:
+    """Review round 3, M1. A complete record skips ``ABSENT`` and no run loaded it, but the table's own collection holds an object its member pattern selects
+    (the reviewer's reproduction), or only a rejected capture of it. The route lists the collection itself and keeps the table required, so the command fails
+    clearly for the table (it has no metadata) instead of reporting success with the table left out. A genuinely empty collection is the positive control."""
+    names = glue_mirror.layer_tables("bronze")
+    collection = bronze_table_entry()["collection"]
+    control_code, control_text = register_bronze_command(bronze_bucket("bronze_00000001"), FakeGlue())
+    sourced = FakeSources()
+    store_source(sourced, collection, "hcai_util_2026.xlsx")
+    glue_sourced = FakeGlue()
+    sourced_code, sourced_text = register_bronze_command(bronze_bucket("bronze_00000001"), glue_sourced, sourced)
+    rejected = FakeSources()
+    store_source(rejected, collection, "hcai_util_2026.xlsx", status="rejected")
+    rejected_code, rejected_text = register_bronze_command(bronze_bucket("bronze_00000001"), FakeGlue(), rejected)
+    raw_root = FakeSources()
+    store_source(raw_root, "raw/" + collection, "hcai_util_2026.xlsx")
+    raw_code, raw_text = register_bronze_command(bronze_bucket("bronze_00000001"), FakeGlue(), raw_root)
+    return {
+        "control_with_an_empty_collection_leaves_the_table_out": control_code == 0 and f"bronze.{ABSENT}: left out" in control_text,
+        "a_matching_object_keeps_the_table_required": sourced_code == 1
+        and f"bronze.{ABSENT}: required" in sourced_text
+        and "source collection" in sourced_text,
+        "the_required_table_fails_clearly_and_every_other_table_registers": f"bronze.{ABSENT}: failed" in sourced_text
+        and len(glue_sourced.tables) == len(names) - 1,
+        "only_a_rejected_capture_keeps_the_table_required": rejected_code == 1 and f"bronze.{ABSENT}: required" in rejected_text,
+        "an_object_under_the_raw_root_keeps_the_table_required": raw_code == 1 and f"bronze.{ABSENT}: required" in raw_text,
+    }
+
+
+def case_bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata() -> Check:
+    """Review round 3, M2. An Iceberg entry for ``ABSENT`` already exists in Glue and points at metadata that is gone from S3. A complete record skips the
+    table. It stays required and fails clearly in normal metadata resolution; a real table-not-found response is the control; any other Glue
+    failure fails the layer."""
+    names = glue_mirror.layer_tables("bronze")
+    entry = {
+        "Name": ABSENT,
+        "Parameters": {"table_type": "ICEBERG", "metadata_location": f"s3://{BUCKET}/lakehouse/bronze/{ABSENT}/metadata/00001-lost.metadata.json"},
+        "VersionId": "1",
+    }
+    existing = FakeGlue()
+    existing.tables[("bronze", ABSENT)] = entry
+    code, text = register_bronze_command(bronze_bucket("bronze_00000001"), existing)
+    absent = FakeGlue()
+    absent_code, absent_text = register_bronze_command(bronze_bucket("bronze_00000001"), absent)
+    broken = FakeGlue(fail={"get_table": "AccessDeniedException"})
+    broken_code, broken_text = register_bronze_command(bronze_bucket("bronze_00000001"), broken)
+    return {
+        "the_command_asked_glue_about_the_candidate": ("get_table", "bronze", ABSENT) in existing.calls,
+        "an_existing_entry_stays_required_and_fails_in_metadata_resolution": code == 1 and f"bronze.{ABSENT}: failed" in text and "no metadata file" in text,
+        "the_entry_is_not_changed_and_every_other_table_registers": existing.tables[("bronze", ABSENT)] == entry and len(existing.tables) == len(names),
+        "the_command_says_the_record_and_glue_disagree": f"bronze.{ABSENT}: required" in text and "Glue" in text and "left out" not in text,
+        "control_with_a_table_not_found_response_leaves_it_out": absent_code == 0
+        and f"bronze.{ABSENT}: left out" in absent_text
+        and ("bronze", ABSENT) not in absent.tables,
+        "a_glue_failure_other_than_not_found_fails_the_layer_and_registers_nothing": broken_code == 1 and not broken.writes() and "Glue" in broken_text,
     }
 
 
@@ -1506,6 +1611,10 @@ CASES: dict[str, Callable[[], Check]] = {
     "bronze_register_leaves_out_the_table_the_committed_run_skipped": case_bronze_register_leaves_out_the_table_the_committed_run_skipped,
     "bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record": (
         case_bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record
+    ),
+    "bronze_register_never_trusts_a_complete_record_over_the_source_collection": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection,
+    "bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata": (
+        case_bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata
     ),
 }
 

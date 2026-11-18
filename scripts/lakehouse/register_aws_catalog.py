@@ -183,7 +183,11 @@ class RegistrationResult:
 
 @dataclass(frozen=True)
 class RegistrationIO:
-    """The caller's authenticated, bounded source, destination and reader services."""
+    """The caller's authenticated, bounded source, destination and reader services.
+
+    ``sources`` is the caller's own versioned reader of the acquisition bucket (the ``Storage`` the bronze loader reads, with the caller's credentials) and
+    ``table_map`` the committed bronze table map. Both are needed to leave a table out of the required set: a record alone never authorizes an omission.
+    """
 
     source: Catalog
     destination: Catalog
@@ -192,6 +196,8 @@ class RegistrationIO:
     publications: PublicationReader
     reservations: Reservations
     clock: Clock = time.monotonic
+    sources: Any = None
+    table_map: Mapping[str, Any] | None = None
 
 
 def canonical(value: object) -> bytes:
@@ -498,7 +504,7 @@ def prepare_read_inventory(
     """
     check_deadline(deadline, io.clock)
     documents = checked_receipts(receipts, required)
-    check_unsourced_absent(io, unsourced, deadline)
+    check_unsourced_absent(io, unsourced, bucket, deadline)
     publications = publication_pins(documents, receipts, reservation_prefix)
     for pin in publications:
         bounded(partial(io.reservations.ensure, pin.reservation, pin.run_id, deadline=deadline), deadline, io.clock)
@@ -570,7 +576,7 @@ def register_read_catalog(
     """
     check_deadline(deadline, io.clock)
     documents = checked_receipts(receipts, required)
-    check_unsourced_absent(io, unsourced, deadline)
+    check_unsourced_absent(io, unsourced, bucket, deadline)
     expected_publications = publication_pins(documents, receipts, reservation_prefix)
     if inventory is None:
         inventory = prepare_read_inventory(io, required, receipts, bucket=bucket, reservation_prefix=reservation_prefix, deadline=deadline, unsourced=unsourced)
@@ -653,12 +659,25 @@ def bronze_record_argument(text: str) -> tuple[str, bytes]:
     return run, Path(path).read_bytes()
 
 
-def check_unsourced_absent(io: RegistrationIO, unsourced: Collection[TableId], deadline: float) -> None:
-    """A table that a record leaves out must have no table in the source catalog: an existing table is never left out on a record's word."""
+def check_unsourced_absent(io: RegistrationIO, unsourced: Collection[TableId], bucket: str, deadline: float) -> None:
+    """Check each omission for itself: a table that a record leaves out must have no table in the source catalog and no source object or observation history in
+    its own collection, found with the caller's own source reader. A table that exists, a collection that holds anything, a missing reader and a listing that
+    fails all refuse (``coverage``): an omission is never accepted on a record's word."""
+    if not unsourced:
+        return
     for identifier in sorted(unsourced):
         plain_identifier(identifier)
         if bounded(lambda identifier=identifier: io.source.load(identifier, deadline=deadline), deadline, io.clock) is not None:
             raise RegistrationError("coverage", "a table that a bronze run record leaves out exists in the source catalog")
+    if io.sources is None or io.table_map is None:
+        raise RegistrationError("coverage", "an omission needs the caller's own source reader and the bronze table map to check the collection")
+    names = sorted(name for namespace, name in unsourced if namespace == "bronze")
+    try:
+        evidence = bronze_unsourced.source_evidence(io.sources, bucket, dict(io.table_map), names)
+    except Exception:
+        raise RegistrationError("coverage", "the source collection of an omitted table could not be listed") from None
+    if evidence:
+        raise RegistrationError("coverage", "the source collection of an omitted table holds a source object or observation history")
 
 
 def inventory_from_document(document: Mapping[str, Any], required: Set[TableId]) -> Inventory:

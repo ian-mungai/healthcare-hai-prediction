@@ -1268,6 +1268,13 @@ class S3Storage:
         )
         self.client = session.client("s3")
 
+    @classmethod
+    def from_client(cls, client: Any) -> S3Storage:
+        """The reader over an S3 client that the caller already holds, so a route reads the sources with its own credentials."""
+        storage = object.__new__(cls)
+        storage.client = client
+        return storage
+
     def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
         """Return each current manifest key with its version ID from one paginated version listing."""
         keys = []

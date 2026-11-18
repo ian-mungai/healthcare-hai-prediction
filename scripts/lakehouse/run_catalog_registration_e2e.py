@@ -23,6 +23,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.lakehouse import register_aws_catalog as reg
+from scripts.lakehouse.run_glue_mirror_e2e import FakeSources, store_source
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = frozenset({("bronze", "source_table"), ("silver", "silver_table"), ("silver", "publish_runs"), ("gold", "gold_table"), ("gold", "publish_runs")})
@@ -281,28 +282,75 @@ def successful_inventory() -> None:
     require(second.inventory.sha256 == hashlib.sha256(reg.canonical(second.inventory.document())).hexdigest(), "repeat: inventory digest changed")
 
 
+GHOST = ("bronze", "ghost_table")
+GHOST_MAP = {"namespace": "bronze", "tables": [{"table": "ghost_table", "collection": "org/ghost", "dataset_ids": ["synthetic"], "format": "csv"}]}
+
+
+def routed(fixture: Fixture, sources: FakeSources | None) -> reg.RegistrationIO:
+    """The registration services plus the route's own source listing and the table map it reconciles an omission against."""
+    return replace(fixture.io, sources=sources, table_map=GHOST_MAP)
+
+
+def prepare_omitting(fixture: Fixture, io: reg.RegistrationIO) -> reg.Inventory:
+    return reg.prepare_read_inventory(
+        io, REQUIRED, fixture.receipts, bucket="synthetic-bucket", reservation_prefix="synthetic_aws_reader", deadline=100, unsourced=frozenset({GHOST})
+    )
+
+
+def refused_as_coverage(call: Callable[[], object], name: str) -> None:
+    try:
+        call()
+    except reg.RegistrationError as error:
+        require(error.code == "coverage", f"{name}: expected coverage, received {error.code}")
+    else:
+        raise AssertionError(f"{name}: an omission that the route could not prove was accepted")
+
+
 def an_unsourced_table_that_exists_in_the_source_catalog_is_refused() -> None:
     """Review round 2 (High): a record that skips a table is no evidence when the source catalog holds a table of that name."""
-    ghost = ("bronze", "ghost_table")
     fixture = Fixture()
-    fixture.source.tables[ghost] = copy.deepcopy(fixture.source.tables[("bronze", "source_table")])
+    fixture.source.tables[GHOST] = copy.deepcopy(fixture.source.tables[("bronze", "source_table")])
+    io = routed(fixture, FakeSources())
     for call in ("prepare", "register"):
-        arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({ghost})}
-        try:
-            if call == "prepare":
-                reg.prepare_read_inventory(fixture.io, REQUIRED, fixture.receipts, **arguments)
-            else:
-                reg.register_read_catalog(fixture.io, REQUIRED, fixture.receipts, **arguments)
-        except reg.RegistrationError as error:
-            require(error.code == "coverage", f"{call}: expected coverage, received {error.code}")
-        else:
-            raise AssertionError(f"{call}: a table that exists in the catalog was left out on a record's word")
+        arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({GHOST})}
+        refused_as_coverage(
+            lambda call=call, arguments=arguments: (
+                reg.prepare_read_inventory(io, REQUIRED, fixture.receipts, **arguments)
+                if call == "prepare"
+                else reg.register_read_catalog(io, REQUIRED, fixture.receipts, **arguments)
+            ),
+            call,
+        )
         require(not fixture.destination.posts and not fixture.destination.namespace_posts, f"{call}: the destination changed before the refusal")
     clean = Fixture()
-    inventory = reg.prepare_read_inventory(
-        clean.io, REQUIRED, clean.receipts, bucket="synthetic-bucket", reservation_prefix="synthetic_aws_reader", deadline=100, unsourced=frozenset({ghost})
-    )
+    inventory = prepare_omitting(clean, routed(clean, FakeSources()))
     require({pin.identifier for pin in inventory.tables} == REQUIRED, "an unsourced table that has no catalog table changed the coverage")
+
+
+def an_omission_needs_the_routes_own_source_listing_and_finds_no_object_or_history() -> None:
+    """Review round 3, M1: a record alone never authorizes an omission. The route lists the table's own collection with its own credentials and leaves the
+    table out only when that finds no source object and no observation history."""
+    fixture = Fixture()
+    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, None)), "no source listing")
+    sourced = FakeSources()
+    store_source(sourced, "org/ghost", "ghost.csv")
+    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, sourced)), "a stored source object")
+    rejected = FakeSources()
+    store_source(rejected, "org/ghost", "ghost.csv", status="rejected")
+    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, rejected)), "a rejected capture only")
+    raw_root = FakeSources()
+    store_source(raw_root, "raw/org/ghost", "ghost.csv")
+    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, raw_root)), "an object under the raw root")
+
+    class Failing(FakeSources):
+        def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+            raise reg.RegistrationError("transport", "Synthetic listing failure")
+
+    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, Failing())), "a listing that fails")
+    require(not fixture.destination.posts and not fixture.reservations.entries, "a refused omission reserved or wrote something")
+    clean = Fixture()
+    inventory = prepare_omitting(clean, routed(clean, FakeSources()))
+    require({pin.identifier for pin in inventory.tables} == REQUIRED, "the empty collection control changed the coverage")
 
 
 def empty_destination() -> None:
@@ -831,6 +879,10 @@ def cases() -> list[tuple[str, Callable[[], None]]]:
     result: list[tuple[str, Callable[[], None]]] = [
         ("successful retained inventory and exact repeat", successful_inventory),
         ("an unsourced table that exists in the source catalog is refused", an_unsourced_table_that_exists_in_the_source_catalog_is_refused),
+        (
+            "an omission needs the route's own source listing and finds no object or history",
+            an_omission_needs_the_routes_own_source_listing_and_finds_no_object_or_history,
+        ),
         ("empty destination namespaces", empty_destination),
         ("failed namespace preparation", namespace_failure),
         ("late namespace reply stops mutation", late_namespace_reply),

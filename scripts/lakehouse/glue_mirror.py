@@ -606,24 +606,53 @@ def has_metadata(s3: Any, bucket: str, table: str) -> bool:
     )
 
 
-def bronze_register_tables(s3: Any, bucket: str) -> tuple[list[str], list[str], list[str]]:
-    """The bronze tables ``register`` registers, the declared tables it leaves out and the tables a record skips although their metadata exists.
+def bronze_table_map() -> dict[str, Any]:
+    """The committed bronze table map, whose collections and selectors an omission is reconciled with."""
+    from scripts.lakehouse import bronze
 
-    A table is left out when some bronze run record skips it for lack of a source object, no record loaded it, no silver model reads it and it has no
-    metadata file in S3. A table that has metadata is registered whatever a record says (the third list names it, so the disagreement is visible). Raises
-    ``MirrorError`` when a run record cannot be read as evidence or S3 cannot be listed: nothing is guessed.
+    return bronze.load_table_map(BRONZE_TABLES)
+
+
+def bronze_register_tables(s3: Any, bucket: str, glue: Any, database: str, sources: Any = None) -> tuple[list[str], list[str], dict[str, str]]:
+    """The bronze tables ``register`` registers, the declared tables it leaves out and, for each candidate it keeps, why.
+
+    A bronze run record only proposes an omission: some complete record skips the table, no record loaded it and no silver model reads it. The route then
+    checks for itself, with its own credentials, that the table has no metadata file in S3, no Glue entry (only a real table-not-found answer counts) and no
+    source object or observation history in its own source collection (``bronze_unsourced.source_evidence``). A table that fails any check stays required and
+    flows to normal metadata resolution, which fails clearly when its metadata is missing. A run record, a Glue call or a listing that fails raises
+    ``MirrorError``: nothing is guessed.
     """
-    from scripts.lakehouse import bronze_unsourced
+    from scripts.lakehouse import bronze, bronze_unsourced
 
     listed = layer_tables("bronze")
     try:
         unsourced = bronze_unsourced.read_unsourced(s3, bucket)
-        candidates = bronze_unsourced.left_out(listed, unsourced, silver_bronze_sources())
-        existing = sorted(name for name in candidates if has_metadata(s3, bucket, name))
+        candidates = sorted(bronze_unsourced.left_out(listed, unsourced, silver_bronze_sources()))
     except Exception as error:
         raise MirrorError(f"the bronze run records cannot be read as evidence: {explain(error)}") from error
-    left_out = candidates - set(existing)
-    return [name for name in listed if name not in left_out], sorted(left_out), existing
+    kept: dict[str, str] = {}
+    try:
+        for name in candidates:
+            if has_metadata(s3, bucket, name):
+                kept[name] = "its table metadata exists in S3"
+    except Exception as error:
+        raise MirrorError(f"the bronze table metadata in S3 cannot be listed: {explain(error)}") from error
+    try:
+        for name in candidates:
+            if name not in kept and current(glue, database, name) is not None:
+                kept[name] = "a Glue table of that name exists"
+    except Exception as error:
+        raise MirrorError(f"Glue could not say whether a bronze table exists: {explain(error)}") from error
+    rest = [name for name in candidates if name not in kept]
+    if rest:
+        try:
+            storage = sources if sources is not None else bronze.S3Storage.from_client(s3)
+            for name in sorted(bronze_unsourced.source_evidence(storage, bucket, bronze_table_map(), rest)):
+                kept[name] = "the source collection holds a source object or observation history"
+        except Exception as error:
+            raise MirrorError(f"the source collection of a bronze table cannot be listed: {explain(error)}") from error
+    left_out = [name for name in candidates if name not in kept]
+    return [name for name in listed if name not in left_out], left_out, kept
 
 
 def layer_plan(layer: str) -> Any:
@@ -644,7 +673,9 @@ def committed_set(spark: Any, layer: str) -> tuple[dict[str, int], str]:
     return {str(name): int(snapshot) for name, snapshot in dict(head["snapshot_set"]).items()}, str(head["run_id"])
 
 
-def register_main(args: argparse.Namespace, parser: argparse.ArgumentParser, glue: Any, s3: Any, config: MirrorConfig, tables: Sequence[str] | None) -> int:
+def register_main(
+    args: argparse.Namespace, parser: argparse.ArgumentParser, glue: Any, s3: Any, config: MirrorConfig, tables: Sequence[str] | None, sources: Any = None
+) -> int:
     """The ``register`` command: one report line per table, exit 1 when any table failed."""
     bucket = args.bucket or os.environ.get("DATA_BUCKET_NAME", "")
     if not bucket:
@@ -657,15 +688,15 @@ def register_main(args: argparse.Namespace, parser: argparse.ArgumentParser, glu
         wanted = tables
         if wanted is None and layer == "bronze":
             try:
-                wanted, left_out, existing = bronze_register_tables(s3, bucket)
+                wanted, left_out, kept = bronze_register_tables(s3, bucket, glue, config.layers["bronze"].database, sources)
             except MirrorError as error:
                 sys.stdout.write(f"{layer}: failed: {error}\n")
                 failed = True
                 continue
             for table in left_out:
                 sys.stdout.write(f"{layer}.{table}: left out: a bronze run record skipped it and no run loaded it (no source object yet)\n")
-            for table in existing:
-                sys.stdout.write(f"{layer}.{table}: required: a bronze run record skips it but its table metadata exists in S3\n")
+            for table, why in kept.items():
+                sys.stdout.write(f"{layer}.{table}: required: a bronze run record skips it but {why}\n")
         report = register_from_s3(config, layer, wanted if wanted is not None else layer_tables(layer), s3, bucket, glue, dry_run=args.dry_run)
         if report["status"] == "skipped":
             sys.stdout.write(f"{layer}: skipped: {report['reason']}\n")
@@ -687,6 +718,7 @@ def main(
     run_id: str | None = None,
     s3: Any = None,
     tables: Sequence[str] | None = None,
+    sources: Any = None,
 ) -> int:
     """The ``check`` and ``register`` commands. ``check`` without a source and a Glue client builds them: Spark on the Polaris catalog and boto3."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -700,7 +732,7 @@ def main(
     if args.command == "register":
         if args.source is None:
             parser.error("register needs --source s3")
-        return register_main(args, parser, glue, s3, config, tables)
+        return register_main(args, parser, glue, s3, config, tables, sources)
     if args.layer not in PUBLISHED_LAYERS or args.source or args.dry_run or args.bucket:
         parser.error("check takes one layer with a publish_runs table (silver, gold or features) and no --source, --bucket or --dry-run")
     spark = None
