@@ -673,7 +673,8 @@ def committed_document(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[st
     runs_head = main_head(ctx, ctx.plan.runs_table)
     if runs_head is None:
         raise PublishError("the publish_runs table has no snapshot on main")
-    tables[ctx.plan.runs_table] = {"metadata_file": metadata_file(ctx, ctx.plan.runs_table), "main_snapshot_id": runs_head}
+    ledger = {str(item["run_id"]): {name: int(value) for name, value in sorted(dict(item["snapshot_set"]).items())} for item in published_runs(ctx)}
+    tables[ctx.plan.runs_table] = {"metadata_file": metadata_file(ctx, ctx.plan.runs_table), "main_snapshot_id": runs_head, "runs": ledger}
     if any(not entry["metadata_file"] for entry in tables.values()):
         raise PublishError("a table has no metadata file, so no recovery snapshot is written")
     return {
@@ -690,9 +691,9 @@ def committed_document(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[st
 
 
 def same_run_state(stored: bytes, document: Mapping[str, Any], runs_table: str) -> bool:
-    """True when a stored snapshot is this run's state: every field equals the regenerated document except the ledger entry (``publish_runs``), which a
-    later run that shares the ledger advances. The ledger entry only has to keep its shape, so a stored snapshot of any other state of the run's own tables
-    differs."""
+    """True when a stored snapshot is this run's state: its JSON content (not its bytes) equals the regenerated document except the ledger entry
+    (``publish_runs``). A later run that shares the ledger advances that entry, so it may hold other runs' rows and a newer file, but it must keep its shape and
+    contain this run's own row with the same snapshot set. Any other field that differs makes it a different snapshot."""
     try:
         old = json.loads(stored)
     except ValueError:
@@ -702,6 +703,9 @@ def same_run_state(stored: bytes, document: Mapping[str, Any], runs_table: str) 
     ledger = old["tables"].get(runs_table)
     if not isinstance(ledger, dict) or not isinstance(ledger.get("metadata_file"), str) or type(ledger.get("main_snapshot_id")) is not int:
         return False
+    rows = ledger.get("runs")
+    if not isinstance(rows, dict) or rows.get(document["run_id"]) != document["snapshot_set"]:
+        return False
     return {**old, "tables": {name: entry for name, entry in old["tables"].items() if name != runs_table}} == {
         **document,
         "tables": {name: entry for name, entry in document["tables"].items() if name != runs_table},
@@ -709,8 +713,9 @@ def same_run_state(stored: bytes, document: Mapping[str, Any], runs_table: str) 
 
 
 def write_committed_snapshot(ctx: Context, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
-    """Create ``catalog_committed_<run>.json`` once and read it back. An object that exists is left alone when it is this run's state (the ledger entry may have
-    moved on because a later run advanced the shared ``publish_runs``); one that differs in anything else stops the step, and nothing is ever replaced."""
+    """Create ``catalog_committed_<run>.json`` once and read it back. An object that exists is left alone when its content is this run's state (the ledger entry
+    may have moved on because a later run advanced the shared ``publish_runs``, but it must still hold this run's row); one that differs in anything else stops
+    the step, and nothing is ever replaced."""
     if ctx.store is None:
         raise PublishError("no backup location is configured")
     document = committed_document(ctx, snapshot_set)

@@ -414,6 +414,7 @@ class Session:
         self.cli, self.names, self.clock, self.marker, self.job_prefix = cli, names, clock or Clock(), marker, job_prefix
         self.deadline: float | None = None
         self.setup_task, self.setup_state = "", ""
+        self.pending_file = marker.parent / "catalog_recovery.pending"  # beside the bootstrap marker on the Mac, so a test's folder holds it
         self.launch_tokens: dict[str, str] = {}
         self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
@@ -1159,43 +1160,70 @@ class Session:
         return "present"
 
     def write_pending_marker(self) -> bool:
-        """Record that the catalog recovery is owed. A failed write is reported; the recovery still runs on this start."""
+        """Record that the catalog recovery is owed; S3 answers the put only once the object is stored. A failed write is reported and answers False."""
+        if not self.names.code_record_bucket:
+            self.step("catalog_recovery_marker_not_written", "the session names no data bucket")
+            return False
         with tempfile.TemporaryDirectory(prefix="catalog_pending_") as folder:
             body = Path(folder) / "marker"
             body.write_text(json.dumps({"pending": "catalog recovery", "since_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")}) + "\n", encoding="utf-8")
             try:
                 self.call("s3api", "put-object", ["--key", CATALOG_PENDING_KEY, "--body", str(body), "--content-type", "application/json"])
             except HostSessionError as error:
-                self.step("catalog_recovery_marker_not_written", f"{error}; a failed recovery is then retried only while the restore log shows it")
+                self.step("catalog_recovery_marker_not_written", str(error))
                 return False
         return True
 
-    def clear_pending_marker(self) -> None:
-        """Remove the marker after the recovery succeeded. A failed delete is reported and the marker stays, so the next start repeats the recovery."""
+    def keep_local_pending(self) -> bool:
+        """Keep the obligation on this Mac when the bucket cannot take it: the next start finds the file and recovers. False when the file cannot be written."""
+        try:
+            self.pending_file.parent.mkdir(parents=True, exist_ok=True)
+            self.pending_file.write_text("catalog recovery pending\n", encoding="utf-8")
+        except OSError:
+            return False
+        return True
+
+    def clear_pending(self) -> None:
+        """Remove both records after the recovery succeeded. A record that cannot be removed is reported and stays, so the next start repeats the recovery."""
         try:
             self.call("s3api", "delete-object", ["--key", CATALOG_PENDING_KEY])
         except HostSessionError as error:
             self.step("catalog_recovery_marker_not_cleared", f"{error}; the next start repeats the catalog recovery")
+        try:
+            self.pending_file.unlink(missing_ok=True)
+        except OSError as error:
+            self.step("catalog_recovery_marker_not_cleared", f"the local record: {type(error).__name__}; the next start repeats the catalog recovery")
 
     def catalog_recovery(self) -> None:
         """Bring the catalog to the newest committed snapshot of each layer (the ``restore`` step of the catalog setup one-shot, which runs on the host under
-        its own role with the root credential) when it is owed: this start restored a database, an earlier start left the pending marker (kept outside the data
-        volume until a recovery succeeded), or either could not be told. The recovery is idempotent, so an unreadable log or marker runs it and never skips it.
-        A stack with no setup container has no restore, so only a marker left earlier runs it there. The marker is written before the run and cleared only
-        after it succeeds, so a failed recovery is retried by the next start. A failure fails the start, because the catalog would otherwise show an older
-        committed set."""
+        its own role with the root credential) when it is owed: this start restored a database, an earlier start left the pending marker (an object in the data
+        bucket, or the file on this Mac when the bucket could not take it), or the log or the marker cannot be read. The recovery is idempotent, so an
+        unreadable log or marker runs it and never skips it. A stack with no setup container has no restore, so only a record left earlier runs it there.
+
+        The retry obligation is durable before any attempt: the recovery runs only after the marker write succeeded. When it cannot be written the
+        start fails without running the recovery, after the obligation is kept on this Mac (or the failure says to run the recovery by hand). The records are
+        cleared only after the recovery succeeds, so a failed recovery is retried by the next start."""
         restored, marker = self.setup_restore_state(), self.pending_marker()
-        if (restored is False and marker in ("absent", "off")) or (not self.setup_task and marker != "present"):
+        local = self.pending_file.exists()
+        if (restored is False and marker in ("absent", "off") and not local) or (not self.setup_task and marker != "present" and not local):
             return
-        owed = marker == "present" or (marker in ("absent", "unreadable") and self.write_pending_marker())
+        if marker != "present" and not self.write_pending_marker():
+            if self.keep_local_pending():
+                raise HostSessionError(
+                    "catalog recovery not started: the pending marker could not be written, so no recovery was attempted; "
+                    "the obligation is kept on this Mac and the next start retries it"
+                )
+            raise HostSessionError(
+                "catalog recovery not started: the pending marker could not be written and no record of it could be kept; "
+                "run python -m scripts.infrastructure.host_session catalog-setup restore by hand once the data bucket is reachable"
+            )
         try:
             lines = self.catalog_setup("restore", seconds=CATALOG_RESTORE_SECONDS)
         except HostSessionError as error:
             raise HostSessionError(f"catalog restore failed: {error}") from None
         counts = restore_counts(lines)
         self.step("catalog_restored", ", ".join(f"{word} {count}" for word, count in sorted(counts.items())) or "no table to restore")
-        if owed:
-            self.clear_pending_marker()
+        self.clear_pending()
 
     def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
         """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch

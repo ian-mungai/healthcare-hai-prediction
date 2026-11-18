@@ -69,6 +69,8 @@ class StandInSpark:
         if ".metadata_log_entries" in source:
             found = self.tables[source.split(".metadata_log_entries")[0]].get("file")
             return Rows([(found,)] if found else [])
+        if " ORDER BY committed_at ASC" in source:
+            return Rows(sorted(self.runs, key=lambda row: (row[2], row[0])))
         if " WHERE run_id = " in source:
             run = source.split("run_id = '", 1)[1].rstrip("'")
             return Rows(row for row in self.runs if row[0] == run)
@@ -128,7 +130,8 @@ def case_writes_the_snapshot_once_from_the_committed_state() -> dict[str, bool]:
         and {name: document["tables"][name]["main_snapshot_id"] for name in SNAPSHOT_SET} == SNAPSHOT_SET,
         "it holds the newest metadata file of each table and of the runs table": document["tables"]["fct_visit"]["metadata_file"]
         == metadata_file("gold", "fct_visit", 6)
-        and document["tables"]["publish_runs"] == {"metadata_file": metadata_file("gold", "publish_runs", 11), "main_snapshot_id": RUNS_MAIN},
+        and document["tables"]["publish_runs"]
+        == {"metadata_file": metadata_file("gold", "publish_runs", 11), "main_snapshot_id": RUNS_MAIN, "runs": {RUN: SNAPSHOT_SET}},
         "it names the run row's digests and no time": set(document["publish_run"]) == {"sealed_sha256", "export_manifest_sha256", "backup_sha256"}
         and "committed_at" not in json.dumps(document),
         "the result names the snapshot's digest": result["snapshot_sha256"] == hashlib.sha256(store.get(publish.committed_name(RUN))).hexdigest(),
@@ -245,6 +248,78 @@ def case_a_stored_snapshot_of_another_shape_is_refused_even_when_only_the_ledger
     return {
         "a snapshot without a ledger entry is refused": message is not None and "never replaced" in message,
         "it is not rewritten": path.read_bytes() == kept,
+    }
+
+
+def ledger_runs(path: Path) -> dict[str, Any]:
+    return dict(json.loads(path.read_bytes())["tables"]["publish_runs"].get("runs", {}))
+
+
+def case_the_snapshot_records_the_committed_runs_of_the_ledger() -> dict[str, bool]:
+    store = new_store()
+    spark = committed_catalog()
+    spark.runs.append(
+        (OTHER_RUN, "real", datetime(2026, 11, 17, 18, tzinfo=UTC), SHA, "b" * 64, "x", "c" * 64, json.dumps({"fct_visit": 1, "dim_site": 2}), None)
+    )
+    publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+    runs = ledger_runs(store.root / publish.committed_name(RUN))
+    return {"the ledger entry holds each committed run with its snapshot set": runs == {RUN: SNAPSHOT_SET, OTHER_RUN: {"fct_visit": 1, "dim_site": 2}}}
+
+
+def case_a_stored_ledger_without_this_runs_commit_is_refused() -> dict[str, bool]:
+    checks = {}
+    for name, runs in (
+        ("another run only", {OTHER_RUN: SNAPSHOT_SET}),
+        ("this run with another snapshot set", {RUN: {"fct_visit": 1, "dim_site": 2}}),
+        ("no runs at all", {}),
+    ):
+        store = new_store()
+        spark = committed_catalog()
+        publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+        path = store.root / publish.committed_name(RUN)
+        stored = json.loads(path.read_bytes())
+        stored["tables"]["publish_runs"]["runs"] = runs
+        path.write_bytes(publish.canonical(stored))
+        kept = path.read_bytes()
+        spark.tables["hai_lakehouse.gold.publish_runs"] = {"refs": {"main": RUNS_MAIN + 1}, "file": metadata_file("gold", "publish_runs", 12)}
+        message = refused(lambda spark=spark, store=store: publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET))
+        checks[f"{name}: refused and kept"] = message is not None and "never replaced" in message and path.read_bytes() == kept
+    return checks
+
+
+def case_a_stored_ledger_with_this_run_and_other_runs_is_accepted() -> dict[str, bool]:
+    store = new_store()
+    spark = committed_catalog()
+    publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+    path = store.root / publish.committed_name(RUN)
+    stored = json.loads(path.read_bytes())
+    stored["tables"]["publish_runs"]["runs"] = {RUN: SNAPSHOT_SET, OTHER_RUN: {"fct_visit": 5, "dim_site": 6}}
+    path.write_bytes(publish.canonical(stored))
+    kept = path.read_bytes()
+    answer = publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+    return {"the rerun succeeds": answer.get("created") is False, "the stored snapshot is unchanged": path.read_bytes() == kept}
+
+
+def case_equal_content_after_parsing_passes_and_a_field_change_fails() -> dict[str, bool]:
+    store = new_store()
+    spark = committed_catalog()
+    ctx = context(spark, store)
+    publish.write_committed_snapshot(ctx, SNAPSHOT_SET)
+    path = store.root / publish.committed_name(RUN)
+    original = path.read_bytes()
+    path.write_bytes(original + b" \n")
+    spaced = publish.ensure_committed_snapshot(ctx, SNAPSHOT_SET)
+    kept_spaced = path.read_bytes() == original + b" \n"
+    path.write_bytes(json.dumps(json.loads(original), indent=4).encode())
+    reindented = publish.ensure_committed_snapshot(ctx, SNAPSHOT_SET)
+    stored = json.loads(original)
+    stored["snapshot_set"]["fct_visit"] += 1
+    path.write_bytes(publish.canonical(stored))
+    message = refused(lambda: publish.ensure_committed_snapshot(ctx, SNAPSHOT_SET))
+    return {
+        "a whitespace-only difference passes and the file is left alone": spaced.get("created") is False and kept_spaced,
+        "a re-indented copy of the same content passes": reindented.get("created") is False,
+        "a changed field is refused": message is not None and "never replaced" in message,
     }
 
 

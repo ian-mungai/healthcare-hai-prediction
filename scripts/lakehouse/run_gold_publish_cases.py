@@ -566,10 +566,22 @@ def recovery_snapshot(h: Harness) -> Check:
         path is not None and path.read_bytes() == bytes_before and again["recovery_snapshot"]["created"] is False
     )
     if path is not None:
-        path.write_bytes(bytes_before + b" ")
-        checks["a different snapshot of the run is refused and kept"] = (
-            refuses(lambda: publish.commit_publish(ctx)) and path.read_bytes() == bytes_before + b" "
+        # The rule of the comparison: a stored snapshot whose JSON content equals the regenerated one passes whatever its bytes; any field that differs fails.
+        path.write_bytes(bytes_before + b" \n")
+        spaced = publish.commit_publish(ctx)
+        checks["a stored copy with the same content after JSON parsing (extra whitespace) passes and is left alone"] = (
+            spaced["recovery_snapshot"]["created"] is False and path.read_bytes() == bytes_before + b" \n"
         )
+        stored = json.loads(bytes_before)
+        stored["snapshot_set"][sorted(stored["snapshot_set"])[0]] += 1
+        changed = publish.canonical(stored)
+        path.write_bytes(changed)
+        checks["a stored copy with a changed field is refused and kept"] = refuses(lambda: publish.commit_publish(ctx)) and path.read_bytes() == changed
+        stored = json.loads(bytes_before)
+        stored["tables"][ctx.plan.runs_table]["runs"] = {}
+        without = publish.canonical(stored)
+        path.write_bytes(without)
+        checks["a stored ledger without this run's commit is refused and kept"] = refuses(lambda: publish.commit_publish(ctx)) and path.read_bytes() == without
         path.write_bytes(bytes_before)
     row = publish.committed_run(ctx)
     ledger_before = publish.metadata_file(ctx, ctx.plan.runs_table)

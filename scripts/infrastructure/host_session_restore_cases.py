@@ -70,9 +70,13 @@ class RecordHost(StandInHost):
         """Every object call is refused by ``s3_denied``; only the pending-recovery marker by ``s3_denied_pending``."""
         return "s3_denied" in self.faults or ("s3_denied_pending" in self.faults and key == PENDING_KEY)
 
+    def read_denied(self, key: str) -> bool:
+        """Only reads of the pending marker are refused (``s3_denied_pending_read``); a write still works."""
+        return self.denied(key) or ("s3_denied_pending_read" in self.faults and key == PENDING_KEY)
+
     def s3_get_object(self, options: dict[str, list[str]]) -> dict[str, Any]:
         key, target = options["--key"][0], options["--key"][1]
-        if self.denied(key):
+        if self.read_denied(key):
             raise StandInError("AccessDenied")
         if key not in self.objects:
             raise StandInError("NoSuchKey")
@@ -162,6 +166,7 @@ def build(
     catalog_setup: bool = True,
     host: RecordHost | None = None,
     log_group: str = POSTGRES_LOG_GROUP,
+    pending_file: Path | None = None,
 ) -> tuple[RecordHost, Session, list[str]]:
     """A session over the stand-in. ``record`` is the value of the code run record; ``named`` gives the session the parameter and log group names;
     ``catalog_setup`` gives the stack the catalog setup one-shot, which the restore step runs in."""
@@ -184,7 +189,9 @@ def build(
     if catalog_setup:
         names = replace(names, one_shot={**names.one_shot, "catalog_setup": CATALOG_SETUP_FAMILY})
     marker = cases.Path(cases.tempfile.mkdtemp(prefix="host_session_restore_")) / "polaris_bootstrap.launched"
-    return host, module.Session(cli, names, module.Clock(lambda: host.now, host.advance), marker, lines.append), lines
+    session = module.Session(cli, names, module.Clock(lambda: host.now, host.advance), marker, lines.append)
+    session.pending_file = pending_file or marker.parent / "catalog_recovery.pending"
+    return host, session, lines
 
 
 def failure(action: Callable[[], object]) -> str | None:
@@ -514,17 +521,48 @@ def an_unknown_log_group_runs_the_recovery() -> dict[str, bool]:
 
 
 def an_unreadable_pending_marker_runs_the_recovery() -> dict[str, bool]:
-    host, session, _ = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=False)
-    session.start()
-    return {"the recovery ran once": len(host.catalog_launches) == 1, "start finished": bool(host.reloads)}
-
-
-def a_marker_that_cannot_be_written_does_not_skip_the_recovery() -> dict[str, bool]:
-    host, session, lines = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=True)
+    host, session, lines = build({"s3_denied_pending_read"}, setup_exits=SETUP_OK, restored=False)
     session.start()
     return {
         "the recovery ran once": len(host.catalog_launches) == 1,
-        "the report says the marker was not written": any(line.startswith("catalog_recovery_marker_not_written") for line in lines),
+        "start finished": bool(host.reloads),
+        "the marker was written first and cleared after": PENDING_KEY not in host.objects,
+    }
+
+
+def a_marker_that_cannot_be_written_fails_the_start_before_any_recovery() -> dict[str, bool]:
+    host, session, lines = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=True)
+    message = failure(session.start)
+    return {
+        "start fails and names the pending marker": message is not None and "pending marker" in message and "not started" in message,
+        "no recovery ran": host.catalog_launches == [],
+        "the host is turned off and nothing is reloaded": host.desired == 0 and host.reloads == [],
+        "the obligation is kept on the Mac": session.pending_file.exists(),
+    }
+
+
+def the_next_start_with_a_working_store_writes_the_marker_and_recovers() -> dict[str, bool]:
+    host, session, _ = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=True)
+    first = failure(session.start)
+    host2, session2, lines2 = build(setup_exits=SETUP_OK, restored=False, host=host, pending_file=session.pending_file)
+    session2.start()
+    return {
+        "the first start failed closed": first is not None,
+        "the next start recovered although the restore log shows no restore": len(host.catalog_launches) == 1 and host.marker_at_launch == [True],
+        "both records are cleared after the recovery succeeded": PENDING_KEY not in host.objects and not session.pending_file.exists(),
+        "the report names the recovery": any(line.startswith("catalog_restored") for line in lines2),
+    }
+
+
+def a_marker_that_cannot_be_recorded_anywhere_fails_the_start_and_says_so() -> dict[str, bool]:
+    folder = Path(importlib.import_module("tempfile").mkdtemp(prefix="pending_blocked_"))
+    blocker = folder / "blocked"
+    blocker.write_text("a file where a folder is needed", encoding="utf-8")
+    host, session, _ = build({"s3_denied_pending"}, setup_exits=SETUP_OK, restored=True, pending_file=blocker / "catalog_recovery.pending")
+    message = failure(session.start)
+    return {
+        "start fails and says no record could be made": message is not None and "pending marker" in message and "by hand" in message,
+        "no recovery ran": host.catalog_launches == [] and host.desired == 0,
     }
 
 

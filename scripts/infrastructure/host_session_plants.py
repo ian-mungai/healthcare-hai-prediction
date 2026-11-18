@@ -255,23 +255,27 @@ PLANTS: dict[str, tuple[str, str]] = {
     "counts a task of an older task definition": ('if current and task.get("taskDefinitionArn") not in (None, current):', "if False:"),
     "never runs the catalog recovery": ("            self.catalog_recovery()\n", ""),
     "recovers the catalog although nothing is owed": (
-        '        if (restored is False and marker in ("absent", "off")) or (not self.setup_task and marker != "present"):\n            return\n',
+        '        if (restored is False and marker in ("absent", "off") and not local) '
+        'or (not self.setup_task and marker != "present" and not local):\n            return\n',
         "",
     ),
+    "ignores a pending record of an earlier start": (
+        'if (restored is False and marker in ("absent", "off") and not local) or (not self.setup_task and marker != "present" and not local):',
+        "if restored is False:",
+    ),
+    "never writes the pending marker": ('        if marker != "present" and not self.write_pending_marker():', "        if False:"),
+    "recovers after a failed marker write": (
+        '        if marker != "present" and not self.write_pending_marker():',
+        '        if marker != "present" and not (self.write_pending_marker() or True):',
+    ),
+    "keeps no local record of the obligation": ('self.pending_file.write_text("catalog recovery pending\\n", encoding="utf-8")', "pass"),
+    "ignores the local record": ("        local = self.pending_file.exists()", "        local = False"),
+    "never clears the pending records": ("        self.clear_pending()\n", ""),
     "skips the recovery when the restore log cannot be read": (
         "        except HostSessionError:\n            return None\n        return any(SETUP_RESTORED_WORDS",
         "        except HostSessionError:\n            return False\n        return any(SETUP_RESTORED_WORDS",
     ),
     "skips the recovery when the marker cannot be read": ('return "absent" if "NoSuchKey" in str(error) else "unreadable"', 'return "absent"'),
-    "ignores a pending marker of an earlier start": (
-        'if (restored is False and marker in ("absent", "off")) or (not self.setup_task and marker != "present"):',
-        "if restored is False:",
-    ),
-    "never writes the pending marker": (
-        'owed = marker == "present" or (marker in ("absent", "unreadable") and self.write_pending_marker())',
-        'owed = marker == "present"',
-    ),
-    "never clears the pending marker": ("        if owed:\n            self.clear_pending_marker()\n", ""),
     "ignores a failed catalog restore": (
         '        except HostSessionError as error:\n            raise HostSessionError(f"catalog restore failed: {error}") from None\n'
         "        counts = restore_counts(lines)",
