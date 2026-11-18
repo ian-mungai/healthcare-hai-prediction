@@ -798,6 +798,33 @@ def bronze_request_is_checked_and_bound() -> None:
         require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
 
 
+def a_full_bronze_run_fits_the_runtask_overrides() -> None:
+    """The bronze_stage job stages a request for every table of the table map (330 at Nov 18 2026, about 11 KB) and the bronze job runs it. A RunTask call
+    takes at most 8192 characters of container overrides, all containers together (the fake refuses more, as the service does). The tables travel in the
+    staged request, which each phase reads and checks against its digest, and never in the overrides of the pin, load or check container."""
+    names = list(collections_of_table_map())
+    good = {"tables": names, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    ingestion, bronze = "ingestion_0f0f0f0f", "bronze_0f0f0f0f"
+    rig = Rig()
+    rig.stage_runs(ingestion)
+    rig.stage.stage(bronze, "bronze_request.json", good)
+    require(len(rig.stage.objects[RUN_KEY.format(run=bronze, name="bronze_request.json")]) > 4096, "the request is not as large as a full run's")
+    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+        require(current.step("bronze_stage") == "succeeded", "the stage job did not launch")
+        require(current.step("bronze_load") == "succeeded", "a full-map bronze request did not launch")
+    sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
+    require(len(sent) == 2, f"{len(sent)} tasks started")
+    for arguments in sent:
+        size = len(json.dumps(arguments["overrides"], separators=(",", ":")))
+        require(size < 4096, f"the overrides of {arguments['taskDefinition']} hold {size} characters, with a service limit of 8192")
+    values = rig.environment(1)
+    require(set(values) == {"fetch", "pin", "load", "check"}, sorted(values))
+    require(all(not value or "," not in value for variables in values.values() for value in variables.values()), "a table list is in the container overrides")
+    require(values["pin"]["BRONZE_TABLES"] == values["load"]["BRONZE_TABLES"] == values["check"]["BRONZE_TABLES"] == "", f"{values}")
+    require(len(values["load"]["BRONZE_REQUEST_SHA256"]) == 64 and values["pin"]["BRONZE_INVENTORY_SHA256"] == INVENTORY, f"{values['pin']}")
+
+
 def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
     """A bronze run that its ingestion run started has no code staged under its own run ID. Its chain gate binds it, and the layer runs of its chain, to the
     code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a binding is never replaced."""
@@ -3380,6 +3407,7 @@ CASES: dict[str, Callable[[], None]] = {
     "fresh_run_settles_the_unfinished_launch_itself": fresh_run_settles_the_unfinished_launch_itself,
     "training_form_requires_a_model": training_form_requires_a_model,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
+    "a_full_bronze_run_fits_the_runtask_overrides": a_full_bronze_run_fits_the_runtask_overrides,
     "a_bronze_run_runs_the_code_of_its_ingestion_run": a_bronze_run_runs_the_code_of_its_ingestion_run,
     "the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after": the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,

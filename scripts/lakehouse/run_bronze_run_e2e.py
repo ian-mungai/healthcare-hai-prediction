@@ -345,6 +345,25 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     require(outcome["notice"] == "sent", f"{outcome}")
 
 
+def case_the_phases_read_their_tables_from_the_staged_request(case: Case) -> None:
+    """The launch passes no table list (it would not fit the RunTask overrides of a full run). With no ``--tables`` and no ``BRONZE_TABLES`` each phase takes
+    the tables from the staged request, after checking its bytes against ``BRONZE_REQUEST_SHA256``."""
+    case.shas = case.stage("alpha_data,beta_data", "real", False)
+    require(case.chain(tables="", staged=True) == [0, 0, 0], case.err)
+    require(len(LOADS) == 1 and LOADS[0][LOADS[0].index("--tables") + 1] == "alpha_data,beta_data", LOADS)
+    recorded = json.loads((case.work() / "state" / RUN / bronze_run.RECORD).read_text())
+    require(recorded["tables"] == ["alpha_data", "beta_data"], recorded)
+    LOADS.clear()
+    require(case.phase("pin", label="again", tables="", staged=True) == 0, case.err)
+    STAGED["bronze_request.json"] = json.dumps({"tables": ["alpha_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1]}).encode()
+    case.err = ""
+    require(case.phase("load", label="again", tables="", staged=True) != 0 and "differs from the one the preflight checked" in case.err, case.err)
+    require(LOADS == [], "a load ran on a request that is not the one the preflight checked")
+    case.err = ""
+    case.shas = ("", case.shas[1])
+    require(case.phase("pin", label="third", tables="", staged=True) != 0 and "differs from the one the preflight checked" in case.err, case.err)
+
+
 def case_qualification_writes_only_the_twins(case: Case) -> None:
     require(case.chain(target="qualify") == [0, 0, 0], case.err)
     arguments = LOADS[0]
@@ -738,6 +757,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
+    "the phases read their tables from the staged request when none is passed": case_the_phases_read_their_tables_from_the_staged_request,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,
     "a dry run writes nothing shared and prints the checked plan": case_dry_run_writes_nothing,

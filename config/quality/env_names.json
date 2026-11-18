@@ -108,7 +108,7 @@
     "BRONZE_DRY_RUN": {"category": "container", "reason": "Derived by the launch preflight from the staged request and passed to the containers."},
     "BRONZE_INVENTORY_SHA256": {"category": "container", "reason": "Derived by the launch preflight from the staged request and passed to the containers."},
     "BRONZE_REQUEST_SHA256": {"category": "container", "reason": "Derived by the launch preflight from the staged request and passed to the containers."},
-    "BRONZE_TABLES": {"category": "container", "reason": "Derived by the launch preflight from the staged request and passed to the containers."},
+    "BRONZE_TABLES": {"category": "container", "reason": "Passed empty by the launch preflight (a full run's table list does not fit the RunTask overrides); a hand run may set it, and otherwise each phase reads the tables from the staged request."},
     "BRONZE_TARGET": {"category": "container", "reason": "Derived by the launch preflight from the staged request and passed to the containers."},
     "CODE_MODE": {"category": "container", "reason": "Passed by the launch to the containers of an AWS task.", "set_in": "scripts/infrastructure/host_session.py"},
     "CODE_RUN_ID": {"category": "container", "reason": "Passed by the launch to the containers of an AWS task."},

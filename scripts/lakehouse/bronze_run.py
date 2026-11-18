@@ -9,8 +9,11 @@ The ``stage`` phase belongs to the small ``bronze_stage`` job that runs before t
 role and writes the run's ``bronze_inventory.json`` and then its ``bronze_request.json`` (once each, for every table of the table map that has a source object,
 as a real load) to ``lakehouse/run_stage/<run>/inputs/``. The launch preflight of the bronze job reads and checks that request and the pin phase checks both.
 
-Two values change from run to run and arrive at dispatch: the tables (``BRONZE_TABLES``) and the target (``BRONZE_TARGET``). The preflight checks them before it
-starts the task. ``pin`` checks them again against the table map of the unpacked code, and ``load`` and ``check`` refuse values that differ from the pin.
+Two values change from run to run and arrive at dispatch: the tables and the target (``BRONZE_TARGET``). The preflight checks them before it starts the task.
+The tables are not in the container environment, because a full run names 330 of them and a RunTask call takes at most 8192 characters of overrides. With no
+``--tables`` and no ``BRONZE_TABLES`` (a hand run may set either) each phase reads them from the staged request, after it checks the request's bytes against
+``BRONZE_REQUEST_SHA256``. ``pin`` checks them again against the table map of the unpacked code, and ``load`` and ``check`` refuse values that differ from the
+pin.
 The target ``real`` writes the namespaces ``bronze`` and ``bronze_dictionary``. The target ``qualify`` writes ``bronze_e2e`` and ``bronze_dictionary_e2e``
 and takes the tables of one collection. No other namespace can be named.
 
@@ -118,6 +121,20 @@ def read_staged(run: str, bucket: str, name: str) -> bytes:
     import boto3
 
     return bytes(boto3.client("s3").get_object(Bucket=bucket, Key=STAGE_KEY.format(run=run, name=name))["Body"].read())
+
+
+def staged_tables(run: str, bucket: str, request_sha256: str) -> list[str]:
+    """The tables of the run's staged request, read with the task identity once its bytes match the digest the preflight checked. The pin checks the rest."""
+    body = read_staged(run, bucket, REQUEST_FILE)
+    if not SHA256.fullmatch(request_sha256) or hashlib.sha256(body).hexdigest() != request_sha256:
+        raise StepError("the staged request differs from the one the preflight checked")
+    try:
+        tables = json.loads(body)["tables"]
+    except (ValueError, KeyError, TypeError):
+        raise StepError("the staged request holds no table list") from None
+    if not isinstance(tables, list):
+        raise StepError("the staged request holds no table list")
+    return tables
 
 
 def owner_storage() -> Any:
@@ -542,7 +559,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("phase", choices=(*PHASES, "inventory", "stage"))
     parser.add_argument("--run", required=True)
-    parser.add_argument("--tables", default="", help="comma-separated tables (also BRONZE_TABLES)")
+    parser.add_argument("--tables", default="", help="comma-separated tables (also BRONZE_TABLES; with neither, the staged request names them)")
     parser.add_argument("--target", default="", help="real or qualify (also BRONZE_TARGET)")
     parser.add_argument("--work", type=Path, default=Path("/workspace"))
     parser.add_argument("--archive", type=Path)
@@ -578,7 +595,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif (folder / DRY_MARKER).exists():
             dry = True
         target = args.target or os.environ.get("BRONZE_TARGET", "")
-        names = check_dispatch(args.tables or os.environ.get("BRONZE_TABLES", ""), target, collections_of(table_map(work / "code")))
+        requested = args.tables or os.environ.get("BRONZE_TABLES", "") or staged_tables(args.run, args.bucket, args.request_sha256)
+        names = check_dispatch(requested, target, collections_of(table_map(work / "code")))
         job = Job(args.run, work, args.bucket, names, target, dry, args.request_sha256, args.inventory_sha256)
         if dry:
             job.folder.mkdir(parents=True, exist_ok=True)

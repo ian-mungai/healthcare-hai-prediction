@@ -108,12 +108,54 @@ def test_the_preflight_and_the_pin_accept_the_staged_inputs(monkeypatch: pytest.
     Setup(monkeypatch, store)
     stage(store)
     values = ecs_preflight.bronze_request_reader(store, BUCKET, bronze_run.collections_of(CONFIG))(RUN)
-    check(values["BRONZE_TABLES"] == "alpha_data,beta_data" and values["BRONZE_TARGET"] == "real" and values["BRONZE_DRY_RUN"] == "", f"{values}")
+    check(values["BRONZE_TABLES"] == "" and values["BRONZE_TARGET"] == "real" and values["BRONZE_DRY_RUN"] == "", f"{values}")
     monkeypatch.setattr(bronze_run, "archive_revision", lambda archive, sha: "c" * 40)
     monkeypatch.setattr(bronze_run, "read_staged", lambda run, bucket, name: store.objects[bronze_run.STAGE_KEY.format(run=run, name=name)])
-    job = bronze_run.Job(RUN, tmp_path, BUCKET, ("alpha_data", "beta_data"), "real", False, values["BRONZE_REQUEST_SHA256"], values["BRONZE_INVENTORY_SHA256"])
+    tables = bronze_run.staged_tables(RUN, BUCKET, values["BRONZE_REQUEST_SHA256"])
+    check(tables == ["alpha_data", "beta_data"], f"the phases read other tables from the staged request: {tables}")
+    job = bronze_run.Job(RUN, tmp_path, BUCKET, tuple(tables), "real", False, values["BRONZE_REQUEST_SHA256"], values["BRONZE_INVENTORY_SHA256"])
     bronze_run.pin(job, tmp_path / "code.tar.gz", "d" * 64)
     check((job.folder / bronze_run.RECORD).is_file(), "the pin phase wrote no record from the staged inputs")
+
+
+FULL_MAP = json.loads((Path(__file__).resolve().parents[1] / "config/lakehouse/bronze_tables.json").read_text())
+FULL_NAMES = [entry["table"] for entry in FULL_MAP["tables"]]
+FULL_SOURCES = {
+    "version": 1,
+    "tables": sorted(FULL_NAMES),
+    "manifests": [],
+    "documents": [],
+    "objects": [[name, f"raw/{name}/1.csv", "v1", "a" * 64, 10] for name in FULL_NAMES],
+}
+
+
+def test_the_request_of_a_full_run_is_staged_and_accepted_and_its_tables_stay_out_of_the_container_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The live run of Nov 18 staged a 10 KB request for all 330 tables and the preflight refused it as too large (the limit was 4096, set for hand-written
+    requests). Every container of the job would also have carried the 10 KB table list, and a RunTask call takes at most 8192 characters of overrides."""
+    store = Store()
+    Setup(monkeypatch, store)
+    monkeypatch.setattr(bronze_run, "table_map", lambda code: FULL_MAP)
+    monkeypatch.setattr(bronze_pin, "build_inventory", lambda *arguments: FULL_SOURCES)
+    done = stage(store)
+    body = store.objects[REQUEST_KEY]
+    check(len(FULL_NAMES) > 300 and len(body) > 4096, f"{len(FULL_NAMES)} tables, {len(body)} bytes: not like the live request")
+    values = ecs_preflight.bronze_request_reader(store, BUCKET, bronze_run.collections_of(FULL_MAP))(RUN)
+    check(values["BRONZE_REQUEST_SHA256"] == done["request_sha256"] == hashlib.sha256(body).hexdigest(), f"{values}")
+    check(values["BRONZE_TARGET"] == "real" and values["BRONZE_DRY_RUN"] == "", f"{values}")
+    check(values["BRONZE_TABLES"] == "", "the table list is still passed through the container environment")
+    check(sum(len(name) + len(value) for name, value in values.items()) < 1024, f"the values are not small: {values}")
+
+
+def test_the_request_limit_holds_the_largest_valid_request_with_room_to_grow() -> None:
+    names = sorted(FULL_NAMES)
+    largest = json.dumps({"tables": names, "target": "real", "dry_run": False, "inventory_sha256": "f" * 64}, sort_keys=True).encode()
+    check(len(largest) * 2 <= ecs_preflight.BRONZE_REQUEST_BYTES, f"{len(largest)} bytes of request against a limit of {ecs_preflight.BRONZE_REQUEST_BYTES}")
+
+
+def test_a_request_above_the_limit_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = Store({REQUEST_KEY: b" " * (ecs_preflight.BRONZE_REQUEST_BYTES + 1)})
+    with pytest.raises(ecs_preflight.TaskRefused, match="bronze_request_too_large"):
+        ecs_preflight.bronze_request_reader(store, BUCKET, bronze_run.collections_of(CONFIG))(RUN)
 
 
 MOVED = SOURCES | {"objects": [*SOURCES["objects"], ["alpha_data", "raw/a/3.csv", "v3", "e" * 64, 30]]}

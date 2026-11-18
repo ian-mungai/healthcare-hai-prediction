@@ -63,7 +63,8 @@ HOST_FILE = Path("config/orchestration/host_jobs.json")
 # Jobs only the direct launch runs, in the same schema: the Run 3 publisher is one of them.
 DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
-BRONZE_REQUEST_BYTES = 4096
+# The request of a full run names every table of the table map (330 tables and about 11 KB at Nov 18 2026): the limit holds twice that.
+BRONZE_REQUEST_BYTES = 32768
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(RUN_ID_PATTERN)
@@ -233,6 +234,10 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
     ``inventory_sha256`` (the digest of the staged source inventory). The tables must be
     in the table map (``collections`` maps each table to its collection) and a qualification run takes the tables of one collection. A file that is not
     staged yet is retryable, a file that fails a check is refused.
+
+    The tables are not passed to the containers: a full run names 330 of them (about 10 KB) and a RunTask call takes at most 8192 characters of overrides for
+    all containers. ``BRONZE_TABLES`` stays in the task definition and is passed empty, and each phase reads the tables from the staged request after it
+    checks the request's bytes against ``BRONZE_REQUEST_SHA256``.
     """
 
     def read(run_id: str) -> dict[str, str]:
@@ -265,10 +270,10 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
         ):
             raise TaskRefused("bronze_request_has_wrong_types")
         try:
-            names = check_dispatch(tables, target, collections)
+            check_dispatch(tables, target, collections)
         except DispatchError as error:
             raise TaskRefused(f"bronze_request_refused: {error}") from None
-        values = {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
+        values = {"BRONZE_TABLES": "", "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
         return values | {"BRONZE_REQUEST_SHA256": hashlib.sha256(body).hexdigest(), "BRONZE_INVENTORY_SHA256": inventory}
 
     return read
