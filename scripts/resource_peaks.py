@@ -27,9 +27,9 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TextIO, cast
 
-from scripts import metrics_push
+from scripts import metrics_push, phase_failure
 
 CGROUP_V2_PEAK = Path("/sys/fs/cgroup/memory.peak")
 CGROUP_V1_PEAK = Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes")
@@ -217,6 +217,33 @@ def _exit_push(
     return push
 
 
+def _watch_stderr() -> phase_failure.StderrTail | None:
+    """Keep the last line of standard error while the job runs. Anything that goes wrong leaves the stream as it was."""
+    try:
+        tail = phase_failure.StderrTail(sys.stderr)
+        sys.stderr = cast(TextIO, tail)
+        return tail
+    except Exception:
+        return None
+
+
+def _release_stderr(tail: phase_failure.StderrTail | None) -> None:
+    if tail is not None:
+        sys.stderr = tail.stream
+        tail.finish()
+
+
+def _write_failure(tail: phase_failure.StderrTail | None, failure: str) -> None:
+    """The failure line of a failed job that wrote none: its last stderr line (or the type of its exception), for the launcher to keep in the end record."""
+    try:
+        if tail is None or tail.marked:
+            return
+        phase_failure.emit(phase_failure.phase_of(sys.argv), failure or tail.last or "the job ended with a failure and wrote no line")
+    except Exception as error:
+        with contextlib.suppress(BaseException):
+            sys.stderr.write(f"event=phase_failure_failed {type(error).__name__}\n")
+
+
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
     """Run a job entry point, log its resource peaks once, push its metrics when an address is set and exit with the job's own code or exception."""
     sampler, unavailable, abandoned = _start(scratch, interval)
@@ -232,6 +259,8 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
     started = time.monotonic()
     interrupted = False
     code = 1
+    failure = ""
+    tail = _watch_stderr()
     try:
         code = _exit_code(main())
     except KeyboardInterrupt:
@@ -240,10 +269,16 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
     except SystemExit as stop:
         code = _exit_code(stop.code)
         raise
+    except Exception as error:
+        failure = type(error).__name__  # the type alone: the message of an unexpected error may carry anything
+        raise
     finally:
+        _release_stderr(tail)
         if abandoned:
             if sampler is not None:
                 sampler.stopped.set()
         else:
             _emit(sampler, unavailable, code, _exit_push(pusher, heartbeat, started, interrupted))
+        if code != 0 and not interrupted:
+            _write_failure(tail, failure)
     raise SystemExit(code)

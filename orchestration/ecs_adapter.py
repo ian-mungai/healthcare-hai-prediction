@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -36,6 +37,16 @@ GUARD = "guard"  # the container of a layer task that ends the task when a phase
 REASON_LIMIT = 200
 ARN = re.compile(r"arn:[^\s,;]+")
 ACCOUNT = re.compile(r"\b[0-9]{12}\b")
+# The failure line of a job phase (the writer is scripts/phase_failure.py, which the job images hold and this module cannot import: the Airflow image mounts a
+# fixed module list). A test keeps the two sides equal. The reader cleans the text again, because a task log is not a trusted source.
+FAILURE_MARKER = "phase_failure: "
+FAILURE_LIMIT = 300
+ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b")
+CREDENTIAL = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|credential)s?\b\s*[=:]\s*\S+")
+URL_USER = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@")
+LONG_TOKEN = re.compile(r"\b[A-Za-z0-9+/_=-]{32,}\b")
+PHASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,39}")
+WHITESPACE = re.compile(r"\s+")
 
 
 class TaskRefused(Exception):
@@ -144,6 +155,41 @@ def sends_once(client: Any) -> bool:
 def scrub(text: str) -> str:
     """A reason without ARNs or account numbers, at most 200 characters."""
     return ACCOUNT.sub("[account]", ARN.sub("[arn]", text))[:REASON_LIMIT]
+
+
+def clean_failure(text: object) -> str:
+    """One line of at most ``FAILURE_LIMIT`` characters. An ARN, account number, access key, credential assignment, URL credential or long token is replaced."""
+    found = ARN.sub("[arn]", str(text))
+    found = ACCOUNT.sub("[account]", found)
+    found = ACCESS_KEY.sub("[key]", found)
+    found = CREDENTIAL.sub(lambda match: f"{match.group(1)}=[redacted]", found)
+    found = URL_USER.sub(lambda match: f"{match.group(1)}[redacted]@", found)
+    found = LONG_TOKEN.sub("[token]", found)
+    return WHITESPACE.sub(" ", found).strip()[:FAILURE_LIMIT]
+
+
+def failure_marker(line: str) -> str | None:
+    """The summary of one failure line of a phase, or None when the line is not a well formed one."""
+    if not line.startswith(FAILURE_MARKER):
+        return None
+    try:
+        record = json.loads(line[len(FAILURE_MARKER) :])
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("phase"), str) or not isinstance(record.get("reason"), str):
+        return None
+    name = record["phase"] if PHASE_NAME.fullmatch(record["phase"]) else "unknown"
+    return f"phase {name}: {clean_failure(record['reason'])}"
+
+
+def failure_summary(tail: str) -> str:
+    """The phase failure that a log tail holds, cleaned and bounded: the last failure line, else the last non-empty line, else an empty string."""
+    lines = [item.strip() for item in tail.splitlines() if item.strip()]
+    for item in reversed(lines):
+        found = failure_marker(item)
+        if found is not None:
+            return found
+    return f"last log line: {clean_failure(lines[-1])}" if lines else ""
 
 
 def classify(error: Exception) -> Exception:

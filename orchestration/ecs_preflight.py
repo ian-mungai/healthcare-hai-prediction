@@ -860,7 +860,8 @@ class Preflight:
         if claim is not None:
             end = {record["event"]: record for record in self.store.records(input_run, after, [claim["attempt"]])}.get("end")
         if end is None or end.get("outcome") != "succeeded":
-            raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed")
+            why = f" ({end['failure']})" if end is not None and end.get("failure") else ""
+            raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed{why}")
 
     def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
         """The values fixed once for a launch: the checked bronze request read once, the publisher's checked run kind and capture root, the serving request

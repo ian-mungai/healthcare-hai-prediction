@@ -68,6 +68,7 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration.ecs_adapter import (
+    GUARD,
     CapacityUnavailable,
     EcsAdapter,
     SendUnknown,
@@ -77,6 +78,7 @@ from orchestration.ecs_adapter import (
     TaskReport,
     TaskUnavailable,
     classify,
+    failure_summary,
     scrub,
 )
 from orchestration.training_contract import CODE_STAMP_RUN
@@ -238,13 +240,15 @@ class JobSpec:
 @dataclass(frozen=True)
 class Outcome:
     """How a job attempt ended. ``adopted`` is True when the result is an earlier attempt's recorded outcome, which this attempt reports without
-    launching. ``logs`` and ``cleanup_note`` come from the call that concluded the attempt and are not part of the recorded outcome."""
+    launching. ``failure`` is the bounded, cleaned summary of the failed phase (``orchestration.phase_failure``) that the end record keeps, empty when the
+    task log held none. ``logs`` and ``cleanup_note`` come from the call that concluded the attempt and are not part of the recorded outcome."""
 
     outcome: str
     exit_code: int
     reason: str
     task_arn: str
     adopted: bool = False
+    failure: str = ""
     logs: str = field(default="", compare=False)
     cleanup_note: str = field(default="", compare=False)
 
@@ -336,7 +340,13 @@ def stamp(text: str) -> float:
 
 
 def outcome_of(record: Mapping[str, Any], adopted: bool = False) -> Outcome:
-    return Outcome(record["outcome"], record["exit_code"], record["reason"], record.get("task_arn", ""), adopted)
+    return Outcome(record["outcome"], record["exit_code"], record["reason"], record.get("task_arn", ""), adopted, str(record.get("failure", "")))
+
+
+def copied(end: Mapping[str, Any]) -> dict[str, Any]:
+    """The fields of an end record that another attempt's end record repeats: the outcome and, when the record holds one, the failure summary."""
+    found = {"outcome": end["outcome"], "exit_code": end["exit_code"], "reason": end["reason"], "task_arn": end.get("task_arn", "")}
+    return {**found, "failure": end["failure"]} if end.get("failure") else found
 
 
 def parse_family_record(raw: bytes, where: str) -> dict[str, Any]:
@@ -739,7 +749,7 @@ class Launcher:
             self.join(launch, claim, arn, began)
             return
         outcome, code, reason = self.judge(report, claim["acceptance"])
-        end = self.put("end", attempt, claim, outcome=outcome, exit_code=code, reason=reason[:REPORT_LIMIT], task_arn=arn)
+        end = self.put("end", attempt, claim, **self.ended(spec, arn, report, outcome, code, reason))
         launch.outcome = outcome_of(end, adopted=True)
 
     def record_intent(self, claim: Mapping[str, Any]) -> dict[str, Any]:
@@ -1034,21 +1044,21 @@ class Launcher:
         end = self.finalize(claim, owner, launch.spec.attempt, decision["outcome"], decision["exit_code"], decision["reason"], "")
         launch.outcome = outcome_of(end, adopted=owner != launch.spec.attempt)
 
-    def finalize(self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str) -> dict[str, Any]:
+    def finalize(self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str, failure: str = "") -> dict[str, Any]:
         """Record how the launch ended. The end record of the attempt that holds the claim is written first and is the one outcome: an attempt that joined it
-        records and reports whatever is stored there, even when it judged the task differently."""
-        first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn)
+        records and reports whatever is stored there, even when it judged the task differently. A ``failure`` summary is kept in the record, and copied."""
+        first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn, **({"failure": failure} if failure else {}))
         if mine == owner:
             if base["job"] in self.adapter.settings.families:
                 count_outcome(base["job"], first["outcome"])
             return first
-        return self.put("end", mine, base, outcome=first["outcome"], exit_code=first["exit_code"], reason=first["reason"], task_arn=first.get("task_arn", ""))
+        return self.put("end", mine, base, **copied(first))
 
-    def close(self, launch: Launch, outcome: str, code: int, reason: str) -> None:
+    def close(self, launch: Launch, outcome: str, code: int, reason: str, failure: str = "") -> None:
         """Record how this attempt ended, through the end record of the attempt that holds the claim."""
         spec = launch.spec
         owner = launch.owner if launch.owner is not None else spec.attempt
-        end = self.finalize({"run_id": spec.run_id, "job": spec.job}, owner, spec.attempt, outcome, code, reason, launch.arn or "")
+        end = self.finalize({"run_id": spec.run_id, "job": spec.job}, owner, spec.attempt, outcome, code, reason, launch.arn or "", failure)
         launch.outcome = outcome_of(end)
 
     @counted
@@ -1105,14 +1115,15 @@ class Launcher:
             if launch.report.state != "succeeded" and self.cancel_requested(spec.run_id, spec.job):
                 self.close(launch, "cancelled", CANCEL_EXIT, "cancel")
             else:
-                self.close(launch, *self.judge(launch.report, spec.acceptance))
+                verdict, code, reason = self.judge(launch.report, spec.acceptance)
+                self.close(launch, verdict, code, reason, self.failure_of(spec, launch.arn or "", launch.report) if verdict == "failed" else "")
         else:
             raise LaunchError("the attempt has not ended")
         outcome = launch.outcome
         if outcome is None:
             raise LaunchError("the end record is missing")
         if not outcome.ok:
-            return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, logs=self.tail(launch))
+            return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, failure=outcome.failure, logs=self.tail(launch))
         note = ""
         if self.cleanup is not None:
             try:
@@ -1121,14 +1132,43 @@ class Launcher:
                 note = str(error)
         return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, cleanup_note=note)
 
+    def ended(self, spec: JobSpec, arn: str, report: TaskReport, outcome: str, code: int, reason: str) -> dict[str, Any]:
+        """The fields of the end record of a task shown STOPPED: its outcome, exit code, reason and ARN, and the summary of the failed phase for a failure."""
+        failure = self.failure_of(spec, arn, report) if outcome == "failed" else ""
+        return {"outcome": outcome, "exit_code": code, "reason": reason[:REPORT_LIMIT], "task_arn": arn, **({"failure": failure} if failure else {})}
+
+    def failure_of(self, spec: JobSpec, arn: str, report: TaskReport) -> str:
+        """The cleaned summary of the failed phase, read from the log of each container that failed (a layer task logs a phase in its own container, and the
+        job's log container is the last one, which never runs after a failure), then from the job's log container. Empty when no log can be read."""
+        failing = [name for name, code in report.containers if name != GUARD and code not in (0, None)]
+        for container in dict.fromkeys([*failing, spec.log_container]):
+            if not (arn and container):
+                continue
+            try:
+                found = failure_summary(self.adapter.tail(arn, container, spec.log_prefix, spec.log_lines))
+            except (TaskUnavailable, TaskRefused):
+                continue
+            if found:
+                return found
+        return ""
+
     def tail(self, launch: Launch) -> str:
+        """The last log lines of the job's log container, else of a container that failed (the log container of a layer task is its last one, which never runs
+        after a failed phase)."""
         spec = launch.spec
-        if not (launch.arn and spec.log_container):
+        if not launch.arn:
             return ""
-        try:
-            return scrub(self.adapter.tail(launch.arn, spec.log_container, spec.log_prefix, spec.log_lines))
-        except (TaskUnavailable, TaskRefused):
-            return ""
+        failing = [name for name, code in (launch.report.containers if launch.report else ()) if name != GUARD and code not in (0, None)]
+        for container in dict.fromkeys([spec.log_container, *failing]):
+            if not container:
+                continue
+            try:
+                found = scrub(self.adapter.tail(launch.arn, container, spec.log_prefix, spec.log_lines))
+            except (TaskUnavailable, TaskRefused):
+                continue
+            if found:
+                return found
+        return ""
 
     def run(self, spec: JobSpec) -> Outcome:
         """Attach, start, wait and conclude one attempt. A repeat of an ended attempt returns its recorded outcome."""
@@ -1217,15 +1257,7 @@ class Launcher:
         if "end" in theirs:
             stored = theirs["end"]
             if attempt != owner and "end" not in mine:
-                self.put(
-                    "end",
-                    attempt,
-                    claim,
-                    outcome=stored["outcome"],
-                    exit_code=stored["exit_code"],
-                    reason=stored["reason"],
-                    task_arn=stored.get("task_arn", ""),
-                )
+                self.put("end", attempt, claim, **copied(stored))
             return outcome_of(stored, adopted=attempt != owner)
         self.put("cancel", attempt, claim, reason=reason[:REPORT_LIMIT])
         if "started" in theirs:

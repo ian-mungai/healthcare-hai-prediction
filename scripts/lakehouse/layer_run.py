@@ -81,7 +81,7 @@ from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
 from orchestration.training_contract import CODE_RUN
-from scripts import resource_peaks
+from scripts import phase_failure, resource_peaks
 from scripts.features import feature_metrics, feature_sets
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import code_archive, duckdb_bounds, layer_metrics, pins, provenance, task_capacity, version_listing
@@ -1435,9 +1435,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
         send_lineage(job, args.phase, failed=True, dry=dry)
+        phase_failure.emit(args.phase, error)  # the last line of the phase: the launcher keeps it in the end record of the launch
         return 1
-    except Exception:  # any other ordinary failure (an SDK error, a bug) still gets its FAIL, and then fails the job as it would have: the exception goes on
+    except (
+        Exception
+    ) as error:  # any other ordinary failure (an SDK error, a bug) still gets its FAIL, and then fails the job as it would have: the exception goes on
         send_lineage(job, args.phase, failed=True, dry=dry)
+        phase_failure.emit(args.phase, type(error).__name__)
         raise
     send_lineage(job, args.phase, failed=False, dry=dry)
     return 0

@@ -71,7 +71,8 @@ def test_a_polaris_address_that_times_out_is_named_in_the_first_log_lines(
     check(lines[0].startswith("startup_check:"), f"the check speaks first: {lines[:1]}")
     text = "\n".join(lines[:4])
     check(f"polaris_unreachable {POLARIS_HOST}:8181" in text and "timed out" in text, f"the log names the address and the cause: {text}")
-    check("layer_run: step pin (silver" in lines[-1], "the driver reports the failed step")
+    check("layer_run: step pin (silver" in lines[-2], "the driver reports the failed step")
+    check(lines[-1].startswith("phase_failure: ") and '"phase":"pin"' in lines[-1], f"and ends with the phase failure line the launcher keeps: {lines[-1]}")
 
 
 def test_a_dbt_target_that_would_download_extensions_is_named_before_the_build(
