@@ -55,7 +55,6 @@ TOKENS = {
     "Population": {"Not Available", "Missing"},
     "Crude Rate": {"Suppressed", "Unreliable", "Not Available", "Missing"},
 }
-RATE_COLUMNS = HEADER[7:]
 DIVIDER = '"---"'
 
 

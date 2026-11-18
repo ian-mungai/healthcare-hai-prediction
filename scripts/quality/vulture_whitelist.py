@@ -11,7 +11,7 @@ import tarfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from scripts.acquisition import shards, wonder_export_contract
+from scripts.acquisition import shards
 from scripts.acquisition.discover_history import Links
 from scripts.acquisition.hcai_util_contract import _Markup
 from scripts.acquisition.tests.conftest import synthetic_collection_routes
@@ -64,8 +64,6 @@ def uses(download: Download, member: tarfile.TarInfo, server: ThreadingHTTPServe
         bridge_handler.do_GET,  # http.server dispatches a GET request to the bridge's Handler by method name.
         bridge_handler.do_PUT,  # http.server dispatches a PUT request to the bridge's Handler by method name.
         server.daemon_threads,  # socketserver reads it when the bridge starts a request thread, and on the server that ecs_lineage_cases sets it on.
-        # Pending: dead, but the file is in 9 collectors' approved code hashes; delete it at the next WONDER code version.
-        wonder_export_contract.RATE_COLUMNS,
     )
 
 

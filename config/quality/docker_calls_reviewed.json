@@ -108,7 +108,7 @@
         "scripts/acquisition/stored_mirror.py": "sha256:c45a6af50dec64510c600b8ad3698dd4a0555a74a9a569ab5b986abe70c6782f",
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
-        "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
+        "scripts/acquisition/wonder_export_contract.py": "sha256:60759b00fd5ea0687486e76ed60bff625e6e8b1388a828f9c6809fcf14aa6005",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
       },
       "reason": "imports a plan module named in the PLANNED table (scripts.acquisition collector contracts); the plan loaders read and validate plans and start no process",
@@ -146,7 +146,7 @@
         "scripts/acquisition/stored_mirror.py": "sha256:c45a6af50dec64510c600b8ad3698dd4a0555a74a9a569ab5b986abe70c6782f",
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
-        "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
+        "scripts/acquisition/wonder_export_contract.py": "sha256:60759b00fd5ea0687486e76ed60bff625e6e8b1388a828f9c6809fcf14aa6005",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
       },
       "reason": "aws_runner (imported from the BLS collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
