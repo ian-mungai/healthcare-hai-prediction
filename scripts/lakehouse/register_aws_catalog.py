@@ -9,6 +9,9 @@ version argument is None. Neither interface may substitute cached data.
 registers an absent table and adopts an identical table. Replacement policy stays
 with the migration caller. This module does not fetch credentials, create data,
 release snapshot protections or start a transport.
+
+A declared bronze table that the committed bronze run left out for lack of a source object has no table to register: ``required_tables`` leaves it out
+when the caller passes it as unsourced (``unsourced_from_records``).
 """
 
 from __future__ import annotations
@@ -23,12 +26,13 @@ import sys
 import time
 import urllib.parse
 import uuid
-from collections.abc import Callable, Mapping, Set
+from collections.abc import Callable, Collection, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts.lakehouse import bronze_unsourced, glue_mirror
 from scripts.lakehouse.gold_publish_record import READER_NAME, SHA256, STORED_RUN
 
 MAX_RECORD = 32 * 1024 * 1024
@@ -598,10 +602,17 @@ def register_read_catalog(
     return RegistrationResult(inventory, tuple(outcomes["registered"]), tuple(outcomes["unchanged"]))
 
 
-def required_tables(root: Path) -> frozenset[TableId]:
-    """Derive the read increment's required tables from committed contracts only."""
+def required_tables(root: Path, unsourced: Collection[str] = ()) -> frozenset[TableId]:
+    """Derive the read increment's required tables from committed contracts only.
+
+    ``unsourced`` names the declared bronze tables that the committed bronze run left out for lack of a source object (``unsourced_from_records``): such a
+    table has no Iceberg table, so it is not required. A table that has sources, one that a later run loaded and one that a silver model reads stay required.
+    """
     bronze = read_document((root / "config/lakehouse/bronze_tables.json").read_bytes(), "coverage")
-    result = {("bronze", row["table"]) for row in bronze["tables"]} | {("bronze", "file_metadata")}
+    declared = [str(row["table"]) for row in bronze["tables"]]
+    readers = glue_mirror.silver_bronze_sources(root / "dbt/models/silver/staging/_bronze__sources.yml")
+    left_out = bronze_unsourced.left_out(declared, unsourced, readers)
+    result = {("bronze", name) for name in declared if name not in left_out} | {("bronze", "file_metadata")}
     for namespace, name in (("silver", "silver_publish.json"), ("gold", "gold_contract.json")):
         contract = read_document((root / "data_contracts/lakehouse" / name).read_bytes(), "coverage")["publish"]
         result.update((namespace, table) for table in contract["tables"])
@@ -609,6 +620,14 @@ def required_tables(root: Path) -> frozenset[TableId]:
     for identifier in result:
         plain_identifier(identifier)
     return frozenset(result)
+
+
+def unsourced_from_records(records: Sequence[bytes]) -> frozenset[str]:
+    """The bronze tables left unsourced by the given run records (``lakehouse/bronze_runs/<run>/check.json``), oldest first."""
+    try:
+        return bronze_unsourced.unsourced_after([bronze_unsourced.record_tables(raw) for raw in records])
+    except bronze_unsourced.UnsourcedError:
+        raise RegistrationError("coverage", "a bronze run record cannot be read as a real run record") from None
 
 
 def inventory_from_document(document: Mapping[str, Any], required: Set[TableId]) -> Inventory:
@@ -745,9 +764,19 @@ def main() -> int:
     )
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--sha256", required=True)
+    parser.add_argument(
+        "--bronze-run-record",
+        type=Path,
+        action="append",
+        default=[],
+        help="a bronze run record check.json, oldest first; a table the newest record naming it skipped (no source object) is not required",
+    )
     args = parser.parse_args()
     try:
-        inventory = inventory_from_document(read_document(args.inventory.read_bytes(), "inventory"), required_tables(Path(__file__).resolve().parents[2]))
+        unsourced = unsourced_from_records([path.read_bytes() for path in args.bronze_run_record])
+        inventory = inventory_from_document(
+            read_document(args.inventory.read_bytes(), "inventory"), required_tables(Path(__file__).resolve().parents[2], unsourced)
+        )
         if not SHA256.fullmatch(args.sha256) or inventory.sha256 != args.sha256:
             raise RegistrationError("inventory", "the saved inventory differs from its frozen digest")
         sys.stdout.write(json.dumps({"tables": len(inventory.tables), "inventory_sha256": inventory.sha256, "native_registration": "unverified"}) + "\n")

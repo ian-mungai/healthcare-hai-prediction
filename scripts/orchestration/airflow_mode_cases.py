@@ -777,13 +777,15 @@ def promotion_needs_no_approval() -> None:
 
 def bronze_request_is_checked_and_bound() -> None:
     pair, other = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
     params = {"run_id": BRONZE_RUN, "mode": "real"}
     rig = Rig()
     with world(rig, "ingestion_dag", params) as current:
         raised = refuses(LaunchUnavailable, lambda: current.step("bronze_load"))
         require("not_staged" in str(raised) and rig.time.now - 1_800_000_000.0 <= 700, f"a missing request was not retried within a bound: {raised}")
-        for bad in (b"not json", {**good, "extra": 1}, {**good, "tables": [other, "ghost"]}, {**good, "dry_run": "no"}, {**good, "target": "other"}):
+        bads = (b"not json", {**good, "extra": 1}, {**good, "tables": [other, "ghost"]}, {**good, "dry_run": "no"}, {**good, "target": "other"})
+        no_list = {key: value for key, value in good.items() if key != "skipped_tables"}
+        for bad in (*bads, no_list, {**good, "skipped_tables": [pair[0]]}, {**good, "skipped_tables": ["ghost"]}, {**good, "skipped_tables": other}):
             rig.stage.stage(BRONZE_RUN, "bronze_request.json", bad)
             refuses(LaunchRefused, lambda: current.step("bronze_load"))
         require(not rig.ecs.calls, "a bad bronze request reached the cloud")
@@ -803,7 +805,7 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
     takes at most 8192 characters of container overrides, all containers together (the fake refuses more, as the service does). The tables travel in the
     staged request, which each phase reads and checks against its digest, and never in the overrides of the pin, load or check container."""
     names = list(collections_of_table_map())
-    good = {"tables": names, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    good = {"tables": names, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
     ingestion, bronze = "ingestion_0f0f0f0f", "bronze_0f0f0f0f"
     rig = Rig()
     rig.stage_runs(ingestion)
@@ -829,7 +831,7 @@ def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
     """A bronze run that its ingestion run started has no code staged under its own run ID. Its chain gate binds it, and the layer runs of its chain, to the
     code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a binding is never replaced."""
     pair, _ = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
     ingestion, bronze = "ingestion_0b0b0b0b", "bronze_0b0b0b0b"
     rig = Rig()
     rig.stage_runs(ingestion)
@@ -861,7 +863,7 @@ def the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after() -> N
     source inventory, and then the ``bronze`` job under the same run ID. A launch is keyed by the run and the job, so each job has its own launch record.
     The stage launch needs no staged request and runs the code of the ingestion run. Airflow writes none of the staged inputs."""
     pair, _ = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
+    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
     ingestion, bronze = "ingestion_0e0e0e0e", "bronze_0e0e0e0e"
     rig = Rig()
     rig.stage_runs(ingestion)

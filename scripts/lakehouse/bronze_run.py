@@ -8,6 +8,9 @@ Each ECS container of the job runs one phase on the shared ``/workspace`` (the c
 The ``stage`` phase belongs to the small ``bronze_stage`` job that runs before the bronze job under the same run ID. It lists the raw sources with the task
 role and writes the run's ``bronze_inventory.json`` and then its ``bronze_request.json`` (once each, for every table of the table map that has a source object,
 as a real load) to ``lakehouse/run_stage/<run>/inputs/``. The launch preflight of the bronze job reads and checks that request and the pin phase checks both.
+The request also names the tables it leaves out (``skipped_tables``) under the digest that every phase checks. The pin lists the sources of those tables
+again with the task identity and refuses the run when one has a source object, so a request and a stage report that both drop such a table do not run. The
+load and check phases read the list from the request, and the stage report must name the same tables.
 
 Two values change from run to run and arrive at dispatch: the tables and the target (``BRONZE_TARGET``). The preflight checks them before it starts the task.
 The tables are not in the container environment, because a full run names 330 of them and a RunTask call takes at most 8192 characters of overrides. With no
@@ -47,7 +50,7 @@ from orchestration.training_contract import run_id_pattern
 from scripts import metrics_push, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
-from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
+from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch, check_skipped
 from scripts.process import TimeoutExpired, run_command
 
 PHASES = ("pin", "load", "check")
@@ -60,7 +63,7 @@ STAGE_REPORT_FILE = "bronze_stage_report.json"
 SKIPPED_REASON = "no source object"
 ABSENT_CODES = ("NoSuchKey", "404", "AccessDenied", "403")
 STAGE_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
-REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
+REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256", "skipped_tables"}
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 REPORT_FOLDER = bronze.REPORT_ROOT
 STEP_SECONDS = 4 * 3600
@@ -125,15 +128,23 @@ def read_staged(run: str, bucket: str, name: str) -> bytes:
     return bytes(boto3.client("s3").get_object(Bucket=bucket, Key=STAGE_KEY.format(run=run, name=name))["Body"].read())
 
 
-def staged_tables(run: str, bucket: str, request_sha256: str) -> list[str]:
-    """The tables of the run's staged request, read with the task identity once its bytes match the digest the preflight checked. The pin checks the rest."""
+def request_document(run: str, bucket: str, request_sha256: str) -> dict[str, Any]:
+    """The run's staged request, read with the task identity once its bytes match the digest the preflight checked."""
     body = read_staged(run, bucket, REQUEST_FILE)
     if not SHA256.fullmatch(request_sha256) or hashlib.sha256(body).hexdigest() != request_sha256:
         raise StepError("the staged request differs from the one the preflight checked")
     try:
-        tables = json.loads(body)["tables"]
-    except (ValueError, KeyError, TypeError):
-        raise StepError("the staged request holds no table list") from None
+        document = json.loads(body)
+    except ValueError:
+        raise StepError("the staged request is not JSON") from None
+    if not isinstance(document, dict):
+        raise StepError("the staged request holds no table list")
+    return document
+
+
+def staged_tables(run: str, bucket: str, request_sha256: str) -> list[str]:
+    """The tables of the run's staged request, read with the task identity once its bytes match the digest the preflight checked. The pin checks the rest."""
+    tables = request_document(run, bucket, request_sha256).get("tables")
     if not isinstance(tables, list):
         raise StepError("the staged request holds no table list")
     return tables
@@ -183,9 +194,15 @@ def pin(job: Job, archive: Path, code_sha256: str) -> None:
         raise StepError("the staged request differs from the one the preflight checked")
     request = json.loads(request_raw)
     if not isinstance(request, dict) or set(request) != REQUEST_KEYS or type(request["dry_run"]) is not bool:
-        raise StepError("the staged request needs exactly tables, target, dry_run and inventory_sha256")
+        raise StepError("the staged request needs exactly tables, target, dry_run, inventory_sha256 and skipped_tables")
     if tuple(request["tables"]) != job.tables or request["target"] != job.target or request["inventory_sha256"] != job.inventory_sha256:
         raise StepError("the staged request differs from the dispatch values")
+    config = table_map(job.code)
+    skipped = check_skipped(request["skipped_tables"], job.tables, job.target, collections_of(config))
+    if [item["table"] for item in staged_skipped(job)] != list(skipped):
+        raise StepError("the stage report names other skipped tables than the staged request")
+    # The request and the report are written by the same stage, so the pin lists the sources again: a table with source objects cannot be left out.
+    bronze.check_unsourced(storage(), job.bucket, config, list(job.tables), list(skipped), [], bronze.load_retired(job.code / bronze.RETIRED))
     if request["dry_run"] and not job.dry_run:
         raise StepError("the request is a dry run and the task is not: a dry run request cannot run live")
     inventory_raw = read_staged(job.run, job.bucket, INVENTORY_FILE)
@@ -198,7 +215,7 @@ def pin(job: Job, archive: Path, code_sha256: str) -> None:
     job.folder.mkdir(parents=True, exist_ok=True)
     (job.folder / INVENTORY_FILE).write_bytes(inventory_raw)
     record = {"run_id": job.run, "code_sha256": code_sha256, "git_revision": revision, "tables": list(job.tables), "target": job.target}
-    record |= {"request_sha256": job.request_sha256, "inventory_sha256": job.inventory_sha256}
+    record |= {"request_sha256": job.request_sha256, "inventory_sha256": job.inventory_sha256, "skipped_tables": list(skipped)}
     (job.folder / RECORD).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(
         f"pinned bronze run {job.run}: target {job.target}, tables {','.join(job.tables)}, code {revision[:12]}, inventory {job.inventory_sha256[:12]}\n"
@@ -213,7 +230,9 @@ def stage_inputs(code: Path, bucket: str, tables: str, target: str, dry_run: boo
     bronze_pin.require_objects(inventory)
     raw = bronze_pin.inventory_bytes(inventory)
     digest = hashlib.sha256(raw).hexdigest()
-    request = json.dumps({"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest}, sort_keys=True).encode()
+    request = json.dumps(
+        {"tables": list(names), "target": target, "dry_run": dry_run, "inventory_sha256": digest, "skipped_tables": []}, sort_keys=True
+    ).encode()
     out.mkdir(parents=True, exist_ok=True)
     (out / INVENTORY_FILE).write_bytes(raw)
     (out / REQUEST_FILE).write_bytes(request)
@@ -264,7 +283,8 @@ def stage_run(code: Path, bucket: str, run: str) -> dict[str, Any]:
     report_bytes = json_bytes(report)
     if put_stage_object(client, bucket, STAGE_KEY.format(run=run, name=STAGE_REPORT_FILE), report_bytes) != report_bytes:
         raise StepError(f"{STAGE_REPORT_FILE} is staged and differs from the report of the staged inventory: it is not replaced")
-    request = json.dumps({"tables": list(names), "target": "real", "dry_run": False, "inventory_sha256": digest}, sort_keys=True).encode()
+    document = {"tables": list(names), "target": "real", "dry_run": False, "inventory_sha256": digest, "skipped_tables": [item["table"] for item in skipped]}
+    request = json.dumps(document, sort_keys=True).encode()
     if put_stage_object(client, bucket, request_key, request) != request:
         raise StepError(f"{request_key} is staged and differs from the request this stage would write: it is not replaced")
     request_digest = hashlib.sha256(request).hexdigest()
@@ -360,14 +380,25 @@ def accepted_unsourced(report: dict[str, Any], skipped: Sequence[dict[str, str]]
 
 
 def staged_skipped(job: Job) -> list[dict[str, str]]:
-    """The tables the stage job left out of this run's request, each with its reason, from the stage report the stage job wrote beside the request. A run
-    with no stage report (staged by hand) left none out. A report of another run, with a wrong count or naming a requested table is refused."""
+    """The tables the stage job left out of this run's request, each with its reason: the names come from the staged request, checked against the digest the
+    preflight bound, and the reasons from the stage report that the stage job wrote before it, which must name the same tables.
+
+    A hand run with no bound request skipped nothing, and a request that skips nothing needs no report (a hand-staged run has none). A request that skips a
+    table with no report, a report of another run or with a wrong count, and a report that names other tables than the request or a requested table are refused.
+    """
     from botocore.exceptions import ClientError
 
+    if not job.request_sha256:
+        return []
+    names = request_document(job.run, job.bucket, job.request_sha256).get("skipped_tables")
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise StepError("the staged request holds no skipped table list")
     try:
         raw = read_staged(job.run, job.bucket, STAGE_REPORT_FILE)
     except ClientError as error:
         if str(error.response.get("Error", {}).get("Code")) in ABSENT_CODES:
+            if names:
+                raise StepError("the staged request skips tables but the stage report is missing") from None
             return []
         raise
     try:
@@ -378,12 +409,17 @@ def staged_skipped(job: Job) -> list[dict[str, str]]:
     skipped = report.get("skipped_tables") if isinstance(report, dict) else None
     if not isinstance(report, dict) or set(report) != keys or report["schema"] != 1 or report["bronze_run"] != job.run or not isinstance(skipped, list):
         raise StepError("the stage report is not the report of this run")
-    names = [item.get("table") if isinstance(item, dict) and set(item) == {"table", "reason"} and isinstance(item["reason"], str) else None for item in skipped]
-    if None in names or len(set(names)) != len(names) or report["skipped_count"] != len(skipped) or set(names) & set(job.tables):
+    listed = [
+        item.get("table") if isinstance(item, dict) and set(item) == {"table", "reason"} and isinstance(item["reason"], str) else None for item in skipped
+    ]
+    if None in listed or len(set(listed)) != len(listed) or report["skipped_count"] != len(skipped) or set(listed) & set(job.tables):
         raise StepError("the stage report names a table twice, a table of the request, or the wrong number of tables")
     if report["requested_tables"] != list(job.tables):
         raise StepError("the stage report describes another request than the one this run loads")
-    return [{"table": item["table"], "reason": item["reason"]} for item in skipped]
+    if sorted(listed) != sorted(names):
+        raise StepError("the stage report names other skipped tables than the staged request")
+    reasons = {item["table"]: item["reason"] for item in skipped}
+    return [{"table": name, "reason": reasons[name]} for name in names]
 
 
 def run_record(job: Job, report: dict[str, Any], report_bytes: bytes, inventory: dict[str, Any], skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:

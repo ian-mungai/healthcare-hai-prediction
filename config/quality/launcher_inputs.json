@@ -1843,6 +1843,7 @@
     "scripts/lakehouse/bronze_namespace_cases.py",
     "scripts/lakehouse/bronze_pin.py",
     "scripts/lakehouse/bronze_run.py",
+    "scripts/lakehouse/bronze_unsourced.py",
     "scripts/lakehouse/bronze_writer.py",
     "scripts/lakehouse/bronze_writer_cases.py",
     "scripts/lakehouse/care_compare_tables.py",

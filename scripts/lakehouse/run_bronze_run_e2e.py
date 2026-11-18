@@ -230,7 +230,7 @@ class Case:
             inventory = {"version": 1, "tables": [], "manifests": [], "objects": [], "documents": []}
         raw = bronze_pin.inventory_bytes(inventory)
         STAGED["bronze_inventory.json"] = raw
-        request: dict[str, Any] = {"tables": names, "target": target, "dry_run": dry, "inventory_sha256": hashlib.sha256(raw).hexdigest()}
+        request: dict[str, Any] = {"tables": names, "target": target, "dry_run": dry, "inventory_sha256": hashlib.sha256(raw).hexdigest(), "skipped_tables": []}
         STAGED["bronze_request.json"] = json.dumps(request).encode()
         return hashlib.sha256(STAGED["bronze_request.json"]).hexdigest(), request["inventory_sha256"]
 
@@ -350,15 +350,43 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
 
 
 def case_a_dropped_table_with_sources_is_refused(case: Case) -> None:
-    """The stage report is staged beside the request, so a request and report that agree on dropping ``beta_data`` (whose manifests the pinned inventory holds
-    through ``alpha_data``'s collection) must not publish a generation without it: the loader reads the pinned manifests for the left-out table again."""
+    """The stage report sits beside the request and is written by the same stage, so a request and report that agree on dropping ``beta_data`` (whose
+    manifests the pinned inventory holds through ``alpha_data``'s collection) must not run. The request names the skipped table under its digest, and the
+    pin lists the sources of the skipped tables again with the task identity: it finds ``beta_data``'s object and refuses, before the load."""
     case.shas = case.stage("alpha_data", "real", False)
+    request = json.loads(STAGED["bronze_request.json"]) | {"skipped_tables": ["beta_data"]}
+    STAGED["bronze_request.json"] = json.dumps(request, sort_keys=True).encode()
+    case.shas = (hashlib.sha256(STAGED["bronze_request.json"]).hexdigest(), case.shas[1])
     report = {"schema": 1, "bronze_run": RUN, "requested_tables": ["alpha_data"], "skipped_count": 1}
     STAGED[bronze_run.STAGE_REPORT_FILE] = json.dumps(report | {"skipped_tables": [{"table": "beta_data", "reason": bronze_run.SKIPPED_REASON}]}).encode()
     codes = case.chain(tables="alpha_data", staged=True)
-    require(codes == [0, 1], f"{codes} {case.err}")
+    require(codes == [1], f"{codes} {case.err}")
     require("beta_data" in case.err and "cannot be left out" in case.err, case.err)
-    require(not any(name.startswith("bronze.") for name in catalog()), f"the refused load wrote bronze tables: {sorted(catalog())}")
+    require(not (case.work() / "state" / RUN / bronze_run.RECORD).exists() and LOADS == [], "a refused pin bound the run or a loader ran")
+    require(not any(name.startswith("bronze.") for name in catalog()), f"the refused run wrote bronze tables: {sorted(catalog())}")
+
+
+def case_a_changed_request_or_report_is_refused(case: Case) -> None:
+    """The stage skips ``empty_data``. A request that changes after the preflight bound its digest stops the pin, and a report that is changed alone (to
+    hide the skipped table) stops the load and the check phases, which compare it with the request."""
+    require(case.phase("stage", staged=True) == 0, case.err)
+    stem = f"lakehouse/run_stage/{RUN}/inputs/"
+    puts = STORAGE[0].client.puts
+    for name in (bronze_run.INVENTORY_FILE, bronze_run.REQUEST_FILE, bronze_run.STAGE_REPORT_FILE):
+        STAGED[name] = puts[f"{stem}{name}"]
+    tables = ",".join(entry["table"] for entry in TABLES if entry["table"] != "empty_data")
+    case.shas = (hashlib.sha256(STAGED[bronze_run.REQUEST_FILE]).hexdigest(), hashlib.sha256(STAGED[bronze_run.INVENTORY_FILE]).hexdigest())
+    case.key = (tables, "real", False)
+    request = json.loads(STAGED[bronze_run.REQUEST_FILE])
+    STAGED[bronze_run.REQUEST_FILE] = json.dumps(request | {"skipped_tables": []}, sort_keys=True).encode()
+    require(case.phase("pin", tables=tables, staged=True) == 1 and "differs from the one the preflight checked" in case.err, case.err)
+    STAGED[bronze_run.REQUEST_FILE] = puts[f"{stem}{bronze_run.REQUEST_FILE}"]
+    case.err = ""
+    require(case.phase("pin", tables=tables, staged=True) == 0, case.err)
+    report = json.loads(STAGED[bronze_run.STAGE_REPORT_FILE]) | {"skipped_tables": [], "skipped_count": 0}
+    STAGED[bronze_run.STAGE_REPORT_FILE] = json.dumps(report).encode()
+    case.err = ""
+    require(case.phase("load", tables=tables, staged=True) == 1 and "stage report" in case.err and LOADS == [], f"{case.err} {LOADS}")
 
 
 def case_the_phases_read_their_tables_from_the_staged_request(case: Case) -> None:
@@ -371,7 +399,9 @@ def case_the_phases_read_their_tables_from_the_staged_request(case: Case) -> Non
     require(recorded["tables"] == ["alpha_data", "beta_data"], recorded)
     LOADS.clear()
     require(case.phase("pin", label="again", tables="", staged=True) == 0, case.err)
-    STAGED["bronze_request.json"] = json.dumps({"tables": ["alpha_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1]}).encode()
+    STAGED["bronze_request.json"] = json.dumps(
+        {"tables": ["alpha_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1], "skipped_tables": []}
+    ).encode()
     case.err = ""
     require(case.phase("load", label="again", tables="", staged=True) != 0 and "differs from the one the preflight checked" in case.err, case.err)
     require(LOADS == [], "a load ran on a request that is not the one the preflight checked")
@@ -614,7 +644,7 @@ def case_an_inventory_object_missing_from_the_bucket_is_refused(case: Case) -> N
 
 def case_a_request_replaced_after_the_preflight_checked_it_is_refused(case: Case) -> None:
     case.shas = case.stage("alpha_data,beta_data", "qualify", True)
-    live = {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1]}
+    live = {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1], "skipped_tables": []}
     STAGED["bronze_request.json"] = json.dumps(live).encode()
     require(case.phase("pin", target="qualify", extra=["--dry-run"], staged=True) != 0 and "preflight checked" in case.err, case.err)
     case.err = ""
@@ -773,7 +803,8 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
-    "a request that drops a table with sources is refused even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
+    "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
+    "a changed request or a report changed alone is refused by every phase": case_a_changed_request_or_report_is_refused,
     "the phases read their tables from the staged request when none is passed": case_the_phases_read_their_tables_from_the_staged_request,
     "a qualification run writes only the bronze_e2e twins": case_qualification_writes_only_the_twins,
     "a retry of one run has no second effect": case_retry_has_no_second_effect,

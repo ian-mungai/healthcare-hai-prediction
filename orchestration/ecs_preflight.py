@@ -65,7 +65,7 @@ DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 # The request of a full run names every table of the table map (330 tables and about 11 KB at Nov 18 2026): the limit holds twice that.
 BRONZE_REQUEST_BYTES = 32768
-BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
+BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256", "skipped_tables"}
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(RUN_ID_PATTERN)
 CODE_RUN = re.compile(CODE_RUN_PATTERN)
@@ -230,10 +230,12 @@ def s3_digest_reader(s3: S3Reader, bucket: str) -> Callable[[str], str]:
 def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, str]) -> Callable[[str], dict[str, str]]:
     """Read and check the run's staged ``bronze_request.json`` and return the values of the bronze containers.
 
-    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``), ``dry_run`` (true or false) and
-    ``inventory_sha256`` (the digest of the staged source inventory). The tables must be
+    The file holds exactly ``tables`` (a list of table names), ``target`` (``real`` or ``qualify``), ``dry_run`` (true or false),
+    ``inventory_sha256`` (the digest of the staged source inventory) and ``skipped_tables`` (the tables of the map that the stage left out for lack of a
+    source object: distinct, not requested, none for a qualification run). The tables must be
     in the table map (``collections`` maps each table to its collection) and a qualification run takes the tables of one collection. A file that is not
-    staged yet is retryable, a file that fails a check is refused.
+    staged yet is retryable, a file that fails a check is refused. The request's digest, which every phase checks, covers the skipped list, and the pin
+    lists the sources of the skipped tables again before it binds the run.
 
     The tables are not passed to the containers: a full run names 330 of them (about 10 KB) and a RunTask call takes at most 8192 characters of overrides for
     all containers. ``BRONZE_TABLES`` stays in the task definition and is passed empty, and each phase reads the tables from the staged request after it
@@ -241,7 +243,7 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
     """
 
     def read(run_id: str) -> dict[str, str]:
-        from scripts.lakehouse.bronze_dispatch import DispatchError, check_dispatch
+        from scripts.lakehouse.bronze_dispatch import DispatchError, check_dispatch, check_skipped
 
         try:
             body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/bronze_request.json")["Body"].read(BRONZE_REQUEST_BYTES + 1)
@@ -258,7 +260,7 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
         except ValueError:
             raise TaskRefused("bronze_request_malformed") from None
         if not isinstance(document, dict) or set(document) != BRONZE_REQUEST_KEYS:
-            raise TaskRefused("bronze_request_needs_exactly_tables_target_and_dry_run")
+            raise TaskRefused("bronze_request_needs_exactly_tables_target_dry_run_inventory_and_skipped_tables")
         tables, target, dry_run, inventory = document["tables"], document["target"], document["dry_run"], document["inventory_sha256"]
         if (
             not isinstance(tables, list)
@@ -271,6 +273,7 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
             raise TaskRefused("bronze_request_has_wrong_types")
         try:
             check_dispatch(tables, target, collections)
+            check_skipped(document["skipped_tables"], tables, target, collections)
         except DispatchError as error:
             raise TaskRefused(f"bronze_request_refused: {error}") from None
         values = {"BRONZE_TABLES": "", "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}

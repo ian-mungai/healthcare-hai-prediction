@@ -99,7 +99,10 @@ def test_the_stage_reads_the_sources_with_the_task_identity_for_every_table_and_
     check(all(put["IfNoneMatch"] == "*" and put["ServerSideEncryption"] == "AES256" for put in store.puts), f"{store.puts}")
     request = json.loads(store.objects[REQUEST_KEY])
     inventory_digest = hashlib.sha256(store.objects[INVENTORY_KEY]).hexdigest()
-    check(request == {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": inventory_digest}, f"{request}")
+    check(
+        request == {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": inventory_digest, "skipped_tables": []},
+        f"{request}",
+    )
     check(done["request_sha256"] == hashlib.sha256(store.objects[REQUEST_KEY]).hexdigest() and done["inventory_sha256"] == inventory_digest, f"{done}")
 
 
@@ -148,7 +151,7 @@ def test_the_request_of_a_full_run_is_staged_and_accepted_and_its_tables_stay_ou
 
 def test_the_request_limit_holds_the_largest_valid_request_with_room_to_grow() -> None:
     names = sorted(FULL_NAMES)
-    largest = json.dumps({"tables": names, "target": "real", "dry_run": False, "inventory_sha256": "f" * 64}, sort_keys=True).encode()
+    largest = json.dumps({"tables": names, "target": "real", "dry_run": False, "inventory_sha256": "f" * 64, "skipped_tables": []}, sort_keys=True).encode()
     check(len(largest) * 2 <= ecs_preflight.BRONZE_REQUEST_BYTES, f"{len(largest)} bytes of request against a limit of {ecs_preflight.BRONZE_REQUEST_BYTES}")
 
 
@@ -192,7 +195,9 @@ def test_a_fresh_stage_never_reads_a_key_that_does_not_exist_yet(monkeypatch: py
 
 
 def test_a_staged_request_that_differs_is_refused_and_never_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
-    other = json.dumps({"tables": ["alpha_data"], "target": "real", "dry_run": False, "inventory_sha256": "f" * 64}, sort_keys=True).encode()
+    other = json.dumps(
+        {"tables": ["alpha_data"], "target": "real", "dry_run": False, "inventory_sha256": "f" * 64, "skipped_tables": []}, sort_keys=True
+    ).encode()
     store = Store({REQUEST_KEY: other})
     Setup(monkeypatch, store)
     with pytest.raises(bronze_run.StepError, match="differs"):
@@ -216,6 +221,7 @@ def test_a_table_with_no_source_object_is_left_out_named_with_its_reason_in_the_
     report = json.loads(store.objects[REPORT_KEY])
     check(report["skipped_tables"] == [{"table": "beta_data", "reason": "no source object"}] and report["skipped_count"] == 1, f"{report}")
     check(report["requested_tables"] == ["alpha_data"] and done["skipped_count"] == 1, f"{report} {done}")
+    check(request["skipped_tables"] == ["beta_data"], f"the request does not name the table the stage left out: {request}")
     check("skipped_tables 1: beta_data" in capsys.readouterr().out, "the output does not count and name the table that was left out")
 
 

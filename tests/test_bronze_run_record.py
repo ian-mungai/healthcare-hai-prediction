@@ -137,31 +137,89 @@ def staged_report(**changes: Any) -> bytes:
     return json.dumps(body).encode()
 
 
-def test_the_check_phase_reads_the_skipped_tables_from_the_stage_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bronze_run, "read_staged", lambda run, bucket, name: staged_report())
-    check(bronze_run.staged_skipped(job()) == SKIPPED, "the skipped tables were not read")
+def staged_request(**changes: Any) -> bytes:
+    body = {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": SHA, "skipped_tables": ["gamma_data"]} | changes
+    return json.dumps(body, sort_keys=True).encode()
+
+
+def bound(request: bytes | None = None) -> bronze_run.Job:
+    """The job of a run whose preflight bound the digest of ``request`` (the standard staged request when none is given)."""
+    digest = hashlib.sha256(staged_request() if request is None else request).hexdigest()
+    return bronze_run.Job(RUN, Path("/workspace"), BUCKET, ("alpha_data", "beta_data"), "real", False, digest, SHA)
+
+
+def staged(monkeypatch: pytest.MonkeyPatch, request: bytes | None, report: bytes | None) -> None:
+    """The staged inputs as the task role reads them: a key that was never staged answers 403."""
+    from botocore.exceptions import ClientError
+
+    def read(run: str, bucket: str, name: str) -> bytes:
+        body = {bronze_run.REQUEST_FILE: request, bronze_run.STAGE_REPORT_FILE: report}[name]
+        if body is None:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "x"}}, "GetObject")
+        return body
+
+    monkeypatch.setattr(bronze_run, "read_staged", read)
+
+
+def test_the_check_phase_reads_the_skipped_tables_from_the_staged_request_and_the_stage_report_that_names_the_same_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staged(monkeypatch, staged_request(), staged_report())
+    check(bronze_run.staged_skipped(bound()) == SKIPPED, "the skipped tables were not read")
+
+
+def test_a_hand_run_with_no_request_digest_has_no_skipped_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    staged(monkeypatch, staged_request(), staged_report())
+    check(bronze_run.staged_skipped(job()) == [], "a run with no bound request reported a skipped table")
+
+
+def test_a_request_that_changed_after_the_preflight_bound_its_digest_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    staged(monkeypatch, staged_request(skipped_tables=[]), staged_report(skipped_tables=[], skipped_count=0))
+    with pytest.raises(bronze_run.StepError, match="differs from the one the preflight checked"):
+        bronze_run.staged_skipped(bound())
+
+
+def test_a_report_altered_alone_to_drop_or_add_a_skipped_table_is_refused_against_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    for report in (staged_report(skipped_tables=[], skipped_count=0), staged_report(skipped_tables=[{"table": "delta_data", "reason": "no source object"}])):
+        staged(monkeypatch, staged_request(), report)
+        with pytest.raises(bronze_run.StepError, match="request"):
+            bronze_run.staged_skipped(bound())
+
+
+def test_a_request_that_names_a_skipped_table_with_no_stage_report_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    staged(monkeypatch, staged_request(), None)
+    with pytest.raises(bronze_run.StepError, match="stage report"):
+        bronze_run.staged_skipped(bound())
 
 
 @pytest.mark.parametrize("code", ["AccessDenied", "NoSuchKey", "404", "403"])
-def test_a_run_with_no_stage_report_has_no_skipped_table(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
+def test_a_hand_staged_run_that_skips_nothing_needs_no_stage_report(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
     from botocore.exceptions import ClientError
 
-    def missing(run: str, bucket: str, name: str) -> bytes:
+    request = staged_request(skipped_tables=[])
+
+    def read(run: str, bucket: str, name: str) -> bytes:
+        if name == bronze_run.REQUEST_FILE:
+            return request
         raise ClientError({"Error": {"Code": code, "Message": "x"}}, "GetObject")
 
-    monkeypatch.setattr(bronze_run, "read_staged", missing)
-    check(bronze_run.staged_skipped(job()) == [], "a hand-staged run reported a skipped table")
+    monkeypatch.setattr(bronze_run, "read_staged", read)
+    check(bronze_run.staged_skipped(bound(request)) == [], "a hand-staged run reported a skipped table")
 
 
 def test_another_failure_reading_the_stage_report_is_raised_and_never_read_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
     from botocore.exceptions import ClientError
 
-    def broken(run: str, bucket: str, name: str) -> bytes:
+    request = staged_request()
+
+    def read(run: str, bucket: str, name: str) -> bytes:
+        if name == bronze_run.REQUEST_FILE:
+            return request
         raise ClientError({"Error": {"Code": "SlowDown", "Message": "x"}}, "GetObject")
 
-    monkeypatch.setattr(bronze_run, "read_staged", broken)
+    monkeypatch.setattr(bronze_run, "read_staged", read)
     with pytest.raises(ClientError):
-        bronze_run.staged_skipped(job())
+        bronze_run.staged_skipped(bound())
 
 
 @pytest.mark.parametrize(
@@ -172,9 +230,10 @@ def test_another_failure_reading_the_stage_report_is_raised_and_never_read_as_no
         staged_report(skipped_count=2),
         staged_report(skipped_tables=[{"table": "alpha_data", "reason": "no source object"}], skipped_count=1),
         staged_report(skipped_tables="x"),
+        staged_report(requested_tables=["alpha_data"]),
     ],
 )
 def test_a_stage_report_of_another_run_or_with_a_wrong_count_or_naming_a_requested_table_is_refused(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
-    monkeypatch.setattr(bronze_run, "read_staged", lambda run, bucket, name: body)
+    staged(monkeypatch, staged_request(), body)
     with pytest.raises(bronze_run.StepError):
-        bronze_run.staged_skipped(job())
+        bronze_run.staged_skipped(bound())
