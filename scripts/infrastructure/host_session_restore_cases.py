@@ -8,13 +8,15 @@ A start on a fresh data volume finds no code record on the host, so it reads the
 from __future__ import annotations
 
 import importlib
+import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
-from scripts.infrastructure.host_session import HostSessionError, Session
+from scripts.infrastructure.host_session import CATALOG_LINE_LIMIT, HostSessionError, Session
 from scripts.infrastructure.host_session_stand_in import CATALOG_SETUP_FAMILY, PROFILE, REGION, SERVICES, StandInError, StandInHost
+from scripts.infrastructure.render_project_config import REPO_ROOT
 
 TASK_DEFINITION_NEW = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:9"
 TASK_DEFINITION_OLD = "arn:aws:ecs:stand-in:111111111111:task-definition/stand-in-postgres:8"
@@ -476,6 +478,36 @@ def a_result_line_that_is_not_the_restore_reply_fails_start() -> dict[str, bool]
 SETUP_OK = {"postgres_restore_fetch": 0, "postgres_databases": 0}
 
 
+def published_table_rows() -> list[dict[str, str]]:
+    """The outcome of every table the published layers hold today (each ledger included), named from the checked contracts: a normal restore reply."""
+    rows: list[dict[str, str]] = []
+    for filename in ("gold_contract", "silver_publish", "features_publish"):
+        contract = json.loads((REPO_ROOT / "data_contracts" / "lakehouse" / f"{filename}.json").read_text(encoding="utf-8"))["publish"]
+        namespace = contract["namespaces"]["real"]
+        rows += [
+            {"table": f"{namespace}.{name}", "backup": f"{namespace}_aaaaaaaa", "outcome": "registered"}
+            for name in sorted([*contract["tables"], contract["runs_table"]])
+        ]
+    return rows
+
+
+def a_restore_reply_with_every_published_table_completes_the_start() -> dict[str, bool]:
+    rows = published_table_rows()
+    host, session, lines = build(setup_exits=SETUP_OK, restored=True)
+    host.restore_tables, host.restore_counts = rows, {"registered": len(rows)}
+    message = failure(session.start)
+    shown = [line for line in lines if line.startswith("catalog_setup_result:")]
+    return {
+        "the reply is longer than the display limit": len(json.dumps(host.restore_tables)) > CATALOG_LINE_LIMIT,
+        "start completes": message is None and bool(host.reloads) and host.desired == 1,
+        "the report names every table in the counts": any(line.startswith("catalog_restored") and f"registered {len(rows)}" in line for line in lines),
+        "the pending marker is cleared": PENDING_KEY not in host.objects,
+        "the displayed result line is cut to the display limit and says so": len(shown) == 1
+        and len(shown[0]) <= CATALOG_LINE_LIMIT + 200
+        and "cut" in shown[0],
+    }
+
+
 def a_failed_catalog_recovery_is_retried_by_the_next_start() -> dict[str, bool]:
     host, session, _ = build({"restore_refuses"}, setup_exits=SETUP_OK, restored=True)
     first = failure(session.start)
@@ -598,5 +630,7 @@ def a_stack_without_setup_containers_is_not_checked() -> dict[str, bool]:
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "restore_" + name: function
     for name, function in sorted(globals().items())
-    if callable(function) and function.__module__ == __name__ and name not in {"build", "failure", "installs", "RecordHost", "run_again_skips"}
+    if callable(function)
+    and function.__module__ == __name__
+    and name not in {"build", "failure", "installs", "RecordHost", "run_again_skips", "published_table_rows"}
 }

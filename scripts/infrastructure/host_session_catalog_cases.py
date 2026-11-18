@@ -11,7 +11,7 @@ import importlib
 import json
 from collections.abc import Callable
 
-from scripts.infrastructure.host_session import CATALOG_STEP_SECONDS, HostSessionError, Names, Session, TaskExitError, catalog_command, main
+from scripts.infrastructure.host_session import CATALOG_LINE_LIMIT, CATALOG_STEP_SECONDS, HostSessionError, Names, Session, TaskExitError, catalog_command, main
 from scripts.infrastructure.host_session_stand_in import CATALOG_SETUP_FAMILY, StandInHost
 
 
@@ -68,6 +68,22 @@ def a_restore_step_carries_its_deadline_and_the_dry_run_flag_only() -> dict[str,
         "the dry run adds its flag after the step": host.catalog_launches[1] == ["--seconds", "60", "restore", "--dry-run"],
         "each launch is a task of the same one-shot": len(host.catalog_launches) == 2,
         "the result is reported": any(line.startswith("catalog_setup_result: {") for line in lines),
+    }
+
+
+def a_result_longer_than_the_display_limit_is_returned_whole_and_displayed_cut() -> dict[str, bool]:
+    host, session, lines = build()
+    session.start()
+    host.catalog_padding = 3 * CATALOG_LINE_LIMIT
+    results = {step: session.catalog_setup(step) for step in ("check", "inspect", "catalog")}
+    shown = [line for line in lines if line.startswith("catalog_setup_result:")]
+    return {
+        **{
+            f"the {step} result is returned whole": len(found) == 1 and len(json.loads(found[0])["padding"]) == 3 * CATALOG_LINE_LIMIT
+            for step, found in results.items()
+        },
+        "each displayed line is cut at the display limit and names the full length": len(shown) == 3
+        and all(len(line) < CATALOG_LINE_LIMIT + 200 and "cut," in line and "characters in all" in line for line in shown),
     }
 
 
@@ -160,6 +176,7 @@ def a_running_task_is_never_reused_for_another_launch() -> dict[str, bool]:
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
+    "catalog_setup_long_result": a_result_longer_than_the_display_limit_is_returned_whole_and_displayed_cut,
     "catalog_setup_restore_command": a_restore_step_carries_its_deadline_and_the_dry_run_flag_only,
     "catalog_setup_runs_with_exactly_its_command": a_step_runs_as_one_task_with_exactly_its_command,
     "catalog_setup_steps_without_an_identity": a_step_without_an_identity_has_no_identity_arguments,

@@ -84,7 +84,10 @@ CATALOG_SLACK_SECONDS = 300  # the task start, the lease margin and the log dela
 CATALOG_LOG_SECONDS = 180
 CATALOG_LINE = re.compile(r"\{.*\}|aws catalog setup .*")
 ARN_TEXT = re.compile(r"arn:aws[a-z-]*:[^\s\"',]*")
-CATALOG_LINE_LIMIT = 4000
+CATALOG_LINE_LIMIT = 4000  # the display limit of one result or refusal line
+CATALOG_RESULT_LIMIT = (
+    250_000  # what is kept to parse: below the 256 KiB event limit of CloudWatch Logs, above any reply of a step (the restore names every table)
+)
 CODE_FETCH_SECONDS = 1200
 PROMETHEUS_RESTORE = "prometheus_restore"
 PROMETHEUS_RESTORE_SECONDS = 1800
@@ -1424,7 +1427,8 @@ class Session:
 
     def catalog_lines(self, task: str) -> list[str] | None:
         """The result or refusal lines of the catalog setup task's log (one JSON object, or lines that start ``aws catalog setup``), or None while the log
-        has none yet. A line is cut at ``CATALOG_LINE_LIMIT`` characters and shows no ARN."""
+        has none yet. A line shows no ARN and is kept whole up to ``CATALOG_RESULT_LIMIT`` characters, so the caller parses the complete result; only the
+        display (``shown``) cuts it at ``CATALOG_LINE_LIMIT``."""
         stream = f"{CATALOG_SETUP}/{CATALOG_SETUP}/{task.rsplit('/', 1)[-1]}"
         try:
             events = self.call("logs", "get-log-events", ["--log-group-name", self.names.log_group, "--log-stream-name", stream, "--start-from-head"])
@@ -1433,7 +1437,7 @@ class Session:
                 return None
             raise
         lines = [str(event.get("message", "")).strip() for event in events.get("events", [])]
-        found = [ARN_TEXT.sub("<arn>", line)[:CATALOG_LINE_LIMIT] for line in lines if CATALOG_LINE.fullmatch(line)]
+        found = [ARN_TEXT.sub("<arn>", line)[:CATALOG_RESULT_LIMIT] for line in lines if CATALOG_LINE.fullmatch(line)]
         return found or None
 
     def catalog_setup(
@@ -1458,11 +1462,11 @@ class Session:
         except TaskExitError as error:
             lines = self.wait("catalog setup log", lambda: self.catalog_lines(self.last_task[CATALOG_SETUP]), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
             for line in lines:
-                self.step("catalog_setup_refused", line)
-            raise TaskExitError(f"{error}: {lines[-1]}", error.exits) from None
+                self.step("catalog_setup_refused", shown(line))
+            raise TaskExitError(f"{error}: {shown(lines[-1])}", error.exits) from None
         lines = self.wait("catalog setup log", lambda: self.catalog_lines(task), CATALOG_LOG_SECONDS, TASK_POLL_SECONDS)
         for line in lines:
-            self.step("catalog_setup_result", line)
+            self.step("catalog_setup_result", shown(line))
         return lines
 
     def status(self) -> dict[str, Any]:
@@ -1511,6 +1515,11 @@ def catalog_command(step: str, identity: str | None, approval: str | None, secon
     if dry_run:
         command.append("--dry-run")
     return command
+
+
+def shown(line: str) -> str:
+    """A result or refusal line as it is displayed: cut at ``CATALOG_LINE_LIMIT`` characters with its full length named. Never parse the displayed text."""
+    return line if len(line) <= CATALOG_LINE_LIMIT else f"{line[:CATALOG_LINE_LIMIT]} ... cut, {len(line)} characters in all"
 
 
 def restore_counts(lines: list[str]) -> dict[str, int]:

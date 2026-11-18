@@ -276,6 +276,14 @@ PLANTS: dict[str, tuple[str, str]] = {
         "        except HostSessionError:\n            return False\n        return any(SETUP_RESTORED_WORDS",
     ),
     "skips the recovery when the marker cannot be read": ('return "absent" if "NoSuchKey" in str(error) else "unreadable"', 'return "absent"'),
+    "parses the displayed cut of a catalog setup result": (
+        "[:CATALOG_RESULT_LIMIT] for line in lines if CATALOG_LINE",
+        "[:CATALOG_LINE_LIMIT] for line in lines if CATALOG_LINE",
+    ),
+    "returns the displayed text of a catalog setup result": (
+        '            self.step("catalog_setup_result", shown(line))\n        return lines',
+        '            self.step("catalog_setup_result", shown(line))\n        return [shown(line) for line in lines]',
+    ),
     "ignores a failed catalog restore": (
         '        except HostSessionError as error:\n            raise HostSessionError(f"catalog restore failed: {error}") from None\n'
         "        counts = restore_counts(lines)",

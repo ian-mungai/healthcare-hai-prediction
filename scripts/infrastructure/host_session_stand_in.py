@@ -157,6 +157,8 @@ class StandInHost:
         self.catalog_launches: list[list[str]] = []
         self.catalog_launch_reloads: list[int] = []
         self.restore_counts: dict[str, Any] = {"registered": 2}
+        self.restore_tables: list[dict[str, str]] = []
+        self.catalog_padding = 0
         self.online: dict[str, tuple[str, str]] = {}
         self.now = 0.0
         self.desired = 0
@@ -462,7 +464,9 @@ class StandInHost:
         if "no_catalog_log" not in self.faults:
             reply = {"step": step, "ok": True}
             if step == "restore":
-                reply = {"step": "restore", "applied": "--dry-run" not in command, "counts": self.restore_counts, "tables": []}
+                reply = {"step": "restore", "applied": "--dry-run" not in command, "counts": self.restore_counts, "tables": self.restore_tables}
+            if self.catalog_padding:
+                reply["padding"] = "x" * self.catalog_padding
             self.pending_output = "noise that is not a result\n" + json.dumps(reply)
         return code
 
