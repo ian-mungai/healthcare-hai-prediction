@@ -16,8 +16,9 @@ loopback address)::
    ``hai_training_<T>`` of each served type and refuses a DENY. The restore task (``mlflow_user``) runs the same check after every host start. This tool holds
    no account or grant logic of its own.
 
-The served types come from ``--hai-types`` (the ``MODEL_API_HAI_TYPES`` text), else ``--preparation-inputs`` (the reviewed services input file, key
-``model_api_hai_types``), else the ``MODEL_API_HAI_TYPES`` environment variable. The output says ``created`` or ``present`` for each secret and gives the
+The served types come from ``--hai-types`` (the ``MODEL_API_HAI_TYPES`` text), else ``--preparation-inputs`` (the reviewed services input file: the setting
+``model_api_hai_types`` sits under its ``variables`` object, as ``data_contracts/infrastructure/services_preparation.schema.json`` defines), else the
+``MODEL_API_HAI_TYPES`` environment variable. The output says ``created`` or ``present`` for each secret and gives the
 check's lines for the account. A secret that cannot be set refuses by name, the other independent values are still made and the exit code is 1.
 The account check ends at one run deadline of ``RUN_SECONDS`` for the whole MLflow step, response bodies included.
 """
@@ -38,7 +39,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from scripts.infrastructure import secret_store
+from scripts.infrastructure.render_platform_config import PREPARATION_SCHEMAS
 from scripts.sdk_logs import quiet_sdk_logs
 from scripts.serving import keys
 
@@ -60,15 +64,24 @@ def new_page_key() -> str:
     return secrets.token_hex(PAGE_KEY_BYTES)
 
 
+def reviewed_types(inputs: Path) -> str:
+    """The ``model_api_hai_types`` setting, under ``variables``, of a services input file that must follow the services preparation schema."""
+    try:
+        document = json.loads(inputs.read_text())
+        schema = json.loads(PREPARATION_SCHEMAS["services"].read_text(encoding="utf-8"))
+        if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
+            raise ServingSecretsError("the services input file does not follow the services preparation schema")
+        return str(document["variables"]["model_api_hai_types"])
+    except (OSError, ValueError, KeyError):
+        raise ServingSecretsError("the services input file is not readable or has no model_api_hai_types under variables") from None
+
+
 def served_types(flag: str | None, inputs: Path | None, environ: Mapping[str, str]) -> tuple[str, ...]:
     """The served HAI types from the flag, else the reviewed services input file, else ``MODEL_API_HAI_TYPES``; distinct and from HAI_1 to HAI_6."""
     if flag is not None:
         text = flag
     elif inputs is not None:
-        try:
-            text = json.loads(inputs.read_text())["model_api_hai_types"]
-        except (OSError, ValueError, KeyError, TypeError):
-            raise ServingSecretsError("the services input file is not readable or has no model_api_hai_types") from None
+        text = reviewed_types(inputs)
     elif environ.get("MODEL_API_HAI_TYPES") is not None:
         text = environ["MODEL_API_HAI_TYPES"]
     else:
@@ -223,7 +236,7 @@ def parser() -> argparse.ArgumentParser:
         "--root", type=Path, default=REPO_ROOT, help="the repository folder that holds the rendered deployment variables and the account check"
     )
     command.add_argument("--hai-types", help="the served HAI types as the MODEL_API_HAI_TYPES text, for example HAI_1,HAI_2")
-    command.add_argument("--preparation-inputs", type=Path, help="the reviewed services input file; its model_api_hai_types names the served types")
+    command.add_argument("--preparation-inputs", type=Path, help="the reviewed services input file; its variables.model_api_hai_types names the served types")
     command.add_argument("--mlflow-url", help="a loopback address of the MLflow tracking server (a port forward): run the model API account check")
     return command
 

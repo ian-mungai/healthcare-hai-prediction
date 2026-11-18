@@ -892,8 +892,22 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         old_route_answered = old_route_status(server.url, admin) == (404, True) and len(server.removed_hits) == 1
     with tempfile.TemporaryDirectory(prefix="serving_types_cases_") as folder:
         inputs = Path(folder) / "services.json"
-        inputs.write_text(json.dumps({"model_api_hai_types": "HAI_1,HAI_2", "streamlit_hai_types": "HAI_1"}))
+        inputs.write_text(
+            json.dumps({"schema_version": 1, "root": "services", "variables": {"model_api_hai_types": "HAI_1,HAI_2", "streamlit_hai_types": "HAI_1"}})
+        )
         from_file = tool.served_types(None, inputs, {})
+        flat = Path(folder) / "flat.json"
+        flat.write_text(json.dumps({"model_api_hai_types": "HAI_1,HAI_2"}))
+        no_types = Path(folder) / "no_types.json"
+        no_types.write_text(json.dumps({"schema_version": 1, "root": "services", "variables": {"streamlit_hai_types": "HAI_1"}}))
+        not_json = Path(folder) / "not_json.json"
+        not_json.write_text("[")
+        unknown_setting = Path(folder) / "unknown_setting.json"
+        unknown_setting.write_text(json.dumps({"schema_version": 1, "root": "services", "variables": {"model_api_hai_types": "HAI_1", "no_such_setting": 1}}))
+        file_refused = [
+            refusal_of(functools.partial(tool.served_types, None, path, {}))
+            for path in (flat, no_types, not_json, unknown_setting, Path(folder) / "absent.json")
+        ]
         from_flag = tool.served_types("HAI_3", inputs, {"MODEL_API_HAI_TYPES": "HAI_4"})
         from_environment = tool.served_types(None, None, {"MODEL_API_HAI_TYPES": "HAI_4,HAI_5"})
         bad_inputs: list[tuple[str | None, Path | None, dict[str, str]]] = [(None, None, {}), ("HAI_9", None, {}), ("HAI_1,HAI_1", None, {}), ("", None, {})]
@@ -948,6 +962,9 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         and from_flag == ("HAI_3",)
         and from_environment == ("HAI_4", "HAI_5"),
         "no served type, an unknown one, a repeat and an empty list are refused": all(message is not None for message in types_refused),
+        "the services input file is read under variables; a flat or schema-breaking file, a missing setting, bad JSON and a missing file are refused": from_file
+        == ("HAI_1", "HAI_2")
+        and all(message is not None for message in file_refused),
         "the tool holds no account or grant logic of its own": not hasattr(tool, "MlflowAuth")
         and "users/permissions" not in tool_source
         and "users/create" not in tool_source
