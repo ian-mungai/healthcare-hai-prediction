@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError, ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 
 from scripts.acquisition import capture_mode as mode
 from scripts.acquisition import (
@@ -174,6 +175,31 @@ def test_an_unreadable_listing_or_a_foreign_key_blocks_the_source(monkeypatch: p
 
     monkeypatch.setattr(mode, "list_objects", broken)
     check(mode.cooldown_status(run, "ACS", NOW) == ("unreadable", None), "a failed listing never allows a request")
+
+
+SDK_FAILURES = [
+    (ClientError({"Error": {"Code": "AccessDenied", "Message": "synthetic bucket detail"}}, "ListObjectsV2"), "AccessDenied"),
+    (ClientError({"Error": {"Message": "synthetic"}}, "ListObjectsV2"), "request_failed"),
+    (EndpointConnectionError(endpoint_url="https://s3.invalid"), "request_failed"),
+    (ConnectTimeoutError(endpoint_url="https://s3.invalid"), "request_failed"),
+    (ReadTimeoutError(endpoint_url="https://s3.invalid"), "request_failed"),
+]
+
+
+@pytest.mark.parametrize(("failure", "code"), SDK_FAILURES)
+def test_a_listing_that_raises_an_sdk_error_is_a_sanitized_storage_error_and_the_cooldown_reads_as_unreadable(failure: Exception, code: str) -> None:
+    def refuse(**_arguments: Any) -> dict:
+        raise failure
+
+    chosen = SimpleNamespace(
+        client=SimpleNamespace(list_objects_v2=refuse), configuration={"data_bucket_name": "synthetic-bucket", "expected_account_id": "111111111111"}
+    )
+    with pytest.raises(mode.StorageError) as caught:
+        mode.list_objects(chosen, "raw/ingestion_cooldowns/ACS/")
+    check(caught.value.code == code, f"a fixed code: {caught.value.code}")
+    check("synthetic" not in str(caught.value) and "s3.invalid" not in str(caught.value), f"no SDK text: {caught.value}")
+    run: Any = SimpleNamespace(storage=chosen, root="raw/")
+    check(mode.cooldown_status(run, "ACS", NOW) == ("unreadable", None), "the source is blocked, not skipped over and not a crash")
 
 
 def test_a_typed_rate_limit_keeps_only_a_bounded_printable_header() -> None:

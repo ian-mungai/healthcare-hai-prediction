@@ -148,7 +148,7 @@ class TaskKeys:
             key = f"{BLS_LEDGER_PREFIX}{max(numbers, default=0) + 1:010d}.json"
             s3.put_object(**named, Key=key, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
         except Exception as error:
-            if _error_code(error) in CONFLICT_CODES:
+            if error_code(error) in CONFLICT_CODES:
                 return False
             raise
         return True
@@ -211,7 +211,7 @@ class TaskStorage:
         except StorageError:
             raise
         except Exception as error:
-            raise StorageError(operation, _error_code(error)) from None
+            raise StorageError(operation, error_code(error)) from None
 
     @staticmethod
     def _answer(reply: Mapping[str, Any]) -> dict:
@@ -244,7 +244,7 @@ class TaskStorage:
         return self._answer(reply)
 
 
-def _error_code(error: Exception) -> str:
+def error_code(error: Exception) -> str:
     """The provider's short code, never its message."""
     response = getattr(error, "response", None)
     code = response.get("Error", {}).get("Code") if isinstance(response, Mapping) else None

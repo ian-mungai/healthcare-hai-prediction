@@ -13,10 +13,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError, ReadTimeoutError
 
 from scripts.acquisition import capture_mode as mode
 from scripts.acquisition import census_acs_tables_contract as contract
-from scripts.acquisition import census_acs_tables_transport, collection_layout, redownload, s3_store, task_role, transport
+from scripts.acquisition import census_acs_tables_transport, collection_layout, completion_record, redownload, s3_store, task_role, transport
 from scripts.acquisition import collect_census_acs_tables as collector
 from scripts.acquisition.run_census_acs_tables_e2e import Reply, Requests, connection_class, dictionary, response
 from scripts.acquisition.s3_store import encoded_json
@@ -342,6 +343,73 @@ def test_an_unreadable_cooldown_blocks_the_source_instead_of_allowing_a_request(
     check(not host.sent and result["counters"]["http_requests"] == 0, f"no request when the cooldown cannot be read: {host.sent}")
     check(len(result["units"]["paused_not_attempted"]) == len(batches) and result["units"]["paused_sources"] == ["ACS"], f"{result['units']}")
     check(result["source_cooldowns"] == {"ACS": "unreadable"} and not world.records(), f"{result.get('source_cooldowns')}")
+
+
+def with_cms_unit(world: World, tmp_path: Path) -> tuple[str, str]:
+    """Add one real generic file unit of an unrelated source after the ACS units. Returns its source ID and its unit's folder in the bucket."""
+    folder = tmp_path / "cms"
+    folder.mkdir()
+    other = World(folder, ["other.csv"])
+    specs = read_json(world.folder / "capture_specs.json")["specs"] | read_json(other.folder / "capture_specs.json")["specs"]
+    world.units.extend(other.units)
+    world.bodies.update(other.bodies)
+    world.write_inputs(specs)
+    return other.units[0]["source_id"], completion_record.unit_prefix(ROOT, world.unit_key(len(world.units) - 1))
+
+
+SDK_ERRORS = {
+    "client_error": lambda world: world.bucket.missing("ListObjectsV2", "AccessDenied"),
+    "no_connection": lambda _world: EndpointConnectionError(endpoint_url="https://s3.invalid"),
+    "connect_timeout": lambda _world: ConnectTimeoutError(endpoint_url="https://s3.invalid"),
+    "read_timeout": lambda _world: ReadTimeoutError(endpoint_url="https://s3.invalid"),
+}
+
+
+@pytest.mark.parametrize("error", sorted(SDK_ERRORS))
+@pytest.mark.parametrize("where", ["cooldown", "unit"])
+def test_a_listing_error_of_the_store_fails_only_its_own_source_by_name_and_an_unrelated_source_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, where: str, error: str
+) -> None:
+    world, batches = three_units(tmp_path, monkeypatch)
+    other, other_prefix = with_cms_unit(world, tmp_path)
+    host = Host(monkeypatch)
+    real = world.bucket.list_objects_v2
+
+    def listing(**arguments: Any) -> dict:
+        prefix = arguments["Prefix"]
+        broken = f"{COOLDOWNS}ACS/" in prefix if where == "cooldown" else prefix.startswith(f"{ROOT}ingestion_units/") and prefix != other_prefix
+        if broken:
+            raise SDK_ERRORS[error](world)
+        return real(**arguments)
+
+    monkeypatch.setattr(world.bucket, "list_objects_v2", listing)
+    before = mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
+    result = host.run(world)
+    monkeypatch.setattr(world.bucket, "list_objects_v2", real)
+    units = result["units"]
+    check(not host.sent and result["counters"]["http_requests"] == 1, f"no ACS request, one request for the unrelated source: {host.sent} {result['counters']}")
+    check(units["paused_sources"] == ["ACS"], f"the failing source is named: {units}")
+    check([item["source_id"] for item in units["completed"]] == [other], f"the unrelated source completed: {units}")
+    if where == "cooldown":
+        check(result["source_cooldowns"] == {"ACS": "unreadable"} and not units["failed"], f"{result.get('source_cooldowns')} {units['failed']}")
+        check(len(units["paused_not_attempted"]) == len(batches), f"every ACS unit waits: {units}")
+    else:
+        check([(item["source_id"], item["reason"]) for item in units["failed"]] == [("ACS", "storage_contract")], f"the failure is named and fixed: {units}")
+        check(len(units["paused_not_attempted"]) == len(batches) - 1, f"the rest of the source waits: {units}")
+    check(f"{ROOT}ingestion_runs/run01/run.json" in world.bucket.names(), "the run record was saved")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    ours = [contract.queue_snapshot_id(batch) for batch in batches]
+    check(
+        len(problems) == len(batches),
+        f"the evidence step, which fails the run's exit, names the unfinished units of the failing source and nothing else: {problems}",
+    )
+    check(all("was not attempted" in item or "did not complete" in item for item in problems), f"only unfinished units are named: {problems}")
+    check(
+        sum(any(snapshot in item for snapshot in ours) for item in problems) + sum("storage_contract" in item for item in problems) >= len(batches),
+        str(problems),
+    )
+    for text in ("synthetic", "s3.invalid", "AccessDenied"):
+        check(text not in json.dumps(result), f"no SDK message text reaches the run record: {text}")
 
 
 def test_a_cooldown_that_cannot_be_saved_stops_the_run_before_another_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

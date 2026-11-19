@@ -34,6 +34,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from scripts.acquisition import (
     bls_api_transport,
     census_acs_api_transport,
@@ -543,12 +545,21 @@ def named(storage: Any) -> dict[str, str]:
     return {"Bucket": storage.configuration["data_bucket_name"], "ExpectedBucketOwner": storage.configuration["expected_account_id"]}
 
 
+def listing_page(call: Callable[..., dict], operation: str, storage: Any, **arguments: Any) -> dict:
+    """One page of a listing through the store's own client. An SDK failure, a refusal or a lost connection, becomes a ``StorageError`` that holds only the
+    provider's short code, as every call through the task storage does, so a run can isolate it to the source that asked."""
+    try:
+        return call(**named(storage), **arguments)
+    except (ClientError, BotoCoreError) as error:
+        raise StorageError(operation, task_role.error_code(error)) from None
+
+
 def list_objects(storage: Any, prefix: str) -> list[dict]:
     """Every current object under a prefix with its last modified time, from the store's own listing."""
     found: list[dict] = []
     options: dict[str, str] = {}
     while True:
-        page = storage.client.list_objects_v2(**named(storage), Prefix=prefix, **options)
+        page = listing_page(storage.client.list_objects_v2, "list-objects-v2", storage, Prefix=prefix, **options)
         found.extend(page.get("Contents", []))
         if not page.get("IsTruncated"):
             return found
@@ -561,7 +572,7 @@ def list_versions(storage: Any, prefixes: Iterable[str]) -> list[dict]:
     for prefix in prefixes:
         options: dict[str, str] = {}
         while True:
-            page = storage.client.list_object_versions(**named(storage), Prefix=prefix, **options)
+            page = listing_page(storage.client.list_object_versions, "list-object-versions", storage, Prefix=prefix, **options)
             for item in page.get("Versions", []):
                 found[(item["Key"], item["VersionId"], "version")] = {
                     "key": item["Key"],
@@ -1264,7 +1275,13 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 if first:
                     paused.add(source)
                 continue
-            verdict, why = decide_skip(run, unit, key, run.clock(), expected)
+            try:
+                verdict, why = decide_skip(run, unit, key, run.clock(), expected)
+            except StorageError as error:
+                tried.add(source)
+                done["failed"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": failure_reason(error)})
+                paused.add(source)
+                continue
             if verdict != "go":
                 if verdict == "complete":
                     done["skipped_complete"].append(key)
