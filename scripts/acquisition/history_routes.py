@@ -21,7 +21,7 @@ from scripts.acquisition.county_change_pages import FILE_PATTERN, page_problem
 from scripts.acquisition.dataset_layout import cms_members, source_folder
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.plan_remaining import capture_plan
-from scripts.acquisition.s3_store import ACCESS_RELEASE_PATH, TERMS_ACCEPTANCE_PATH, AwsCli, encoded_json, preflight, upload_snapshot, write_once
+from scripts.acquisition.s3_store import ACCESS_RELEASE_PATH, TERMS_ACCEPTANCE_PATH, AwsCli, encoded_json, preflight, release_paths, upload_snapshot, write_once
 from scripts.acquisition.source_registry import LOCK_PATH, canonical_hash, load_registry, read_json, validate_registry
 from scripts.acquisition.transport import CaptureError, Limits
 from scripts.infrastructure.render_project_config import REPO_ROOT, load_configuration
@@ -56,6 +56,7 @@ def lineage_bindings(source: dict, candidate: dict) -> dict:
     if binding not in RELEASE_BINDINGS or not held:
         raise CaptureError("A release binding must be terms or access_release and applies only to a held source.")
     key, path = RELEASE_BINDINGS[binding]
+    path = release_paths(source["source_id"])[-1] if binding == "access_release" else path
     return {key: hashlib.sha256(path.read_bytes()).hexdigest()}
 
 

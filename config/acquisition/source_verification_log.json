@@ -159,6 +159,45 @@
       ]
     },
     {
+      "dataset_id": "AHRQ_SYSTEM",
+      "title": "AHRQ Compendium system and hospital linkage",
+      "publisher": "AHRQ",
+      "collection": "ahrq/health_system_compendium",
+      "route": "access_hold",
+      "route_class": "not recorded",
+      "access_and_terms": {
+        "text": "Public primary-source routes; no login or payment used. No additional reuse license inferred.",
+        "source": "registry validation.reviewed_access_terms"
+      },
+      "data_class": "Public",
+      "data_class_basis": "config/lakehouse/bronze_tables.json collection class",
+      "verification": {
+        "date": "2026-11-08",
+        "basis": "access release record access_releases_20261108.json"
+      },
+      "evidence": {
+        "registry_record_sha256": "ba15789d5b5e46e8cde6fdca3cc601c571d9ebde4345cae62e2ec54c2f495e20",
+        "registry_record_pointer": "acquisition-manifest.json#/source_records/26",
+        "capture_candidates": "not recorded",
+        "unique_snapshot_ids": "not recorded",
+        "receipt_sha256": "not recorded",
+        "object_version": "not recorded",
+        "receipt_path": "not recorded"
+      },
+      "status": "not recorded",
+      "status_reason": "No closeout capture record and no project guide row",
+      "deferral_trigger": null,
+      "not_recorded": [
+        "evidence.capture_candidates",
+        "evidence.object_version",
+        "evidence.receipt_path",
+        "evidence.receipt_sha256",
+        "evidence.unique_snapshot_ids",
+        "route_class",
+        "status"
+      ]
+    },
+    {
       "dataset_id": "BLS",
       "title": "BLS Local Area Unemployment Statistics",
       "publisher": "BLS",

@@ -16,6 +16,7 @@ from tests.support import check
 
 VERSIONS = REPO_ROOT / "config/acquisition"
 ENTRIES = {
+    "ahrq_compendium": ("ahrq_compendium", "scripts.acquisition.store_ahrq_compendium"),
     "bls_api": ("bls_api", "scripts.acquisition.collect_bls_api"),
     "census_acs_api": ("census_acs_api", "scripts.acquisition.collect_census_acs_api"),
     "census_acs_detailed": ("census_acs_detailed", "scripts.acquisition.collect_census_acs_detailed"),

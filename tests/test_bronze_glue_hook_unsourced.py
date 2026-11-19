@@ -29,6 +29,10 @@ def table_map() -> dict[str, Any]:
     return bronze.load_table_map()
 
 
+# Every mapped table plus the four loader tables: what the Glue mirror registers when no table is left out. The count follows the table map.
+ALL_TABLES = len(table_map()["tables"]) + 4
+
+
 def loaded_names() -> list[str]:
     """Every mapped table except the source-less one: what a bootstrap that leaves ``TABLE`` out requests."""
     return [str(entry["table"]) for entry in table_map()["tables"] if entry["table"] != TABLE]
@@ -83,7 +87,7 @@ def registered_in(report: dict[str, Any]) -> list[str]:
 
 
 def test_the_hook_registers_exactly_the_tables_the_by_hand_register_would_and_leaves_the_sourceless_one_out() -> None:
-    """Tonight's live by-hand register: 334 created, 1 left out (``hcai_util_workbook_sheet_rows``)."""
+    """The by-hand register on Nov 18 2026 created every mapped and loader table but one and left one out (``hcai_util_workbook_sheet_rows``)."""
     glue = stand_in.FakeGlue()
     report = run_hook(glue, history_reader(), [TABLE])
     registered = sorted(name for name, outcome in report["tables"].items() if outcome in DONE)
@@ -91,7 +95,7 @@ def test_the_hook_registers_exactly_the_tables_the_by_hand_register_would_and_le
     check(report["status"] == "ok", f"{report['status']}: {report.get('reason')}")
     check(registered == sorted(wanted), f"hook only: {sorted(set(registered) - set(wanted))}, by hand only: {sorted(set(wanted) - set(registered))}")
     check(left_out == [TABLE] and kept == {}, f"the by-hand register changed its decision: {left_out} {kept}")
-    check(len(registered) == 334 and TABLE not in registered, f"{len(registered)} tables registered")
+    check(len(registered) == ALL_TABLES - 1 and TABLE not in registered, f"{len(registered)} tables registered")
     check(report["tables"][TABLE].startswith("left out: ") and "no source object" in report["tables"][TABLE], f"{report['tables'].get(TABLE)}")
     check(("bronze", TABLE) not in glue.tables, "the left-out table was registered in Glue")
 
@@ -107,7 +111,7 @@ def test_a_delete_marked_manifest_still_counts_as_history_for_the_hook_as_for_th
     check(outcome.startswith("failed: required") and bronze_source_history.HISTORY_REASON in outcome, f"{outcome}")
     check(report["status"] == "failed" and TABLE in report["reason"], f"{report['status']} {report.get('reason')}")
     registered = [name for name, text in report["tables"].items() if text in DONE]
-    check(len(registered) == 335 - 1, f"the other tables were not registered: {len(registered)}")
+    check(len(registered) == ALL_TABLES - 1, f"the other tables were not registered: {len(registered)}")
     check(("bronze", TABLE) not in glue.tables, "a table with no snapshot was registered")
 
 
@@ -137,7 +141,7 @@ def test_a_history_listing_that_fails_is_a_reported_failure_and_the_committed_ta
     report = run_hook(glue, Broken(), [TABLE])
     check(report["status"] == "failed" and TABLE in report["reason"] and "history stand-in down" in report["reason"], f"{report}")
     check(report["tables"][TABLE].startswith("failed: ") and "history" in report["tables"][TABLE], f"{report['tables'].get(TABLE)}")
-    check(sum(text in DONE for text in report["tables"].values()) == 334, "a failed history read stopped the registration of the committed tables")
+    check(sum(text in DONE for text in report["tables"].values()) == ALL_TABLES - 1, "a failed history read stopped the registration of the committed tables")
 
 
 def test_a_reader_that_cannot_list_history_cannot_prove_absence_and_fails_the_mirror() -> None:
@@ -204,7 +208,10 @@ def test_a_left_out_table_that_a_silver_model_reads_is_required_and_fails_the_mi
         f"{report['status']} {report.get('reason')}",
     )
     check(report["tables"][SILVER_TABLE].startswith("failed: required"), f"{report['tables'].get(SILVER_TABLE)}")
-    check(len(registered_in(report)) == 334 and ("bronze", SILVER_TABLE) not in glue.tables, "the other tables were not registered, or the silver table was")
+    check(
+        len(registered_in(report)) == ALL_TABLES - 1 and ("bronze", SILVER_TABLE) not in glue.tables,
+        "the other tables were not registered, or the silver table was",
+    )
 
 
 def test_a_left_out_table_with_s3_metadata_is_required_and_registers_from_its_committed_snapshot_as_the_register_does() -> None:
@@ -214,7 +221,7 @@ def test_a_left_out_table_with_s3_metadata_is_required_and_registers_from_its_co
     held = reader({**SIDE_SNAPSHOTS, TABLE: 555})
     report = run_hook(glue, history_reader(), [TABLE], s3=metadata_bucket(TABLE), read_loader=held)
     check(report["status"] == "ok" and report["tables"][TABLE] == "created" and ("bronze", TABLE) in glue.tables, f"{report}")
-    check(len(registered_in(report)) == 335, f"{len(registered_in(report))} tables registered")
+    check(len(registered_in(report)) == ALL_TABLES, f"{len(registered_in(report))} tables registered")
     gone = run_hook(stand_in.FakeGlue(), history_reader(), [TABLE], s3=metadata_bucket(TABLE))
     check(
         gone["status"] == "failed" and TABLE in gone["reason"] and "metadata exists in S3" in gone["reason"],
@@ -229,7 +236,7 @@ def test_a_left_out_table_that_glue_already_holds_is_required_and_fails_the_mirr
     glue.tables[("bronze", TABLE)] = {"Name": TABLE, "Parameters": {}, "VersionId": "1"}
     report = run_hook(glue, history_reader(), [TABLE])
     check(report["status"] == "failed" and TABLE in report["reason"] and "a Glue table of that name exists" in report["reason"], f"{report}")
-    check(report["tables"][TABLE].startswith("failed: required") and len(registered_in(report)) == 334, f"{report['tables'].get(TABLE)}")
+    check(report["tables"][TABLE].startswith("failed: required") and len(registered_in(report)) == ALL_TABLES - 1, f"{report['tables'].get(TABLE)}")
 
 
 def test_an_existence_check_that_cannot_be_read_never_proves_absence_and_the_other_tables_are_still_registered() -> None:
@@ -241,7 +248,7 @@ def test_an_existence_check_that_cannot_be_read_never_proves_absence_and_the_oth
 
     report = run_hook(Flaky(), history_reader(), [TABLE])
     check(report["status"] == "failed" and TABLE in report["reason"] and "InternalServiceException" in report["tables"][TABLE], f"{report}")
-    check(report["tables"][TABLE].startswith("failed: ") and len(registered_in(report)) == 334, f"{report['tables'].get(TABLE)}")
+    check(report["tables"][TABLE].startswith("failed: ") and len(registered_in(report)) == ALL_TABLES - 1, f"{report['tables'].get(TABLE)}")
 
 
 def test_the_hook_and_the_register_leave_out_exactly_the_same_tables_for_each_condition() -> None:

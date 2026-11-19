@@ -19,7 +19,7 @@ BRONZE_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 LOG_VERSION = 1
 NOT_RECORDED = "not recorded"
 # The access release records, oldest first; a later record supersedes an earlier one for a source it names.
-RELEASE_RECORDS = ("access_releases_20260929.json", "access_releases_20261002.json", "access_releases_20261117.json")
+RELEASE_RECORDS = ("access_releases_20260929.json", "access_releases_20261002.json", "access_releases_20261108.json", "access_releases_20261117.json")
 STATUSES = ("verified", "deferred", "validation-only", "rejected", NOT_RECORDED)
 ROW_FIELDS = (
     "dataset_id",

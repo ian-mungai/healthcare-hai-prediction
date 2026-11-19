@@ -28,6 +28,7 @@ SUITES = [
     "hud_api",
     "wonder_export",
     "reference_download",
+    "ahrq_compendium",
     "cms_owners",
     "nber_hc",
     "hcai_util",

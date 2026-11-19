@@ -1,0 +1,20 @@
+{
+ "note": "Records that release a registry access_hold which is not about publisher terms. Receipts bind this file by SHA-256; the base registry is updated at collection closeout. Earlier records stay unchanged so receipts that bind them still verify; new receipts bind the newest record.",
+ "recorded_at_utc": "2026-11-08T23:59:43+00:00",
+ "previous_record": "config/acquisition/access_releases_20261002.json",
+ "releases": [
+  {
+   "decision_records": [
+    "data/local_keep/ahrq_compendium_20261108/README.md"
+   ],
+   "decisions": [
+    "The AHRQ_SYSTEM access hold is lifted for the capture of the Compendium hospital linkage files and their technical documents (owner, Nov 8 2026, acquisition first decision)",
+    "The owner saved the files by hand in a browser to ~/Downloads/ahrq_compendium/; scripted downloads stay blocked by AHRQ"
+   ],
+   "hold": "access: scripted downloads of the AHRQ Compendium files return HTTP 403 or an empty body",
+   "released": true,
+   "scope": "The thirteen files the owner saved on Nov 8 2026 (six hospital linkage workbooks as data, seven technical documents as methodology references), each bound by origin URL, SHA-256 and size in the AHRQ Compendium plan; AHRQ publishes no terms text for these files (checked on 9 Nov 2026; every receipt carries that terms record) and no reuse license is inferred; not model-eligible; nothing published",
+   "source_id": "AHRQ_SYSTEM"
+  }
+ ]
+}

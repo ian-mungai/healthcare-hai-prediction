@@ -336,6 +336,15 @@ RELEASE_COVERS = {
     "access_releases_20261002.json": frozenset({"abstracted_sheets", "reference_documents"}),
     "access_releases_20261117.json": frozenset({"abstracted_sheets", "reference_documents", "whole_workbooks"}),
 }
+# A source with its own record is bound and released by that record only, so no other source reaches it and the shared binding never moves.
+SOURCE_RELEASE_PATHS = {"AHRQ_SYSTEM": REPO_ROOT / "config/acquisition/access_releases_20261108.json"}
+# What a source's own record authorizes, by file name; these records are not in RELEASE_COVERS, which describes the shared records only.
+SOURCE_RELEASE_COVERS = {"access_releases_20261108.json": frozenset({"reference_documents", "whole_workbooks"})}
+
+
+def release_paths(source_id: str) -> tuple[Path, ...]:
+    """The release records that may bind and release this source."""
+    return (SOURCE_RELEASE_PATHS[source_id],) if source_id in SOURCE_RELEASE_PATHS else ACCESS_RELEASE_PATHS
 
 
 def access_released(source: dict, lineage: dict) -> bool:
@@ -366,7 +375,7 @@ def released_by_record(source: dict, lineage: dict) -> bool:
 
 def bound_release(source: dict, recorded_sha256: str) -> tuple[Path, dict, dict] | None:
     """Return the record path, document and release entry that a receipt's bound hash names, or None when no listed or archived record releases the source."""
-    for path in ACCESS_RELEASE_PATHS:
+    for path in release_paths(source["source_id"]):
         try:
             body = bound_record(path, recorded_sha256)
             if body is None:

@@ -111,6 +111,10 @@
         "class": "Public",
         "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
       },
+      "ahrq/health_system_compendium": {
+        "class": "Public",
+        "reason": "Hospital, health-system and corporate-parent names, addresses, ownership type and bed, discharge and revenue figures, from the header rows of the six workbooks the owner saved (2016 to 2023 vintages). No column holds a person's name or contact detail. AHRQ publishes no terms text for these files (checked on 9 Nov 2026); no reuse license is inferred."
+      },
       "nsi/retention_and_staffing": {
         "class": "Public",
         "reason": "Published report stored as document rows. No data rows. The text was not read for personal names."
@@ -1545,6 +1549,13 @@
         "methodology",
         "reference"
       ]
+    },
+    {
+      "table": "ahrq_hospital_linkage",
+      "group": "federal_context",
+      "collection": "ahrq/health_system_compendium",
+      "member_pattern": "(?i)\\.xlsx?$",
+      "format": "sheet_rows"
     },
     {
       "table": "nsi_retention_pdf",
