@@ -5477,7 +5477,7 @@ def read_models(case: str) -> dict[str, Any]:
         "illinois": [tuple(row) for row in duckdb_csv(database, ILLINOIS_SQL)],
         "state_holds": [tuple(row) for row in duckdb_csv(database, STATE_HOLDS_SQL)],
         "state_hold_detail": [tuple(row) for row in duckdb_csv(database, STATE_HOLD_DETAIL_SQL)],
-        "state_sentinels": [tuple(row) for row in duckdb_csv(database, STATE_SENTINELS_SQL)],
+        "state_sentinels": [tuple(row) for row in duckdb_csv(database, STATE_SENTINELS_SQL, init)],
         "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
         "occmix": [tuple(row) for row in duckdb_csv(database, OCCMIX_SQL)],
         "hud": [tuple(row) for row in duckdb_csv(database, HUD_SQL)],
