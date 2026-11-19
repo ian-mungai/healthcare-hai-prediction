@@ -33,6 +33,9 @@ WRITES = [
 ]
 STEPS = ["archive", *(f"write:{name}" for name in WRITES), "replace_pin", "relock", "archive_plans", "legacy_catalog", "policies"]
 TRACKED = registry.REPO_ROOT / "config/acquisition"
+# The builder never writes the receipt index: source_receipt_index.py builds it from the local capture receipts after every change of the verification
+# log, so the earlier state keeps the index of its own log and the committed index belongs to the current one.
+WRITTEN_ELSEWHERE = {"source_receipt_index.json"}
 
 
 def git(*arguments: str) -> str:
@@ -97,7 +100,9 @@ def loaders_accept(root: Path) -> None:
     reference_download_contract.load_plan(config / "reference_downloads_plan.json")
     with patch.object(nber_hc_contract, "gate_sha256", nber_hc_contract.registry_gate_sha256):
         nber_hc_contract.load_plan(config / "nber_hospital_compare_plan.json")
-    differing = [path.name for path in sorted(config.glob("*.json")) if path.read_bytes() != (TRACKED / path.name).read_bytes()]
+    differing = [
+        path.name for path in sorted(config.glob("*.json")) if path.name not in WRITTEN_ELSEWHERE and path.read_bytes() != (TRACKED / path.name).read_bytes()
+    ]
     check(not differing, f"these files differ from the committed ones: {differing}")
 
 
