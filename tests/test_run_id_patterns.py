@@ -35,6 +35,7 @@ OLD_FORM_ALLOWED = {
 VALID = [
     f"ingestion_{HEX}",
     f"ingestion_retry_{HEX}_2",
+    f"pipeline_{HEX}",
     f"bronze_{HEX}_2",
     f"features_elastic_net_{HEX}",
     f"drift_ols_{HEX}",

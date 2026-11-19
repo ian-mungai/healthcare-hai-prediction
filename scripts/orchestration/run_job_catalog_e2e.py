@@ -15,14 +15,30 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import airflow_mount_cases, ecs_adapter_cases, ecs_chain_cases, ecs_send_boundary_cases, layer_walk_cases, override_docs_cases
+from scripts.orchestration import (
+    airflow_mount_cases,
+    ecs_adapter_cases,
+    ecs_chain_cases,
+    ecs_send_boundary_cases,
+    layer_walk_cases,
+    override_docs_cases,
+    pipeline_cases,
+    pipeline_mutants,
+)
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
     "orchestration/ecs_adapter.py",
-    "dags/bronze_chain_dag.py",
+    "dags/bronze_dag.py",
+    "dags/pipeline_dag.py",
     "scripts/orchestration/ecs_chain_cases.py",
+    "scripts/orchestration/pipeline_cases.py",
+    "scripts/orchestration/pipeline_mutants.py",
+    "scripts/orchestration/source_mutants.py",
+    "scripts/orchestration/airflow_api_fake.py",
+    "orchestration/dag_runtime.py",
+    "orchestration/training_contract.py",
     "scripts/lakehouse/bronze_dispatch.py",
     "config/orchestration/ecs_broker_jobs.json",
     "config/orchestration/ecs_broker_jobs.schema.json",
@@ -45,6 +61,8 @@ def suites() -> dict[str, dict[str, Callable[[], None]]]:
     return {
         "adapter": {**ecs_adapter_cases.CASES, **ecs_send_boundary_cases.CASES},
         "chain": ecs_chain_cases.CASES,
+        "pipeline": pipeline_cases.CASES,
+        "mutants": pipeline_mutants.CASES,
         "airflow": airflow_mount_cases.CASES,
         "overrides": override_docs_cases.CASES,
         "walk": layer_walk_cases.CASES,
@@ -57,7 +75,7 @@ def revision() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--only", choices=("adapter", "chain", "airflow", "overrides", "walk"))
+    parser.add_argument("--only", choices=("adapter", "chain", "pipeline", "mutants", "airflow", "overrides", "walk"))
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []

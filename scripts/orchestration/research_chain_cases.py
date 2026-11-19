@@ -887,12 +887,23 @@ def training_dag_starts_the_research_after_its_release() -> None:
         expected["research_request"].upstream == frozenset({"release_run"}) and expected["trigger_research"].upstream == frozenset({"research_request"}),
         "the reference graph does not put the trigger behind the release",
     )
+    require(expected["start_metadata"].upstream == frozenset({"release_run"}), "the reference graph does not put the catalog start behind the release")
     for model, base, count in (("m2", BASE, 1), ("m3", BASE, 0), ("m2", "", 0)):
         rig = Rig()
         training = {**TRAIN_FORM, "model": model, "mlflow": "aws", "base_run": base, "run_id": training_contract.trained_run_id(BASE, model), "mode": "real"}
         with world(rig, "training_dag", training) as current, mock.patch.object(current.runtime, "run_step", lambda name: "ok"):
             states = current.run_dag("training_dag.py")
             require(graph.validate_transform_graph(task_graph(current), "training_dag") == [], "the shipped training DAG breaks the graph rules")
+        catalog = [(dag, run, conf) for dag, run, conf in current.dag_runs]
+        wanted = [
+            (
+                "metadata_ingest_dag",
+                training_contract.metadata_run_for_base(BASE),
+                {"run_id": "metadata_" + BASE.split("_", 1)[1], "features_run": BASE, "mode": "real"},
+            )
+        ]
+        require(catalog == (wanted if base else []), f"{model} on {base!r}: the catalog start was {catalog}")
+        require(states.pop("start_metadata") == ("success" if base else "skipped"), f"{model} on {base!r}: {states}")
         require(set(states.values()) == {"success"}, f"{model}: {states}")
         require(len(current.results["research_request"]) == count, f"{model} on {base!r}: the request is {current.results['research_request']}")
         trigger = next(node for node in current.built if node.task_id == "trigger_research")
@@ -909,9 +920,10 @@ def training_dag_starts_the_research_after_its_release() -> None:
     with world(rig, "training_dag", training) as current, mock.patch.object(current.runtime, "run_step", rejecting):
         states = current.run_dag("training_dag.py")
     require(
-        states["research_request"] == "upstream_failed" and states["trigger_research"] == "upstream_failed",
-        f"a failed training run started the research: {states}",
+        states["research_request"] == "upstream_failed" and states["trigger_research"] == "upstream_failed" and states["start_metadata"] == "upstream_failed",
+        f"a failed training run started the research or the catalog: {states}",
     )
+    require(not current.dag_runs, f"a failed training run started a DAG run: {current.dag_runs}")
 
 
 CASES: dict[str, Callable[[], None]] = {

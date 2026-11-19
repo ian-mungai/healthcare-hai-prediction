@@ -27,7 +27,7 @@ from unittest import mock
 
 from monitoring import drift_gate
 from monitoring.aws_cases import MemoryS3
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, SET_RUN, model_training_run_id, parameters_for, run_id_pattern
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, SET_RUN, base_run_of, model_training_run_id, parameters_for, run_id_pattern
 
 ROOT = Path(__file__).resolve().parents[1]
 DAG_FILE = ROOT / "dags/drift_monitoring_dag.py"
@@ -274,6 +274,7 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
             "trigger": f"drift:{DRIFT_RUN}",
             "mlflow": "aws",
             "model": "m2",
+            "base_run": base_run_of(FEATURES_RUN),
         }
         problems = []
         if request["trigger_run_id"] != request["conf"]["run_id"]:

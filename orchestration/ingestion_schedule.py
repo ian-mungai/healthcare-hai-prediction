@@ -6,8 +6,8 @@ off without a sign. A scheduled run has no owner to name its run, so its run ID 
 the first eight hex digits of the SHA-256 digest of the logical date, so the same logical date always gives the same run ID, and its launch records make
 a repeat join the run it repeats and start nothing new. A scheduled run is always the ``monthly`` kind: only the hand trigger can start ``bootstrap``. The
 daily retry of failed files runs on days 2 and 3 after the monthly run of day 1 (the retry period) under a run ID fixed by the original run and the day
-(``ingestion_retry_<hex>_<day>``, the original run's hex), so the same day always joins its recorded launch. Bronze starts after the retry period
-(``dag_runtime.build_bronze_start``, which the two ingestion DAGs end with). The module reads no Airflow object and makes no call.
+(``ingestion_retry_<hex>_<day>``, the original run's hex), so the same day always joins its recorded launch. The pipeline run starts from bronze after the
+retry period (``dag_runtime.build_pipeline_start``, which the retry DAG ends with). The module reads no Airflow object and makes no call.
 """
 
 from __future__ import annotations
@@ -17,7 +17,16 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from orchestration.training_contract import RETRY_FIRST_DAY, RETRY_LAST_DAY, compose_run_id, new_run_hex, run_id_parts, run_id_pattern, scheduled_run_hex
+from orchestration.training_contract import (
+    PIPELINE_RUN,
+    RETRY_FIRST_DAY,
+    RETRY_LAST_DAY,
+    compose_run_id,
+    new_run_hex,
+    run_id_parts,
+    run_id_pattern,
+    scheduled_run_hex,
+)
 
 ENVIRONMENT_SETTING = "HAI_ENVIRONMENT"
 PRODUCTION = "prod"
@@ -160,16 +169,18 @@ def ingestion_runs_of(bronze_run: str) -> tuple[str, tuple[str, ...]]:
     return original, tuple(retry_run_id(original, day) for day in range(RETRY_FIRST_DAY, RETRY_LAST_DAY + 1))
 
 
-def bronze_after_ingestion(ingestion_run: str, context: Mapping[str, Any]) -> str | None:
-    """The bronze run that a finished ingestion run starts at once, or None. A hand-started run has a zero-day retry period, so its bronze run starts when it
-    has passed. A scheduled run waits for the last retry day (``bronze_after_retry``)."""
-    return None if is_scheduled(context) else bronze_run_for(ingestion_run)
+def pipeline_run_for(ingestion_run: str) -> str:
+    """The pipeline run that follows an ingestion run or one of its retry days: ``pipeline_`` and the hex and attempt of the ingestion run."""
+    if not isinstance(ingestion_run, str) or not re.fullmatch(f"{RUN_ID_PATTERN}|{run_id_pattern('ingestion_retry')}", ingestion_run):
+        raise ValueError("a pipeline run follows an ingestion run or one of its retry days")
+    parts = run_id_parts(ingestion_run)
+    return compose_run_id(PIPELINE_RUN, parts.hex, parts.attempt)
 
 
-def bronze_after_retry(original_run: str, day: int, context: Mapping[str, Any]) -> str | None:
-    """The bronze run that a retry day starts, or None: the last day of a scheduled retry period ends the period. A hand retry starts no bronze run; the owner
-    starts a bronze run with an attempt suffix when one is wanted."""
-    return bronze_run_for(original_run) if is_scheduled(context) and day == RETRY_LAST_DAY else None
+def pipeline_after_retry(original_run: str, day: int, context: Mapping[str, Any]) -> str | None:
+    """The pipeline run that a retry day starts (from bronze), or None: the last day of a scheduled retry period ends the period. A hand retry starts no
+    pipeline run; the owner starts one with an attempt suffix when one is wanted."""
+    return pipeline_run_for(original_run) if is_scheduled(context) and day == RETRY_LAST_DAY else None
 
 
 def captured_ids(record: Mapping[str, Any]) -> set[str]:

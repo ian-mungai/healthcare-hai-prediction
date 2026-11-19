@@ -407,7 +407,7 @@
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
-        "orchestration/training_contract.py": "sha256:512d3440a0088ca3b215c40ac0ae8a4b9404c9102997bbf2c4e4f9a74c84c562",
+        "orchestration/training_contract.py": "sha256:dc61d8d303acf222c3f6eadb535a56c8a894ed25d08e371326c4c64f510698d2",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:346993406097e06051381a300bf3fa73ba9654f0f1f0802a67028dd3e8b59029",
         "scripts/infrastructure/sts_stand_in.py": "sha256:2892a7d92971696bcf4d2c05580d8dfb38de1f92eac66c94d2606561cfb08914",
@@ -1375,7 +1375,7 @@
       "occurrences": 1,
       "file_sha256": "dfb1ddf8035f78ae8761e0f4031914e8830d43b8c5a8e9fa64e1bd272f031266",
       "dependencies": {
-        "orchestration/training_contract.py": "sha256:512d3440a0088ca3b215c40ac0ae8a4b9404c9102997bbf2c4e4f9a74c84c562",
+        "orchestration/training_contract.py": "sha256:dc61d8d303acf222c3f6eadb535a56c8a894ed25d08e371326c4c64f510698d2",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:17baa9244c94f518e77a0c265f2ce548585ea3d5a4e513299c0c6a3e36a3dd7f",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
@@ -1555,15 +1555,15 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 232,
+      "line": 502,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "f4b0ce56a362ace1ae18eb1764d017ebfbe17c07cba1eb79df2285383fd3c2eb",
+      "file_sha256": "27eebb0be952986e55f95768fb99a54e3d308c69f9ff4db1556a2648908bd962",
       "dependencies": {
-        "orchestration/ingestion_schedule.py": "sha256:8baa2065c29708e808137357615764258d049895641e47c1799a935f2b4793a6",
+        "orchestration/ingestion_schedule.py": "sha256:3aeb1b3f140de4c5972c46b0a40d5869fa1ed987a57e1634d9e855e763f09603",
         "orchestration/interface.py": "sha256:1b42a78e7c86b6357f59ba7ec6ef83e733a0e3c4c2c91e92dbf217fc1f966892",
-        "orchestration/training_contract.py": "sha256:512d3440a0088ca3b215c40ac0ae8a4b9404c9102997bbf2c4e4f9a74c84c562"
+        "orchestration/training_contract.py": "sha256:dc61d8d303acf222c3f6eadb535a56c8a894ed25d08e371326c4c64f510698d2"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",
       "lines": [
@@ -1578,7 +1578,7 @@
       "occurrences": 1,
       "file_sha256": "8e536809898a38505c987a39cc4fb32923db48e59b9de0d7cd101508e01154e7",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:5bc42e0533249d6370b3a68064817f399403b49f4ae1c093f454dea769c6f4b3",
+        "orchestration/ecs_preflight.py": "sha256:40aef086275cde0004c3aec4b7bda2f7efa3b3d23cb758506ae4226d62b5eddf",
         "scripts/acquisition/s3_store.py": "sha256:17baa9244c94f518e77a0c265f2ce548585ea3d5a4e513299c0c6a3e36a3dd7f",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
         "scripts/infrastructure/host_session.py": "sha256:dfb1ddf8035f78ae8761e0f4031914e8830d43b8c5a8e9fa64e1bd272f031266",

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -49,8 +50,13 @@ SUBSTITUTIONS = (
     "the fake task ends at its first status read (finish_after 1) and its exit codes are planned by the scenario",
     "USER is set when the environment has none: the check runs python without the image entrypoint that adds the passwd entry for the user id",
     "the Airflow metadata database is SQLite in a temporary folder and DAG.test() runs the tasks in process (no scheduler, no API server)",
+    "the Airflow REST API that the first DAG's tasks call (orchestration/dag_runtime.py): the in-memory DAG runs of airflow_api_fake.py behind a loopback "
+    "server that checks the HS512 token, reached with AIRFLOW_API_PORT and a stand-in signing value. A child DAG run of the first DAG is a record that ends "
+    "over a fake clock (dag_runtime.CLOCK and SLEEP), not a run of the child DAG: each stage DAG runs in a step of its own. No task is marked passed without "
+    "running",
 )
 FAKE_CREDENTIAL = "stand-in"
+API_SIGNING = "stand-in-signing-value"
 LOG_GROUP = "example_jobs_dev"
 STAGE_PREFIXES = ("lakehouse/run_stage/", "drift/", "research/")  # the staged inputs the launch role reads (the run stage, the drift and the research records)
 SCRATCH_FREE = 400 * 2**30
@@ -69,6 +75,7 @@ SOURCES = (
     "orchestration/ecs_preflight.py",
     "orchestration/promotion_chain.py",
     "orchestration/training_contract.py",
+    "scripts/orchestration/airflow_api_fake.py",
     "scripts/orchestration/aws_http_bridge.py",
     "scripts/orchestration/ecs_fake.py",
     "scripts/orchestration/ecs_launch_fake.py",
@@ -117,10 +124,11 @@ class Step:
     """One DAG run of a scenario: the DAG, its trigger values and what the run must do.
 
     ``states`` maps task ids to the states they must end in (``None`` means every task of the DAG ends in ``success``), ``starts`` is the number of RunTask
-    calls the run sends, and ``family`` the host task definition family they name. ``reason`` is text each failing task's error must contain, ``skip`` the
-    tasks that need the Airflow API server or other DAGs (they are marked as passed and not run), ``skipped`` the tasks that must end skipped (a mapped trigger
-    with no request, a research run that waits), ``plan`` the exit code per container of the task, ``sent`` a check of the environment of each container of
-    the first RunTask call and ``after`` a check of the rig once the run ended."""
+    calls the run sends, and ``family`` the host task definition family they name. ``reason`` is text each failing task's error must contain, ``skipped`` the
+    tasks that must end skipped (a mapped trigger with no request, a research run that waits), ``plan`` the exit code per container of the task, ``sent`` a
+    check of the environment of each container of the first RunTask call and ``after`` a check of the rig once the run ended. Every task of a run runs: no
+    task is ever marked passed without running. A task that calls the Airflow REST API (the first DAG's) gets ``api``, which builds the in-memory API of the
+    step from the rig, and ``api_after`` checks that API once the run ended."""
 
     dag_id: str
     params: Mapping[str, Any]
@@ -129,7 +137,6 @@ class Step:
     states: Mapping[str, str] | None = None
     run_state: str = "success"
     reason: str | None = None
-    skip: str | None = None
     plan: Mapping[str, int | None] | None = None
     end: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -139,6 +146,8 @@ class Step:
     skipped: tuple[str, ...] = ()
     sent: Callable[[dict[str, dict[str, str]]], None] | None = None
     after: Callable[[Any], None] | None = None
+    api: Callable[[Any], Any] | None = None
+    api_after: Callable[[Any, Any], None] | None = None
 
 
 class RefusedRun(TypedDict):
@@ -317,8 +326,25 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
     observer = Observer()
     dag = bag.get_dag(step.dag_id)
     require(dag is not None, f"{step.dag_id} is not in the DAG folder")
-    with make_bridge(rig) as bridge:
+    api = step.api(rig) if step.api is not None else None
+    with make_bridge(rig) as bridge, contextlib.ExitStack() as served:
         environment = launch_environment(rig, bridge.endpoint, scratch) | dict(step.environment)
+        if api is not None:
+            from scripts.orchestration.airflow_api_fake import ApiServer
+
+            runtime = importlib.import_module("orchestration.dag_runtime")
+            server = served.enter_context(ApiServer(api, API_SIGNING))
+            request = runtime.airflow_call
+
+            def signed_call(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, Any]:
+                """The runtime's own request, with the port and the signing value in the environment for this call only (Airflow's own services read theirs)."""
+                with mock.patch.dict(os.environ, {"AIRFLOW_API_PORT": str(server.port), "AIRFLOW__API_AUTH__JWT_SECRET": API_SIGNING}):
+                    answer: tuple[int, Any] = request(method, path, body)
+                return answer
+
+            served.enter_context(mock.patch.object(runtime, "airflow_call", signed_call))
+            served.enter_context(mock.patch.object(runtime, "CLOCK", api.clock))  # a wait of hours takes no time: the clock and the wait are the API's
+            served.enter_context(mock.patch.object(runtime, "SLEEP", api.sleep))
         with (
             mock.patch.dict(os.environ, environment),
             mock.patch.object(airflow_steps, "UNAVAILABLE_SECONDS", 1.0),
@@ -333,7 +359,7 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
             observer.watching(),
             planted(step.plant),
         ):
-            run = dag.test(run_conf=dict(step.params), mark_success_pattern=step.skip)
+            run = dag.test(run_conf=dict(step.params))
         states = states_of(run)
         run_state = str(getattr(run.state, "value", run.state))
         requests = list(bridge.requests)
@@ -349,6 +375,8 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
         "bridge_requests": len(requests),
     }
     check_run(rig, step, facts, calls)
+    if api is not None and step.api_after is not None:
+        step.api_after(rig, api)
     if step.after is not None:
         step.after(rig)
     return facts
@@ -445,6 +473,8 @@ def trigger_forms() -> dict[str, dict[str, Any]]:
 
     c, training = rig_modules().cases, importlib.import_module("orchestration.training_contract")
     silver, gold, base, bronze = c.SILVER_RUN, c.GOLD_RUN, c.FEATURES_RUN, c.BRONZE_RUN
+    parts = training.run_id_parts(bronze)
+    pipeline_run = training.compose_run_id(training.PIPELINE_RUN, parts.hex, parts.attempt)
     models = ("m1", "m2", "m3", "m4", "m5", "m6")
     return {
         "ingestion_dag": {"run_id": c.PUBLISHER_RUN},
@@ -460,7 +490,8 @@ def trigger_forms() -> dict[str, dict[str, Any]]:
         "research_dag": {"run_id": training.research_run_id(c.SERVE_BASE), "base_run": c.SERVE_BASE},
         "serving_deploy_dag": {"run_id": c.SERVE_RUN, "hai_type": "HAI_1", "deploy_mode": "stable"},
         "metadata_ingest_dag": {"run_id": training.compose_run_id("metadata", "0a1b2c3d"), "features_run": base},
-        "bronze_chain_dag": {"run_id": bronze},
+        "bronze_dag": {"run_id": bronze},
+        training.PIPELINE_DAG: {"run_id": pipeline_run},
     }
 
 
@@ -702,7 +733,7 @@ def serving_request_is_bound(rig: Any, run: str, environment: dict[str, dict[str
 
 def drift_inputs_are(model: str, features_run: str, code_run: str) -> Callable[[dict[str, dict[str, str]]], None]:
     """A check of the drift launch's containers: the baseline container is told the model, the current-window container the model's features run and the fetch
-    container the run whose code the chain gate bound. A missing container or value, ``latest`` or another run is a break."""
+    container the run whose code the binding gate bound. A missing container or value, ``latest`` or another run is a break."""
 
     def check(environment: dict[str, dict[str, str]]) -> None:
         for container, name, value in (("baseline", "FEATURE_SET", model), ("current", "INPUT_RUN_ID", features_run), ("fetch", "CODE_RUN_ID", code_run)):
@@ -817,6 +848,8 @@ def cases_catalog() -> dict[str, Scenario]:
     c = modules.cases
     training = importlib.import_module("orchestration.training_contract")
     silver, gold, features = (training.chain_layer_run(layer, c.BRONZE_RUN) for layer in ("silver", "gold", "features"))
+    parts = training.run_id_parts(c.BRONZE_RUN)
+    pipeline_run = training.compose_run_id(training.PIPELINE_RUN, parts.hex, parts.attempt)
     features_m1 = training.model_features_run_id(features, "m1")  # the drift check and the training run of a model chain from the run of its own set
     drift = training.model_drift_run_id(features_m1)
     train = training.trained_run_id(features, "m1")
@@ -842,10 +875,12 @@ def cases_catalog() -> dict[str, Scenario]:
         bound["before"] = code_bindings(rig)
 
     def drift_bound_nothing(rig: Any) -> None:
-        require(code_bindings(rig) == bound["before"], "the drift launch bound a run: the chain gate binds every run of the chain")
+        require(code_bindings(rig) == bound["before"], "the drift launch bound a run: the binding gate binds every run of the pipeline")
 
-    def stage_other(rig: Any) -> None:
-        rig.stage_runs(c.OTHER_RUN)
+    metadata_run = training.metadata_run_for_base(features)  # the catalog run a training run of this base starts
+
+    def stage_metadata(rig: Any) -> None:
+        rig.stage_runs(metadata_run)
 
     def stage_retry(rig: Any) -> None:
         import importlib
@@ -863,12 +898,284 @@ def cases_catalog() -> dict[str, Scenario]:
     # The training run that the drift run starts when its gate trains: its own model's set, the primary population and the drift run as its trigger.
     train_params = {**c.TRAIN_PARAMS, "run_id": train, "model": "m1", "features_run": features_m1, "trigger": f"drift:{drift}"}
 
-    # The bronze DAG's chain gate binds each layer run and each model's features, drift and training run to the bronze run's code.
-    bronze = Step("bronze_chain_dag", {"run_id": c.BRONZE_RUN, "mode": "real"}, 0, skip=r"run_.*|start_metadata")
+    # The first DAG runs every task in the image. Its check of the pipeline's DAGs, each stage's join of a child run and its wait for the model routes call the
+    # Airflow REST API, which an in-memory API behind a loopback server stands in for (airflow_api_fake.py; the runtime's own signed requests reach it). The
+    # child DAG runs are records of that API, so each stage DAG runs in a step of its own. The binding task runs against the rig's staged code.
+    from scripts.orchestration.airflow_api_fake import Cluster
+
+    layer_runs = {layer: training.chain_layer_run(layer, pipeline_run) for layer in training.PIPELINE_STAGES}
+    stage_dags = dict(training.PIPELINE_STAGE_DAGS)
+    first_tasks = ("check_dags", "run_ingestion", "bind_code", "run_bronze", "run_silver", "run_gold", "run_features", "await_downstream", "gate")
+    models = ("m1", "m2", "m3", "m4", "m5", "m6")
+    watched: dict[str, Any] = {}
+
+    def pipeline_form(start: str = "ingestion") -> dict[str, str]:
+        return {"run_id": pipeline_run, "mode": "real", "start_from": start, "run_kind": "bootstrap", "capture_root": "raw/"}
+
+    def bound_keys() -> set[str]:
+        """The binding objects the binding task writes: the silver, gold and features runs, and for each model its features, drift and training run, each
+        bound to the code run of the bronze run. The rig stages code under the bronze run itself, which a bronze run keeps (a bronze run of an ingestion run is
+        bound to that run's code), so it has no binding object here."""
+        runs = [layer_runs[layer] for layer in ("silver", "gold", "features")]
+        for model in models:
+            model_features = training.model_features_run_id(layer_runs["features"], model)
+            model_drift = training.model_drift_run_id(model_features)
+            runs += [model_features, model_drift, training.model_training_run_id(model_drift, model)]
+        return {f"lakehouse/run_stage/{run}/inputs/code_run.json" for run in runs}
+
+    def first_api(
+        failing: tuple[str, ...] = (),
+        existing: Mapping[str, str] | None = None,
+        paused: tuple[str, ...] = (),
+        started_with: Mapping[str, Any] | None = None,
+    ) -> Callable[[Any], Any]:
+        """The API of one step of the first DAG: the stage runs in ``failing`` end failed, ``existing`` maps a stage to the state of a run of it that exists
+        already (started with the settings of the stage unless ``started_with`` gives others) and ``paused`` are DAGs that are paused. It notes which runs
+        were bound to code whenever a run is created."""
+
+        def build(rig: Any) -> Any:
+            api = Cluster()
+            api.failing = {(stage_dags[layer], layer_runs[layer]) for layer in failing}
+            api.paused = set(paused)
+            for layer, state in (existing or {}).items():
+                key = (stage_dags[layer], layer_runs[layer])
+                api.create(*key, "earlier", (started_with or {}).get(layer, stage_conf(layer)))
+                api.runs[key]["state"] = state
+            api.log.clear()
+            seen: dict[tuple[str, str], frozenset[str]] = {}
+            watched.update(seen=seen, before=frozenset(code_bindings(rig)))
+            api.on_create = lambda dag, run: seen.setdefault((dag, run), frozenset(code_bindings(rig)))
+            return api
+
+        return build
+
+    def stage_conf(layer: str) -> dict[str, str]:
+        conf = {"run_id": layer_runs[layer], "mode": "real"}
+        if layer == "ingestion":
+            conf |= {"run_kind": "bootstrap", "capture_root": "raw/"}
+        if layer == "gold":
+            conf["silver_snapshot_run"] = layer_runs["silver"]
+        if layer == "features":
+            conf["gold_snapshot_run"] = layer_runs["gold"]
+        return conf
+
+    def made_exactly(*layers: str, bound: bool = True, failed: str | None = None) -> Callable[[Any, Any], None]:
+        """The first DAG created the runs of exactly these stages, in this order and with the settings of the stage, after it read every DAG it needs. Each run
+        ended in success but the one named by ``failed``. The binding task (when it ran: ``bound``) bound its runs to one code run before every later stage."""
+
+        def check(rig: Any, api: Any) -> None:
+            made = api.created_by("api")
+            wanted = [(stage_dags[layer], layer_runs[layer]) for layer in layers]
+            require(made == wanted, f"the first DAG created {made}, expected {wanted}")
+            for layer in layers:
+                conf = api.runs[(stage_dags[layer], layer_runs[layer])]["conf"]
+                require(conf == stage_conf(layer), f"the {layer} run was created with {conf}, expected {stage_conf(layer)}")
+                state = api.runs[(stage_dags[layer], layer_runs[layer])]["state"]
+                require(state == ("failed" if layer == failed else "success"), f"the {layer} run ended {state}")
+            first_post = next((index for index, item in enumerate(api.calls) if item[0] == "POST"), len(api.calls))
+            reads = {path for method, path in api.calls[:first_post] if method == "GET" and path.count("/") == 4}
+            require(len(reads) >= 14, f"the first DAG read {len(reads)} DAGs before it created a run: {sorted(reads)}")
+            seen, before, keys = watched["seen"], watched["before"], bound_keys()
+            for layer in layers:
+                at = seen[(stage_dags[layer], layer_runs[layer])]
+                if layer == "ingestion":
+                    require(not keys & at, f"ingestion started after the binding task ran: {sorted(keys & at)}")
+                else:
+                    require(keys <= at, f"the {layer} run was created before the binding task bound {sorted(keys - at)}")
+            if bound:
+                bindings = code_bindings(rig)
+                require(keys <= set(bindings), f"the binding task did not bind {sorted(keys - set(bindings))}")
+                require(len({bindings[key] for key in keys}) == 1, "the binding task bound the runs to different code runs")
+            else:
+                require(set(code_bindings(rig)) == before, "a run was bound although the binding task never ran")
+
+        return check
+
+    def whole_run_checked(rig: Any, api: Any) -> None:
+        made_exactly(*training.PIPELINE_STAGES)(rig, api)
+        for model in models:
+            model_features = training.model_features_run_id(layer_runs["features"], model)
+            route = [(next(dag for dag, name in training.FEATURE_DAGS.items() if name == model), model_features)]
+            route.append(("drift_monitoring_dag", training.model_drift_run_id(model_features)))
+            require(all(api.runs[key]["state"] == "success" for key in route), f"the route of {model} did not end in success: {route}")
+        for model in training.PROMOTION_MODELS:
+            drift_run = training.model_drift_run_id(training.model_features_run_id(layer_runs["features"], model))
+            research = ("research_dag", training.research_dag_run_id(training.model_training_run_id(drift_run, model)))
+            require(research in api.runs and api.runs[research]["state"] == "success", f"the research run of {model}: {sorted(api.runs)}")
+
+    def ended_before_next(layer: str, *layers: str) -> Callable[[Any, Any], None]:
+        """``made_exactly`` the stages in ``layers``, and the run of ``layer`` that existed and was running ended before the stage after it was created."""
+        made = made_exactly(*layers)
+
+        def check(rig: Any, api: Any) -> None:
+            made(rig, api)
+            key = (stage_dags[layer], layer_runs[layer])
+            after = stages[stages.index(layer) + 1]
+            ended = next((index for index, item in enumerate(api.log) if item[:3] == ("end", *key)), -1)
+            created = next((index for index, item in enumerate(api.log) if item[:3] == ("create", stage_dags[after], layer_runs[after])), -1)
+            require(0 <= ended < created, f"the {after} run was created at {created}, the running {layer} run ended at {ended}: {api.log}")
+
+        return check
+
+    def refused_before_any_child(rig: Any, api: Any) -> None:
+        require(not api.created_by("api") and frozenset(code_bindings(rig)) == watched["before"], f"a child or a binding came before the refusal: {api.log}")
+
+    def other_settings(layer: str) -> tuple[tuple[str, dict[str, str]], ...]:
+        """For each state a child can be in, the settings of a run of this stage that the first DAG would not have started: another logical run, another mode
+        and, for the stages that read a producer run, another producer run."""
+        right = stage_conf(layer)
+        changes = [{**right, "run_id": training.chain_layer_run(layer, "pipeline_a1a1a1a1")}, {**right, "mode": "fixture"}]
+        if layer in ("gold", "features"):
+            producer, before = ("silver_snapshot_run", "silver") if layer == "gold" else ("gold_snapshot_run", "gold")
+            changes.append({**right, producer: training.chain_layer_run(before, "pipeline_a1a1a1a1")})
+        return tuple((state, change) for change in changes for state in ("success", "running", "failed"))
+
+    def stopped_at(task: str) -> dict[str, str]:
+        """The task states of a run that failed at ``task``: the tasks before it passed, the tasks after it never ran and the gate, which runs after a failure,
+        rejected the run."""
+        index = first_tasks.index(task)
+        states = {
+            name: "success" if position < index else "failed" if position == index else "upstream_failed" for position, name in enumerate(first_tasks[:-1])
+        }
+        return {**states, "gate": "failed"}
+
+    def stage_bronze_request(rig: Any) -> None:
+        pair, _ = c.table_pair()
+        rig.stage.stage(c.BRONZE_RUN, "bronze_request.json", {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": c.INVENTORY})
+
+    def bronze_jobs_ran(rig: Any, facts: dict[str, Any]) -> None:
+        """The stage job then the load job launched, each with the full launch record of a job that succeeded."""
+        sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"][-2:]
+        require(
+            facts["run_task_calls"] == 2 and len(sent) == 2,
+            f"{facts['run_task_calls']} RunTask calls for the bronze DAG, expected the stage job and the load job",
+        )
+        names = [str(arguments["taskDefinition"]) for arguments in sent]
+        require("bronze_stage" in names[0] and "bronze_stage" not in names[1] and "bronze" in names[1], f"the bronze jobs launched as {names}")
+        for job in ("bronze_stage", "bronze"):
+            records = launch_records(rig, c.BRONZE_RUN, job)
+            require({"claim", "intent", "started", "end"} <= set(records), f"the launch records of the {job} job are {sorted(records)}")
+            require(records["end"]["outcome"] == "succeeded", f"the {job} job ended {records['end']['outcome']}")
+
+    pipeline_steps = (
+        Step(training.PIPELINE_DAG, pipeline_form(), 0, api=first_api(), api_after=whole_run_checked),
+        # The bronze DAG's two jobs launch through the same launch library as every layer: the stage job lists the sources and the load job runs its request.
+        Step("bronze_dag", {"run_id": c.BRONZE_RUN, "mode": "real"}, 2, prepare=stage_bronze_request, check=bronze_jobs_ran),
+    )
+    bind_step = pipeline_steps[0]
+    stages = training.PIPELINE_STAGES
+    first_dag_scenarios = (
+        # Each start runs exactly the stages from the chosen one on, after the binding, and creates none of the earlier ones.
+        *(
+            Scenario(
+                f"the_first_dag_starts_from_{layer}",
+                (Step(training.PIPELINE_DAG, pipeline_form(layer), 0, api=first_api(), api_after=made_exactly(*stages[position:])),),
+                make_rig,
+            )
+            for position, layer in enumerate(stages)
+            if position
+        ),
+        # A fresh child that fails stops the run: the stage task fails, no later stage exists and the gate rejects the run.
+        *(
+            Scenario(
+                f"the_first_dag_stops_when_the_{layer}_run_fails",
+                (
+                    Step(
+                        training.PIPELINE_DAG,
+                        pipeline_form(),
+                        0,
+                        states=stopped_at(f"run_{layer}"),
+                        run_state="failed",
+                        api=first_api(failing=(layer,)),
+                        api_after=made_exactly(*stages[: position + 1], bound=position > 0, failed=layer),
+                    ),
+                ),
+                make_rig,
+            )
+            for position, layer in enumerate(stages)
+        ),
+        # A run that exists is joined by its own outcome and never created again: a success is adopted, a running run is waited for and a failed run fails the
+        # stage with no later stage created.
+        Scenario(
+            "the_first_dag_joins_a_child_that_exists_already",
+            (
+                Step(
+                    training.PIPELINE_DAG,
+                    pipeline_form("bronze"),
+                    0,
+                    api=first_api(existing={"bronze": "success"}),
+                    api_after=made_exactly("silver", "gold", "features"),
+                ),
+                Step(
+                    training.PIPELINE_DAG,
+                    pipeline_form("bronze"),
+                    0,
+                    api=first_api(existing={"bronze": "running"}),
+                    api_after=ended_before_next("bronze", "silver", "gold", "features"),
+                ),
+                Step(
+                    training.PIPELINE_DAG,
+                    pipeline_form("bronze"),
+                    0,
+                    states=stopped_at("run_bronze"),
+                    run_state="failed",
+                    api=first_api(existing={"bronze": "running"}, failing=("bronze",)),
+                    api_after=made_exactly(failed="bronze"),
+                ),
+                Step(
+                    training.PIPELINE_DAG,
+                    pipeline_form("bronze"),
+                    0,
+                    states=stopped_at("run_bronze"),
+                    run_state="failed",
+                    api=first_api(existing={"bronze": "failed"}),
+                    api_after=made_exactly(),
+                ),
+            ),
+            make_rig,
+        ),
+        # A child that exists but was started with other settings than the first DAG's (another logical run, another producer run, another mode) is not reused:
+        # the stage task fails, nothing after it is created and the child is left as it was.
+        *(
+            Scenario(
+                f"the_first_dag_refuses_a_{layer}_run_started_with_other_settings",
+                tuple(
+                    Step(
+                        training.PIPELINE_DAG,
+                        pipeline_form(layer),
+                        0,
+                        states=stopped_at(f"run_{layer}"),
+                        run_state="failed",
+                        api=first_api(existing={layer: state}, started_with={layer: changed}),
+                        api_after=made_exactly(),
+                    )
+                    for state, changed in other_settings(layer)
+                ),
+                make_rig,
+            )
+            for layer in ("bronze", "gold", "features")
+        ),
+        # A paused DAG of the pipeline stops the run before any child or binding.
+        Scenario(
+            "the_first_dag_refuses_a_paused_dag_before_any_child",
+            (
+                Step(
+                    training.PIPELINE_DAG,
+                    pipeline_form(),
+                    0,
+                    states=stopped_at("check_dags"),
+                    run_state="failed",
+                    api=first_api(paused=("gold_transform_dag",)),
+                    api_after=refused_before_any_child,
+                ),
+            ),
+            make_rig,
+        ),
+    )
     pipeline = Scenario(
         "every_host_dag_runs_end_to_end",
         (
-            bronze,
+            *pipeline_steps,
             Step("silver_transform_dag", {"run_id": silver, "mode": "real"}, 1, family("silver"), job_states()),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 1, family("gold"), job_states()),
             Step("features_base_dag", {"run_id": features, "mode": "real", "gold_snapshot_run": gold}, 1, family("features")),
@@ -902,8 +1209,8 @@ def cases_catalog() -> dict[str, Scenario]:
                 prepare=lambda rig: stage_drift(rig, gated=False),
                 check=joined,
             ),
-            # A drift start names no base run, so the training run starts no research.
-            Step("training_dag", train_params, 1, family("train"), skipped=("trigger_research",)),
+            # A hand-built training run names no base run, so it starts neither the research nor the catalog; the automatic route names its base (drift DAG).
+            Step("training_dag", train_params, 1, family("train"), skipped=("trigger_research", "start_metadata")),
             Step("model_promotion_dag", dict(c.PROMOTE_PARAMS), 1, family("promote"), job_states()),
             Step("serving_deploy_dag", dict(c.SERVE_FORM), 1, family("serve"), job_states(), sent=serving_request_is(stable_request)),
             Step("drift_live_check_dag", dict(c.LIVE_PARAMS), 1, family("drift"), job_states(), prepare=lambda rig: rig.stage_runs(c.LIVE_RUN)),
@@ -913,10 +1220,10 @@ def cases_catalog() -> dict[str, Scenario]:
                 {"original_run": c.PUBLISHER_RUN, "day": 2, "mode": "real"},
                 1,
                 family("publisher"),
-                job_states(),
+                {**job_states(), "start_pipeline": "skipped"},  # a hand-started retry starts no pipeline run (the last retry day of a scheduled period does)
                 prepare=stage_retry,
             ),
-            Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real", "features_run": features}, 1, family("metadata"), prepare=stage_other),
+            Step("metadata_ingest_dag", {"run_id": metadata_run, "mode": "real", "features_run": features}, 1, family("metadata"), prepare=stage_metadata),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 0, family("gold"), job_states()),  # joins the launch
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), job_states()),
         ),
@@ -937,7 +1244,7 @@ def cases_catalog() -> dict[str, Scenario]:
     def trained(model: str) -> Step:
         """The training run of a model on the base run, as the chain of its features, drift and training run IDs names it, which the gate bound to the code."""
         params = {**c.TRAIN_PARAMS, "run_id": training.trained_run_id(base, model), "model": model}
-        return Step("training_dag", params, 1, family("train"), skipped=("trigger_research",))
+        return Step("training_dag", params, 1, family("train"), skipped=("trigger_research", "start_metadata"))
 
     def stage_first_champion(rig: Any) -> None:
         """A research record that names no Production version and no canary result."""
@@ -1043,7 +1350,7 @@ def cases_catalog() -> dict[str, Scenario]:
         Scenario(
             "research_dag_promotes_a_challenger_with_a_recorded_release",
             (
-                bronze,
+                bind_step,
                 *(trained(model) for model in training.PROMOTION_MODELS),
                 Step("research_dag", research_params, 7, check=chain_with_release_ran, prepare=stage_research),
                 # A second run for the base joins the launches of the first and starts nothing again.
@@ -1054,7 +1361,7 @@ def cases_catalog() -> dict[str, Scenario]:
         Scenario(
             "research_dag_promotes_a_first_champion_without_a_canary",
             (
-                bronze,
+                bind_step,
                 *(trained(model) for model in training.PROMOTION_MODELS),
                 Step("research_dag", research_params, 4, check=first_champion_ran, prepare=stage_first_champion),
             ),
@@ -1063,7 +1370,7 @@ def cases_catalog() -> dict[str, Scenario]:
         Scenario(
             "research_dag_fails_after_the_notice_when_the_release_is_refused",
             (
-                bronze,
+                bind_step,
                 *(trained(model) for model in training.PROMOTION_MODELS),
                 release_refused(6, check=closed_after_the_notice, plan={"feast": 1}, prepare=stage_research),
             ),
@@ -1296,16 +1603,17 @@ def cases_catalog() -> dict[str, Scenario]:
     form = Scenario("trigger_forms_validate_in_airflow", (), make_rig, after=form_check)
     conformance = Scenario("bridge_refuses_what_aws_refuses", (), make_rig, after=bridge_conformance)
     timetables = Scenario("scheduled_ingestion_runs_have_the_run_id_of_their_job", (), make_rig, after=timetable_check)
-    return {item.name: item for item in (pipeline, *research_cases, *serve_cases, *refusals, *planted_cases, form, conformance, timetables)}
+    return {
+        item.name: item for item in (pipeline, *first_dag_scenarios, *research_cases, *serve_cases, *refusals, *planted_cases, form, conformance, timetables)
+    }
 
 
 def timetable_check(_rig: Any) -> None:
     """Airflow's own timetable classes name the scheduled runs of the two ingestion schedules as their jobs, from November 2026 to April 2028 (day 1, the retry
     days, a year end and a leap February), and Airflow's DAG parser gives the two production DAG files their timetables (``schedule_timetable_cases``). The
-    plugins folder is the checkout's, as the image mounts it at /opt/airflow/plugins."""
+    plugins folder is the checkout's (the ``airflow-check`` service sets it, because Airflow reads it once at import)."""
     from scripts.orchestration import schedule_timetable_cases
 
-    os.environ.setdefault("AIRFLOW__CORE__PLUGINS_FOLDER", str(ROOT / "airflow_plugins"))
     failed = [f"{item['case']}: {item['evidence']}" for item in schedule_timetable_cases.run_cases() if not item["passed"]]
     require(not failed, "; ".join(failed))
 

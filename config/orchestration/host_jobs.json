@@ -132,7 +132,8 @@
     "research_dag": "promote",
     "serving_deploy_dag": "serve",
     "metadata_ingest_dag": "metadata",
-    "bronze_chain_dag": "chain",
+    "bronze_dag": "chain",
+    "pipeline_dag": "chain",
     "ingestion_dag": "publisher",
     "ingestion_retry_dag": "publisher"
   },

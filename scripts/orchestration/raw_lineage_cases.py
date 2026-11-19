@@ -236,14 +236,12 @@ def bronze_launch(record: Any, outcome: str = "succeeded") -> tuple[Rig, Any, ec
     launch = operator(rig, None)
     launch.job = job
     if outcome == "succeeded":
-        launch.execute({"ti": SimpleNamespace(dag_id="bronze_chain_dag", task_id="bronze_load", run_id=f"manual__{RUN}", map_index=-1, try_number=1)})
+        launch.execute({"ti": SimpleNamespace(dag_id="bronze_dag", task_id="bronze_load", run_id=f"manual__{RUN}", map_index=-1, try_number=1)})
     else:
         rig.ecs.plan = {"gold": 3}
         refuses(
             JobFailed,
-            lambda: launch.execute(
-                {"ti": SimpleNamespace(dag_id="bronze_chain_dag", task_id="bronze_load", run_id=f"manual__{RUN}", map_index=-1, try_number=1)}
-            ),
+            lambda: launch.execute({"ti": SimpleNamespace(dag_id="bronze_dag", task_id="bronze_load", run_id=f"manual__{RUN}", map_index=-1, try_number=1)}),
         )
     declared = ecs_lineage.declared_lineage("bronze")
     evidence, store = ecs_lineage.S3Evidence(rig.bucket, BUCKET_LAUNCH), S3LaunchStore(rig.bucket, BUCKET_LAUNCH, PREFIX)
@@ -398,7 +396,7 @@ def bronze_sends_no_table_events() -> None:
         [item["eventType"] for item in task] == ["START", "COMPLETE"] and all(item["inputs"] == [] and item["outputs"] == [] for item in task),
         "task events only",
     )
-    bronze_request = SubmissionRequest("bronze_load", RUN, "real", 1, "bronze_chain_dag", "evidence", f"manual__{RUN}")
+    bronze_request = SubmissionRequest("bronze_load", RUN, "real", 1, "bronze_dag", "evidence", f"manual__{RUN}")
     with receiving() as receiver, lineage_environment(http_on(receiver.url)):
         record = run_evidence(rig, bronze_request)
     require(record["job"] == "bronze" and not receiver.requests, f"the bronze evidence step sent {len(receiver.requests)} events")

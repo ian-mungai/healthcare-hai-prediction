@@ -486,7 +486,7 @@ def bronze_record_cases() -> list[tuple[Any, ...]]:
 
 
 def code_run_cases() -> list[tuple[Any, ...]]:
-    """The binding of a run to the run whose staged code it uses: read for every job, created once by the chain gate and the drift step, never replaced."""
+    """The binding of a run to the run whose staged code it uses: read for every job, created once by the binding gate and the drift step, never replaced."""
     bucket = f"arn:aws:s3:::{BUCKET}"
     return [
         ("read the code run binding", "s3:GetObject", CODE_RUN, True),

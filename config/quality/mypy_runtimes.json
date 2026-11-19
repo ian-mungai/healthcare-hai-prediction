@@ -24,7 +24,11 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
-    "dags/bronze_chain_dag.py": {
+    "dags/bronze_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
+    "dags/pipeline_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },

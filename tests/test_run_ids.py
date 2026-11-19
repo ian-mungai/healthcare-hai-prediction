@@ -36,6 +36,8 @@ def test_the_names_tables_hold_the_approved_short_names() -> None:
         f"ingestion_retry_{HEX}_3",
         f"ingestion_retry_{HEX}_2_3",
         f"ingestion_retry_{HEX}_3_2",
+        f"pipeline_{HEX}",
+        f"pipeline_{HEX}_2",
         f"bronze_{HEX}",
         f"silver_{HEX}_2",
         f"gold_{HEX}",
@@ -158,6 +160,48 @@ def test_the_runs_of_one_pipeline_run_share_one_hex() -> None:
     check(contract.chain_run_id(research, "HAI_3", "canary_deploy") == f"canary_deploy_ssi_colon_{HEX}", "chain step 2")
 
 
+def test_the_pipeline_name_is_one_constant_and_its_run_id_is_the_root_of_one_pipeline_run() -> None:
+    check(contract.PIPELINE_RUN == "pipeline" and contract.PIPELINE_DAG == "pipeline_dag", f"{contract.PIPELINE_RUN} {contract.PIPELINE_DAG}")
+    check(f"{contract.PIPELINE_RUN}_dag" == contract.PIPELINE_DAG, "the DAG id is derived from the run name")
+    check(re.fullmatch(contract.run_id_pattern(contract.PIPELINE_RUN), f"pipeline_{HEX}_2") is not None, "the pipeline pattern refuses its own run")
+    check(re.fullmatch(contract.run_id_pattern(contract.PIPELINE_RUN), f"bronze_{HEX}") is None, "the pipeline pattern takes another name")
+    parts = contract.run_id_parts(f"pipeline_{HEX}_2")
+    check((parts.name, parts.qualifier, parts.hex, parts.attempt) == ("pipeline", None, HEX, 2), f"{parts}")
+    check(contract.compose_run_id("pipeline", HEX) == f"pipeline_{HEX}", "compose")
+    check(contract.new_run_hex() != contract.new_run_hex(), "a fresh hex")
+
+
+def test_the_layer_runs_of_a_pipeline_run_derive_from_its_hex_and_attempt() -> None:
+    pipeline = f"pipeline_{HEX}"
+    for layer in ("ingestion", "bronze", "silver", "gold", "features", "metadata"):
+        check(contract.chain_layer_run(layer, pipeline) == f"{layer}_{HEX}", layer)
+        check(contract.chain_layer_run(layer, f"pipeline_{HEX}_2") == f"{layer}_{HEX}_2", f"{layer} attempt")
+    check(contract.chain_layer_run("silver", f"bronze_{HEX}") == f"silver_{HEX}", "a bronze parent still derives the layers (hand bronze)")
+    check(contract.chain_layer_run("silver", pipeline) == contract.chain_layer_run("silver", f"bronze_{HEX}"), "both parents give one run")
+    check(contract.metadata_run_for_base(f"features_{HEX}_2") == f"metadata_{HEX}_2", "metadata of a base run")
+    for bad_layer in ("research", "drift", "pipeline", "m1", ""):
+        with pytest.raises(ValueError):
+            contract.chain_layer_run(bad_layer, pipeline)
+    for bad_parent in (f"silver_{HEX}", f"ingestion_{HEX}", f"features_ols_{HEX}", OLD_RUN, "latest"):
+        with pytest.raises(ValueError):
+            contract.chain_layer_run("gold", bad_parent)
+    for bad_base in (f"features_ols_{HEX}", f"bronze_{HEX}", f"pipeline_{HEX}", OLD_RUN):
+        with pytest.raises(ValueError):
+            contract.metadata_run_for_base(bad_base)
+
+
+def test_the_base_run_of_a_model_sets_run_is_the_run_the_set_was_built_from() -> None:
+    for model in contract.MODELS:
+        for attempt in (1, 2, 7):
+            base = contract.compose_run_id("features", HEX, attempt)
+            set_run = contract.model_features_run_id(base, model)
+            check(contract.base_run_of(set_run) == base, f"{set_run} gave {contract.base_run_of(set_run)}")
+            check(contract.base_run_of(contract.model_features_run_id(base, model)) == base, "stable")
+    for bad in (f"features_{HEX}", f"bronze_{HEX}", f"drift_ols_{HEX}", f"training_ols_{HEX}", OLD_RUN, "latest", ""):
+        with pytest.raises(ValueError):
+            contract.base_run_of(bad)
+
+
 def test_the_attempt_suffix_carries_down_but_research_takes_only_its_own() -> None:
     bronze = f"bronze_{HEX}_2"
     check(contract.chain_layer_run("silver", bronze) == f"silver_{HEX}_2", "layer")
@@ -211,7 +255,7 @@ def test_the_record_key_of_a_research_run_takes_only_the_new_form() -> None:
 
 
 def test_the_whole_chain_of_a_pipeline_run_is_valid_at_every_step() -> None:
-    ids = [f"ingestion_{HEX}", f"ingestion_retry_{HEX}_2", f"bronze_{HEX}"]
+    ids = [f"pipeline_{HEX}", f"ingestion_{HEX}", f"ingestion_retry_{HEX}_2", f"bronze_{HEX}"]
     for layer in ("silver", "gold", "features", "metadata"):
         ids.append(contract.chain_layer_run(layer, f"bronze_{HEX}"))
     base = f"features_{HEX}"

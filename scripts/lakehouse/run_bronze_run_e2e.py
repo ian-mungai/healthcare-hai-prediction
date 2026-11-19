@@ -33,12 +33,14 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration import raw_lineage
+from orchestration.training_contract import PIPELINE_DAG, PIPELINE_RUN
 from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_mirror_signoff, bronze_pin, bronze_run, glue_mirror, layer_acceptance
 from scripts.lakehouse import run_glue_mirror_e2e as glue_stand_in
 from scripts.quality import lock_env
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
 RUN = "bronze_0a1b2c3d"
+PIPELINE = f"{PIPELINE_RUN}_0a1b2c3d"
 BUCKET = "hai-test-bucket"
 TABLES = [
     {"table": "alpha_data", "collection": "org_a/set_one", "format": "csv", "dataset_ids": ["alpha"]},
@@ -372,7 +374,10 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     require(arguments[arguments.index("--tables") + 1] == "alpha_data,beta_data" and "--task-role" in arguments, arguments)
     require(arguments[arguments.index("--bucket") + 1] == BUCKET, arguments)
     require(set(catalog()) == {"bronze.alpha_data", "bronze.beta_data", "bronze_dictionary.alpha_data", "bronze_dictionary.beta_data"}, sorted(catalog()))
-    require("bronze_chain_dag" in case.out and RUN in case.out, "the success line names the chain trigger for this run")
+    require(
+        PIPELINE_DAG in case.out and PIPELINE in case.out and '"start_from": "silver"' in case.out,
+        "the success line names the first DAG, its run for this bronze run and the silver start",
+    )
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
     require("mirror" not in record, f"the load receipt carries the mirror outcome: {record}")
     raw_lineage.loaded_objects(record, "check.json", RUN)
@@ -436,7 +441,7 @@ def case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown(ca
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
     latest = attempts()[-1]["mirror"]
     require(latest["status"] == "failed" and "AccessDeniedException" in latest["reason"], f"{latest}")
-    require(record["snapshots"] == {"alpha_data": 100, "beta_data": 101} and "bronze_chain_dag" in case.out, "the failed mirror held back the committed run")
+    require(record["snapshots"] == {"alpha_data": 100, "beta_data": 101} and PIPELINE_DAG in case.out, "the failed mirror held back the committed run")
     require("glue mirror FAILED" in case.err and "alpha_data" in case.err, f"the failed mirror is not shown: {case.err}")
     raw_lineage.loaded_objects(record, "check.json", RUN)
 
@@ -501,7 +506,7 @@ def case_a_first_run_before_the_iam_apply_is_unavailable(case: Case) -> None:
     with refusing_attempts(case):
         require(case.chain() == [0, 0, 0], case.err)
     client = STORAGE[0].client
-    require(f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts and "bronze_chain_dag" in case.out, "the run was held back")
+    require(f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts and PIPELINE_DAG in case.out, "the run was held back")
     key = bronze_mirror.attempt_key(RUN, 1)
     require(
         "mirror attempt record" in case.err and key in case.err and "AccessDenied" in case.err and "generation 1" in case.err,
@@ -545,7 +550,7 @@ def case_success_then_glue_and_record_write_revoked_fails_retry(case: Case) -> N
     require(bronze_mirror.attempt_key(RUN, 2) in case.err and "already" in case.err, f"the refused record is not named: {case.err}")
     found = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)
     require([item["sequence"] for item in found] == [1], f"a record was written for the refused retry: {found}")
-    require("bronze_chain_dag" not in case.out.split("glue mirror unavailable")[-1], "the failed retry emitted the chain hint")
+    require(PIPELINE_DAG not in case.out.split("glue mirror unavailable")[-1], "the failed retry emitted the pipeline hint")
 
 
 def case_success_then_only_glue_revoked_records_unavailable(case: Case) -> None:
@@ -700,7 +705,7 @@ def case_before_the_grant_every_attempt_is_unavailable_exit_0(case: Case) -> Non
         require(case.chain(label="retry") == [0, 0, 0], f"a retry before the grant failed its check phase: {case.err}")
     puts = STORAGE[0].client.puts
     require(puts[f"lakehouse/bronze_runs/{RUN}/check.json"] == receipt, "a retry changed the receipt")
-    require(f"lakehouse/bronze_runs/{RUN}/carried_over.json" in puts and "bronze_chain_dag" in case.out, "the run's records or the chain hint are missing")
+    require(f"lakehouse/bronze_runs/{RUN}/carried_over.json" in puts and PIPELINE_DAG in case.out, "the run's records or the pipeline hint are missing")
     require("glue mirror unavailable" in case.out and "AccessDeniedException" in case.out, f"the unavailable mirror is not named: {case.out}")
     require("glue mirror UNAVAILABLE" in case.err and "glue mirror ok" not in case.out and "FAILED" not in case.err, f"the stderr text: {case.err}")
     require(bronze_mirror.attempt_key(RUN, 1) in case.err and "AccessDenied" in case.err, f"the missing attempt record is not named: {case.err}")
@@ -930,7 +935,7 @@ def case_qualification_writes_only_the_twins(case: Case) -> None:
     require(arguments[arguments.index("--namespace") + 1] == "bronze_e2e", arguments)
     require(arguments[arguments.index("--dictionary-namespace") + 1] == "bronze_dictionary_e2e", arguments)
     require(all(name.startswith(("bronze_e2e.", "bronze_dictionary_e2e.")) for name in catalog()), sorted(catalog()))
-    require("bronze_chain_dag" not in case.out, "a qualification run never offers the chain")
+    require(PIPELINE_DAG not in case.out, "a qualification run never offers the pipeline")
 
 
 def case_a_real_run_records_the_files_it_carried_over(case: Case) -> None:
@@ -970,7 +975,7 @@ def case_dry_run_writes_nothing(case: Case) -> None:
     found = [item for item in plan["objects"] if item["key"] == alpha_key]
     require(len(found) == 1 and found[0]["version_id"] == alpha_version and found[0]["sha256_verified"] is True, plan["objects"])
     require(plan["summary"]["objects"] == 2 and plan["summary"]["bytes"] == len(b"id,value\n1,a\n2,b\n") + len(b"id,value\n3,c\n"), plan["summary"])
-    require("bronze_chain_dag" not in case.out, "a dry run never offers the chain")
+    require(PIPELINE_DAG not in case.out, "a dry run never offers the pipeline")
 
 
 def case_dry_run_from_the_environment(case: Case) -> None:
@@ -1057,7 +1062,7 @@ def case_loader_failure_fails_the_task(case: Case) -> None:
     codes = case.chain()
     require(codes == [0, 1], codes)
     require("exited 1" in case.err, case.err)
-    require("bronze_chain_dag" not in case.out, "no chain offer after a failed load")
+    require(PIPELINE_DAG not in case.out, "no pipeline offer after a failed load")
 
 
 def case_check_refuses_a_bad_report(case: Case) -> None:
@@ -1068,7 +1073,7 @@ def case_check_refuses_a_bad_report(case: Case) -> None:
         label = f"w_{defect}"
         require(case.phase("pin", label=label) == 0 and case.phase("load", label=label) == 0, case.err)
         require(case.phase("check", label=label) != 0 and fragment in case.err, (defect, case.err))
-        require("bronze_chain_dag" not in case.out, defect)
+        require(PIPELINE_DAG not in case.out, defect)
 
 
 def contradict_table_check(report: dict[str, Any], field: str) -> None:
@@ -1105,10 +1110,10 @@ def case_report_table_checks(case: Case, change: Callable[[dict[str, Any]], obje
     code = case.phase("check", label=label, tables=tables)
     require(writes() == before and len(LOADS) == loads, "the report check must not load or write tables")
     if change is None:
-        require(code == 0 and "bronze_chain_dag" in case.out, (code, case.err, case.out))
+        require(code == 0 and PIPELINE_DAG in case.out, (code, case.err, case.out))
         return
     require(code == 1 and "a table check of the loader report did not pass" in case.err, (code, case.err))
-    require("bronze_chain_dag" not in case.out, case.out)
+    require(PIPELINE_DAG not in case.out, case.out)
 
 
 def case_phase_outside_the_job(case: Case) -> None:

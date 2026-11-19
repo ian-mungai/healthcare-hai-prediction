@@ -9,9 +9,8 @@ scheduled run takes the run ID of its logical date (``ingestion_`` and the first
 own Airflow run ID (the monthly timetable of orchestration/ingestion_timetables.py names it), and is always the ``monthly`` kind, and only the hand trigger
 starts ``bootstrap`` (orchestration/ingestion_schedule.py). Development keeps the hand trigger.
 
-A fifth task, ``start_bronze``, starts ``bronze_chain_dag`` under ``bronze_<hex>`` of this run once the run passed, when the owner started it by hand (a
-zero-day retry period). A scheduled run starts none: the last day of its retry period does (``ingestion_retry_dag``). A test capture root starts none.
-The plan rebuilds and holds are a later slice.
+The DAG starts no run after it. The first DAG (``pipeline_dag``) runs this DAG as its first stage and every later stage after it, and the last day of a
+scheduled run's retry period starts that DAG from the bronze stage (``ingestion_retry_dag``). The plan rebuilds and holds are a later slice.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from typing import Any
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_bronze_start, build_job_chain
+from orchestration.dag_runtime import build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RUN, schedule_for
 
 SCHEDULE = schedule_for(os.environ)
@@ -54,4 +53,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("publisher_run", family="publisher") >> build_bronze_start(retry=False)
+    build_job_chain("publisher_run", family="publisher")

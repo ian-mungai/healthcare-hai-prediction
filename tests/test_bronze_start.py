@@ -1,4 +1,4 @@
-"""The start of bronze: a hand start runs it at once, a scheduled run after its retry period, and the files that period did not capture are named."""
+"""The start of a pipeline run after ingestion: the last scheduled retry day starts it from bronze, and the files that period did not capture are named."""
 
 from __future__ import annotations
 
@@ -39,19 +39,36 @@ def test_only_an_ingestion_run_starts_a_bronze_run(run: str) -> None:
         schedule.bronze_run_for(run)
 
 
-def test_a_hand_started_ingestion_run_starts_bronze_at_once_and_a_scheduled_one_waits_for_its_retry_period() -> None:
-    check(schedule.bronze_after_ingestion(ORIGINAL, context("manual")) == f"bronze_{HEX}", "a hand start did not start bronze")
-    check(schedule.bronze_after_ingestion(ORIGINAL, {}) == f"bronze_{HEX}", "a run with no DAG run is a hand start")
-    check(schedule.bronze_after_ingestion(ORIGINAL, context("scheduled")) is None, "a scheduled run started bronze before its retry period")
+@pytest.mark.parametrize(
+    ("ingestion", "pipeline"),
+    [
+        (ORIGINAL, f"pipeline_{HEX}"),
+        (f"{ORIGINAL}_2", f"pipeline_{HEX}_2"),
+        (f"ingestion_retry_{HEX}_3", f"pipeline_{HEX}"),
+    ],
+)
+def test_the_pipeline_run_takes_the_hex_and_the_attempt_of_its_ingestion_run(ingestion: str, pipeline: str) -> None:
+    check(schedule.pipeline_run_for(ingestion) == pipeline, f"{ingestion} gave {schedule.pipeline_run_for(ingestion)}")
 
 
-def test_only_the_last_scheduled_retry_day_starts_bronze() -> None:
+@pytest.mark.parametrize("run", ["latest", f"silver_{HEX}", "20261116T201053Z-b10a4f2d", f"bronze_{HEX}", f"pipeline_{HEX}"])
+def test_only_an_ingestion_run_gives_a_pipeline_run(run: str) -> None:
+    with pytest.raises(ValueError, match="ingestion"):
+        schedule.pipeline_run_for(run)
+
+
+def test_a_hand_started_ingestion_run_starts_nothing_after_it() -> None:
+    check(not hasattr(schedule, "bronze_after_ingestion"), "a hand-started ingestion run still names a bronze start: the pipeline DAG runs the stages")
+
+
+def test_only_the_last_scheduled_retry_day_starts_the_pipeline() -> None:
     last = schedule.RETRY_LAST_DAY
-    check(schedule.bronze_after_retry(ORIGINAL, last, context("scheduled")) == f"bronze_{HEX}", "the last retry day did not start bronze")
+    check(schedule.pipeline_after_retry(ORIGINAL, last, context("scheduled")) == f"pipeline_{HEX}", "the last retry day did not start the pipeline")
     for day in range(schedule.RETRY_FIRST_DAY, last):
-        check(schedule.bronze_after_retry(ORIGINAL, day, context("scheduled")) is None, f"retry day {day} started bronze inside the period")
-    check(schedule.bronze_after_retry(ORIGINAL, last, context("manual")) is None, "a hand retry started bronze: only the owner starts a suffixed bronze run")
-    check(schedule.bronze_after_retry(f"{ORIGINAL}_2", last, context("scheduled")) == f"bronze_{HEX}_2", "the attempt did not carry")
+        check(schedule.pipeline_after_retry(ORIGINAL, day, context("scheduled")) is None, f"retry day {day} started the pipeline inside the period")
+    check(schedule.pipeline_after_retry(ORIGINAL, last, context("manual")) is None, "a hand retry started the pipeline: only the owner starts a suffixed run")
+    check(schedule.pipeline_after_retry(f"{ORIGINAL}_2", last, context("scheduled")) == f"pipeline_{HEX}_2", "the attempt did not carry")
+    check(not hasattr(schedule, "bronze_after_retry"), "the retry start still names a bronze start")
 
 
 def test_the_ingestion_runs_of_a_bronze_run_are_its_original_and_each_retry_day() -> None:

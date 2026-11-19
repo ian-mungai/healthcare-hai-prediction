@@ -339,12 +339,12 @@
   },
   "steps": {
     "acquire_run": null,
+    "bind_code": "@gate",
     "bronze_load": "bronze",
     "canary_check": "promote",
     "catalog_backup": "gold",
     "catalog_release": null,
     "catalog_up": null,
-    "chain_gate": "@gate",
     "check_drift": "drift",
     "commit_publish": "gold",
     "cross_layer_checks": "gold",

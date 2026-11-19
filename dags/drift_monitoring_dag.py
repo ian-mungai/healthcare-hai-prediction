@@ -6,12 +6,13 @@ task on AWS through the direct ECS launch library. The task covers the six HAI t
 a record of another run, a changed or inconsistent record, a marker without the gate's decision, a decision of another model, a marker whose monitored types
 are not the types of its records and a decision that differs in any field from the one the gate rule (``decide_drift_gate``) gives for the marker's types and
 records. It builds at most one request for ``training_dag``: the model's own training run for the types the gate trains (the model drifted, its feature schema
-changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
-``trigger=drift:<this run>``. A type the gate skips is logged with its reason, and a type whose check left features out of the comparison (no value in any
-reference row) is logged with their names. The trigger is mapped over that list, so a model that does not train starts nothing. The training run id and the
-trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of a retrained model is automatic through the
-promotion rule and the canary. A run whose check failed does not start again: its launch is terminal, so
-``trigger_dag --drift-attempt`` starts the same model run's check as a run of its own that runs the code staged for it."""
+changed or it has no Production model for the type), the primary population, the model's run as ``features_run``, the base run of that set as ``base_run``
+(the run that starts the catalog once for the base and, for a promotion model, the research) and ``trigger=drift:<this run>``. A type the gate skips is logged
+with its reason, and a type whose check left features out of the comparison (no value in any reference row) is logged with their names. The trigger is mapped
+over that list, so a model that does not train starts nothing. The training run id and the trigger run id come from the drift run id and the model, so a retry
+never starts a second training run. Promotion of a retrained model is automatic through the promotion rule and the canary. A run whose check failed does not
+start again: its launch is terminal, so ``trigger_dag --drift-attempt`` starts the same model run's check as a run of its own that runs the code staged for
+it."""
 
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ from orchestration.training_contract import (
     LAUNCH_LANES,
     SET_RUN,
     GateRefused,
+    base_run_of,
     decide_drift_gate,
     model_training_run_id,
     parameters_for,
@@ -148,7 +150,12 @@ def training_requests(drift_run: str, mlflow: str, model: str, features_run: str
     return [
         {
             "trigger_run_id": model_training_run_id(drift_run, model),
-            "conf": {"run_id": model_training_run_id(drift_run, model), "mode": "real", **parameters_for("training_dag", training, LAUNCH_LANES)},
+            "conf": {
+                "run_id": model_training_run_id(drift_run, model),
+                "mode": "real",
+                **parameters_for("training_dag", training, LAUNCH_LANES),
+                "base_run": base_run_of(features_run),
+            },
         }
     ]
 

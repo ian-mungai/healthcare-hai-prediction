@@ -8,8 +8,8 @@ In production (``HAI_ENVIRONMENT=prod``) the DAG also runs on days 2 and 3 of ea
 as its original and the day of the month as its day, 2 or 3 (orchestration/ingestion_schedule.py). The run's own Airflow run ID is its job's run ID
 (``ingestion_retry_<hex>_<day>``), which the retry timetable of orchestration/ingestion_timetables.py gives the scheduler. Development keeps the hand trigger.
 
-The last retry day ends the retry period: its ``start_bronze`` task starts ``bronze_chain_dag`` under ``bronze_<hex>`` whatever the day's own result, because
-the files still missing then keep their earlier capture. A hand-started retry starts no bronze run.
+The last retry day ends the retry period: its ``start_pipeline`` task starts the first DAG (``pipeline_dag``) from its bronze stage under ``pipeline_<hex>``
+whatever the day's own result, because the files still missing then keep their earlier capture. A hand-started retry starts no pipeline run.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_bronze_start, build_job_chain
+from orchestration.dag_runtime import build_job_chain, build_pipeline_start
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RETRY_DAY, SCHEDULED_RUN, retry_schedule_for
 from orchestration.training_contract import RETRY_FIRST_DAY, RETRY_LAST_DAY
 
@@ -58,4 +58,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("publisher_run") >> build_bronze_start(retry=True)
+    build_job_chain("publisher_run") >> build_pipeline_start()

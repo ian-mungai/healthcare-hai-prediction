@@ -172,7 +172,7 @@ resource "aws_iam_role_policy" "airflow_launch_bronze_record" {
 }
 
 # Every job's launch reads lakehouse/run_stage/<run>/inputs/code_run.json, the run whose staged code the run uses (orchestration/ecs_preflight.py,
-# S3CodeRuns). The chain gate and the drift step create it once. The list grant on that key alone makes a missing binding answer 404, which reads as the
+# S3CodeRuns). The pipeline binding gate and the drift step create it once. The list grant on that key alone makes a missing binding answer 404, which reads as the
 # run's own code, instead of 403, which the step never reads as missing.
 resource "aws_iam_role_policy" "airflow_launch_code_runs" {
   count = var.airflow_launch_prepared ? 1 : 0

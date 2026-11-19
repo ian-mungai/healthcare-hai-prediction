@@ -191,7 +191,9 @@ def the_production_dag_files_carry_the_timetables() -> str:
             ("ingestion_retry_dag.py", "ingestion_retry_dag", "IngestionRetryTimetable"),
         ):
             with mock.patch.dict(os.environ, environment):
-                bag = DagBag(dag_folder=str(ROOT / "dags" / file), include_examples=False)
+                bag = DagBag(
+                    dag_folder=str(ROOT / "dags" / file)
+                )  # the examples are off by AIRFLOW__CORE__LOAD_EXAMPLES: Airflow 3.4 takes no include_examples
             require(not bag.import_errors, f"{file} under {environment}: {bag.import_errors}")
             kind = type(bag.dags[dag_id].timetable).__name__
             require((kind == name) if schedules else (kind != name), f"{dag_id} under {environment} has the timetable {kind}")

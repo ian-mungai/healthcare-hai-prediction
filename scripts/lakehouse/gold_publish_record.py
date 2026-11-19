@@ -16,7 +16,7 @@ from typing import Any
 # The run ID form of orchestration/training_contract.py (RUN_ID). The containers of this module mount scripts only, so it holds a copy that
 # tests/test_run_id_patterns.py keeps equal.
 RUN_ID_PATTERN = (
-    r"(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
+    r"(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
     r"|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
     r"|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?"
     r"|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])"

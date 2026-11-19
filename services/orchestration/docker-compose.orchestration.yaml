@@ -163,6 +163,8 @@ services:
       # Airflow reads the creation default once, when the check imports it, so the DAGs of the run are unpaused here and not in the rig (the training DAG's trigger
       # of research_dag fails with a paused target).
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      # Airflow reads the plugins folder once, when the check imports it: the ingestion timetables register only through airflow_plugins/hai_timetables.py.
+      AIRFLOW__CORE__PLUGINS_FOLDER: /opt/hai/repo/airflow_plugins
       AIRFLOW__OPENLINEAGE__DISABLED: "true"
     volumes:
       - ${HAI_ORCH_REPO}/dags:/opt/hai/dags:ro

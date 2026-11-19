@@ -167,7 +167,7 @@
     "TF_PLUGIN_CACHE_DIR": {"category": "tool", "reason": "Terraform's own plugin cache folder; the offline Terraform proofs pass it on to terraform when it is set."},
     "TMPDIR": {"category": "container", "reason": "Set by the task on its workspace volume."},
     "TRAINING_IMAGE_DIGEST": {"category": "container", "reason": "The training image digest for the MLflow run tags, set by the renderer."},
-    "AIRFLOW_API_PORT": {"category": "shell", "reason": "Optional: the port of the Airflow API for the chain DAG."},
+    "AIRFLOW_API_PORT": {"category": "shell", "reason": "Optional: the port of the Airflow API for the pipeline start of the retry DAG and the catalog start of a training run."},
     "CI_CORE_BUDGET": {"category": "shell", "reason": "Optional override of the core budget of the local gate's admission queue (a whole number above 0); a person may export it for one run."},
     "CONFIRM_IAM_POLICIES": {"category": "shell", "reason": "The confirmation text that the policy apply command asks for; the owner command lists export it for one command."},
     "DOCKER_HOST": {"category": "shell", "reason": "Optional: names the Docker socket as the Docker command does; unset, the launcher reads the current Docker context."},

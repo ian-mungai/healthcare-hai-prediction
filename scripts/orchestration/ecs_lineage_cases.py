@@ -138,7 +138,7 @@ def facts(job: str, outcome: str = "succeeded", input_run: str | None = None) ->
 def invocation(job: str, template: str | None = None) -> dict[str, Any]:
     template = template or TEMPLATE.get(job) or next(name for name, owner in JOBS["steps"].items() if owner == job)
     dags = json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["dags"]
-    dag = DAG.get(job) or next((name for name, family in dags.items() if family == job), "bronze_chain_dag")  # the bronze job runs in the chain DAG
+    dag = DAG.get(job) or next((name for name, family in dags.items() if family == job), "bronze_dag")  # the bronze job runs in the bronze DAG
     request: dict[str, Any] = {
         "request_version": 2,
         "template": template,

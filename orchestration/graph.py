@@ -10,6 +10,8 @@ the four tasks preflight, job, evidence and gate, the gate is the only leaf and 
 A DAG of ``TRIGGERS`` adds one trigger task per DAG it starts (the base DAG its six model DAGs, a model DAG the drift check of its set), each behind the gate
 only, and those tasks are its leaves instead of the gate.
 The research DAG (``RESEARCH_DAGS``) is ready, research, chain and the gate, which runs after a failure too and is its only leaf.
+The first DAG and the bronze DAG (``FIRST_CHAINS``) are each one chain of their own tasks, in the order of the dict: the last task is the only leaf, every task
+follows only the one before it, and every task runs under ``all_success`` but the first DAG's gate, which runs after a failure too.
 """
 
 from __future__ import annotations
@@ -78,18 +80,31 @@ PIPELINE_CHAINS = {
 }
 # The pipeline chains that start another DAG after their release: a task that builds the request, then the trigger, which is the only leaf.
 CHAIN_TRIGGERS = {"training_dag": ("research_request", "trigger_research")}
+# The pipeline chains that also start the catalog after their release: one more leaf, directly behind the release, that nothing follows.
+CHAIN_STARTS = {"training_dag": "start_metadata"}
 # The research DAG: ready (skips until m1, m2 and m4 have trained on the base run), research (the one job), chain (the promotion chain of each type with a
 # challenger) and the gate, which runs after a failure too and is the only leaf.
 RESEARCH_DAGS = frozenset({"research_dag"})
 RESEARCH_UPSTREAM = {"ready": frozenset(), "research": frozenset({"ready"}), "chain": frozenset({"research"}), "gate": frozenset({"chain"})}
-# Every shipped DAG that the graph rules cover: the step chains, then the one-job chains, then the research DAG.
-GRAPH_DAGS = (*PIPELINE_CHAINS, *sorted(COLLAPSED_DAGS), *sorted(RESEARCH_DAGS))
+# The first DAG (check, ingestion, the code binding, bronze, silver, gold, the features base, the wait for every model's route, then the gate that runs after a
+# failure too) and the bronze DAG (the stage job, then the load job): one chain each, which the last task ends. The first DAG's name is a literal here, as in
+# its file; a case keeps it equal to ``training_contract.PIPELINE_DAG``.
+FIRST_CHAINS = {
+    "pipeline_dag": ("check_dags", "run_ingestion", "bind_code", "run_bronze", "run_silver", "run_gold", "run_features", "await_downstream", "gate"),
+    "bronze_dag": ("bronze_stage", "bronze_load"),
+}
+FIRST_RULES = {"pipeline_dag": {"gate": "all_done"}, "bronze_dag": {}}
+# Every shipped DAG that the graph rules cover: the step chains, the first and bronze DAGs, then the one-job chains, then the research DAG.
+GRAPH_DAGS = (*PIPELINE_CHAINS, *FIRST_CHAINS, *sorted(COLLAPSED_DAGS), *sorted(RESEARCH_DAGS))
 
 
 def requirements(dag_id: str) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
     """Return the fixed task dependencies and trigger rules for a supported pipeline."""
     if dag_id == "transform_dag":
         return EXPECTED_UPSTREAM, EXPECTED_RULES
+    if dag_id in FIRST_CHAINS:
+        chain = FIRST_CHAINS[dag_id]
+        return {name: frozenset({chain[index - 1]} if index else ()) for index, name in enumerate(chain)}, FIRST_RULES[dag_id]
     if dag_id in RESEARCH_DAGS:
         return RESEARCH_UPSTREAM, {"gate": "all_done"}
     if dag_id in COLLAPSED_DAGS:
@@ -100,6 +115,8 @@ def requirements(dag_id: str) -> tuple[dict[str, frozenset[str]], dict[str, str]
     if dag_id in CHAIN_TRIGGERS:
         request, trigger = CHAIN_TRIGGERS[dag_id]
         upstream.update({request: frozenset({"release_run"}), trigger: frozenset({request})})
+    if dag_id in CHAIN_STARTS:
+        upstream[CHAIN_STARTS[dag_id]] = frozenset({"release_run"})
     return upstream, {name: "all_done" for name in ("catalog_release", "final_gate", "release_run")}
 
 
@@ -173,9 +190,14 @@ def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transfor
         violations.append(Violation("cycle", cycle[0], f"tasks in or after a cycle: {', '.join(cycle)}"))
     downstream = {upstream for node in graph.values() for upstream in node.upstream}
     leaves = sorted(set(graph) - downstream)
-    last = sorted(TRIGGERS.get(dag_id, ())) or (
-        list(CHAIN_TRIGGERS[dag_id][1:]) if dag_id in CHAIN_TRIGGERS else ["gate" if dag_id in COLLAPSED_DAGS | RESEARCH_DAGS else "release_run"]
-    )
+    if dag_id in FIRST_CHAINS:
+        last = [FIRST_CHAINS[dag_id][-1]]
+    else:
+        last = sorted(TRIGGERS.get(dag_id, ())) or (
+            sorted([*CHAIN_TRIGGERS[dag_id][1:], *([CHAIN_STARTS[dag_id]] if dag_id in CHAIN_STARTS else [])])
+            if dag_id in CHAIN_TRIGGERS
+            else ["gate" if dag_id in COLLAPSED_DAGS | RESEARCH_DAGS else "release_run"]
+        )
     if leaves != last:
         violations.append(Violation("leaf", ",".join(leaves) or "-", f"{' and '.join(last)} must be the only leaf" + ("s" if len(last) > 1 else "")))
     violations += [Violation("missing_task", task, "required pipeline task absent") for task in expected_upstream if task not in graph]

@@ -45,6 +45,8 @@ PIPELINE_DAGS = (
     "features_m5_dag",
     "features_m6_dag",
     "research_dag",
+    "pipeline_dag",
+    "bronze_dag",
 )
 IMAGE_CHECK = "image labels, user and top layers"
 DAG_CHECK = "every DAG file imports in the image with no error or cycle"
@@ -270,8 +272,23 @@ def test_literal_inventory_matches_the_declared_producers() -> None:
 
     if not isinstance(chains, ast.Dict) or any(key is None for key in chains.keys):
         raise AssertionError("the producer declares split DAG names without importing Airflow")
-    declared_dags = {ast.literal_eval(key) for key in chains.keys if key is not None} | frozen_names("COLLAPSED_DAGS") | frozen_names("RESEARCH_DAGS")
-    check(declared_dags == set(PIPELINE_DAGS), "the independent thirteen-DAG inventory matches PIPELINE_CHAINS, COLLAPSED_DAGS and RESEARCH_DAGS")
+    first = next(
+        node.value
+        for node in graph.body
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "FIRST_CHAINS" for target in node.targets)
+    )
+    if not isinstance(first, ast.Dict) or any(key is None for key in first.keys):
+        raise AssertionError("the producer declares the first and bronze DAG names as literals without importing Airflow")
+    declared_dags = (
+        {ast.literal_eval(key) for key in chains.keys if key is not None}
+        | {ast.literal_eval(key) for key in first.keys if key is not None}
+        | frozen_names("COLLAPSED_DAGS")
+        | frozen_names("RESEARCH_DAGS")
+    )
+    check(
+        declared_dags == set(PIPELINE_DAGS),
+        "the independent fifteen-DAG inventory matches PIPELINE_CHAINS, FIRST_CHAINS, COLLAPSED_DAGS and RESEARCH_DAGS",
+    )
 
 
 @pytest.mark.parametrize("transform_present", [False, True], ids=["split", "transform"])

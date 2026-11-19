@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from orchestration.training_contract import PIPELINE_ACTIVE_DAGS, PIPELINE_DAG, PIPELINE_STAGES
 from scripts.orchestration import trigger_dag
 from scripts.orchestration.airflow_api import AirflowApiError
 
@@ -650,7 +651,143 @@ def live_check_cases() -> dict[str, bool]:
     }
 
 
+PIPELINE_RUN = "pipeline_0a1b2c3d"
+BRONZE_RUN = "bronze_0a1b2c3d"
+BRONZE = "bronze_dag"
+
+
+def bronze_cases() -> dict[str, bool]:
+    """``bronze_dag`` is started by hand with a bronze run ID (a new one when absent) and no other option; its status, settle and clear-failed take its
+    runs, and it is activated alone (a hand start of one DAG activates only that DAG)."""
+    base = ["--dag", BRONZE, "--mode", "real", "--wait-seconds", "5"]
+
+    def started(*extra: str) -> tuple[int, Ends]:
+        api = Ends()
+        return invoke(api, [*base, *extra])[0], api
+
+    plain_code, plain = started()
+    named_code, named = started("--run-id", BRONZE_RUN)
+    made = plain.confs[0]["run_id"] if plain.confs else ""
+    clearable = Clearable({BRONZE_RUN: "failed"}, {"bronze_stage": "success", "bronze_load": "failed"})
+    cleared = invoke(clearable, ["--dag", BRONZE, "--clear-failed", "--run-id", BRONZE_RUN, "--wait-seconds", "5"])
+    settling = StandIn({BRONZE_RUN: "running"})
+    settled = invoke(settling, ["--dag", BRONZE, "--settle", "--run-id", BRONZE_RUN, "--wait-seconds", "5"])
+    return {
+        "a start with no run ID makes a bronze run ID and sends the mode only": plain_code == 0
+        and re.fullmatch(r"bronze_[a-f0-9]{8}", made) is not None
+        and plain.confs == [{"run_id": made, "mode": "real"}],
+        "a named bronze run is sent as given": named_code == 0 and named.confs == [{"run_id": BRONZE_RUN, "mode": "real"}],
+        "a hand start activates the bronze DAG alone": plain.paused == {BRONZE: False},
+        "a run ID of another name is refused before any call": all(
+            refused_quietly([*base, "--run-id", bad], "run ID")
+            for bad in ("silver_0a1b2c3d", "ingestion_0a1b2c3d", "pipeline_0a1b2c3d", "latest", "bronze_0a1b2c3", "bronze_0a1b2c3d_1")
+        ),
+        "an option of another workflow is refused before any call": all(
+            refused_quietly([*base, flag, value], words)
+            for flag, value, words in (
+                ("--silver-snapshot-run", SILVER, "silver snapshot"),
+                ("--start-from", "bronze", "start"),
+                ("--run-kind", "monthly", "run kind"),
+            )
+        ),
+        "the status of a bronze run can be read": invoke(
+            StandIn({BRONZE_RUN: "success"}), ["--dag", BRONZE, "--status", "--run-id", BRONZE_RUN, "--wait-seconds", "5"]
+        )[0]
+        == 0,
+        "settle marks a running bronze run failed": settled[0] == 0 and settling.runs[BRONZE_RUN] == "failed",
+        "clear-failed runs the failed task of a failed bronze run again": cleared[0] == 0 and clearable.cleared == [(BRONZE, BRONZE_RUN, ["bronze_load"])],
+    }
+
+
+def activation_cases() -> dict[str, bool]:
+    """A hand start of the first DAG activates the whole inventory of the pipeline first (a fresh deployment creates every DAG paused), the children before the
+    first DAG, and names the DAG that cannot be activated; no run is created then."""
+    inventory = list(PIPELINE_ACTIVE_DAGS)
+    base = ["--dag", PIPELINE_DAG, "--mode", "real", "--wait-seconds", "5"]
+    order: list[str] = []
+
+    class Recording(Ends):
+        def unpause(self, dag_id: str) -> None:
+            order.append(dag_id)
+            super().unpause(dag_id)
+
+    class Missing(Ends):
+        def unpause(self, dag_id: str) -> None:
+            if dag_id == "silver_transform_dag":
+                raise AirflowApiError("GET /dags/silver_transform_dag: status 404: not found")
+            super().unpause(dag_id)
+
+    api = Recording()
+    api.paused = {dag: True for dag in inventory}
+    code = invoke(api, base)[0]
+    missing = Missing()
+    miss_code, printed, error, _ = invoke(missing, base)
+    return {
+        "every DAG of the inventory is unpaused before the run is created": code == 0
+        and api.paused == {dag: False for dag in inventory}
+        and api.calls[: len(inventory) + 1] == ["unpause"] * len(inventory) + ["trigger"],
+        "the children are activated before the first DAG": order[-1] == PIPELINE_DAG and sorted(order) == sorted(inventory),
+        "a DAG that cannot be activated is named and nothing is created": miss_code == 1
+        and printed is None
+        and "silver_transform_dag" in error
+        and "cannot be activated" in error
+        and "trigger" not in missing.calls,
+        "a hand start of another workflow activates that workflow alone": invoke(
+            Ends(), ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5"]
+        )[0]
+        == 0,
+    }
+
+
+def pipeline_cases() -> dict[str, bool]:
+    """The first DAG is started by hand with a ``pipeline_<hex>`` run ID (a new one when absent), a validated ``--start-from`` stage and, for its ingestion
+    stage, the run kind and capture root that ``ingestion_dag`` takes. Every refusal comes before the secret is read and before any Airflow call."""
+    base = ["--dag", PIPELINE_DAG, "--mode", "real", "--wait-seconds", "5"]
+
+    def started(*extra: str) -> tuple[int, Ends]:
+        api = Ends()
+        return invoke(api, [*base, *extra])[0], api
+
+    plain_code, plain = started()
+    named_code, named = started("--run-id", PIPELINE_RUN, "--start-from", "silver")
+    kind_code, kind = started("--run-id", PIPELINE_RUN, "--run-kind", "monthly", "--capture-root", "ingestion_test/ingestion_0a1b2c3d/")
+    stages = PIPELINE_STAGES
+    each = {stage: started("--run-id", PIPELINE_RUN, "--start-from", stage) for stage in stages}
+    made = plain.confs[0]["run_id"] if plain.confs else ""
+    return {
+        "a start with no run ID makes a pipeline run ID and sends the mode only": plain_code == 0
+        and re.fullmatch(r"pipeline_[a-f0-9]{8}", made) is not None
+        and plain.confs == [{"run_id": made, "mode": "real"}],
+        "a named run and a later start are sent as given": named_code == 0
+        and named.confs == [{"run_id": PIPELINE_RUN, "mode": "real", "start_from": "silver"}],
+        "a run kind and a capture root reach the conf": kind_code == 0
+        and kind.confs == [{"run_id": PIPELINE_RUN, "mode": "real", "run_kind": "monthly", "capture_root": "ingestion_test/ingestion_0a1b2c3d/"}],
+        "every stage of the contract is a start the trigger takes": all(code == 0 for code, _ in each.values()) and len(each) == len(stages) == 5,
+        "a stage outside the contract is stopped by the parser": all(
+            invoke(Ends(), [*base, "--start-from", bad])[0] == 2 for bad in ("metadata", "training", "silver_transform_dag", "")
+        ),
+        "a run ID of another name is refused before any call": all(
+            refused_quietly([*base, "--run-id", bad], "run ID")
+            for bad in ("silver_0a1b2c3d", "bronze_0a1b2c3d", "ingestion_0a1b2c3d", "latest", "pipeline_0a1b2c3")
+        ),
+        "an option of another workflow is refused before any call": refused_quietly([*base, "--silver-snapshot-run", SILVER], "silver snapshot"),
+        "a start stage on another workflow is refused before any call": refused_quietly(
+            ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5", "--start-from", "bronze"], "start"
+        ),
+        "a refused kind names the preflight's reason": refused_quietly([*base, "--run-kind", "weekly"], "publisher_request_has_wrong_kind"),
+        "the status of a pipeline run can be read": invoke(
+            StandIn({PIPELINE_RUN: "success"}), ["--dag", PIPELINE_DAG, "--status", "--run-id", PIPELINE_RUN, "--wait-seconds", "5"]
+        )[0]
+        == 0,
+        "status with a start stage is refused": invoke(
+            StandIn({PIPELINE_RUN: "queued"}), ["--dag", PIPELINE_DAG, "--status", "--run-id", PIPELINE_RUN, "--wait-seconds", "5", "--start-from", "bronze"]
+        )[0]
+        == 2,
+    }
+
+
 FLAG_VALUES = {
+    "--start-from": "bronze",
     "--run-id": RUN,
     "--silver-snapshot-run": SILVER,
     "--gold-snapshot-run": SILVER,
@@ -673,6 +810,8 @@ FLAG_VALUES = {
 }
 # What each workflow's form takes besides the mode and the wait: the contract, written out here and not read from the command.
 ACCEPTED_FLAGS = {
+    "bronze_dag": {"--run-id"},
+    "pipeline_dag": {"--run-id", "--start-from", "--run-kind", "--capture-root"},
     "ingestion_dag": {"--run-id", "--run-kind", "--capture-root"},
     "silver_transform_dag": {"--run-id"},
     "gold_transform_dag": {"--run-id", "--silver-snapshot-run"},
@@ -724,6 +863,9 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "base run": base_run_cases,
     "drift attempt": drift_attempt_cases,
     "live check": live_check_cases,
+    "pipeline": pipeline_cases,
+    "bronze": bronze_cases,
+    "activation": activation_cases,
     "accepted options": every_workflow_takes_only_its_options,
 }
 

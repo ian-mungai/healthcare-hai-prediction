@@ -39,6 +39,7 @@ from orchestration.training_contract import (
     HAI_TYPES,
     LAUNCH_LANES,
     MODELS,
+    PIPELINE_RUN,
     PROMOTION_MODELS,
     chain_layer_run,
     chain_parameters_for,
@@ -172,7 +173,7 @@ def drift_attempt(request: SubmissionRequest) -> int:
 
 def drift_model(request: SubmissionRequest) -> str:
     """The model whose set a drift check reads, after the gates that bind the check: a model of the contract, and a drift run that derives from the model run
-    it checks and the attempt it names (the first attempt's run is the one the chain gate bound to the bronze code), so that no other run is checked under that
+    it checks and the attempt it names (the first attempt's run is the one the binding gate bound to the bronze code), so no other run is checked under that
     name."""
     model = (request.training or {}).get("model")
     if model not in MODELS:
@@ -682,7 +683,7 @@ class Preflight:
             raise LaunchRefused(f"{request.template} has no ECS job")
         job = family_of(self.steps, self.host, request.template, request.dag_id)
         if job == GATE:
-            self.record_chain(request.run_id)
+            self.bind_pipeline(request.template, request.run_id)
             return None
         if job is None:
             return None
@@ -773,7 +774,7 @@ class Preflight:
         return code_run, False
 
     def drift_code_run(self, request: SubmissionRequest) -> str:
-        """The code run of a later drift attempt. The first attempt's run is bound to the bronze run's code by the chain gate. A later attempt exists to run
+        """The code run of a later drift attempt. The first attempt's run is bound to the bronze run's code by the binding gate. A later attempt exists to run
         fixed code, so it runs the code staged for its own run (or the run its owner bound it to), never the bronze run's: the run's own ``code.sha256``
         must be staged, or the launch is refused by name. The attempt is not bound: it resolves to its own staged code, which is written once."""
         code_run = self.code_runs.resolve(request.run_id)
@@ -835,14 +836,23 @@ class Preflight:
         parts = run_id_parts(bronze_run)
         return self.code_runs.resolve(compose_run_id("ingestion", parts.hex, parts.attempt)), True
 
-    def record_chain(self, bronze_run: str) -> None:
-        """Bind each layer run that derives from the bronze run, and for each model the runs of its chain from the base run (its set's features run, the
-        drift check of that set and the training run the check may start), to the code the bronze run runs, and the bronze run to its code first."""
+    def bind_pipeline(self, template: str, pipeline_run: str) -> None:
+        """Bind each layer run of a pipeline run, and for each model the runs of its chain from the base run (its set's features run, the drift check of
+        that set and the training run the check may start), to the code the bronze run of the pipeline runs, and the bronze run to its code first.
+
+        Only a pipeline run takes this gate: any other run is refused by the gate's name and the run, before anything is bound."""
+        try:
+            parts = run_id_parts(pipeline_run)
+        except ValueError:
+            parts = None
+        if parts is None or parts.name != PIPELINE_RUN:
+            raise LaunchRefused(f"{template} binds the code of a {PIPELINE_RUN} run, not of {pipeline_run!r}")
+        bronze_run = chain_layer_run("bronze", pipeline_run)
         code, bind = self.bronze_code_run(bronze_run)
         if bind:
             self.code_runs.bind(bronze_run, code)
         for layer in CHAIN_LAYERS:
-            run = chain_layer_run(layer, bronze_run)
+            run = chain_layer_run(layer, pipeline_run)
             self.code_runs.bind(run, code)
             if layer == "features":
                 for model in MODELS:

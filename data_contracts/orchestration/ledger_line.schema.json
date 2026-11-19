@@ -66,11 +66,11 @@
     },
     "submission_id": {
       "type": "string",
-      "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]):[a-z][a-z0-9_]{1,40}:(fixture|publish_fixture|real):[0-9]{1,2}(:(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))?$"
+      "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]):[a-z][a-z0-9_]{1,40}:(fixture|publish_fixture|real):[0-9]{1,2}(:(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))?$"
     },
     "run_id": {
       "type": "string",
-      "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+      "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
     },
     "template": {
       "type": "string",
@@ -162,7 +162,7 @@
             },
             "run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "mode": {
               "enum": [
@@ -178,7 +178,7 @@
             },
             "input_run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "target": {
               "enum": [
@@ -325,7 +325,7 @@
     },
     "input_run_id": {
       "type": "string",
-      "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+      "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
     },
     "target": {
       "enum": [
@@ -664,7 +664,7 @@
             },
             "run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "mode": {
               "enum": [
@@ -680,7 +680,7 @@
             },
             "input_run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "target": {
               "enum": [
@@ -694,7 +694,7 @@
               "properties": {
                 "features_run": {
                   "type": "string",
-                  "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))$"
+                  "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))$"
                 },
                 "population": {
                   "enum": [
@@ -1184,7 +1184,7 @@
             },
             "run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "mode": {
               "enum": [
@@ -1200,7 +1200,7 @@
             },
             "input_run_id": {
               "type": "string",
-              "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
+              "pattern": "^(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"
             },
             "target": {
               "enum": [
@@ -1214,7 +1214,7 @@
               "properties": {
                 "features_run": {
                   "type": "string",
-                  "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))$"
+                  "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))$"
                 },
                 "population": {
                   "enum": [
@@ -1757,7 +1757,7 @@
         },
         "container_name": {
           "type": "string",
-          "pattern": "^hai-(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])-[a-z][a-z0-9_]{1,40}-[0-9]{1,2}$"
+          "pattern": "^hai-(?:(?:ingestion|promotion|features|metadata|pipeline|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])-[a-z][a-z0-9_]{1,40}-[0-9]{1,2}$"
         }
       },
       "allOf": [

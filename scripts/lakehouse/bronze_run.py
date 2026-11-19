@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration import ingestion_schedule
-from orchestration.training_contract import run_id_pattern
+from orchestration.training_contract import PIPELINE_DAG, PIPELINE_RUN, compose_run_id, run_id_parts, run_id_pattern
 from scripts import metrics_push, phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_mirror, bronze_pin, provenance, task_capacity
@@ -737,12 +737,11 @@ def check(job: Job) -> None:
         sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
         record_mirror_attempt(job, report, body, retry=stored == "kept")
     if job.target == "real":
-        conf = json.dumps({"run_id": job.run, "mode": "real"})
-        sys.stdout.write(
-            f"the chain starts from this run through its ingestion run; to start it by hand: airflow dags trigger bronze_chain_dag --conf '{conf}'\n"
-        )
+        parts = run_id_parts(job.run)
+        conf = json.dumps({"run_id": compose_run_id(PIPELINE_RUN, parts.hex, parts.attempt), "mode": "real", "start_from": "silver"})
+        sys.stdout.write(f"the later layers run from this bronze run; to start them by hand: airflow dags trigger {PIPELINE_DAG} --conf '{conf}'\n")
     else:
-        sys.stdout.write("this was a qualification run in the test twins: the chain reads production bronze, so do not start it\n")
+        sys.stdout.write("this was a qualification run in the test twins: the later layers read production bronze, so do not start them\n")
 
 
 def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:

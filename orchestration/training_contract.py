@@ -22,8 +22,22 @@ MAX_ATTEMPT = 99
 RETRY_FIRST_DAY = 2
 RETRY_LAST_DAY = 3
 CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
+# The first DAG runs every other DAG of one pipeline run (owner, Nov 18 2026). Its name is these two constants: its run ID name and its DAG id.
+PIPELINE_RUN = "pipeline"
+PIPELINE_DAG = f"{PIPELINE_RUN}_dag"
 # The names of a run ID without a qualifier, with a model name, with an infection name.
-PLAIN_NAMES = ("ingestion", "bronze", "silver", "gold", "features", "metadata", "research", "serving", "promotion")
+PLAIN_NAMES = (PIPELINE_RUN, "ingestion", "bronze", "silver", "gold", "features", "metadata", "research", "serving", "promotion")
+# The stages the first DAG runs, in order (a start can name any of them), and the layers whose run IDs a pipeline run (or a hand-started bronze run) derives:
+# one hex and attempt for all of them.
+PIPELINE_STAGE_DAGS = {
+    "ingestion": "ingestion_dag",
+    "bronze": "bronze_dag",
+    "silver": "silver_transform_dag",
+    "gold": "gold_transform_dag",
+    "features": "features_base_dag",
+}
+PIPELINE_STAGES = tuple(PIPELINE_STAGE_DAGS)
+PIPELINE_LAYERS = (*PIPELINE_STAGES, "metadata")
 MODEL_QUALIFIED = ("features", "drift", "training", "research", "reload")
 HEX_DIGITS = "[a-f0-9]{8}"
 ATTEMPT_TAIL = "(?:_(?:[2-9]|[1-9][0-9]))?"
@@ -162,12 +176,30 @@ def _parent(run_id: str, *names: str) -> RunIdParts:
     return parts
 
 
-def chain_layer_run(layer: str, bronze_run: str) -> str:
-    """The run ID of ``layer`` (silver, gold, features or metadata) in the chain of ``bronze_run``: the bronze run's hex and attempt."""
-    if layer not in ("silver", "gold", "features", "metadata"):
-        raise ValueError(f"{layer} is not a layer of the bronze chain")
-    parts = _parent(bronze_run, "bronze")
+def chain_layer_run(layer: str, parent_run: str) -> str:
+    """The run ID of ``layer`` (ingestion, bronze, silver, gold, features or metadata) in the pipeline run of ``parent_run``: the parent's hex and attempt.
+
+    The parent is the pipeline run (the first DAG's run) or a bronze run, which a hand-started bronze DAG is."""
+    if layer not in PIPELINE_LAYERS:
+        raise ValueError(f"{layer} is not a layer of the pipeline")
+    parts = _parent(parent_run, PIPELINE_RUN, "bronze")
     return compose_run_id(layer, parts.hex, parts.attempt)
+
+
+def metadata_run_for_base(base_run: str) -> str:
+    """The run ID of the catalog start for a base features run (a ``features`` run): the base run's hex and attempt."""
+    parts = _parent(base_run, "features")
+    if parts.qualifier is not None:
+        raise ValueError(f"{base_run!r} is a model set's run, not a base run")
+    return compose_run_id("metadata", parts.hex, parts.attempt)
+
+
+def base_run_of(set_run: str) -> str:
+    """The base features run that a model set's features run was built from: the set run's hex and attempt, without the model's name."""
+    parts = _parent(set_run, "features")
+    if parts.qualifier is None:
+        raise ValueError(f"{set_run!r} is a base run, not a model set's run")
+    return compose_run_id("features", parts.hex, parts.attempt)
 
 
 def model_features_run_id(base_run: str, model: str) -> str:
@@ -299,6 +331,12 @@ MODEL_LISTS = {
 }
 MODELS = tuple(MODEL_LISTS)
 FEATURE_DAGS = {f"features_{model}_dag": model for model in MODELS}
+# The DAGs the first DAG waits for after the features base (each model's set, its drift check, its training run and, for a promotion model, the research), and
+# the catalog DAG, which it never waits for. Every DAG of the pipeline must be active (not paused) for a run to go through: this is the inventory that the
+# first DAG checks and that the host trigger of the first DAG activates.
+PIPELINE_DOWNSTREAM_DAGS = (*FEATURE_DAGS, "drift_monitoring_dag", "training_dag", "research_dag")
+CATALOG_DAG = "metadata_ingest_dag"
+PIPELINE_ACTIVE_DAGS = (PIPELINE_DAG, *PIPELINE_STAGE_DAGS.values(), *PIPELINE_DOWNSTREAM_DAGS, CATALOG_DAG)
 PROMOTION_MODELS = ("m1", "m2", "m4")
 MEDIATION_MODELS = ("m2",)
 OFFLINE_ACTIONS = ("guard", "fit", "mediation", "hac_validate", "smoke")
@@ -540,6 +578,53 @@ def research_requests(model: str, training_run: str, base_run: str, population: 
             "conf": {"run_id": research_run_id(base_run), "mode": "real", **parameters_for("research_dag", research, LAUNCH_LANES)},
         }
     ]
+
+
+# The parameters of each DAG's form that have a default, with the default. A run that a person started by hand names only the values that differ from these, and
+# Airflow stores what was named, so the first DAG compares a run that exists with the run it would have created through these defaults
+# (``dag_runtime.conf_problem``). A case reads every DAG file and keeps this table equal to the forms.
+DAG_PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
+    "ingestion_dag": {"mode": "real", "run_kind": "bootstrap", "capture_root": "raw/"},
+    "bronze_dag": {"mode": "real"},
+    "silver_transform_dag": {"mode": "real"},
+    "gold_transform_dag": {"mode": "real"},
+    "features_base_dag": {"mode": "real"},
+    **{dag: {"mode": "real"} for dag in FEATURE_DAGS},
+    "drift_monitoring_dag": {"mode": "real", "mlflow": "aws", "drift_attempt": 1},
+    "training_dag": {
+        "mode": "real",
+        "features_run": "latest",
+        "population": "primary",
+        "hai_types": list(HAI_TYPES),
+        "trigger": "manual",
+        "mlflow": "aws",
+        "base_run": "",
+    },
+    "research_dag": {"mode": "real", "population": "primary", "hai_types": list(HAI_TYPES), "mlflow": "aws", "research_attempt": 1},
+    CATALOG_DAG: {"mode": "real"},
+    PIPELINE_DAG: {"mode": "real", "start_from": PIPELINE_STAGES[0], "run_kind": "bootstrap", "capture_root": "raw/"},
+}
+
+
+def route_run_conf(step: str, base_run: str, model: str) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """The settings of the run of one step of a model's route that the DAG before it creates, and the names of the settings that the DAG chooses from data the
+    first DAG does not read (the types the drift gate trains, which the research request repeats). Every other setting is fixed by the base run and the model:
+    the run ID, the mode, the run it reads, the MLflow lane and, for research, the population (``primary``, as the training run's) and the attempt (1, which a
+    form leaves out, so the form's default is compared). The first DAG refuses a route run started with another value of a fixed setting."""
+    features = model_features_run_id(base_run, model)
+    drift = model_drift_run_id(features)
+    training = model_training_run_id(drift, model)
+    if step == "features":
+        return {"run_id": features, "mode": "real", "base_snapshot_run": base_run}, ()
+    if step == "drift":
+        return {"run_id": drift, "mode": "real", "mlflow": "aws", "model": model, "features_run": features}, ()
+    if step == "training":
+        fixed = {"run_id": training, "mode": "real", "features_run": features, "population": "primary", "trigger": f"drift:{drift}", "mlflow": "aws"}
+        return {**fixed, "model": model, "base_run": base_run_of(features)}, ("hai_types",)
+    if step == "research":
+        (request,) = research_requests(model, training, base_run, "primary", HAI_TYPES, "aws")
+        return {**{name: request["conf"][name] for name in ("run_id", "mode", "base_run", "population", "mlflow")}, "research_attempt": 1}, ("hai_types",)
+    raise ValueError(f"{step} is not a step of a model's route")
 
 
 def action_environment(template: str, action: str, mode: str) -> str:

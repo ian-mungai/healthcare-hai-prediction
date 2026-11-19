@@ -4,6 +4,9 @@ Every wait has a deadline.
 
 Usage::
 
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag pipeline_dag --mode real --wait-seconds 14400
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag pipeline_dag --mode real --run-id <pipeline run ID> --start-from bronze --wait-seconds 14400
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag bronze_dag --mode real --run-id <bronze run ID> --wait-seconds 14400
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --run-kind bootstrap --capture-root raw/ --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --capture-root ingestion_test/<run id>/ --wait-seconds 7200
@@ -25,6 +28,18 @@ A workflow whose job publishes from a producer run requires that run as a run ID
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
+
+``bronze_dag`` loads one bronze run (a new ``bronze_<hex>`` when ``--run-id`` is absent) and takes no other option. Its run needs the code of its ingestion run
+(the same hex), so a new random run ID is refused by the launch preflight by name: name the run of an ingestion run that passed. A hand start activates that DAG
+alone.
+
+``pipeline_dag`` is the first DAG, which runs ingestion, bronze, silver, gold and the features base in order and waits for each (a new ``pipeline_<hex>`` run ID
+when ``--run-id`` is absent). ``--start-from`` names the first stage to run (one of ``orchestration.training_contract.PIPELINE_STAGES``, ``ingestion`` by
+default), and ``--run-kind`` and ``--capture-root`` reach its ingestion stage, checked as for ``ingestion_dag`` (the capture root of a test names an
+``ingestion_<hex>`` folder). It takes no producer run: its stages derive their run IDs from its own. The wait ends at ``--wait-seconds``, at most four hours,
+and the run goes on in Airflow after it. A hand start first unpauses every DAG of the pipeline (``orchestration.training_contract.PIPELINE_ACTIVE_DAGS``, the
+children before the first DAG), because a fresh deployment creates every DAG paused. It names a DAG that cannot be activated and creates no run. The first DAG
+itself refuses a run while one of those DAGs is paused.
 
 ``drift_live_check_dag`` starts the on-demand live drift check of the Production baseline of ``--model`` and ``--hai-type``. Its form is the run ID (a new
 ``drift_<model>_<hex>`` when absent), the mode ``real``, the model and the type, and no other option. The run runs the code staged for its own run
@@ -81,6 +96,11 @@ from orchestration.training_contract import (
     LAUNCH_LANES,
     MODEL_NAMES,
     MODELS,
+    PIPELINE_ACTIVE_DAGS,
+    PIPELINE_DAG,
+    PIPELINE_RUN,
+    PIPELINE_STAGES,
+    chain_layer_run,
     compose_run_id,
     drift_attempt_of,
     model_drift_run_id,
@@ -89,6 +109,7 @@ from orchestration.training_contract import (
     parameters_for,
     research_attempt_of,
     research_run_id,
+    run_id_parts,
     serving_parameters_for,
     trained_run_id,
 )
@@ -106,7 +127,10 @@ LIVE_DAG = "drift_live_check_dag"
 DRIFT_DAG = "drift_monitoring_dag"
 # The options of each workflow's form besides the mode and the wait, by the name of their argument. A workflow takes no other option: one that is given and is
 # not here is refused before the secret is read, whatever its value and even when it equals the default.
+BRONZE_DAG = "bronze_dag"
 ACCEPTED_OPTIONS = {
+    BRONZE_DAG: {"run_id"},
+    PIPELINE_DAG: {"run_id", "start_from", "run_kind", "capture_root"},
     "ingestion_dag": {"run_id", "run_kind", "capture_root"},
     "silver_transform_dag": {"run_id"},
     "gold_transform_dag": {"run_id", "silver_snapshot_run"},
@@ -122,6 +146,7 @@ ACCEPTED_OPTIONS = {
 OPTION_DEFAULTS: dict[str, Any] = {"population": "primary", "hai_types": list(HAI_TYPES), "trigger": "manual", "mlflow": "aws", "promotion_mode": "promote"}
 OPTION_NAMES = (
     "run_id",
+    "start_from",
     "silver_snapshot_run",
     "run_kind",
     "capture_root",
@@ -144,7 +169,7 @@ OPTION_NAMES = (
 FAILED_TASK_STATES = ("failed", "upstream_failed")
 # The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
 PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
-DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG, LIVE_DAG)
+DAGS = (PIPELINE_DAG, BRONZE_DAG, "ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG, LIVE_DAG)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
@@ -165,7 +190,12 @@ class TriggerError(RuntimeError):
     """A refused request or a run that did not end well; the message names the run and the cause, never a secret."""
 
 
+# The DAGs a hand start activates before it creates its run: the first DAG needs every DAG of the pipeline active, and a fresh deployment creates each paused.
+# The first DAG comes last, so it never runs before its children can. Any other workflow activates itself alone.
+ACTIVATION = {PIPELINE_DAG: (*(dag for dag in PIPELINE_ACTIVE_DAGS if dag != PIPELINE_DAG), PIPELINE_DAG)}
 HAND_START_NAMES = {
+    PIPELINE_DAG: PIPELINE_RUN,
+    BRONZE_DAG: "bronze",
     "ingestion_dag": "ingestion",
     "silver_transform_dag": "silver",
     "gold_transform_dag": "gold",
@@ -201,9 +231,11 @@ def run_conf(
     gold_snapshot_run: str | None = None,
     run_kind: str | None = None,
     capture_root: str | None = None,
+    start_from: str | None = None,
 ) -> dict[str, Any]:
     """The validated configuration of one run. Gold names the committed silver run it reads, features and feature store the gold run; the others name
-    none. Ingestion may name its run kind and capture root, which the launch preflight checks again."""
+    none. Ingestion may name its run kind and capture root, which the launch preflight checks again, and the first DAG takes them for its ingestion stage and
+    the stage a run starts from."""
     if dag not in DAGS or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: unknown workflow or run ID ({dag!r}, {run_id!r})")
     accepted = FORM_MODES.get(dag, MODES)
@@ -213,8 +245,23 @@ def run_conf(
     given_publisher = {"run_kind": run_kind, "capture_root": capture_root}
     if dag == "ingestion_dag":
         conf |= publisher_conf(dag, mode, run_id, given_publisher)
+    elif dag == BRONZE_DAG:
+        if run_id_parts(run_id).name != "bronze":
+            raise TriggerError(f"refused: {dag} takes a bronze run ID, not {run_id!r}")
+        if any(value is not None for value in given_publisher.values()):
+            raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag and {PIPELINE_DAG} do")
+    elif dag == PIPELINE_DAG:
+        if run_id_parts(run_id).name != PIPELINE_RUN:
+            raise TriggerError(f"refused: {dag} takes a {PIPELINE_RUN} run ID, not {run_id!r}")
+        conf |= publisher_conf("ingestion_dag", mode, chain_layer_run("ingestion", run_id), given_publisher)
+        if start_from is not None:
+            if start_from not in PIPELINE_STAGES:
+                raise TriggerError(f"refused: the start stage is one of {', '.join(PIPELINE_STAGES)}, not {start_from!r}")
+            conf["start_from"] = start_from
     elif any(value is not None for value in given_publisher.values()):
-        raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag does")
+        raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag and {PIPELINE_DAG} do")
+    if start_from is not None and dag != PIPELINE_DAG:
+        raise TriggerError(f"refused: {dag} takes no start stage, only {PIPELINE_DAG} does")
     if dag in (*PARAMETER_DAGS, SERVING_DAG, LIVE_DAG) and (silver_snapshot_run is not None or gold_snapshot_run is not None):
         raise TriggerError("refused: a training, research, serving or live drift workflow reads no silver or gold snapshot run")
     if dag == LIVE_DAG:
@@ -399,12 +446,21 @@ def require_accepted_options(dag: str, given: set[str]) -> None:
         )
 
 
+def activate(api: AirflowApi, dags: tuple[str, ...]) -> None:
+    """Unpause each DAG in turn. A DAG that Airflow cannot activate (not parsed, refused) is named and nothing is created after it."""
+    for dag_id in dags:
+        try:
+            api.unpause(dag_id)
+        except AirflowApiError as error:
+            raise TriggerError(f"refused: {dag_id} cannot be activated ({safe_cause(error)}), so no run was created") from None
+
+
 def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
     """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states."""
     started = time.monotonic()
     run_id = conf["run_id"]
     try:
-        api.unpause(dag)
+        activate(api, ACTIVATION.get(dag, (dag,)))
         api.trigger(dag, run_id, conf)
         run = wait_for_end(api, dag, run_id, deadline, wait_seconds)
         tasks = api.task_states(dag, run_id)
@@ -481,8 +537,9 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--mode", help="the mode of a new run: real for every workflow here; required for a trigger, refused with --status or --settle")
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
-    cli.add_argument("--run-kind", help="ingestion_dag only: bootstrap (the form's default) or monthly")
-    cli.add_argument("--capture-root", help="ingestion_dag only: raw/ (the form's default) or ingestion_test/<run id>/")
+    cli.add_argument("--start-from", choices=PIPELINE_STAGES, help=f"{PIPELINE_DAG} only: the first stage to run (the form's default is ingestion)")
+    cli.add_argument("--run-kind", help="ingestion_dag and the first DAG only: bootstrap (the form's default) or monthly")
+    cli.add_argument("--capture-root", help="ingestion_dag and the first DAG only: raw/ (the form's default) or ingestion_test/<run id>/")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
     cli.add_argument(
         "--base-run", help="training_dag and research_dag: the features_base_dag run whose model set is trained or researched; derives the run IDs"
@@ -525,9 +582,14 @@ def main(argv: list[str] | None = None) -> int:
             setattr(args, name, value)
     inspecting = "status" if args.status else "settle" if args.settle else "clear" if args.clear_failed else None
     if inspecting and (
-        args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None or args.drift_attempt is not None
+        args.run_id is None
+        or args.mode is not None
+        or args.run_kind is not None
+        or args.capture_root is not None
+        or args.drift_attempt is not None
+        or args.start_from is not None
     ):
-        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind, no --capture-root and no --drift-attempt")
+        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind, no --capture-root, no --drift-attempt and no --start-from")
     if not inspecting and args.mode is None:
         cli.error("a trigger needs --mode")
     try:
@@ -587,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
             args.gold_snapshot_run,
             args.run_kind,
             args.capture_root,
+            args.start_from,
         )
         conf |= extra
         require_accepted_options(args.dag, given)

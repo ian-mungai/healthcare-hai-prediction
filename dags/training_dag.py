@@ -1,7 +1,8 @@
 """Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library.
 
 After its release, a training run of m1, m2 or m4 that names its base run (``base_run``) starts ``research_dag`` for that base; the DAG skips until all three
-models have run on it. Another model, a hand start with no base and a run that did not pass its release start nothing.
+models have run on it. Another model, a hand start with no base and a run that did not pass its release start nothing. The same release also starts the catalog
+(``metadata_ingest_dag``, a ``start_metadata`` task, under the catalog run of the base run) once for every base run, whichever model finishes first.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Any
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import DAG, Param, get_current_context, task
 
-from orchestration.dag_runtime import build_tasks
+from orchestration.dag_runtime import build_metadata_start, build_tasks
 from orchestration.training_contract import BASE_RUN, DRIFT_RUN, HAI_TYPES, SET_RUN, TRAINING_STEPS, research_requests, run_id_pattern
 
 with DAG(
@@ -44,6 +45,7 @@ with DAG(
 
     request = research_request()
     released >> request.operator
+    released >> build_metadata_start()
     TriggerDagRunOperator.partial(
         task_id="trigger_research",
         trigger_dag_id="research_dag",

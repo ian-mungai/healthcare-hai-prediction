@@ -25,7 +25,7 @@ from tests.support import check
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 KNOWN_DAGS = {
-    "bronze_chain_dag",
+    "bronze_dag",
     "drift_live_check_dag",
     "drift_monitoring_dag",
     "features_base_dag",
@@ -40,6 +40,7 @@ KNOWN_DAGS = {
     "ingestion_retry_dag",
     "metadata_ingest_dag",
     "model_promotion_dag",
+    "pipeline_dag",
     "research_dag",
     "serving_deploy_dag",
     "silver_transform_dag",
@@ -337,7 +338,7 @@ def test_a_training_run_with_a_base_starts_the_research_through_the_mapped_trigg
     scenario = real_image_dags.cases_catalog()["training_dag_starts_the_research_for_its_base"]
     (step,) = scenario.steps
     base = str(step.params["base_run"])
-    check(step.dag_id == "training_dag" and step.params["model"] in contract.PROMOTION_MODELS and not step.skipped and step.skip is None, f"the step: {step}")
+    check(step.dag_id == "training_dag" and step.params["model"] in contract.PROMOTION_MODELS and not step.skipped, f"the step: {step}")
     check(step.params["run_id"] == contract.trained_run_id(base, str(step.params["model"])), "the training run is not the model's run on the base")
     check(step.after is not None, "the scenario does not check the research run the trigger created")
     request = contract.research_requests(str(step.params["model"]), str(step.params["run_id"]), base, "primary", list(step.params["hai_types"]), "aws")
@@ -403,6 +404,16 @@ def test_the_airflow_check_service_sets_the_creation_default_the_check_needs_bef
     compose: Any = load_yaml((SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text())
     environment = compose["services"]["airflow-check"]["environment"]
     check(environment.get("AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION") == "false", f"the check image creates DAGs paused: {environment}")
+
+
+def test_the_airflow_check_service_loads_the_plugins_folder_the_timetable_scenario_reads_through() -> None:
+    # Airflow reads the plugins folder once, at import, and in_image_checks imports it before the rig runs: a custom timetable is then not registered.
+    compose: Any = load_yaml((SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text())
+    service = compose["services"]["airflow-check"]
+    folder = service["environment"].get("AIRFLOW__CORE__PLUGINS_FOLDER")
+    mounted = [str(volume).split(":")[1] for volume in service["volumes"] if ":" in str(volume)]
+    check(folder == "/opt/hai/repo/airflow_plugins", f"the check image reads the plugins from {folder}")
+    check(folder in mounted, f"the plugins folder {folder} is not mounted in the check image: {mounted}")
 
 
 def test_the_rig_names_none_of_the_retired_inputs() -> None:
@@ -711,3 +722,71 @@ def test_the_driver_exits_non_zero_when_a_scenario_fails_or_none_ran() -> None:
     check(real_image_dags.exit_code({"ok": True, "scenarios": [{"ok": True}]}) == 0, "a passing run exits 0")
     check(real_image_dags.exit_code({"ok": False, "scenarios": [{"ok": False}]}) == 1, "a failing run exits 1")
     check(real_image_dags.exit_code({"ok": True, "scenarios": []}) == 1, "a run of no scenario exits 1")
+
+
+def _marked_passed(source: str) -> list[str]:
+    """Where a real-image DAG scenario would mark a task passed without running it: a ``mark_success_pattern`` argument, or a ``skip`` setting of a step."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.keyword) and node.arg in {"mark_success_pattern", "skip"}:
+            found.append(f"line {node.value.lineno}: {node.arg}=")
+        if isinstance(node, ast.Attribute) and node.attr in {"mark_success_pattern", "skip"}:
+            found.append(f"line {node.lineno}: .{node.attr}")
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "skip":
+            found.append(f"line {node.lineno}: a skip field")
+    return found
+
+
+def test_no_scenario_marks_a_task_passed_without_running_it() -> None:
+    source = (SOURCE_ROOT / "scripts/orchestration/real_image_dags.py").read_text()
+    check(_marked_passed(source) == [], f"a scenario marks tasks passed without running them: {_marked_passed(source)}")
+    check("skip" not in {item.name for item in real_image_dags.Step.__dataclass_fields__.values()}, "a step can still skip tasks")
+    for broken in (
+        source + "\nrun = dag.test(run_conf={}, mark_success_pattern=step.skip)\n",
+        source.replace("    api: Callable[[Any], Any] | None = None\n", "    skip: str | None = None\n", 1),
+        source + "\nStep('pipeline_dag', {}, 0, skip='run_.*')\n",
+    ):
+        check(_marked_passed(broken) != [], "the guard missed a step that marks tasks passed without running them")
+
+
+def test_the_first_dags_run_every_task_in_the_image_against_the_api_stand_in() -> None:
+    catalog = real_image_dags.cases_catalog()
+    first = [step for name, scenario in catalog.items() if "first_dag" in name or name == "every_host_dag_runs_end_to_end" for step in scenario.steps]
+    pipeline = [step for step in first if step.dag_id == "pipeline_dag"]
+    check(
+        len(pipeline) == 39 and all(step.api is not None and step.api_after is not None for step in pipeline), "a first-DAG step runs without the API stand-in"
+    )
+    check(all(step.starts == 0 for step in pipeline), "the first DAG launches a host job itself")
+    bronze = [step for step in first if step.dag_id == "bronze_dag"]
+    check(len(bronze) == 1 and bronze[0].starts == 2 and bronze[0].check is not None, "the bronze DAG's two jobs are not run and checked")
+    names = {name for name in catalog if name.startswith("the_first_dag_")}
+    stages = ("ingestion", "bronze", "silver", "gold", "features")
+    expected = {f"the_first_dag_starts_from_{stage}" for stage in stages[1:]} | {f"the_first_dag_stops_when_the_{stage}_run_fails" for stage in stages}
+    check(expected <= names, f"missing first-DAG scenarios: {sorted(expected - names)}")
+    check("scripts/orchestration/airflow_api_fake.py" in real_image_dags.SOURCES, "the API stand-in is not among the inputs the verdict binds to")
+    check(
+        any("airflow_api_fake.py" in text and "No task is marked passed without running" in text for text in real_image_dags.SUBSTITUTIONS),
+        "the report does not name the API stand-in as a substitution",
+    )
+
+
+def test_every_step_runs_its_dag_under_a_run_id_of_the_run_name_the_dag_takes() -> None:
+    """The forms of the layer DAGs build their run ID pattern from the contract, which the static form check above cannot read: a step that names another
+    run name (a silver run for the catalog DAG) is refused by Airflow only in the image."""
+    contract = importlib.import_module("orchestration.training_contract")
+    names = {
+        "ingestion_dag": "ingestion",
+        "bronze_dag": "bronze",
+        "silver_transform_dag": "silver",
+        "gold_transform_dag": "gold",
+        "features_base_dag": "features",
+        "metadata_ingest_dag": "metadata",
+        contract.PIPELINE_DAG: contract.PIPELINE_RUN,
+    }
+    seen = set()
+    for scenario, step in _steps():
+        if step.dag_id in names and "run_id" in step.params:
+            seen.add(step.dag_id)
+            run = str(step.params["run_id"])
+            check(contract.run_id_parts(run).name == names[step.dag_id], f"{scenario}: {step.dag_id} runs under {run}, not a {names[step.dag_id]} run")
+    check(seen == set(names), f"no step runs {sorted(set(names) - seen)}")

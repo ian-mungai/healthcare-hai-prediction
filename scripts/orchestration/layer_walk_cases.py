@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration.training_contract import chain_layer_run
+from orchestration.training_contract import PIPELINE_DAG, PIPELINE_RUN, chain_layer_run, compose_run_id
 from scripts.lakehouse import layer_run, session
 from scripts.lakehouse import run_layer_run_e2e as layer_e2e
 from scripts.lakehouse.run_layer_run_e2e import require
@@ -149,8 +149,8 @@ def walk(case: layer_e2e.Case) -> None:
     rig = launches.Rig()
     bronze, child = BRONZE_RUN, chain_layer_run("silver", BRONZE_RUN)
     rig.stage.objects[f"lakehouse/run_stage/{bronze}/inputs/code.sha256"] = case.digest.encode() + b"\n"
-    with launches.world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate did not pass")
+    with launches.world(rig, PIPELINE_DAG, {"run_id": compose_run_id(PIPELINE_RUN, "b0b0b0b0"), "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate did not pass")
     with launches.world(rig, "silver_transform_dag", {"run_id": child, "mode": "real"}) as current:
         require(current.step("pin_bronze") == "succeeded", "the chain child silver job did not pass")
     walk_task(case, rig.environment(-1), "silver", bronze, "chain")

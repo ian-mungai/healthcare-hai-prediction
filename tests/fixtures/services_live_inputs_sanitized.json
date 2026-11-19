@@ -36,7 +36,7 @@
   "environment": "dev",
   "execution_role_arn": "arn:aws:iam::<account>:role/healthcare_hai_prediction_task_execution_dev",
   "expected_account_id": "<account>",
-  "host_job_cap_mib": 22800,
+  "host_job_cap_mib": 22128,
   "host_private_ip": "<host_ip>",
   "log_group_names": {
     "airflow": "healthcare_hai_prediction_airflow_dev",

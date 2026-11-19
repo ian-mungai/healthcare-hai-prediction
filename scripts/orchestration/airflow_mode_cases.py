@@ -11,7 +11,7 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    promotion approval, the staged bronze request, the closed serving request, the staged code digest (``gates_refuse_before_any_cloud_call`` and the request
    and digest cases). A staged input that is not ready yet is waited for within a bound. A ``LaunchUnavailable`` of the library is never repeated by the step
    (``unavailable_is_bounded``).
-4. A chain step and the chain gate run without a signed record, and the gate binds the chain's code runs (``chain_runs_without_a_signed_record``).
+4. A chain step and the binding gate run without a signed record, and the gate binds the pipeline's code runs (``chain_runs_without_a_signed_record``).
    A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
 5. A control step launches nothing (``control_step_launches_nothing``). A job launches once, later steps of its DAG join it, a failure fails every step,
    and a retry launches nothing (``job_runs_once_and_steps_join``, ``failed_job_fails_every_step``).
@@ -83,7 +83,8 @@ from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, Launc
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import compose_run_id, record_key, research_run_id, run_id_parts
+from orchestration.training_contract import PIPELINE_DAG, compose_run_id, record_key, research_run_id, run_id_parts
+from orchestration.training_contract import PIPELINE_RUN as PIPELINE_RUN_NAME
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
@@ -109,6 +110,9 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     """The run ID of ``layer`` in the pipeline run of ``parent_run``: the layer's name and the parent's hex and attempt."""
     parts = run_id_parts(parent_run)
     return compose_run_id(layer, parts.hex, parts.attempt)
+
+
+PIPELINE_RUN = derived_run_id(BRONZE_RUN, PIPELINE_RUN_NAME)
 
 
 CONTRACT_NAMES = {
@@ -351,6 +355,19 @@ class World:
         self.dag_runs: list[tuple[str, str, dict[str, str]]] = []  # the DAG runs that a task asked the Airflow API to create
         self.dag_run_exists = False  # the API answers that the run exists already (409)
         self.dag_run_error: Exception | None = None  # the API call raises this
+        self.paused: set[str] = set()  # the DAGs that Airflow holds paused
+        self.existing_conf: Any = "same"  # the settings the existing run was started with ("same" as the request that found it, or a dict, or None)
+
+    def dag_is_paused(self, dag_id: str) -> bool:
+        """The stand-in of ``dag_runtime.dag_is_paused``."""
+        return dag_id in self.paused
+
+    def dag_run(self, dag_id: str, dag_run_id: str) -> dict[str, Any] | None:
+        """The stand-in of ``dag_runtime.dag_run``: the run that a request found existing, with the settings it was started with."""
+        asked = [conf for dag, run, conf in self.dag_runs if (dag, run) == (dag_id, dag_run_id)]
+        if not asked:
+            return None
+        return {"dag_id": dag_id, "dag_run_id": dag_run_id, "state": "success", "conf": asked[-1] if self.existing_conf == "same" else self.existing_conf}
 
     def create_dag_run(self, dag_id: str, dag_run_id: str, conf: dict[str, str]) -> bool:
         """The stand-in of ``dag_runtime.create_dag_run``: it records the request and answers as configured."""
@@ -514,6 +531,8 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
             with (
                 mock.patch.object(runtime, "get_current_context", lambda: current.context),
                 mock.patch.object(runtime, "create_dag_run", current.create_dag_run),
+                mock.patch.object(runtime, "dag_is_paused", current.dag_is_paused, create=True),
+                mock.patch.object(runtime, "dag_run", current.dag_run, create=True),
                 mock.patch.object(steps, "services", lambda: rig.services),
                 mock.patch.object(steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
                 mock.patch.object(steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
@@ -615,7 +634,7 @@ def gates_refuse_before_any_cloud_call() -> None:
 
 def chain_runs_without_a_signed_record() -> None:
     """Signing the first publishes is the owner's manual step (owner decision, Nov 10 2026), not a code gate: the direct path reads no signed record and
-    takes no setting for one, a chain step and the chain gate run without it, and the gate still binds the chain's code runs."""
+    takes no setting for one, a chain step and the binding gate run without it, and the gate still binds the pipeline's code runs."""
     preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
     require("signed" not in inspect.signature(preflight.Preflight).parameters, "the preflight still takes a signed record reader")
     require(not hasattr(preflight.Preflight, "require_signed"), "the preflight still has the signed gate")
@@ -627,10 +646,10 @@ def chain_runs_without_a_signed_record() -> None:
     require(rig.tasks_started() == 1, "the chain step did not launch its job")
     rig = Rig()
     silver = derived_run_id(BRONZE_RUN, "silver")
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate did not run without a signed record")
-    require(rig.preflight.code_runs.stored(silver) == BRONZE_RUN, "the chain gate did not bind the silver run to the bronze run's code")
-    require(not rig.ecs.calls, "the chain gate launched a task")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate did not run without a signed record")
+    require(rig.preflight.code_runs.stored(silver) == BRONZE_RUN, "the binding gate did not bind the silver run to the bronze run's code")
+    require(not rig.ecs.calls, "the binding gate launched a task")
 
 
 def after_needs_the_previous_job_to_pass() -> None:
@@ -811,8 +830,7 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
     rig.stage_runs(ingestion)
     rig.stage.stage(bronze, "bronze_request.json", good)
     require(len(rig.stage.objects[RUN_KEY.format(run=bronze, name="bronze_request.json")]) > 4096, "the request is not as large as a full run's")
-    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, "bronze_dag", {"run_id": bronze, "mode": "real"}) as current:
         require(current.step("bronze_stage") == "succeeded", "the stage job did not launch")
         require(current.step("bronze_load") == "succeeded", "a full-map bronze request did not launch")
     sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
@@ -828,34 +846,61 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
 
 
 def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
-    """A bronze run that its ingestion run started has no code staged under its own run ID. Its chain gate binds it, and the layer runs of its chain, to the
-    code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a binding is never replaced."""
+    """A bronze run that its ingestion run started has no code staged under its own run ID. Its own jobs bind it, and the binding gate binds the layer runs of
+    its pipeline, to the code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a
+    binding is never replaced."""
     pair, _ = table_pair()
     good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
     ingestion, bronze = "ingestion_0b0b0b0b", "bronze_0b0b0b0b"
     rig = Rig()
     rig.stage_runs(ingestion)
     rig.stage.stage(bronze, "bronze_request.json", good)
-    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded" and not rig.ecs.calls, "the chain gate failed or reached ECS")
+    pipeline = derived_run_id(bronze, PIPELINE_RUN_NAME)
+    with world(rig, PIPELINE_DAG, {"run_id": pipeline, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded" and not rig.ecs.calls, "the binding gate failed or reached ECS")
         require(rig.preflight.code_runs.stored(bronze) == ingestion, "the bronze run is not bound to the code of its ingestion run")
         for layer in ("silver", "gold", "features"):
             require(rig.preflight.code_runs.stored(f"{layer}_0b0b0b0b") == ingestion, f"the {layer} run is not bound to the code of the ingestion run")
+    with world(rig, "bronze_dag", {"run_id": bronze, "mode": "real"}) as current:
         require(current.step("bronze_load") == "succeeded", "the bronze job did not run")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == ingestion, "the bronze job fetches its own code, not its ingestion run's")
     own = Rig()
     own.stage_runs("ingestion_0c0c0c0c", "bronze_0c0c0c0c")
-    with world(own, "bronze_chain_dag", {"run_id": "bronze_0c0c0c0c", "mode": "real"}) as current:
-        current.step("chain_gate")
+    with world(own, PIPELINE_DAG, {"run_id": "pipeline_0c0c0c0c", "mode": "real"}) as current:
+        current.step("bind_code")
     require(own.preflight.code_runs.stored("bronze_0c0c0c0c") is None, "a bronze run with its own staged code was bound away from it")
     require(own.preflight.code_runs.stored("silver_0c0c0c0c") == "bronze_0c0c0c0c", "its layers do not run its own code")
     none = Rig()
-    with world(none, "bronze_chain_dag", {"run_id": "bronze_0d0d0d0d", "mode": "real"}) as current:
-        current.step("chain_gate")
+    with world(none, PIPELINE_DAG, {"run_id": "pipeline_0d0d0d0d", "mode": "real"}) as current:
+        current.step("bind_code")
     require(
         none.preflight.code_runs.stored("silver_0d0d0d0d") == "ingestion_0d0d0d0d",
         "a run with no code anywhere is bound to its ingestion run, which then refuses it by name",
     )
+    alone = Rig()
+    alone.stage_runs("ingestion_0e1e0e1e")
+    with world(alone, "bronze_dag", {"run_id": "bronze_0e1e0e1e", "mode": "real"}) as current:
+        require(current.step("bronze_stage") == "succeeded" and alone.tasks_started() == 1, "a hand-started bronze DAG did not launch its stage job")
+    require(
+        alone.preflight.code_runs.stored("bronze_0e1e0e1e") == "ingestion_0e1e0e1e", "the stage job did not bind the bronze run to its ingestion run's code"
+    )
+    require(
+        all(alone.preflight.code_runs.stored(f"{layer}_0e1e0e1e") is None for layer in ("silver", "gold", "features")),
+        "a hand-started bronze DAG bound a layer run: only the binding gate binds the layers",
+    )
+
+
+def the_binding_gate_takes_only_a_pipeline_run() -> None:
+    """The binding gate binds the code of a pipeline run's layers: it refuses a run of another name by that name, before it binds anything."""
+    rig = Rig()
+    rig.stage_runs("ingestion_0f1f0f1f")
+    for run in ("bronze_0f1f0f1f", "silver_0f1f0f1f", "ingestion_0f1f0f1f", "latest", "20261116T201053Z-b10a4f2d"):
+        with world(rig, PIPELINE_DAG, {"run_id": run, "mode": "real"}) as current:
+            error = refuses(LaunchRefused, lambda current=current: current.step("bind_code"))
+        require(
+            "bind_code" in str(error) and PIPELINE_RUN_NAME in str(error), f"bind_code on {run} was refused without naming the step and the run name: {error}"
+        )
+    require(not any("code_run.json" in key for key in rig.stage.objects) and not rig.ecs.calls, "the gate bound a run or reached ECS for a run of another name")
 
 
 def the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after() -> None:
@@ -867,8 +912,7 @@ def the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after() -> N
     ingestion, bronze = "ingestion_0e0e0e0e", "bronze_0e0e0e0e"
     rig = Rig()
     rig.stage_runs(ingestion)
-    with world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, "bronze_dag", {"run_id": bronze, "mode": "real"}) as current:
         require(current.step("bronze_stage") == "succeeded", "the stage job did not launch with no staged request")
         require(rig.tasks_started() == 1, f"the stage launch started {rig.tasks_started()} tasks")
         sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"][0]
@@ -967,10 +1011,10 @@ def code_run_is_bound_once() -> None:
     rig = Rig()
     layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
-    params = {"run_id": BRONZE_RUN, "mode": "real"}
-    with world(rig, "bronze_chain_dag", params) as current:
-        require(current.step("chain_gate") == "succeeded" and not rig.ecs.calls, "the gate failed or reached ECS")
-        require(current.step("chain_gate") == "succeeded", "a repeated gate failed")
+    params = {"run_id": PIPELINE_RUN, "mode": "real"}
+    with world(rig, PIPELINE_DAG, params) as current:
+        require(current.step("bind_code") == "succeeded" and not rig.ecs.calls, "the gate failed or reached ECS")
+        require(current.step("bind_code") == "succeeded", "a repeated gate failed")
     bound = json.loads(rig.stage.objects[RUN_KEY.format(run=silver, name="code_run.json")])
     require(bound == {"code_run": BRONZE_RUN}, f"the layer run is not bound to the bronze run: {bound}")
     with world(rig, "silver_transform_dag", {"run_id": silver, "mode": "real"}) as current:
@@ -978,12 +1022,12 @@ def code_run_is_bound_once() -> None:
         require(rig.environment()["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the layer run fetches its own code, not its bronze run's")
     other = layers("silver_b1b1b1b1", "silver")
     require(other != silver, "two bronze runs share a layer run")
-    with world(rig, "bronze_chain_dag", params) as current:
+    with world(rig, PIPELINE_DAG, params) as current:
         rig.stage.objects[RUN_KEY.format(run=silver, name="code_run.json")] = json.dumps({"code_run": "20261031T090000Z-b1b1b1b1"}).encode()
-        error = refuses(LaunchRefused, lambda: current.step("chain_gate"))
+        error = refuses(LaunchRefused, lambda: current.step("bind_code"))
         require("another run" in str(error), f"a rebind to another code run was not refused: {error}")
         rig.stage.denied.add(RUN_KEY.format(run=silver, name="code_run.json"))
-        refuses(LaunchUnavailable, lambda: current.step("chain_gate"))
+        refuses(LaunchUnavailable, lambda: current.step("bind_code"))
     fresh = Rig()
     with world(fresh, "silver_transform_dag", SILVER) as current:
         fresh.stage.denied.add(RUN_KEY.format(run=SILVER_RUN, name="code_run.json"))
@@ -1590,8 +1634,8 @@ def five_dags_run_end_to_end() -> None:
     model_features = model_run(features, "m1")
     drift = drift_run_of(model_features)
     training = training_run_of(drift, "m1")
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     plan = (
         ("silver_transform_dag.py", "silver_transform_dag", {"run_id": silver, "mode": "real"}, "silver", silver),
         ("gold_transform_dag.py", "gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, "gold", gold),
@@ -1612,6 +1656,7 @@ def five_dags_run_end_to_end() -> None:
         rig, "training_dag", {**TRAIN_PARAMS, "run_id": training, "features_run": model_features, "trigger": f"drift:{drift}", "model": "m1"}
     ) as current:
         states = current.run_dag("training_dag.py")
+        require(states.pop("start_metadata") == "skipped", "a hand-started training run with no base run started the catalog")
         failed = {name: state for name, state in states.items() if state != "success"}
         require(not failed and current.results["release_run"] == "released", f"training_dag did not finish: {failed} {current.results}")
     require(rig.tasks_started() == 6, f"one task per job was expected: {rig.tasks_started()} tasks")
@@ -1668,8 +1713,8 @@ def dags_run_with_their_form_defaults() -> None:
     gold = layers(silver, "gold")
     features = layers(gold, "features")
     training = str(TRAIN_PARAMS["run_id"])
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     plan = (
         ("silver_transform_dag", {"run_id": silver}, "silver", silver),
         ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver}, "gold", gold),
@@ -1681,6 +1726,8 @@ def dags_run_with_their_form_defaults() -> None:
         before = rig.tasks_started()
         with world(rig, dag_id, dict(params)) as current:
             states = current.run_dag(f"{dag_id}.py")
+            if dag_id == "training_dag":
+                require(states.pop("start_metadata") == "skipped", "a training run with no base run started the catalog")
             failed = {name: current.results[name] for name, state in states.items() if state != "success"}
             require(bool(states) and not failed, f"{dag_id} with only its required inputs did not finish: {failed}")
         require(rig.tasks_started() == before + 1, f"{dag_id} started {rig.tasks_started() - before} tasks, not one")
@@ -1821,8 +1868,8 @@ def base_dag_takes_its_gold_run() -> None:
     layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     for dag_id, params in (("silver_transform_dag", {"run_id": silver}), ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver})):
         with world(rig, dag_id, params) as current:
             current.run_dag(f"{dag_id}.py")
@@ -1861,8 +1908,8 @@ def features_job_names_its_feature_set() -> None:
     gold = layers(layers(BRONZE_RUN, "silver"), "gold")
     rig = Rig()
     rig.stage_runs(BASE_DAG_RUN)
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     for dag_id, params in (
         ("silver_transform_dag", {"run_id": layers(BRONZE_RUN, "silver")}),
         ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": layers(BRONZE_RUN, "silver")}),
@@ -1900,14 +1947,14 @@ FEATURE_CONTAINERS = {"pin", "build", "validate", "export", "publish", "upload",
 
 
 def base_run_passed(rig: Rig, base_fails: bool = False) -> tuple[str, str]:
-    """Run the chain gate, silver, gold and the features base DAG over the rig and return the gold run and the base run that its features job published.
+    """Run the binding gate, silver, gold and the features base DAG over the rig and return the gold run and the base run that its features job published.
     With ``base_fails`` the base DAG's job fails instead, and the base DAG is left to the caller to run again for its states."""
     layers = derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     base = layers(gold, "features")
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     for dag_id, params in (
         ("silver_transform_dag", {"run_id": silver}),
         ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver}),
@@ -2013,7 +2060,7 @@ def model_dag_needs_the_base_job_to_pass() -> None:
 
 
 def model_run_code_is_bound() -> None:
-    """The chain gate binds every model run of the chain to the bronze run's staged code, so a model launch fetches that code. A model run no chain gate
+    """The binding gate binds every model run of the chain to the bronze run's staged code, so a model launch fetches that code. A model run no binding gate
     bound has no staged code of its own and is refused before any ECS call."""
     rig = Rig()
     _, base = base_run_passed(rig)
@@ -2422,7 +2469,7 @@ def drift_dag_takes_its_model_and_features_run() -> None:
 
 def drift_job_takes_its_model_and_features_run() -> None:
     """The drift job checks one model's published set: the baseline container is told the model (FEATURE_SET) and the current-window container the model
-    run (INPUT_RUN_ID). The run's code was bound by the chain gate, so the drift launch binds nothing."""
+    run (INPUT_RUN_ID). The run's code was bound by the binding gate, so the drift launch binds nothing."""
     rig = Rig()
     _, run = model_chain_passed(rig, "m2")
     puts, started = len(rig.stage.puts), rig.tasks_started()
@@ -2433,7 +2480,7 @@ def drift_job_takes_its_model_and_features_run() -> None:
     require(values["baseline"]["FEATURE_SET"] == "m2", f"the baseline container was not told the model: {values['baseline']}")
     require(values["current"]["INPUT_RUN_ID"] == run, f"the current-window container was not told the model run: {values['current']}")
     require(values["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the drift run fetches its own code, not its bronze run's")
-    require(len(rig.stage.puts) == puts, "the drift launch bound a run: the chain gate binds every run of the chain")
+    require(len(rig.stage.puts) == puts, "the drift launch bound a run: the binding gate binds every run of the pipeline")
     require(rig.tasks_started() == started + 1, "the drift check did not start exactly one task")
 
 
@@ -2485,7 +2532,7 @@ def drift_attempt_ids_and_form() -> None:
 
 
 def drift_attempt_runs_the_code_staged_for_its_own_run() -> None:
-    """The first drift run is bound to the bronze code by the chain gate. A later attempt exists to run fixed code, so it runs the code staged for its own
+    """The first drift run is bound to the bronze code by the binding gate. A later attempt exists to run fixed code, so it runs the code staged for its own
     run and binds the training run it may start to the same code. Attempt 1 and its training run stay as they were."""
     contract = importlib.import_module("orchestration.training_contract")
     rig = Rig()
@@ -2635,19 +2682,19 @@ def training_run_fits_its_model_only() -> None:
         require(values["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, f"the {model} training run fetches its own code, not its bronze run's")
 
 
-def bronze_chain_has_no_model_less_drift_layer() -> None:
-    """The bronze chain runs silver, gold and the features base only: each model's own DAG starts its drift check. The chain gate binds no drift layer run
-    and no training run of one, and the chain DAG's text names no drift DAG."""
+def the_pipeline_runs_no_model_less_drift_layer() -> None:
+    """The pipeline runs ingestion, bronze, silver, gold and the features base only: each model's own DAG starts its drift check. The binding gate binds no
+    drift layer run and no training run of one, and the bronze DAG's text names no drift DAG. The first DAG waits for each model's route, which starts with that
+    model's own drift check."""
     preflight = importlib.import_module("orchestration.ecs_preflight")
     contract = importlib.import_module("orchestration.training_contract")
     require(preflight.CHAIN_LAYERS == ("silver", "gold", "features"), f"the chain layers are {preflight.CHAIN_LAYERS}")
-    text = (ROOT / "dags/bronze_chain_dag.py").read_text()
-    require("drift" not in text, "the bronze chain DAG still names a drift layer")
+    require("drift" not in (ROOT / "dags/bronze_dag.py").read_text(), "the bronze DAG file names a drift layer")
     rig = Rig()
-    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
-        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    with world(rig, PIPELINE_DAG, {"run_id": PIPELINE_RUN, "mode": "real"}) as current:
+        require(current.step("bind_code") == "succeeded", "the binding gate failed")
     old_drift = f"drift_{BRONZE_RUN.removeprefix('bronze_')}"
-    require(RUN_KEY.format(run=old_drift, name="code_run.json") not in rig.stage.objects, "the chain gate still binds the model-less drift layer's runs")
+    require(RUN_KEY.format(run=old_drift, name="code_run.json") not in rig.stage.objects, "the binding gate still binds the model-less drift layer's runs")
     require(re.fullmatch(contract.RUN_ID, old_drift) is None, "a drift run without a model is a run ID")
 
 
@@ -3015,9 +3062,9 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
 
 
 def ingestion_dag_runs_the_publisher_on_the_host() -> None:
-    """ingestion_dag is one chain of four tasks and the bronze start: the Run 3 publisher job launches once on its host definition, with the run kind and the
-    capture root of the DAG run and nothing staged for it but its code. A trigger that names neither gets the bootstrap kind under raw/. A hand start under
-    raw/ starts the bronze run of its ingestion run, a test capture root starts none."""
+    """ingestion_dag is one chain of four tasks: the Run 3 publisher job launches once on its host definition, with the run kind and the capture root of the
+    DAG run and nothing staged for it but its code. A trigger that names neither gets the bootstrap kind under raw/. The DAG starts no run after it: the first
+    DAG runs the later stages."""
     for trigger, kind, root in (
         ({"run_id": PUBLISHER_RUN, "mode": "real"}, "bootstrap", "raw/"),
         ({"run_id": PUBLISHER_RUN, "mode": "real", "run_kind": "monthly", "capture_root": PUBLISHER_TEST_ROOT}, "monthly", PUBLISHER_TEST_ROOT),
@@ -3025,13 +3072,12 @@ def ingestion_dag_runs_the_publisher_on_the_host() -> None:
         rig = Rig()
         with world(rig, "ingestion_dag", dict(trigger)) as current:
             states = current.run_dag("ingestion_dag.py")
-        bronze = "success" if root == "raw/" else "skipped"
         require(
-            states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success", "start_bronze": bronze},
+            states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"},
             f"the ingestion chain did not pass: {states}",
         )
         started = [(dag, run_id) for dag, run_id, _ in current.dag_runs]
-        require(started == ([("bronze_chain_dag", "bronze_ab12cd34")] if root == "raw/" else []), f"the bronze start was {started} under {root}")
+        require(started == [], f"the ingestion DAG started {started} under {root}")
         sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
         require(len(sent) == 1 and sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the publisher did not run once on the host: {sent}")
         run = rig.environment()["run"]
@@ -3474,7 +3520,8 @@ CASES: dict[str, Callable[[], None]] = {
     "live_drift_job_takes_its_model_and_type": live_drift_job_takes_its_model_and_type,
     "live_drift_job_is_refused_by_name_before_any_launch": live_drift_job_is_refused_by_name_before_any_launch,
     "training_run_fits_its_model_only": training_run_fits_its_model_only,
-    "bronze_chain_has_no_model_less_drift_layer": bronze_chain_has_no_model_less_drift_layer,
+    "the_pipeline_runs_no_model_less_drift_layer": the_pipeline_runs_no_model_less_drift_layer,
+    "the_binding_gate_takes_only_a_pipeline_run": the_binding_gate_takes_only_a_pipeline_run,
     "graph_rules_cover_the_model_drift_trigger": graph_rules_cover_the_model_drift_trigger,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
