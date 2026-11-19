@@ -708,7 +708,8 @@ def fit_cases(cases: Any, folder: Path) -> None:
         manifest = fixture.manifest()
         require(result["input_hashes"]["extract_sha256"] == manifest["sha256"], "result.json does not record the extract it read")
         provenance = output_of(fixture, f"{BUNDLE}/provenance.json")
-        require(set(contract["provenance_fields"]) <= set(provenance) and provenance["run_id"] == RUN, f"provenance: {sorted(provenance)}")
+        require(set(contract["provenance_fields"]) == set(provenance) and provenance["run_id"] == RUN, f"provenance: {sorted(provenance)}")
+        require(set(contract["provenance_fields"]) == model_code.PROVENANCE_KEYS, "bundle.json provenance_fields differ from the keys the model API allows")
         require("model_code_closure_sha256" in contract["provenance_fields"], f"bundle.json provenance_fields: {contract['provenance_fields']}")
         require("self_check.json" in contract["optional_files"], f"bundle.json optional_files: {contract['optional_files']}")
         require(

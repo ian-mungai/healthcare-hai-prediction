@@ -28,7 +28,8 @@
     "git_dirty",
     "code_digest",
     "resolved_versions",
-    "model_code_closure_sha256"
+    "model_code_closure_sha256",
+    "inputs"
   ],
   "reproducibility": {
     "encoding": "canonical_json",
