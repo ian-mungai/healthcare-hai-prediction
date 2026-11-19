@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from botocore.exceptions import ClientError
 
@@ -34,6 +35,7 @@ from scripts.infrastructure.secret_store_stand_in import StandIn
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET_RESOURCE = re.compile(r'^\s*(resource|data|ephemeral)\s+"(aws_secretsmanager_[a-z_]*|aws_ssm_parameter[a-z_]*)"', re.MULTILINE)
 NAME = secret_store.POSTGRES_PASSWORD
+STALL_SECONDS = 30.0
 
 Case = Callable[[Path], dict[str, bool]]
 
@@ -850,22 +852,44 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
             trash_code == 1 and server.grants[grant_experiment_1] == "DENY" and experiment_1 in trash and "DENY" in trash and "mlflow_user: ready" not in trash
         )
     stalls: list[bool] = []
-    for http11 in (False, True):
+    for http11, setup_delay in ((False, 0.0), (True, 0.0), (False, 0.3), (True, 0.3)):
         with (
             StandIn(values={admin_name: admin, user_name: served, credential_name: "stored-" + admin}, shared={}) as store,
             MlflowAuthStandIn(admin, models={model_1}, experiments={experiment_1: ("7", "active")}) as server,
         ):
             server.users[served] = store.values[credential_name]
-            server.stall_path, server.stall_http11 = "/api/3.0/mlflow/users/permissions/get", http11
+            server.stall_path, server.stall_http11, server.stall_seconds = "/api/3.0/mlflow/users/permissions/get", http11, STALL_SECONDS
             check = tool.account_check(root)
-            run_seconds = check.RUN_SECONDS
+            run_seconds, ensure_account = check.RUN_SECONDS, check.ensure_account
             check.RUN_SECONDS = 0.4
-            began_stall = time.monotonic()
+            interval: dict[str, float] = {}
+
+            def measured(*arguments: Any, _ensure: Callable[..., Any] = ensure_account, _interval: dict[str, float] = interval) -> Any:
+                """The shared account check, with the absolute deadline it was given and the moment it ended; setup time is outside both."""
+                _interval["deadline"] = arguments[5]
+                try:
+                    return _ensure(*arguments)
+                finally:
+                    _interval["ended"] = time.monotonic()
+
             try:
-                stall_code, stall = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
+                with (
+                    mock.patch.object(check, "ensure_account", measured),
+                    mock.patch.object(secret_store, "open_store", slow_open(secret_store.open_store, setup_delay)),
+                ):
+                    stall_code, stall = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
             finally:
                 check.RUN_SECONDS = run_seconds
-            stalls.append(stall_code == 1 and time.monotonic() - began_stall < 0.6 and "deadline" in stall and "mlflow_user: ready" not in stall)
+            # The check ends at its own absolute deadline: not before it, and long before the stall would end by itself (the stall lasts STALL_SECONDS,
+            # so a check that waited for it would end at least that long after the deadline). The allowance is generous because only a missed deadline matters.
+            late = interval.get("ended", 0.0) - interval.get("deadline", 0.0)
+            stalls.append(
+                stall_code == 1
+                and "deadline" in stall
+                and "mlflow_user: ready" not in stall
+                and 0.0 <= late < STALL_SECONDS / 2
+                and not server.release.is_set()
+            )
     with StandIn(shared={}) as store, MlflowAuthStandIn(admin) as server:
         no_admin_code, no_admin = captured(lambda: tool.run(root, store.endpoint, server.url, types))
         no_admin_quiet = server.log == []
@@ -898,16 +922,41 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         from_file = tool.served_types(None, inputs, {})
         flat = Path(folder) / "flat.json"
         flat.write_text(json.dumps({"model_api_hai_types": "HAI_1,HAI_2"}))
-        no_types = Path(folder) / "no_types.json"
-        no_types.write_text(json.dumps({"schema_version": 1, "root": "services", "variables": {"streamlit_hai_types": "HAI_1"}}))
-        not_json = Path(folder) / "not_json.json"
-        not_json.write_text("[")
-        unknown_setting = Path(folder) / "unknown_setting.json"
-        unknown_setting.write_text(json.dumps({"schema_version": 1, "root": "services", "variables": {"model_api_hai_types": "HAI_1", "no_such_setting": 1}}))
+        envelope = {"schema_version": 1, "root": "services"}
+
+        def written(name: str, text: str) -> Path:
+            path = Path(folder) / name
+            path.write_text(text)
+            return path
+
+        def reviewed(name: str, variables: dict[str, Any]) -> Path:
+            return written(name, json.dumps({**envelope, "variables": variables}))
+
+        default_text = secret_store.terraform_variables(root / "infra/services/model_api.tf")["model_api_hai_types"]
+        # A reviewed file without the setting serves the default that the services stack declares (the schema requires no setting).
+        from_empty = tool.served_types(None, reviewed("empty.json", {}), {})
+        from_other = tool.served_types(None, reviewed("other.json", {"streamlit_hai_types": "HAI_1", "model_api_enabled": True}), {})
+        not_json = written("not_json.json", "[")
+        duplicate_setting = written(
+            "duplicate_setting.json",
+            '{"schema_version": 1, "root": "services", "variables": {"model_api_hai_types": "HAI_1", "model_api_hai_types": "HAI_2"}}',
+        )
+        duplicate_envelope = written("duplicate_envelope.json", '{"schema_version": 1, "root": "services", "root": "services", "variables": {}}')
         file_refused = [
             refusal_of(functools.partial(tool.served_types, None, path, {}))
-            for path in (flat, no_types, not_json, unknown_setting, Path(folder) / "absent.json")
+            for path in (
+                written("flat.json", json.dumps({"model_api_hai_types": "HAI_1,HAI_2"})),
+                not_json,
+                reviewed("unknown_setting.json", {"model_api_hai_types": "HAI_1", "no_such_setting": 1}),
+                reviewed("empty_value.json", {"model_api_hai_types": ""}),
+                reviewed("bad_value.json", {"model_api_hai_types": "HAI_9"}),
+                reviewed("repeated_type.json", {"model_api_hai_types": "HAI_1,HAI_1"}),
+                written("null_value.json", json.dumps({**envelope, "variables": {"model_api_hai_types": None}})),
+                written("array.json", "[]"),
+                Path(folder) / "absent.json",
+            )
         ]
+        duplicate_refused = [refusal_of(functools.partial(tool.served_types, None, path, {})) for path in (duplicate_setting, duplicate_envelope)]
         from_flag = tool.served_types("HAI_3", inputs, {"MODEL_API_HAI_TYPES": "HAI_4"})
         from_environment = tool.served_types(None, None, {"MODEL_API_HAI_TYPES": "HAI_4,HAI_5"})
         bad_inputs: list[tuple[str | None, Path | None, dict[str, str]]] = [(None, None, {}), ("HAI_9", None, {}), ("HAI_1,HAI_1", None, {}), ("", None, {})]
@@ -949,8 +998,8 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         "the same refusal holds when the credential parameter already existed": stored_ok,
         "a slow answer body ends at the run deadline with exit 1 and no ready line": slow_ok,
         "an explicit DENY on a deleted experiment refuses with exit 1, names it, stays and is never reported ready": trash_ok,
-        "a closing response that stalls after one byte, as HTTP/1.0 and as HTTP/1.1, ends at the run deadline with exit 1 and no ready line": stalls
-        == [True, True],
+        "a closing response that stalls after one byte, as HTTP/1.0 and HTTP/1.1, also after a slow store start, ends at its own deadline": stalls
+        == [True] * 4,
         "a missing administrator parameter exits 1, names it and calls no MLflow route": no_admin_code == 1 and admin_name in no_admin and no_admin_quiet,
         "a wrong administrator password exits 1 with the status and without any password": wrong_code == 1 and wrong_text_clean,
         "an address off the loopback, with a user, or with another scheme exits 1 before the administrator parameter is read": len(refused)
@@ -962,14 +1011,29 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         and from_flag == ("HAI_3",)
         and from_environment == ("HAI_4", "HAI_5"),
         "no served type, an unknown one, a repeat and an empty list are refused": all(message is not None for message in types_refused),
-        "the services input file is read under variables; a flat or schema-breaking file, a missing setting, bad JSON and a missing file are refused": from_file
+        "the services input file is read under variables; a flat or invalid file, a bad value, bad JSON and a missing file are refused": from_file
         == ("HAI_1", "HAI_2")
         and all(message is not None for message in file_refused),
+        "a reviewed file without the setting serves the default of the services stack": tuple(default_text.split(",")) == from_empty == from_other
+        and default_text == "HAI_1",
+        "a repeated JSON member, in the variables or in the envelope, is refused as the deployment reader refuses it, without echoing a value": all(
+            message is not None and "duplicate" in message and "HAI_2" not in message for message in duplicate_refused
+        ),
         "the tool holds no account or grant logic of its own": not hasattr(tool, "MlflowAuth")
         and "users/permissions" not in tool_source
         and "users/create" not in tool_source
         and "http.client" not in tool_source,
     }
+
+
+def slow_open(open_store: Callable[..., Any], seconds: float) -> Callable[..., Any]:
+    """``secret_store.open_store`` after a pause, as a slow start of the store before the account check."""
+
+    def opened(*arguments: Any, **options: Any) -> Any:
+        time.sleep(seconds)
+        return open_store(*arguments, **options)
+
+    return opened
 
 
 def refusal_of(call: Callable[[], Any]) -> str | None:

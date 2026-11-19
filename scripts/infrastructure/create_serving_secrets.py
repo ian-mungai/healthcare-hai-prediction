@@ -17,9 +17,11 @@ loopback address)::
    no account or grant logic of its own.
 
 The served types come from ``--hai-types`` (the ``MODEL_API_HAI_TYPES`` text), else ``--preparation-inputs`` (the reviewed services input file: the setting
-``model_api_hai_types`` sits under its ``variables`` object, as ``data_contracts/infrastructure/services_preparation.schema.json`` defines), else the
-``MODEL_API_HAI_TYPES`` environment variable. The output says ``created`` or ``present`` for each secret and gives the
-check's lines for the account. A secret that cannot be set refuses by name, the other independent values are still made and the exit code is 1.
+``model_api_hai_types`` sits under its ``variables`` object, as ``data_contracts/infrastructure/services_preparation.schema.json`` defines; a file without
+the setting serves the default of the ``model_api_hai_types`` variable in ``infra/services/model_api.tf``; the file is read like the deployment inputs,
+so a repeated JSON member is refused), else the ``MODEL_API_HAI_TYPES`` environment variable.
+The output says ``created`` or ``present`` for each secret and gives the check's lines for the account.
+A secret that cannot be set refuses by name, the other independent values are still made and the exit code is 1.
 The account check ends at one run deadline of ``RUN_SECONDS`` for the whole MLflow step, response bodies included.
 """
 
@@ -40,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import secret_store
+from scripts.infrastructure.capture_reader import CaptureError, read_capture_with_digest
 from scripts.sdk_logs import quiet_sdk_logs
 from scripts.serving import keys
 
@@ -47,6 +50,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT_CHECK = "infra/services/scripts/mlflow_user.py"
 # Read by path: this tool stays light and imports nothing from the render modules.
 SERVICES_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/services_preparation.schema.json"
+# The Terraform variable that declares the default served types: the one source of the default for a reviewed file that omits the setting.
+SERVICES_MODEL_API = REPO_ROOT / "infra/services/model_api.tf"
 MLFLOW_USER_VALUE = "model_api"
 ADMIN_USER = "admin"
 PAGE_KEY_ID = "streamlit"
@@ -70,13 +75,18 @@ def reviewed_types(inputs: Path) -> str:
     from jsonschema import Draft202012Validator
 
     try:
-        document = json.loads(inputs.read_text())
+        document, _ = read_capture_with_digest(inputs)
         schema = json.loads(SERVICES_SCHEMA.read_text(encoding="utf-8"))
         if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
             raise ServingSecretsError("the services input file does not follow the services preparation schema")
-        return str(document["variables"]["model_api_hai_types"])
+        variables = document["variables"]
+        if "model_api_hai_types" in variables:
+            return str(variables["model_api_hai_types"])
+        return secret_store.terraform_variables(SERVICES_MODEL_API)["model_api_hai_types"]
+    except CaptureError as error:
+        raise ServingSecretsError(f"the services input file is refused: {error}") from None
     except (OSError, ValueError, KeyError):
-        raise ServingSecretsError("the services input file is not readable or has no model_api_hai_types under variables") from None
+        raise ServingSecretsError("the default of model_api_hai_types cannot be read") from None
 
 
 def served_types(flag: str | None, inputs: Path | None, environ: Mapping[str, str]) -> tuple[str, ...]:
