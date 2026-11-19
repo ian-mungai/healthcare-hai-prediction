@@ -151,7 +151,11 @@ FAILURE_CONTAINER_CODES = (
     "container_start_error",
     "container_timeout",
 )
-FAILURE_CODES = (*FAILURE_STARTUP_CODES, *FAILURE_CAPACITY_CODES, *FAILURE_ERROR_CODES, *FAILURE_CONTAINER_CODES)
+# A training run that fitted none of its requested types: the run itself and the status of each unfitted type (the writer's, which a test keeps equal).
+FAILURE_TRAINING_TYPES = tuple(f"hai_{number}" for number in range(1, 7))
+FAILURE_TRAINING_STATUSES = ("not_converged", "not_estimable", "not_run")
+FAILURE_TRAINING_CODES = ("nothing_fitted", *(f"{kind}_{status}" for kind in FAILURE_TRAINING_TYPES for status in FAILURE_TRAINING_STATUSES))
+FAILURE_CODES = (*FAILURE_STARTUP_CODES, *FAILURE_CAPACITY_CODES, *FAILURE_ERROR_CODES, *FAILURE_CONTAINER_CODES, *FAILURE_TRAINING_CODES)
 FAILURE_LINE_FACTS = ("available", "engine_floor", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
 FAILURE_FACTS = (*FAILURE_LINE_FACTS, "exit_code")
 # The fixed figures and the ranges of the facts (the writer's, which a test keeps equal). A refusal of the capacity module is fixed by its memory and its
@@ -196,6 +200,12 @@ FAILURE_TEMPLATES = {
     "phase_failed": "the phase failed (exit code {exit_code})",
     "phase_stopped": "the container was stopped by ECS (exit code {exit_code})",
     "dbt_target_not_executed": "the dbt target check was not executed because the task capacity could not be derived",
+    "nothing_fitted": "no requested type was fitted",
+    **{
+        f"{kind}_{status}": f"{kind.upper()} {'was not run' if status == 'not_run' else 'is ' + status.replace('_', ' ')}"
+        for kind in FAILURE_TRAINING_TYPES
+        for status in FAILURE_TRAINING_STATUSES
+    },
 }
 CONTAINER_REASONS = {
     "CannotStartContainerError": "container_start_error",

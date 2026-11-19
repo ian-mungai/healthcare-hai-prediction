@@ -462,6 +462,7 @@ def nothing_fitted_logs() -> list[str]:
 
     detail = "model m6 was fitted for none of HAI_1 (HAI_1: not_estimable: panel has no complete repeated training hospitals)"
     failure = aws_run.StepFailed("log_run", 1, "nothing_fitted", detail)
+    failure.failure_codes = phase_failure.nothing_fitted_codes({"HAI_1": "not_estimable"})
     named = json.dumps({"phase": "train", "step": "log_run", "failure": "nothing_fitted", "detail": detail}, sort_keys=True)
     return [
         '{"code": 0, "resumed": false, "step": "version_extract"}',
@@ -482,7 +483,10 @@ def test_a_training_run_that_fitted_nothing_is_recorded_as_a_failed_launch_with_
         stored_end["outcome"] == "failed" and stored_end["failure"]["container"] == "train" and stored_end["failure"]["phase"] == "train",
         f"the end record: {stored_end}",
     )
-    check(stored_end["failure"]["codes"] == ["step_failed"], f"the closed code of the failed step: {stored_end['failure']}")
+    check(stored_end["failure"]["codes"] == ["nothing_fitted", "hai_1_not_estimable"], f"the closed codes of the run: {stored_end['failure']}")
+    check(stored_end["failure"]["facts"] == {"exit_code": 1}, f"no number but the exit code: {stored_end['failure']}")
+    expected = "phase train failed in container train: no requested type was fitted; HAI_1 is not estimable"
+    check(outcome.failure == expected, f"the message names the reason and the status of the type: {outcome.failure!r}")
     check(not promotion_chain.trained(launcher.store, RUN), "the promotion chain counts the failed launch as a passed training run")
 
 

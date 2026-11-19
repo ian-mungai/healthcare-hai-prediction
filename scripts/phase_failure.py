@@ -5,6 +5,7 @@ A failed phase writes one line, ``phase_failure: {json}``, as its last line. The
 no stderr, no exception text and no log line, so no job value, credential, bucket name or location can reach it. A number is data too, so the facts are only the
 capacity figures of a refusal that the capacity module measured (``measured``), each in its own range and consistent with the others; a job's own exception can
 carry none, and the exit code is added by the launcher from ECS. A failure of a class that has no code of its own is the one safe code ``unexpected_error``.
+A training run that fitted none of its types tags its error with ``nothing_fitted_codes``: the code of the run and the status of each type.
 
 The launcher reads the line from the log of the failing container (``orchestration.ecs_adapter.parse_failure_line``, the reader, which the Airflow image holds
 and this module is not part of), validates it against the same lists, adds the container identity and keeps it in the end record of the launch. A message for a
@@ -133,7 +134,13 @@ CONTAINER_CODES = (
     "container_start_error",
     "container_timeout",
 )
-CODES = (*STARTUP_CODES, *CAPACITY_CODES, *ERROR_CODES, *CONTAINER_CODES)
+# What a training run reports when it fitted none of its requested types (``scripts.training.aws_run``): the run itself and one code for the status of each
+# unfitted type. The names are closed like every other code, so the record states the reason and the statuses without a number or a text. A test keeps the
+# types and the statuses equal to the training contract and the model slots.
+TRAINING_TYPES = tuple(f"hai_{number}" for number in range(1, 7))
+TRAINING_STATUSES = ("not_converged", "not_estimable", "not_run")
+TRAINING_CODES = ("nothing_fitted", *(f"{kind}_{status}" for kind in TRAINING_TYPES for status in TRAINING_STATUSES))
+CODES = (*STARTUP_CODES, *CAPACITY_CODES, *ERROR_CODES, *CONTAINER_CODES, *TRAINING_CODES)
 # The facts a job may write, all capacity figures in bytes except the count of other containers. The exit code is a fact of the stored record only: the launcher
 # takes it from ECS.
 LINE_FACTS = ("available", "engine_floor", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
@@ -217,6 +224,13 @@ def facts_fit(codes: Sequence[str], facts: Mapping[str, object], *, stored: bool
         if (figures["headroom"], figures["sibling_reserve"], figures["available"]) != expected or figures["available"] >= ENGINE_FLOOR:
             return False
     return not ("capacity_spill_floor" in codes and figures["spill_free"] * SPILL_SHARE_PERCENT // 100 >= SPILL_FLOOR)
+
+
+def nothing_fitted_codes(statuses: Mapping[str, str]) -> tuple[str, ...]:
+    """The codes of a training run that fitted none of its requested types: ``nothing_fitted``, then the status of each unfitted type (``statuses`` maps a type
+    such as ``HAI_1`` to its status) in the order of the types. A type or status that is not listed has no code."""
+    found = {f"{hai_type.lower()}_{status}" for hai_type, status in statuses.items()}
+    return ("nothing_fitted", *(code for code in TRAINING_CODES[1:] if code in found))
 
 
 def record(phase: str, codes: Sequence[str], facts: Mapping[str, int] | None = None) -> dict[str, Any]:

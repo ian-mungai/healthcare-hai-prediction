@@ -12,8 +12,10 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
   It then runs the actions of the run's model (``training_contract.train_steps``): ``version_extract``, ``fit``, ``hac_validate`` and ``log_run``, the
   ``mediation`` for m2 and the ``promotion_check`` for m1, m2 and m4. The last of these actions judges the run by the saved fit results
   (``job_actions.accept_training``, which ``job.main`` runs after the action has saved its records): a run that fitted none of its requested types fails with
-  ``nothing_fitted`` and names each type's status and reason, so the launcher records a failed training run and the bundles and MLflow runs stay. A run that
-  fitted at least one type passes, and the phase prints one ``outcome`` line that names every unfitted type with its reason. The check holds for every model.
+  ``nothing_fitted`` and names each type's status and reason. The phase's closed failure record carries the code ``nothing_fitted`` and one code for the
+  status of each type (``phase_failure.nothing_fitted_codes``), so the launcher records a failed training run with that reason, and the bundles and MLflow
+  runs stay. A run that fitted at least one type passes, and the phase prints one ``outcome`` line that names every unfitted type with its reason. The check
+  holds for every model.
 - ``research`` (training image, a separate task): checks the research parameters (``research_dag``), records the code identity and runs the ``research`` action,
   which reads the finished MLflow runs of m1, m2 and m4 on one ``base_run``, runs RQ1 and RQ4 and sets the one ``challenger`` alias of each type. It stores
   ``research/<run>/research_<type>.json`` once. It moves no production alias.
@@ -171,14 +173,28 @@ def run_action(work: Path, run: str, mode: str, action: str) -> dict[str, Any]:
         code = job.main(arguments)
     if code:
         failure = json.loads(err.getvalue().strip().splitlines()[-1]) if err.getvalue().strip() else {}
-        raise StepFailed(action, code, str(failure.get("failure", "failed")), str(failure.get("detail", "")))
+        failed = StepFailed(action, code, str(failure.get("failure", "failed")), str(failure.get("detail", "")))
+        if failed.failure == "nothing_fitted":
+            failed.failure_codes = unfitted_codes(work)
+        raise failed
     lines = [line for line in out.getvalue().splitlines() if line.startswith("{")]
     resumed = bool(json.loads(lines[-1]).get("resumed")) if lines else False
     return {"step": action, "code": 0, "resumed": resumed}
 
 
+def unfitted_codes(work: Path) -> tuple[str, ...]:
+    """The closed codes of a run that fitted none of its requested types: the run and the status of each type, read from the fit results the action judged."""
+    from scripts.training import job_actions
+
+    parameters = recorded_parameters(work)
+    _, unfitted = job_actions.training_outcome(work / "in" / "fit", [str(hai_type) for hai_type in parameters["hai_types"]], str(parameters["model"]))
+    return phase_failure.nothing_fitted_codes({hai_type: found["status"] for hai_type, found in unfitted.items()})
+
+
 class StepFailed(Exception):
-    """One action exited nonzero; the phase stops with its code."""
+    """One action exited nonzero; the phase stops with its code. ``failure_codes`` are the closed codes of its failure record (``scripts.phase_failure``)."""
+
+    failure_codes: tuple[str, ...] | None = None
 
     def __init__(self, step: str, code: int, failure: str, detail: str) -> None:
         super().__init__(f"{step}: {failure}")

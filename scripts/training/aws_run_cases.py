@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import code_digest, training_contract
+from orchestration import code_digest, ecs_adapter, training_contract
 from scripts.features import publication_reads, training_extract
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
 from scripts.orchestration.ecs_fake import client_error
@@ -278,6 +278,11 @@ def train_cases(cases: Any, folder: Path) -> None:
         require(failure["step"] == "log_run" and failure["failure"] == "nothing_fitted", f"the failure is not named: {failure}")
         require(HAI_TYPE in failure["detail"] and "not_estimable" in failure["detail"], f"the failure does not name the type and its status: {failure}")
         require("no complete repeated training hospitals" in failure["detail"], f"the failure does not give the reason: {failure}")
+        record = ecs_adapter.failure_from_tail(error)
+        require(
+            record is not None and record["phase"] == "train" and record["codes"] == ["nothing_fitted", "hai_1_not_estimable"] and record["facts"] == {},
+            f"the closed failure record that the launcher reads: {record}",
+        )
         require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS[:-1], f"the actions before the last one: {out}")
         for step in M6_STEPS:
             verify_done(fixture.folder / "in" / step, step, DIGEST)
@@ -287,6 +292,14 @@ def train_cases(cases: Any, folder: Path) -> None:
             parent["params"]["model_status"] == "not_estimable" and "model_reason" in parent["params"], f"the MLflow record lost the status: {parent['params']}"
         )
         require(len(fixture.tracking.active()) > 1, "the child runs were not logged")
+
+    def nothing_fitted_names_the_status_of_every_type() -> None:
+        """Two requested types, neither fitted: the closed record names the run and the status of each type in the order of the types."""
+        fixture = staged_train(folder / "nothing_fitted_two", "m6", hai_types=("HAI_1", "HAI_2"), hospitals=120, adjust=single_window)
+        code, _, error = train(fixture)
+        record = ecs_adapter.failure_from_tail(error)
+        require(code == EXIT_FAILED and record is not None, f"{code} {error}")
+        require(record["codes"] == ["nothing_fitted", "hai_1_not_estimable", "hai_2_not_estimable"] and record["facts"] == {}, f"the record: {record}")
 
     def partly_fitted_passes_and_names_the_unfitted_type() -> None:
         """One type fitted and one not: the phase passes, and its output names every unfitted type with its reason."""
@@ -356,6 +369,7 @@ def train_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_run_train_stops_after_progress_and_names_the_step", stops_after_progress)
     cases.check("aws_run_train_refuses_missing_prerequisite", refuses_prerequisite)
     cases.check("aws_run_train_nothing_fitted_fails_with_the_records_kept", nothing_fitted_fails_with_the_records_kept)
+    cases.check("aws_run_train_nothing_fitted_names_the_status_of_every_type", nothing_fitted_names_the_status_of_every_type)
     cases.check("aws_run_train_partly_fitted_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
     cases.check("aws_run_train_every_fitted_run_prints_no_outcome", every_fitted_run_prints_no_outcome)
     cases.check("aws_run_train_every_model_is_judged_by_its_own_slot", every_model_is_judged_by_its_own_slot)

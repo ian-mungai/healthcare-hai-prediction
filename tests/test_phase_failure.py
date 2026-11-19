@@ -10,7 +10,7 @@ import json
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -250,3 +250,87 @@ def test_the_stderr_tail_keeps_no_text(tmp_path: Path) -> None:
     tail.write("some text " + ASSIGNMENT + "\n" + phase_failure.line(phase_failure.record("build", ["phase_failed"])) + "\n")
     tail.finish()
     check(tail.marked and not hasattr(tail, "last") and ASSIGNMENT not in repr(vars(tail)), f"only whether a record was written is kept: {vars(tail)}")
+
+
+# A training run that fitted none of its requested types names that, and the status of each unfitted type, with closed codes only: no number and no text.
+OLD_CODES = 66
+OLD_CODES_SHA256 = "1cae2f73a3bd615922edcab85977d5513c7f3fb23ec5d0e50eed0afbc9f652d5"
+
+
+def test_the_codes_that_existed_before_the_training_codes_are_unchanged_and_keep_their_order() -> None:
+    import hashlib
+
+    before = phase_failure.CODES[:OLD_CODES]
+    check(
+        len(before) == OLD_CODES and hashlib.sha256("\n".join(before).encode()).hexdigest() == OLD_CODES_SHA256, "an earlier code changed, moved or was removed"
+    )
+    check(phase_failure.CODES[OLD_CODES:] == phase_failure.TRAINING_CODES, "the training codes are the only addition and come last")
+    check(tuple(ecs_adapter.FAILURE_CODES[OLD_CODES:]) == tuple(ecs_adapter.FAILURE_TRAINING_CODES), "the reader adds the same codes")
+
+
+def test_the_training_codes_come_from_the_types_and_statuses_of_a_training_run() -> None:
+    from orchestration import training_contract
+    from scripts.training.models.common import Status
+
+    unfitted = {status for status in get_args(Status) if status != "fitted"}
+    check(set(phase_failure.TRAINING_STATUSES) == unfitted == set(ecs_adapter.FAILURE_TRAINING_STATUSES), "the unfitted statuses of a model slot")
+    check(
+        tuple(phase_failure.TRAINING_TYPES) == tuple(name.lower() for name in training_contract.HAI_TYPES) == tuple(ecs_adapter.FAILURE_TRAINING_TYPES),
+        "the types",
+    )
+    check(phase_failure.TRAINING_CODES[0] == "nothing_fitted" and len(phase_failure.TRAINING_CODES) == 1 + 6 * 3, f"{phase_failure.TRAINING_CODES}")
+    check(len(set(phase_failure.CODES)) == len(phase_failure.CODES), "a code is listed twice")
+
+
+def test_a_run_that_fitted_nothing_writes_the_code_and_the_status_of_each_type_and_the_reader_returns_them() -> None:
+    codes = phase_failure.nothing_fitted_codes({"HAI_2": "not_converged", "HAI_1": "not_estimable", "HAI_6": "not_run"})
+    check(codes == ("nothing_fitted", "hai_1_not_estimable", "hai_2_not_converged", "hai_6_not_run"), f"the code first, then the types in order: {codes}")
+    written = phase_failure.line(phase_failure.record("train", codes))
+    found = ecs_adapter.parse_failure_line(written)
+    check(found == {"v": 1, "phase": "train", "codes": list(codes), "facts": {}}, f"the reader returns the closed record: {found}")
+    check(
+        len(phase_failure.nothing_fitted_codes({f"HAI_{number}": "not_estimable" for number in range(1, 7)})) == 7 <= phase_failure.MAX_CODES, "six types fit"
+    )
+    if found is None:
+        raise AssertionError("the record was not read")
+    stored = ecs_adapter.stored_failure({**found, "facts": {"exit_code": 1}, "container": "train", "source": "job"})
+    message = ecs_adapter.render_failure(stored)
+    check(
+        message == "phase train failed in container train: no requested type was fitted; HAI_1 is not estimable; HAI_2 is not converged; HAI_6 was not run",
+        message,
+    )
+
+
+def test_the_codes_of_an_error_tagged_by_the_training_runner_are_kept_and_its_text_is_not() -> None:
+    class Unfitted(RuntimeError):
+        failure_codes = phase_failure.nothing_fitted_codes({"HAI_1": "not_estimable"})
+
+    found = phase_failure.record_for("train", Unfitted(ASSIGNMENT))
+    check(found == {"v": 1, "phase": "train", "codes": ["nothing_fitted", "hai_1_not_estimable"], "facts": {}}, f"{found}")
+    check(ASSIGNMENT not in json.dumps(found), "the message of the error is never read")
+
+
+def test_an_unknown_training_code_a_status_that_was_fitted_and_a_number_are_still_refused() -> None:
+    for codes in (
+        ["nothing_fitted", "hai_7_not_estimable"],
+        ["hai_1_fitted"],
+        ["nothing_fitted", "hai_1_not_estimable_"],
+        ["NOTHING_FITTED"],
+        ["nothing fitted"],
+    ):
+        check(ecs_adapter.parse_failure_line(marker({"v": 1, "phase": "train", "codes": codes, "facts": {}})) is None, f"{codes} is not a code")
+        listed = [code for code in codes if code in phase_failure.CODES]
+        check(phase_failure.record("train", codes)["codes"] == (listed or ["unexpected_error"]), f"the writer keeps only the listed codes of {codes}")
+    for facts in ({"memory": 5}, {"types": 1}, {"siblings": 1}):
+        check(
+            ecs_adapter.parse_failure_line(marker({"v": 1, "phase": "train", "codes": ["nothing_fitted"], "facts": facts})) is None,
+            f"a number {facts} is refused",
+        )
+    check(
+        ecs_adapter.parse_failure_line(marker({"v": 1, "phase": "train", "codes": ["nothing_fitted"] + ["hai_1_not_run"] * 2, "facts": {}})) is None, "a repeat"
+    )
+    check(
+        ecs_adapter.parse_failure_line(marker({"v": 1, "phase": "train", "codes": ["nothing_fitted", *(phase_failure.TRAINING_CODES[1:9])], "facts": {}}))
+        is None,
+        "more than the limit",
+    )
