@@ -777,6 +777,127 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         expected = np.r_[1.0, design.matrix[0, fitted.kept_indices_]] @ fitted.coefficients_ + sum(fitted.effects_.values()) / len(fitted.effects_)
         require(math.isclose(result.predictions[0], expected), "unseen hospital did not receive the mean fitted effect")
 
+    def panel_with(years: Sequence[int], hospitals: int, **columns: Callable[[Any], Any]) -> Any:
+        """The synthetic panel plus extra m6 predictors named C202 and up, each valued by ``columns[name](row)``, where None marks a missing value."""
+        base = request(years=years, hospitals=hospitals)
+        added = tuple(Feature(f"feature_matrix_county_context:{name}", "number", f"C{202 + index}", "county_context") for index, name in enumerate(columns))
+        rows = tuple(dict(row, **{name: call(row) for name, call in columns.items()}) for row in base.data.rows)
+        lists = {**base.feature_lists, "m6_fixed_effects": (*base.feature_lists["m6_fixed_effects"], *(feature.reference for feature in added))}
+        return replace(base, data=Dataset(rows, (*base.data.features, *added), "HAI_1"), feature_lists=lists)
+
+    def value_of(row: Any) -> float:
+        """A deterministic predictor value that no other synthetic column explains."""
+        return float((int(row["ccn"]) * 7 + row["window_year"] * 13) % 17)
+
+    def fit_m6(changed: Any) -> Any:
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            return suite.fit_slot(changed, "m6_fixed_effects")
+
+    def panel_fits_with_an_entirely_missing_predictor() -> None:
+        """The reviewer's reproduction: one predictor with no value in any row used to leave no complete row, so m6 fitted nothing."""
+        changed = panel_with(range(2019, 2023), 60, late=lambda row: None)
+        result = fit_m6(changed)
+        require(result.status == "fitted", f"m6 with one entirely missing predictor is {result.status}: {result.reason}")
+        selection = result.details["panel_selection"]
+        require(selection["learned_on"] == "fitting_rows", f"the selection does not say what it was learned on: {selection}")
+        require(
+            selection["dropped"] == [{"reference": "feature_matrix_county_context:late", "missing_fraction": 1.0}], f"wrong dropped predictors: {selection}"
+        )
+        require("feature_matrix_county_context:late" not in selection["kept_references"], "the missing predictor stayed in the kept set")
+        prepare = result.pipeline.named_steps["prepare"]
+        require(tuple(selection["kept_references"]) == prepare.kept_references_, "the recorded kept set is not the fitted design's kept set")
+        require(result.details["dropped_incomplete_row_count"] == 0, "rows were dropped for a predictor that was left out")
+        require(result.details["panel_fitting_rows"] == 180, f"panel rows: {result.details['panel_fitting_rows']}")
+        _, holdout = changed.data.split()
+        require("late" not in prepare.transform(holdout.rows).names, "the dropped predictor is in the design")
+        record = result.details["mundlak"]
+        require(record["status"] == "fitted" and "late" not in record["tested_columns"], f"the Mundlak test used the dropped predictor: {record}")
+        require(record["numerator_degrees_of_freedom"] == len(record["tested_columns"]) > 0, f"q is not the number of tested slopes: {record}")
+
+    def panel_drops_a_mostly_missing_predictor() -> None:
+        changed = panel_with(range(2019, 2023), 60, late=lambda row: None if row["window_year"] < 2021 else value_of(row))
+        result = fit_m6(changed)
+        require(result.status == "fitted", f"m6 with a mostly missing predictor is {result.status}: {result.reason}")
+        (dropped,) = result.details["panel_selection"]["dropped"]
+        require(dropped["reference"].endswith(":late") and math.isclose(dropped["missing_fraction"], 2 / 3), f"wrong dropped record: {dropped}")
+        require(result.details["panel_fitting_rows"] == 180 and result.details["dropped_incomplete_row_count"] == 0, "rows were lost to a dropped predictor")
+
+    def panel_final_fit_selects_before_complete_cases() -> None:
+        """Rows missing the sparse predictor are the rows that hold the other one, so complete cases on the full list leave nothing."""
+        changed = panel_with(
+            range(2019, 2023),
+            60,
+            sparse=lambda row: None if int(row["ccn"]) % 10 < 6 else value_of(row),
+            part=lambda row: None if int(row["ccn"]) % 10 >= 6 else value_of(row) + 1.0,
+        )
+        training, _ = changed.data.split()
+        result = fit_m6(changed)
+        require(result.status == "fitted", f"the final fit did not select before complete cases: {result.status} {result.reason}")
+        selection = result.details["panel_selection"]
+        require([entry["reference"] for entry in selection["dropped"]] == ["feature_matrix_county_context:sparse"], f"wrong dropped predictors: {selection}")
+        require("feature_matrix_county_context:part" in selection["kept_references"], "the kept predictor was dropped")
+        left = sum(row["part"] is not None for row in training.rows)
+        require(result.details["panel_fitting_rows"] == left, f"complete cases were not kept on the kept set: {result.details['panel_fitting_rows']} != {left}")
+        require(result.details["dropped_incomplete_row_count"] == len(training.rows) - left, "the incomplete row count is wrong")
+        require("part" in result.details["mundlak"]["tested_columns"], "the Mundlak test lost the kept predictor")
+
+    def panel_fold_selection_ignores_validation_rows() -> None:
+        """Fold fitting rows 2018 to 2020: two of three missing drops the predictor, while counting the 2021 validation rows would keep it."""
+
+        def tuned(late: Callable[[Any], Any]) -> list[dict[str, Any]]:
+            changed = panel_with(range(2018, 2023), 60, late=late)
+            training, _ = changed.data.split()
+            with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+                _, audit = suite._tune(changed, "m6_fixed_effects", False, training)
+            require(audit and audit[0]["status"] == "fitted", f"the m6 tuning did not fit: {audit}")
+            return audit[0]["folds"]
+
+        present = tuned(lambda row: None if row["window_year"] in (2018, 2019) else value_of(row))
+        absent = tuned(lambda row: None if row["window_year"] in (2018, 2019, 2021) else value_of(row))
+        for folds in (present, absent):
+            require(len(folds) == 1 and folds[0]["fitting_rows"] == 180, f"unexpected folds: {folds}")
+            require(
+                not any(reference.endswith(":late") for reference in folds[0]["selected_references"]), "validation rows kept a predictor the fitting rows drop"
+            )
+        kept = tuned(lambda row: None if row["window_year"] == 2021 else value_of(row))
+        require(any(reference.endswith(":late") for reference in kept[0]["selected_references"]), "validation rows removed a predictor the fitting rows keep")
+        require(kept[0]["fitting_rows"] == 180, "validation rows changed which fitting rows are complete")
+
+    def panel_with_few_clusters_reports_the_tested_slopes() -> None:
+        changed = panel_with(range(2019, 2023), 40, late=lambda row: None)
+        result = fit_m6(changed)
+        record = result.details["mundlak"]
+        require(result.status == "fitted", f"fewer than 50 hospitals stopped the fit: {result.status} {result.reason}")
+        require(
+            record["status"] == "not_estimable" and "at least 50 hospital clusters" in record["reason"] and record["clusters"] == 40, f"wrong refusal: {record}"
+        )
+        require(record["tested_columns"] and "late" not in record["tested_columns"], f"the refusal does not name the tested slopes: {record}")
+        require(record["numerator_degrees_of_freedom"] == len(record["tested_columns"]), f"the refusal does not report q: {record}")
+
+    def panel_selection_is_in_the_run_result() -> None:
+        changed = panel_with(range(2019, 2023), 60, late=lambda row: None)
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            output = suite.fit_model(changed, "m6")
+        payload = output.to_result()
+        require(payload["fitted_parameters"]["m6_fixed_effects"]["panel_selection"]["dropped"], "the kept set is not in the result")
+        record = output.research["hospital_effects"]
+        require(record["status"] == "fitted" and "late" not in record["tested_columns"], f"the RQ6 record used the dropped predictor: {record}")
+        json.dumps(payload, sort_keys=True, allow_nan=False)
+
+    def panel_without_repeated_hospitals_stays_not_estimable() -> None:
+        base = request(years=range(2019, 2023), hospitals=120)
+        rows = tuple(row for row in base.data.rows if row["window_year"] == 2022 or row["window_year"] == 2019 + int(row["ccn"]) % 3)
+        single = replace(base, data=replace(base.data, rows=rows))
+        result = fit_m6(single)
+        require(
+            result.status == "not_estimable" and "no complete repeated training hospitals" in result.reason,
+            f"a panel with no repeated hospital: {result.status} {result.reason}",
+        )
+        no_cmi = panel_with(range(2019, 2023), 60, late=value_of)
+        absent = replace(no_cmi, data=replace(no_cmi.data, rows=tuple(dict(row, cmi=None) for row in no_cmi.data.rows)))
+        result = fit_m6(absent)
+        require(result.status == "not_estimable" and "forced covariate" in result.reason, f"a missing forced covariate: {result.status} {result.reason}")
+
     def shap_failure() -> None:
         from scripts.training.model_test_support import TreeExplainer
 
@@ -1893,6 +2014,13 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("panel_record_carries_mundlak", panel_record_carries_mundlak),
         ("one_model_run_of_m6_carries_mundlak", one_model_run_of_m6_carries_mundlak),
         ("panel_fits_complete_cases", panel_fits_complete_cases),
+        ("panel_fits_with_an_entirely_missing_predictor", panel_fits_with_an_entirely_missing_predictor),
+        ("panel_drops_a_mostly_missing_predictor", panel_drops_a_mostly_missing_predictor),
+        ("panel_final_fit_selects_before_complete_cases", panel_final_fit_selects_before_complete_cases),
+        ("panel_fold_selection_ignores_validation_rows", panel_fold_selection_ignores_validation_rows),
+        ("panel_with_few_clusters_reports_the_tested_slopes", panel_with_few_clusters_reports_the_tested_slopes),
+        ("panel_selection_is_in_the_run_result", panel_selection_is_in_the_run_result),
+        ("panel_without_repeated_hospitals_stays_not_estimable", panel_without_repeated_hospitals_stays_not_estimable),
         ("unbalanced_panel_and_unseen_effect", panel_unbalanced_and_unseen),
         ("shap_additivity_refusal", shap_failure),
         ("separated_mediation", mediation_separation),

@@ -80,6 +80,33 @@ class FeatureBatch:
         )
 
 
+MAX_MISSING_FRACTION = 0.5
+
+
+def missing_masks(batch: FeatureBatch, features: tuple[Feature, ...]) -> dict[str, Any]:
+    """Return the missing-value mask of every predictor, keyed by reference."""
+    return {
+        feature.reference: np.isnan(batch.columns[feature.reference])
+        if feature.kind == "number"
+        else np.equal(batch.columns[feature.reference], np.asarray(None, dtype=object))
+        for feature in features
+    }
+
+
+def select_by_missing(masks: Mapping[str, Any], features: tuple[Feature, ...], forced: tuple[str, ...] = ()) -> tuple[tuple[str, ...], dict[str, float]]:
+    """Apply the missing-predictor rule: keep the predictors missing in at most half of the rows and refuse a forced covariate that fails it."""
+    rates = {reference: float(np.mean(mask)) for reference, mask in masks.items()}
+    kept = tuple(feature.reference for feature in features if rates[feature.reference] <= MAX_MISSING_FRACTION)
+    if not set(forced).issubset(kept):
+        raise NotEstimable("forced covariate exceeds the half-missing threshold or is absent")
+    return kept, rates
+
+
+def missing_selection(values: Any, features: tuple[Feature, ...], forced: tuple[str, ...] = ()) -> tuple[tuple[str, ...], dict[str, float]]:
+    """Learn only the missing-predictor selection of the given rows, without any other fold statistic."""
+    return select_by_missing(missing_masks(FeatureBatch.from_records(values, features), features), features, forced)
+
+
 def column_kind(name: str) -> str:
     """The kind of a design column from its name: a missing-value flag, a category level or a value."""
     if name.endswith("__missing"):
@@ -109,16 +136,8 @@ class FoldPreprocessor(EstimatorParameters):
     def fit(self, values: Any, y: Any = None) -> FoldPreprocessor:
         """Learn selectors, numeric statistics, exact indicator aliases and categories from fitting rows."""
         batch = FeatureBatch.from_records(values, self.features)
-        masks = {
-            feature.reference: np.isnan(batch.columns[feature.reference])
-            if feature.kind == "number"
-            else np.equal(batch.columns[feature.reference], np.asarray(None, dtype=object))
-            for feature in self.features
-        }
-        self.missing_rates_ = {reference: float(np.mean(mask)) for reference, mask in masks.items()}
-        self.kept_references_ = tuple(feature.reference for feature in self.features if self.missing_rates_[feature.reference] <= 0.5)
-        if not set(self.forced).issubset(self.kept_references_):
-            raise NotEstimable("forced covariate exceeds the half-missing threshold or is absent")
+        masks = missing_masks(batch, self.features)
+        self.kept_references_, self.missing_rates_ = select_by_missing(masks, self.features, self.forced)
         self.medians_: dict[str, float] = {}
         self.scales_: dict[str, float] = {}
         self.centers_: dict[str, float] = {}

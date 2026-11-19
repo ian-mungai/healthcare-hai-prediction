@@ -21,6 +21,7 @@ from scripts.training.models.common import (
     Array,
     Dataset,
     DeadlineExceeded,
+    Feature,
     ModelError,
     ModelRequest,
     NotConverged,
@@ -34,7 +35,7 @@ from scripts.training.models.elastic import ElasticRegressor
 from scripts.training.models.linear import OLSRegressor
 from scripts.training.models.mixed import MixedRegressor
 from scripts.training.models.panel import MINIMUM_FITTING_YEARS, PanelRegressor, complete_case_positions, repeated_hospital_positions
-from scripts.training.models.preprocessing import FoldPreprocessor, missing
+from scripts.training.models.preprocessing import MAX_MISSING_FRACTION, FoldPreprocessor, missing, missing_selection
 from scripts.training.models.spatial import SpatialRegressor, build_weights, moran_test
 from scripts.training.models.trees import TreeRegressor, shap_values
 
@@ -58,8 +59,8 @@ def time_folds(data: Dataset) -> list[tuple[Any, Any]]:
     return [(np.flatnonzero(years < year), np.flatnonzero(years == year)) for year in sorted(set(years))[MINIMUM_FITTING_YEARS:]]
 
 
-def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool) -> Any:
-    features = request.features_for(slot)
+def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, features: tuple[Feature, ...] | None = None) -> Any:
+    features = request.features_for(slot) if features is None else features
     if slot == "m3_mixed":
         features = tuple(feature for feature in features if feature.name != "control_type_code")
     forced = () if slot == "m1_ols" else (request.cmi_reference,)
@@ -91,27 +92,55 @@ def _grid(grid: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*(grid[name] for name in names))]
 
 
-def _panel_rows(request: ModelRequest, data: Dataset) -> tuple[Dataset, int, list[str]]:
-    """The fixed-effects model fits complete cases on its own predictor set, then only hospitals with repeated windows among them."""
-    complete, incomplete = complete_case_positions(data.rows, tuple(feature.name for feature in request.features_for("m6_fixed_effects")))
+@dataclass(frozen=True)
+class PanelSample:
+    """The fixed-effects rows of one fitting set with the predictors that were learned from it before any row was dropped."""
+
+    data: Dataset
+    features: tuple[Feature, ...]
+    selection: Mapping[str, Any]
+    incomplete: int
+    singletons: list[str]
+
+
+def _panel_rows(request: ModelRequest, data: Dataset) -> PanelSample:
+    """Learn the missing-predictor selection on these fitting rows, then keep complete cases on the kept predictors, then only hospitals with repeated windows.
+
+    Rows outside ``data`` never enter the selection, so validation and holdout rows cannot change which predictors the fit keeps.
+    """
+    declared = request.features_for("m6_fixed_effects")
+    if not data.rows:
+        raise NotEstimable("panel has no complete repeated training hospitals")
+    kept, rates = missing_selection(data.rows, declared, (request.cmi_reference,))
+    features = tuple(feature for feature in declared if feature.reference in kept)
+    complete, incomplete = complete_case_positions(data.rows, tuple(feature.name for feature in features))
+    selection = {
+        "learned_on": "fitting_rows",
+        "selection_rows": len(data.rows),
+        "maximum_missing_fraction": MAX_MISSING_FRACTION,
+        "declared_count": len(declared),
+        "kept_references": list(kept),
+        "dropped": [{"reference": feature.reference, "missing_fraction": rates[feature.reference]} for feature in declared if feature.reference not in kept],
+    }
     data = data.subset(complete)
     positions, singletons = repeated_hospital_positions(data.rows)
     data = data.subset(positions)
     if not data.rows:
         raise NotEstimable("panel has no complete repeated training hospitals")
-    return data, incomplete, singletons
+    return PanelSample(data, features, selection, incomplete, singletons)
 
 
-def _fit_pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, training: Dataset) -> tuple[Any, list[str], int]:
-    dropped: list[str] = []
-    incomplete = 0
+def _fit_pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, training: Dataset) -> tuple[Any, PanelSample | None]:
+    sample = None
+    features = None
     if slot == "m6_fixed_effects":
-        training, incomplete, dropped = _panel_rows(request, training)
+        sample = _panel_rows(request, training)
+        training, features = sample.data, sample.features
     request.deadline.check()
-    pipeline = _pipeline(request, slot, parameters, forest)
+    pipeline = _pipeline(request, slot, parameters, forest, features)
     pipeline.fit(training.rows, training.y)
     request.deadline.check()
-    return pipeline, dropped, incomplete
+    return pipeline, sample
 
 
 def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -127,9 +156,11 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     for left, right in folds:
         request.deadline.check()
         fitting, validation = training.subset(left), training.subset(right)
+        features = None
         if slot == "m6_fixed_effects":
-            fitting, _, _ = _panel_rows(request, fitting)
-        prepare = _pipeline(request, slot, options[0], forest).named_steps["prepare"]
+            sample = _panel_rows(request, fitting)
+            fitting, features = sample.data, sample.features
+        prepare = _pipeline(request, slot, options[0], forest, features).named_steps["prepare"]
         fitting_design = prepare.fit_transform(fitting.rows)
         validation_design = prepare.transform(validation.rows)
         record = {
@@ -191,7 +222,7 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         if not training.rows or not holdout.rows:
             raise NotEstimable("mixed model has no ownership-eligible training or holdout windows")
     parameters, audit = _tune(request, slot, forest, training)
-    pipeline, dropped, incomplete = _fit_pipeline(request, slot, parameters, forest, training)
+    pipeline, sample = _fit_pipeline(request, slot, parameters, forest, training)
     prediction = np.asarray(pipeline.predict(holdout.rows), dtype=np.float64).reshape(-1)
     scored = metrics(holdout.y, prediction)
     request.deadline.check()
@@ -214,9 +245,11 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
     if slot == "m2_elastic_net":
         grid = request.config["slots"][slot]["grid"]
         details["grid_edge"] = any(parameters[name] in (grid[name][0], grid[name][-1]) for name in grid)
-    if slot == "m6_fixed_effects":
-        details["dropped_incomplete_row_count"] = incomplete
-        details["dropped_singleton_hospital_count"] = len(dropped)
+    if sample is not None:
+        details["panel_selection"] = dict(sample.selection)
+        details["dropped_incomplete_row_count"] = sample.incomplete
+        details["panel_fitting_rows"] = len(sample.data.rows)
+        details["dropped_singleton_hospital_count"] = len(sample.singletons)
         details["unseen_holdout_hospitals"] = len({row["ccn"] for row in holdout.rows if row["ccn"] not in model.effects_})
     return SlotResult(
         slot,

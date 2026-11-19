@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -63,8 +63,13 @@ def write_atomic(folder: Path, name: str, data: bytes) -> None:
     os.replace(partial, target)
 
 
-def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: Callable[[str], bool], plan: Plan) -> None:
-    """Resume a completed step unchanged, or run the plan, write its outputs and the completion record, and print the outputs."""
+def run_step(
+    context: Any, record: Mapping[str, Any], step: str, allowed: Callable[[str], bool], plan: Plan, report: Callable[[], Mapping[str, Any]] | None = None
+) -> None:
+    """Resume a completed step unchanged, or run the plan, write its outputs and the completion record, and print the outputs.
+
+    ``report`` adds facts of the written outputs to the printed summary, for a resumed step as well.
+    """
     folder, digest = context.run_dir, str(record["code_digest"])
     if not folder.is_dir():
         raise JobFailure("run_dir", "the run folder does not exist")
@@ -97,7 +102,19 @@ def run_step(context: Any, record: Mapping[str, Any], step: str, allowed: Callab
         except OSError as error:
             raise JobFailure("run_dir", str(error)) from None
         summary = {"action": step, "resumed": False, "outputs": sorted(outputs)}
-    sys.stdout.write(json.dumps(summary, sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps({**summary, **(report() if report is not None else {})}, sort_keys=True) + "\n")
+
+
+def model_statuses(folder: Path, hai_types: Sequence[str], model: str) -> dict[str, dict[str, Any]]:
+    """Return the status and reason of the run's own model slot in each type's written result."""
+    from scripts.training import bundle
+
+    slot = training_contract.MODEL_LISTS[model][0]
+    found = {}
+    for hai_type in hai_types:
+        status = job_inputs.read_json(folder / bundle.prefix(hai_type) / "result.json", "fit_changed")["statuses"][slot]
+        found[hai_type] = {"status": status["status"], "reason": status["reason"]}
+    return found
 
 
 def check_targets(root: Path) -> None:
@@ -197,7 +214,14 @@ def run_fit(context: Any, record: Mapping[str, Any]) -> None:
                 outputs |= fit_type(context, record, config, hai_type, mapping, periods, parameters["model"])
             return outputs
 
-        run_step(context, record, "fit", fit_allowed(parameters["hai_types"]), plan)
+        def report() -> dict[str, Any]:
+            statuses = model_statuses(context.run_dir, parameters["hai_types"], parameters["model"])
+            for hai_type, found in statuses.items():
+                if found["status"] != "fitted":
+                    sys.stderr.write(f"model {parameters['model']} of {hai_type} was not fitted: {found['status']}: {found['reason']}\n")
+            return {"model_status": statuses}
+
+        run_step(context, record, "fit", fit_allowed(parameters["hai_types"]), plan, report)
 
 
 def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str, model: str) -> dict[str, bytes]:
@@ -423,6 +447,7 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
     }
     bundle_hash = bundle.sha256_of(done["outputs"], hai_type)
     chosen, candidate = result["selection"]["selected"], result["selection"]["registry_candidate"]
+    own = result["statuses"][training_contract.MODEL_LISTS[model][0]]
     training_metrics.fit_selection(parameters["model"], hai_type, result["selection"])
     params = {
         "hai_type": hai_type,
@@ -432,6 +457,8 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
         "selected_model": chosen or "none",
         "registry_candidate": candidate or "none",
         "model": parameters["model"],
+        "model_status": own["status"],
+        **({"model_reason": own["reason"]} if own["reason"] else {}),
         **{f"seed.{purpose}": seed for purpose, seed in result["seeds"].items()},
     }
     metrics: dict[str, float] = run_tracking.numbers("counts", result["counts"]) | run_tracking.numbers(

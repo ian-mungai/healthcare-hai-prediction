@@ -306,11 +306,12 @@ def mundlak(y: Array, slopes: Array, names: Sequence[str], entities: Sequence[st
     clusters = len(set(entity_labels.tolist()))
     if not tested or slopes.shape[0] != len(y) or len(entity_labels) != len(y) or len(year_values) != len(y):
         raise ModelError("Mundlak test needs time-varying slopes with matching rows, hospitals and years")
+    base = {"clusters": clusters, "tested_columns": tested, "numerator_degrees_of_freedom": len(tested)}
     if clusters < MUNDLAK_MINIMUM_CLUSTERS:
         return {
             "status": "not_estimable",
             "reason": f"Mundlak test needs at least {MUNDLAK_MINIMUM_CLUSTERS} hospital clusters, found {clusters}",
-            "clusters": clusters,
+            **base,
         }
     means = np.zeros_like(slopes)
     for label in sorted(set(entity_labels.tolist())):
@@ -321,14 +322,14 @@ def mundlak(y: Array, slopes: Array, names: Sequence[str], entities: Sequence[st
     design = np.column_stack((np.ones(len(y)), slopes, means, dummies))
     block = list(range(1 + len(tested), 1 + 2 * len(tested)))
     if not np.isfinite(design).all() or not np.isfinite(y).all():
-        return {"status": "not_estimable", "reason": "Mundlak design contains a nonfinite value", "clusters": clusters}
+        return {"status": "not_estimable", "reason": "Mundlak design contains a nonfinite value", **base}
     if design.shape[0] <= design.shape[1] or np.linalg.matrix_rank(design) != design.shape[1]:
-        return {"status": "not_estimable", "reason": "Mundlak design is rank deficient or has no residual degrees of freedom", "clusters": clusters}
+        return {"status": "not_estimable", "reason": "Mundlak design is rank deficient or has no residual degrees of freedom", **base}
     beta, covariance, _ = cluster_covariances(y, design, entity_labels)
     gamma, variance = beta[block], covariance[np.ix_(block, block)]
     eigenvalues = np.linalg.eigvalsh((variance + variance.T) / 2)
     if not np.isfinite(eigenvalues).all() or eigenvalues[0] <= 1e-10 * max(eigenvalues[-1], 1e-300):
-        return {"status": "not_estimable", "reason": "Mundlak clustered covariance of the hospital means is singular or indefinite", "clusters": clusters}
+        return {"status": "not_estimable", "reason": "Mundlak clustered covariance of the hospital means is singular or indefinite", **base}
     statistic = float(gamma @ np.linalg.solve(variance, gamma))
     f_statistic = statistic / len(tested)
     return {

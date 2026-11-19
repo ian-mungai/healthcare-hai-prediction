@@ -59,7 +59,9 @@ CHAMPION_PARENT_RUN = "training_elastic_net_aaaaaaaa"
 BUNDLE = f"bundles/bundle_{HAI_TYPE}"
 LABEL = "hai_1__sir__number"
 SQL_TYPES = {"varchar": "VARCHAR", "double": "DOUBLE", "bigint": "BIGINT", "boolean": "BOOLEAN", "date": "DATE"}
+LATE_REFERENCE = "feature_matrix_hospital:late"
 FIXTURE_COLUMNS = {
+    "late": "double",
     "spine_key": "varchar",
     "ccn": "varchar",
     "window_year": "bigint",
@@ -82,6 +84,13 @@ SCHEMA_COLUMNS = (
     ("feature_matrix_hospital_window", "hospital_window", "control_type_code", "varchar", {"copy": "control_type_code"}),
     ("feature_matrix_hospital_window", "hospital_window", "county_fips", "varchar", {"copy": "county_fips"}),
     ("feature_matrix_hospital", "hospital", "extra", "double", {"kind": "number", "match": {"measure_control": "C001"}, "value_column": "value_number"}),
+)
+LATE_COLUMN = (
+    "feature_matrix_hospital",
+    "hospital",
+    "late",
+    "double",
+    {"kind": "number", "match": {"measure_control": "C002"}, "value_column": "value_number"},
 )
 REFERENCES = tuple(f"{view}:{name}" for view, _, name, _, _ in SCHEMA_COLUMNS)
 SLOT_LISTS = {
@@ -152,6 +161,11 @@ def table_entry(folder: Path, name: str, rows: list[dict[str, Any]], columns: di
     return entry | ({"kind": kind} if kind else {})
 
 
+def single_window(rows: list[dict[str, Any]]) -> None:
+    """Keep each hospital in one training window, so no hospital repeats, and every hospital in the newest window."""
+    rows[:] = [row for row in rows if row["window_year"] == 2023 or row["window_year"] == 2019 + int(row["ccn"]) % 4]
+
+
 class Fixture:
     """One run folder with the mounted extract inputs, a small code root and the job's output folder."""
 
@@ -172,6 +186,8 @@ class Fixture:
         period_years: int = 2,
         adjust: Callable[[list[dict[str, Any]]], None] | None = None,
         flags: dict[str, float] | None = None,
+        population: str = "primary",
+        late: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         self.run = run
         self.folder = prepare(folder, run_id=run)
@@ -182,12 +198,19 @@ class Fixture:
         self.model = model
         self.root = folder / "code"
         self.rows = [dict(row) for row in request(years, hospitals).data.rows]
+        # A fourth predictor of the m6 list whose values come from ``late(row)``; None marks a missing value.
+        self.late, self.population = late is not None, population
+        self.schema_columns = SCHEMA_COLUMNS + (LATE_COLUMN,) * self.late
+        self.slot_lists = {**SLOT_LISTS, "m6_fixed_effects": SLOT_LISTS["m6_fixed_effects"] + (LATE_REFERENCE,) * self.late}
+        if late is not None:
+            for row in self.rows:
+                row["late"] = late(row)
         if adjust is not None:
             adjust(self.rows)
         self.newest, self.period_years, self.flag_values = max(row["window_year"] for row in self.rows), period_years, flags
         self.parameters = {
             "features_run": "latest",
-            "population": "primary",
+            "population": population,
             "hai_types": list(hai_types),
             "trigger": "manual",
             "mlflow": "local",
@@ -221,12 +244,12 @@ class Fixture:
         config["slots"]["m2_elastic_net"]["forced_references"] = [REFERENCES[1]]
         (self.root / "config/training/models.json").write_text(json.dumps(config) + "\n")
         (self.root / "config/training/feature_lists").mkdir(parents=True)
-        for slot, references in SLOT_LISTS.items():
+        for slot, references in self.slot_lists.items():
             (self.root / f"config/training/feature_lists/{slot}.json").write_text(
                 json.dumps({"schema": 1, "scope": "cms_only", "slot": slot, "references": list(references)}) + "\n"
             )
         tables: dict[str, Any] = {}
-        for view, family, name, kind, pivot in SCHEMA_COLUMNS:
+        for view, family, name, kind, pivot in self.schema_columns:
             table = tables.setdefault(view, {"family": family, "role": "predictor", "columns": []})
             table["columns"].append({"name": name, "view": view, "type": kind, "role": "predictor", "pivot": pivot})
         (self.root / "data_contracts/features").mkdir(parents=True)
@@ -284,7 +307,7 @@ class Fixture:
             name = f"extract_{hai_type}.parquet"
             label = f"hai_{hai_type.split('_')[1]}__sir__number"
             weight = f"hai_{hai_type.split('_')[1]}__predicted__number"
-            listed = {reference.split(":", 1)[1] for slot in job_inputs.REQUEST_LISTS[self.model] for reference in SLOT_LISTS[slot]}
+            listed = {reference.split(":", 1)[1] for slot in job_inputs.REQUEST_LISTS[self.model] for reference in self.slot_lists[slot]}
             kept = listed | {"spine_key", "ccn", "window_year", "control_type_code", "county_fips"}
             rows = [
                 {key: value for key, value in row.items() if key in kept} | {label: row[LABEL], weight: 1.0 + index % 5} for index, row in enumerate(self.rows)
@@ -296,7 +319,7 @@ class Fixture:
                 "kind": "training_extract",
                 "run_id": self.run,
                 "hai_type": hai_type,
-                "population": "primary",
+                "population": self.population,
                 "parameters_sha256": hashlib.sha256(canonical(self.parameters)).hexdigest(),
                 "code_digest": DIGEST,
                 "publication_run_id": "features_elastic_net_1234abcd",
@@ -927,7 +950,40 @@ def fit_cases(cases: Any, folder: Path) -> None:
             f"feature list: {listing}",
         )
 
+    def m6_fits_with_a_missing_predictor_in_both_populations() -> None:
+        """The reviewer's reproduction through the real fit action: a predictor with no value used to leave m6 no complete row, yet the job exited 0."""
+        for population in ("primary", "sensitivity"):
+            fixture = Fixture(folder / f"m6_late_{population}", model="m6", hospitals=60, population=population, late=lambda row: None)
+            code, out, error = run_action(fixture, "fit")
+            require(code == 0, f"fit of m6 failed for {population}: {error}")
+            require(fixture.manifest()["population"] == population, f"the fixture did not write a {population} extract")
+            result = output_of(fixture, f"{BUNDLE}/result.json")
+            require(result["statuses"]["m6_fixed_effects"]["status"] == "fitted", f"m6 on {population} is {result['statuses']['m6_fixed_effects']}")
+            selection = result["fitted_parameters"]["m6_fixed_effects"]["panel_selection"]
+            require([entry["reference"] for entry in selection["dropped"]] == [LATE_REFERENCE], f"m6 on {population} dropped {selection['dropped']}")
+            require(LATE_REFERENCE not in selection["kept_references"], f"m6 on {population} kept the missing predictor")
+            record = result["test_statistics"]["hospital_effects"]
+            require(record["status"] == "fitted" and "late" not in record["tested_columns"], f"the Mundlak record on {population}: {record}")
+            require(record["numerator_degrees_of_freedom"] == len(record["tested_columns"]), f"the Mundlak record on {population} does not report q: {record}")
+            validation = output_of(fixture, f"hac_predictions_{HAI_TYPE}.json")
+            require(validation["status"] == "fitted", f"the validation refit on {population} is {validation['status']}: {validation['reason']}")
+            require(json.loads(out.strip().splitlines()[-1])["model_status"] == {HAI_TYPE: {"status": "fitted", "reason": ""}}, f"summary: {out}")
+
+    def an_unfitted_model_is_said_plainly() -> None:
+        """A panel that is truly not estimable still ends the fit with exit 0, and the summary and the error stream say that no model was fitted."""
+        fixture = Fixture(folder / "m6_unfitted", model="m6", hospitals=120, adjust=single_window)
+        code, out, error = run_action(fixture, "fit")
+        require(code == 0, f"fit of an unfitted m6 failed: {error}")
+        result = output_of(fixture, f"{BUNDLE}/result.json")
+        status = result["statuses"]["m6_fixed_effects"]
+        require(status["status"] == "not_estimable" and "no complete repeated training hospitals" in status["reason"], f"m6 status: {status}")
+        reported = json.loads(out.strip().splitlines()[-1])
+        require(reported["model_status"] == {HAI_TYPE: {"status": "not_estimable", "reason": status["reason"]}}, f"the summary does not say it: {reported}")
+        require("not fitted" in error and "m6" in error and "not_estimable" in error and HAI_TYPE in error, f"the error stream does not say it: {error!r}")
+
     cases.check("job_fit_writes_results_and_done", fitted)
+    cases.check("job_fit_m6_fits_with_a_missing_predictor_in_both_populations", m6_fits_with_a_missing_predictor_in_both_populations)
+    cases.check("job_fit_an_unfitted_model_is_said_plainly", an_unfitted_model_is_said_plainly)
     cases.check("job_fit_each_model_fits_only_its_own_model_and_tests", one_model_per_run)
     cases.check("job_fit_only_promotion_models_have_a_registry_candidate", candidate_only_for_promotion_models)
     cases.check("job_fit_feature_list_of_every_model_and_population", feature_list_of_every_model_and_population)
@@ -2141,7 +2197,25 @@ def log_run_cases(cases: Any, folder: Path) -> None:
             keys.add(next(iter(fixture.tracking.parents().values()))["tags"]["training_key"])
         require(len(keys) == 2, "two models of one publication share a training key")
 
+    def unfitted_model_is_on_the_run_record() -> None:
+        """A green run of a model that was not fitted carries that status on the parent run and on the slot's child run."""
+        fixture = staged(folder / "unfitted_record", model="m6", hospitals=120, adjust=single_window)
+        code, _, error = run_action(fixture, "log_run")
+        require(code == 0, f"log_run failed: {error}")
+        run_id, run = next(iter(fixture.tracking.parents().items()))
+        require(run["params"]["model_status"] == "not_estimable", f"the parent run does not name the status: {run['params']}")
+        require("no complete repeated training hospitals" in run["params"]["model_reason"], f"the parent run does not name the reason: {run['params']}")
+        children = {item["tags"]["step_key"]: item for item in fixture.tracking.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
+        require(children["m6_fixed_effects"]["params"]["status"] == "not_estimable", f"the slot child run: {children['m6_fixed_effects']['params']}")
+        fitted_fixture = staged(folder / "fitted_record", model="m6", hospitals=60, late=lambda row: None)
+        require(run_action(fitted_fixture, "log_run")[0] == 0, "log_run of a fitted m6 failed")
+        fitted_run = next(iter(fitted_fixture.tracking.parents().values()))
+        require(
+            fitted_run["params"]["model_status"] == "fitted" and "model_reason" not in fitted_run["params"], f"a fitted model's parent: {fitted_run['params']}"
+        )
+
     cases.check("job_log_run_logs_runs_tags_metrics_artifacts_and_metafile", logged)
+    cases.check("job_log_run_an_unfitted_model_is_on_the_run_record", unfitted_model_is_on_the_run_record)
     cases.check("job_log_run_tags_the_model_and_the_base_run", tags_model_and_base_run)
     cases.check("job_log_run_logs_only_the_tests_of_its_model", logs_only_the_tests_of_its_model)
     cases.check("job_log_run_training_key_differs_per_model", training_key_differs_per_model)
