@@ -129,8 +129,8 @@ def written(folder: Path, name: str, document: Any) -> Path:
 def serve_with_the_real_loader(document: Any, folder: Path, tags: dict[str, str] | None = None) -> tuple[Any, list[list[str]]]:
     """Load a version through the real serving loader, which reads data only: the feature list, the provenance, the saved prediction check and the model file.
 
-    Only the transports are stand-ins: the MLflow registry record, the download call (the loader's ``fetch`` seam, writing each file into the folder the
-    loader gives), skops (it returns a model whose ``predict`` scores 0.5) and the pandas frame, a list of the row dicts, because the training environment has
+    Only the transports are stand-ins: the MLflow registry record, the download call (the loader's ``fetch`` seam, writing each file at the local path the
+    loader chooses), skops (it returns a model whose ``predict`` scores 0.5) and the pandas frame, a list of the row dicts, because the training environment has
     no pandas. The provenance holds the closure digest of the image's own record and one version for each of the four libraries, and the saved check holds one
     row of zeros that scores 0.5. Returns the loaded model and the column names of every frame the pipeline scored after the load.
     """
@@ -150,11 +150,9 @@ def serve_with_the_real_loader(document: Any, folder: Path, tags: dict[str, str]
         "model/model.skops": "stand-in",
     }
 
-    def fetch(run_id: str, path: str, destination: str) -> str:
-        target = Path(destination) / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(files[path]) + "\n")
-        return str(target)
+    def fetch(run_id: str, path: str, local_path: str, limit: int) -> str:
+        Path(local_path).write_text(json.dumps(files[path]) + "\n")
+        return local_path
 
     version = SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1", **(tags or {})}, source="runs:/run1/model")
     library = SimpleNamespace(MlflowClient=lambda: SimpleNamespace(get_model_version=lambda name, number: version))

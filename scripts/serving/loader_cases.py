@@ -37,6 +37,7 @@ HAI = "HAI_1"
 VERSION = "3"
 RUN = "run1"
 PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
+ARTIFACT_URI = "mlflow-artifacts:/1/run1/artifacts"
 FEATURE_LIST, PROVENANCE, SELF_CHECK, MODEL = "bundle/feature_list.json", "bundle/provenance.json", "bundle/self_check.json", "model/model.skops"
 FOUR = [FEATURE_LIST, PROVENANCE, SELF_CHECK, MODEL]
 REFERENCES = ["a:1", "b:2", "c:3"]
@@ -88,7 +89,7 @@ def _documents(closure: str) -> dict[str, Any]:
             "code_digest": "1" * 64,
             "model_code_closure_sha256": closure,
             "resolved_versions": {**LIBRARIES, "mlflow": "3.17.2", "mlflow-skinny": "3.17.2", "sqlalchemy": "2.0.0", "psycopg2-binary": None, "libpq": None},
-            "inputs": {},
+            "inputs": {"snapshot_set": {"feature_matrix_m1": 9, "hospital": 4}, "auxiliary_files": {"adjacency": {"sha256": "2" * 64, "row_count": 120}}},
         },
         SELF_CHECK: {"schema": 1, "slot": "m1_ols", "references": list(REFERENCES), "rows": copy.deepcopy(ROWS), "predictions": [score(row) for row in ROWS]},
     }
@@ -96,22 +97,28 @@ def _documents(closure: str) -> dict[str, Any]:
 
 @dataclass
 class Run:
-    """The files of one MLflow run behind the ``fetch`` seam. It records each download and writes the file where MLflow does: ``destination/path``."""
+    """The files of one MLflow run behind the ``fetch`` seam. ``fetch(run, path, local_path, limit)`` writes the file at ``local_path``, which the loader chose,
+    and returns it. It records each download; ``other`` replaces what a path returns (a symlink, a folder, another file)."""
 
     files: dict[str, bytes]
     failing: dict[str, Exception] = field(default_factory=dict)
+    other: dict[str, Callable[[str, bytes], str]] = field(default_factory=dict)
     calls: list[tuple[str, str, str]] = field(default_factory=list)
+    local_paths: list[str] = field(default_factory=list)
+    limits: list[int] = field(default_factory=list)
 
-    def __call__(self, run_id: str, artifact_path: str, destination: str) -> str:
-        self.calls.append((run_id, artifact_path, destination))
+    def __call__(self, run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
+        self.calls.append((run_id, artifact_path, str(Path(local_path).parent)))
+        self.local_paths.append(local_path)
+        self.limits.append(limit)
         if artifact_path in self.failing:
             raise self.failing[artifact_path]
         if run_id != RUN or artifact_path not in self.files:
             raise FileNotFoundError(f"MlflowException: no artifact {artifact_path!r} in {run_id!r}")
-        target = Path(destination) / artifact_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(self.files[artifact_path])
-        return str(target)
+        if artifact_path in self.other:
+            return self.other[artifact_path](local_path, self.files[artifact_path])
+        Path(local_path).write_bytes(self.files[artifact_path])
+        return local_path
 
     @property
     def paths(self) -> list[str]:
@@ -132,11 +139,13 @@ class Skops:
         self.loads: list[str] = []
         self.present: list[bool] = []
         self.frames: list[list[dict[str, Any]]] = []
+        self.folders: list[list[str]] = []
 
     def load(self, file: Any, trusted: Any = None) -> Any:
         self.trusted = trusted
         self.loads.append(str(file))
         self.present.append(Path(file).is_file())
+        self.folders.append(sorted(str(item.relative_to(Path(file).parent)) for item in Path(file).parent.rglob("*")))
         if Path(file).read_bytes() == b"UNTRUSTED":
             raise UntrustedTypesFoundException("untrusted types found: ['evil.Thing']")
         return SimpleNamespace(predict=self.predict)
@@ -151,20 +160,80 @@ def default_predictor(frame: list[dict[str, Any]]) -> list[float]:
     return [score([row["a"], row["b"], row["c"]])]
 
 
-class Registry:
-    """A stand-in for the MLflow module: the version lookup, the default download call and a ``sklearn.load_model`` that must never run."""
+class Server:
+    """The artifact store of the tracking server, as MLflow 3.17.2 sees it: files by path, a body that is longer than the file it names (``long``), a listing
+    that shows the children of a folder and a streamed GET. It records each GET, the chunks pulled and the most bytes the watched folder held at a pull."""
 
-    def __init__(self, tags: dict[str, str], source: str) -> None:
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+        self.long: dict[str, int] = {}
+        self.reads: list[str] = []
+        self.pulled: dict[str, int] = {}
+        self.peak = 0
+        self.watch: Path | None = None
+
+    def exists(self, path: str) -> bool:
+        return path in self.files or path in self.long
+
+    def children(self, path: str) -> list[str]:
+        return sorted(name for name in (*self.files, *self.long) if name.startswith(path + "/"))
+
+    def list_artifacts(self, path: str) -> list[Any]:
+        """``ArtifactRepository.list_artifacts``: the entries directly below a folder, and an empty list for a file."""
+        prefix = f"{path}/"
+        heads: dict[str, bool] = {}
+        for name in self.children(path):
+            head, _, rest = name[len(prefix) :].partition("/")
+            heads[head] = heads.get(head, False) or bool(rest)
+        return [SimpleNamespace(path=prefix + head, is_dir=is_dir) for head, is_dir in sorted(heads.items())]
+
+    def held(self) -> int:
+        return sum(item.stat().st_size for item in self.watch.rglob("*") if item.is_file()) if self.watch is not None else 0
+
+    def body(self, path: str, chunk_size: int) -> Iterator[bytes]:
+        """The chunks of one file. ``iter_content`` of a real response pulls one chunk per step, so the bytes on disk at a pull are the loader's own writes."""
+        data = None if path in self.long else self.files[path]
+        size = self.long[path] if data is None else len(data)
+        for start in range(0, size, chunk_size):
+            self.pulled[path] = self.pulled.get(path, 0) + 1
+            self.peak = max(self.peak, self.held())
+            yield b"{" * min(chunk_size, size - start) if data is None else data[start : start + chunk_size]
+
+    def get(self, path: str) -> Any:
+        """``http_request(host_creds, '/' + path, 'GET', stream=True)``: a 404 for no file and a 400 for a folder."""
+        self.reads.append(path)
+        status = 200 if self.exists(path) else 400 if self.children(path) else 404
+        return SimpleNamespace(status=status, iter_content=lambda chunk_size: self.body(path, chunk_size), close=lambda: None)
+
+    def download_artifacts(self, artifact_path: str, dst_path: str) -> str:
+        """``ArtifactRepository.download_artifacts`` of 3.17.2: a listing decides file or folder, a folder is downloaded with every descendant, and
+        ``HttpArtifactRepository._download_file`` writes every chunk with no limit (``artifact_repo.py:346``, ``http_artifact_repo.py:145``)."""
+        names = self.children(artifact_path) if self.list_artifacts(artifact_path) else [artifact_path]
+        for name in names:
+            self.reads.append(name)
+            target = Path(dst_path) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as out:
+                for chunk in self.body(name, 1024 * 1024):
+                    out.write(chunk)
+        return str(Path(dst_path) / artifact_path)
+
+
+class Registry:
+    """A stand-in for the MLflow module: the version and run lookups, the default download call and a ``sklearn.load_model`` that must never run."""
+
+    def __init__(self, tags: dict[str, str], source: str, server: Server) -> None:
         self.tags = tags
         self.source = source
+        self.server = server
         self.sklearn_loads = 0
         self.direct_reads = 0
         self.default_calls: list[dict[str, Any]] = []
-        self.files: dict[str, bytes] = {}
         self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
         self.sklearn = SimpleNamespace(load_model=self.load_model)
         self.MlflowClient = lambda: SimpleNamespace(
-            get_model_version=lambda name, version: SimpleNamespace(run_id=RUN, tags=dict(self.tags), source=self.source)
+            get_model_version=lambda name, version: SimpleNamespace(run_id=RUN, tags=dict(self.tags), source=self.source),
+            get_run=lambda run_id: SimpleNamespace(info=SimpleNamespace(artifact_uri=ARTIFACT_URI)),
         )
 
     def load_model(self, uri: str) -> Any:
@@ -177,10 +246,34 @@ class Registry:
             self.direct_reads += 1
             raise RuntimeError(f"MlflowException: Failed to download artifacts from path {artifact_path!r}, please ensure that the path is correct.")
         self.default_calls.append({"run_id": run_id, "artifact_path": artifact_path, "dst_path": dst_path})
-        target = Path(dst_path or tempfile.mkdtemp()) / artifact_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(self.files[artifact_path])
-        return str(target)
+        return self.server.download_artifacts(artifact_path, str(dst_path or tempfile.mkdtemp()))
+
+    def modules(self) -> dict[str, Any]:
+        """The MLflow modules the default fetch imports, over the same server: the repository of the run, the credentials and the streamed request."""
+
+        class HttpArtifactRepository:
+            artifact_uri = ARTIFACT_URI
+            list_artifacts = staticmethod(self.server.list_artifacts)
+
+        def http_request(creds: Any, endpoint: str, method: str, **options: Any) -> Any:
+            if method != "GET" or options != {"stream": True}:
+                raise AssertionError(f"the download is a streamed GET: {method} {options}")
+            return self.server.get(endpoint.removeprefix("/"))
+
+        def raise_for_status(response: Any) -> None:
+            if response.status != 200:
+                raise RuntimeError(f"MlflowException: HTTP {response.status}")
+
+        return {
+            "mlflow": self,
+            "mlflow.store": SimpleNamespace(),
+            "mlflow.store.artifact": SimpleNamespace(),
+            "mlflow.store.artifact.artifact_repository_registry": SimpleNamespace(get_artifact_repository=lambda uri: HttpArtifactRepository()),
+            "mlflow.store.artifact.http_artifact_repo": SimpleNamespace(HttpArtifactRepository=HttpArtifactRepository),
+            "mlflow.utils": SimpleNamespace(),
+            "mlflow.utils.credentials": SimpleNamespace(get_default_host_creds=lambda uri: SimpleNamespace(host=uri)),
+            "mlflow.utils.rest_utils": SimpleNamespace(http_request=http_request, augmented_raise_for_status=raise_for_status),
+        }
 
 
 @dataclass
@@ -191,6 +284,7 @@ class World:
     skops: Skops
     registry: Registry
     closure: str
+    server: Server
 
     def attempt(self, use_default_fetch: bool = False) -> tuple[Any, Exception | None]:
         try:
@@ -227,6 +321,8 @@ def world(
     source: str | None = None,
     predictor: Callable[[list[dict[str, Any]]], Any] = default_predictor,
     model_bytes: bytes = b"SKOPS-STAND-IN",
+    long: Mapping[str, int] | None = None,
+    other: Mapping[str, Callable[[str, bytes], str]] | None = None,
 ) -> Iterator[World]:
     """One serving image over stand-in libraries. Edits change the good documents; ``raw`` replaces whole files; every temporary file lands in ``tmp``."""
     with tempfile.TemporaryDirectory() as base, contextlib.ExitStack() as stack:
@@ -244,9 +340,11 @@ def world(
         files |= dict(raw or {})
         for path in drop:
             files.pop(path, None)
-        run = Run(files, dict(failing or {}))
-        registry = Registry({"feature_schema_sha256": "hash1"} if tags is None else tags, f"runs:/{RUN}/model" if source is None else source)
-        registry.files = files
+        run = Run(files, dict(failing or {}), dict(other or {}))
+        server = Server(files)
+        server.watch = tmp
+        server.long = dict(long or {})
+        registry = Registry({"feature_schema_sha256": "hash1"} if tags is None else tags, f"runs:/{RUN}/model" if source is None else source, server)
         skops = Skops(predictor)
         versions = dict(LIBRARIES) if installed is None else dict(installed)
 
@@ -256,12 +354,12 @@ def world(
             return versions[name]
 
         stack.enter_context(
-            mock.patch.dict(sys.modules, {"mlflow": registry, "pandas": SimpleNamespace(DataFrame=lambda rows: rows), "skops": skops, "skops.io": skops})
+            mock.patch.dict(sys.modules, {**registry.modules(), "pandas": SimpleNamespace(DataFrame=lambda rows: rows), "skops": skops, "skops.io": skops})
         )
         stack.enter_context(mock.patch.dict(os.environ, {key: value for key, value in os.environ.items() if key != PROXY_SWITCH}, clear=True))
         stack.enter_context(mock.patch.object(tempfile, "tempdir", str(tmp)))
         stack.enter_context(mock.patch.object(mlflow_loader, "installed_version", installed_version))
-        yield World(root, tmp, run, skops, registry, closure)
+        yield World(root, tmp, run, skops, registry, closure, server)
 
 
 def refused(c: Checker, label: str, expected: str, **options: Any) -> None:
@@ -593,23 +691,158 @@ def case_loader_logs_one_line_with_the_version_and_the_peak_memory(c: Checker) -
     )
 
 
-def case_loader_default_fetch_downloads_into_the_given_folder_through_the_tracking_server(c: Checker) -> None:
-    """With no ``fetch`` given, the loader calls ``mlflow.artifacts.download_artifacts(run_id, artifact_path, dst_path)`` with the loader's one folder as
-    ``dst_path`` and the proxy setting ``false`` set first: the presigned path that an S3 artifact store advertises is unreachable from the task."""
+def only_references_and_columns(document: dict[str, Any]) -> None:
+    for key in ("slot", "fitted_slot", "kept_references", "kept_columns"):
+        document.pop(key)
+
+
+def nested(depth: int) -> Any:
+    value: Any = 1
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def case_loader_default_fetch_stops_a_download_at_its_cap(c: Checker) -> None:
+    """The default fetch counts the bytes it writes and stops the transport at the path's cap: a response of 5 MiB for a 1 MiB cap is refused as
+    ``ArtifactRefused`` after the first chunk, the temporary folder never holds more than the cap plus one chunk (real MLflow wrote 2 MiB for the 1 MiB
+    JSON cap before the refusal) and nothing remains."""
+    size = 5 * MIB + 2
+    for path in FOUR:
+        with mock.patch.object(mlflow_loader, "MODEL_CAP", MIB), world(long={path: size}) as w:
+            model, error = w.attempt(use_default_fetch=True)
+            c.check(
+                f"{path}: a response of {size} bytes is refused as ArtifactRefused (got {type(error).__name__ if error else 'a loaded model'})",
+                model is None and type(error).__name__ == "ArtifactRefused",
+            )
+            c.check(f"{path}: the folder held at most the cap plus one chunk ({w.server.peak} bytes)", w.server.peak <= 2 * MIB)
+            c.check(f"{path}: the transport was stopped, {w.server.pulled.get(path)} chunks pulled", 1 <= w.server.pulled.get(path, 0) <= 2)
+            c.check(f"{path}: no downloaded file or folder remains", w.leftover() == [])
+    padded = canonical(good_documents("0" * 64)[FEATURE_LIST])
+    with world(raw={FEATURE_LIST: padded + b" " * (MIB - len(padded))}) as w:
+        model, error = w.attempt(use_default_fetch=True)
+        c.check(f"a feature list of exactly 1 MiB is read ({error!r})", model is not None)
+    with world(raw={FEATURE_LIST: padded + b" " * (MIB + 1 - len(padded))}) as w:
+        _, error = w.attempt(use_default_fetch=True)
+        c.check("a feature list of 1 MiB and one byte is refused as ArtifactRefused", type(error).__name__ == "ArtifactRefused" and w.leftover() == [])
+
+
+def case_loader_default_fetch_refuses_a_folder_without_fetching_a_descendant(c: Checker) -> None:
+    """A named path that is a folder is refused as ``ArtifactRefused`` for each of the four files, and no file below it is fetched (real MLflow downloaded
+    ``bundle/feature_list.json/unexpected.py`` when the named path was a folder)."""
+    for path in FOUR:
+        with world(raw={f"{path}/unexpected.py": b"print(1)"}, drop=(path,)) as w:
+            model, error = w.attempt(use_default_fetch=True)
+            c.check(
+                f"{path} as a folder: refused as ArtifactRefused (got {type(error).__name__ if error else 'a loaded model'})",
+                model is None and type(error).__name__ == "ArtifactRefused",
+            )
+            c.check(f"{path} as a folder: nothing below it was fetched ({w.server.reads})", not any(read.startswith(path + "/") for read in w.server.reads))
+            c.check(f"{path} as a folder: no downloaded file or folder remains", w.leftover() == [])
+
+
+def case_loader_default_fetch_writes_four_fixed_names_into_one_folder(c: Checker) -> None:
+    """A good load GETs exactly the four paths once each and writes them under the loader's four fixed names in one flat folder: the artifact never
+    chooses a local name or a subfolder."""
     with world() as w:
         model, error = w.attempt(use_default_fetch=True)
+        c.check(f"the load succeeds ({error!r})", model is not None)
+        c.check(f"the four paths were fetched once each ({w.server.reads})", sorted(w.server.reads) == sorted(FOUR))
         c.check(
-            f"the loader loads with the default fetch and no direct read of the artifact store ({error!r})", model is not None and w.registry.direct_reads == 0
+            f"the folder holds the four fixed names and no subfolder ({w.skops.folders})",
+            w.skops.folders == [["feature_list.json", "model.skops", "provenance.json", "self_check.json"]],
         )
-        c.check("it asked for exactly the four paths", sorted(call["artifact_path"] for call in w.registry.default_calls) == sorted(FOUR))
-        c.check("every call names the run", {call["run_id"] for call in w.registry.default_calls} == {RUN})
-        destinations = {call["dst_path"] for call in w.registry.default_calls}
+        c.check("the proxy setting is false before the first download", os.environ.get(PROXY_SWITCH) == "false" and w.registry.direct_reads == 0)
+        c.check("mlflow's recursive download call was never used", w.registry.default_calls == [])
+        c.check("nothing remains after the load", w.leftover() == [])
+
+
+def symlink_to_the_content(local: str, data: bytes) -> str:
+    real = Path(local).with_name("real_content")
+    real.write_bytes(data)
+    os.symlink(real, local)
+    return local
+
+
+def folder_instead_of_a_file(local: str, data: bytes) -> str:
+    os.mkdir(local)
+    return local
+
+
+def another_file(local: str, data: bytes) -> str:
+    other = Path(local).with_name("other_name")
+    other.write_bytes(data)
+    return str(other)
+
+
+def case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file(c: Checker) -> None:
+    """Whatever a fetch returns must be the regular file at the path the loader chose (no symlink, no folder, no other file), whatever its content."""
+    for path in FOUR:
+        for label, other in (("a symlink", symlink_to_the_content), ("a folder", folder_instead_of_a_file), ("another file", another_file)):
+            refused(c, f"{path} returned as {label}", "ArtifactRefused", other={path: other})
+    with world() as w:
+        w.attempt()
         c.check(
-            "every call has the same explicit destination, inside the temporary folder",
-            len(destinations) == 1 and None not in destinations and Path(str(next(iter(destinations)))).parent == w.tmp,
+            "each fetch got its path-specific cap: 1 MiB for the three JSON files, 64 MiB for the model",
+            dict(zip(w.run.paths, w.run.limits, strict=True)) == {FEATURE_LIST: MIB, PROVENANCE: MIB, SELF_CHECK: MIB, MODEL: 64 * MIB},
         )
-        c.check("the folder is gone after the load", w.leftover() == [])
-        c.check("the setting is false for every later download in the process", os.environ.get(PROXY_SWITCH) == "false")
+        c.check(
+            "each fetch got a local path with a fixed name in one folder",
+            sorted(Path(local).name for local in w.run.local_paths) == ["feature_list.json", "model.skops", "provenance.json", "self_check.json"],
+        )
+
+
+def case_loader_refuses_unknown_deep_or_oversized_fields_of_the_feature_list_and_provenance(c: Checker) -> None:
+    """The two bundle documents have closed shapes. Every case is refused as ``ArtifactRefused`` before admission and leaves no file. The values are the
+    reviewer's (a list nested 600 deep, a 300,000 character text, an array of 50,000) and the same under a permitted key."""
+    big_text, big_list, deep = "x" * 300_000, list(range(50_000)), nested(600)
+    for name, option in (("feature_list.json", "feature"), ("provenance.json", "provenance")):
+        for label, value in (("a small value", 1), ("a list nested 600 deep", deep), ("a 300,000 character text", big_text), ("an array of 50,000", big_list)):
+            refused(c, f"{name}: unknown key with {label}", "ArtifactRefused", **{option: set_key("unknown", value)})
+    for label, edit in (
+        ("slot that is a nested list", set_key("slot", nested(3))),
+        ("slot that is a number", set_key("slot", 1)),
+        ("slot of 300,000 characters", set_key("slot", "x" * 300_000)),
+        ("fitted_slot of 257 characters", set_key("fitted_slot", "x" * (mlflow_loader.MAX_TEXT + 1))),
+        ("fitted_slot that is a list", set_key("fitted_slot", ["m1"])),
+        ("kept_references of 50,000 elements", set_key("kept_references", ["r"] * 50_000)),
+        ("kept_references with a list inside", set_key("kept_references", [["a:1"]])),
+        ("kept_references nested 600 deep", set_key("kept_references", deep)),
+        ("kept_columns that is text", set_key("kept_columns", "a")),
+        ("kept_references and kept_columns of unequal length", lambda d: d.update(kept_references=["a:1"], kept_columns=[])),
+    ):
+        refused(c, f"feature_list.json: {label}", "ArtifactRefused", feature=edit)
+    for label, edit in (
+        ("inputs nested 600 deep", set_key("inputs", {"a": deep})),
+        ("inputs holding a 300,000 character text", set_key("inputs", {"a": "x" * 300_000})),
+        ("inputs that is a list", set_key("inputs", [1])),
+        ("timings holding 50,000 numbers", set_key("timings", {"a": big_list})),
+        ("timings with 50,000 keys", set_key("timings", {f"k{n}": n for n in range(50_000)})),
+        ("a key of 257 characters", set_key("timings", {"k" * 257: 1})),
+        ("run_id of 300,000 characters", set_key("run_id", "x" * 300_000)),
+        ("run_id that is a list", set_key("run_id", ["a"])),
+        ("git_dirty that is text", set_key("git_dirty", "no")),
+        ("try that is an object", set_key("try", {"a": 1})),
+        ("code_digest that is a number", set_key("code_digest", 5)),
+        ("a version text of 300,000 characters", lambda d: d["resolved_versions"].__setitem__("mlflow", "x" * 300_000)),
+        ("resolved_versions with an object value", lambda d: d["resolved_versions"].__setitem__("mlflow", {"a": 1})),
+    ):
+        refused(c, f"provenance.json: {label}", "ArtifactRefused", provenance=edit)
+    refused(
+        c,
+        "provenance.json: unknown key and a wrong closure: the shape comes before admission",
+        "ArtifactRefused",
+        provenance=lambda d: d.update(unknown=1, model_code_closure_sha256="0" * 64),
+    )
+    with world(feature=only_references_and_columns) as w:
+        model, error = w.attempt()
+        c.check(f"a feature list with only references and columns still loads ({error!r})", model is not None)
+    with world(feature=lambda d: d.update(slot=None, fitted_slot=None, kept_references=[], kept_columns=[])) as w:
+        model, error = w.attempt()
+        c.check(f"a feature list of a run that fitted no slot (null slots, empty kept lists) loads ({error!r})", model is not None)
+    with world(provenance=lambda d: d.update(git_commit=None, git_dirty=None, run_id=None, **{"try": 2})) as w:
+        model, error = w.attempt()
+        c.check(f"a provenance with null commit, dirty flag and run_id and an integer try loads ({error!r})", model is not None)
 
 
 def case_loader_reads_the_feature_set_from_the_tags(c: Checker) -> None:
@@ -703,8 +936,18 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
         "mlflow loader",
     ),
     "loader_logs_one_line_with_the_version_and_the_peak_memory": (case_loader_logs_one_line_with_the_version_and_the_peak_memory, "mlflow loader"),
-    "loader_default_fetch_downloads_into_the_given_folder_through_the_tracking_server": (
-        case_loader_default_fetch_downloads_into_the_given_folder_through_the_tracking_server,
+    "loader_default_fetch_stops_a_download_at_its_cap": (case_loader_default_fetch_stops_a_download_at_its_cap, "mlflow loader"),
+    "loader_default_fetch_refuses_a_folder_without_fetching_a_descendant": (
+        case_loader_default_fetch_refuses_a_folder_without_fetching_a_descendant,
+        "mlflow loader",
+    ),
+    "loader_default_fetch_writes_four_fixed_names_into_one_folder": (case_loader_default_fetch_writes_four_fixed_names_into_one_folder, "mlflow loader"),
+    "loader_refuses_a_fetch_that_returns_anything_but_the_expected_file": (
+        case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file,
+        "mlflow loader",
+    ),
+    "loader_refuses_unknown_deep_or_oversized_fields": (
+        case_loader_refuses_unknown_deep_or_oversized_fields_of_the_feature_list_and_provenance,
         "mlflow loader",
     ),
     "loader_reads_the_feature_set": (case_loader_reads_the_feature_set_from_the_tags, "mlflow loader feast"),

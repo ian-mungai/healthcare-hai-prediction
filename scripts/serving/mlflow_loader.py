@@ -3,7 +3,9 @@
 The image holds the code of the trusted model types (``data_contracts/training/model_code.json`` lists its files), so a load needs only the model artifact's
 data: the loader downloads four files of the version's source run, never ``model/MLmodel`` and never ``model/code/``, and never calls
 ``mlflow.sklearn.load_model``.
-Every download goes through one ``fetch`` call into one temporary folder that exists for one load and is removed when the load ends, with or without a refusal.
+Every download goes through one ``fetch`` call, which streams one named file to a local path with a fixed name, inside one temporary folder that exists for
+one load and is removed when the load ends, with or without a refusal. The fetch counts the bytes it writes against the file's cap and stops at the first
+byte over it. It never asks MLflow to download a path as a folder: a path that is a folder is refused before any byte of a file below it is fetched.
 
 The steps of one load: the registry's source must be ``runs:/<run_id>/model``; the version tags give the schema hash and the feature set; the feature list
 (``bundle/feature_list.json``) and the provenance (``bundle/provenance.json``) are checked as data; the model is admitted only when its recorded closure digest
@@ -23,11 +25,13 @@ import json
 import logging
 import math
 import os
+import posixpath
 import re
 import resource
+import stat
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -53,13 +57,24 @@ MODEL_CAP = 64 * 1024 * 1024
 MAX_FEATURES = 2000
 MAX_TEXT = 256
 MAX_ROWS = 8
+# The local names of the four files: the loader chooses them, the artifact never does.
+LOCAL_NAMES = {FEATURE_LIST: "feature_list.json", PROVENANCE: "provenance.json", SELF_CHECK: "self_check.json", MODEL: "model.skops"}
+STREAM_CHUNK = 1024 * 1024
 SELF_CHECK_KEYS = {"schema", "slot", "references", "rows", "predictions"}
+# The keys the training writer writes (``scripts/training/bundle.py``: ``feature_list_document`` and ``build``). Any other key is refused. The nested
+# metadata of a permitted key is checked under three budgets: values nested at most ``MAX_DEPTH`` containers deep, at most ``MAX_ENTRIES`` entries in one
+# container and at most ``MAX_NODES`` values in a document. The real ``inputs`` value nests three deep (inputs, auxiliary_files, one file's record).
+FEATURE_LIST_KEYS = {"slot", "references", "columns", "fitted_slot", "kept_references", "kept_columns"}
+PROVENANCE_KEYS = {"run_id", "timings", "try", "git_commit", "git_dirty", "code_digest", "resolved_versions", CLOSURE_KEY, "inputs"}
+MAX_DEPTH = 4
+MAX_ENTRIES = 64
+MAX_NODES = 1024
 # The prediction check: ``math.isclose(got, saved, rel_tol=REL_TOL, abs_tol=ABS_TOL)``. Equal closure and library versions leave only floating-point summation
 # order to differ (about 1e-15 relative), so 1e-9 leaves six orders of headroom and a wrong feature order or a changed model differs by far more.
 REL_TOL = 1e-9
 ABS_TOL = 1e-12
 
-Fetch = Callable[[str, str, str], str]
+Fetch = Callable[[str, str, str, int], str]
 
 
 class ArtifactRefused(ValueError):
@@ -94,10 +109,42 @@ def installed_version(name: str) -> str:
     return importlib.metadata.version(name)
 
 
-def mlflow_fetch(run_id: str, artifact_path: str, destination: str) -> str:
-    """Download one file of a run into ``destination`` and return its local path (the MLflow call with an explicit destination)."""
+def write_limited(chunks: Iterable[bytes], local_path: str, limit: int, name: str) -> None:
+    """Write the chunks to a new file at ``local_path`` (never through a link). The running total is checked before each write, so a chunk that would pass
+    ``limit`` is not written and the transport is not read any further."""
+    written = 0
+    with os.fdopen(os.open(local_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as stream:
+        for chunk in chunks:
+            if written + len(chunk) > limit:
+                raise ArtifactRefused(f"{name} is over {limit} bytes")
+            stream.write(chunk)
+            written += len(chunk)
+
+
+def mlflow_fetch(run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
+    """Stream one file of a run to ``local_path`` and return that path, never more than ``limit`` bytes.
+
+    It does not call ``download_artifacts``, which lists the path and downloads every file below a folder with no limit (MLflow 3.17.2
+    ``artifact_repo.py:346``, ``http_artifact_repo.py:145``). It lists the path once, refuses a folder, then sends the one streamed GET of
+    ``_download_file`` and counts each chunk.
+    """
     mlflow = importlib.import_module("mlflow")
-    return str(mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=artifact_path, dst_path=destination))
+    registry = importlib.import_module("mlflow.store.artifact.artifact_repository_registry")
+    http = importlib.import_module("mlflow.store.artifact.http_artifact_repo")
+    credentials = importlib.import_module("mlflow.utils.credentials")
+    rest = importlib.import_module("mlflow.utils.rest_utils")
+    repository = registry.get_artifact_repository(mlflow.MlflowClient().get_run(run_id).info.artifact_uri)
+    if not isinstance(repository, http.HttpArtifactRepository):
+        raise ArtifactRefused("the run's artifacts are not served by the tracking server")
+    if repository.list_artifacts(artifact_path):
+        raise ArtifactRefused(f"{artifact_path} is a folder, not a file")
+    response = rest.http_request(credentials.get_default_host_creds(repository.artifact_uri), posixpath.join("/", artifact_path), "GET", stream=True)
+    try:
+        rest.augmented_raise_for_status(response)
+        write_limited(response.iter_content(chunk_size=STREAM_CHUNK), local_path, limit, artifact_path)
+    finally:
+        response.close()
+    return local_path
 
 
 def image_closure(root: Path) -> str:
@@ -142,19 +189,78 @@ def text_list(document: Mapping[str, Any], key: str, name: str) -> list[str]:
     return values
 
 
+def optional_text(value: Any, name: str) -> None:
+    if value is not None and not (isinstance(value, str) and len(value) <= MAX_TEXT):
+        raise ArtifactRefused(f"{name} must be null or text of at most {MAX_TEXT} characters")
+
+
+def check_metadata(value: Any, name: str, nodes: list[int]) -> None:
+    """Check a nested JSON value under the three budgets: null, a boolean, a finite number or short text, in objects and lists of at most ``MAX_DEPTH``
+    containers deep with at most ``MAX_ENTRIES`` entries each, and at most ``MAX_NODES`` values in the whole document (``nodes`` counts across calls).
+    It walks with a list of pending values, so a deep value never reaches the parser's recursion limit."""
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        nodes[0] += 1
+        if nodes[0] > MAX_NODES:
+            raise ArtifactRefused(f"{name} holds more than {MAX_NODES} values")
+        if isinstance(item, dict | list):
+            if depth > MAX_DEPTH or len(item) > MAX_ENTRIES:
+                raise ArtifactRefused(f"{name} nests more than {MAX_DEPTH} deep or holds more than {MAX_ENTRIES} entries in one object or list")
+            if isinstance(item, dict):
+                if not all(isinstance(key, str) and len(key) <= MAX_TEXT for key in item):
+                    raise ArtifactRefused(f"{name} holds a key that is not text of at most {MAX_TEXT} characters")
+                item = list(item.values())
+            pending.extend((child, depth + 1) for child in item)
+        elif not (item is None or isinstance(item, bool) or (isinstance(item, str) and len(item) <= MAX_TEXT) or finite_number(item)):
+            raise ArtifactRefused(f"{name} holds a value that is not null, a boolean, a finite number or text of at most {MAX_TEXT} characters")
+
+
 def check_feature_list(document: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The closed shape of ``bundle/feature_list.json``: the six keys the writer writes. ``references`` and ``columns`` are required; the slots are null or text
+    and the two kept lists, when present, are texts of equal length."""
     if not isinstance(document, dict):
         raise ArtifactRefused(f"{FEATURE_LIST} must be one JSON object")
+    if not set(document) <= FEATURE_LIST_KEYS:
+        raise ArtifactRefused(f"{FEATURE_LIST} holds a key outside {sorted(FEATURE_LIST_KEYS)}")
     references, columns = text_list(document, "references", FEATURE_LIST), text_list(document, "columns", FEATURE_LIST)
     if len(references) != len(columns):
         raise ArtifactRefused(f"{FEATURE_LIST} must list as many columns as references")
+    for key in ("slot", "fitted_slot"):
+        optional_text(document.get(key), f"{FEATURE_LIST} {key}")
+    kept = [text_list(document, key, FEATURE_LIST) for key in ("kept_references", "kept_columns") if key in document]
+    if len(kept) == 1 or (kept and len(kept[0]) != len(kept[1])):
+        raise ArtifactRefused(f"{FEATURE_LIST} must hold kept_references and kept_columns together, of equal length")
     return tuple(references), tuple(columns)
 
 
-def check_admission(provenance: Any, closure: str) -> None:
-    """Exact equality: the closure digest, then the four library versions."""
+def check_provenance_shape(provenance: Any) -> None:
+    """The closed shape of ``bundle/provenance.json``: the nine keys the writer writes, each value of its kind and within the metadata budgets."""
     if not isinstance(provenance, dict):
         raise ArtifactRefused(f"{PROVENANCE} must be one JSON object")
+    if not set(provenance) <= PROVENANCE_KEYS:
+        raise ArtifactRefused(f"{PROVENANCE} holds a key outside {sorted(PROVENANCE_KEYS)}")
+    nodes = [0]
+    for key, value in provenance.items():
+        check_metadata(value, f"{PROVENANCE} {key}", nodes)
+    for key in ("run_id", "git_commit", "code_digest"):
+        optional_text(provenance.get(key), f"{PROVENANCE} {key}")
+    dirty, attempt = provenance.get("git_dirty"), provenance.get("try")
+    if not (dirty is None or isinstance(dirty, bool)):
+        raise ArtifactRefused(f"{PROVENANCE} git_dirty must be null or a boolean")
+    if attempt is not None and not (isinstance(attempt, int | str) and not isinstance(attempt, bool)):
+        raise ArtifactRefused(f"{PROVENANCE} try must be null, an integer or text")
+    for key in ("timings", "inputs"):
+        if key in provenance and not isinstance(provenance[key], dict):
+            raise ArtifactRefused(f"{PROVENANCE} {key} must be an object")
+    versions = provenance.get("resolved_versions", {})
+    if not isinstance(versions, dict) or not all(version is None or isinstance(version, str) for version in versions.values()):
+        raise ArtifactRefused(f"{PROVENANCE} resolved_versions must be an object of texts and nulls")
+
+
+def check_admission(provenance: Any, closure: str) -> None:
+    """The closed shape of the provenance, then exact equality: the closure digest, then the four library versions."""
+    check_provenance_shape(provenance)
     recorded = provenance.get(CLOSURE_KEY)
     if recorded is None:
         raise ModelCodeMissing(f"{PROVENANCE} holds no {CLOSURE_KEY}")
@@ -167,8 +273,6 @@ def check_admission(provenance: Any, closure: str) -> None:
         raise ArtifactRefused(f"{PROVENANCE} must hold resolved_versions as an object")
     for library in LIBRARIES:
         trained = versions.get(library)
-        if trained is not None and not isinstance(trained, str):
-            raise ArtifactRefused(f"the recorded version of {library} must be text or null")
         try:
             installed: str | None = installed_version(library)
         except importlib.metadata.PackageNotFoundError:
@@ -240,7 +344,8 @@ class MlflowLoader:
     def __init__(self, fetch: Fetch | None = None, root: Path = ROOT) -> None:
         """Check the image's own model code against its record (the start of the process fails when they differ), then read the image's contract.
 
-        ``fetch(run_id, artifact_path, destination)`` downloads one file into ``destination`` and returns its path; the default is the MLflow download call.
+        ``fetch(run_id, artifact_path, local_path, limit)`` writes the one file at ``local_path``, which the loader chose, never more than ``limit`` bytes, and
+        returns ``local_path``; the default streams it from the tracking server.
         """
         self._fetch: Fetch = fetch or mlflow_fetch
         self.closure = image_closure(root)
@@ -248,8 +353,8 @@ class MlflowLoader:
 
     def load(self, hai_type: str, version: str) -> LoadedModel:
         # The task reaches the tracking server only. With no setting, the 3.17.2 client asks the server's /server-info, which advertises presigned downloads
-        # for an S3 artifact destination, and reads each file straight from S3. A failure of that read is hidden behind one MlflowException. Setting
-        # ``false`` before any client or download exists keeps the run file download on the tracking server.
+        # for an S3 artifact destination, and reads each file straight from S3. Setting ``false`` before any client exists keeps any later MLflow download on
+        # the tracking server; the default fetch already sends its own streamed GET there.
         os.environ[PROXY_DOWNLOADS] = "false"
         mlflow = importlib.import_module("mlflow")
         pandas = importlib.import_module("pandas")
@@ -266,32 +371,45 @@ class MlflowLoader:
             schema_hash = str(info.tags["feature_set_schema_sha256"])
         else:
             schema_hash = str(info.tags["feature_schema_sha256"])
-        # One folder for this load: every download lands in it, and it is removed when the ``with`` ends, after skops and the self-check or at a refusal.
+        # One folder for this load: every download lands in it under a fixed name, and it is removed when the ``with`` ends, after skops and the
+        # self-check or at a refusal.
         sizes: dict[str, int] = {}
 
-        def download(path: str, folder: str) -> str:
-            local = self._fetch(info.run_id, path, folder)
-            sizes[path] = os.stat(local).st_size
+        def download(path: str, folder: str, limit: int) -> str:
+            """Fetch one file to its fixed local name and require that to be a regular file (no link, folder or other file) of at most ``limit`` bytes."""
+            local = os.path.join(folder, LOCAL_NAMES[path])
+            returned = self._fetch(info.run_id, path, local, limit)
+            try:
+                status = os.lstat(local)
+            except OSError as error:
+                raise ArtifactRefused(f"{path} was not written to its local file") from error
+            if os.fspath(returned) != local or not stat.S_ISREG(status.st_mode):
+                raise ArtifactRefused(f"{path} is not one regular file at the path the loader chose")
+            if status.st_size > limit:
+                raise ArtifactRefused(f"{path} is over {limit} bytes")
+            sizes[path] = status.st_size
             return local
 
         with tempfile.TemporaryDirectory(prefix="model_load_") as folder:
-            references, columns = check_feature_list(read_json(download(FEATURE_LIST, folder), FEATURE_LIST))
+            references, columns = check_feature_list(read_json(download(FEATURE_LIST, folder, JSON_CAP), FEATURE_LIST))
             if feature_set and not references:
                 raise ValueError("the model version names a feature set but its feature list has no references")
             try:
-                recorded = download(PROVENANCE, folder)
+                recorded = download(PROVENANCE, folder, JSON_CAP)
+            except ArtifactRefused:
+                raise
             except Exception as error:
                 raise ModelCodeMissing(f"{PROVENANCE} cannot be downloaded") from error
             provenance = read_json(recorded, PROVENANCE)
             check_admission(provenance, self.closure)
             try:
-                saved = download(SELF_CHECK, folder)
+                saved = download(SELF_CHECK, folder, JSON_CAP)
+            except ArtifactRefused:
+                raise
             except Exception as error:
                 raise SelfCheckMissing(f"{SELF_CHECK} cannot be downloaded") from error
             rows, predictions = check_self_check(read_json(saved, SELF_CHECK), references)
-            model_path = download(MODEL, folder)
-            if sizes[MODEL] > MODEL_CAP:
-                raise ArtifactRefused(f"{MODEL} is over {MODEL_CAP} bytes")
+            model_path = download(MODEL, folder, MODEL_CAP)
             pipeline: Any = importlib.import_module("skops.io").load(model_path, trusted=list(self._contract["serialization"]["trusted_types"]))
 
             def predict(values: Mapping[str, Any]) -> float:
