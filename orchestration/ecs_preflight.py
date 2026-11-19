@@ -26,7 +26,7 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 
-from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
+from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable, failure_message
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.ecs_lineage import invocation_text
 from orchestration.ingestion_schedule import RETRY_FIRST_DAY, RETRY_KIND, RETRY_LAST_DAY, retry_run_id
@@ -860,7 +860,7 @@ class Preflight:
         if claim is not None:
             end = {record["event"]: record for record in self.store.records(input_run, after, [claim["attempt"]])}.get("end")
         if end is None or end.get("outcome") != "succeeded":
-            why = f" ({end['failure']})" if end is not None and end.get("failure") else ""
+            why = f" ({failure_message(end)})" if failure_message(end) else ""
             raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed{why}")
 
     def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:

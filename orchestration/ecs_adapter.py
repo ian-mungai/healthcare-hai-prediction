@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -45,7 +45,6 @@ ACCOUNT = re.compile(r"\b[0-9]{12}\b")
 FAILURE_MARKER = "phase_failure: "
 FAILURE_VERSION = 1
 FAILURE_MAX_CODES = 8
-FAILURE_MAX_FACT = 1 << 62
 FAILURE_MAX_LINE = 2000
 FAILURE_PHASES = (
     "init",
@@ -153,7 +152,30 @@ FAILURE_CONTAINER_CODES = (
     "container_timeout",
 )
 FAILURE_CODES = (*FAILURE_STARTUP_CODES, *FAILURE_CAPACITY_CODES, *FAILURE_ERROR_CODES, *FAILURE_CONTAINER_CODES)
-FAILURE_FACTS = ("available", "engine_floor", "exit_code", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
+FAILURE_LINE_FACTS = ("available", "engine_floor", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
+FAILURE_FACTS = (*FAILURE_LINE_FACTS, "exit_code")
+# The fixed figures and the ranges of the facts (the writer's, which a test keeps equal). A refusal of the capacity module is fixed by its memory and its
+# count of other containers, so a fact is accepted only for its code, in its range and consistent with the others.
+FAILURE_ENGINE_FLOOR = 2 * GIB
+FAILURE_SPILL_FLOOR = GIB
+FAILURE_SIBLING_RESERVE = 256 * (1 << 20)
+FAILURE_HEADROOM_FLOOR = GIB
+FAILURE_HEADROOM_PERCENT = 6
+FAILURE_SPILL_SHARE_PERCENT = 60
+FAILURE_MAX_SIBLINGS = 10
+FAILURE_RANGES = {
+    "available": (-(1 << 44), FAILURE_ENGINE_FLOOR - 1),
+    "engine_floor": (FAILURE_ENGINE_FLOOR, FAILURE_ENGINE_FLOOR),
+    "exit_code": (1, 255),
+    "headroom": (FAILURE_HEADROOM_FLOOR, 1 << 44),
+    "memory": (1 << 20, 1 << 44),
+    "sibling_reserve": (0, FAILURE_MAX_SIBLINGS * FAILURE_SIBLING_RESERVE),
+    "siblings": (0, FAILURE_MAX_SIBLINGS),
+    "spill_floor": (FAILURE_SPILL_FLOOR, FAILURE_SPILL_FLOOR),
+    "spill_free": (0, 1 << 50),
+}
+FAILURE_ENGINE_FACTS = frozenset({"memory", "headroom", "siblings", "sibling_reserve", "available", "engine_floor"})
+FAILURE_SPILL_FACTS = frozenset({"spill_free", "spill_floor"})
 FAILURE_BYTE_FACTS = ("available", "engine_floor", "headroom", "memory", "sibling_reserve", "spill_floor", "spill_free")
 # Where a stored record came from: the phase's own line (``job``), the state of the task alone (``task``) or the guard that reported its own time limit
 # (``guard``).
@@ -298,8 +320,31 @@ def scrub(text: str) -> str:
     return ACCOUNT.sub("[account]", ARN.sub("[arn]", text))[:REASON_LIMIT]
 
 
-def fact_ok(value: object) -> bool:
-    return type(value) is int and abs(value) <= FAILURE_MAX_FACT
+def facts_fit(codes: Sequence[str], facts: Mapping[str, object], *, stored: bool) -> bool:
+    """Whether the facts belong to the codes and are what a refusal of the capacity module can produce (the writer's ``facts_fit``, kept equal by a test):
+    only the facts of the capacity codes present, and the exit code in a stored record, each an integer in its range, and the figures of a refusal consistent
+    with the fixed floors."""
+    allowed = FAILURE_FACTS if stored else FAILURE_LINE_FACTS
+    for name, value in facts.items():
+        low, high = FAILURE_RANGES.get(name, (1, 0))
+        if name not in allowed or type(value) is not int or not low <= value <= high:
+            return False
+    figures: dict[str, int] = {name: value for name, value in facts.items() if isinstance(value, int)}
+    need: set[str] = set()
+    if "capacity_engine_floor" in codes:
+        need |= FAILURE_ENGINE_FACTS
+    if "capacity_spill_floor" in codes:
+        need |= FAILURE_SPILL_FACTS
+    if {name for name in figures if name != "exit_code"} != need:
+        return False
+    if "capacity_engine_floor" in codes:
+        memory, siblings = figures["memory"], figures["siblings"]
+        headroom = max(FAILURE_HEADROOM_FLOOR, memory * FAILURE_HEADROOM_PERCENT // 100)
+        reserve = siblings * FAILURE_SIBLING_RESERVE
+        expected = (headroom, reserve, memory - headroom - reserve)
+        if (figures["headroom"], figures["sibling_reserve"], figures["available"]) != expected or figures["available"] >= FAILURE_ENGINE_FLOOR:
+            return False
+    return not ("capacity_spill_floor" in codes and figures["spill_free"] * FAILURE_SPILL_SHARE_PERCENT // 100 >= FAILURE_SPILL_FLOOR)
 
 
 def closed_failure(record: object, *, stored: bool) -> dict[str, Any] | None:
@@ -316,7 +361,7 @@ def closed_failure(record: object, *, stored: bool) -> dict[str, Any] | None:
         and len(set(map(str, codes))) == len(codes)
         and all(isinstance(code, str) and code in FAILURE_CODES for code in codes)
         and isinstance(facts, dict)
-        and all(isinstance(name, str) and name in FAILURE_FACTS and fact_ok(value) for name, value in facts.items())
+        and facts_fit(codes, facts, stored=stored)
         and (not stored or (record["container"] in FAILURE_PHASES and record["source"] in FAILURE_SOURCES))
     )
     if not valid or not isinstance(record["phase"], str):
@@ -372,6 +417,14 @@ def render_failure(record: Mapping[str, Any]) -> str:
     values.update({f"{name}_gib": f"{facts[name] / GIB:.2f}" for name in FAILURE_BYTE_FACTS if name in facts})
     shown = "; ".join(FAILURE_TEMPLATES[code].format_map(defaultdict(lambda: "?", values)) for code in record["codes"])
     return f"phase {record['phase']} failed in container {record['container']}: {shown}"
+
+
+def failure_message(end: Mapping[str, Any] | None) -> str:
+    """The message of the closed failure record of an end record, from the fixed templates (validated again), or an empty string when it holds none. Every
+    consumer of an end record shows this and never the record itself."""
+    if end is None or "failure" not in end:
+        return ""
+    return render_failure(stored_failure(end["failure"]))
 
 
 def classify(error: Exception) -> Exception:

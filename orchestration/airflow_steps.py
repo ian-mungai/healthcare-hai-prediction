@@ -28,7 +28,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration import layer_report, promotion_chain
-from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config
+from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config, failure_message
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_lineage import (
@@ -399,7 +399,7 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
         end = {record["event"]: record for record in store.records(request.run_id, job, [claim["attempt"]])}.get("end")
     if claim is None or end is None or end.get("outcome") != "succeeded":
         found = end.get("outcome") if end is not None else "no end record"
-        why = f" ({end['failure']})" if end is not None and end.get("failure") else ""
+        why = f" ({failure_message(end)})" if failure_message(end) else ""
         raise LaunchRefused(f"no successful launch of {job} is recorded for run {request.run_id}: {found}{why}")
     result: dict[str, Any] = {"job": job, "run_id": request.run_id, "attempt": claim["attempt"], "task_arn": end.get("task_arn", "")}
     if job in layer_report.LAYERS:

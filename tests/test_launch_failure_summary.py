@@ -19,6 +19,7 @@ from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import Preflight
 from scripts import phase_failure
 from scripts.orchestration.ecs_launch_cases import RUN, Rig, spec
+from tests.failure_support import engine_facts
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,11 +40,9 @@ HOSTILE = [
     "111111\n111111",
     ASSIGNMENT,
 ]
-FLOOR = phase_failure.record(
-    "build",
-    ["capacity_engine_floor"],
-    {"memory": 1 << 30, "headroom": 1 << 30, "siblings": 1, "sibling_reserve": 1 << 28, "available": -(1 << 28), "engine_floor": 2 << 30},
-)
+FLOOR = phase_failure.record("build", ["capacity_engine_floor"], engine_facts())
+# What the messages of the end record say for that refusal: every figure comes from the record itself, and the wording from fixed templates.
+FLOOR_TEXT = "only -0.25 GiB is left for the engines, below the floor of 2.00 GiB (memory 1.00 GiB, headroom 1.00 GiB, 1 other containers)"
 
 
 def gold_spec(attempt: int = 1, containers: list[str] | None = None) -> Any:
@@ -82,14 +81,17 @@ def stored(rig: Rig, attempt: int = 1) -> dict[str, Any]:
 def test_the_closed_record_of_the_failed_phase_is_kept_in_the_end_record_and_rendered_from_templates() -> None:
     rig, launcher, launch = ended({"build": 1, "publish": None}, {"build": ["noise", phase_failure.line(FLOOR)]})
     outcome = launcher.conclude(launch)
-    expected = {"v": 1, "phase": "build", "codes": ["capacity_engine_floor"], "facts": FLOOR["facts"], "container": "build", "source": "job"}
+    expected = {
+        "v": 1,
+        "phase": "build",
+        "codes": ["capacity_engine_floor"],
+        "facts": {**FLOOR["facts"], "exit_code": 1},
+        "container": "build",
+        "source": "job",
+    }
     check(outcome.outcome == "failed" and outcome.exit_code == 1, f"the launch still fails with its exit code: {outcome}")
     check(stored(rig).get("failure") == expected, f"the durable end record holds the closed record: {stored(rig)}")
-    check(
-        "phase build" in outcome.failure and "engine floor" in outcome.failure.lower() or "floor" in outcome.failure,
-        f"the message is rendered from the template: {outcome.failure!r}",
-    )
-    check("0.25" in outcome.failure or "-0.25" in outcome.failure, f"with the capacity facts: {outcome.failure!r}")
+    check(outcome.failure == f"phase build failed in container build: {FLOOR_TEXT}", f"the message is rendered from the template: {outcome.failure!r}")
 
 
 @pytest.mark.parametrize("text", HOSTILE)
@@ -201,7 +203,7 @@ def test_a_failure_after_publish_shows_its_own_log_and_not_the_log_of_a_successf
     exits[name] = 1
     exits["guard"] = 1
     logs = {phase: [f"{phase} finished successfully"] for phase in LAYER[:failing]}
-    logs[name] = ["last words", phase_failure.line(phase_failure.record(name, ["phase_failed"], {"exit_code": 1}))]
+    logs[name] = ["last words", phase_failure.line(phase_failure.record(name, ["phase_failed"]))]
     found = diagnose(exits, logs)
     check(found.record["container"] == name and found.record["phase"] == name, f"{name}: {found.record}")
     check(
@@ -286,12 +288,12 @@ def test_a_killed_container_with_a_memory_reason_is_a_primary_failure() -> None:
 
 def finished_gold(rig: Rig, line: str | None = None) -> Launcher:
     launcher = rig.launcher()
-    job = spec(environment={"gold": {"RUN_ID": RUN}, "verify": {"RUN_ID": RUN}}, log_container="verify", log_prefix="gold")
+    job = spec(environment={"build": {"RUN_ID": RUN}, "publish": {"RUN_ID": RUN}}, log_container="publish", log_prefix="gold")
     launch = launcher.attach(job)
     launcher.start(launch)
     if line:
-        rig.logs.streams[f"gold/gold/{(launch.arn or '').rsplit('/', 1)[-1]}"] = [line]
-    rig.ecs.finish(launch.arn or "", {"gold": 3})
+        rig.logs.streams[f"gold/build/{(launch.arn or '').rsplit('/', 1)[-1]}"] = [line]
+    rig.ecs.finish(launch.arn or "", {"build": 3})
     launcher.wait(launch)
     launcher.conclude(launch)
     return launcher
@@ -301,24 +303,28 @@ def test_the_evidence_task_shows_the_rendered_record_and_still_refuses() -> None
     from scripts.orchestration.raw_lineage_cases import run_evidence
 
     rig = Rig()
-    finished_gold(rig, phase_failure.line(phase_failure.record("gold", ["capacity_engine_floor"], FLOOR["facts"])))
+    finished_gold(rig, phase_failure.line(phase_failure.record("build", ["capacity_engine_floor"], engine_facts())))
     with pytest.raises(LaunchRefused) as caught:
         run_evidence(rig)
-    check("failed" in str(caught.value) and "floor" in str(caught.value), f"the refusal shows the rendered record: {caught.value}")
+    check(
+        f"phase build failed in container build: {FLOOR_TEXT}" in str(caught.value), f"the refusal shows the rendered message, not the record: {caught.value}"
+    )
+    check("capacity_engine_floor" not in str(caught.value) and "{" not in str(caught.value), f"and no dictionary: {caught.value}")
 
 
 def test_the_operator_error_and_the_gate_input_check_name_the_rendered_record() -> None:
     from scripts.orchestration.ecs_launch_operator_cases import context, operator
 
     rig = Rig()
-    finished_gold(rig, phase_failure.line(phase_failure.record("gold", ["capacity_engine_floor"], FLOOR["facts"])))
+    finished_gold(rig, phase_failure.line(phase_failure.record("build", ["capacity_engine_floor"], engine_facts())))
     with pytest.raises(JobFailed) as caught:
-        operator(rig, 2, log_container="verify").execute(context(2))
-    check("floor" in str(caught.value), f"the failed job's error names the record: {caught.value}")
+        operator(rig, 2, log_container="publish").execute(context(2))
+    check(f"phase build failed in container build: {FLOOR_TEXT}" in str(caught.value), f"the failed job's error names the record: {caught.value}")
     gate = cast(Any, SimpleNamespace(store=rig.launcher().store))
     with pytest.raises(LaunchRefused) as refused:
         Preflight.require_passed(gate, "publish", "gold", RUN)
-    check("floor" in str(refused.value), f"the gate refusal shows it: {refused.value}")
+    check(f"phase build failed in container build: {FLOOR_TEXT}" in str(refused.value), f"the gate refusal shows the rendered message: {refused.value}")
+    check("capacity_engine_floor" not in str(refused.value) and "{" not in str(refused.value), f"and no dictionary: {refused.value}")
 
 
 def test_the_guard_lines_that_the_launcher_compares_are_the_ones_the_guard_writes() -> None:
@@ -328,3 +334,85 @@ def test_the_guard_lines_that_the_launcher_compares_are_the_ones_the_guard_write
     source = (ROOT / "scripts/orchestration/task_guard.py").read_text()
     check(GUARD_TIMEOUT_LINE == GUARD_TIMEOUT and f'say("{GUARD_TIMEOUT_LINE}")' in source, "the time limit line is the guard's own")
     check(GUARD_PHASE.replace("build", "{found}") in source, "and the phase line the launcher must not treat as a guard cause is too")
+
+
+# The tail that a timeout or a cancel shows comes from the phase that was active, not from a log container that never ran.
+
+
+def stopped_task(containers: list[str], logs: dict[str, list[str]], cancel: bool = False, deadline: bool = False) -> tuple[Rig, Any]:
+    """A layer-shaped gold task stopped while ``build`` was active: by a cancel request, or by the deadline of the real virtual clock."""
+    from dataclasses import replace
+
+    rig = Rig()
+    launcher = rig.launcher()
+    launch = launcher.attach(replace(gold_spec(containers=containers), deadline_seconds=1 if deadline else 3600))
+    launcher.start(launch)
+    for name, lines in logs.items():
+        rig.logs.streams[stream(launch.arn or "", name)] = lines
+    if deadline:
+        rig.time.now += 2
+    else:
+        rig.ecs.finish(launch.arn or "", {"fetch": 0, "pin": 0, "build": 143, "validate": None, "export": None, "publish": None})
+    if cancel:
+        launcher.store.put_once(
+            {"schema_version": 1, "event": "cancel", "run_id": RUN, "job": "gold", "attempt": 1, "at": "2026-11-19T00:00:00Z", "reason": "cancel"}
+        )
+    launcher.wait(launch)
+    return rig, (launcher, launch)
+
+
+ACTIVE = ["fetch", "pin", "build", "validate", "export", "publish"]
+PROGRESS = {"build": ["build progress line 1", "build progress line 2"]}
+FINISHED = {**PROGRESS, "pin": ["pin finished successfully"]}
+
+
+def test_a_cancel_shows_the_tail_of_the_active_phase_when_the_log_container_never_ran() -> None:
+    rig, (launcher, launch) = stopped_task(ACTIVE, FINISHED, cancel=True)
+    outcome = launcher.conclude(launch)
+    check(outcome.outcome == "cancelled", f"{outcome}")
+    check(
+        "build progress line 2" in outcome.logs and "pin finished successfully" not in outcome.logs, f"the cancel tail is the active phase's: {outcome.logs!r}"
+    )
+    check("failure" not in stored(rig), "a cancel keeps no failure record")
+
+
+def test_a_timeout_on_the_real_clock_shows_the_tail_of_the_active_phase() -> None:
+    rig, (launcher, launch) = stopped_task(ACTIVE, PROGRESS, deadline=True)
+    check(launch.timed_out and launch.report is not None, f"the stopped report of the timeout is kept: {launch.report}")
+    outcome = launcher.conclude(launch)
+    check(
+        outcome.outcome == "timeout" and "build progress line 2" in outcome.logs, f"the timeout tail is the active phase's: {outcome.outcome} {outcome.logs!r}"
+    )
+    check("failure" not in stored(rig), "a timeout keeps no failure record")
+
+
+def test_a_stop_while_a_later_phase_runs_shows_that_phase_and_not_the_successful_log_container() -> None:
+    names = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "maintain"]
+    rig = Rig()
+    launcher = rig.launcher()
+    launch = launcher.attach(gold_spec(containers=names))
+    launcher.start(launch)
+    rig.logs.streams[stream(launch.arn or "", "publish")] = ["publish finished successfully"]
+    rig.logs.streams[stream(launch.arn or "", "maintain")] = ["maintain progress"]
+    rig.ecs.finish(launch.arn or "", {"publish": 0, "upload": 0, "maintain": 143, **{name: 0 for name in names[:5]}})
+    launcher.store.put_once(
+        {"schema_version": 1, "event": "cancel", "run_id": RUN, "job": "gold", "attempt": 1, "at": "2026-11-19T00:00:00Z", "reason": "cancel"}
+    )
+    launcher.wait(launch)
+    outcome = launcher.conclude(launch)
+    check(outcome.logs == "maintain progress", f"{outcome.logs!r}")
+
+
+def test_a_timeout_or_cancel_with_no_stopped_phase_keeps_the_configured_tail() -> None:
+    rig = Rig()
+    launcher = rig.launcher()
+    job = spec(environment={"build": {"RUN_ID": RUN}, "publish": {"RUN_ID": RUN}}, log_container="publish", log_prefix="gold")
+    launch = launcher.attach(job)
+    launcher.start(launch)
+    rig.logs.streams[stream(launch.arn or "", "publish")] = ["publish tail"]
+    rig.ecs.finish(launch.arn or "", {})
+    launcher.store.put_once(
+        {"schema_version": 1, "event": "cancel", "run_id": RUN, "job": "gold", "attempt": 1, "at": "2026-11-19T00:00:00Z", "reason": "cancel"}
+    )
+    launcher.wait(launch)
+    check(launcher.conclude(launch).logs == "publish tail", "no stopped phase, so the configured container's tail")

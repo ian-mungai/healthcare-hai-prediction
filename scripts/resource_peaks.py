@@ -236,12 +236,12 @@ def _release_stderr(tail: phase_failure.StderrTail | None) -> None:
         tail.finish()
 
 
-def _write_failure(tail: phase_failure.StderrTail | None, error: BaseException | None, code: int) -> None:
-    """The closed failure record of a failed job that wrote none: its phase, the category of its exception (never the text) and its exit code, for the
-    launcher to keep in the end record. Like ``_emit`` it never changes the job's result: a fault in it, an interrupt included, ends it."""
+def _write_failure(tail: phase_failure.StderrTail | None, error: BaseException | None) -> None:
+    """The closed failure record of a failed job that wrote none: its phase and the category of its exception (never the text), for the launcher to keep in
+    the end record with the exit code that ECS reports. Like ``_emit`` it never changes the job's result: a fault in it, an interrupt included, ends it."""
     try:
         if tail is not None and not tail.marked:
-            phase_failure.emit_error(phase_failure.phase_of(sys.argv), error, exit_code=code)
+            phase_failure.emit_error(phase_failure.phase_of(sys.argv), error)
     except BaseException:
         return
 
@@ -283,5 +283,5 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
         else:
             quiet = not _emit(sampler, unavailable, code, _exit_push(pusher, heartbeat, started, interrupted))
         if code != 0 and not interrupted and not quiet:
-            _write_failure(tail, failure, code)
+            _write_failure(tail, failure)
     raise SystemExit(code)

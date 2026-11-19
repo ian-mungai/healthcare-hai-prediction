@@ -18,6 +18,7 @@ from orchestration import ecs_adapter
 from scripts import phase_failure
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
+from tests.failure_support import engine_facts
 from tests.support import check
 
 # Values of the shapes that must never be kept are built from parts, so no scanner reads them as real secrets in this file.
@@ -39,7 +40,7 @@ HOSTILE = [
     "111111\n111111",
     "arn:aws:ecs:us-west-2:" + "1" * 12 + ":task/example",
 ]
-FACTS = {"memory": 1 << 30, "available": -(1 << 28), "engine_floor": 2 << 30}
+FACTS = dict(engine_facts())
 GOOD: dict[str, Any] = {"v": 1, "phase": "build", "codes": ["capacity_engine_floor"], "facts": FACTS}
 
 
@@ -48,7 +49,7 @@ def marker(record: object) -> str:
 
 
 def test_a_record_round_trips_from_the_writer_to_the_reader() -> None:
-    written = phase_failure.line(phase_failure.record("build", ["capacity_engine_floor"], FACTS))
+    written = phase_failure.line(phase_failure.record("build", ["capacity_engine_floor"], engine_facts()))
     check(written.startswith(phase_failure.MARKER) and "\n" not in written, f"one line: {written!r}")
     check(
         ecs_adapter.parse_failure_line(written) == {"v": 1, "phase": "build", "codes": ["capacity_engine_floor"], "facts": GOOD["facts"]},
@@ -113,7 +114,7 @@ def test_the_writer_keeps_only_the_closed_parts_of_an_error() -> None:
         failure_facts = {"memory": 5, "message": ASSIGNMENT, "available": "text", "extra": 1}
 
     found = phase_failure.record_for("build", Tagged(ASSIGNMENT))
-    check(found["codes"] == ["capacity_engine_floor"] and found["facts"] == {"memory": 5}, f"only allowed numeric facts stay: {found}")
+    check(found["codes"] == ["unexpected_error"] and found["facts"] == {}, f"facts that the capacity module did not measure are never kept: {found}")
     check(ASSIGNMENT not in json.dumps(found), "the message of the error is never read")
     check(phase_failure.record_for("not a phase", KeyError(ASSIGNMENT))["phase"] == "unknown", "a phase that is not on the list is unknown")
     check(phase_failure.record_for("build", KeyError(ASSIGNMENT))["codes"] == ["key_error"], "a known class gives its category")
@@ -122,14 +123,11 @@ def test_the_writer_keeps_only_the_closed_parts_of_an_error() -> None:
         pass
 
     check(phase_failure.record_for("build", Odd(BUCKET))["codes"] == ["unexpected_error"], "any other class is one safe category")
-    check(phase_failure.record_for("build", Odd(), exit_code=3)["facts"] == {"exit_code": 3}, "the exit code is a fact")
+    check(phase_failure.record_for("build", Odd())["facts"] == {}, "a job has no facts of its own")
 
 
-def test_a_failure_that_names_no_error_is_a_generic_phase_failure_with_its_exit_code() -> None:
-    check(
-        phase_failure.record_for("build", None, exit_code=1) == {"v": 1, "phase": "build", "codes": ["phase_failed"], "facts": {"exit_code": 1}},
-        "generic record",
-    )
+def test_a_failure_that_names_no_error_is_a_generic_phase_failure_with_no_facts() -> None:
+    check(phase_failure.record_for("build", None) == {"v": 1, "phase": "build", "codes": ["phase_failed"], "facts": {}}, "generic record")
 
 
 def test_the_two_sides_share_one_vocabulary() -> None:
@@ -138,6 +136,7 @@ def test_the_two_sides_share_one_vocabulary() -> None:
     check(tuple(phase_failure.CODES) == tuple(ecs_adapter.FAILURE_CODES), "the codes")
     check(frozenset(phase_failure.FACTS) == frozenset(ecs_adapter.FAILURE_FACTS), "the numeric facts")
     check(set(ecs_adapter.FAILURE_TEMPLATES) == set(ecs_adapter.FAILURE_CODES), "every code has a template")
+    check(frozenset(phase_failure.LINE_FACTS) == frozenset(ecs_adapter.FAILURE_LINE_FACTS), "the facts a job may write")
 
 
 def test_the_startup_check_codes_that_can_fail_are_all_in_the_vocabulary() -> None:
@@ -208,7 +207,7 @@ def test_a_failed_job_leaves_a_generic_record_and_no_text_of_its_stderr(tmp_path
 
     lines, code = recorded(main, tmp_path, capsys)
     found = records_of(lines)
-    check(code == 1 and found == [{"v": 1, "phase": "build", "codes": ["phase_failed"], "facts": {"exit_code": 1}}], f"one generic record: {found}")
+    check(code == 1 and found == [{"v": 1, "phase": "build", "codes": ["phase_failed"], "facts": {}}], f"one generic record: {found}")
     written = [line for line in lines if line.startswith(phase_failure.MARKER)]
     check(len(written) == 1 and not any(part in written[0] for part in (ROW_VALUE, "synthetic", ACCESS_KEY[:8] + "I")), f"no text of the stderr: {written}")
 
@@ -228,7 +227,7 @@ def test_an_exception_leaves_only_its_category(tmp_path: Path, capsys: pytest.Ca
         sys.argv = previous
     err = capsys.readouterr().err
     found = records_of(err.splitlines())
-    check(found == [{"v": 1, "phase": "extract", "codes": ["key_error"], "facts": {"exit_code": 1}}], f"the class, not the message: {found}")
+    check(found == [{"v": 1, "phase": "extract", "codes": ["key_error"], "facts": {}}], f"the class, not the message: {found}")
     check("hunter2" not in "".join(line for line in err.splitlines() if line.startswith(phase_failure.MARKER)), "no value of the exception")
 
 

@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from scripts import phase_failure
 from scripts.lakehouse.ecs_engine import TASK_ENVIRONMENTS
 from scripts.lakehouse.memory_budget import BudgetError, parse_size, spark_heap
 
@@ -72,7 +73,7 @@ class CapacityError(RuntimeError):
     def __init__(self, message: str, code: str, facts: dict[str, int] | None = None) -> None:
         super().__init__(message)
         self.failure_codes = (code,)
-        self.failure_facts = dict(facts or {})
+        self.failure_facts = phase_failure.measured(facts or {})  # the one kind of facts that a failure record keeps: those this module measured
 
 
 @dataclass(frozen=True)

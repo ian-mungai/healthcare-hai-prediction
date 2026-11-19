@@ -1107,13 +1107,14 @@ class Launcher:
                     launch.report = report
                     return
             if self.clock.wall() > due:
-                self.confirm_stop(launch.arn, "deadline")
+                launch.report = self.confirm_stop(launch.arn, "deadline")  # kept for the tail of the timeout: which phase was active
                 launch.timed_out = True
                 return
             self.clock.sleep(POLL_SECONDS)
 
-    def confirm_stop(self, arn: str, reason: str) -> None:
-        """Send the stop and wait until the task is shown STOPPED. A read that fails, including a reply that describes no task, records nothing."""
+    def confirm_stop(self, arn: str, reason: str) -> TaskReport:
+        """Send the stop and wait until the task is shown STOPPED, and return its stopped report. A read that fails, including a reply that describes no task,
+        records nothing."""
         try:
             self.adapter.stop(arn, reason)
         except TaskUnavailable as error:
@@ -1121,10 +1122,13 @@ class Launcher:
         except TaskRefused as error:
             raise StopFailed(f"the cloud refused to stop the task ({error}). Nothing was recorded, so the stop can be repeated") from None
         end = self.clock.monotonic() + STOP_WAIT_SECONDS
-        while self.poll(arn).state not in ENDED:
+        report = self.poll(arn)
+        while report.state not in ENDED:
             if self.clock.monotonic() >= end:
                 raise StopFailed(f"the task is still stopping after {STOP_WAIT_SECONDS:g} seconds. Nothing was recorded, so the stop can be repeated")
             self.clock.sleep(STOP_POLL_SECONDS)
+            report = self.poll(arn)
+        return report
 
     @counted
     def conclude(self, launch: Launch) -> Outcome:
@@ -1210,11 +1214,14 @@ class Launcher:
         log = self.read_log(arn, container, spec)
         exits, reasons = dict(report.containers), dict(report.reasons)
         code = exits.get(container)
-        facts = {"exit_code": code} if isinstance(code, int) and not isinstance(code, bool) else {}
+        # The exit code is ECS's, never the job's. A job's own line counts only when its count of other containers fits this task.
+        facts = {"exit_code": code} if type(code) is int and 1 <= code <= 255 else {}
         name = container if container in FAILURE_PHASES else "unknown"
         marker = failure_from_tail(log) if source == "job" else None
+        if marker is not None and marker["facts"].get("siblings", 0) > len(report.containers) - 1:
+            marker = None
         if marker is not None:
-            record = {**marker, "container": name, "source": "job"}
+            record = {**marker, "facts": {**marker["facts"], **facts}, "container": name, "source": "job"}
         else:
             if source == "guard":
                 codes = ["guard_timeout"]
@@ -1226,8 +1233,17 @@ class Launcher:
         return Diagnosis(stored_failure(record), scrub(log))
 
     def tail(self, launch: Launch) -> str:
-        """The last log lines of the job's log container: the tail of a timeout or a cancel, which name no failed container. A failed task uses ``diagnose``."""
-        return scrub(self.read_log(launch.arn or "", launch.spec.log_container, launch.spec))
+        """The last log lines of the phase that was active when a timeout or a cancel stopped the task: the first container, in task order, that ended with a
+        code other than zero (the stopped phase, or one that failed) and has a log. The job's log container is the last one and may never have run, so it
+        comes only when no such log exists. A failed task uses ``diagnose``."""
+        spec, arn = launch.spec, launch.arn or ""
+        place = {name: index for index, name in enumerate(spec.environment)}
+        stopped = [name for name, code in (launch.report.containers if launch.report else ()) if name != GUARD and code not in (0, None)]
+        for container in sorted(stopped, key=lambda name: (place.get(name, len(place)), name)):
+            found = self.read_log(arn, container, spec)
+            if found:
+                return scrub(found)
+        return scrub(self.read_log(arn, spec.log_container, spec))
 
     def run(self, spec: JobSpec) -> Outcome:
         """Attach, start, wait and conclude one attempt. A repeat of an ended attempt returns its recorded outcome."""

@@ -550,7 +550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILED
     except StepFailed as failure:
         sys.stderr.write(json.dumps({"phase": values.phase, "step": failure.step, "failure": failure.failure, "detail": failure.detail}, sort_keys=True) + "\n")
-        phase_failure.emit_error(values.phase, failure, failure.code)
+        phase_failure.emit_error(values.phase, failure)
         return failure.code
     if values.phase not in ("train", "promote", "research", "canary", "notify"):
         for step in steps:
