@@ -397,12 +397,25 @@ bronze._object_key,
 {{ return({'nonresponse': 'nonresponse_without_period', 'demonstration': 'demonstration_entity'}) }}
 {% endmacro %}
 
+{% macro state_label_row_limit() %}
+{#- The most rows of an exempt utilization file that fail the facility number and count as its label rows (the description and header rows). Every live non-response
+    file of the first live silver run (Nov 19 2026) holds exactly five, so a sixth row that fails the facility number, such as a real row with a stray character in its number, is a
+    defect and the file is not exempt. -#}
+{{ return(5) }}
+{% endmacro %}
+
 {% macro hcai_util_hold_reason(alias, county) %}
 {#- Why a utilization row cannot be kept, or null: no facility number, a period that is no date or runs backwards, a number that does not type or a county name that
     does not identify exactly one county of California. The description row fails the first test. A non-response row with a facility number and both period cells
-    empty is a listing row: the file says which facility did not report, and no period by nature, so it has its own reason and is not period_not_a_date. -#}
+    empty is a listing row: the file says which facility did not report, and no period by nature, so it has its own reason and is not period_not_a_date. It gets
+    that reason only when nothing else is wrong with it: an unsafe number or a county that does not match keeps its own reason first, so a listing row that is
+    held for a defect never makes its file exempt. Order of the reasons of one row: facility_not_a_facility_number; for a non-response row with both period cells
+    empty then value_not_a_number, county_not_matched, nonresponse_without_period; for every other row period_not_a_date, period_reversed, value_not_a_number,
+    county_not_matched. -#}
 case
     when {{ alias }}.fac_no is null then 'facility_not_a_facility_number'
+    when {{ alias }}.response_status = 'nonresponse' and {{ alias }}.period_is_blank and {{ alias }}.unsafe_value_fields is not null then 'value_not_a_number'
+    when {{ alias }}.response_status = 'nonresponse' and {{ alias }}.period_is_blank and {{ county }}.county_fips is null then 'county_not_matched'
     when {{ alias }}.response_status = 'nonresponse' and {{ alias }}.period_is_blank then '{{ state_listing_hold_reasons().nonresponse }}'
     when {{ state_date(alias ~ '.fac_op_per_begin_dt', true) }} is null or {{ state_date(alias ~ '.fac_op_per_end_dt', true) }} is null then 'period_not_a_date'
     when {{ state_date(alias ~ '.fac_op_per_begin_dt', true) }} > {{ state_date(alias ~ '.fac_op_per_end_dt', true) }} then 'period_reversed'

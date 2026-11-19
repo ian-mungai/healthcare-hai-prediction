@@ -2,8 +2,9 @@
 -- numerator and denominator keep their published text and type as numbers (value_number, numerator, denominator) once thousands separators are removed;
 -- a missing token is null. A row with any other number text, an entity or measure that is no number, a period that is no date or runs backwards, or a
 -- county name that does not identify exactly one county of Illinois is held in int_state_source_holds without its content, never typed. A row whose county is
--- the publisher's demonstration marker is held as demonstration_entity (state_demonstration_county). The county code
--- comes from the county name within Illinois (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches
+-- the publisher's demonstration marker is held as demonstration_entity (state_demonstration_county) and stays outside the ranking of releases: it is no
+-- report of the entity whose number it carries, so it never changes which value is the latest of a real key. The county code comes from the county name
+-- within Illinois (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches
 -- seed. The measure texts (description, rationale, evidence) stay in bronze. is_latest_release marks the row of the newest release of each key
 -- (publication date, then download run). The newest release of a key is chosen among the rows with a usable key before the held rows are left out, so a
 -- newest row that is held leaves no older row marked latest: the key has no latest row and the hold says why.

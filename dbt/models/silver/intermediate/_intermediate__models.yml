@@ -1720,7 +1720,12 @@ models:
           Why the row cannot be kept. nonresponse_without_period: a non-response file row with a facility number and no period cell (the file lists facilities
           that did not report, so it has no period by nature). demonstration_entity: an Illinois row whose county is the publisher's demonstration marker
           (state_demonstration_county). Both are held by nature, not by a defect; assert_state_rows_reconcile lets a file with no typed row pass only when all
-          its held rows are of these kinds or utilization label rows.
+          its held rows are of these kinds or utilization label rows (at most state_label_row_limit, five). A non-response row with both period cells empty gets
+          nonresponse_without_period only when its numbers and county are fine: an unsafe number (value_not_a_number) or a county that does not match
+          (county_not_matched) comes first. Order for a utilization row: facility_not_a_facility_number; for a non-response row with empty period cells then
+          value_not_a_number, county_not_matched, nonresponse_without_period; for every other row period_not_a_date, period_reversed, value_not_a_number,
+          county_not_matched. Order for an Illinois row: entity_not_a_number, measure_not_a_number, period_not_a_date, period_reversed, value_not_a_number,
+          demonstration_entity, county_not_matched.
         data_tests:
           - not_null
           - accepted_values:

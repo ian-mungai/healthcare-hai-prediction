@@ -2445,6 +2445,33 @@ def il_county_file(key: str, name: str, county: str, rows: int) -> tuple[Stored,
 
 IL_DEMONSTRATION_FILE = il_county_file("il4", "IL_history_fixture_demo.csv", "Demo", 3)
 IL_REAL_COUNTY_UNMATCHED_FILE = il_county_file("il5", "IL_history_fixture_unmatched.csv", "Atlantis", 3)
+# A non-response listing with one more facility-failing row that is a real row (a facility number with a stray character): six rows fail the facility number
+# and the file holds no more than five label rows.
+UTIL_LISTING_WITH_MALFORMED_FACILITY = tuple(
+    with_record(item, util_row(fac_no="10600009X", fac_name="MALFORMED FIXTURE HOSPITAL", county="Alameda")) for item in UTIL_LISTING
+)
+# A non-response listing with an empty period row that carries an unsafe number, and another whose county no list names: each keeps its own reason, so the
+# file holds more than listing rows and label rows.
+UTIL_LISTING_WITH_UNSAFE_VALUE = tuple(
+    with_record(item, util_row(fac_no="106000025", fac_name="UNSAFE FIXTURE HOSPITAL", county="Alameda", tot_lic_beds="SENTINEL_NUMBER"))
+    for item in UTIL_LISTING
+)
+UTIL_LISTING_WITH_UNMATCHED_COUNTY = tuple(
+    with_record(item, util_row(fac_no="106000026", fac_name="UNMATCHED FIXTURE HOSPITAL", county="Atlantis")) for item in UTIL_LISTING
+)
+# A newer demonstration row on the entity, measure and period of a real value (the base fixture's entity 1001, measure 101 and 2022): it is no report of that
+# entity, so it must not change which value is the latest of the real key.
+IL_DEMONSTRATION_ON_REAL_KEY = (
+    Stored(
+        "illinois_report_card_csv",
+        "il6",
+        "2026-12-31",
+        "IL_history_fixture_demo_key.csv",
+        sha("state_il_il6"),
+        1,
+        records=(cc(entity_id="1001", name="DEMO HOSPITAL", city="Demo City", county_name="Demo", measure_id="101", value="9.9", **IL_PERIOD),),
+    ),
+)
 
 
 def hud(zip_code: str, geoid: str, res: str, tot: str, state: str = "") -> tuple[tuple[str, str], ...]:
@@ -3866,6 +3893,7 @@ BASE = (
 # page file with serial dates: assert_state_rows_reconcile accepts the first two and the page file types.
 STATE_UNREPORTED = (*BASE, *UTIL_LISTING, *IL_DEMONSTRATION_FILE, *UTIL_PAGES_SERIALS)
 STATE_UNREPORTED_CASE = "state_unreported_files"
+STATE_DEMONSTRATION_KEY_CASE = "state_demonstration_row_on_a_real_key"
 # The hold reasons of the base fixture and the three added files.
 STATE_UNREPORTED_HOLDS = [
     ("hcai_util_nonresponse_csv", "facility_not_a_facility_number", "5"),
@@ -4037,6 +4065,24 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "state_nonresponse_file_with_other_hold": (
         "assert_state_rows_reconcile",
         (*BASE, *UTIL_LISTING_WITH_TEXT_PERIOD),
+        frozenset(),
+    ),
+    # A facility number with a stray character is no label row: a file with six rows that fail the facility number is not exempt.
+    "state_nonresponse_file_with_malformed_facility": (
+        "assert_state_rows_reconcile",
+        (*BASE, *UTIL_LISTING_WITH_MALFORMED_FACILITY),
+        frozenset(),
+    ),
+    # An empty period row with an unsafe number keeps value_not_a_number, so the listing's exemption does not hide it.
+    "state_nonresponse_listing_with_unsafe_value": (
+        "assert_state_rows_reconcile",
+        (*BASE, *UTIL_LISTING_WITH_UNSAFE_VALUE),
+        frozenset(),
+    ),
+    # An empty period row whose county no list names keeps county_not_matched.
+    "state_nonresponse_listing_with_unmatched_county": (
+        "assert_state_rows_reconcile",
+        (*BASE, *UTIL_LISTING_WITH_UNMATCHED_COUNTY),
         frozenset(),
     ),
     # A Promoting Interoperability criterion that is neither Y nor N.
@@ -6332,6 +6378,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("owner_bridge", OWNER_BRIDGE, frozenset()),
         ("county_code_reused_in_latest_list", COUNTY_CODE_REUSED, frozenset()),
         (STATE_UNREPORTED_CASE, STATE_UNREPORTED, frozenset()),
+        (STATE_DEMONSTRATION_KEY_CASE, (*BASE, *IL_DEMONSTRATION_ON_REAL_KEY), frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     jobs += [(case, objects, frozenset()) for case, (objects, _sql, _view) in BRONZE_SHAPES.items()]
@@ -6906,7 +6953,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         checks[f"{case}_refused_by_name"] = (
             not isinstance(result, BaseException) and result[0] != 0 and result[1].get(view) == "error" and all(part in message for part in fragments)
         )
-    checks.update(state_unreported_checks(results))
+    checks.update(state_unreported_checks(results, base.get("illinois")))
     # The base outputs' hash lets a serial and a parallel run on the same code be compared.
     FIXTURE_EVIDENCE["base_outputs_sha256"] = hashlib.sha256(json.dumps(base, sort_keys=True, default=str).encode()).hexdigest()
     FIXTURE_EVIDENCE["case_errors"] = {case: str(result) for case, result in sorted(results.items()) if isinstance(result, BaseException)}
@@ -6920,10 +6967,11 @@ def state_case_rows(case: str, sql: str) -> list[tuple[str, ...]]:
     return [tuple(row) for row in duckdb_csv(database, sql, f"{CONTAINER_OUT}/e2e/{case}/attach.sql")]
 
 
-def state_unreported_checks(results: dict[str, tuple[int, dict[str, str]] | BaseException]) -> dict[str, bool]:
+def state_unreported_checks(results: dict[str, tuple[int, dict[str, str]] | BaseException], base_illinois: Any) -> dict[str, bool]:
     """Check the files of the live shapes: a non-response listing and a demonstration file hold no typed row by nature and the whole project builds;
     a page file with serial dates types; and both a real county that fails in every row and a listing row held for another reason still fail."""
     code, statuses = built(results, STATE_UNREPORTED_CASE)
+    demonstration_code, demonstration_statuses = built(results, STATE_DEMONSTRATION_KEY_CASE)
     typed = state_case_rows(
         STATE_UNREPORTED_CASE,
         "SELECT fac_no, period_begin_date::VARCHAR, period_end_date::VARCHAR FROM int_hcai_util_facility_periods WHERE fac_no LIKE '10600003%' ORDER BY ALL;",
@@ -6932,6 +6980,12 @@ def state_unreported_checks(results: dict[str, tuple[int, dict[str, str]] | Base
         "state_unreported_files_build_passes": code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items()),
         "state_unreported_files_hold_reasons": state_case_rows(STATE_UNREPORTED_CASE, STATE_HOLDS_SQL) == [tuple(row) for row in STATE_UNREPORTED_HOLDS],
         "state_unreported_page_file_with_serials_types": typed == [("106000031", "2023-01-01", "2023-12-31"), ("106000032", "2023-01-01", "2023-12-31")],
+        # Demonstration rows, in a file of their own or on the key of a real value, change no typed Illinois row and no latest flag.
+        "state_demonstration_rows_leave_typed_illinois_unchanged": state_case_rows(STATE_UNREPORTED_CASE, ILLINOIS_SQL) == base_illinois,
+        "state_demonstration_row_on_a_real_key_builds_and_changes_no_typed_row": demonstration_code == 0
+        and bool(demonstration_statuses)
+        and all(node_passes(name, status) for name, status in demonstration_statuses.items())
+        and state_case_rows(STATE_DEMONSTRATION_KEY_CASE, ILLINOIS_SQL) == base_illinois,
     }
 
 
