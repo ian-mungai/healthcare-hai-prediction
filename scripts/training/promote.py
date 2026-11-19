@@ -22,17 +22,26 @@ the run, which restarts the MLflow service first. Automatic promotions of that m
 Once production names the version, and before the receipt, the action writes the Production record of the infection type (``production_record``): the
 version's feature set and schema hash, the model, the version, the run, its lease generation and the time, create-only under ``promote/production/``. The
 features job reads it to decide whether an online set loads or holds, without MLflow access. A retry keeps the record the run wrote first.
+
+Every mode first checks, as data only, that the model API can load the version (``check_model_data``): its ``bundle/provenance.json`` names the closure of the
+model code (``model_code_closure_sha256``) that this job's own code root also has, and its ``bundle/self_check.json`` has the shape the loader requires. The
+check loads no model and predicts nothing. A version that fails it is refused by name before the lease, the intent, the alias and the Production record.
+The self-check rules repeat the loader's (``scripts/serving/mlflow_loader.py``, slice S1): change both together.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
+import tempfile
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from orchestration import training_contract
+from scripts import model_code
 from scripts.training import job_actions, job_inputs, production_record, promote_lease, promote_receipt, registry, run_tracking
 from scripts.training.job_failure import JobFailure
 
@@ -40,6 +49,11 @@ PROMOTED_TAG = "promoted_run"
 VERDICT_TAG = "promotion_verdict"
 RECORD = "promote.json"
 CANARY_TAGS = ("canary_verdict", "canary_version", "canary_run")
+CLOSURE_KEY = "model_code_closure_sha256"
+SELF_CHECK_KEYS = frozenset({"schema", "slot", "references", "rows", "predictions"})
+BUNDLE_FILE_BYTES = 1 << 20
+SELF_CHECK_MAX_ROWS = 8
+SELF_CHECK_MAX_TEXT = 256
 
 
 def parameters_of(path: Any) -> dict[str, Any]:
@@ -88,6 +102,101 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
         check_canary(version, number)
     if mode == "rollback" and PROMOTED_TAG not in tags:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
+
+
+def bundle_document(store: Any, run_id: str, name: str, scratch: Path, unreadable: str, oversize: str = "", not_json: str = "") -> Any:
+    """Download ``bundle/<name>`` of a run and parse it as JSON, or refuse with ``unreadable`` (``oversize`` for a file over 1 MiB, ``not_json`` for text that
+    is not JSON; each defaults to ``unreadable``).
+
+    The download, a missing or unreadable file and text that is not JSON each refuse. No detail holds a value of the file, only the class of the error.
+    """
+    try:
+        path = Path(store.download_artifacts(run_id, f"bundle/{name}", str(scratch)))
+        size = path.stat().st_size
+        text = path.read_bytes() if size <= BUNDLE_FILE_BYTES else b""
+    except JobFailure:
+        raise
+    except Exception as error:
+        raise JobFailure(unreadable, f"bundle/{name} could not be downloaded or read: {type(error).__name__}") from None
+    if size > BUNDLE_FILE_BYTES:
+        raise JobFailure(oversize or unreadable, f"bundle/{name} is {size} bytes, over the {BUNDLE_FILE_BYTES} the model API accepts")
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError) as error:
+        raise JobFailure(not_json or unreadable, f"bundle/{name} is not JSON: {type(error).__name__}") from None
+
+
+def check_closure(provenance: Any, root: Path) -> None:
+    """Refuse a version whose provenance has no closure value, or one that differs from the closure of this job's own code root, or when that root cannot give
+    its own value. The model API refuses the same versions at load (``ModelCodeMissing`` and ``ModelCodeMismatch``)."""
+    if not isinstance(provenance, dict):
+        raise JobFailure("model_provenance_unreadable", "bundle/provenance.json is not an object")
+    if CLOSURE_KEY not in provenance:
+        raise JobFailure(
+            "model_code_closure_missing", f"bundle/provenance.json has no {CLOSURE_KEY}: the version was trained before the model code closure was recorded"
+        )
+    try:
+        own = model_code.closure_digest(root)
+    except (model_code.RecordError, OSError) as error:
+        raise JobFailure("model_code_closure_unreadable", f"this job's model code closure cannot be computed: {type(error).__name__}: {error}") from None
+    found = provenance[CLOSURE_KEY]
+    if found != own:
+        shown = found if isinstance(found, str) and model_code.DIGEST.fullmatch(found) else "not a digest"
+        raise JobFailure("model_code_closure_mismatch", f"the version was trained with model code {shown}, and this job's model code is {own}")
+
+
+def feature_references(document: Any) -> list[str]:
+    """The ``references`` of a feature list, or refuse a list that is not a non-empty list of non-empty text."""
+    references = document.get("references") if isinstance(document, dict) else None
+    if not isinstance(references, list) or not references or not all(isinstance(item, str) and item for item in references):
+        raise JobFailure("self_check_feature_list", "bundle/feature_list.json has no references list of non-empty text")
+    return references
+
+
+def is_number(value: Any) -> bool:
+    """A JSON number that is not a boolean and is finite."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and (isinstance(value, int) or math.isfinite(value))
+
+
+def check_self_check(document: Any, references: list[str]) -> None:
+    """Refuse a self-check that breaks the loader's shape rules: the closed keys, the references of the feature list, one to eight rows as wide as the list,
+    cells that are null, finite numbers or text of at most 256 characters, and as many finite predictions as rows. The file is data only: no model runs.
+
+    The loader (``scripts/serving/mlflow_loader.py``) holds the same rules. A detail names the place, never a value."""
+    if not isinstance(document, dict):
+        raise JobFailure("self_check_not_json", "bundle/self_check.json is not an object")
+    slot = document.get("slot")
+    if set(document) != SELF_CHECK_KEYS or type(document["schema"]) is not int or document["schema"] != 1 or not isinstance(slot, str) or not slot:
+        raise JobFailure("self_check_keys", f"bundle/self_check.json must have exactly the keys {sorted(SELF_CHECK_KEYS)}, schema 1 and a text slot")
+    if document["references"] != references:
+        raise JobFailure("self_check_references", "the references of bundle/self_check.json differ from bundle/feature_list.json")
+    rows = document["rows"]
+    if not isinstance(rows, list) or not 1 <= len(rows) <= SELF_CHECK_MAX_ROWS:
+        raise JobFailure("self_check_row_count", f"bundle/self_check.json must have a list of 1 to {SELF_CHECK_MAX_ROWS} rows")
+    for index, row in enumerate(rows):
+        if not isinstance(row, list) or len(row) != len(references):
+            raise JobFailure("self_check_row_width", f"row {index} of bundle/self_check.json is not a list of {len(references)} values")
+        for column, cell in enumerate(row):
+            if not (cell is None or is_number(cell) or (isinstance(cell, str) and len(cell) <= SELF_CHECK_MAX_TEXT)):
+                raise JobFailure("self_check_cells", f"cell {column} of row {index} is not null, a finite number or text of at most {SELF_CHECK_MAX_TEXT}")
+    predictions = document["predictions"]
+    if not isinstance(predictions, list) or len(predictions) != len(rows) or not all(is_number(item) for item in predictions):
+        raise JobFailure("self_check_predictions", f"predictions of bundle/self_check.json must be {len(rows)} finite numbers, one per row")
+
+
+def check_model_data(store: Any, version: Any, root: Path) -> None:
+    """Refuse, by name, a version the model API would refuse at load because of its closure value or its self-check file, reading the files as data only.
+
+    ``root`` is the code root of this job. Nothing is loaded, unpickled or predicted, and nothing is written.
+    """
+    run_id = str(getattr(version, "run_id", ""))
+    with tempfile.TemporaryDirectory(prefix="promote_data_") as folder:
+        scratch = Path(folder)
+        check_closure(bundle_document(store, run_id, "provenance.json", scratch, "model_provenance_unreadable"), root)
+        references = feature_references(bundle_document(store, run_id, "feature_list.json", scratch, "self_check_feature_list"))
+        check_self_check(
+            bundle_document(store, run_id, "self_check.json", scratch, "self_check_missing", "self_check_too_large", "self_check_not_json"), references
+        )
 
 
 def storage() -> tuple[Any, str]:
@@ -148,12 +257,19 @@ def settle(client: Any, bucket: str, request: Mapping[str, Any], observed: str |
         raise JobFailure("promotion_intent_failed", f"{error}. Production was not changed") from None
 
 
-def inspect(store: Any, request: Mapping[str, Any]) -> str | None:
-    """Refuse a request the registry cannot serve and return the version production names, or None."""
+def target_of(store: Any, request: Mapping[str, Any]) -> Any:
+    """The registered version the request names, or refuse with ``version_missing``."""
     name, number = request["model"], request["version"]
     target = next((item for item in registry.versions_of(store, name) if str(item.version) == number), None)
     if target is None:
         raise JobFailure("version_missing", f"{name} has no version {number}")
+    return target
+
+
+def inspect(store: Any, request: Mapping[str, Any]) -> str | None:
+    """Refuse a request the registry cannot serve and return the version production names, or None."""
+    name, number = request["model"], request["version"]
+    target = target_of(store, request)
     current = registry.champion(store, name)
     observed = None if current is None else str(current.version)
     check_version(target, request["mode"], number, observed)
@@ -221,6 +337,7 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
             try:
                 store: Any = run_tracking.open_store(uri)
                 inspect(store, request)
+                check_model_data(store, target_of(store, request), job_inputs.ROOT)
                 lease = hold(client, bucket, request)
                 observed = inspect(store, request)
                 receipt = reconcile(client, bucket, store, request, settle(client, bucket, request, observed), observed)

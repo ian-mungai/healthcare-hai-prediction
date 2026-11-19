@@ -887,9 +887,50 @@ def canary(number: str, run: str = "x") -> dict[str, str]:
     return {"canary_verdict": "promote", "canary_version": number, "canary_run": run}
 
 
+CLOSURE_RECORD = "data_contracts/training/model_code.json"
+SERVING_REFERENCES = ["facility.beds", "facility.ownership_class", "facility.cmi"]
+
+
+def serving_bundle() -> dict[str, Any]:
+    """The three bundle documents of a candidate trained with the model code of the repository: provenance with its closure value, the feature list and the
+    self-check (two rows, one with a missing value, and their predictions)."""
+    closure = json.loads((REAL / CLOSURE_RECORD).read_text())["closure_sha256"]
+    return {
+        "provenance.json": {"run_id": "training_synthetic", "model_code_closure_sha256": closure},
+        "feature_list.json": {"slot": "m2_elastic_net", "references": list(SERVING_REFERENCES), "columns": ["beds", "ownership_class", "cmi"]},
+        "self_check.json": {
+            "schema": 1,
+            "slot": "m2_elastic_net",
+            "references": list(SERVING_REFERENCES),
+            "rows": [[120, "private", 1.2], [80, None, 1.1]],
+            "predictions": [0.9, 1.1],
+        },
+    }
+
+
+def serving_data(fixture: Fixture, run: str = "x", documents: dict[str, Any] | None = None) -> None:
+    """Give a run the bundle files the promotion reads and the job's code root the closure files it hashes.
+
+    ``documents`` maps a bundle file name to a JSON value, to raw bytes, or to None for a file that is removed. The default is ``serving_bundle()``.
+    """
+    for name in (CLOSURE_RECORD, *(item["path"] for item in json.loads((REAL / CLOSURE_RECORD).read_text())["files"])):
+        (fixture.root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REAL / name, fixture.root / name)
+    folder = fixture.tracking.root / run / "bundle"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, document in (documents if documents is not None else serving_bundle()).items():
+        (folder / name).unlink(missing_ok=True)
+        if document is not None:
+            (folder / name).write_bytes(document if isinstance(document, bytes) else (json.dumps(document) + "\n").encode())
+
+
 def registry_fixture(folder: Path) -> Fixture:
-    """A registry with version 1 in production after an earlier promotion and version 2 as a passed challenger."""
+    """A registry with version 1 in production after an earlier promotion and version 2 as a passed challenger.
+
+    Every version names the run ``x``, whose bundle holds the closure value of the repository's model code and a valid self-check (``serving_data``).
+    """
     fixture = Fixture(folder)
+    serving_data(fixture)
     store = fixture.tracking
     store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
     for tags in (
@@ -1065,6 +1106,193 @@ def promote_in(
 def promote_call(fixture: Fixture, work: Path, parameters: Any = PROMOTION, **changes: str | None) -> tuple[int, str, str]:
     """Run the promote phase with a receipt bucket of its own."""
     return promote_in(fixture, work, None, parameters, **changes)
+
+
+SERVING_REASONS = (
+    "model_provenance_unreadable",
+    "model_code_closure_missing",
+    "model_code_closure_mismatch",
+    "model_code_closure_unreadable",
+    "self_check_missing",
+    "self_check_too_large",
+    "self_check_not_json",
+    "self_check_keys",
+    "self_check_feature_list",
+    "self_check_references",
+    "self_check_row_count",
+    "self_check_row_width",
+    "self_check_cells",
+    "self_check_predictions",
+)
+SERVING_FILES = ("bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json")
+
+
+def serving_documents(**changes: Any) -> dict[str, Any]:
+    """The documents of a valid candidate with the named files replaced (a value of None leaves a file absent)."""
+    return {**serving_bundle(), **changes}
+
+
+def self_check_with(**changes: Any) -> dict[str, Any]:
+    """The documents of a valid candidate with fields of the self-check replaced (a value of None drops the field)."""
+    document = {**serving_bundle()["self_check.json"], **changes}
+    return serving_documents(**{"self_check.json": {key: value for key, value in document.items() if value is not None}})
+
+
+def provenance_with(**changes: Any) -> dict[str, Any]:
+    """The documents of a valid candidate with fields of provenance.json replaced (a value of None drops the field)."""
+    document = {**serving_bundle()["provenance.json"], **changes}
+    return serving_documents(**{"provenance.json": {key: value for key, value in document.items() if value is not None}})
+
+
+def serving_data_cases(cases: Any, folder: Path) -> None:
+    """The promotion refuses a candidate that the model API would refuse at load, with its own reason, before any lease, record or alias."""
+
+    def alias(fixture: Fixture) -> str | None:
+        return fixture.tracking.models[MODEL]["aliases"].get("production")
+
+    def writes(fixture: Fixture) -> list[str]:
+        return [name for name in fixture.tracking.calls if name in REGISTRY_WRITES]
+
+    def refused(name: str, reason: str, fixture: Fixture, bucket: ListingBucket, before: str | None, code: int, out: str, error: str) -> None:
+        require(code != 0 and reason in error, f"{name} was not refused with {reason}: {code} {error}")
+        require(not [other for other in SERVING_REASONS if other != reason and other in error], f"{name} named another reason: {error}")
+        require(alias(fixture) == before and not writes(fixture), f"{name} moved production or wrote to the registry: {alias(fixture)} {writes(fixture)}")
+        require(not bucket.objects, f"{name} stored records before the refusal: {sorted(bucket.objects)}")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), f"{name} reported success")
+        require("private" not in error and "0.9" not in error, f"{name} put a self-check value in the message")
+
+    def refuses(name: str, reason: str, documents: dict[str, Any] | None = None, after: Callable[[Fixture], None] | None = None) -> None:
+        def case() -> None:
+            fixture, bucket = registry_fixture(folder / name), receipt_bucket()
+            serving_data(fixture, documents=documents)
+            if after is not None:
+                after(fixture)
+            fixture.tracking.calls.clear()
+            code, out, error = promote_in(fixture, folder / f"{name}_work", bucket)
+            refused(name, reason, fixture, bucket, "1", code, out, error)
+
+        cases.check(f"promote_data_refuses_{name}", case)
+
+    def without_record(fixture: Fixture) -> None:
+        (fixture.root / CLOSURE_RECORD).unlink()
+
+    def with_changed_closure_file(fixture: Fixture) -> None:
+        path = fixture.root / "scripts/training/models/linear.py"
+        path.write_bytes(path.read_bytes().replace(b"a", b"b", 1))
+
+    def without_closure_file(fixture: Fixture) -> None:
+        (fixture.root / "scripts/training/models/linear.py").unlink()
+
+    large = b"{" + b" " * (1 << 20) + b"}"
+    nan, infinity = float("nan"), float("inf")
+    row = [120, "private", 1.2]
+    refuses("a_candidate_with_no_provenance_file", "model_provenance_unreadable", serving_documents(**{"provenance.json": None}))
+    refuses("a_provenance_that_is_not_json", "model_provenance_unreadable", serving_documents(**{"provenance.json": b"not json"}))
+    refuses("a_provenance_that_is_not_an_object", "model_provenance_unreadable", serving_documents(**{"provenance.json": ["a"]}))
+    refuses("a_candidate_with_no_closure_value", "model_code_closure_missing", provenance_with(model_code_closure_sha256=None))
+    refuses("a_candidate_with_another_closure_value", "model_code_closure_mismatch", provenance_with(model_code_closure_sha256="0" * 64))
+    refuses("a_closure_value_that_is_not_text", "model_code_closure_mismatch", provenance_with(model_code_closure_sha256=12))
+    refuses("a_code_root_with_a_changed_closure_file", "model_code_closure_mismatch", None, with_changed_closure_file)
+    refuses("a_code_root_with_no_closure_record", "model_code_closure_unreadable", None, without_record)
+    refuses("a_code_root_with_no_closure_file", "model_code_closure_unreadable", None, without_closure_file)
+    refuses("a_candidate_with_no_self_check", "self_check_missing", serving_documents(**{"self_check.json": None}))
+    refuses("a_self_check_over_one_mebibyte", "self_check_too_large", serving_documents(**{"self_check.json": large}))
+    refuses("a_self_check_that_is_not_json", "self_check_not_json", serving_documents(**{"self_check.json": b"{"}))
+    refuses("a_self_check_that_is_not_an_object", "self_check_not_json", serving_documents(**{"self_check.json": [1]}))
+    refuses("a_self_check_with_an_extra_key", "self_check_keys", self_check_with(note="x"))
+    refuses("a_self_check_with_no_slot", "self_check_keys", self_check_with(slot=None))
+    refuses("a_self_check_of_another_schema", "self_check_keys", self_check_with(schema=2))
+    refuses("a_self_check_slot_that_is_not_text", "self_check_keys", self_check_with(slot=3))
+    refuses("a_candidate_with_no_feature_list", "self_check_feature_list", serving_documents(**{"feature_list.json": None}))
+    refuses("a_feature_list_with_no_references", "self_check_feature_list", serving_documents(**{"feature_list.json": {"slot": "m2_elastic_net"}}))
+    refuses("a_feature_list_with_empty_references", "self_check_feature_list", serving_documents(**{"feature_list.json": {"references": []}}))
+    refuses("self_check_references_that_differ_from_the_feature_list", "self_check_references", self_check_with(references=["a", "b", "c"]))
+    refuses("a_self_check_with_no_rows", "self_check_row_count", self_check_with(rows=[], predictions=[]))
+    refuses("a_self_check_with_nine_rows", "self_check_row_count", self_check_with(rows=[row] * 9, predictions=[0.5] * 9))
+    refuses("a_self_check_whose_rows_are_not_a_list", "self_check_row_count", self_check_with(rows="rows"))
+    refuses("a_self_check_row_one_value_short", "self_check_row_width", self_check_with(rows=[[120, "private"], row]))
+    refuses("a_self_check_row_one_value_long", "self_check_row_width", self_check_with(rows=[[*row, 1], row]))
+    refuses("a_self_check_row_that_is_not_a_list", "self_check_row_width", self_check_with(rows=["private", row]))
+    refuses("a_self_check_cell_that_is_a_boolean", "self_check_cells", self_check_with(rows=[[True, "private", 1.2], row]))
+    refuses("a_self_check_cell_that_is_a_list", "self_check_cells", self_check_with(rows=[[[1], "private", 1.2], row]))
+    refuses("a_self_check_cell_of_over_256_characters", "self_check_cells", self_check_with(rows=[[120, "x" * 257, 1.2], row]))
+    refuses("a_self_check_cell_that_is_not_a_number", "self_check_cells", self_check_with(rows=[[nan, "private", 1.2], row]))
+    refuses(
+        "a_self_check_cell_that_overflows",
+        "self_check_cells",
+        serving_documents(**{"self_check.json": json.dumps(serving_bundle()["self_check.json"]).replace("120", "1e999").encode()}),
+    )
+    refuses("a_self_check_with_one_prediction_too_few", "self_check_predictions", self_check_with(predictions=[0.9]))
+    refuses("a_self_check_prediction_that_is_not_a_number", "self_check_predictions", self_check_with(predictions=[0.9, nan]))
+    refuses("a_self_check_prediction_that_is_infinite", "self_check_predictions", self_check_with(predictions=[infinity, 1.1]))
+    refuses("a_self_check_prediction_that_is_text", "self_check_predictions", self_check_with(predictions=["0.9", 1.1]))
+    refuses("a_self_check_prediction_that_is_a_boolean", "self_check_predictions", self_check_with(predictions=[True, 1.1]))
+    refuses("a_self_check_whose_predictions_are_not_a_list", "self_check_predictions", self_check_with(predictions=0.9))
+
+    def mode_refused(name: str, build: Callable[[Path], tuple[Fixture, ListingBucket, str | None]], parameters: dict[str, str], reason: str) -> None:
+        def case() -> None:
+            fixture, bucket, before = build(folder / name)
+            fixture.tracking.calls.clear()
+            code, out, error = promote_in(fixture, folder / f"{name}_work", bucket, parameters)
+            refused(name, reason, fixture, bucket, before, code, out, error)
+
+        cases.check(f"promote_data_{name}", case)
+
+    def candidate(name: Path, documents: dict[str, Any]) -> tuple[Fixture, ListingBucket, str | None]:
+        fixture = registry_fixture(name)
+        serving_data(fixture, documents=documents)
+        return fixture, receipt_bucket(), "1"
+
+    def hand_moved(name: Path) -> tuple[Fixture, ListingBucket, str | None]:
+        fixture, bucket, _ = candidate(name, provenance_with(model_code_closure_sha256=None))
+        fixture.tracking.set_registered_model_alias(MODEL, "production", "2")
+        return fixture, bucket, "2"
+
+    def first_champion(name: Path) -> tuple[Fixture, ListingBucket, str | None]:
+        fixture, bucket = Fixture(name), receipt_bucket()
+        serving_data(fixture, documents=self_check_with(rows=[], predictions=[]))
+        fixture.tracking.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
+        fixture.tracking.create_model_version(MODEL, "runs:/x/model", run_id="x", tags={"promotion_verdict": "pass_baseline"})
+        return fixture, bucket, None
+
+    rollback = {**PROMOTION, "model_version": "1", "promotion_mode": "rollback"}
+    mode_refused("direct_promote_of_the_version_production_already_names", hand_moved, {**PROMOTION, "model_version": "2"}, "model_code_closure_missing")
+    mode_refused("canary_promotion_over_a_champion", lambda name: candidate(name, self_check_with(rows=[], predictions=[])), PROMOTION, "self_check_row_count")
+    mode_refused("first_champion_with_no_canary", first_champion, {**PROMOTION, "model_version": "1"}, "self_check_row_count")
+    mode_refused("rollback", lambda name: candidate(name, provenance_with(model_code_closure_sha256="1" * 64)), rollback, "model_code_closure_mismatch")
+
+    def hand_moved_leaves_no_production_record() -> None:
+        fixture, bucket, _ = hand_moved(folder / "hand_moved_record")
+        promote_in(fixture, folder / "hand_moved_record_work", bucket, {**PROMOTION, "model_version": "2"})
+        require(not any(key.startswith(PRODUCTION_PREFIX) for key in bucket.objects), f"a Production record was written: {sorted(bucket.objects)}")
+
+    def valid_candidate_reads_three_files_and_loads_nothing() -> None:
+        fixture, bucket = registry_fixture(folder / "valid"), receipt_bucket()
+        downloads: list[str] = []
+        real = fixture.tracking.download_artifacts
+
+        def watch(run_id: str, path: str, dst_path: str | None = None) -> str:
+            downloads.append(f"{run_id}:{path}")
+            return real(run_id, path, dst_path)
+
+        with (
+            mock.patch.object(fixture.tracking, "download_artifacts", side_effect=watch),
+            mock.patch.object(promotion_check, "load_pipeline", side_effect=AssertionError("a model was loaded")),
+        ):
+            code, _, error = promote_in(fixture, folder / "valid_work", bucket)
+        require(code == 0 and alias(fixture) == "2", f"a candidate with the closure value and a valid self-check was not promoted: {code} {error}")
+        require(sorted(downloads) == sorted(f"x:{name}" for name in SERVING_FILES), f"the check read other files than the three bundle files: {downloads}")
+        require(f"{PRODUCTION_PREFIX}0000000001.json" in bucket.objects, f"no Production record: {sorted(bucket.objects)}")
+
+    def maximum_self_check_is_accepted() -> None:
+        fixture, bucket = registry_fixture(folder / "maximum"), receipt_bucket()
+        serving_data(fixture, documents=self_check_with(rows=[[1, "x" * 256, None]] * 8, predictions=[0.5] * 8))
+        code, _, error = promote_in(fixture, folder / "maximum_work", bucket)
+        require(code == 0 and alias(fixture) == "2", f"eight rows of the longest text were refused: {code} {error}")
+
+    cases.check("promote_data_hand_moved_alias_writes_no_production_record", hand_moved_leaves_no_production_record)
+    cases.check("promote_data_valid_candidate_reads_three_files_and_loads_nothing", valid_candidate_reads_three_files_and_loads_nothing)
+    cases.check("promote_data_accepts_the_largest_valid_self_check", maximum_self_check_is_accepted)
 
 
 def promote_cases(cases: Any, folder: Path) -> None:
@@ -1830,6 +2058,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
 
     def first_champion_promoted() -> None:
         fixture, bucket = Fixture(folder / "first_champion"), receipt_bucket()
+        serving_data(fixture)
         store = fixture.tracking
         store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
         for tags in ({"promotion_verdict": "fail:rmse_improvement"}, {"promotion_verdict": "pass_baseline", **canary("2")}):
@@ -1847,6 +2076,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         exception of Nov 15 2026); a failed verdict still does not."""
         for verdict, moves in (("pass_baseline", True), ("pass", True), ("fail:rmse_improvement", False)):
             fixture, bucket = Fixture(folder / f"first_no_canary_{verdict.split(':')[0]}"), receipt_bucket()
+            serving_data(fixture)
             fixture.tracking.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
             fixture.tracking.create_model_version(MODEL, "runs:/x/model", run_id="x", tags={"promotion_verdict": verdict})
             fixture.tracking.set_registered_model_alias(MODEL, "challenger", "1")
@@ -1948,3 +2178,4 @@ def promote_cases(cases: Any, folder: Path) -> None:
     refuses("promote_refuses_the_local_lane", {**PROMOTION, "mlflow": "local"})
     refuses("promote_refuses_an_unsafe_tracking_address", MLFLOW_TRACKING_URI="http://203.0.113.9:5100")
     refuses("promote_refuses_a_missing_login", MLFLOW_TRACKING_PASSWORD=None)
+    serving_data_cases(cases, folder / "serving_data")
