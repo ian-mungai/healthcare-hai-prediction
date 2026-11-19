@@ -1081,7 +1081,7 @@ def operations(s3: FakeS3) -> set[str]:
 
 
 def round2_scenarios(scenario: Any, plan: dict, data_entry: dict, doc_entry: dict, root: Path, downloads: Path) -> None:
-    """Review round 1: S3 proof before any local copy goes, an explicit capture root, a confined local folder and the retrospective release basis."""
+    """S3 proof before any local copy goes, an explicit capture root, a confined local folder and the retrospective release basis."""
     verify_s3_scenarios(scenario, plan, root, downloads)
     root_choice_scenarios(scenario, plan, root, downloads)
     confinement_scenarios(scenario, plan, data_entry, root, downloads)
