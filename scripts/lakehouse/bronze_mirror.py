@@ -27,7 +27,8 @@ attempt (``bronze_run.read_attempt``: a record that exists, or a history that ca
 its check phase, first run or retry. A run with any recorded attempt gets no exception: its retry fails by name. The task role cannot list the attempt
 folder and reads a key only through the read grant, so a full withdrawal of both mirror grants after a recorded ok answers 403 exactly as a grant
 never applied does: that retry exits 0 as unavailable while ``show`` still reads the old ok (the owner's profile lists the folder), so the sign-off
-needs the task result as well. Any other failure is a failure. After the grant, a rerun registers the tables.
+needs the latest task's result and loader report as well (its digest must be the last stored attempt's). Any other failure is a failure. After the grant,
+a rerun registers the tables.
 
 The load is already committed, so the hook never raises and never undoes it. The report (status, reason, one outcome per table) goes into the loader
 report and standard error when it failed. ``check.json`` is the immutable receipt of the load and a retry runs the hook again, so the check phase
@@ -42,8 +43,10 @@ Known limit (owner decision, Nov 18 2026): ``show`` reads only the records that 
 an earlier ``ok`` record (a policy change, or a task that stops between the hook and the record), the retry leaves no record and ``show`` still reads
 that earlier ``ok``. The check phase of such a retry fails (exit 1, the key, report digest and generation are named), but nothing in S3 says so. A
 mirror is therefore signed off only by ``python -m scripts.lakehouse.bronze_mirror_signoff --run <bronze run> --describe <describe-tasks output of the
-run's latest task>``, which needs this verdict and a stopped task of the bronze job, for this run, with every container at exit 0. The launch-evidence
-join that would remove the limit is not built."""
+run's latest task> --report <that task's loader report>``, which needs this verdict, a stopped task of the bronze job, for this run, with every container
+at exit 0, and the task's loader report, whose SHA-256 must be the report digest of the last stored attempt (a retry that stored nothing has a report that
+matches no attempt, so its sign-off is refused, also after both mirror grants were withdrawn in full). The owner pairs the task with its report by hand: the
+launch-evidence join that would do it by itself is not built."""
 
 from __future__ import annotations
 
@@ -359,7 +362,9 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> int:
     except AttemptError as error:
         sys.stdout.write(f"acceptance: unavailable: {error}\n")
         return 1
-    sys.stderr.write("the recorded outcome only, not a sign-off: the bronze_mirror_signoff command (see its docstring) also needs the matching task's result\n")
+    sys.stderr.write(
+        "the recorded outcome only, not a sign-off: the bronze_mirror_signoff command (see its docstring) also needs the matching task's result and report\n"
+    )
     sys.stdout.write(render(verdict))
     return 0 if verdict["state"] in ("ok", "unchanged", "skipped") else 1
 

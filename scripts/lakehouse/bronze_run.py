@@ -702,7 +702,8 @@ def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes,
     too, for a run with no recorded mirror attempt: the grant has never worked for this run, so no attempt fails its check phase for it, first run or retry,
     and nothing is recorded. A run with any recorded attempt, or whose attempt records cannot be read (a read error, a body that is not a record), gets no
     exception: its retry fails by name. The role cannot tell a grant that was never applied from one withdrawn in full (both answer 403, and it cannot list
-    the folder), so a full withdrawal after a recorded ok exits 0 as unavailable; the sign-off needs the owner's listing and the task result for that.
+    the folder), so a full withdrawal after a recorded ok exits 0 as unavailable; the sign-off needs the owner's listing, the task result and the task's
+    loader report (matched to the last stored attempt) for that.
     """
     if "mirror" not in report:
         return

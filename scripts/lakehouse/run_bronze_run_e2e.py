@@ -33,7 +33,7 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration import raw_lineage
-from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_pin, bronze_run, glue_mirror
+from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_mirror_signoff, bronze_pin, bronze_run, glue_mirror, layer_acceptance
 from scripts.lakehouse import run_glue_mirror_e2e as glue_stand_in
 from scripts.quality import lock_env
 
@@ -390,6 +390,45 @@ def attempts() -> list[dict[str, Any]]:
     return bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)
 
 
+def latest_report(case: Case, label: str = "w") -> Path:
+    """The loader report that the task of workspace ``label`` wrote: the file the owner reads from the latest task."""
+    found = sorted((case.work(label) / "code" / bronze_run.REPORT_FOLDER).glob("report_*.json"))
+    require(len(found) == 1, f"workspace {label} holds {len(found)} loader reports")
+    return found[0]
+
+
+def described_task() -> dict[str, Any]:
+    """The describe-tasks output of one successful bronze task of RUN, from the job catalog entry (the owner's profile reads it, nothing here calls ECS)."""
+    containers = layer_acceptance.read_json(layer_acceptance.JOBS_FILE)["jobs"]["bronze"]["containers"]
+    task = {
+        "taskArn": "arn:aws:ecs:us-west-2:111111111111:task/example_cluster/" + "a" * 32,
+        "taskDefinitionArn": "arn:aws:ecs:us-west-2:111111111111:task-definition/example_project_dev_job_bronze_host:7",
+        "lastStatus": "STOPPED",
+        "containers": [{"name": name, "exitCode": 0} for name in ("init", *containers)],
+        "overrides": {
+            "containerOverrides": [
+                {"name": "init"},
+                *(
+                    {"name": name, "environment": [{"name": key, "value": RUN if key == "RUN_ID" else "x"} for key in keys]}
+                    for name, keys in containers.items()
+                ),
+            ]
+        },
+    }
+    return {"tasks": [task], "failures": []}
+
+
+def signoff(case: Case, report: Path | None) -> tuple[int, str]:
+    """The real sign-off over the stand-in bucket, with the described latest task and, when given, that task's loader report."""
+    describe = case.root / "describe.json"
+    describe.write_text(json.dumps(described_task()))
+    arguments = ["--run", RUN, "--bucket", BUCKET, "--describe", str(describe), *(["--report", str(report)] if report else [])]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = bronze_mirror_signoff.main(arguments, client=STORAGE[0].client)
+    return code, out.getvalue()
+
+
 def case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown(case: Case) -> None:
     """The load is committed before the mirror runs: a Glue failure fails no phase, is kept as an attempt record and is shown by name."""
     DEFECTS.add("mirror_failed")
@@ -547,15 +586,36 @@ def case_stored_body_that_is_not_a_record_counts_as_history(case: Case) -> None:
     require("not an attempt record" in case.err and bronze_mirror.attempt_key(RUN, 1) in case.err, f"{case.err}")
 
 
+def case_the_signoff_accepts_the_latest_ok_and_refuses_a_stale_or_missing_report(case: Case) -> None:
+    """The sign-off over a real run. The latest task's report matches the last stored attempt: accepted. Without the report, or with the report of an earlier
+    task while a newer attempt is stored: refused."""
+    require(case.chain() == [0, 0, 0], case.err)
+    code, out = signoff(case, latest_report(case))
+    require(code == 0 and "signoff: ok" in out, f"a genuine latest ok was refused: {out}")
+    code, out = signoff(case, None)
+    require(code == 1 and "no loader report was given" in out, f"a sign-off without the latest report passed: {out}")
+    first = latest_report(case)
+    require(retry(case, "mirror_failed") == [0, 0, 0], case.err)
+    code, out = signoff(case, first)
+    require(code == 1 and "an earlier attempt, not the latest" in out, f"the report of an earlier task passed: {out}")
+    code, out = signoff(case, latest_report(case, "retry"))
+    require(code == 1 and "acceptance: failed" in out, f"a failed latest attempt was signed off: {out}")
+
+
 def case_withdrawn_read_and_write_grant_looks_never_applied(case: Case) -> None:
     """The documented limit. The task role cannot list the attempt folder (its only list grants are the table prefixes and the source versions) and reads a key
     only through the new read grant, so with both mirror grants withdrawn a recorded ok answers 403 exactly as a never-applied grant does. The retry exits 0 as
-    unavailable; the durable acceptance (the owner's profile lists the folder) still reads the old ok, so the sign-off must also have the task result."""
+    unavailable; the durable acceptance (the owner's profile lists the folder) still reads the old ok, so the sign-off also needs the latest task's result and
+    its loader report, whose digest must be the last stored attempt's: here it is not, so the sign-off is refused."""
     recorded_success_then(case, revoke_glue=True)
     with refusing_attempts(case), refusing_attempt_reads(case):
         codes = case.chain(label="retry")
     require(codes == [0, 0, 0] and "glue mirror UNAVAILABLE" in case.err, f"{codes} {case.err}")
     require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "ok", "the limit is documented as the old ok staying in force")
+    code, out = signoff(case, None)
+    require(code == 1 and "signoff: ok" not in out, f"the stale ok was signed off with no loader report: {out}")
+    code, out = signoff(case, latest_report(case, "retry"))
+    require(code == 1 and "matches no stored attempt" in out and "acceptance: ok" in out and "task: ok" in out, f"the stale ok was signed off: {out}")
 
 
 def case_no_history_and_another_write_error_than_a_denial_fails_the_retry(case: Case) -> None:
@@ -646,6 +706,8 @@ def case_before_the_grant_every_attempt_is_unavailable_exit_0(case: Case) -> Non
     require(bronze_mirror.attempt_key(RUN, 1) in case.err and "AccessDenied" in case.err, f"the missing attempt record is not named: {case.err}")
     require(not any("/mirror_" in written for written in puts), f"an attempt record was written without its grant: {sorted(puts)}")
     require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "unavailable", "the acceptance passed with nothing recorded")
+    code, out = signoff(case, latest_report(case, "retry"))
+    require(code == 1 and "acceptance: unavailable" in out and "no stored attempt" in out, f"nothing is registered yet, but the sign-off said: {out}")
     DEFECTS.discard("iam_not_applied")
     case.shas = None
     case.err = ""
@@ -1299,6 +1361,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "after a recorded success, revoking only the record write fails the retry": case_success_then_only_record_write_revoked_fails_retry,
     "an attempt history that cannot be read fails the retry closed": case_unreadable_attempt_history_fails_retry_closed,
     "a stored attempt that is not a record counts as history": case_stored_body_that_is_not_a_record_counts_as_history,
+    "the sign-off accepts the latest ok and refuses a stale report": case_the_signoff_accepts_the_latest_ok_and_refuses_a_stale_or_missing_report,
     "a withdrawn read and write grant cannot be told from a grant never applied (limit)": case_withdrawn_read_and_write_grant_looks_never_applied,
     "no history and another write error than a denial fails the retry": case_no_history_and_another_write_error_than_a_denial_fails_the_retry,
     "the attempt history conditions are each needed": case_history_condition_mutants_are_caught,
