@@ -1,0 +1,72 @@
+{
+  "$defs": {
+    "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "file": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "size": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "path": {
+      "pattern": "^([A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The trusted model-family source files a model load needs, with the size and SHA-256 of each and one digest over them (scripts/model_code.py). The digest is the SHA-256 of the sorted lines path NUL size NUL sha256 and a newline. File paths are sorted and unique, which this schema cannot state; scripts/model_code.py checks it.",
+  "properties": {
+    "closure_sha256": {
+      "$ref": "#/$defs/digest"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/file"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "generation": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "image_provided": {
+      "items": {
+        "$ref": "#/$defs/path"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema": {
+      "const": "model_code/1"
+    }
+  },
+  "required": [
+    "schema",
+    "generation",
+    "image_provided",
+    "files",
+    "closure_sha256"
+  ],
+  "title": "Record of the model code closure",
+  "type": "object"
+}

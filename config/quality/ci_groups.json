@@ -161,6 +161,7 @@
       "^\\.yamllint$",
       "^config/quality_tools\\.json$",
       "^services/orchestration/egress_proxy\\.json$",
+      "^data_contracts/training/model_code(\\.schema)?\\.json$",
       "^scripts/ci/groups/repository_code_checks\\.sh$"
     ],
     "ci_tooling_checks": [

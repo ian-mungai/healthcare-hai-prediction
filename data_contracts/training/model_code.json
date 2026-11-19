@@ -1,0 +1,46 @@
+{
+  "closure_sha256": "7496b704f7b6b77bc07d1d2c800a32ac693d105b5121d23b391d2e6fc74ddffd",
+  "files": [
+    {
+      "path": "scripts/training/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    {
+      "path": "scripts/training/models/__init__.py",
+      "sha256": "f07c60fd4261bd580cf4252a5aabbf165a53038723a5f4f15141f2e2f22f720c",
+      "size": 86
+    },
+    {
+      "path": "scripts/training/models/common.py",
+      "sha256": "a445ab391ebdb5fbe0b464ca6447e69a1d9e876c8d33bc3766a18e6d64833015",
+      "size": 15067
+    },
+    {
+      "path": "scripts/training/models/elastic.py",
+      "sha256": "4169e3a29223858e65fbbf2698fd5c5409104a0d961f24da1dabb03e6165a897",
+      "size": 3212
+    },
+    {
+      "path": "scripts/training/models/linear.py",
+      "sha256": "445dcfd72610feb3eecb94bf75a2cef418b84e07ccafe6388eb32bd7161c8a08",
+      "size": 1773
+    },
+    {
+      "path": "scripts/training/models/preprocessing.py",
+      "sha256": "25654ef6050818e9e1589c179d1b1a0aa46673a75b8917172a34f5c1446077c7",
+      "size": 15436
+    },
+    {
+      "path": "scripts/training/models/trees.py",
+      "sha256": "b0f6ba92339e903e60d5012db4227cf238e10ab7581e2b660dd0904f22974741",
+      "size": 4304
+    }
+  ],
+  "generation": 1,
+  "image_provided": [
+    "orchestration/__init__.py",
+    "orchestration/training_contract.py"
+  ],
+  "schema": "model_code/1"
+}

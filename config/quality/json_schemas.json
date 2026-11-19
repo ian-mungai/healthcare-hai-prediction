@@ -83,6 +83,12 @@
       ]
     },
     {
+      "schema": "data_contracts/training/model_code.schema.json",
+      "files": [
+        "data_contracts/training/model_code.json"
+      ]
+    },
+    {
       "schema": "data_contracts/training/model_contract.schema.json",
       "files": [
         "data_contracts/training/model_contract.json"
