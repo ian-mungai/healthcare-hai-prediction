@@ -727,6 +727,29 @@ def case_loader_default_fetch_stops_a_download_at_its_cap(c: Checker) -> None:
         c.check("a feature list of 1 MiB and one byte is refused as ArtifactRefused", type(error).__name__ == "ArtifactRefused" and w.leftover() == [])
 
 
+def case_loader_default_fetch_stops_the_model_at_its_own_cap(c: Checker) -> None:
+    """The model file has its own cap, 64 MiB, checked while it is written: a response one byte over it and one of 300 MiB (more than the 256 MiB temporary
+    filesystem) are both refused as ``ArtifactRefused``, and the folder never holds more than the cap plus one chunk. A file of exactly the cap is read."""
+    cap = mlflow_loader.MODEL_CAP
+    c.check("the model cap is 64 MiB", cap == 64 * MIB)
+    for label, size in (("one byte over the cap", cap + 1), ("300 MiB", 300 * MIB)):
+        with world(long={MODEL: size}) as w:
+            model, error = w.attempt(use_default_fetch=True)
+            c.check(
+                f"a model response of {label} is refused as ArtifactRefused (got {type(error).__name__ if error else 'a loaded model'})",
+                model is None and type(error).__name__ == "ArtifactRefused",
+            )
+            c.check(f"{label}: the folder held at most the cap plus one chunk ({w.server.peak} bytes)", w.server.peak <= cap + MIB)
+            c.check(f"{label}: at most {cap // MIB + 1} chunks were pulled ({w.server.pulled[MODEL]})", w.server.pulled[MODEL] <= cap // MIB + 1)
+            c.check(
+                f"{label}: the three small files were read first and nothing remains",
+                w.server.reads[:3] == [FEATURE_LIST, PROVENANCE, SELF_CHECK] and w.leftover() == [],
+            )
+    with world(long={MODEL: cap}) as w:
+        model, error = w.attempt(use_default_fetch=True)
+        c.check(f"a model response of exactly the cap is read ({error!r})", model is not None and w.leftover() == [])
+
+
 def case_loader_default_fetch_refuses_a_folder_without_fetching_a_descendant(c: Checker) -> None:
     """A named path that is a folder is refused as ``ArtifactRefused`` for each of the four files, and no file below it is fetched (real MLflow downloaded
     ``bundle/feature_list.json/unexpected.py`` when the named path was a folder)."""
@@ -937,6 +960,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     ),
     "loader_logs_one_line_with_the_version_and_the_peak_memory": (case_loader_logs_one_line_with_the_version_and_the_peak_memory, "mlflow loader"),
     "loader_default_fetch_stops_a_download_at_its_cap": (case_loader_default_fetch_stops_a_download_at_its_cap, "mlflow loader"),
+    "loader_default_fetch_stops_the_model_at_its_own_cap": (case_loader_default_fetch_stops_the_model_at_its_own_cap, "mlflow loader"),
     "loader_default_fetch_refuses_a_folder_without_fetching_a_descendant": (
         case_loader_default_fetch_refuses_a_folder_without_fetching_a_descendant,
         "mlflow loader",
