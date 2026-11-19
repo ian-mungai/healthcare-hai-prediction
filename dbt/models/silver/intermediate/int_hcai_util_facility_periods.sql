@@ -6,7 +6,9 @@
 -- and latitude: typed once thousands separators are removed. A blank is null and a missing token (spreadsheet error text such as #DIV/0!, N/A) is null
 -- with its text in nulled_values_published, a JSON object from column to text ('{}' when none). A row with any other number text, a facility that is no
 -- number, a period that is no date or runs backwards, or a county name that does not identify exactly one county of California is held in
--- int_state_source_holds without its content, never typed. The person, phone and address cells never leave bronze. The county code comes from the county
+-- int_state_source_holds without its content, never typed. A non-response row with a facility number and every period cell empty (the real non-response
+-- files list facilities and no period) is held as nonresponse_without_period; no period is invented for it. The person, phone and address cells never
+-- leave bronze. The county code comes from the county
 -- name within California (county_source name_match, from the state_county_names seed). The CCN comes only from the reviewed matches seed. The newest
 -- release of a key is chosen among the rows with a usable key before the held rows are left out, so a newest row that is held leaves no older row marked
 -- latest: the key has no latest row and the hold says why.

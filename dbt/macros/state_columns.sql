@@ -319,8 +319,8 @@ count(*) filter (where trim({{ column }}) <> '' and ({{ state_number(column) }})
 
 {% macro hcai_util_staging_projection() %}
 {#- The utilization columns staging carries: the facility number only in the shape of one, the period dates only in a date or serial shape, the descriptors and
-    the typed numbers (hcai_util_numeric_columns, hcai_util_coordinate_columns) only when blank, a missing token or a number, and the names of the number columns
-    that failed in unsafe_value_fields, joined by a vertical bar. The administrator, report preparer, phone, street address and parent corporation columns are never selected. -#}
+    the typed numbers (hcai_util_numeric_columns, hcai_util_coordinate_columns) only when blank, a missing token or a number, the names of the number columns
+    that failed in unsafe_value_fields, joined by a vertical bar, and period_is_blank, true when both period cells are empty (text that is no date is not empty). The administrator, report preparer, phone, street address and parent corporation columns are never selected. -#}
 bronze._object_key,
     bronze._member_sha256,
     bronze._row_number,
@@ -331,6 +331,7 @@ bronze._object_key,
     nullif(trim(bronze.fac_operated_this_yr), '') as fac_operated_this_yr,
     case when {{ state_date_shape('bronze.fac_op_per_begin_dt', true) }} then trim(bronze.fac_op_per_begin_dt) end as fac_op_per_begin_dt,
     case when {{ state_date_shape('bronze.fac_op_per_end_dt', true) }} then trim(bronze.fac_op_per_end_dt) end as fac_op_per_end_dt,
+    (nullif(trim(bronze.fac_op_per_begin_dt), '') is null and nullif(trim(bronze.fac_op_per_end_dt), '') is null) as period_is_blank,
     nullif(trim(bronze.license_no), '') as license_no,
     nullif(trim(bronze.license_status), '') as license_status,
     nullif(trim(bronze.facility_level), '') as facility_level,
@@ -385,11 +386,24 @@ bronze._object_key,
     ), '') as unsafe_value_fields
 {%- endmacro %}
 
+{% macro state_demonstration_county() %}
+{#- The county text the Illinois Hospital Report Card publisher writes for its demonstration facilities (found in three live files, Nov 19 2026: one entity, one city, one county, every row). Compared exactly. -#}
+{{ return('Demo') }}
+{% endmacro %}
+
+{% macro state_listing_hold_reasons() %}
+{#- The two hold reasons of rows that are held by nature, not by a defect: a non-response listing row with no reported period, and a row of a demonstration facility.
+    assert_state_rows_reconcile lets a file hold no typed row only when each of its held rows has one of these reasons (or is a label row of a utilization file). -#}
+{{ return({'nonresponse': 'nonresponse_without_period', 'demonstration': 'demonstration_entity'}) }}
+{% endmacro %}
+
 {% macro hcai_util_hold_reason(alias, county) %}
 {#- Why a utilization row cannot be kept, or null: no facility number, a period that is no date or runs backwards, a number that does not type or a county name that
-    does not identify exactly one county of California. The description row fails the first test. -#}
+    does not identify exactly one county of California. The description row fails the first test. A non-response row with a facility number and both period cells
+    empty is a listing row: the file says which facility did not report, and no period by nature, so it has its own reason and is not period_not_a_date. -#}
 case
     when {{ alias }}.fac_no is null then 'facility_not_a_facility_number'
+    when {{ alias }}.response_status = 'nonresponse' and {{ alias }}.period_is_blank then '{{ state_listing_hold_reasons().nonresponse }}'
     when {{ state_date(alias ~ '.fac_op_per_begin_dt', true) }} is null or {{ state_date(alias ~ '.fac_op_per_end_dt', true) }} is null then 'period_not_a_date'
     when {{ state_date(alias ~ '.fac_op_per_begin_dt', true) }} > {{ state_date(alias ~ '.fac_op_per_end_dt', true) }} then 'period_reversed'
     when {{ alias }}.unsafe_value_fields is not null then 'value_not_a_number'
@@ -399,13 +413,14 @@ end
 
 {% macro illinois_hold_reason(alias, county) %}
 {#- Why a report-card row cannot be kept, or null: the entity or the measure is no number, a period is no date or runs backwards, a number does not type or the county
-    name does not identify exactly one county of Illinois. -#}
+    name does not identify exactly one county of Illinois. A row whose county is exactly the publisher's demonstration marker is a demonstration facility. -#}
 case
     when {{ alias }}.entity_id is null then 'entity_not_a_number'
     when {{ alias }}.measure_id is null then 'measure_not_a_number'
     when {{ state_date(alias ~ '.date_start') }} is null or {{ state_date(alias ~ '.date_end') }} is null then 'period_not_a_date'
     when {{ state_date(alias ~ '.date_start') }} > {{ state_date(alias ~ '.date_end') }} then 'period_reversed'
     when {{ alias }}.unsafe_value_fields is not null then 'value_not_a_number'
+    when {{ county }}.county_fips is null and {{ alias }}.county_name = '{{ state_demonstration_county() }}' then '{{ state_listing_hold_reasons().demonstration }}'
     when {{ county }}.county_fips is null then 'county_not_matched'
 end
 {%- endmacro %}

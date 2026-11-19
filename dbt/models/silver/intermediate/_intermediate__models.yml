@@ -1537,8 +1537,9 @@ models:
       is unique. The numbers are typed from the columns of hcai_util_numeric_columns() with the published text of every value that did not type kept in
       nulled_values_published. The administrator and report preparer names, the phone, the street address and the parent corporation are never read.
       A row whose number text does not type, whose facility or period is not in its published shape or runs backwards, or whose county name does not identify
-      exactly one county of California is held in int_state_source_holds without its content. County code by county name (state_county_names seed); CCN only
-      from the reviewed matches seed (ccn_source reviewed_match).
+      exactly one county of California is held in int_state_source_holds without its content. The real non-response files list facilities with every period
+      cell empty: such a row is held as nonresponse_without_period and never typed, and no period is invented for it. County code by county name
+      (state_county_names seed); CCN only from the reviewed matches seed (ccn_source reviewed_match).
     meta:
       classification: Public
     data_tests:
@@ -1715,7 +1716,11 @@ models:
         description: Row position within the file, from 1.
         data_tests: [not_null]
       - name: hold_reason
-        description: Why the row cannot be kept.
+        description: >
+          Why the row cannot be kept. nonresponse_without_period: a non-response file row with a facility number and no period cell (the file lists facilities
+          that did not report, so it has no period by nature). demonstration_entity: an Illinois row whose county is the publisher's demonstration marker
+          (state_demonstration_county). Both are held by nature, not by a defect; assert_state_rows_reconcile lets a file with no typed row pass only when all
+          its held rows are of these kinds or utilization label rows.
         data_tests:
           - not_null
           - accepted_values:
@@ -1728,5 +1733,7 @@ models:
                   - county_not_matched
                   - entity_not_a_number
                   - measure_not_a_number
+                  - nonresponse_without_period
+                  - demonstration_entity
       - name: hold_detail
         description: For value_not_a_number, the names of the number fields that failed, joined by a vertical bar; null otherwise. Never a published value.

@@ -2388,6 +2388,65 @@ GROUP_E = (
 )
 
 
+# The shapes of the first live silver run (Nov 19 2026), which the synthetic group above did not have. A non-response file is five label rows (text where the
+# facility number belongs) and listing rows with a facility number and every period cell empty. A page file keeps the workbook's serial dates. The Illinois
+# demonstration facilities carry the county text "Demo" in every row, and one real county can fail to match in every row of a file.
+UTIL_LABEL_ROWS = tuple(
+    util_row(description=text, fac_no=text, fac_op_per_begin_dt="Period begin", fac_op_per_end_dt="Period end")
+    for text in ("Description of the field", "Data type", "Format", "Source", "Note")
+)
+
+
+def util_listing(fac_no: str) -> tuple[tuple[str, str], ...]:
+    """Return one non-response listing row: a facility and its county, with no period cell."""
+    return util_row(fac_no=fac_no, fac_name="LISTED FIXTURE HOSPITAL", fac_city="Fixtureville", county="Alameda")
+
+
+UTIL_LISTING = (
+    Stored(
+        "hcai_util_nonresponse_csv",
+        "hn2",
+        "2025-12-31",
+        "nonresp_1_6_2025.csv",
+        sha("state_util_nonresponse_listing"),
+        8,
+        records=(*UTIL_LABEL_ROWS, util_listing("106000021"), util_listing("106000022"), util_listing("106000023")),
+    ),
+)
+# The same file with one more row whose period cell holds text that is no date: that row is held for another reason, so the file is not exempt.
+UTIL_LISTING_WITH_TEXT_PERIOD = tuple(
+    with_record(item, util_row(fac_no="106000024", county="Alameda", fac_op_per_begin_dt="SENTINEL_PERIOD")) for item in UTIL_LISTING
+)
+UTIL_PAGES_SERIALS = (
+    Stored(
+        "hcai_util_pages_csv",
+        "hu3",
+        "2025-12-31",
+        "page_1_6_2026.csv",
+        sha("state_util_pages_serials"),
+        7,
+        records=(
+            *UTIL_LABEL_ROWS,
+            util_row(fac_no="106000031", fac_name="SERIAL FIXTURE HOSPITAL", county="Alameda", fac_op_per_begin_dt="44927", fac_op_per_end_dt="45291"),
+            util_row(fac_no="106000032", fac_name="SERIAL FIXTURE CLINIC", county="Los Angeles", fac_op_per_begin_dt="44927", fac_op_per_end_dt="45291"),
+        ),
+    ),
+)
+
+
+def il_county_file(key: str, name: str, county: str, rows: int) -> tuple[Stored, ...]:
+    """Return one Illinois file whose every row is valid except that its county is the given text."""
+    records = tuple(
+        cc(entity_id=str(9000 + number), name="FIXTURE ENTITY", city="Fixtureville", county_name=county, measure_id="101", value="1.0", **IL_PERIOD)
+        for number in range(rows)
+    )
+    return (Stored("illinois_report_card_csv", key, "2025-12-31", name, sha(f"state_il_{key}"), rows, records=records),)
+
+
+IL_DEMONSTRATION_FILE = il_county_file("il4", "IL_history_fixture_demo.csv", "Demo", 3)
+IL_REAL_COUNTY_UNMATCHED_FILE = il_county_file("il5", "IL_history_fixture_unmatched.csv", "Atlantis", 3)
+
+
 def hud(zip_code: str, geoid: str, res: str, tot: str, state: str = "") -> tuple[tuple[str, str], ...]:
     """Return one HUD ZIP-to-county row with its residential and total ratios; business and other ratios equal the total."""
     return (("zip", zip_code), ("geoid", geoid), ("res_ratio", res), ("bus_ratio", tot), ("oth_ratio", tot), ("tot_ratio", tot), ("state", state))
@@ -3803,6 +3862,26 @@ BASE = (
     *GROUP_AL5,
     *GROUP_G4,
 )
+# The base fixture plus the files of the live shapes that hold no typed row by nature (a non-response listing, the Illinois demonstration facilities) and a
+# page file with serial dates: assert_state_rows_reconcile accepts the first two and the page file types.
+STATE_UNREPORTED = (*BASE, *UTIL_LISTING, *IL_DEMONSTRATION_FILE, *UTIL_PAGES_SERIALS)
+STATE_UNREPORTED_CASE = "state_unreported_files"
+# The hold reasons of the base fixture and the three added files.
+STATE_UNREPORTED_HOLDS = [
+    ("hcai_util_nonresponse_csv", "facility_not_a_facility_number", "5"),
+    ("hcai_util_nonresponse_csv", "nonresponse_without_period", "3"),
+    ("hcai_util_pages_csv", "county_not_matched", "2"),
+    ("hcai_util_pages_csv", "facility_not_a_facility_number", "7"),
+    ("hcai_util_pages_csv", "period_not_a_date", "2"),
+    ("hcai_util_pages_csv", "period_reversed", "1"),
+    ("hcai_util_pages_csv", "value_not_a_number", "3"),
+    ("illinois_report_card_csv", "county_not_matched", "2"),
+    ("illinois_report_card_csv", "demonstration_entity", "3"),
+    ("illinois_report_card_csv", "entity_not_a_number", "2"),
+    ("illinois_report_card_csv", "measure_not_a_number", "1"),
+    ("illinois_report_card_csv", "period_reversed", "1"),
+    ("illinois_report_card_csv", "value_not_a_number", "2"),
+]
 # Each failing case changes the base fixture, or drops label and period rows, and names the one dbt test that must catch it.
 FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "occmix_uncast_value": (
@@ -3946,6 +4025,18 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
             replace(item, records=(cc(entity_id="x", county_name="Cook", measure_id="101", value="1.6", **IL_PERIOD),)) if item.key == "il2" else item
             for item in BASE
         ),
+        frozenset(),
+    ),
+    # A real county that no list names in every row of an Illinois file: a file that is all held for the generic county reason is no demonstration file.
+    "state_real_county_file_all_held": (
+        "assert_state_rows_reconcile",
+        (*BASE, *IL_REAL_COUNTY_UNMATCHED_FILE),
+        frozenset(),
+    ),
+    # A non-response listing with one more row whose period cell holds text that is no date: one row is held for another reason, so the file is not exempt.
+    "state_nonresponse_file_with_other_hold": (
+        "assert_state_rows_reconcile",
+        (*BASE, *UTIL_LISTING_WITH_TEXT_PERIOD),
         frozenset(),
     ),
     # A Promoting Interoperability criterion that is neither Y nor N.
@@ -6240,6 +6331,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("reversed_order", tuple(reversed(BASE)), frozenset()),
         ("owner_bridge", OWNER_BRIDGE, frozenset()),
         ("county_code_reused_in_latest_list", COUNTY_CODE_REUSED, frozenset()),
+        (STATE_UNREPORTED_CASE, STATE_UNREPORTED, frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     jobs += [(case, objects, frozenset()) for case, (objects, _sql, _view) in BRONZE_SHAPES.items()]
@@ -6814,10 +6906,33 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         checks[f"{case}_refused_by_name"] = (
             not isinstance(result, BaseException) and result[0] != 0 and result[1].get(view) == "error" and all(part in message for part in fragments)
         )
+    checks.update(state_unreported_checks(results))
     # The base outputs' hash lets a serial and a parallel run on the same code be compared.
     FIXTURE_EVIDENCE["base_outputs_sha256"] = hashlib.sha256(json.dumps(base, sort_keys=True, default=str).encode()).hexdigest()
     FIXTURE_EVIDENCE["case_errors"] = {case: str(result) for case, result in sorted(results.items()) if isinstance(result, BaseException)}
     return checks
+
+
+def state_case_rows(case: str, sql: str) -> list[tuple[str, ...]]:
+    """Return the rows of a query on a fixture case's build file, read as read_models reads the base case."""
+    database = f"{CONTAINER_OUT}/e2e/{case}/staging.duckdb"
+    (CASES / case / "attach.sql").write_text(f"ATTACH '{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb' AS lakehouse (READ_ONLY);\n")
+    return [tuple(row) for row in duckdb_csv(database, sql, f"{CONTAINER_OUT}/e2e/{case}/attach.sql")]
+
+
+def state_unreported_checks(results: dict[str, tuple[int, dict[str, str]] | BaseException]) -> dict[str, bool]:
+    """Check the files of the live shapes: a non-response listing and a demonstration file hold no typed row by nature and the whole project builds;
+    a page file with serial dates types; and both a real county that fails in every row and a listing row held for another reason still fail."""
+    code, statuses = built(results, STATE_UNREPORTED_CASE)
+    typed = state_case_rows(
+        STATE_UNREPORTED_CASE,
+        "SELECT fac_no, period_begin_date::VARCHAR, period_end_date::VARCHAR FROM int_hcai_util_facility_periods WHERE fac_no LIKE '10600003%' ORDER BY ALL;",
+    )
+    return {
+        "state_unreported_files_build_passes": code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items()),
+        "state_unreported_files_hold_reasons": state_case_rows(STATE_UNREPORTED_CASE, STATE_HOLDS_SQL) == [tuple(row) for row in STATE_UNREPORTED_HOLDS],
+        "state_unreported_page_file_with_serials_types": typed == [("106000031", "2023-01-01", "2023-12-31"), ("106000032", "2023-01-01", "2023-12-31")],
+    }
 
 
 FIXTURE_EVIDENCE: dict[str, Any] = {}

@@ -2,7 +2,8 @@
 -- published shape, a period that runs backwards, a number or financial value that is not in a reviewed form, or a county name that does not identify
 -- exactly one county of the state. A held row is identified by its file checksum and row number only: the rejected text, which can name a person, is
 -- never copied here. hold_detail names the number fields that failed and nothing else. The typed models leave these rows out, and
--- assert_state_rows_reconcile makes typed rows plus held rows equal the staged rows of each file.
+-- assert_state_rows_reconcile makes typed rows plus held rows equal the staged rows of each file. Two reasons name rows that are held by nature:
+-- nonresponse_without_period (a non-response listing row, which has no period) and demonstration_entity (the publisher's demonstration facilities).
 {{ config(materialized='table') }}
 
 with
