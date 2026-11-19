@@ -29,6 +29,7 @@ from scripts.training import (
     guards,
     hac_validation,
     job,
+    job_actions,
     job_inputs,
     mediation,
     production_record,
@@ -41,6 +42,7 @@ from scripts.training import (
 )
 from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
+from scripts.training.job_failure import JobFailure
 from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
@@ -1020,9 +1022,9 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_each_model_fits_only_its_own_model_and_tests", one_model_per_run)
     cases.check("job_fit_only_promotion_models_have_a_registry_candidate", candidate_only_for_promotion_models)
     cases.check("job_fit_feature_list_of_every_model_and_population", feature_list_of_every_model_and_population)
+    cases.check("job_fit_feature_list_of_m6_follows_the_panel", feature_list_of_m6_follows_the_panel)
     cases.check("job_fit_feature_list_of_an_unfitted_run", feature_list_of_an_unfitted_run)
     cases.check("job_fit_trust_check_reads_saved_state", serialized_state_trusted)
-    cases.check("job_fit_feature_list_of_m6_follows_the_panel", feature_list_of_m6_follows_the_panel)
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
     cases.check("job_fit_result_is_reproducible", reproducible)
@@ -2231,25 +2233,85 @@ def log_run_cases(cases: Any, folder: Path) -> None:
             keys.add(next(iter(fixture.tracking.parents().values()))["tags"]["training_key"])
         require(len(keys) == 2, "two models of one publication share a training key")
 
-    def unfitted_model_is_on_the_run_record() -> None:
-        """A green run of a model that was not fitted carries that status on the parent run and on the slot's child run."""
+    def nothing_fitted_fails_after_the_records_are_saved() -> None:
+        """The last action of a run that fitted none of its types fails by name, after the MLflow runs and the completion record are saved: the parent run
+        and the slot's child run carry the status, and a rerun resumes and fails the same way."""
         fixture = staged(folder / "unfitted_record", model="m6", hospitals=120, adjust=single_window)
-        code, _, error = run_action(fixture, "log_run")
-        require(code == 0, f"log_run failed: {error}")
+        code, out, error = run_action(fixture, "log_run")
+        failure = json.loads(error.strip().splitlines()[-1])
+        require(
+            code == 1 and failure["failure"] == "nothing_fitted" and failure["action"] == "log_run", f"log_run of a run that fitted nothing: {code} {error}"
+        )
+        require(
+            HAI_TYPE in failure["detail"] and "not_estimable" in failure["detail"] and "no complete repeated training hospitals" in failure["detail"], failure
+        )
+        verify_done(fixture.out, "log_run", DIGEST)
+        require((fixture.out / "log_run.json").is_file() and json.loads(out.strip().splitlines()[-1])["action"] == "log_run", f"the step did not finish: {out}")
         run_id, run = next(iter(fixture.tracking.parents().items()))
         require(run["params"]["model_status"] == "not_estimable", f"the parent run does not name the status: {run['params']}")
         require("no complete repeated training hospitals" in run["params"]["model_reason"], f"the parent run does not name the reason: {run['params']}")
         children = {item["tags"]["step_key"]: item for item in fixture.tracking.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
         require(children["m6_fixed_effects"]["params"]["status"] == "not_estimable", f"the slot child run: {children['m6_fixed_effects']['params']}")
+        calls = len(fixture.tracking.calls)
+        again, _, error = run_action(fixture, "log_run")
+        require(again == 1 and failure_of(error) == "nothing_fitted", f"a rerun of the run that fitted nothing: {again} {error}")
+        require(len(fixture.tracking.calls) == calls and len(fixture.tracking.parents()) == 1, "the rerun logged again")
+
+    def fitted_run_passes_with_its_status() -> None:
+        """A fitted run passes and its parent run says fitted, with no reason."""
         fitted_fixture = staged(folder / "fitted_record", model="m6", hospitals=60, late=lambda row: None)
-        require(run_action(fitted_fixture, "log_run")[0] == 0, "log_run of a fitted m6 failed")
+        code, _, error = run_action(fitted_fixture, "log_run")
+        require(code == 0 and "not fitted" not in error, f"log_run of a fitted m6: {code} {error}")
         fitted_run = next(iter(fitted_fixture.tracking.parents().values()))
         require(
             fitted_run["params"]["model_status"] == "fitted" and "model_reason" not in fitted_run["params"], f"a fitted model's parent: {fitted_run['params']}"
         )
 
+    def partly_fitted_passes_and_names_the_unfitted_type() -> None:
+        """One type fitted and one not: the last action passes, logs both types and names the unfitted one with its reason on standard error."""
+        fixture = staged(folder / "partly_record", model="m6", hai_types=("HAI_1", "HAI_2"), hospitals=120, adjust_type={"HAI_2": single_window})
+        code, out, error = run_action(fixture, "log_run")
+        require(code == 0, f"a partly fitted run failed: {error}")
+        require(
+            "fitted for HAI_1" in error and "HAI_2: not_estimable:" in error and "no complete repeated training hospitals" in error,
+            f"the unfitted type is not named: {error!r}",
+        )
+        require(len(fixture.tracking.parents()) == 2, "a type was not logged")
+        require(json.loads(out.strip().splitlines()[-1])["action"] == "log_run", f"summary: {out}")
+
+    def only_the_last_action_judges_the_outcome() -> None:
+        """For m1 to m6 the check belongs to the model's last data action (log_run, or promotion_check for m1, m2 and m4) and to no earlier one, and it reads
+        the run's own slot."""
+        types = ["HAI_1", "HAI_2"]
+        for model in training_contract.MODELS:
+            slot = training_contract.MODEL_LISTS[model][0]
+            work = folder / f"outcome_{model}"
+            for hai_type in types:
+                target = work / "in/fit" / bundle.prefix(hai_type) / "result.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    json.dumps({"statuses": {slot: {"status": "not_estimable", "reason": "nothing to estimate"}, "other": {"status": "fitted", "reason": ""}}})
+                )
+            write_done(work / "in/fit", "fit", DIGEST, [f"{bundle.prefix(hai_type)}/result.json" for hai_type in types])
+            (work / "training_parameters.json").write_text(
+                json.dumps({**{"features_run": "latest", "population": "primary", "trigger": "manual", "mlflow": "local"}, "hai_types": types, "model": model})
+            )
+            steps = training_contract.train_steps(model)
+            for action in steps:
+                context = SimpleNamespace(action=action, parameters=work / "training_parameters.json")
+                try:
+                    job_actions.accept_training(context, {"code_digest": DIGEST})
+                except JobFailure as failure:
+                    require(action == steps[-1] and failure.name == "nothing_fitted", f"{model}: {action} judged the outcome: {failure.name}")
+                else:
+                    require(action != steps[-1], f"{model}: the last action {action} accepted a run that fitted nothing")
+            require(steps[-1] == ("promotion_check" if model in training_contract.PROMOTION_MODELS else "log_run"), f"{model}: the last action is {steps[-1]}")
+
     cases.check("job_log_run_logs_runs_tags_metrics_artifacts_and_metafile", logged)
-    cases.check("job_log_run_an_unfitted_model_is_on_the_run_record", unfitted_model_is_on_the_run_record)
+    cases.check("job_log_run_nothing_fitted_fails_after_the_records_are_saved", nothing_fitted_fails_after_the_records_are_saved)
+    cases.check("job_log_run_a_fitted_run_passes_with_its_status", fitted_run_passes_with_its_status)
+    cases.check("job_log_run_a_partly_fitted_run_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
+    cases.check("job_log_run_only_the_last_action_judges_the_outcome", only_the_last_action_judges_the_outcome)
     cases.check("job_log_run_tags_the_model_and_the_base_run", tags_model_and_base_run)
     cases.check("job_log_run_logs_only_the_tests_of_its_model", logs_only_the_tests_of_its_model)
     cases.check("job_log_run_training_key_differs_per_model", training_key_differs_per_model)

@@ -128,6 +128,29 @@ def training_outcome(folder: Path, hai_types: Sequence[str], model: str) -> tupl
     return fitted, {hai_type: found for hai_type, found in statuses.items() if found["status"] != "fitted"}
 
 
+def accept_training(context: Any, record: Mapping[str, Any]) -> None:
+    """Judge the training run by its saved model statuses, once its model's last data action has finished and saved everything it saves.
+
+    Only that last action judges: ``log_run``, or ``promotion_check`` for the promotion models (the handlers of both call this). The AWS
+    runner and the local fixture lane both run the actions one by one, so both reach one decision for every model. A run that fitted none of its requested
+    types fails with ``nothing_fitted`` and names each type's status and reason. A run that fitted at least one type passes, and standard error names the
+    others with their reasons.
+    """
+    parameters = job_inputs.parameters_of(context.parameters)
+    model, hai_types = parameters["model"], parameters["hai_types"]
+    if context.action != training_contract.train_steps(model)[-1]:
+        return
+    try:
+        fitted, unfitted = training_outcome(verified_step(job_inputs.input_root(context.parameters), "fit", record), hai_types, model)
+    except InputError as error:
+        raise JobFailure(error.name, error.detail) from None
+    named = "; ".join(f"{hai_type}: {found['status']}: {found['reason']}" for hai_type, found in unfitted.items())
+    if not fitted:
+        raise JobFailure("nothing_fitted", f"model {model} was fitted for none of {', '.join(hai_types)} ({named})")
+    if unfitted:
+        sys.stderr.write(f"model {model} was fitted for {', '.join(fitted)} and not for: {named}\n")
+
+
 def check_targets(root: Path) -> None:
     """Check the target and earlier-outcome lists against the gold control bridge, as the guard does."""
     try:

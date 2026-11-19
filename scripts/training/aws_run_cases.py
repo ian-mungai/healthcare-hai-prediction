@@ -275,10 +275,10 @@ def train_cases(cases: Any, folder: Path) -> None:
         code, out, error = train(fixture)
         require(code == EXIT_FAILED, f"a run that fitted nothing ended with exit {code}: {out} {error}")
         failure = lines_of(error)[-1]
-        require(failure["step"] == "outcome" and failure["failure"] == "nothing_fitted", f"the failure is not named: {failure}")
+        require(failure["step"] == "log_run" and failure["failure"] == "nothing_fitted", f"the failure is not named: {failure}")
         require(HAI_TYPE in failure["detail"] and "not_estimable" in failure["detail"], f"the failure does not name the type and its status: {failure}")
         require("no complete repeated training hospitals" in failure["detail"], f"the failure does not give the reason: {failure}")
-        require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS, f"an action did not run before the outcome: {out}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS[:-1], f"the actions before the last one: {out}")
         for step in M6_STEPS:
             verify_done(fixture.folder / "in" / step, step, DIGEST)
         require((fixture.folder / "in/fit" / f"bundles/bundle_{HAI_TYPE}/result.json").is_file(), "the diagnostic bundle is gone")
@@ -333,20 +333,6 @@ def train_cases(cases: Any, folder: Path) -> None:
             fitted, unfitted = job_actions.training_outcome(written(model, "mixed", mixed), types, model)
             require(fitted == ["HAI_1"] and list(unfitted) == ["HAI_2"], f"{model} partly fitted: {fitted} {unfitted}")
 
-    def an_unreadable_fit_result_fails_by_name() -> None:
-        """A missing saved fit result is a named failure of the outcome, never an unhandled error."""
-        from scripts.training import aws_run
-
-        work = folder / "outcome_unreadable"
-        work.mkdir(parents=True)
-        (work / "training_parameters.json").write_text(json.dumps({**PARAMETERS, "model": "m6"}) + "\n")
-        try:
-            aws_run.accept_outcome(work)
-        except aws_run.StepFailed as failure:
-            require(failure.step == "outcome" and failure.failure == "outcome_unreadable" and failure.code == EXIT_FAILED, f"the failure: {failure.failure}")
-        else:
-            raise ValueError("a missing fit result was accepted")
-
     def refuses_prerequisite() -> None:
         fixture = staged_train(folder / "prerequisite")
         (fixture.extract / "extract.done.json").unlink()
@@ -373,7 +359,6 @@ def train_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_run_train_partly_fitted_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
     cases.check("aws_run_train_every_fitted_run_prints_no_outcome", every_fitted_run_prints_no_outcome)
     cases.check("aws_run_train_every_model_is_judged_by_its_own_slot", every_model_is_judged_by_its_own_slot)
-    cases.check("aws_run_train_an_unreadable_fit_result_fails_by_name", an_unreadable_fit_result_fails_by_name)
 
     def refuses_login(name: str, variable: str) -> None:
         def case() -> None:

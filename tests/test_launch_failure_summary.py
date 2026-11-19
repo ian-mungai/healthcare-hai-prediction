@@ -18,6 +18,7 @@ from orchestration.ecs_launch import Launch, Launcher, LaunchRefused
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import Preflight
 from scripts import phase_failure
+from scripts.orchestration import ecs_launch_cases
 from scripts.orchestration.ecs_launch_cases import RUN, Rig, spec
 from tests.failure_support import engine_facts
 from tests.support import check
@@ -416,3 +417,80 @@ def test_a_timeout_or_cancel_with_no_stopped_phase_keeps_the_configured_tail() -
     )
     launcher.wait(launch)
     check(launcher.conclude(launch).logs == "publish tail", "no stopped phase, so the configured container's tail")
+
+
+# A training run whose last action found no fitted type: the train container exits 1 with the named failure, the launcher records the launch as failed and the
+# promotion chain and the research readiness do not count it as a passed training run.
+
+
+def train_rig() -> Rig:
+    from dataclasses import replace
+
+    rig = Rig()
+    rig.ecs.register("example_dev_job_train_host", ecs_launch_cases.NEED.memory_mib, None)
+    rig.adapter = ecs_launch_cases.EcsAdapter(rig.ecs, rig.logs, replace(ecs_launch_cases.SETTINGS, families=frozenset({"gold", "drift", "train"})))
+    return rig
+
+
+def train_spec() -> Any:
+    names = ["prepare", "extract", "train"]
+    revision = ecs_launch_cases.REVISIONS["gold"].replace("_gold_", "_train_")
+    return spec(
+        job="train",
+        environment={name: {"RUN_ID": RUN} for name in names},
+        log_container="train",
+        log_prefix="train",
+        acceptance=("train",),
+        task_definition=revision,
+    )
+
+
+def train_ended(codes: dict[str, int | None], logs: list[str]) -> tuple[Rig, Launcher, Launch]:
+    rig = train_rig()
+    launcher = rig.launcher()
+    launch = launcher.attach(train_spec())
+    launcher.start(launch)
+    arn = launch.arn or ""
+    rig.logs.streams[f"train/train/{arn.rsplit('/', 1)[-1]}"] = logs
+    rig.ecs.finish(arn, codes)
+    launcher.wait(launch)
+    return rig, launcher, launch
+
+
+def nothing_fitted_logs() -> list[str]:
+    from scripts.training import aws_run
+
+    detail = "model m6 was fitted for none of HAI_1 (HAI_1: not_estimable: panel has no complete repeated training hospitals)"
+    failure = aws_run.StepFailed("log_run", 1, "nothing_fitted", detail)
+    named = json.dumps({"phase": "train", "step": "log_run", "failure": "nothing_fitted", "detail": detail}, sort_keys=True)
+    return [
+        '{"code": 0, "resumed": false, "step": "version_extract"}',
+        '{"code": 0, "resumed": false, "step": "fit"}',
+        named,
+        phase_failure.line(phase_failure.record_for("train", failure)),
+    ]
+
+
+def test_a_training_run_that_fitted_nothing_is_recorded_as_a_failed_launch_with_its_named_reason() -> None:
+    from orchestration import promotion_chain
+
+    rig, launcher, launch = train_ended({"prepare": 0, "extract": 0, "train": 1}, nothing_fitted_logs())
+    outcome = launcher.conclude(launch)
+    stored_end = json.loads(rig.bucket.objects[rig.key(1, "end", "train")])
+    check(outcome.outcome == "failed" and outcome.exit_code == 1, f"the launch of a run that fitted nothing: {outcome}")
+    check(
+        stored_end["outcome"] == "failed" and stored_end["failure"]["container"] == "train" and stored_end["failure"]["phase"] == "train",
+        f"the end record: {stored_end}",
+    )
+    check(stored_end["failure"]["codes"] == ["step_failed"], f"the closed code of the failed step: {stored_end['failure']}")
+    check(not promotion_chain.trained(launcher.store, RUN), "the promotion chain counts the failed launch as a passed training run")
+
+
+def test_a_training_run_that_fitted_a_type_is_recorded_as_a_passed_launch() -> None:
+    from orchestration import promotion_chain
+
+    rig, launcher, launch = train_ended(
+        {"prepare": 0, "extract": 0, "train": 0}, ['{"outcome": "partly_fitted", "unfitted": {"HAI_2": {"status": "not_estimable"}}}']
+    )
+    outcome = launcher.conclude(launch)
+    check(outcome.outcome == "succeeded" and promotion_chain.trained(launcher.store, RUN), f"a run with a fitted type: {outcome}")

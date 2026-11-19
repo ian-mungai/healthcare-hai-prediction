@@ -228,9 +228,11 @@ def run_version_extract(context: Context) -> None:
 
 def run_promotion_check(context: Context) -> None:
     """Register each candidate, score it against the champion and record the verdict without changing production."""
-    from scripts.training import promotion_check
+    from scripts.training import job_actions, promotion_check
 
-    promotion_check.run(context, read_record(context))
+    record = read_record(context)
+    promotion_check.run(context, record)
+    job_actions.accept_training(context, record)
 
 
 def run_promote(context: Context) -> None:
@@ -251,7 +253,9 @@ def run_log_run(context: Context) -> None:
     """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
     from scripts.training import job_actions
 
-    job_actions.run_log_run(context, read_record(context))
+    record = read_record(context)
+    job_actions.run_log_run(context, record)
+    job_actions.accept_training(context, record)
 
 
 HANDLERS: dict[str, Callable[[Context], None]] = {

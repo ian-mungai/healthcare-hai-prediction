@@ -185,6 +185,14 @@ def rendered_cases(cases: Cases, folder: Path) -> None:
             f"{action}_only_declared_predecessor_inputs",
             partial(require, inputs == allowed, "step received another predecessor output"),
         )
+    for action in ("log_run", "promotion_check"):
+        mounted = {PurePosixPath(target).relative_to("/workspace/in").parts[0] for _, target, _ in specs[action].mounts if target.startswith("/workspace/in/")}
+        cases.check(
+            f"{action}_mounts_the_fit_output_that_the_outcome_check_reads",
+            partial(
+                require, "fit" in mounted and "fit" in training_contract.INPUT_STEPS[action], "the last action of a model cannot read the saved fit results"
+            ),
+        )
     cases.check(
         "hac_validation_has_no_predictor_extracts",
         lambda: require(
