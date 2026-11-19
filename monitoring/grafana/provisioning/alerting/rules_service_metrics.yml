@@ -46,6 +46,11 @@ groups:
           severity: warning
         annotations:
           summary: Polaris answered more than three requests with a 5xx status in ten minutes.
+          headline: 'Polaris returns server errors'
+          recovered: 'Polaris returns no more server errors.'
+          affects: 'Catalog reads or writes may fail.'
+          next_step: 'Read the Polaris log on the host. The HAI Polaris dashboard shows the error rate.'
+          dashboard: 'HAI Polaris'
 
       - uid: polaris_heap_high
         title: PolarisHeapHigh
@@ -83,6 +88,11 @@ groups:
           severity: warning
         annotations:
           summary: The Polaris Java heap has stayed above 90% of its maximum. A heap with no defined maximum raises no alert.
+          headline: 'Polaris heap is almost full'
+          recovered: 'The Polaris heap is back under 90 percent.'
+          affects: 'Polaris may slow down or stop.'
+          next_step: 'Watch the HAI Polaris dashboard. Plan more memory for Polaris if the heap stays high.'
+          dashboard: 'HAI Polaris'
 
       - uid: mlflow_server_errors
         title: MlflowServerErrors
@@ -120,6 +130,11 @@ groups:
           severity: warning
         annotations:
           summary: MLflow answered more than three requests with a 5xx status in ten minutes.
+          headline: 'MLflow returns server errors'
+          recovered: 'MLflow returns no more server errors.'
+          affects: 'Training and promotion steps may fail to log or read runs.'
+          next_step: 'Read the MLflow log on the host. The HAI MLflow dashboard shows the error rate.'
+          dashboard: 'HAI MLflow'
 
       - uid: mlflow_slow_requests
         title: MlflowSlowRequests
@@ -157,6 +172,11 @@ groups:
           severity: warning
         annotations:
           summary: The 95th percentile of MLflow request time has stayed above five seconds.
+          headline: 'MLflow is slow'
+          recovered: 'MLflow requests are fast again.'
+          affects: 'Training and promotion steps may run into their time limits.'
+          next_step: 'Open the HAI MLflow dashboard to see the request time. Read the MLflow log.'
+          dashboard: 'HAI MLflow'
 
       - uid: grafana_rule_evaluation_failing
         title: GrafanaRuleEvaluationFailing
@@ -194,6 +214,11 @@ groups:
           severity: warning
         annotations:
           summary: Grafana alert rules fail to evaluate, so some alerts cannot fire.
+          headline: 'Grafana alert rules fail to evaluate'
+          recovered: 'Grafana evaluates its alert rules again.'
+          affects: 'Some alerts cannot fire.'
+          next_step: 'Open the HAI Grafana dashboard. Read the Grafana log to find the failing rule.'
+          dashboard: 'HAI Grafana'
 
       - uid: grafana_notifications_failing
         title: GrafanaNotificationsFailing
@@ -231,6 +256,11 @@ groups:
           severity: warning
         annotations:
           summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure and a first failure after a restart also count).
+          headline: 'Grafana cannot deliver notifications'
+          recovered: 'Grafana delivers its notifications again.'
+          affects: 'You may miss alert emails.'
+          next_step: 'Open Grafana. Go to Alerting, then Contact points. Read the error of the hai_sns contact point.'
+          dashboard: 'HAI Grafana'
 
       - uid: grafana_scheduler_behind
         title: GrafanaSchedulerBehind
@@ -268,3 +298,8 @@ groups:
           severity: warning
         annotations:
           summary: The Grafana alert scheduler runs more than a minute behind, so alerts fire late.
+          headline: 'Grafana alert scheduler is behind'
+          recovered: 'The Grafana alert scheduler is on time again.'
+          affects: 'Alerts fire late.'
+          next_step: 'Open the HAI host capacity dashboard to see if the host is under load.'
+          dashboard: 'HAI Grafana'

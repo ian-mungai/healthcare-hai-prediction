@@ -39,6 +39,11 @@ ALERTS = f"{MONITORING}/prometheus/alerts.yml"
 ALERTING = f"{MONITORING}/grafana/provisioning/alerting"
 CONTACT = f"{ALERTING}/contact_points.yml"
 POLICIES = f"{ALERTING}/policies.yml"
+TEMPLATES = f"{ALERTING}/templates.yml"
+TEMPLATE_GROUP = "hai_sns"
+TEMPLATE_PARTS = ("hai.sns.subject", "hai.sns.message", "hai.model_name", "hai.hai_name", "hai.alert", "hai.time", "hai.which", "hai.subject_target")
+NOTICE_ANNOTATIONS = ("headline", "recovered", "affects", "next_step", "dashboard")
+HEADLINE_LIMIT = 60
 CONTACT_NAME = "hai_sns"
 TOPIC_REFERENCE = "${ALERTS_TOPIC_ARN}"
 STATIC_CREDENTIALS = ("access_key", "secret_key", "profile", "role_arn")
@@ -481,6 +486,7 @@ def alert_problems(
                     problems.append(f"{where} needs a severity label of {' or '.join(SEVERITIES)}")
                 if not str(rule.get("annotations", {}).get("summary", "")).strip():
                     problems.append(f"{where} has no summary")
+                problems.extend(notice_annotation_problems(where, rule.get("annotations", {}), dashboard_titles(root)))
                 if "for" in rule and not DURATION.match(str(rule["for"])):
                     problems.append(f"{where} has the duration {rule['for']}, which is not a whole number of seconds, minutes or hours")
                 for state in ("noDataState", "execErrState"):
@@ -495,6 +501,76 @@ def alert_problems(
                     problems.append(f"{where}: {SCHEDULER_ALERT} must also fire when no heartbeat series exists")
     if total == 0:
         problems.append(f"{ALERTING} holds no alert rule")
+    return problems
+
+
+def dashboard_titles(root: Path) -> set[str]:
+    """The titles of the tracked dashboards, which the dashboard annotation of a rule names."""
+    folder = root / DASHBOARDS
+    titles: set[str] = set()
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        try:
+            titles.add(str(json.loads(path.read_text(encoding="utf-8")).get("title")))
+        except (OSError, ValueError, AttributeError):
+            continue
+    return titles
+
+
+def notice_annotation_problems(where: str, annotations: Any, titles: set[str]) -> list[str]:
+    """Problems with the annotations that the alert email reads: each is text, the headline fits a subject and the dashboard exists."""
+    problems: list[str] = []
+    annotations = annotations if isinstance(annotations, dict) else {}
+    for key in NOTICE_ANNOTATIONS:
+        if not str(annotations.get(key, "")).strip():
+            problems.append(f"{where} has no {key} annotation, which the alert email reads")
+    if len(str(annotations.get("headline", ""))) > HEADLINE_LIMIT:
+        problems.append(f"{where}: the headline is longer than {HEADLINE_LIMIT} characters, and an SNS subject holds 100")
+    dashboard = str(annotations.get("dashboard", "")).strip()
+    if dashboard and titles and dashboard not in titles:
+        problems.append(f"{where}: the dashboard annotation names {dashboard!r}, which is no dashboard title")
+    for key, value in annotations.items():
+        if "$" in str(value) or "{{" in str(value):
+            problems.append(f"{where}: the {key} annotation holds a template or a variable, and the alert email shows it as written")
+    return problems
+
+
+def template_problems(root: Path, contact: Any) -> list[str]:
+    """Problems with the notification template group: the file parses, it defines every part, the contact point calls the subject and the message, every
+    annotation it reads is one the rules must hold, and its names of models and infection types are the names of the contract."""
+    problems: list[str] = []
+    document = read_yaml(root, TEMPLATES, problems)
+    if document is None:
+        return problems
+    entries = document.get("templates") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or len(entries) != 1 or entries[0].get("name") != TEMPLATE_GROUP or not str(entries[0].get("template", "")).strip():
+        return [*problems, f"{TEMPLATES} must provision exactly one template group named {TEMPLATE_GROUP}"]
+    text = str(entries[0]["template"])
+    if text.count("{{") != text.count("}}"):
+        problems.append(f"{TEMPLATES}: the template has an unclosed action")
+    defined = set(re.findall(r'\{\{\s*define\s+"([^"]+)"', text))
+    for part in TEMPLATE_PARTS:
+        if part not in defined:
+            problems.append(f"{TEMPLATES} does not define {part}")
+    for call in set(re.findall(r'\{\{-?\s*template\s+"([^"]+)"', text)) - defined:
+        problems.append(f"{TEMPLATES} calls {call}, which it does not define")
+    read = set(re.findall(r"\.(?:Common)?Annotations\.([a-z_]+)", text))
+    for key in sorted(read - {"summary", *NOTICE_ANNOTATIONS}):
+        problems.append(f"{TEMPLATES} reads the annotation {key}, which no rule is required to hold")
+    for key in sorted(set(NOTICE_ANNOTATIONS) - read):
+        problems.append(f"{TEMPLATES} does not read the annotation {key}, which every rule must hold")
+    settings = {}
+    points = contact.get("contactPoints") if isinstance(contact, dict) else None
+    if isinstance(points, list) and points and points[0].get("receivers"):
+        settings = points[0]["receivers"][0].get("settings", {})
+    for field, part in (("subject", "hai.sns.subject"), ("message", "hai.sns.message")):
+        if f'template "{part}"' not in str(settings.get(field, "")):
+            problems.append(f"{CONTACT}: the {field} must call the template {part} of {TEMPLATES}")
+    from orchestration import training_contract
+
+    for part, labels in (("hai.model_name", training_contract.MODEL_LABELS), ("hai.hai_name", training_contract.HAI_LABELS)):
+        found = dict(re.findall(r'\{\{ (?:else )?if eq \. "([^"]+)" \}\}(.+?) \(\1\)', text.split(f'define "{part}"', 1)[-1].split("{{- end }}", 1)[0]))
+        if found != dict(labels):
+            problems.append(f"{TEMPLATES}: {part} names {found}, but the contract names {dict(labels)}")
     return problems
 
 
@@ -735,6 +811,7 @@ def check(root: Path = ROOT) -> list[str]:
     policies = read_yaml(root, POLICIES, problems)
     contact_problems, receivers = contact_point_problems(contact, policies) if contact is not None and policies is not None else ([], set())
     problems.extend(contact_problems)
+    problems.extend(template_problems(root, contact) if contact is not None else [])
     if uids:
         problems.extend(alert_problems(root, metrics, jobs, uids[0], receivers, late_counters(known)))
     folder = root / DASHBOARDS

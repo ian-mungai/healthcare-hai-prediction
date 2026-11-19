@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from scripts.infrastructure.monitoring_cases import CASES, REPO_ROOT
 from scripts.infrastructure.service_alert_fixture_cases import CASES as FIXTURE_CASES
 from scripts.infrastructure.service_panel_cases import CASES as SERVICE_CASES
+from scripts.infrastructure.sns_template_cases import CASES as TEMPLATE_CASES
 
 OUTPUT = REPO_ROOT / "data" / "e2e" / "monitoring"
 
@@ -21,7 +22,7 @@ OUTPUT = REPO_ROOT / "data" / "e2e" / "monitoring"
 def run_cases() -> dict[str, dict[str, bool]]:
     """The outcome of every case; a case that raises is one failed check named after the type of its exception, never its message."""
     results: dict[str, dict[str, bool]] = {}
-    for name, function in (CASES | SERVICE_CASES | FIXTURE_CASES).items():
+    for name, function in (CASES | SERVICE_CASES | FIXTURE_CASES | TEMPLATE_CASES).items():
         try:
             results[name] = function(REPO_ROOT)
         except Exception as error:

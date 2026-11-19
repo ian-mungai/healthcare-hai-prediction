@@ -44,6 +44,11 @@ groups:
           severity: critical
         annotations:
           summary: The Airflow scheduler sent no heartbeat for 10 minutes.
+          headline: 'Airflow scheduler is silent'
+          recovered: 'The Airflow scheduler sends heartbeats again.'
+          affects: 'No DAG run starts or moves on until the scheduler runs again.'
+          next_step: 'Check that the Airflow scheduler task runs on the host and read its log.'
+          dashboard: 'HAI overview'
 
       - uid: airflow_dag_run_failed
         title: AirflowDagRunFailed
@@ -80,6 +85,11 @@ groups:
           severity: warning
         annotations:
           summary: A DAG run failed in the last hour.
+          headline: 'Airflow DAG run failed'
+          recovered: 'No DAG run of this DAG failed in the last hour.'
+          affects: 'The DAG run did not finish, so the steps that wait for it do not run.'
+          next_step: 'Open the DAG in Airflow, find the failed run and read the log of its failed task.'
+          dashboard: 'HAI overview'
 
       - uid: airflow_task_failed
         title: AirflowTaskFailed
@@ -116,6 +126,11 @@ groups:
           severity: warning
         annotations:
           summary: A task failed in the last hour.
+          headline: 'Airflow task failed'
+          recovered: 'No task of this DAG failed in the last hour.'
+          affects: 'The DAG run that holds this task did not finish.'
+          next_step: 'Open the DAG in Airflow, find the failed task and read its log.'
+          dashboard: 'HAI overview'
 
       - uid: airflow_dag_import_errors
         title: AirflowDagImportErrors
@@ -153,3 +168,8 @@ groups:
           severity: warning
         annotations:
           summary: A DAG file fails to import.
+          headline: 'Airflow cannot import a DAG file'
+          recovered: 'Every DAG file imports again.'
+          affects: 'The DAG in the broken file does not run until its file imports.'
+          next_step: 'Open Airflow and read the import error it lists. Fix the DAG file.'
+          dashboard: 'HAI overview'

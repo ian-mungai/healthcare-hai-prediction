@@ -44,6 +44,11 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the host state exporter, so the host capacity and the OpenMetadata health are not visible.
+          headline: 'Host state exporter is down'
+          recovered: 'Prometheus reaches the host state exporter again.'
+          affects: 'Host capacity and OpenMetadata health are not visible.'
+          next_step: 'Check that the host state exporter task runs on the host and read its log.'
+          dashboard: 'HAI host capacity'
 
       - uid: host_state_source_down
         title: HostStateSourceDown
@@ -81,6 +86,11 @@ groups:
           severity: warning
         annotations:
           summary: The host state exporter cannot read one of its sources (the ECS capacity or the OpenMetadata health check).
+          headline: 'Host state exporter cannot read a source'
+          recovered: 'The host state exporter reads its sources again.'
+          affects: 'Part of the host capacity or OpenMetadata health data is missing.'
+          next_step: 'Read the exporter log to see which source fails. It is the ECS capacity or the OpenMetadata health check.'
+          dashboard: 'HAI host capacity'
 
       - uid: host_job_room_low
         title: HostJobRoomLow
@@ -118,3 +128,8 @@ groups:
           severity: warning
         annotations:
           summary: With no host job running, ECS has less memory left than the host job cap, so no job can be placed.
+          headline: 'No room left to place a host job'
+          recovered: 'The host has room for a job again.'
+          affects: 'No new host job can start until memory is free.'
+          next_step: 'Open the HAI host capacity dashboard and stop a service you do not need.'
+          dashboard: 'HAI host capacity'

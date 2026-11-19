@@ -43,6 +43,7 @@ SCRAPE = "monitoring/prometheus/prometheus.yml"
 MAPPING = "monitoring/statsd/mapping.yml"
 DATASOURCE = "monitoring/grafana/provisioning/datasources/prometheus.yml"
 TERRAFORM = "infra/services/monitoring.tf"
+TEMPLATES = f"{ALERTING}/templates.yml"
 Plant = Callable[[Path], None]
 
 
@@ -279,9 +280,62 @@ def contact_point_is_not_sns(root: Path) -> dict[str, bool]:
 
 
 def contact_point_has_no_subject(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, CONTACT, "          subject: '{{ template \"hai.sns.subject\" . }}'\n", ""), "needs a subject")
+
+
+def rule_has_no_next_step(root: Path) -> dict[str, bool]:
+    note = "          next_step: 'Open Airflow, find the failed run of this job and read its task log. Fix the cause and run it again.'\n"
+    return reported(root, lambda tree: edit(tree, RULES_JOBS, note, ""), "has no next_step annotation")
+
+
+def rule_names_a_dashboard_that_does_not_exist(root: Path) -> dict[str, bool]:
     return reported(
-        root, lambda tree: edit(tree, CONTACT, "          subject: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'\n", ""), "needs a subject"
+        root, lambda tree: edit(tree, RULES_JOBS, "          dashboard: 'HAI host jobs'\n", "          dashboard: 'HAI nothing'\n"), "is no dashboard title"
     )
+
+
+def rule_has_a_headline_too_long_for_a_subject(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES_JOBS, "          headline: 'Host job failed'\n", f"          headline: '{'Host job failed ' * 5}'\n"),
+        "headline is longer",
+    )
+
+
+def rule_annotation_holds_a_variable(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES_JOBS, "          headline: 'Host job failed'\n", "          headline: '{{ $labels.job }} failed'\n"),
+        "template or a variable",
+    )
+
+
+def template_file_is_missing(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: (tree / TEMPLATES).unlink(), f"{TEMPLATES} does not exist")
+
+
+def template_part_is_not_defined(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, TEMPLATES, '{{ define "hai.time" -}}', '{{ define "hai.clock" -}}'), "does not define hai.time")
+
+
+def contact_point_message_skips_the_template(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, CONTACT, '{{ template "hai.sns.message" . }}', '{{ template "sns.default.message" . }}'),
+        "message must call the template hai.sns.message",
+    )
+
+
+def template_reads_an_annotation_no_rule_holds(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, TEMPLATES, ".Annotations.affects", ".Annotations.impact"), "reads the annotation impact")
+
+
+def template_names_differ_from_the_contract(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, TEMPLATES, "Elastic Net (m2)", "Elastic Nets (m2)"), "hai.model_name names")
+
+
+def template_calls_a_part_it_does_not_define(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, TEMPLATES, 'template "hai.which" .', 'template "hai.where" .'), "calls hai.where")
 
 
 def contact_point_file_is_missing(root: Path) -> dict[str, bool]:
@@ -453,6 +507,16 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "contact_point_is_not_sns": contact_point_is_not_sns,
     "contact_point_has_no_subject": contact_point_has_no_subject,
     "contact_point_file_is_missing": contact_point_file_is_missing,
+    "rule_has_no_next_step": rule_has_no_next_step,
+    "rule_names_a_dashboard_that_does_not_exist": rule_names_a_dashboard_that_does_not_exist,
+    "rule_has_a_headline_too_long_for_a_subject": rule_has_a_headline_too_long_for_a_subject,
+    "rule_annotation_holds_a_variable": rule_annotation_holds_a_variable,
+    "template_file_is_missing": template_file_is_missing,
+    "template_part_is_not_defined": template_part_is_not_defined,
+    "contact_point_message_skips_the_template": contact_point_message_skips_the_template,
+    "template_reads_an_annotation_no_rule_holds": template_reads_an_annotation_no_rule_holds,
+    "template_names_differ_from_the_contract": template_names_differ_from_the_contract,
+    "template_calls_a_part_it_does_not_define": template_calls_a_part_it_does_not_define,
     "policy_default_receiver_is_another": policy_default_receiver_is_another,
     "policy_has_a_route_to_another_receiver": policy_has_a_route_to_another_receiver,
     "grafana_environment_lacks_the_topic_arn": grafana_environment_lacks_the_topic_arn,

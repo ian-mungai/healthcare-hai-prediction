@@ -44,6 +44,11 @@ groups:
           severity: warning
         annotations:
           summary: An ECS service runs fewer tasks than it should.
+          headline: 'An ECS service runs too few tasks'
+          recovered: 'The service runs all its tasks again.'
+          affects: 'The service does not run in full.'
+          next_step: 'Open the HAI services and disk dashboard to see which service. Then check its tasks in ECS.'
+          dashboard: 'HAI services and disk'
 
       - uid: service_health_down
         title: ServiceHealthDown
@@ -81,6 +86,11 @@ groups:
           severity: warning
         annotations:
           summary: The health endpoint of a service that should run does not answer.
+          headline: 'A service health check fails'
+          recovered: 'The health endpoint of the service answers again.'
+          affects: 'The service runs but does not answer.'
+          next_step: 'Open the HAI services and disk dashboard to see which service. Read its log on the host.'
+          dashboard: 'HAI services and disk'
 
       - uid: service_tasks_restarting
         title: ServiceTasksRestarting
@@ -117,6 +127,11 @@ groups:
           severity: warning
         annotations:
           summary: More than 2 tasks of a service stopped in the last hour, so it is restarting.
+          headline: 'A service keeps restarting'
+          recovered: 'The service has not restarted more than 2 times in the last hour.'
+          affects: 'The service is unstable and may drop requests.'
+          next_step: 'Open the HAI services and disk dashboard to see the stop reasons. Read the service log.'
+          dashboard: 'HAI services and disk'
 
       - uid: scratch_disk_low
         title: ScratchDiskLow
@@ -154,6 +169,11 @@ groups:
           severity: warning
         annotations:
           summary: The job scratch volume has less than 15 percent free, so the next job may fail for space.
+          headline: 'Job scratch disk is low'
+          recovered: 'The job scratch volume has enough free space again.'
+          affects: 'The next job may fail for lack of space.'
+          next_step: 'Free space on the job scratch volume or grow it before the next job.'
+          dashboard: 'HAI services and disk'
 
       - uid: data_disk_low
         title: DataDiskLow
@@ -191,6 +211,11 @@ groups:
           severity: critical
         annotations:
           summary: The data volume has less than 10 percent free.
+          headline: 'Data disk is low'
+          recovered: 'The data volume has enough free space again.'
+          affects: 'Services that write to the data volume may fail.'
+          next_step: 'Free space on the data volume or grow it now.'
+          dashboard: 'HAI services and disk'
 
       - uid: opensearch_cluster_red
         title: OpenSearchClusterRed
@@ -228,6 +253,11 @@ groups:
           severity: critical
         annotations:
           summary: The OpenSearch cluster is red, so OpenMetadata search and lineage reads can fail.
+          headline: 'OpenSearch cluster is red'
+          recovered: 'The OpenSearch cluster is no longer red.'
+          affects: 'OpenMetadata search and lineage reads can fail.'
+          next_step: 'Check the OpenSearch task on the host and read its log.'
+          dashboard: 'HAI OpenMetadata'
 
       - uid: opensearch_cluster_yellow
         title: OpenSearchClusterYellow
@@ -265,6 +295,11 @@ groups:
           severity: warning
         annotations:
           summary: The OpenSearch cluster has been yellow for 30 minutes, so some replica shards are not assigned.
+          headline: 'OpenSearch cluster is yellow'
+          recovered: 'The OpenSearch cluster is no longer yellow.'
+          affects: 'Some replica shards are not assigned. Search still works.'
+          next_step: 'No urgent action is needed. Check the OpenSearch task if it stays yellow.'
+          dashboard: 'HAI OpenMetadata'
 
       - uid: bootstrap_task_failed
         title: BootstrapTaskFailed
@@ -301,3 +336,8 @@ groups:
           severity: warning
         annotations:
           summary: The latest run of a one-shot bootstrap task (code fetch, Polaris bootstrap or OpenMetadata bootstrap) did not exit with 0.
+          headline: 'A bootstrap task failed'
+          recovered: 'The latest run of the bootstrap task exited with 0.'
+          affects: 'The service that this task prepares may not work.'
+          next_step: 'Read the log of the failed one-shot task. It is the code fetch, the Polaris bootstrap or the OpenMetadata bootstrap.'
+          dashboard: 'HAI services and disk'

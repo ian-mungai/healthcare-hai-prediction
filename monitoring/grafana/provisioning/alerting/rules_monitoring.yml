@@ -44,3 +44,8 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the StatsD exporter, so Airflow metrics are lost.
+          headline: 'StatsD exporter is down'
+          recovered: 'Prometheus reaches the StatsD exporter again.'
+          affects: 'Airflow metrics are lost, so the Airflow alerts cannot fire.'
+          next_step: 'Check that the StatsD exporter task runs on the host.'
+          dashboard: 'HAI overview'

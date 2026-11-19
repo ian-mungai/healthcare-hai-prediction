@@ -43,6 +43,11 @@ groups:
           severity: warning
         annotations:
           summary: A dbt test of the layer failed in its latest build.
+          headline: 'A dbt test failed'
+          recovered: 'The latest dbt build of this layer passes its tests.'
+          affects: 'The data of this layer failed a check, so its output may be wrong or missing.'
+          next_step: 'Open Airflow, find the latest build of this layer and read which dbt test failed.'
+          dashboard: 'HAI data quality'
 
       - uid: quality_checks_failed
         title: QualityChecksFailed
@@ -79,3 +84,8 @@ groups:
           severity: warning
         annotations:
           summary: A quality check of the layer's gate failed in its latest validation.
+          headline: 'A quality check failed'
+          recovered: 'The latest validation of this layer passes its checks.'
+          affects: 'The gate of this layer failed, so its data is not accepted.'
+          next_step: 'Open Airflow, find the latest validation of this layer and read which check failed.'
+          dashboard: 'HAI data quality'

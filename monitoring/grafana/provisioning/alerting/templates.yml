@@ -1,0 +1,165 @@
+# The text of every alert email. Amazon SNS sends plain text: no HTML, no Markdown and a subject of at most 100 characters. The contact point (contact_points.yml)
+# names the two templates below. One alert reads as a subject and these blocks, in this order: what happened, when, what it affects, what to do next, where to
+# look and details. A block with no content is left out. The words come from the annotations of each rule (summary, headline, recovered, affects, next_step and
+# dashboard, in the rules_*.yml files), and the readable names of the labels come from this file. The times are in America/Los_Angeles with UTC in brackets.
+# The two lists of names (hai.model_name and hai.hai_name) must agree with MODEL_LABELS and HAI_LABELS in orchestration/training_contract.py: the monitoring file
+# check compares them. Grafana does not expand a dollar sign in a template, so the variables below stay as written.
+apiVersion: 1
+
+templates:
+  - orgId: 1
+    name: hai_sns
+    template: |
+      {{ define "hai.model_name" -}}
+      {{ if eq . "m1" }}OLS baseline (m1){{ else if eq . "m2" }}Elastic Net (m2){{ else if eq . "m3" }}Mixed effects (m3){{ else if eq . "m4" }}Gradient boosting (m4){{ else if eq . "m5" }}Spatial (m5){{ else if eq . "m6" }}Fixed effects (m6){{ else }}{{ . }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.hai_name" -}}
+      {{ if eq . "HAI_1" }}CLABSI (HAI_1){{ else if eq . "HAI_2" }}CAUTI (HAI_2){{ else if eq . "HAI_3" }}SSI colon (HAI_3){{ else if eq . "HAI_4" }}SSI hysterectomy (HAI_4){{ else if eq . "HAI_5" }}MRSA (HAI_5){{ else if eq . "HAI_6" }}C. difficile (HAI_6){{ else }}{{ . }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.time" -}}
+      {{ . | tz "America/Los_Angeles" | date "3:04 PM MST, Jan 2 2006" }} [{{ . | tz "UTC" | date "15:04" }} UTC]
+      {{- end }}
+
+      {{ define "hai.subject_target" -}}
+      {{ if .Labels.dag_id }} ({{ printf "%.30s" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ printf "%.30s" . }}{{ end }})
+      {{- else if .Labels.job }} (job {{ printf "%.20s" .Labels.job }}{{ with .Labels.phase }}, phase {{ printf "%.20s" . }}{{ end }})
+      {{- else if .Labels.hai_type }} ({{ template "hai.hai_name" .Labels.hai_type }})
+      {{- else if .Labels.feature_set }} (feature set {{ template "hai.model_name" .Labels.feature_set }})
+      {{- else if .Labels.service }} (service {{ printf "%.30s" .Labels.service }})
+      {{- end }}
+      {{- end }}
+
+      {{ define "hai.which" -}}
+      {{ if .Labels.job }}Job {{ .Labels.job }}{{ with .Labels.phase }}, phase {{ . }}{{ end }}{{ with .Labels.model_set }}, model {{ template "hai.model_name" . }}{{ end }}{{ with .Labels.job_type }}, infection type {{ template "hai.hai_name" . }}{{ end }}.
+      {{- else if .Labels.dag_id }}DAG {{ .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ . }}{{ end }}.
+      {{- else if .Labels.hai_type }}Infection type {{ template "hai.hai_name" .Labels.hai_type }}.
+      {{- else if .Labels.feature_set }}Feature set {{ template "hai.model_name" .Labels.feature_set }}.
+      {{- else if .Labels.service }}Service {{ .Labels.service }}.
+      {{- end }}
+      {{- end }}
+
+      {{ define "hai.alert" -}}
+      {{ $resolved := eq .Status "resolved" -}}
+      {{ $which := or .Labels.job .Labels.dag_id .Labels.hai_type .Labels.feature_set .Labels.service -}}
+      {{ $summary := "" -}}{{ with .Annotations.summary }}{{ $summary = . }}{{ end -}}
+      {{ $affects := "" -}}{{ with .Annotations.affects }}{{ $affects = . }}{{ end -}}
+      {{ $next := "" -}}{{ with .Annotations.next_step }}{{ $next = . }}{{ end -}}
+      {{ $dashboard := "" -}}{{ with .Annotations.dashboard }}{{ $dashboard = . }}{{ end -}}
+      {{ $details := or .Labels.alertname .Labels.severity $which -}}
+      What happened:
+      {{- if $resolved }}
+      This alert has cleared.{{ with .Annotations.recovered }} {{ . }}{{ end }}
+      {{- if $summary }}
+      Earlier problem: {{ $summary }}
+      {{- end }}
+      {{- else if $summary }}
+      {{ $summary }}
+      {{- else }}
+      {{ with .Labels.alertname }}{{ . }} is firing.{{ else }}An alert is firing.{{ end }}
+      {{- end }}
+
+      When:
+      {{- if $resolved }}
+      Cleared at {{ template "hai.time" .EndsAt }}
+      Began at {{ template "hai.time" .StartsAt }}
+      {{- else }}
+      Started at {{ template "hai.time" .StartsAt }}
+      {{- end }}
+      {{- if or $which $resolved $affects }}
+
+      What it affects:
+      {{- if $which }}
+      {{ template "hai.which" . }}
+      {{- end }}
+      {{- if $resolved }}
+      Nothing is affected now.
+      {{- else if $affects }}
+      {{ $affects }}
+      {{- end }}
+      {{- end }}
+      {{- if or $resolved $next }}
+
+      What to do next:
+      {{- if $resolved }}
+      No action is needed.
+      {{- else }}
+      {{ $next }}
+      {{- end }}
+      {{- end }}
+      {{- if $dashboard }}
+
+      Where to look:
+      Dashboard: {{ $dashboard }} in Grafana.
+      Grafana opens through a port forward. Start it with: bash scripts/open_ui.sh grafana
+      Then browse to http://localhost:3001
+      {{- end }}
+      {{- if $details }}
+
+      Details:
+      {{- with .Labels.job }}
+      Job: {{ . }}
+      {{- end }}
+      {{- with .Labels.phase }}
+      Phase: {{ . }}
+      {{- end }}
+      {{- with .Labels.model_set }}
+      Model: {{ template "hai.model_name" . }}
+      {{- end }}
+      {{- with .Labels.job_type }}
+      Infection type: {{ template "hai.hai_name" . }}
+      {{- end }}
+      {{- with .Labels.hai_type }}
+      Infection type: {{ template "hai.hai_name" . }}
+      {{- end }}
+      {{- with .Labels.feature_set }}
+      Feature set: {{ template "hai.model_name" . }}
+      {{- end }}
+      {{- with .Labels.dag_id }}
+      DAG: {{ . }}
+      {{- end }}
+      {{- with .Labels.task_id }}
+      Task: {{ . }}
+      {{- end }}
+      {{- with .Labels.service }}
+      Service: {{ . }}
+      {{- end }}
+      {{- with .Labels.kind }}
+      Check group: {{ . }}
+      {{- end }}
+      {{- with .Labels.severity }}
+      Severity: {{ . }}
+      {{- end }}
+      {{- with .Labels.alertname }}
+      Alert rule: {{ . }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+
+      {{ define "hai.sns.subject" -}}
+      {{ $firing := len .Alerts.Firing -}}
+      {{ $resolved := len .Alerts.Resolved -}}
+      {{ if gt $firing 0 }}FIRING{{ else }}RESOLVED{{ end }}:
+      {{- with .CommonAnnotations.headline }} {{ . }}{{ else }}{{ with .CommonLabels.alertname }} {{ . }}{{ else }} Alert{{ end }}{{ end }}
+      {{- if eq (len .Alerts) 1 }}{{ with index .Alerts 0 }}{{ template "hai.subject_target" . }}{{ end }}
+      {{- else }} ({{ if $firing }}{{ $firing }} firing{{ end }}{{ if and $firing $resolved }}, {{ end }}{{ if $resolved }}{{ $resolved }} resolved{{ end }})
+      {{- end }}
+      {{- end }}
+
+      {{ define "hai.sns.message" -}}
+      {{ $firing := len .Alerts.Firing -}}
+      {{ $resolved := len .Alerts.Resolved -}}
+      {{ if gt (len .Alerts) 1 -}}
+      {{ len .Alerts }} alerts: {{ if $firing }}{{ $firing }} firing{{ end }}{{ if and $firing $resolved }} and {{ end }}{{ if $resolved }}{{ $resolved }} resolved{{ end }}.
+
+      {{ end -}}
+      {{ range $index, $alert := .Alerts -}}
+      {{ if $index }}
+
+      ----------
+
+      {{ end -}}
+      {{ template "hai.alert" $alert -}}
+      {{ end -}}
+      {{- end }}

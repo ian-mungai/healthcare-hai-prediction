@@ -43,3 +43,8 @@ groups:
           severity: warning
         annotations:
           summary: A Spark task of the bronze load failed. Spark retries a task, so read the job outcome to see whether the load failed.
+          headline: 'Spark tasks failed in a bronze load'
+          recovered: 'The latest bronze load has no failed Spark task.'
+          affects: 'Spark retries a task, so the load itself may be fine.'
+          next_step: 'Read the job outcome in Airflow to see if the bronze load failed.'
+          dashboard: 'HAI ingestion'

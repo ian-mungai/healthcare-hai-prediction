@@ -44,6 +44,11 @@ groups:
           severity: critical
         annotations:
           summary: Prometheus cannot scrape the model API. Expected until the API runs on the host.
+          headline: 'Model API is down'
+          recovered: 'Prometheus reaches the model API again.'
+          affects: 'The model API gives no predictions. This is expected until the API runs on the host.'
+          next_step: 'If the API should run, check its task on the host. If it is not deployed yet, no action is needed.'
+          dashboard: 'HAI overview'
 
       - uid: api_error_rate_high
         title: ApiErrorRateHigh
@@ -81,6 +86,11 @@ groups:
           severity: warning
         annotations:
           summary: More than 5 percent of API requests ended in a server error for 10 minutes.
+          headline: 'Model API returns server errors'
+          recovered: 'The model API error rate is back under 5 percent.'
+          affects: 'Some predictions fail.'
+          next_step: 'Read the model API log on the host to find the failing requests.'
+          dashboard: 'HAI overview'
 
       - uid: api_latency_high
         title: ApiLatencyHigh
@@ -118,6 +128,11 @@ groups:
           severity: warning
         annotations:
           summary: The 95th percentile API latency exceeded 1 second for 10 minutes.
+          headline: 'Model API is slow'
+          recovered: 'The model API latency is back under 1 second.'
+          affects: 'Predictions take longer than 1 second for the slowest 5 percent of requests.'
+          next_step: 'Open the HAI overview dashboard to see the latency, then read the model API log.'
+          dashboard: 'HAI overview'
 
       - uid: api_online_store_not_ready
         title: ApiOnlineStoreNotReady
@@ -154,4 +169,9 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: The model API read an online feature store that is not ready (loading, absent or unreadable) for 10 minutes, so it refuses predictions of that feature set.
+          summary: The model API read an online feature store that is not ready for 10 minutes. The store is loading, absent or unreadable, so the API refuses predictions of that feature set.
+          headline: 'Online store is not ready for the API'
+          recovered: 'The online store of this feature set is ready again.'
+          affects: 'The model API refuses predictions of this feature set.'
+          next_step: 'Check the reload of this feature set at host start. Read the log of the reload step.'
+          dashboard: 'HAI feature store'

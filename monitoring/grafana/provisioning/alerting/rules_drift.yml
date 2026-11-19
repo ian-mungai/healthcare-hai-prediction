@@ -43,3 +43,8 @@ groups:
           severity: warning
         annotations:
           summary: The latest drift check of a HAI type reached its trigger share, so its model is due for retraining.
+          headline: 'Drift reached the retraining trigger'
+          recovered: 'The latest drift check of this type is below the trigger share.'
+          affects: 'The model of this infection type is due for retraining.'
+          next_step: 'Open the HAI drift dashboard to see which features drifted. Decide if you retrain the model.'
+          dashboard: 'HAI drift'

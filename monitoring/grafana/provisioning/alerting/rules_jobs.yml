@@ -42,7 +42,12 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: A host job phase failed or was interrupted, and no later run of it has succeeded.
+          summary: A host job phase failed or was interrupted. No later run of it has succeeded.
+          headline: 'Host job failed'
+          recovered: 'A later run of this job phase succeeded.'
+          affects: 'The job phase did not finish, so the steps that need its output do not run.'
+          next_step: 'Open Airflow, find the failed run of this job and read its task log. Fix the cause and run it again.'
+          dashboard: 'HAI host jobs'
 
       - uid: job_vanished
         title: JobVanished
@@ -79,6 +84,11 @@ groups:
           severity: warning
         annotations:
           summary: A host job phase stopped sending heartbeats for 3 minutes without an exit push, so it was killed or lost. Its last heartbeat shows its memory.
+          headline: 'Host job stopped sending heartbeats'
+          recovered: 'This job phase sends heartbeats again or has ended.'
+          affects: 'The job phase was killed or lost, so its output is missing.'
+          next_step: 'Open the HAI host jobs dashboard to see the last memory of the job. Then read its task log in Airflow.'
+          dashboard: 'HAI host jobs'
 
       - uid: job_peak_memory_near_cap
         title: JobPeakMemoryNearCap
@@ -115,6 +125,11 @@ groups:
           severity: warning
         annotations:
           summary: A host job phase used more than 90 percent of the host job cap at its peak.
+          headline: 'Host job used almost all of its memory'
+          recovered: 'No job phase is near the host job cap now.'
+          affects: 'The job phase may be killed for memory on a larger input.'
+          next_step: 'Open the HAI host jobs dashboard to see the peak memory. Plan a higher cap before the next run.'
+          dashboard: 'HAI host jobs'
 
       - uid: pushgateway_down
         title: PushgatewayDown
@@ -152,6 +167,11 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the Pushgateway, so the jobs' own metrics are lost.
+          headline: 'Pushgateway is down'
+          recovered: 'Prometheus reaches the Pushgateway again.'
+          affects: 'Job metrics are lost, so the job alerts and the host jobs dashboard go blind.'
+          next_step: 'Check that the Pushgateway task runs on the host.'
+          dashboard: 'HAI host jobs'
 
       - uid: online_reload_failed
         title: OnlineReloadFailed
@@ -188,3 +208,8 @@ groups:
           severity: warning
         annotations:
           summary: The online store reload at host start failed for a feature set, so the store may be empty.
+          headline: 'Online store reload failed'
+          recovered: 'The online store reload of this feature set succeeded.'
+          affects: 'The online store may be empty, so the model API may refuse predictions.'
+          next_step: 'Read the log of the reload step for this feature set. Then reload it again.'
+          dashboard: 'HAI feature store'
