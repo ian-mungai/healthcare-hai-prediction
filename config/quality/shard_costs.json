@@ -861,7 +861,10 @@
       "container variable alias file does not use it": 3.98,
       "container variable alias set_in names a JSON file": 3.98,
       "variable read by a listed test module": 3.98,
-      "listed test module is gone": 3.98
+      "listed test module is gone": 3.98,
+      "dbt model deleted and named only in the deferral record of the project file": 3.98,
+      "dbt model deleted, named in the project file outside the deferral record": 3.98,
+      "dbt model deleted, named in the project file before the deferral record": 3.98
     }
   }
 }
