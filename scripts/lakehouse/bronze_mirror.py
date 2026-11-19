@@ -19,7 +19,13 @@ generation, the loader report's digest and its time (for display) and the outcom
 must be the receipt's own report, every record must carry the receipt's generation, the numbers must run from 001 without a gap and no report may
 appear twice. Anything else is ``unavailable``, never a pass that another record lends. ``python -m scripts.lakehouse.bronze_mirror show --run <bronze
 run> [--bucket NAME]`` prints the attempts and the verdict and exits 1 unless it is ok, unchanged or skipped.
-"""
+
+Known limit (owner decision, Nov 18 2026): ``show`` reads only the records that exist. If the role loses its write access to the attempt records after
+an earlier ``ok`` record (a policy change, or a task that stops between the hook and the record), the retry leaves no record and ``show`` still reads
+that earlier ``ok``. The check phase of such a retry fails (exit 1, the key, report digest and generation are named), but nothing in S3 says so. A
+mirror is therefore signed off only by ``python -m scripts.lakehouse.bronze_mirror_signoff --run <bronze run> --describe <describe-tasks output of the
+run's latest task>``, which needs this verdict and a stopped task of the bronze job, for this run, with every container at exit 0. The launch-evidence
+join that would remove the limit is not built."""
 
 from __future__ import annotations
 
@@ -245,6 +251,20 @@ def acceptance(client: Any, bucket: str, run: str) -> dict[str, Any]:
     return {"state": outcome["status"], "reason": outcome.get("reason", ""), "attempts": found}
 
 
+def render(verdict: Mapping[str, Any]) -> str:
+    """The attempts of a verdict in number order, each with its cause, then the verdict line."""
+    lines = []
+    for record in verdict["attempts"]:
+        outcome = record["mirror"]
+        cause = f": {outcome['reason']}" if "reason" in outcome else ""
+        lines.append(
+            f"{record['sequence']:03d} {record['report_run_at_utc']} {outcome['status']} generation {record['metadata_generation']} "
+            f"report {record['report_sha256'][:12]}{cause}"
+        )
+    detail = f": {verdict['reason']}" if verdict["reason"] else ""
+    return "\n".join([*lines, f"acceptance: {verdict['state']}{detail}"]) + "\n"
+
+
 def main(argv: Sequence[str] | None = None, client: Any = None) -> int:
     """``show``: every mirror attempt of a bronze run in number order with its cause, then the verdict. Exit 1 unless it is ok, unchanged or skipped."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -264,15 +284,8 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> int:
     except AttemptError as error:
         sys.stdout.write(f"acceptance: unavailable: {error}\n")
         return 1
-    for record in verdict["attempts"]:
-        outcome = record["mirror"]
-        cause = f": {outcome['reason']}" if "reason" in outcome else ""
-        sys.stdout.write(
-            f"{record['sequence']:03d} {record['report_run_at_utc']} {outcome['status']} generation {record['metadata_generation']} "
-            f"report {record['report_sha256'][:12]}{cause}\n"
-        )
-    detail = f": {verdict['reason']}" if verdict["reason"] else ""
-    sys.stdout.write(f"acceptance: {verdict['state']}{detail}\n")
+    sys.stderr.write("the recorded outcome only, not a sign-off: python -m scripts.lakehouse.bronze_mirror_signoff also needs the matching task's result\n")
+    sys.stdout.write(render(verdict))
     return 0 if verdict["state"] in ("ok", "unchanged", "skipped") else 1
 
 
