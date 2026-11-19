@@ -287,3 +287,39 @@ def test_a_rollback_says_it_was_reversed_whatever_the_canary_said(canary: dict[s
     check("stays a challenger" not in text and "canary passed" not in text and "canary failed" not in text, f"a hold reason in a rollback: {text}")
     body = promotion_notice("rolled_back")["Message"]
     check("stays a challenger" not in body and "was rolled back." in body, body)
+
+
+def canary_check_keys() -> set[str]:
+    """Every check key that the canary judgment can fail with, read from the code that appends it, plus the key of a missing replay report."""
+    import inspect
+    import re
+
+    keys = set(re.findall(r'failed\.append\("(\w+)"\)', inspect.getsource(auto_promotion.canary_checks)))
+    from scripts.training import aws_run
+
+    keys |= set(re.findall(r'"failed": \["(\w+)"\]', inspect.getsource(aws_run)))
+    return keys
+
+
+def test_every_canary_check_key_has_a_display_name_and_every_name_has_a_key() -> None:
+    keys = canary_check_keys()
+    check(len(keys) >= 6, f"the scan found {keys}")
+    check(
+        keys == set(auto_promotion.CHECK_NAMES),
+        f"keys without a name: {keys - set(auto_promotion.CHECK_NAMES)}, names without a key: {set(auto_promotion.CHECK_NAMES) - keys}",
+    )
+    check(all(name.strip() and name == name.strip() for name in auto_promotion.CHECK_NAMES.values()), "an empty display name")
+
+
+@pytest.mark.parametrize("key", sorted(canary_check_keys()))
+def test_a_held_notice_shows_each_failed_check_by_its_name_with_the_key_beside_it(key: str) -> None:
+    text = auto_promotion.notice_detail(ROLLED_BACK_RECORD, {"failed": [key]}, "held")
+    check(f"{auto_promotion.CHECK_NAMES[key]} ({key})" in text, text)
+    check(not re.search(rf"(?<!\(){key}\b", text), f"the key stands without its name: {text}")
+    two = auto_promotion.notice_detail(ROLLED_BACK_RECORD, {"failed": [key, "canary_version"]}, "held")
+    check(two.count("(") >= 2, two)
+
+
+def test_a_held_notice_leaves_no_decision_to_the_owner() -> None:
+    body = promotion_notice("held")["Message"]
+    check("unless you want" not in body and "automatic" in body, body)

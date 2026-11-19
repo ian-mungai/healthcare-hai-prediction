@@ -37,6 +37,16 @@ from scripts.training import job_inputs, promote, registry, run_tracking
 RELEASE_SECONDS = 1800.0
 MAX_RELATIVE_DIFFERENCE = 1e-6
 OUTCOMES = training_contract.PROMOTION_OUTCOMES
+# The names people read beside the check keys of the canary judgment (the readable keys rule). A test reads the code that appends each key and requires
+# a name for every key and a key for every name.
+CHECK_NAMES = {
+    "requests_answered": "a request did not get a 200 answer on every attempt",
+    "within_time_limit": "a request took longer than the API time limit",
+    "both_sides_compared": "the stable and canary sides had too few rows to compare",
+    "canary_version": "a canary answer came from another model version",
+    "predictions_match_offline": "a canary prediction differs from the offline prediction",
+    "replay_report_missing": "the replay report is missing",
+}
 
 
 class PlanRefused(ValueError):
@@ -203,9 +213,8 @@ def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, o
         return f"{candidate} is the Production model, but its release or rollout failed, so {served}.{first}"
     if outcome == "rolled_back":
         return f"The promotion of {candidate} was reversed. Check the promotion record for the serving version and the reason."
-    reason = (
-        "no canary result was stored" if canary is None else f"the canary failed {', '.join(canary['failed'])}" if canary["failed"] else "the canary passed"
-    )
+    failed = " and ".join(f"{CHECK_NAMES.get(key, key)} ({key})" for key in canary["failed"]) if canary is not None else ""
+    reason = "no canary result was stored" if canary is None else f"the canary failed because {failed}" if canary["failed"] else "the canary passed"
     return f"{candidate} stays a challenger: {reason}."
 
 
@@ -244,7 +253,7 @@ OUTCOME_NOTICES = {
         "Challenger model held back for {name}",
         "The challenger model of {name} was not promoted.",
         "The Production model of {name} did not change.",
-        f"No action is needed unless you want this challenger promoted. To see the steps of the research run:\n{AIRFLOW}",
+        f"No action is needed, because the promotion decision is automatic. To see the steps of the research run:\n{AIRFLOW}",
     ),
     "rolled_back": (
         "Promotion rolled back for {name}",
