@@ -611,11 +611,41 @@ def show_mirror(report: dict[str, Any]) -> None:
 
 class AttemptWriteError(StepError):
     """The mirror attempt record of a loader report could not be written. The message names the exact key, the report and the metadata generation.
-    ``denied`` is true when the cause is a missing grant (AccessDenied), the one cause that an unavailable mirror tolerates."""
 
-    def __init__(self, message: str, denied: bool = False) -> None:
+    ``denied`` is true when the cause is a missing grant (AccessDenied). ``history`` is true when the run has a recorded mirror attempt or when its attempt
+    records cannot be read: only a run with no history may tolerate an unavailable mirror."""
+
+    def __init__(self, message: str, denied: bool = False, history: bool = False) -> None:
         super().__init__(message)
         self.denied = denied
+        self.history = history
+
+
+def read_attempt(client: Any, bucket: str, key: str) -> dict[str, Any] | None:
+    """The attempt record at ``key``, or None when the key reads as absent.
+
+    The task role cannot list its records folder, and it reads a key only through the read grant: an absent key answers 403 or 404 and so does a key that
+    exists but may not be read, so both read as absent (before the IAM apply no record can exist; the owner's profile lists the folder). Every other read error
+    and a body that is not an attempt record object raise ``AttemptWriteError`` with ``history`` set: a record that exists, or a history that cannot be
+    read, is never read as no history.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code")) in ABSENT_CODES:
+            return None
+        raise AttemptWriteError(
+            f"the mirror attempt record {key} cannot be read ({error}), so the history of this run's mirror attempts is unknown", history=True
+        ) from None
+    try:
+        record = json.loads(body)
+    except ValueError:
+        record = None
+    if not isinstance(record, dict):
+        raise AttemptWriteError(f"{key} exists and is not an attempt record object, so the history of this run's mirror attempts cannot be read", history=True)
+    return record
 
 
 def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, Any], report_sha256: str) -> tuple[str, str]:
@@ -628,16 +658,17 @@ def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, A
     """
     from botocore.exceptions import ClientError
 
-    sequence, key, refused = 1, bronze_mirror.attempt_key(run, 1), ""
+    sequence, key, refused, history = 1, bronze_mirror.attempt_key(run, 1), "", False
     for _ in range(2 * bronze_mirror.MAX_ATTEMPTS):
         key = bronze_mirror.attempt_key(run, sequence)
         try:
-            existing = read_own_record(client, bucket, key)
+            existing = read_attempt(client, bucket, key)
             if existing is None and refused == key:
                 raise AttemptWriteError(
-                    f"the mirror attempt record {key} exists and cannot be read, so the next number cannot be found (report {report_sha256[:12]})"
+                    f"the mirror attempt record {key} exists and cannot be read, so the next number cannot be found (report {report_sha256[:12]})", history=True
                 )
             if existing is not None:
+                history = True
                 if existing.get("report_sha256") == report_sha256:
                     return "kept", key
                 sequence += 1
@@ -652,10 +683,11 @@ def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, A
             raise AttemptWriteError(
                 f"the mirror attempt record {key} was not written (report {report_sha256[:12]}, generation {generation}): {error}",
                 denied=str(error.response.get("Error", {}).get("Code")) in ("AccessDenied", "403"),
+                history=history,
             ) from None
         except bronze_mirror.AttemptError as error:
             raise StepError(str(error)) from None
-    raise AttemptWriteError(f"the run has more than {bronze_mirror.MAX_ATTEMPTS} mirror attempt records: {key} cannot be numbered")
+    raise AttemptWriteError(f"the run has more than {bronze_mirror.MAX_ATTEMPTS} mirror attempt records: {key} cannot be numbered", history=True)
 
 
 def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes, retry: bool) -> None:
@@ -667,15 +699,17 @@ def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes,
     otherwise end on an older attempt, and an acceptance would read a pass that this attempt did not earn. The load and its receipt stay as they are.
 
     The one exception is a mirror that is ``unavailable`` (Glue refused every call: the IAM grant is not applied yet) whose record is refused with AccessDenied
-    too: the grant is missing on every attempt, first run or retry, so no attempt fails its check phase for it and nothing is recorded. Any other write error
-    still fails a retry.
+    too, for a run with no recorded mirror attempt: the grant has never worked for this run, so no attempt fails its check phase for it, first run or retry,
+    and nothing is recorded. A run with any recorded attempt, or whose attempt records cannot be read (a read error, a body that is not a record), gets no
+    exception: its retry fails by name. The role cannot tell a grant that was never applied from one withdrawn in full (both answer 403, and it cannot list
+    the folder), so a full withdrawal after a recorded ok exits 0 as unavailable; the sign-off needs the owner's listing and the task result for that.
     """
     if "mirror" not in report:
         return
     try:
         outcome, key = store_mirror_attempt(storage().client, job.bucket, job.run, report, hashlib.sha256(report_bytes).hexdigest())
     except AttemptWriteError as error:
-        if retry and not (error.denied and report["mirror"]["status"] == "unavailable"):
+        if retry and not (error.denied and not error.history and report["mirror"]["status"] == "unavailable"):
             raise StepError(f"{error}; the run already has a recorded load, so the history of its mirror cannot end on an older attempt") from None
         sys.stderr.write(f"bronze_run: {error}\n")
         return

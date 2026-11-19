@@ -21,9 +21,13 @@ otherwise the mirror is ``failed`` and names the table and the reason (the other
 mirror too. Nothing is read when the mirror is off, in a test namespace or when the load left nothing out. The hook and the register can differ only
 in the inputs they read.
 
-Before the IAM grant exists, Glue refuses every call with AccessDeniedException. The mirror is then ``unavailable`` (a status of its own: the refusal is
-named, nothing is registered and nothing is reported ok) and, when the attempt record is refused with AccessDenied too, no attempt fails its check phase,
-first run or retry. Any other failure is a failure. After the grant, a rerun registers the tables.
+Before the IAM grant exists, Glue refuses every call with AccessDeniedException. The mirror is then ``unavailable`` (a status of its own: the refusal
+is named, nothing is registered and nothing is reported ok). When the attempt record is refused with AccessDenied too and the run has no recorded
+attempt (``bronze_run.read_attempt``: a record that exists, or a history that cannot be read other than as a 403 or 404, is history), no attempt fails
+its check phase, first run or retry. A run with any recorded attempt gets no exception: its retry fails by name. The task role cannot list the attempt
+folder and reads a key only through the read grant, so a full withdrawal of both mirror grants after a recorded ok answers 403 exactly as a grant
+never applied does: that retry exits 0 as unavailable while ``show`` still reads the old ok (the owner's profile lists the folder), so the sign-off
+needs the task result as well. Any other failure is a failure. After the grant, a rerun registers the tables.
 
 The load is already committed, so the hook never raises and never undoes it. The report (status, reason, one outcome per table) goes into the loader
 report and standard error when it failed. ``check.json`` is the immutable receipt of the load and a retry runs the hook again, so the check phase

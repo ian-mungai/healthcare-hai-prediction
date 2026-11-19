@@ -23,7 +23,7 @@ import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -244,7 +244,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     shown = [name for name in names if name != "beta_data"] if "report_missing_table" in DEFECTS else names
     snapshots = {name: 100 + position for position, name in enumerate(names)}
     CLOCK[0] += 1
-    stamp = f"20261118T23{CLOCK[0]:02d}00Z"
+    stamp = (datetime(2026, 11, 18, 12, 0, 0, tzinfo=UTC) + timedelta(seconds=CLOCK[0])).strftime("%Y%m%dT%H%M%SZ")
     report = {"run_at_utc": stamp, "mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
     report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
@@ -472,7 +472,160 @@ def case_a_first_run_before_the_iam_apply_is_unavailable(case: Case) -> None:
     require(verdict["state"] == "unavailable" and key in verdict["reason"], f"{verdict}")
 
 
-def case_before_the_iam_apply_every_attempt_is_unavailable_and_exits_0(case: Case) -> None:
+def refusing_attempt_reads(case: Case, code: str = "AccessDenied") -> Any:
+    """The attempt records of the run cannot be read: the read grant is withdrawn (AccessDenied, which an absent key answers too, because the role cannot list
+    its folder) or the read fails for another reason (``code``)."""
+    client = STORAGE[0].client
+    original = client.get_object
+
+    def refuse(**arguments: Any) -> dict[str, Any]:
+        if "/mirror_" in arguments["Key"]:
+            raise ClientError({"Error": {"Code": code, "Message": "no read"}}, "GetObject")
+        return original(**arguments)
+
+    return mock.patch.object(client, "get_object", refuse)
+
+
+def recorded_success_then(case: Case, revoke_glue: bool) -> None:
+    """A run with a recorded ``ok`` mirror attempt, then the next attempt's mirror is unavailable (Glue revoked) or ok."""
+    require(case.chain() == [0, 0, 0], case.err)
+    require(bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)[-1]["mirror"]["status"] == "ok", "the first attempt was not recorded as ok")
+    if revoke_glue:
+        DEFECTS.add("iam_not_applied")
+    case.shas = None
+    case.err = ""
+
+
+def case_success_then_glue_and_record_write_revoked_fails_retry(case: Case) -> None:
+    """The run has a recorded ok. Glue and the attempt-record write are both revoked and the records stay readable: the unavailable exception does not apply
+    (the run has recorded history), so the retry fails its check phase and names the key. No fresh ok is recorded and no chain hint is emitted."""
+    recorded_success_then(case, revoke_glue=True)
+    with refusing_attempts(case):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"the retry passed with recorded history: {codes} {case.err}")
+    require(bronze_mirror.attempt_key(RUN, 2) in case.err and "already" in case.err, f"the refused record is not named: {case.err}")
+    found = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)
+    require([item["sequence"] for item in found] == [1], f"a record was written for the refused retry: {found}")
+    require("bronze_chain_dag" not in case.out.split("glue mirror unavailable")[-1], "the failed retry emitted the chain hint")
+
+
+def case_success_then_only_glue_revoked_records_unavailable(case: Case) -> None:
+    """Glue is revoked, the record write still works: the retry records its unavailable outcome, so the acceptance is ``unavailable``, never the old ok."""
+    recorded_success_then(case, revoke_glue=True)
+    require(case.chain(label="retry") == [0, 0, 0], case.err)
+    found = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)
+    require([item["mirror"]["status"] for item in found] == ["ok", "unavailable"], f"{[item['mirror']['status'] for item in found]}")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "unavailable", "the old ok stayed in force")
+
+
+def case_success_then_only_record_write_revoked_fails_retry(case: Case) -> None:
+    """Glue works and registers, the attempt-record write is revoked: the retry fails its check phase (the history would end on an older attempt)."""
+    recorded_success_then(case, revoke_glue=False)
+    with refusing_attempts(case):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"{codes} {case.err}")
+    require(bronze_mirror.attempt_key(RUN, 2) in case.err and "AccessDenied" in case.err, f"{case.err}")
+
+
+def case_unreadable_attempt_history_fails_retry_closed(case: Case) -> None:
+    """Glue and the record write are refused and the history read fails for a reason other than a plain AccessDenied (a service error): an unreadable
+    history is never counted as no history, so the retry fails its check phase and says the history cannot be read."""
+    recorded_success_then(case, revoke_glue=True)
+    with refusing_attempts(case), refusing_attempt_reads(case, code="InternalError"):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"an unreadable history counted as no history: {codes} {case.err}")
+    require("cannot be read" in case.err and bronze_mirror.attempt_key(RUN, 1) in case.err and "InternalError" in case.err, f"{case.err}")
+
+
+def case_stored_body_that_is_not_a_record_counts_as_history(case: Case) -> None:
+    """The first attempt's key holds a body that is not an attempt object: it is a record that exists, so it is history, never an absent key."""
+    recorded_success_then(case, revoke_glue=True)
+    STORAGE[0].client.puts[bronze_mirror.attempt_key(RUN, 1)] = b"[]"
+    with refusing_attempts(case):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"a stored body that is not a record counted as no history: {codes} {case.err}")
+    require("not an attempt record" in case.err and bronze_mirror.attempt_key(RUN, 1) in case.err, f"{case.err}")
+
+
+def case_withdrawn_read_and_write_grant_looks_never_applied(case: Case) -> None:
+    """The documented limit. The task role cannot list the attempt folder (its only list grants are the table prefixes and the source versions) and reads a key
+    only through the new read grant, so with both mirror grants withdrawn a recorded ok answers 403 exactly as a never-applied grant does. The retry exits 0 as
+    unavailable; the durable acceptance (the owner's profile lists the folder) still reads the old ok, so the sign-off must also have the task result."""
+    recorded_success_then(case, revoke_glue=True)
+    with refusing_attempts(case), refusing_attempt_reads(case):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 0] and "glue mirror UNAVAILABLE" in case.err, f"{codes} {case.err}")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "ok", "the limit is documented as the old ok staying in force")
+
+
+def case_no_history_and_another_write_error_than_a_denial_fails_the_retry(case: Case) -> None:
+    """A run with no recorded attempt (the grant never worked) whose retry's record fails with a service error, not a denial: still a failure."""
+    DEFECTS.add("iam_not_applied")
+    with refusing_attempts(case):
+        require(case.chain() == [0, 0, 0], case.err)
+    case.shas = None
+    case.err = ""
+    with refusing_attempts(case, code="InternalError"):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1] and "InternalError" in case.err, f"{codes} {case.err}")
+
+
+def case_history_condition_mutants_are_caught(case: Case) -> None:
+    """Mutants of the new condition. Each must make at least one of the history cases fail: the history flag never set, any write error taken as a missing
+    grant, and a read error taken as an absent key."""
+    real = bronze_run.store_mirror_attempt
+
+    def without_history(*arguments: Any, **keywords: Any) -> tuple[str, str]:
+        try:
+            return real(*arguments, **keywords)
+        except bronze_run.AttemptWriteError as error:
+            error.history = False
+            raise
+
+    def any_error_is_a_denial(*arguments: Any, **keywords: Any) -> tuple[str, str]:
+        try:
+            return real(*arguments, **keywords)
+        except bronze_run.AttemptWriteError as error:
+            error.denied = True
+            raise
+
+    real_read = bronze_run.read_attempt
+
+    def read_errors_are_absence(client: Any, bucket: str, key: str) -> Any:
+        try:
+            return real_read(client, bucket, key)
+        except bronze_run.AttemptWriteError:
+            return None
+
+    guarded = (
+        case_success_then_glue_and_record_write_revoked_fails_retry,
+        case_unreadable_attempt_history_fails_retry_closed,
+        case_stored_body_that_is_not_a_record_counts_as_history,
+        case_retry_with_another_record_error_fails,
+        case_no_history_and_another_write_error_than_a_denial_fails_the_retry,
+    )
+    mutants = {
+        "the history flag is never set": ("store_mirror_attempt", without_history),
+        "any write error counts as a missing grant": ("store_mirror_attempt", any_error_is_a_denial),
+        "a read error counts as an absent key": ("read_attempt", read_errors_are_absence),
+    }
+    survivors = []
+    for label, (target, mutant) in mutants.items():
+        caught = False
+        for guard in guarded:
+            DEFECTS.clear()
+            with tempfile.TemporaryDirectory() as folder, patched(Path(folder)) as workspace, mock.patch.object(bronze_run, target, mutant):
+                try:
+                    guard(workspace)
+                except Exception:
+                    caught = True
+        if not caught:
+            survivors.append(label)
+    DEFECTS.clear()
+    require(not survivors, f"mutants of the history condition survived: {survivors}")
+
+
+def case_before_the_grant_every_attempt_is_unavailable_exit_0(case: Case) -> None:
     """The combined code before the owner's IAM apply, first run and retries alike. Glue answers AccessDeniedException to the real hook and the role may not
     write the attempt record. The hook never raises and reports the mirror ``unavailable`` (the refusal named). Every phase exits 0 on every attempt, nothing is
     recorded as ok, the run record, the carried-over record and the chain hint are written and the acceptance is ``unavailable``. After the grant a rerun
@@ -513,7 +666,7 @@ def case_the_silver_readers_file_the_hook_reads_equals_the_dbt_sources(case: Cas
     require("config/lakehouse/bronze_silver_readers.json" in templates["stage_files"], "the silver readers file is not staged with the bronze job")
 
 
-def case_a_retry_with_another_record_error_fails_its_check(case: Case) -> None:
+def case_retry_with_another_record_error_fails(case: Case) -> None:
     """Only a missing grant is tolerated: an unavailable mirror whose attempt record fails with another error still fails the retry's check phase."""
     require(case.chain() == [0, 0, 0], case.err)
     DEFECTS.add("iam_not_applied")
@@ -1139,9 +1292,17 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a retry that repairs a failed mirror shows the repair and keeps the receipt": case_a_retry_repairing_the_mirror_keeps_the_receipt,
     "a repeated check of the same report makes no second attempt record": case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record,
     "a first run before the IAM apply fails no phase and is unavailable to the acceptance": case_a_first_run_before_the_iam_apply_is_unavailable,
-    "before the IAM apply every attempt, first run or retry, is unavailable and exits 0": case_before_the_iam_apply_every_attempt_is_unavailable_and_exits_0,
+    "before the IAM apply every attempt, first run or retry, is unavailable and exits 0": case_before_the_grant_every_attempt_is_unavailable_exit_0,
     "the silver readers file the hook reads equals the dbt sources and is staged": case_the_silver_readers_file_the_hook_reads_equals_the_dbt_sources,
-    "a retry whose record fails for another reason than a missing grant fails its check": case_a_retry_with_another_record_error_fails_its_check,
+    "after a recorded success, revoking Glue and the record write fails the retry": case_success_then_glue_and_record_write_revoked_fails_retry,
+    "after a recorded success, revoking only Glue records the unavailable retry": case_success_then_only_glue_revoked_records_unavailable,
+    "after a recorded success, revoking only the record write fails the retry": case_success_then_only_record_write_revoked_fails_retry,
+    "an attempt history that cannot be read fails the retry closed": case_unreadable_attempt_history_fails_retry_closed,
+    "a stored attempt that is not a record counts as history": case_stored_body_that_is_not_a_record_counts_as_history,
+    "a withdrawn read and write grant cannot be told from a grant never applied (limit)": case_withdrawn_read_and_write_grant_looks_never_applied,
+    "no history and another write error than a denial fails the retry": case_no_history_and_another_write_error_than_a_denial_fails_the_retry,
+    "the attempt history conditions are each needed": case_history_condition_mutants_are_caught,
+    "a retry whose record fails for another reason than a missing grant fails its check": case_retry_with_another_record_error_fails,
     "a retry whose record cannot be written fails its check after a recorded success": case_a_retry_without_its_record_fails_its_check,
     "a first load never recorded is not accepted on a later retry's record": case_a_first_load_never_recorded_is_not_accepted,
     "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,

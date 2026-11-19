@@ -594,6 +594,7 @@
     "config/lakehouse/aws_bronze_grants.json",
     "config/lakehouse/aws_bronze_templates.json",
     "config/lakehouse/bootstrap_ownership.json",
+    "config/lakehouse/bronze_silver_readers.json",
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/dbt_package_archive.json",
     "config/lakehouse/identity_classification.csv",

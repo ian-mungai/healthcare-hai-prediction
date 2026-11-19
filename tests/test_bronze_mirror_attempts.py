@@ -333,3 +333,42 @@ def test_an_unavailable_outcome_names_its_cause_and_never_passes_the_acceptance(
     record(client, unavailable)
     verdict = bronze_mirror.acceptance(client, BUCKET, RUN)
     check(verdict["state"] == "unavailable" and "AccessDeniedException" in verdict["reason"], f"{verdict}")
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "403", "NoSuchKey", "404"])
+def test_a_key_that_answers_as_absent_is_no_history(code: str) -> None:
+    """The task role cannot list its folder, so an absent key and a key it may not read answer alike: both read as no history."""
+
+    class Client403(Client):
+        def get_object(self, **arguments: Any) -> dict[str, Any]:
+            raise ClientError({"Error": {"Code": code, "Message": "x"}}, "GetObject")
+
+    check(bronze_run.read_attempt(Client403(), BUCKET, bronze_mirror.attempt_key(RUN, 1)) is None, code)
+
+
+@pytest.mark.parametrize(("body", "code"), [(b"[]", None), (b"not json", None), (b"{}", "InternalError"), (b"{}", "SlowDown")])
+def test_an_unreadable_history_or_a_stored_body_that_is_not_a_record_is_history_never_absence(body: bytes, code: str | None) -> None:
+    class Odd(Client):
+        def get_object(self, **arguments: Any) -> dict[str, Any]:
+            if code:
+                raise ClientError({"Error": {"Code": code, "Message": "x"}}, "GetObject")
+            return {"Body": io.BytesIO(body)}
+
+    with pytest.raises(bronze_run.AttemptWriteError) as caught:
+        bronze_run.read_attempt(Odd(), BUCKET, bronze_mirror.attempt_key(RUN, 1))
+    check(caught.value.history and not caught.value.denied and bronze_mirror.attempt_key(RUN, 1) in str(caught.value), f"{caught.value}")
+
+
+def test_a_refused_write_after_a_recorded_attempt_carries_the_history_and_without_one_it_does_not() -> None:
+    client = Client()
+    record(client, OK)
+    client.refuse_put.add("mirror_")
+    document, digest = report(FAILED, "20261118T231500Z")
+    with pytest.raises(bronze_run.AttemptWriteError) as caught:
+        bronze_run.store_mirror_attempt(client, BUCKET, RUN, document, digest)
+    check(caught.value.denied and caught.value.history, f"denied {caught.value.denied} history {caught.value.history}")
+    fresh = Client()
+    fresh.refuse_put.add("mirror_")
+    with pytest.raises(bronze_run.AttemptWriteError) as bare:
+        bronze_run.store_mirror_attempt(fresh, BUCKET, RUN, document, digest)
+    check(bare.value.denied and not bare.value.history, f"denied {bare.value.denied} history {bare.value.history}")
