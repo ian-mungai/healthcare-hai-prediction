@@ -102,29 +102,142 @@ def projected_counts(roots: int, dictionaries: int, extra_loader_sources: int = 
     return {"mapped": roots + dictionaries, "declared": roots + loaders, "pins": roots + 1, "mirror_names": roots + dictionaries + loaders}
 
 
+_ABSENT = object()
+
+
+def _fail(label: str, where: str, problem: str) -> ScopeError:
+    """The error for one bad value: the input, the path in it and what is wrong."""
+    return ScopeError(f"{label}: {where}: {problem}")
+
+
+def _name(value: Any, label: str, where: str) -> str:
+    """A non-empty string at ``where``, or a ScopeError naming it."""
+    if value is _ABSENT:
+        raise _fail(label, where, "is missing")
+    if not isinstance(value, str):
+        raise _fail(label, where, f"must be a string, not {type(value).__name__}")
+    if not value.strip():
+        raise _fail(label, where, "is empty")
+    return value
+
+
+def _object(value: Any, label: str, where: str) -> Mapping[str, Any]:
+    """An object (a mapping) at ``where``, or a ScopeError naming it."""
+    if value is _ABSENT:
+        raise _fail(label, where, "is missing")
+    if not isinstance(value, dict):
+        raise _fail(label, where, f"must be an object, not {type(value).__name__}")
+    return value
+
+
+def _array(value: Any, label: str, where: str) -> list[Any]:
+    """A list at ``where``, or a ScopeError naming it."""
+    if value is _ABSENT:
+        raise _fail(label, where, "is missing")
+    if not isinstance(value, list):
+        raise _fail(label, where, f"must be a list, not {type(value).__name__}")
+    return value
+
+
+def validate_table_map(document: Any, label: str) -> None:
+    """Check every value derive_scope reads from the table map: the document, ``tables``, and per entry ``table``, ``group``, ``collection`` and ``format``
+    (non-empty strings), ``roles`` (an optional list of non-empty strings) and ``dictionary`` (an optional object with a non-empty string ``table``).
+    Other keys are ignored."""
+    tables = _array(_object(document, label, "the document").get("tables", _ABSENT), label, "tables")
+    for index, row in enumerate(tables):
+        where = f"tables[{index}]"
+        fields = _object(row, label, where)
+        for key in ("table", "group", "collection", "format"):
+            _name(fields.get(key, _ABSENT), label, f"{where}.{key}")
+        where = f"tables[{index}] ({fields['table']})"
+        if "roles" in fields:
+            for position, role in enumerate(_array(fields["roles"], label, f"{where}.roles")):
+                _name(role, label, f"{where}.roles[{position}]")
+        if "dictionary" in fields:
+            _name(_object(fields["dictionary"], label, f"{where}.dictionary").get("table", _ABSENT), label, f"{where}.dictionary.table")
+
+
+def validate_copy_tables(copy_tables: Any, label: str) -> None:
+    """Check the copy_tables variable: an object of non-empty string table names to non-empty string source families."""
+    for table, family in _object(copy_tables, label, "vars.copy_tables").items():
+        _name(table, label, "a vars.copy_tables key")
+        _name(family, label, f"vars.copy_tables.{table}")
+
+
+def project_file_problems(project_dir: Path) -> list[str]:
+    """Hints for a failed parse: the YAML files of the project that do not read as YAML or whose ``sources`` block has the wrong shape (a list of objects
+    with a ``name``, each with a ``tables`` list of objects with a ``name``). dbt is the only reader of the sources file, so this names the file when
+    dbt's own text does not."""
+    yaml = importlib.import_module("yaml")
+    found = []
+    for path in sorted(project_dir.rglob("*.yml")):
+        if {"dbt_packages", "target"} & set(path.relative_to(project_dir).parts):
+            continue
+        try:
+            document = yaml.safe_load(path.read_text())
+        except (yaml.YAMLError, UnicodeDecodeError, RecursionError, OSError) as error:
+            found.append(f"{path} does not read as YAML ({type(error).__name__})")
+            continue
+        if not isinstance(document, dict) or "sources" not in document:
+            continue
+        sources = document["sources"]
+        if not isinstance(sources, list) or not all(isinstance(source, dict) and isinstance(source.get("name"), str) for source in sources):
+            found.append(f"{path}: sources must be a list of objects with a name")
+            continue
+        for source in sources:
+            tables = source.get("tables", [])
+            if not isinstance(tables, list) or not all(isinstance(table, dict) and isinstance(table.get("name"), str) for table in tables):
+                found.append(f"{path}: the tables of source {source['name']} must be a list of objects with a name")
+    return found
+
+
+def validate_manifest(manifest: Any, label: str) -> None:
+    """Check every value bronze_readers and derive_scope read from the manifest: ``metadata`` (with ``dbt_version`` a string when present), every source
+    (an object with string ``source_name`` and ``name``) and every node (an object with a string ``resource_type``; a model also a ``name``, a
+    ``depends_on`` object and its ``nodes`` list of strings). Other keys, and the fields of nodes that are not models, are ignored."""
+    document = _object(manifest, label, "the document")
+    metadata = _object(document.get("metadata", _ABSENT), label, "metadata")
+    if "dbt_version" in metadata:
+        _name(metadata["dbt_version"], label, "metadata.dbt_version")
+    for unique_id, source in _object(document.get("sources", _ABSENT), label, "sources").items():
+        fields = _object(source, label, f"sources[{unique_id}]")
+        for key in ("source_name", "name"):
+            _name(fields.get(key, _ABSENT), label, f"sources[{unique_id}].{key}")
+    for unique_id, node in _object(document.get("nodes", _ABSENT), label, "nodes").items():
+        where = f"nodes[{unique_id}]"
+        fields = _object(node, label, where)
+        if _name(fields.get("resource_type", _ABSENT), label, f"{where}.resource_type") != "model":
+            continue
+        _name(fields.get("name", _ABSENT), label, f"{where}.name")
+        dependencies = _array(
+            _object(fields.get("depends_on", _ABSENT), label, f"{where}.depends_on").get("nodes", _ABSENT), label, f"{where}.depends_on.nodes"
+        )
+        for position, dependency in enumerate(dependencies):
+            _name(dependency, label, f"{where}.depends_on.nodes[{position}]")
+
+
 def read_copy_tables(project_dir: Path) -> dict[str, str]:
-    """The ``copy_tables`` variable of the dbt project: bronze table to source family."""
+    """The ``copy_tables`` variable of the dbt project: bronze table to source family. A file that is unreadable or shaped wrongly is a ScopeError naming it."""
     yaml = importlib.import_module("yaml")
     path = project_dir / "dbt_project.yml"
     try:
         document = yaml.safe_load(path.read_text())
-    except (yaml.YAMLError, UnicodeDecodeError) as error:
-        raise ScopeError(f"{path} is not valid YAML: {error}") from error
-    copy_tables = ((document.get("vars") or {}) if isinstance(document, dict) else {}).get("copy_tables")
-    if not isinstance(copy_tables, dict):
-        raise ScopeError(f"{path} has no copy_tables variable")
-    return {str(table): str(family) for table, family in copy_tables.items()}
+    except (yaml.YAMLError, UnicodeDecodeError, RecursionError) as error:
+        raise ScopeError(f"{path} is not valid YAML: {type(error).__name__}: {error}") from error
+    variables = _object(_object(document, str(path), "the document").get("vars", _ABSENT), str(path), "vars")
+    validate_copy_tables(variables.get("copy_tables", _ABSENT), str(path))
+    return dict(variables["copy_tables"])
 
 
 def load_map(path: Path) -> dict[str, Any]:
-    """Read and validate the table map with the bronze loader; every way the file can be invalid is a ScopeError naming it; a missing file stays an OSError."""
+    """Read and validate the table map with the bronze loader and then with :func:`validate_table_map`; an invalid file is a ScopeError naming it, and a
+    missing file stays an OSError."""
     try:
         document = bronze.load_table_map(path)
-    except (ValueError, KeyError, TypeError, AttributeError, re.error) as error:
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, re.error) as error:
         raise ScopeError(f"{path} is not a valid table map: {type(error).__name__}: {error}") from error
-    if not isinstance(document, dict) or not isinstance(document.get("tables"), list):
-        raise ScopeError(f"{path} is not a valid table map: it has no list of tables")
-    return document
+    validate_table_map(document, str(path))
+    return dict(document)
 
 
 def bronze_readers(manifest: Mapping[str, Any]) -> dict[str, list[str]]:
@@ -169,6 +282,9 @@ def _scope_problems(
 
 def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy_tables: Mapping[str, str]) -> tuple[dict[str, Any], list[str]]:
     """Derive the scope report and its problems from a parsed manifest, a table map document and the copy_tables variable. Pure: reads nothing."""
+    validate_table_map(table_map, "the table map")
+    validate_copy_tables(copy_tables, "copy_tables")
+    validate_manifest(manifest, "the manifest")
     names = [str(entry["table"]) for entry in table_map["tables"]]
     repeated = sorted({name for name in names if names.count(name) > 1})
     if repeated:
@@ -265,37 +381,67 @@ def _canonical(document: Any) -> str:
 
 
 def _projected(entries: Sequence[Mapping[str, Any]], keys: Sequence[str], where: str, found: list[str]) -> tuple[dict[str, dict[str, Any]], set[str]]:
-    """Entries by table name, each cut down to the projected keys, and the set of tables that appear twice with different rows; both are named in ``found``.
+    """Entries by table name, each cut down to the projected keys, and the tables that appear more than once with different rows; both are named in ``found``.
 
-    A row without a table name is named. A table that appears twice is named with both definitions, unless the two rows are byte identical; a conflicting
-    table is left out of the field comparison by the caller, so the answer never depends on which duplicate comes first.
+    A row without a table name is named. A table whose rows are not all byte identical gets exactly one diagnostic, whatever the order or the number of repeats:
+    it shows every distinct definition (sorted) and says so when the definitions differ only outside the projection. Such a table is left out of the field
+    comparison by the caller, so the answer never depends on which duplicate comes first.
     """
-    first: dict[str, Mapping[str, Any]] = {}
-    conflicts: set[str] = set()
+    rows: dict[str, list[Mapping[str, Any]]] = {}
     for entry in entries:
         if "table" not in entry:
             found.append(f"{where}: an entry has no table name")
             continue
-        table = str(entry["table"])
-        if table not in first:
-            first[table] = entry
-        elif _canonical(first[table]) != _canonical(entry):
+        rows.setdefault(str(entry["table"]), []).append(entry)
+    conflicts: set[str] = set()
+    for table, group in sorted(rows.items()):
+        if len({_canonical(row) for row in group}) > 1:
             conflicts.add(table)
-            shown = sorted(_canonical({key: row.get(key) for key in keys}) for row in (first[table], entry))
-            outside = " (the rows differ only outside the projection)" if shown[0] == shown[1] else ""
-            found.append(f"{where}: {table} appears twice with different definitions{outside}: {shown[0]} and {shown[1]}")
-    return {table: {key: row.get(key) for key in keys} for table, row in first.items()}, conflicts
+            shown = sorted({_canonical({key: row.get(key) for key in keys}) for row in group})
+            outside = " (the rows differ only outside the projection)" if len(shown) == 1 else ""
+            found.append(f"{where}: {table} appears more than once with different definitions{outside}: {' and '.join(shown)}")
+    return {table: {key: group[0].get(key) for key in keys} for table, group in rows.items()}, conflicts
+
+
+def _shape_problems(document: Any, where: str) -> list[str]:
+    """Named problems with the shape of a report or an expected document: the parts equality reads must be objects, and lists of objects with string tables."""
+    if not isinstance(document, dict):
+        return [f"{where}: the document is not an object"]
+    found = []
+    for group in PROJECTION:
+        rows = document.get(group)
+        if not isinstance(rows, list):
+            found.append(f"{where}: {group} is missing or not a list")
+            continue
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                found.append(f"{where}: {group}[{index}] is not an object")
+            elif "table" in row and not isinstance(row["table"], str):
+                found.append(f"{where}: {group}[{index}].table is not a string")
+    declaration = document.get("silver_source_declaration")
+    for name, value in (("counts", document.get("counts")), ("silver_source_declaration", declaration)):
+        if not isinstance(value, dict):
+            found.append(f"{where}: {name} is missing or not an object")
+    if isinstance(declaration, dict):
+        found.extend(
+            f"{where}: silver_source_declaration.{name} is missing or not an object"
+            for name in ("pins", "glue_mirror_names")
+            if not isinstance(declaration.get(name), dict)
+        )
+    return found
 
 
 def equality_problems(report: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
     """Where the consumer-scope projection of ``report`` differs from ``expected`` (a report or a draft). An empty list means equal.
 
     The projection is the table lists with the keys of :data:`PROJECTION`, the twelve :data:`COUNT_KEYS` and the silver declaration facts. List order is
-    ignored: entries are matched by table name. A table on one side only, a changed key or a changed count is named. A table repeated within one side is
-    named with both definitions (and never resolved to one of them) unless the repeated rows are byte identical. Acquisition annotations, gap records,
-    policy relationships, retained history and descriptive text are not compared.
+    ignored: entries are matched by table name. A table on one side only, a changed key or a changed count is named. A table repeated within one side gets
+    exactly one diagnostic showing every distinct definition (never resolved to one of them) unless the repeated rows are byte identical. A document of the
+    wrong shape is named, not raised. Acquisition annotations, gap records, policy relationships, retained history and descriptive text are not compared.
     """
-    found: list[str] = []
+    found = _shape_problems(report, "report") + _shape_problems(expected, "expected document")
+    if found:
+        return found
     for group, keys in PROJECTION.items():
         ours, ours_conflicts = _projected(report[group], keys, f"{group} (report)", found)
         theirs, theirs_conflicts = _projected(expected[group], keys, f"{group} (expected document)", found)
@@ -369,9 +515,13 @@ def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None)
             raise
         except TimeoutExpired as expired:
             raise ScopeError(f"the dbt parse of {project_dir} did not finish within {expired.timeout} s") from expired
-        except json.JSONDecodeError as error:
-            raise ScopeError(f"the dbt parse of {project_dir} left a manifest.json that is not valid JSON: {error}") from error
+        except dbt_manifest_labels.ManifestError as error:
+            hints = project_file_problems(project_dir)
+            raise ScopeError(f"the dbt parse of {project_dir} failed{': ' + '; '.join(hints) if hints else ''}\n{error}") from error
+        except (ValueError, RecursionError) as error:
+            raise ScopeError(f"manifest.json of the dbt parse of {project_dir} is not valid JSON: {type(error).__name__}: {error}") from error
         seconds = time.monotonic() - began
+    validate_manifest(manifest, f"manifest.json of the dbt parse of {project_dir}")
     report, problems = derive_scope(manifest, table_map, copy_tables)
     return report, problems, seconds
 

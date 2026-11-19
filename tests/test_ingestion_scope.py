@@ -352,3 +352,34 @@ def test_a_real_parse_past_its_deadline_exits_2(tmp_path: Path, monkeypatch: pyt
     check(code == 2, f"exit {code}")
     check("dbt parse" in capsys.readouterr().err, "the failed parse is not named")
     check(not out.exists(), "a timed-out run wrote a report")
+
+
+SOURCES_FILE_FAULTS = {
+    "syntax": "version: 2\nsources: [\n",
+    "sources_not_a_list": "version: 2\nsources: 5\n",
+    "source_without_name": "version: 2\nsources:\n  - schema: bronze\n    tables:\n      - name: t_a\n",
+    "tables_not_a_list": "version: 2\nsources:\n  - name: bronze\n    schema: bronze\n    tables: 5\n",
+    "table_without_name": "version: 2\nsources:\n  - name: bronze\n    schema: bronze\n    tables:\n      - description: no name\n",
+    "table_names_repeated": "version: 2\nsources:\n  - name: bronze\n    schema: bronze\n    tables:\n      - name: t_a\n      - name: t_a\n",
+    "declares_nothing": "version: 2\nsources: []\n",
+    "empty_file": "",
+}
+
+
+@pytest.mark.parametrize("fault", sorted(SOURCES_FILE_FAULTS))
+def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(fault: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The sources file is read by dbt only. A fault in it fails the real parse, so the command exits 2 with the failed parse and the file named."""
+    models, declared, copies, table_map = base_project()
+    files = synthetic_files(models, declared, copies)
+    files["models/_sources.yml"] = SOURCES_FILE_FAULTS[fault]
+    project = write_project(files, tmp_path)
+    map_path = tmp_path / "map.json"
+    map_path.write_text(json.dumps(table_map))
+    out = tmp_path / "report.json"
+    code = scope.main(["--project", str(project), "--table-map", str(map_path), "--no-packages", "--out", str(out)])
+    err = capsys.readouterr().err
+    check(code == 2, f"{fault}: exit {code}: {err[:300]}")
+    check("dbt parse" in err and ("_sources.yml" in err or "models/stg_bronze__file_copies.sql" in err), f"{fault}: no file is named: {err[:400]}")
+    if fault in ("sources_not_a_list", "tables_not_a_list", "syntax"):
+        check("_sources.yml" in err, f"{fault}: the sources file is not named: {err[:400]}")
+    check(not out.exists(), "a report was written")

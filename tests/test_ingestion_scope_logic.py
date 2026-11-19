@@ -139,6 +139,8 @@ def test_graph_1_lists_match_the_hand_derived_scope() -> None:
     [
         (3, 2, 0, {"mapped": 5, "declared": 7, "pins": 4, "mirror_names": 9}),
         (3, 2, 1, {"mapped": 5, "declared": 8, "pins": 4, "mirror_names": 10}),
+        (3, 2, 2, {"mapped": 5, "declared": 9, "pins": 4, "mirror_names": 11}),
+        (74, 11, 3, {"mapped": 85, "declared": 81, "pins": 75, "mirror_names": 92}),
         (0, 0, 0, {"mapped": 0, "declared": 4, "pins": 1, "mirror_names": 4}),
         (74, 11, 0, {"mapped": 85, "declared": 78, "pins": 75, "mirror_names": 89}),
         (74, 11, 1, {"mapped": 85, "declared": 79, "pins": 75, "mirror_names": 90}),
@@ -147,7 +149,7 @@ def test_graph_1_lists_match_the_hand_derived_scope() -> None:
         (73, 11, 0, {"mapped": 84, "declared": 77, "pins": 74, "mirror_names": 88}),
         (73, 11, 1, {"mapped": 84, "declared": 78, "pins": 74, "mirror_names": 89}),
     ],
-    ids=["3_2", "3_2_index", "empty", "today", "today_index", "d3_a1", "d3_a1_index", "d3_a2", "d3_a2_index"],
+    ids=["3_2", "3_2_index", "3_2_two_extra", "today_three_extra", "empty", "today", "today_index", "d3_a1", "d3_a1_index", "d3_a2", "d3_a2_index"],
 )
 def test_projected_counts_equal_independent_constants(roots: int, dictionaries: int, extra: int, expected: dict[str, int]) -> None:
     """The whole returned dictionary, for small hand cases and for the design's tuples (mapped, declared, pins, mirror names) with and without the index."""
@@ -273,7 +275,7 @@ def test_a_table_defined_twice_with_conflicting_fields_is_refused_in_either_orde
     before = scope.equality_problems(report, with_row_before(report, group, change))
     after = scope.equality_problems(report, with_row_after(report, group, change))
     check(before == after, f"the answer depends on the row order: {before} against {after}")
-    check(len(before) == 1 and table in before[0] and "twice" in before[0], f"the duplicate is not named: {before}")
+    check(len(before) == 1 and table in before[0] and "more than once" in before[0], f"the duplicate is not named: {before}")
     key = next(iter(change))
     check(compact(change[key]) in before[0] and compact(report[group][0][key]) in before[0], f"both definitions must appear: {before[0]}")
 
@@ -283,7 +285,7 @@ def test_a_duplicate_on_the_report_side_is_refused_too() -> None:
     report, _ = graph_1()
     bad = with_row_before(report, "in_scope", {"source_family": "other"})
     found = scope.equality_problems(bad, report)
-    check(len(found) == 1 and "t_a" in found[0] and "report" in found[0] and "twice" in found[0], f"{found}")
+    check(len(found) == 1 and "t_a" in found[0] and "report" in found[0] and "more than once" in found[0], f"{found}")
 
 
 def test_a_byte_identical_duplicate_is_tolerated_and_an_annotation_only_difference_is_not() -> None:
