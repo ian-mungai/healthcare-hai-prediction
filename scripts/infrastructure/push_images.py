@@ -141,7 +141,7 @@ def entry_function(name: str, local: str, entry: dict[str, Any]) -> list[str]:
     """The shell function that runs the image as its own user and returns 1 unless the run ended in time with status 0 and the expected output.
 
     The run is a named background job, so that the function can wait for it with a deadline. When the deadline passes the function removes the container by name
-    and stops the job (TERM, then KILL after 5 s), the way ``bounded`` in ``scripts/lakehouse/cutover_route.py`` does. It then confirms that no container of
+    and stops the job (TERM, then KILL after 5 s). It then confirms that no container of
     that name is left. It never relies on ``errexit``: every failure is an explicit ``return 1``.
     """
     if "program" in entry:
