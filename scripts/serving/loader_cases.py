@@ -1177,10 +1177,16 @@ def case_loader_agrees_with_the_shared_matrix_of_bundle_documents(c: Checker) ->
     paths = {data_rule_matrix.FEATURE_LIST: FEATURE_LIST, data_rule_matrix.PROVENANCE: PROVENANCE, data_rule_matrix.SELF_CHECK: SELF_CHECK}
     good = good_documents(model_code.closure_digest(ROOT))
     for entry in data_rule_matrix.entries():
-        path = paths[entry.file]
-        built = data_rule_matrix.build(entry, good[path])
-        raw = {path: built if isinstance(built, bytes) else canonical(built)}
-        if entry.rule:
+        made = data_rule_matrix.documents(entry, {file: good[path] for file, path in paths.items()})
+        raw = {paths[file]: built if isinstance(built, bytes) else canonical(built) for file, built in made.items()}
+        if entry.file_only:
+            try:
+                mlflow_loader.check_feature_list(model_code.parse_json(raw[paths[entry.file]], entry.file))
+                refusal = ""
+            except mlflow_loader.ArtifactRefused as refusal_error:
+                refusal = str(refusal_error)
+            c.check(f"matrix {entry.name}: the loader's feature list rule accepts it ({refusal})", refusal == "")
+        elif entry.rule:
             refused(c, f"matrix {entry.name}", "ArtifactRefused", raw=raw)
         else:
             with world(raw=raw) as w:

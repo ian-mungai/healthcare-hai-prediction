@@ -782,17 +782,21 @@ def check_cell(value: Any, row: int) -> None:
 
 
 def check_self_check(document: Any, references: Sequence[str]) -> tuple[list[list[Any]], list[float]]:
-    """The shape of ``bundle/self_check.json`` as data: a closed key set, schema 1, a slot of at most ``MAX_TEXT`` characters, the feature list's references,
-    1 to ``MAX_ROWS`` rows as wide as the references, cells that are null, finite numbers or short text, and as many finite predictions as rows. Returns the
-    rows and the predictions. Raises ``DataRuleError`` with the rule ``self_check_<part>``. The file is data only: no model runs."""
+    """The shape of ``bundle/self_check.json`` as data: a closed key set, schema 1, a non-empty slot of at most ``MAX_TEXT`` characters, the feature list's
+    references (at least one and none with an empty name: a self-check exists only for a registry candidate, so the empty lists that the writer saves for a
+    result that is not registrable are a feature list matter and never reach this rule), 1 to ``MAX_ROWS`` rows as wide as the references, cells that are
+    null, finite numbers or short text, and as many finite predictions as rows. Returns the rows and the predictions. Raises ``DataRuleError`` with the rule
+    ``self_check_<part>``. The file is data only: no model runs."""
     if not isinstance(document, dict):
         raise DataRuleError("self_check_not_object", f"{SELF_CHECK} must be one JSON object")
     if set(document) != SELF_CHECK_KEYS or type(document["schema"]) is not int or document["schema"] != 1:
         raise DataRuleError("self_check_keys", f"{SELF_CHECK} must be one JSON object with exactly the keys {sorted(SELF_CHECK_KEYS)} and schema 1")
-    if not isinstance(document["slot"], str) or len(document["slot"]) > MAX_TEXT:
-        raise DataRuleError("self_check_keys", f"{SELF_CHECK} must name its slot as text of at most {MAX_TEXT} characters")
+    if not isinstance(document["slot"], str) or not document["slot"] or len(document["slot"]) > MAX_TEXT:
+        raise DataRuleError("self_check_keys", f"{SELF_CHECK} must name its slot as non-empty text of at most {MAX_TEXT} characters")
     if document["references"] != list(references):
         raise DataRuleError("self_check_references", f"the references of {SELF_CHECK} differ from those of {FEATURE_LIST}")
+    if not references or not all(isinstance(name, str) and name for name in references):
+        raise DataRuleError("self_check_references", f"{SELF_CHECK} must name at least one reference and no empty reference name")
     rows, predictions = document["rows"], document["predictions"]
     if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_ROWS:
         raise DataRuleError("self_check_row_count", f"{SELF_CHECK} must hold 1 to {MAX_ROWS} rows")

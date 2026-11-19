@@ -354,7 +354,7 @@ KEY_OUTCOMES: dict[str, str] = {
     "serving references number": "refused TypeError",
     "serving references dict": "refused ArtifactRefused",
     "serving references not_text": "refused ArtifactRefused",
-    "serving references empty_name": "loaded, scoring fails KeyError",
+    "serving references empty_name": "refused ArtifactRefused",
     "serving columns absent": "refused ArtifactRefused",
     "serving columns empty": "refused ArtifactRefused",
     "serving columns text": "refused ArtifactRefused",
@@ -410,12 +410,7 @@ KEY_OUTCOMES: dict[str, str] = {
     "drift kept_columns repeat": "refused artifact_invalid 2",
     "drift kept_columns unknown": "refused artifact_invalid 2",
 }
-KEY_LIMITS = frozenset(
-    {
-        "serving references empty_name",
-        "serving columns empty_name",
-    }
-)
+KEY_LIMITS = frozenset({"serving columns empty_name"})
 
 
 def scenarios() -> list[tuple[str, Callable[[], None]]]:

@@ -10,7 +10,7 @@ and the reason the promote action reports.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 FEATURE_LIST, PROVENANCE, SELF_CHECK = "feature_list", "provenance", "self_check"
@@ -34,10 +34,16 @@ PROMOTE_REASONS = {
 
 
 class Entry(NamedTuple):
+    """One document of the list. ``others`` replaces further files of the same bundle (the self-check's references equal the feature list's, so a case about
+    them changes both). ``file_only`` marks a document whose verdict is the rule of its own file alone: a feature list of a result that is not registrable
+    (empty lists, null slots) is a good feature list that has no self-check and no model, so only the feature list rule judges it."""
+
     name: str
     file: str
     build: Build
     rule: str
+    others: tuple[tuple[str, Build], ...] = ()
+    file_only: bool = False
 
 
 def reason_of(entry: Entry) -> str:
@@ -139,6 +145,28 @@ def columns_one_short(document: Any) -> None:
     document["columns"] = document["columns"][:-1]
 
 
+def empty_first_reference(document: Any) -> None:
+    document["references"][0] = ""
+
+
+def no_references(document: Any) -> None:
+    document.update(references=[], columns=[])
+    for key in ("kept_references", "kept_columns"):
+        if key in document:
+            document[key] = []
+
+
+def no_references_in_a_self_check(document: Any) -> None:
+    document["references"] = []
+    document["rows"] = [[] for _ in document["rows"]]
+
+
+def not_registrable(document: Any) -> None:
+    """The feature list the writer saves for a result with no registry candidate: null slots and empty lists, and no self-check or model beside it."""
+    document.clear()
+    document.update(slot=None, references=[], columns=[], fitted_slot=None, kept_references=[], kept_columns=[])
+
+
 def deep(depth: int) -> Any:
     value: Any = 1
     for _ in range(depth):
@@ -186,7 +214,9 @@ def entries() -> list[Entry]:
         Entry("self_check_slot_that_is_not_text", s, put("slot", 3), "self_check_keys"),
         Entry("self_check_slot_of_257_characters", s, put("slot", long), "self_check_keys"),
         Entry("self_check_slot_of_256_characters", s, put("slot", "x" * 256), ""),
-        Entry("self_check_with_an_empty_slot", s, put("slot", ""), ""),
+        Entry("self_check_with_an_empty_slot", s, put("slot", ""), "self_check_keys"),
+        Entry("self_check_with_an_empty_reference_name", s, edited(empty_first_reference), "self_check_references", ((f, edited(empty_first_reference)),)),
+        Entry("self_check_with_no_references", s, edited(no_references_in_a_self_check), "self_check_references", ((f, edited(no_references)),)),
         Entry("self_check_references_that_differ", s, edited(references_differ), "self_check_references"),
         Entry("self_check_with_no_rows", s, edited(no_rows), "self_check_row_count"),
         Entry("self_check_with_nine_rows", s, edited(nine_rows), "self_check_row_count"),
@@ -225,6 +255,7 @@ def entries() -> list[Entry]:
         Entry("feature_list_slot_that_is_not_text", f, put("slot", 3), "feature_list"),
         Entry("feature_list_with_one_kept_list_only", f, edited(kept_one), "feature_list"),
         Entry("feature_list_with_kept_lists_of_unequal_length", f, edited(kept_unequal), "feature_list"),
+        Entry("feature_list_of_a_result_that_is_not_registrable", f, edited(not_registrable), "", (), True),
         Entry("feature_list_of_the_two_required_keys_only", f, edited(lambda d: [d.pop(key) for key in list(d) if key not in ("references", "columns")]), ""),
         # The provenance: its nine keys, the kind of each and the three budgets of the nested values.
         Entry("provenance_that_is_not_an_object", p, lambda document: ["a"], "provenance"),
@@ -249,3 +280,11 @@ def entries() -> list[Entry]:
 def build(entry: Entry, good: Any) -> Any:
     """The document of the entry made from a deep copy of the consumer's own good document of that file (a JSON value or raw bytes)."""
     return entry.build(json.loads(json.dumps(good)))
+
+
+def documents(entry: Entry, good: Mapping[str, Any]) -> dict[str, Any]:
+    """Every file the entry replaces, by file name (``feature_list``, ``provenance`` or ``self_check``), each made from the consumer's own good document."""
+    made = {entry.file: build(entry, good[entry.file])}
+    for file, builder in entry.others:
+        made[file] = builder(json.loads(json.dumps(good[file])))
+    return made

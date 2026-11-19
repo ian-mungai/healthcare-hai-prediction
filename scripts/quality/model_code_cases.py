@@ -201,44 +201,49 @@ def good_bundle_documents() -> dict[str, Any]:
     }
 
 
-def apply_shared_rules(file: str, data: bytes, references: tuple[str, ...]) -> None:
-    """Parse and check one file with the shared functions, as every reader does. Raises ``model_code.DataRuleError``."""
-    document = model_code.parse_json(data, file)
-    if file == data_rule_matrix.FEATURE_LIST:
-        model_code.check_feature_list(document)
-    elif file == data_rule_matrix.PROVENANCE:
-        model_code.check_provenance(document)
-    else:
-        model_code.check_self_check(document, references)
+def apply_shared_rules(data: dict[str, bytes], only: str | None = None) -> None:
+    """Parse and check the bundle files with the shared functions, as every reader does: the feature list (its references go on), the provenance, then the
+    self-check. ``only`` judges one file by its own rule. Raises ``model_code.DataRuleError``."""
+    references: tuple[str, ...] = ()
+    for file in (data_rule_matrix.FEATURE_LIST, data_rule_matrix.PROVENANCE, data_rule_matrix.SELF_CHECK):
+        document = model_code.parse_json(data[file], file)
+        if file == data_rule_matrix.FEATURE_LIST:
+            references = model_code.check_feature_list(document)[0] if only in (None, file) else tuple(document["references"])
+        elif only in (None, file):
+            if file == data_rule_matrix.PROVENANCE:
+                model_code.check_provenance(document)
+            else:
+                model_code.check_self_check(document, references)
 
 
 def case_shared_data_rules_name_the_rule_each_matrix_document_breaks() -> list[str]:
-    """Every document of the shared matrix (``scripts/quality/data_rule_matrix.py``) is refused with the rule the matrix names, or accepted when it names none.
+    """Every document of the shared matrix (``scripts/model_data_matrix.py``) is refused with the rule the matrix names, or accepted when it names none.
     The loader, the promote action and the promotion check run the same list, so a rule that one of them lacks fails their case."""
     problems = []
     good = good_bundle_documents()
-    references = tuple(good[data_rule_matrix.FEATURE_LIST]["references"])
+    encoded = {file: (json.dumps(document, sort_keys=True) + "\n").encode() for file, document in good.items()}
     entries = data_rule_matrix.entries()
     if len({entry.name for entry in entries}) != len(entries):
         problems.append("two entries of the matrix share a name")
     for entry in entries:
-        built = data_rule_matrix.build(entry, good[entry.file])
-        data = built if isinstance(built, bytes) else (json.dumps(built, sort_keys=True) + "\n").encode()
+        made = data_rule_matrix.documents(entry, good)
+        data = {**encoded, **{file: built if isinstance(built, bytes) else (json.dumps(built, sort_keys=True) + "\n").encode() for file, built in made.items()}}
         try:
-            apply_shared_rules(entry.file, data, references)
+            apply_shared_rules(data, entry.file if entry.file_only else None)
             found = ""
         except model_code.DataRuleError as error:
             found = error.rule
         if found != entry.rule:
             problems.append(f"{entry.name}: the shared rules gave {found or 'no refusal'}, and the matrix names {entry.rule or 'no refusal'}")
-    for file in (data_rule_matrix.FEATURE_LIST, data_rule_matrix.PROVENANCE, data_rule_matrix.SELF_CHECK):
-        try:
-            apply_shared_rules(file, (json.dumps(good[file]) + "\n").encode(), references)
-        except model_code.DataRuleError as error:
-            problems.append(f"the good {file} was refused as {error.rule}")
-    for probe in ("duplicate_schema_key", "utf16_self_check", "valid_provenance_with_an_unused_nan_field"):
+    try:
+        apply_shared_rules(encoded)
+    except model_code.DataRuleError as error:
+        problems.append(f"the good documents were refused as {error.rule}")
+    for probe in ("duplicate_schema_key", "utf16_self_check", "valid_provenance_with_an_unused_nan_field", "self_check_with_an_empty_slot"):
         if probe not in {entry.name for entry in entries}:
-            problems.append(f"the matrix lacks the reviewer's probe {probe}")
+            problems.append(f"the matrix lacks the probe {probe}")
+    if not any(entry.file_only and not entry.rule for entry in entries):
+        problems.append("the matrix lacks the feature list of a result that is not registrable, which every reader must accept")
     return problems
 
 

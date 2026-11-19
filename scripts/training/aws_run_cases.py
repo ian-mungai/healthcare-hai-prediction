@@ -32,6 +32,7 @@ from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
 from scripts.training import guards, mlflow_alias_stand_in, promote_receipt, promotion_check
 from scripts.training import production_record as production_record_module
+from scripts.training import promote as promote_module
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, single_window, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.job_failure import EXIT_FAILED
@@ -1243,10 +1244,19 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
 
     # The matrix every reader runs (``scripts/quality/data_rule_matrix.py``): the promotion refuses each document the loader refuses, by the reason the matrix
     # names, and accepts each document the loader accepts.
+    def feature_list_is_read(name: str, document: Any) -> None:
+        def case() -> None:
+            require(promote_module.feature_references(document) == document["references"], f"{name} was not read as a feature list")
+
+        cases.check(f"promote_data_reads_{name}", case)
+
     for entry in data_rule_matrix.entries():
-        built = data_rule_matrix.build(entry, serving_bundle()[f"{entry.file}.json"])
-        documents = serving_documents(**{f"{entry.file}.json": built})
-        if entry.rule:
+        good = {file: serving_bundle()[f"{file}.json"] for file in (data_rule_matrix.FEATURE_LIST, data_rule_matrix.PROVENANCE, data_rule_matrix.SELF_CHECK)}
+        made = data_rule_matrix.documents(entry, good)
+        documents = serving_documents(**{f"{file}.json": built for file, built in made.items()})
+        if entry.file_only:
+            feature_list_is_read(f"matrix_{entry.name}", made[entry.file])
+        elif entry.rule:
             refuses(f"matrix_{entry.name}", data_rule_matrix.reason_of(entry), documents)
         else:
             accepts(f"matrix_{entry.name}", documents)
