@@ -45,7 +45,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the host state exporter, so the host capacity and the OpenMetadata health are not visible.
           headline: 'Host state exporter is down'
-          recovered: 'Prometheus reaches the host state exporter again.'
+          recovered: 'The host state exporter scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Capacity and health data are missing for the gap.'
           resolved_next: 'Open the HAI host capacity dashboard and check the current values.'
           affects: 'Host capacity and OpenMetadata health are not visible.'
@@ -89,11 +89,11 @@ groups:
         annotations:
           summary: The host state exporter cannot read one of its sources (the ECS capacity or the OpenMetadata health check).
           headline: 'Host state source cannot be read'
-          recovered: 'The host state exporter reads its sources again.'
+          recovered: 'The source is no longer reported as down. The exporter may also have stopped reporting it.'
           resolved_affects: 'Data from that source is missing for the gap.'
-          resolved_next: 'Open the HAI host capacity dashboard and check the current values.'
-          affects: 'Part of the host capacity data or the OpenMetadata health data is missing.'
-          next_step: 'Read the exporter log to see which source fails. It is the ECS capacity or the OpenMetadata health check.'
+          resolved_next: 'Open the HAI host capacity dashboard and check the panel Host state exporter sources up.'
+          affects: 'The data of one source of the host state exporter is missing.'
+          next_step: 'Check the failed source in Details on HAI host capacity (panel Host state exporter sources up). Then read the host state exporter log.'
           dashboard: 'HAI host capacity'
 
       - uid: host_job_room_low
@@ -133,7 +133,7 @@ groups:
         annotations:
           summary: With no host job running, ECS has less memory left than the host job cap, so no job can be placed.
           headline: 'No room left to place a host job'
-          recovered: 'The idle-host placement warning has cleared. A job running now also clears it.'
+          recovered: 'The idle-host placement warning is no longer met. A running job or missing memory data also clears it.'
           resolved_affects: 'A job may have started, so the host can still be short of memory for the next job.'
           resolved_next: 'Check the free memory on the HAI host capacity dashboard before you start another job.'
           affects: 'With no host job running, less memory is free than one job needs, so no job can be placed.'

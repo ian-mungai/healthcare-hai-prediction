@@ -45,7 +45,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape Polaris, so the catalog metrics are lost.
           headline: 'Polaris is not reachable'
-          recovered: 'Prometheus reaches Polaris again.'
+          recovered: 'The Polaris scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Catalog metrics are missing for the gap.'
           resolved_next: 'Open the HAI Polaris dashboard and check the current state.'
           affects: 'Catalog metrics are lost. Polaris may be down.'
@@ -89,7 +89,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the OpenMetadata admin port.
           headline: 'OpenMetadata metrics unreachable'
-          recovered: 'Prometheus reaches the OpenMetadata admin port again.'
+          recovered: 'The OpenMetadata scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'OpenMetadata metrics are missing for the gap.'
           resolved_next: 'Open the HAI OpenMetadata dashboard and check the current health.'
           affects: 'OpenMetadata metrics are lost. OpenMetadata may be down.'
@@ -133,11 +133,11 @@ groups:
         annotations:
           summary: Prometheus cannot read the MLflow metrics through the host state exporter. MLflow or the relay is down.
           headline: 'MLflow metrics are not reachable'
-          recovered: 'Prometheus reads the MLflow metrics again.'
+          recovered: 'The MLflow metrics scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Metrics are missing for the gap. A training or promotion step in the gap may have failed.'
           resolved_next: 'Check that MLflow answers. Read the failed runs of the gap in Airflow if there are any.'
           affects: 'MLflow metrics are unavailable. Check MLflow itself before you retry training or promotion.'
-          next_step: 'Check that MLflow and its relay run on the host. Open the HAI MLflow dashboard to see which one fails.'
+          next_step: 'Read both the MLflow log and the host state exporter log. Use the HAI MLflow dashboard only for request metrics.'
           dashboard: 'HAI MLflow'
 
       - uid: redis_exporter_down
@@ -177,7 +177,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the Redis exporter.
           headline: 'Redis exporter is not reachable'
-          recovered: 'Prometheus reaches the Redis exporter again.'
+          recovered: 'The Redis exporter scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Redis metrics are missing for the gap.'
           resolved_next: 'Open the HAI feature store dashboard and check the current values.'
           affects: 'Redis metrics are lost.'
@@ -221,10 +221,10 @@ groups:
         annotations:
           summary: The Redis exporter cannot reach Redis, so the online feature store is unavailable.
           headline: 'Redis is down'
-          recovered: 'The Redis exporter reaches Redis again.'
-          resolved_affects: 'Requests in the gap could not read features.'
+          recovered: 'The Redis exporter no longer reports Redis as down. It may also have stopped reporting.'
+          resolved_affects: 'Requests in the gap may have failed to read features.'
           resolved_next: 'Open the HAI feature store dashboard and check that the store holds data.'
-          affects: 'The online feature store is unavailable, so the model API cannot read features.'
+          affects: 'The online feature store may be unavailable, so the model API may fail to read features.'
           next_step: 'Check that the Redis task runs on the host and read its log.'
           dashboard: 'HAI feature store'
 
@@ -265,7 +265,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the Postgres exporter.
           headline: 'Postgres exporter unreachable'
-          recovered: 'Prometheus reaches the Postgres exporter again.'
+          recovered: 'The Postgres exporter scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Postgres metrics are missing for the gap.'
           resolved_next: 'Open the HAI infrastructure dashboard and check the current values.'
           affects: 'Postgres metrics are lost.'
@@ -309,10 +309,10 @@ groups:
         annotations:
           summary: The Postgres exporter cannot reach Postgres, which Airflow, Polaris and MLflow need.
           headline: 'Postgres is down'
-          recovered: 'The Postgres exporter reaches Postgres again.'
+          recovered: 'The Postgres exporter no longer reports Postgres as down. It may also have stopped reporting.'
           resolved_affects: 'Calls of Airflow, Polaris or MLflow in the gap may have failed.'
           resolved_next: 'Check in Airflow that the runs of the gap finished.'
-          affects: 'Airflow, Polaris and MLflow need Postgres and cannot work without it.'
+          affects: 'Airflow, Polaris and MLflow may fail without Postgres.'
           next_step: 'Check that the Postgres task runs on the host and read its log.'
           dashboard: 'HAI infrastructure'
 
@@ -353,7 +353,7 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the node exporter.
           headline: 'Node exporter is not reachable'
-          recovered: 'Prometheus reaches the node exporter again.'
+          recovered: 'The node exporter scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Host metrics are missing for the gap.'
           resolved_next: 'Open the HAI host capacity dashboard and check the current values.'
           affects: 'Host CPU, memory and disk metrics are lost.'
@@ -396,7 +396,7 @@ groups:
         annotations:
           summary: The kernel killed a process for memory in the last hour.
           headline: 'Host killed a process for memory'
-          recovered: 'The kernel killed no process for memory in the last hour.'
+          recovered: 'The kernel reports no process killed for memory in the last hour.'
           resolved_affects: 'The killed process may still be down and its work may be incomplete.'
           resolved_next: 'Open the HAI services and disk dashboard. Check the logs for the process that was killed.'
           affects: 'A process on the host was killed for memory, so a job or service may have stopped.'

@@ -45,7 +45,7 @@ groups:
         annotations:
           summary: The Airflow scheduler sent no heartbeat for 10 minutes.
           headline: 'Airflow scheduler is silent'
-          recovered: 'The Airflow scheduler sends heartbeats again.'
+          recovered: 'Heartbeats from the Airflow scheduler are reported again.'
           resolved_affects: 'DAG runs that were due while it was silent may have started late or not at all.'
           resolved_next: 'Open Airflow and check that the runs that were due in the meantime have started.'
           affects: 'DAG runs may not start or move on while the scheduler is silent.'
@@ -88,11 +88,11 @@ groups:
         annotations:
           summary: A DAG run failed in the last hour.
           headline: 'Airflow DAG run failed'
-          recovered: 'This DAG has no recorded failed run in the last hour.'
-          resolved_affects: 'The failed run only left the one-hour window. It may still need repair and the steps after it may be missing.'
-          resolved_next: 'Open the DAG in Airflow and check its latest run. Rerun it if the cause is not fixed.'
+          recovered: 'No failed run of this DAG is reported in the last hour.'
+          resolved_affects: 'The failure may only have left the one-hour window. The failed run can still need repair. The monitor may also have stopped reporting.'
+          resolved_next: 'Check the latest run of this DAG in Airflow. Rerun the failed task only after the cause is fixed.'
           affects: 'A run of this DAG failed, so the steps that need its output may be missing.'
-          next_step: 'Open the DAG in Airflow and find the failed run. Read the log of its failed task.'
+          next_step: 'Open the DAG in Airflow and find the failed run. Read the log of its failed task. Fix the cause, then rerun the failed task if the run still needs repair.'
           dashboard: 'HAI overview'
 
       - uid: airflow_task_failed
@@ -131,8 +131,8 @@ groups:
         annotations:
           summary: A task failed in the last hour.
           headline: 'Airflow task failed'
-          recovered: 'This task has no recorded failure in the last hour.'
-          resolved_affects: 'Other tasks of the DAG can still fail. The failed attempt may have left later tasks undone.'
+          recovered: 'No failed attempt of this task is reported in the last hour.'
+          resolved_affects: 'Other tasks of the DAG can still fail. The failed attempt may have left later tasks undone. The monitor may also have stopped reporting.'
           resolved_next: 'Check the current state of the DAG run in Airflow.'
           affects: 'A failed attempt may delay later tasks.'
           next_step: 'Open the DAG in Airflow and check whether the task retried and the DAG run completed. Read the log of the failed attempt.'
@@ -175,9 +175,9 @@ groups:
         annotations:
           summary: A DAG file fails to import.
           headline: 'Airflow cannot import a DAG file'
-          recovered: 'No DAG file fails to import now.'
-          resolved_affects: 'Runs of that DAG that were due while the file was broken may have been missed.'
-          resolved_next: 'Open Airflow and check that the DAG shows no import error and has its next run scheduled.'
+          recovered: 'No DAG import error is reported. The metric may also no longer be reported.'
+          resolved_affects: 'Runs that were due while the file was broken may have been missed. The monitor may also have stopped reporting.'
+          resolved_next: 'Open Airflow and check that the DAG imports and that its intended run exists.'
           affects: 'The DAG in the broken file does not run until its file imports.'
           next_step: 'Open Airflow and read the import error it lists. Fix the DAG file.'
           dashboard: 'HAI overview'

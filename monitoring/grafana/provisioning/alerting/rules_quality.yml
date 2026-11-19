@@ -44,7 +44,7 @@ groups:
         annotations:
           summary: A dbt test of the layer failed in its latest build.
           headline: 'A dbt test failed'
-          recovered: 'The latest build of this layer has no failed dbt test.'
+          recovered: 'The latest build of this layer reports no failed dbt test or reports no test result.'
           resolved_affects: 'The output of the failed build may still be wrong. The layers after it may be behind.'
           resolved_next: 'Check in Airflow that the latest build passed and the later layers ran.'
           affects: 'The data of this layer failed a check, so its output may be wrong or missing.'
@@ -87,7 +87,7 @@ groups:
         annotations:
           summary: A quality check of the layer's gate failed in its latest validation.
           headline: 'A quality check failed'
-          recovered: 'The latest validation of this layer has no failed check.'
+          recovered: 'The latest validation of this layer reports no failed check or reports no check result.'
           resolved_affects: 'The data of the failed validation was not accepted. The layers after it may be behind.'
           resolved_next: 'Check in Airflow that the latest validation passed and the later layers ran.'
           affects: 'The gate of this layer failed, so its data is not accepted.'

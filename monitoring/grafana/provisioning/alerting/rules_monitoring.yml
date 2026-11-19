@@ -45,9 +45,9 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the StatsD exporter, so Airflow metrics are lost.
           headline: 'StatsD exporter is down'
-          recovered: 'Prometheus reaches the StatsD exporter again.'
-          resolved_affects: 'Airflow metrics are missing for the gap, so an Airflow alert may have been missed.'
+          recovered: 'The StatsD exporter scrape is no longer reported as failed. The target may also have been removed.'
+          resolved_affects: 'Airflow metrics were unavailable during the gap, so an Airflow alert may have been missed.'
           resolved_next: 'Check in Airflow that the DAG runs of the gap finished.'
-          affects: 'Airflow metrics are lost, so the Airflow alerts cannot fire.'
+          affects: 'Airflow metrics are unavailable, so the Airflow alerts may not fire.'
           next_step: 'Check that the StatsD exporter task runs on the host.'
           dashboard: 'HAI overview'

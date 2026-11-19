@@ -92,6 +92,8 @@ templates:
       {{- else if .Labels.job }} (job {{ template "hai.mid10" .Labels.job }}{{ with .Labels.phase }}, phase {{ template "hai.mid10" . }}{{ end }})
       {{- else if .Labels.hai_type }} ({{ template "hai.hai_name" .Labels.hai_type }})
       {{- else if .Labels.feature_set }} (set {{ template "hai.model_name" .Labels.feature_set }})
+      {{- else if .Labels.source }} (source {{ template "hai.mid20" .Labels.source }})
+      {{- else if .Labels.task }} (setup task {{ template "hai.mid20" .Labels.task }})
       {{- else if .Labels.service }} (service {{ template "hai.mid20" .Labels.service }})
       {{- end }}
       {{- end }}
@@ -101,13 +103,15 @@ templates:
       {{- else if .Labels.dag_id }}DAG {{ template "hai.line" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ template "hai.line" . }}{{ end }}.
       {{- else if .Labels.hai_type }}Infection type {{ template "hai.hai_name" .Labels.hai_type }}.
       {{- else if .Labels.feature_set }}Feature set {{ template "hai.model_name" .Labels.feature_set }}.
+      {{- else if .Labels.source }}Host state source {{ template "hai.line" .Labels.source }}.
+      {{- else if .Labels.task }}Setup task {{ template "hai.line" .Labels.task }}.
       {{- else if .Labels.service }}Service {{ template "hai.line" .Labels.service }}.
       {{- end }}
       {{- end }}
 
       {{ define "hai.alert" -}}
       {{ $resolved := eq .Status "resolved" -}}
-      {{ $which := or .Labels.job .Labels.dag_id .Labels.hai_type .Labels.feature_set .Labels.service -}}
+      {{ $which := or .Labels.job .Labels.dag_id .Labels.hai_type .Labels.feature_set .Labels.source .Labels.task .Labels.service -}}
       {{ $summary := "" -}}{{ with .Annotations.summary }}{{ $summary = . }}{{ end -}}
       {{ $affects := "" -}}{{ with .Annotations.affects }}{{ $affects = . }}{{ end -}}
       {{ $next := "" -}}{{ with .Annotations.next_step }}{{ $next = . }}{{ end -}}
@@ -191,6 +195,12 @@ templates:
       {{- end }}
       {{- with .Labels.task_id }}
       Task: {{ template "hai.line" . }}
+      {{- end }}
+      {{- with .Labels.source }}
+      Failed source: {{ template "hai.line" . }}
+      {{- end }}
+      {{- with .Labels.task }}
+      Setup task: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.service }}
       Service: {{ template "hai.line" . }}

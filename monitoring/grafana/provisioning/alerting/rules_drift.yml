@@ -44,9 +44,9 @@ groups:
         annotations:
           summary: The latest drift check of a HAI type reached its trigger share, so its model is due for retraining.
           headline: 'Drift reached retraining trigger'
-          recovered: 'The latest drift check of this type no longer shows a trigger.'
+          recovered: 'The latest drift check of this type no longer shows a trigger. A newer check may also have failed or reported nothing.'
           resolved_affects: 'A newer drift check replaced the trigger. Training that the earlier trigger started is not stopped.'
-          resolved_next: 'If you expect a new model, check in Airflow that training_dag ran for the earlier trigger.'
+          resolved_next: 'If you expect a new model, check in Airflow that the requested training_dag run exists.'
           affects: 'The drift rules say this model is due for retraining.'
-          next_step: 'No decision is needed from you. drift_monitoring_dag decides about retraining and triggers training_dag itself. If training did not start, open the drift run in Airflow and read the log of its failed task.'
+          next_step: 'The drift workflow makes the retraining decision. In Airflow, check trigger_training and the requested training_dag run.'
           dashboard: 'HAI drift'

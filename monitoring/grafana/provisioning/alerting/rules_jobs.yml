@@ -44,9 +44,9 @@ groups:
         annotations:
           summary: A host job phase failed or was interrupted. No later run of it has succeeded.
           headline: 'Host job failed'
-          recovered: 'A later run of this job phase succeeded.'
+          recovered: 'A later success of this job phase is recorded or its failure record is gone.'
           resolved_affects: 'Layers after this job phase may still be behind, because they did not run while it failed.'
-          resolved_next: 'Open Airflow and check that the DAGs after this layer have run since the success.'
+          resolved_next: 'Check the latest run of this job phase in Airflow. Check that the DAGs after this layer have run since.'
           affects: 'The job phase did not succeed, so the layers after it do not run on its output.'
           next_step: 'Open Airflow and find the failed run of this job. Read its task log. Fix the cause and rerun the failed task.'
           dashboard: 'HAI host jobs'
@@ -87,9 +87,9 @@ groups:
         annotations:
           summary: A host job phase stopped sending heartbeats for 3 minutes without an exit push, so it was killed or lost. Its last heartbeat shows its memory.
           headline: 'Host job went silent'
-          recovered: 'This job phase sends heartbeats again or has finished.'
-          resolved_affects: 'The output of the lost run is still missing. Layers after it may be behind.'
-          resolved_next: 'Check in Airflow that a new run of this job phase has finished.'
+          recovered: 'A new heartbeat of this job phase is reported or its running record is gone because it ended.'
+          resolved_affects: 'The earlier heartbeat gap may have left incomplete work.'
+          resolved_next: 'Check the outcome of the affected run in Airflow.'
           affects: 'The job phase was killed or lost, so its output is missing.'
           next_step: 'Open the HAI host jobs dashboard to see the last memory of the job. Then read its task log in Airflow.'
           dashboard: 'HAI host jobs'
@@ -130,7 +130,7 @@ groups:
         annotations:
           summary: A host job phase used more than 90 percent of the host job cap at its peak.
           headline: 'Host job near its memory cap'
-          recovered: 'The latest peak of this job phase is at or under 90 percent of the host job cap.'
+          recovered: 'The latest peak of this job phase is at or under 90 percent of the host job cap or is not reported.'
           resolved_affects: 'A larger input can still run out of memory.'
           resolved_next: 'Check the peak memory of the next run on the HAI host jobs dashboard.'
           affects: 'The job phase may be killed for memory on a larger input.'
@@ -174,10 +174,10 @@ groups:
         annotations:
           summary: Prometheus cannot scrape the Pushgateway, so the jobs' own metrics are lost.
           headline: 'Pushgateway is down'
-          recovered: 'Prometheus reaches the Pushgateway again.'
-          resolved_affects: 'Job metrics pushed during the gap are lost, so a job alert may have been missed.'
+          recovered: 'The Pushgateway scrape is no longer reported as failed. The target may also have been removed.'
+          resolved_affects: 'Job metrics were unavailable to Prometheus during the gap. Intermediate samples or alerts may be missing.'
           resolved_next: 'Check in Airflow that the jobs of the gap finished.'
-          affects: 'Job metrics are lost, so the job alerts and the host jobs dashboard go blind.'
+          affects: 'Job metrics are unavailable to Prometheus, so the job alerts and the host jobs dashboard go blind.'
           next_step: 'Check that the Pushgateway task runs on the host.'
           dashboard: 'HAI host jobs'
 
@@ -217,7 +217,7 @@ groups:
         annotations:
           summary: The online store reload at host start failed for a feature set, so the store may be empty.
           headline: 'Online store reload failed'
-          recovered: 'The latest online reload of this feature set did not fail.'
+          recovered: 'The latest online reload of this feature set is not reported as failed.'
           resolved_affects: 'The store may still lack the data of the failed reload.'
           resolved_next: 'Open the HAI feature store dashboard and check that the store holds data.'
           affects: 'The online store of this feature set may be empty, so the model API may refuse its predictions.'

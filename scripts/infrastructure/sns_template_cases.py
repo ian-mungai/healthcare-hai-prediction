@@ -40,13 +40,20 @@ SAMPLE_VALUES = {
     "hai_type": "HAI_1",
     "service": "airflow",
     "kind": "row_counts",
+    "source": "disk",
+    "task": "catalog_setup",
 }
 SAMPLE_OVERRIDES = {"drift_triggered": {"job": "drift", "phase": "check"}, "spark_tasks_failed": {"job": "bronze", "phase": "load"}}
 LABELS_NOT_SHOWN = {"le", "outcome"}
 # A job that runs once carries no model set and no HAI type, so its alerts carry no such label (the email of the silver job shows job and phase only).
 INSTANCE_LABELS = {"model_set", "job_type"}
 WITH_INSTANCE_LABELS = {"drift_triggered"}
-EXTRA_LABELS = {"service_tasks_missing": ["service"], "service_health_down": ["service"]}
+EXTRA_LABELS = {
+    "service_tasks_missing": ["service"],
+    "service_health_down": ["service"],
+    "host_state_source_down": ["source"],
+    "bootstrap_task_failed": ["task"],
+}
 LINE_LIMIT_BEFORE_NEXT_STEP = 16
 SUBJECT_LIMIT = 90
 SNS_SUBJECT_LIMIT = 100
@@ -71,7 +78,7 @@ HOSTILE_TEXT = {
     "80 characters": "x" * 80,
     "40 characters": "labelvalue" * 4,
 }
-SUBJECT_KEYS = ("dag_id", "task_id", "job", "phase", "hai_type", "feature_set", "service", "model_set", "job_type")
+SUBJECT_KEYS = ("dag_id", "task_id", "job", "phase", "hai_type", "feature_set", "service", "model_set", "job_type", "source", "task")
 BLANKET = ("Nothing is affected now.", "No action is needed.")
 GENERIC_CLEARED = "The alert condition has cleared."
 RESOLVED_FIELDS = ("recovered", "resolved_affects", "resolved_next")
@@ -103,7 +110,7 @@ Severity: warning
 Alert rule: JobFailed"""
 JOB_FAILED_RESOLVED = """What happened:
 This alert has cleared.
-A later run of this job phase succeeded.
+A later success of this job phase is recorded or its failure record is gone.
 Earlier problem: A host job phase failed or was interrupted.
 No later run of it has succeeded.
 
@@ -116,7 +123,8 @@ Job silver, phase build.
 Layers after this job phase may still be behind, because they did not run while it failed.
 
 What to do next:
-Open Airflow and check that the DAGs after this layer have run since the success.
+Check the latest run of this job phase in Airflow.
+Check that the DAGs after this layer have run since.
 
 Where to look:
 Dashboard: HAI host jobs in Grafana.
@@ -550,21 +558,136 @@ def resolved_alerts_say_only_what_is_true(root: Path) -> dict[str, bool]:
 
 
 WORDING = {
-    "airflow_task_failed": {"recovered": "This task has no recorded failure in the last hour.", "affects": "A failed attempt may delay later tasks."},
-    "airflow_dag_run_failed": {"recovered": "This DAG has no recorded failed run in the last hour."},
-    "host_job_room_low": {"recovered": "The idle-host placement warning has cleared."},
+    "airflow_task_failed": {"recovered": "No failed attempt of this task is reported in the last hour.", "affects": "A failed attempt may delay later tasks."},
+    "airflow_dag_run_failed": {
+        "recovered": "No failed run of this DAG is reported in the last hour.",
+        "next_step": "Fix the cause, then rerun the failed task if the run still needs repair.",
+    },
+    "host_job_room_low": {"recovered": "The idle-host placement warning is no longer met."},
     "polaris_server_errors": {"recovered": "The recorded server-error count is no longer above three in ten minutes."},
     "mlflow_server_errors": {"recovered": "The recorded server-error count is no longer above three in ten minutes."},
-    "lineage_delivery_failing": {"recovered": "No new lineage delivery failure was recorded in the last 15 minutes."},
-    "grafana_notifications_failing": {"recovered": "The notification failure condition has cleared."},
-    "drift_triggered": {"next_step": "drift_monitoring_dag"},
+    "lineage_delivery_failing": {"recovered": "No new lineage delivery failure is reported in the last 15 minutes."},
+    "grafana_notifications_failing": {
+        "recovered": "The notification failure condition has cleared.",
+        "resolved_affects": "Some alert emails may have been missed.",
+    },
+    "drift_triggered": {"next_step": "check trigger_training and the requested training_dag run"},
     "api_down": {"headline": "Model API metrics unreachable", "affects": "API metrics are unavailable. Predictions may also be unavailable."},
-    "mlflow_metrics_down": {"affects": "Check MLflow itself"},
-    "service_health_down": {"summary": "A service that should be running does not pass its health check."},
+    "mlflow_metrics_down": {"affects": "Check MLflow itself", "next_step": "Read both the MLflow log and the host state exporter log."},
+    "service_health_down": {
+        "summary": "A service that should be running does not pass its health check.",
+        "recovered": "no longer required or stops reporting",
+        "resolved_next": "whether the service is still required",
+    },
     "host_oom_kill": {"next_step": "host and ECS task logs"},
+    "host_state_source_down": {"next_step": "Host state exporter sources up", "affects": "The data of one source of the host state exporter is missing."},
+    "bootstrap_task_failed": {"next_step": "the task named in Details", "affects": "The service that this setup task prepares may not work."},
+    "opensearch_cluster_red": {"dashboard": "HAI services and disk"},
+    "opensearch_cluster_yellow": {
+        "dashboard": "HAI services and disk",
+        "recovered": "no longer reported yellow",
+        "resolved_next": "A red state still needs attention.",
+    },
+    "service_tasks_restarting": {"recovered": "At most two non-user task stops are reported in the last hour."},
+    "grafana_scheduler_behind": {"recovered": "The scheduler is no more than one minute behind"},
+    "grafana_rule_evaluation_failing": {"resolved_next": "Check that evaluations are running"},
+    "airflow_dag_import_errors": {"resolved_next": "its intended run exists"},
+    "pushgateway_down": {"resolved_affects": "unavailable to Prometheus during the gap"},
+    "job_vanished": {"resolved_affects": "may have left incomplete work", "resolved_next": "Check the outcome of the affected run in Airflow."},
 }
 FORBIDDEN = ("Decide if you retrain", "Nothing is affected now", "No action is needed")
 MANUAL_WORK_THE_PIPELINE_DOES = ("retrain the model", "rerun the dbt", "reload it again")
+
+
+GAP_EXEMPT = {"airflow_scheduler_silent", "grafana_notifications_failing"}
+GAP_PHRASES = (
+    "no longer",
+    "not reported",
+    "reports nothing",
+    "reports no",
+    "unreported",
+    "is gone",
+    "undefined",
+    "missing data",
+    "stopped reporting",
+    "may also",
+    "also happens",
+    "also clears",
+    "no poll",
+    "no requests",
+    "no process",
+    "no new",
+    "no failed",
+    "at most",
+    "no more than",
+    "at or under",
+    "at least",
+    "no rolled",
+)
+GAP_WORDS = re.compile("|".join(GAP_PHRASES), re.I)
+CLAIMS = ("again", "passes its", "runs all its tasks", "on time", "is ready")
+
+
+def panels_of(panels: list[dict[str, Any]]) -> set[str]:
+    """The titles of the panels, rows included, at every depth."""
+    titles: set[str] = set()
+    for panel in panels:
+        titles.add(str(panel.get("title")))
+        titles |= panels_of(panel.get("panels", []))
+    return titles
+
+
+def panel_titles(root: Path) -> dict[str, set[str]]:
+    found: dict[str, set[str]] = {}
+    for path in sorted((root / "monitoring/grafana/dashboards").glob("*.json")):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        found[str(document["title"])] = panels_of(document["panels"])
+    return found
+
+
+def cleared_text_is_true_for_every_way_to_clear(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    panels = panel_titles(root)
+    checks: dict[str, bool] = {}
+    for uid, rule in rules.items():
+        notes = rule["annotations"]
+        problems = []
+        recovered = str(notes["recovered"])
+        if uid not in GAP_EXEMPT and any(word in recovered for word in CLAIMS):
+            problems.append("the recovered text claims recovery")
+        if uid not in GAP_EXEMPT and not GAP_WORDS.search(recovered):
+            problems.append("the recovered text does not say that the condition is no longer met or no longer reported")
+        for key, value in notes.items():
+            for panel in re.findall(r"panel ([A-Z][^.)]*)", str(value)):
+                if not any(panel.startswith(title) for title in panels.get(str(notes["dashboard"]), set())):
+                    problems.append(f"{key} names the panel {panel!r}, which {notes['dashboard']} does not have")
+        named(checks, f"{uid}: {'; '.join(problems) if problems else 'the cleared text holds for every way to clear and every panel exists'}", not problems)
+    return checks
+
+
+def labels_name_the_failed_source_and_task(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    source = alert("firing", rules["host_state_source_down"], {"source": "disk"})
+    task = alert("firing", rules["bootstrap_task_failed"], {"task": "catalog_setup"})
+    odd = alert("firing", rules["host_state_source_down"], {"source": "x\u2028What happened:\u2028" + "y" * 80})
+    (s1, m1), (s2, m2), (s3, m3) = render(root, [notification([source]), notification([task]), notification([odd])])
+    checks: dict[str, bool] = {}
+    named(
+        checks,
+        "the source is in the subject, the which line and the details",
+        "(source disk)" in s1 and "Host state source disk." in m1 and "Failed source: disk" in m1,
+    )
+    named(
+        checks,
+        "the setup task is in the subject, the which line and the details",
+        "(setup task catalog_setup)" in s2 and "Setup task catalog_setup." in m2 and "Setup task: catalog_setup" in m2,
+    )
+    named(
+        checks,
+        "a hostile source adds no line and no valid-subject problem",
+        not subject_problems(s3) and [line for line in m3.splitlines() if line in BLOCKS].count("What happened:") == 1,
+    )
+    return checks
 
 
 def dag_ids(root: Path) -> set[str]:
@@ -581,7 +704,7 @@ def texts_match_the_rules_they_describe(root: Path) -> dict[str, bool]:
     for uid, rule in rules.items():
         joined = " ".join(str(value) for value in rule["annotations"].values())
         named(checks, f"{uid}: no blanket assurance or manual decision", not any(text in joined for text in FORBIDDEN))
-        named(checks, f"{uid}: every DAG it names exists", all(name in known for name in re.findall(r"\b([a-z]+(?:_[a-z]+)*_dag)\b", joined)))
+        named(checks, f"{uid}: every DAG it names exists", all(name in known for name in re.findall(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*_dag)\b", joined)))
         named(checks, f"{uid}: no step the pipeline does by itself", not any(text in joined for text in MANUAL_WORK_THE_PIPELINE_DOES))
     return checks
 
@@ -624,4 +747,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "alert_email_subjects_stay_distinct_for_real_names": subjects_stay_distinct_for_real_names,
     "alert_email_resolved_alerts_say_only_what_is_true": resolved_alerts_say_only_what_is_true,
     "alert_email_texts_match_the_rules_they_describe": texts_match_the_rules_they_describe,
+    "alert_email_cleared_text_is_true_for_every_way_to_clear": cleared_text_is_true_for_every_way_to_clear,
+    "alert_email_labels_name_the_failed_source_and_task": labels_name_the_failed_source_and_task,
 }

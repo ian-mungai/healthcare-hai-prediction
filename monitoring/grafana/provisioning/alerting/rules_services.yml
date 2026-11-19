@@ -45,9 +45,9 @@ groups:
         annotations:
           summary: An ECS service runs fewer tasks than it should.
           headline: 'ECS service runs too few tasks'
-          recovered: 'The service runs all its tasks again.'
+          recovered: 'The running count is no longer below the desired count. The desired count may also have been lowered.'
           resolved_affects: 'Work that the service should have done in the gap may be missing.'
-          resolved_next: 'Open the HAI services and disk dashboard and check the service.'
+          resolved_next: 'Open the HAI services and disk dashboard and check the running and desired counts of the service.'
           affects: 'The service runs fewer tasks than it should.'
           next_step: 'Open the HAI services and disk dashboard to see which service. Then check its tasks in ECS.'
           dashboard: 'HAI services and disk'
@@ -89,9 +89,9 @@ groups:
         annotations:
           summary: 'A service that should be running does not pass its health check.'
           headline: 'A service health check fails'
-          recovered: 'The service passes its health check again.'
+          recovered: 'The service health warning cleared. This also happens when the service is no longer required or stops reporting.'
           resolved_affects: 'Requests to the service in the gap may have failed.'
-          resolved_next: 'Open the HAI services and disk dashboard and check the service.'
+          resolved_next: 'Check whether the service is still required and whether its health check passes.'
           affects: 'The service may not answer requests.'
           next_step: 'Open the HAI services and disk dashboard to see which service. Read its log on the host.'
           dashboard: 'HAI services and disk'
@@ -132,10 +132,10 @@ groups:
         annotations:
           summary: More than 2 tasks of a service stopped in the last hour, so it is restarting.
           headline: 'A service keeps restarting'
-          recovered: 'The service had no more than two task stops in the last hour.'
-          resolved_affects: 'The service restarted in that hour, so requests in that time may have failed.'
+          recovered: 'At most two non-user task stops are reported in the last hour.'
+          resolved_affects: 'Earlier task stops may have interrupted work.'
           resolved_next: 'Read the stop reasons on the HAI services and disk dashboard.'
-          affects: 'The service is unstable and may drop requests.'
+          affects: 'The service had more than two task stops that were not started by a user. It may be unstable.'
           next_step: 'Open the HAI services and disk dashboard to see the stop reasons. Read the service log.'
           dashboard: 'HAI services and disk'
 
@@ -176,7 +176,7 @@ groups:
         annotations:
           summary: The job scratch volume has less than 15 percent free, so the next job may fail for space.
           headline: 'Job scratch disk is low'
-          recovered: 'The job scratch volume has at least 15 percent free again.'
+          recovered: 'The job scratch volume reports at least 15 percent free or reports nothing.'
           resolved_affects: 'A job that ran while the volume was low may have failed for space.'
           resolved_next: 'Check the recent job runs in Airflow for space errors.'
           affects: 'The next job may fail for lack of space.'
@@ -220,7 +220,7 @@ groups:
         annotations:
           summary: The data volume has less than 10 percent free.
           headline: 'Data disk is low'
-          recovered: 'The data volume has at least 10 percent free again.'
+          recovered: 'The data volume reports at least 10 percent free or reports nothing.'
           resolved_affects: 'A service that wrote to the volume while it was low may have failed.'
           resolved_next: 'Open the HAI services and disk dashboard and check that every service runs.'
           affects: 'Services that write to the data volume may fail.'
@@ -264,12 +264,12 @@ groups:
         annotations:
           summary: The OpenSearch cluster is red, so OpenMetadata search and lineage reads can fail.
           headline: 'OpenSearch cluster is red'
-          recovered: 'The OpenSearch cluster is no longer red.'
+          recovered: 'The cluster is no longer reported red. It may be yellow or green or its status may be unreported.'
           resolved_affects: 'Searches and lineage reads in the red time may have failed.'
-          resolved_next: 'Open the HAI OpenMetadata dashboard and check the cluster state.'
+          resolved_next: 'Check the cluster state on HAI services and disk (panel OpenSearch cluster status).'
           affects: 'OpenMetadata search and lineage reads can fail.'
-          next_step: 'Check the OpenSearch task on the host and read its log.'
-          dashboard: 'HAI OpenMetadata'
+          next_step: 'Check the OpenSearch task on the host and read its log. The cluster status is on HAI services and disk.'
+          dashboard: 'HAI services and disk'
 
       - uid: opensearch_cluster_yellow
         title: OpenSearchClusterYellow
@@ -308,12 +308,12 @@ groups:
         annotations:
           summary: The OpenSearch cluster has been yellow for 30 minutes, so some replica shards are not assigned.
           headline: 'OpenSearch cluster is yellow'
-          recovered: 'The OpenSearch cluster is no longer yellow.'
-          resolved_affects: 'A yellow cluster keeps every primary shard, so no data was lost.'
-          resolved_next: 'No follow-up is needed for a yellow cluster that has cleared.'
+          recovered: 'The cluster is no longer reported yellow. It may be green or red or its status may be unreported.'
+          resolved_affects: 'A red cluster would raise its own alert after its five-minute hold.'
+          resolved_next: 'Check the current state on HAI services and disk. A red state still needs attention.'
           affects: 'Some replica shards are not assigned. Search still works.'
-          next_step: 'Wait and watch. Check the OpenSearch task if the cluster stays yellow.'
-          dashboard: 'HAI OpenMetadata'
+          next_step: 'Wait and watch the cluster status on HAI services and disk. Check the OpenSearch task if it stays yellow.'
+          dashboard: 'HAI services and disk'
 
       - uid: bootstrap_task_failed
         title: BootstrapTaskFailed
@@ -351,9 +351,9 @@ groups:
         annotations:
           summary: The latest run of a one-shot bootstrap task (code fetch, Polaris bootstrap or OpenMetadata bootstrap) did not exit with 0.
           headline: 'A bootstrap task failed'
-          recovered: 'The latest run of the bootstrap task exited with 0.'
+          recovered: 'The latest run of this setup task is not reported as failed.'
           resolved_affects: 'The service may have run without its bootstrap in the meantime.'
-          resolved_next: 'Open the HAI services and disk dashboard and check the service.'
-          affects: 'The service that this task prepares may not work.'
-          next_step: 'Read the log of the failed one-shot task. It is the code fetch, the Polaris bootstrap or the OpenMetadata bootstrap.'
+          resolved_next: 'Open the HAI services and disk dashboard. Check the service and the panel Last exit code, by one-shot task.'
+          affects: 'The service that this setup task prepares may not work.'
+          next_step: 'A setup task failed. Read the log of the task named in Details.'
           dashboard: 'HAI services and disk'
