@@ -228,12 +228,13 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
     scored = metrics(holdout.y, prediction)
     request.deadline.check()
     prepare, model = pipeline.named_steps["prepare"], pipeline.named_steps["model"]
+    panel_columns = model.kept_indices_ if slot == "m6_fixed_effects" else None
     details = {
         **model.details_,
         "training_rows": len(training.rows),
         "holdout_rows": len(holdout.rows),
         "selected_references": list(prepare.kept_references_),
-        "used_references": list(prepare.used_references(training.rows[:1])),
+        "used_references": list(prepare.used_references(training.rows[:1], panel_columns)),
         "training_missing_fraction": prepare.missing_rates_,
         "indicator_aliases": dict(prepare.indicator_aliases_),
         "constant_columns": dict(prepare.constant_columns_),

@@ -251,14 +251,21 @@ class FoldPreprocessor(EstimatorParameters):
             alias_references[canonical] = (*alias_references.get(canonical, ()), indicator_references[alias])
         return Prepared(matrix, tuple(names), tuple(references), batch.rows, unknown, alias_references)
 
-    def used_references(self, values: Any) -> tuple[str, ...]:
+    def used_references(self, values: Any, columns: Sequence[int] | None = None) -> tuple[str, ...]:
         """The references of the sources that still contribute a column to the fitted design, in the order of the feature list.
 
-        A source counts when a value or category column of it survives or when its missing indicator does, including an indicator that several sources
-        share. A source that the half-missing selector, the constant check or the dependent-column removal left without a column is not listed. The layout
-        does not depend on the values, so any rows of the fitting set (one is enough) give the answer."""
+        Stage one is the preprocessing alone (``columns`` is None): a source counts when a value or category column of it survives or when its missing
+        indicator does, including an indicator that several sources share. A source that the half-missing selector, the constant check or the dependent-column
+        removal left without a column is not listed. Stage two is a model that drops columns of the design afterwards, as the fixed-effects panel does for the
+        columns that the hospital effects absorb or that depend on others within hospital: it passes the positions it kept, and only a source with a column
+        among them counts. The layout does not depend on the values, so any rows of the fitting set (one is enough) give the answer."""
         design = self.transform(values)
-        return tuple(feature.reference for feature in self.features if design.columns_for([feature.reference]))
+        kept = None if columns is None else set(columns)
+        return tuple(
+            feature.reference
+            for feature in self.features
+            if (found := design.columns_for([feature.reference])) and (kept is None or not kept.isdisjoint(found))
+        )
 
     def fit_transform(self, values: Any, y: Any = None) -> Prepared:
         """Fit and transform exactly the same fitting rows for a Pipeline step."""

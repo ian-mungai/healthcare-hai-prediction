@@ -934,20 +934,48 @@ def fit_cases(cases: Any, folder: Path) -> None:
                 wanted = (slot, list(SLOT_LISTS[slot]), [reference.split(":", 1)[-1] for reference in SLOT_LISTS[slot]]) if promotion else (None, [], [])
                 require(keys == wanted, f"{label}: the registry keys are {keys}, expected {wanted}")
 
+    def feature_list_of_m6_follows_the_panel() -> None:
+        """The kept list of m6 names the sources of the fitted panel's columns. A predictor the selection drops for its missing share and a predictor that the
+        hospital effects absorb both leave the fitted design, the used references and the feature list, and the first stays out of the used list while the
+        second still appears in the preprocessing's kept set."""
+        for name, late in (("missing", lambda row: None), ("absorbed", lambda row: float(int(row["ccn"]) % 7))):
+            fixture = Fixture(folder / f"kept_m6_{name}", model="m6", hospitals=60, late=late)
+            code, _, error = run_action(fixture, "fit")
+            require(code == 0, f"fit of m6 with a {name} predictor failed: {error}")
+            result, listing = output_of(fixture, f"{BUNDLE}/result.json"), output_of(fixture, f"{BUNDLE}/feature_list.json")
+            slot = "m6_fixed_effects"
+            require(result["statuses"][slot]["status"] == "fitted", f"m6 with a {name} predictor is {result['statuses'][slot]}")
+            details = result["fitted_parameters"][slot]
+            require(
+                LATE_REFERENCE not in details["used_references"], f"{name}: the used references still name the removed predictor: {details['used_references']}"
+            )
+            require(
+                LATE_REFERENCE not in listing["kept_references"] and "late" not in listing["kept_columns"], f"{name}: the drift metadata keeps it: {listing}"
+            )
+            require("late" not in details["mundlak"]["tested_columns"], f"{name}: the fitted panel tests it: {details['mundlak']['tested_columns']}")
+            expected = [reference for reference in SLOT_LISTS[slot] if reference in details["used_references"]]
+            require(
+                expected and listing["kept_references"] == expected, f"{name}: kept references {listing['kept_references']}, the fitted design's are {expected}"
+            )
+            require(
+                listing["fitted_slot"] == slot and listing["slot"] is None, f"{name}: fitted_slot {listing['fitted_slot']}, registry slot {listing['slot']}"
+            )
+            selection = details["panel_selection"]
+            if name == "absorbed":
+                require("late" in details["absorbed_columns"], f"the fixture's predictor was not absorbed: {details['absorbed_columns']}")
+                require(LATE_REFERENCE in selection["kept_references"] and LATE_REFERENCE in details["selected_references"], "the selection stage dropped it")
+            else:
+                require([entry["reference"] for entry in selection["dropped"]] == [LATE_REFERENCE], f"the selection stage kept it: {selection}")
+
     def feature_list_of_an_unfitted_run() -> None:
-        """A fixed-effects run whose predictor is missing in every row ends not_estimable with exit 0 (an owner decision is pending on that order). The
-        bundle says the run is unfitted: no fitted slot and no kept list."""
-
-        def remove_process(rows: list[dict[str, Any]]) -> None:
-            for row in rows:
-                row["process"] = None
-
-        fixture = Fixture(folder / "kept_unfitted", model="m6", adjust=remove_process)
+        """A fixed-effects run with no repeated hospital ends not_estimable, and its fit action still exits 0 (the training run fails later, at its last
+        action). The bundle says the run is unfitted: no fitted slot and no kept list."""
+        fixture = Fixture(folder / "kept_unfitted", model="m6", hospitals=120, adjust=single_window)
         code, _, error = run_action(fixture, "fit")
         require(code == 0, f"fit failed: {error}")
         require(
             output_of(fixture, f"{BUNDLE}/result.json")["statuses"]["m6_fixed_effects"]["status"] == "not_estimable",
-            "the m6 run fitted with a missing predictor",
+            "the m6 run fitted with no repeated hospital",
         )
         listing = output_of(fixture, f"{BUNDLE}/feature_list.json")
         require(
@@ -994,6 +1022,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_feature_list_of_every_model_and_population", feature_list_of_every_model_and_population)
     cases.check("job_fit_feature_list_of_an_unfitted_run", feature_list_of_an_unfitted_run)
     cases.check("job_fit_trust_check_reads_saved_state", serialized_state_trusted)
+    cases.check("job_fit_feature_list_of_m6_follows_the_panel", feature_list_of_m6_follows_the_panel)
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
     cases.check("job_fit_result_is_reproducible", reproducible)

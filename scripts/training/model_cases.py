@@ -1413,10 +1413,10 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                         "mediation compression changed an estimate or interval",
                     )
 
-    def kept_scenario(model: str, *, dead_on_list: bool = False) -> tuple[Any, tuple[str, ...], dict[str, Feature]]:
+    def kept_scenario(model: str) -> tuple[Any, tuple[str, ...], dict[str, Feature]]:
         """A request whose ``model`` list holds a complete constant, an exact duplicate, two predictors with one missing pattern (one constant where
         present), an all-missing one, a 60 % missing one and the ownership column. The fixed-effects model fits complete cases, so its list leaves out the two
-        predictors that are missing in most or all rows; ``dead_on_list`` puts the all-missing one back to show the outcome."""
+        predictors that are missing in most or all rows."""
         names = ("constant", "duplicate", "twin_a", "twin_b", "dead", "sparse")
         found = {name: Feature(f"feature_matrix_hospital:{name}", "number") for name in names}
         found["group"] = Feature("feature_matrix_hospital_window:control_type_code", "category", family="hospital_window")
@@ -1434,7 +1434,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         )
         data = replace(req.data, rows=rows, features=(*req.data.features, *found.values()))
         base = tuple(feature.reference for feature in req.data.features)
-        middle = ("constant", "duplicate", "twin_a", "twin_b") + (("dead", "sparse") if model != "m6" else ("dead",) if dead_on_list else ())
+        middle = ("constant", "duplicate", "twin_a", "twin_b") + (("dead", "sparse") if model != "m6" else ())
         listed = (*base, *(found[name].reference for name in middle), found["group"].reference)
         slot = MODEL_SLOT[model]
         return replace(req, data=data, feature_lists={**req.feature_lists, slot: listed}), listed, found
@@ -1460,6 +1460,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             design = result.pipeline.named_steps["prepare"].transform(changed.data.split()[0].rows)
             shared = {reference for name, aliases in design.reference_aliases.items() if name in design.names for reference in aliases}
             expected = {reference for reference in listed if reference in design.references or reference in shared}
+            if model == "m6":
+                panel_columns = set(result.pipeline.named_steps["model"].kept_indices_)
+                expected = {reference for reference in expected if panel_columns.intersection(design.columns_for([reference]))}
             if model == "m3":
                 expected.add(found["group"].reference)
             require(kept == [reference for reference in listed if reference in expected], f"{model}: the kept list is not the fitted design's sources: {kept}")
@@ -1476,7 +1479,13 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 (found["twin_b"].reference in kept) == (model != "m6"),
                 f"{model}: a predictor that survives only through a shared missing indicator is listed wrongly",
             )
-            require(found["twin_a"].reference in kept and found["group"].reference in kept, f"{model}: a used predictor is missing from the kept list")
+            require(found["twin_a"].reference in kept, f"{model}: a used predictor is missing from the kept list")
+            require(
+                (found["group"].reference in kept) == (model != "m6"),
+                f"{model}: the ownership column is listed wrongly (the hospital effects of m6 absorb it, so its panel does not use it)",
+            )
+            if model == "m6":
+                require(any(name.startswith("control_type_code") for name in result.details["absorbed_columns"]), "m6: the ownership column was not absorbed")
             if model != "m6":
                 require(found["dead"].reference not in kept and found["sparse"].reference not in kept, f"{model}: a dropped predictor is in the kept list")
             require(
@@ -1487,10 +1496,16 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
     def an_unfitted_run_writes_no_kept_list() -> None:
         from scripts.training import bundle
 
-        # A fixed-effects run with an all-missing predictor on its list ends not_estimable (complete cases are taken before the missing-feature drop; an owner
-        # decision is pending on that order). The run is unfitted, which the bundle must say apart from a fitted model that is not registrable.
-        changed, _, _ = kept_scenario("m6", dead_on_list=True)
-        fitted = fitted_model_suite("m6", changed)
+        # A fixed-effects run with no repeated hospital ends not_estimable. The run is unfitted, which the bundle must say apart from a fitted model that is
+        # not registrable.
+        base = request(years=range(2019, 2023), hospitals=120)
+        single = replace(
+            base,
+            data=replace(
+                base.data, rows=tuple(row for row in base.data.rows if row["window_year"] == 2022 or row["window_year"] == 2019 + int(row["ccn"]) % 3)
+            ),
+        )
+        fitted = fitted_model_suite("m6", single)
         require(fitted.slots["m6_fixed_effects"].status == "not_estimable", f"expected an unfitted m6, got {fitted.slots['m6_fixed_effects'].status}")
         require(bundle.feature_list_document(fitted) == EMPTY_LIST, f"an unfitted run lists {bundle.feature_list_document(fitted)}")
         spatial_run = replace(req, adjacency=())
