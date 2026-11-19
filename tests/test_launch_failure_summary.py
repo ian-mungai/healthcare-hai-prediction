@@ -95,6 +95,29 @@ def test_the_closed_record_of_the_failed_phase_is_kept_in_the_end_record_and_ren
     check(outcome.failure == f"phase build failed in container build: {FLOOR_TEXT}", f"the message is rendered from the template: {outcome.failure!r}")
 
 
+def test_the_plain_reason_and_exit_code_of_the_end_record_agree_with_its_failure_record() -> None:
+    """A phase that fails stops the containers before it with SIGTERM (143) and ECS words the stop "Task failed to start": the end record names the cause."""
+    rig = Rig()
+    launcher = rig.launcher()
+    launch = launcher.attach(gold_spec())
+    launcher.start(launch)
+    arn = launch.arn or ""
+    rig.logs.streams[stream(arn, "build")] = [phase_failure.line(FLOOR)]
+    rig.ecs.finish(arn, {"fetch": 143, "build": 1, "publish": None})
+    rig.ecs.tasks[arn]["stoppedReason"] = "Task failed to start"
+    launcher.wait(launch)
+    outcome = launcher.conclude(launch)
+    end = stored(rig)
+    check(end["failure"]["container"] == "build" and end["failure"]["facts"]["exit_code"] == 1, f"the structured block names the build container: {end}")
+    check(
+        end["exit_code"] == 1 and outcome.exit_code == 1,
+        f"the exit code is the build container's, not a stopped sibling's: {end['exit_code']} and {outcome.exit_code}",
+    )
+    check(end["reason"] == outcome.failure and "failed to start" not in end["reason"], f"the reason is the rendered failure: {end['reason']!r}")
+    again = rig.launcher().run(gold_spec(2))
+    check(again.adopted and again.exit_code == 1 and again.reason == end["reason"], f"a later attempt reports the same pair: {again}")
+
+
 @pytest.mark.parametrize("text", HOSTILE)
 def test_no_job_text_reaches_the_record_in_any_form(text: str) -> None:
     forged = [

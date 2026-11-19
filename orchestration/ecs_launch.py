@@ -1145,7 +1145,9 @@ class Launcher:
             else:
                 verdict, code, reason = self.judge(launch.report, spec.acceptance)
                 diagnosis = self.diagnose(spec, launch.arn or "", launch.report) if verdict == "failed" else None
-                self.close(launch, verdict, code, reason, diagnosis.record if diagnosis else None)
+                record = diagnosis.record if diagnosis else None
+                code, reason = self.agreed(code, reason, record)
+                self.close(launch, verdict, code, reason, record)
         else:
             raise LaunchError("the attempt has not ended")
         outcome = launch.outcome
@@ -1165,7 +1167,17 @@ class Launcher:
     def ended(self, spec: JobSpec, arn: str, report: TaskReport, outcome: str, code: int, reason: str) -> dict[str, Any]:
         """The fields of the end record of a task shown STOPPED: its outcome, exit code, reason and ARN, and the closed failure record of a failure."""
         record = self.diagnose(spec, arn, report).record if outcome == "failed" else None
+        code, reason = self.agreed(code, reason, record)
         return {"outcome": outcome, "exit_code": code, "reason": reason[:REPORT_LIMIT], "task_arn": arn, **({"failure": record} if record else {})}
+
+    @staticmethod
+    def agreed(code: int, reason: str, record: Mapping[str, Any] | None) -> tuple[int, str]:
+        """The exit code and the plain reason of an end record that holds a closed failure record: ECS's code of the container that caused the failure and the
+        message of the record. The task's own first non-zero code and stopped reason describe the task, not the cause: a phase that fails stops the
+        containers before it with SIGTERM (143), and ECS words that stop "Task failed to start". A failure with no record keeps both."""
+        if record is None:
+            return code, reason
+        return record["facts"].get("exit_code", code), render_failure(record)
 
     def cause(self, spec: JobSpec, arn: str, report: TaskReport) -> tuple[str, str] | None:
         """The one container that caused a failed task, and how it is known: ``job`` (it exited with an error of its own), ``task`` (ECS reports it with no exit
