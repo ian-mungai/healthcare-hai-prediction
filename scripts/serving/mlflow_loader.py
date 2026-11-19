@@ -267,23 +267,30 @@ class MlflowLoader:
         else:
             schema_hash = str(info.tags["feature_schema_sha256"])
         # One folder for this load: every download lands in it, and it is removed when the ``with`` ends, after skops and the self-check or at a refusal.
+        sizes: dict[str, int] = {}
+
+        def download(path: str, folder: str) -> str:
+            local = self._fetch(info.run_id, path, folder)
+            sizes[path] = os.stat(local).st_size
+            return local
+
         with tempfile.TemporaryDirectory(prefix="model_load_") as folder:
-            references, columns = check_feature_list(read_json(self._fetch(info.run_id, FEATURE_LIST, folder), FEATURE_LIST))
+            references, columns = check_feature_list(read_json(download(FEATURE_LIST, folder), FEATURE_LIST))
             if feature_set and not references:
                 raise ValueError("the model version names a feature set but its feature list has no references")
             try:
-                recorded = self._fetch(info.run_id, PROVENANCE, folder)
+                recorded = download(PROVENANCE, folder)
             except Exception as error:
                 raise ModelCodeMissing(f"{PROVENANCE} cannot be downloaded") from error
             provenance = read_json(recorded, PROVENANCE)
             check_admission(provenance, self.closure)
             try:
-                saved = self._fetch(info.run_id, SELF_CHECK, folder)
+                saved = download(SELF_CHECK, folder)
             except Exception as error:
                 raise SelfCheckMissing(f"{SELF_CHECK} cannot be downloaded") from error
             rows, predictions = check_self_check(read_json(saved, SELF_CHECK), references)
-            model_path = self._fetch(info.run_id, MODEL, folder)
-            if os.stat(model_path).st_size > MODEL_CAP:
+            model_path = download(MODEL, folder)
+            if sizes[MODEL] > MODEL_CAP:
                 raise ArtifactRefused(f"{MODEL} is over {MODEL_CAP} bytes")
             pipeline: Any = importlib.import_module("skops.io").load(model_path, trusted=list(self._contract["serialization"]["trusted_types"]))
 
@@ -292,7 +299,7 @@ class MlflowLoader:
                 return float(pipeline.predict(pandas.DataFrame([row]))[0])
 
             replay(predict, references, rows, predictions)
-        LOG.info("model %s version %s loaded; process peak memory %.0f MiB", hai_type, version, peak_memory_mib())
+        LOG.info("model %s version %s loaded; file bytes %s; process peak memory %.0f MiB", hai_type, version, sizes, peak_memory_mib())
         return LoadedModel(version, references, schema_hash, predict, feature_set)
 
     def release(self, model: LoadedModel) -> None:

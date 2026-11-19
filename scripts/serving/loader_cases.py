@@ -567,6 +567,7 @@ def case_loader_self_check_refuses_a_model_that_does_not_reproduce_its_predictio
 def case_loader_logs_one_line_with_the_version_and_the_peak_memory(c: Checker) -> None:
     """One log line per load names the version and the process peak memory (the 1280 MiB limit is unmeasured)."""
     records: list[str] = []
+    files: dict[str, bytes] = {}
 
     class Capture(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
@@ -580,11 +581,16 @@ def case_loader_logs_one_line_with_the_version_and_the_peak_memory(c: Checker) -
     try:
         with world() as w:
             w.attempt()
+            files = dict(w.run.files)
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous)
     lines = [line for line in records if f"version {VERSION}" in line and "peak" in line]
     c.check("one line names the version and the peak memory", len(lines) == 1 and "MiB" in lines[0])
+    sizes = [f"'{path}': {len(data)}" for path, data in files.items() if path in FOUR]
+    c.check(
+        "the same line holds the real size in bytes of each of the four files", len(lines) == 1 and all(size in lines[0] for size in sizes) and len(sizes) == 4
+    )
 
 
 def case_loader_default_fetch_downloads_into_the_given_folder_through_the_tracking_server(c: Checker) -> None:
