@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
+import os
 import sys
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
@@ -114,6 +117,76 @@ def panel_standin(y: Any, x: Any, entities: Any, years: Any, names: Any) -> Any:
 
 
 EMPTY_LIST: dict[str, Any] = {"slot": None, "references": [], "columns": [], "fitted_slot": None, "kept_references": [], "kept_columns": []}
+
+
+def written(folder: Path, name: str, document: Any) -> Path:
+    """Write one JSON document under a scratch folder and return its path."""
+    path = folder / name
+    path.write_text(json.dumps(document) + "\n")
+    return path
+
+
+def serve_with_the_real_loader(document: Any, folder: Path, tags: dict[str, str] | None = None) -> tuple[Any, list[list[str]]]:
+    """Load a version through the real serving loader.
+
+    Only the MLflow transport is a stand-in (registry record, artifact download, model load), and so is the pandas frame, a list of the row dicts, because
+    the training environment has no pandas. Returns the loaded model and the column names of every frame the pipeline scored.
+    """
+    mlflow_loader = importlib.import_module("scripts.serving.mlflow_loader")
+    listing = written(folder, "served_feature_list.json", document)
+    scored: list[list[str]] = []
+
+    def predict(frame: Any) -> list[float]:
+        scored.append(list(frame[0]))
+        return [0.5]
+
+    version = SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1", **(tags or {})})
+    library = SimpleNamespace(
+        MlflowClient=lambda: SimpleNamespace(get_model_version=lambda name, number: version),
+        artifacts=SimpleNamespace(download_artifacts=lambda run_id, artifact_path: str(listing)),
+        sklearn=SimpleNamespace(load_model=lambda uri: SimpleNamespace(predict=predict)),
+    )
+    with patch.dict(sys.modules, {"mlflow": library, "pandas": SimpleNamespace(DataFrame=list)}), patch.dict(os.environ):
+        return mlflow_loader.MlflowLoader().load("HAI_1", "1"), scored
+
+
+def score_with_the_real_promotion_reader(document: Any, extract_columns: Sequence[str], folder: Path) -> dict[str, float]:
+    """Run the real ``promotion_check.champion_predictions`` on a champion with this feature list. Only the store calls and the model load are stand-ins."""
+    from scripts.training import promotion_check
+
+    listing = written(folder, "champion_feature_list.json", document)
+    store = SimpleNamespace(
+        download_artifacts=lambda run_id, path, scratch: str(listing),
+        get_run=lambda run_id: SimpleNamespace(data=SimpleNamespace(tags={"newest_window": "2021"})),
+    )
+    rows = [{"spine_key": "000001:2022"}, {"spine_key": "000002:2022"}]
+    pipeline = SimpleNamespace(predict=lambda frame: [1.0, 2.0])
+    with patch.object(promotion_check, "load_pipeline", return_value=pipeline):
+        return promotion_check.champion_predictions(
+            store, SimpleNamespace(run_id="run1"), "hai_model_HAI_1", {"columns": list(extract_columns)}, rows, 2022, folder
+        )
+
+
+def monitor_with_the_real_baseline_reader(document: Any, folder: Path) -> tuple[Any, list[str]]:
+    """Run the real ``monitoring.baseline.fetch`` on a Production version with this feature list. The registry lookup, the artifact download and the DVC load
+    of the training matrix are stand-ins. Returns the result and the written ``features.json``."""
+    baseline = importlib.import_module("monitoring.baseline")
+    dvc_baseline = importlib.import_module("scripts.training.dvc_baseline")
+    artifacts = {
+        "bundle/feature_list.json": document,
+        "extract/manifest_HAI_1.json": {"hai_type": "HAI_1", "population": "primary", "newest_window_year": 2021},
+    }
+    matrix = folder / "matrix.parquet"
+    matrix.write_bytes(b"matrix")
+
+    def download(run_id: str, path: str, dst_path: str) -> str:
+        return str(written(folder, path.replace("/", "_"), artifacts[path]))
+
+    store = SimpleNamespace(get_model_version_by_alias=lambda name, alias: SimpleNamespace(run_id="run1", version="1"), download_artifacts=download)
+    out = folder / "baseline_out"
+    with patch.object(dvc_baseline, "load", return_value=matrix):
+        result = baseline.fetch(store, "HAI_1", out, project=folder)
+    return result, json.loads((out / "features.json").read_text())
 
 
 def scenarios() -> list[tuple[str, Callable[[], None]]]:
@@ -1995,6 +2068,72 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 result = suite.fit_slot(req, "m5_spatial")
             require(result.status == "not_estimable" and reason in result.reason, "unresolved robust LM diagnostics produced a fitted model")
 
+    def feature_list_reaches_the_real_readers() -> None:
+        """The real writer's list, with and without the keys of the kept list, through the three real readers: serving and promotion read the whole reviewed
+        list, drift reads the kept columns when it has them and every column when it has not. A reader that took a key it must not read fails here."""
+        from scripts.training import bundle
+        from scripts.training.job_failure import JobFailure
+
+        for model in ("m1", "m2", "m4"):
+            changed, _, _ = kept_scenario(model)
+            document = bundle.feature_list_document(fitted_model_suite(model, changed))
+            old = {key: document[key] for key in ("slot", "references", "columns")}
+            require(document["slot"] in REGISTRABLE and document["references"], f"{model}: the writer's list is not a registry list: {document}")
+            require(
+                0 < len(document["kept_columns"]) < len(document["columns"]) and set(document["kept_columns"]) <= set(document["columns"]),
+                f"{model}: the fixture must keep fewer columns than it lists so that a reader of the wrong key shows: {document}",
+            )
+            dropped = sorted(set(document["columns"]) - set(document["kept_columns"]))[0]
+            with tempfile.TemporaryDirectory() as scratch:
+                folder = Path(scratch)
+                for label, shape in (("two-key", old), ("six-key", document)):
+                    served, frames = serve_with_the_real_loader(shape, folder)
+                    require(served.references == tuple(document["references"]), f"{model} {label}: serving references {served.references}")
+                    row = {reference: float(index) for index, reference in enumerate(document["references"])}
+                    require(served.predict(row) == 0.5 and frames == [document["columns"]], f"{model} {label}: serving scored the columns {frames}")
+                    require(
+                        score_with_the_real_promotion_reader(shape, document["columns"], folder) == {"000001:2022": 1.0, "000002:2022": 2.0},
+                        f"{model} {label}: promotion did not score a champion whose columns the extract holds",
+                    )
+                    try:
+                        score_with_the_real_promotion_reader(shape, [name for name in document["columns"] if name != dropped], folder)
+                    except JobFailure as error:
+                        require(error.name == "champion_features" and dropped in str(error), f"{model} {label}: promotion named {error}")
+                    else:
+                        raise AssertionError(f"{model} {label}: promotion accepted an extract that lacks the listed column {dropped}")
+                    result, features = monitor_with_the_real_baseline_reader(shape, folder)
+                    expected = document["kept_columns"] if shape is document else document["columns"]
+                    require(features == expected and result.features == expected, f"{model} {label}: drift monitors {features}, expected {expected}")
+
+    def non_registrable_lists_are_refused_by_the_readers_that_need_features() -> None:
+        """m3, m5 and m6 are fitted but never registered: their list has an empty registry part and a kept list (the ownership column is left out of m6's).
+        An unfitted run's list is empty. No version can carry them to a reader; if one did, drift has nothing to monitor and a set-tagged load refuses."""
+        from monitoring.drift_check import CheckError
+        from scripts.training import bundle
+
+        documents = {"unfitted": EMPTY_LIST}
+        for model in ("m3", "m5", "m6"):
+            changed, _, _ = kept_scenario(model)
+            documents[model] = bundle.feature_list_document(fitted_model_suite(model, changed))
+            require(
+                documents[model]["slot"] is None and documents[model]["references"] == [] and documents[model]["kept_columns"],
+                f"{model}: expected an empty registry part and a kept list: {documents[model]}",
+            )
+        with tempfile.TemporaryDirectory() as scratch:
+            for name, document in documents.items():
+                try:
+                    monitor_with_the_real_baseline_reader(document, Path(scratch))
+                except CheckError as error:
+                    require(error.name == "no_features" and error.code == 4, f"{name}: drift refused with {error}")
+                else:
+                    raise AssertionError(f"{name}: drift monitored a list that has no registry columns")
+                try:
+                    serve_with_the_real_loader(document, Path(scratch), {"feature_set": "m2", "feature_set_schema_sha256": "digest"})
+                except ValueError as error:
+                    require("no references" in str(error), f"{name}: serving refused with {error}")
+                else:
+                    raise AssertionError(f"{name}: serving loaded a set model that lists no reference")
+
     return [
         ("model_action_budgets", model_action_budgets),
         ("mediation_attempted_drop_counts", mediation_attempted_drop_counts),
@@ -2065,6 +2204,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("mediation_frozen_category_contrasts", mediation_frozen_category_contrasts),
         ("bundle_feature_list_follows_the_fitted_design", bundle_feature_list_follows_the_fitted_design),
         ("bundle_feature_list_of_an_unfitted_run_is_empty", an_unfitted_run_writes_no_kept_list),
+        ("feature_list_reaches_the_real_readers", feature_list_reaches_the_real_readers),
+        ("non_registrable_lists_are_refused_by_the_readers_that_need_features", non_registrable_lists_are_refused_by_the_readers_that_need_features),
     ]
 
 
