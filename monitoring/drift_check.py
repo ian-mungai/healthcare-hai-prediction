@@ -9,7 +9,8 @@ have learned it (training drops a feature that is missing in more than half the 
 ``all_missing_in_reference``. A feature that has reference values and none in the current window is refused by name (``feature_all_missing``), and a list with
 nothing left to compare is refused (``no_comparable_feature``). ``feature_count``, ``drifted_count`` and ``drift_share`` count the compared features only.
 Retraining is triggered when the share of drifted features reaches the configured share. The record ``drift_<HAI type>.json`` in ``--out`` is written
-atomically and holds no clock value, so a rerun on the same inputs writes the same bytes.
+atomically and holds no clock value, so a rerun on the same inputs writes the same bytes. It is schema version 2, which requires ``excluded_features``; a
+record of version 1 (stored before the field existed) lacks it and is only read, never written.
 
 Exit codes: 0 record written (checked or skipped), 2 an input is refused (the message names the failure and the column or file), 3 a package is missing.
 Run it from the repository root as a module, in an environment with DuckDB and, for a real report, Evidently.
@@ -205,7 +206,7 @@ def build_record(arguments: argparse.Namespace, on_report: Callable[[Any], None]
     _, reference_rows, _ = window_of(reference, None)
     window, current_rows, years = window_of(current, newest)
     record: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "drift_record",
         "run_id": arguments.run_id,
         "hai_type": reference_manifest["hai_type"],

@@ -56,6 +56,7 @@ def feature_document(columns: list[str], kept: Any = None) -> dict[str, Any]:
     """A bundle's ``feature_list.json``. Without ``kept`` it has the shape of a version trained before the kept list existed; with it, the new keys."""
     document: dict[str, Any] = {"slot": "m2_elastic_net" if columns else None, "references": [f"feature_matrix:{name}" for name in columns], "columns": columns}
     if kept is not None:
+        document["fitted_slot"] = "m2_elastic_net" if kept else None
         document["kept_columns"] = kept
         document["kept_references"] = [f"feature_matrix:{name}" for name in kept] if isinstance(kept, list) else kept
     return document

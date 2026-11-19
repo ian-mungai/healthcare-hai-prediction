@@ -117,27 +117,25 @@ def resolved_versions(contract: Mapping[str, Any]) -> dict[str, str | None]:
 
 
 def feature_list_document(suite: ModelSuite) -> dict[str, Any]:
-    """Return ``feature_list.json`` of the registry candidate.
+    """Return ``feature_list.json``.
 
-    ``references`` and ``columns`` are the slot's whole reviewed list, as serving and the promotion check read them. ``kept_references`` and
-    ``kept_columns`` are the features the fitted model uses, in list order: the ones the preprocessing kept (it drops a feature that is missing in more than
-    half the fitting rows) and the ownership column of the mixed model, which groups the rows instead of entering the fixed part. The drift baseline
-    monitors exactly these.
+    ``slot``, ``references`` and ``columns`` keep their registry meaning: the registry candidate and its whole reviewed list, which serving and the promotion
+    check read. They are empty for a model that cannot be registered. ``fitted_slot``, ``kept_references`` and ``kept_columns`` describe the model this run
+    fitted, registrable or not: its slot (None when the run fitted none) and the sources of its final fitted design, in list order. A source counts when a
+    value, category or shared missing indicator column of it survives the selector, the constant check and the dependent-column removal. The ownership column
+    of the mixed model is added, because that model groups its rows by it instead of entering it in the fixed part. The drift baseline monitors exactly the
+    kept columns.
     """
     candidate = suite.candidate
-    if candidate is None:
-        return {"slot": None, "references": [], "columns": [], "kept_references": [], "kept_columns": []}
-    features = suite.request.features_for(candidate)
-    details = suite.slots[candidate].details
-    used = {*details["selected_references"], *details.get("excluded_fixed_references", ())}
-    kept = [feature for feature in features if feature.reference in used]
-    return {
-        "slot": candidate,
-        "references": [feature.reference for feature in features],
-        "columns": [feature.name for feature in features],
-        "kept_references": [feature.reference for feature in kept],
-        "kept_columns": [feature.name for feature in kept],
-    }
+    registry = suite.request.features_for(candidate) if candidate is not None else ()
+    document: dict[str, Any] = {"slot": candidate, "references": [feature.reference for feature in registry], "columns": [feature.name for feature in registry]}
+    fitted = suite.fitted_slot()
+    kept: list[Feature] = []
+    if fitted is not None:
+        details = suite.slots[fitted].details
+        used = {*details["used_references"], *details.get("excluded_fixed_references", ())}
+        kept = [feature for feature in suite.request.features_for(fitted) if feature.reference in used]
+    return document | {"fitted_slot": fitted, "kept_references": [feature.reference for feature in kept], "kept_columns": [feature.name for feature in kept]}
 
 
 def build(

@@ -169,6 +169,8 @@ def skipped(reason: str, fixture: Fixture) -> Callable[[Path], Problems]:
             return [f"exit {code}: {text[:300]}"]
         record = read_record(out)
         problems = schema_problems(record)
+        if record["schema_version"] != 2:
+            problems.append(f"the record is schema version {record['schema_version']}, the writer's is 2")
         if record["status"] != "skipped" or record["skip_reason"] != reason:
             problems.append(f"expected a skipped record with reason {reason}, got {record['status']} {record['skip_reason']}")
         if record["triggered"]:
@@ -232,6 +234,8 @@ def checked(fixture: Fixture, expect_triggered: bool, expect_drifted: int | None
             return [f"exit {code}: {text[:400]}"]
         record = read_record(out)
         problems = schema_problems(record)
+        if record["schema_version"] != 2:
+            problems.append(f"the record is schema version {record['schema_version']}, the writer's is 2")
         if record["status"] != "checked":
             problems.append(f"status {record['status']}")
         if record["triggered"] is not expect_triggered:

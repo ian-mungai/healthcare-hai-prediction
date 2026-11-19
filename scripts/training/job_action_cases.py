@@ -658,12 +658,6 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require([row["spine_key"] for row in table] == sorted(row["spine_key"] for row in table), "holdout rows are not sorted by key")
         feature_list = output_of(fixture, f"{BUNDLE}/feature_list.json")
         require(feature_list["slot"] == result["selection"]["registry_candidate"] and feature_list["columns"], f"feature list: {feature_list}")
-        kept = result["fitted_parameters"][feature_list["slot"]]["selected_references"]
-        require(
-            feature_list["kept_references"] == [reference for reference in feature_list["references"] if reference in kept] and kept,
-            f"the kept references are not the fitted preprocessing's, in list order: {feature_list}",
-        )
-        require(feature_list["kept_columns"] == [reference.split(":", 1)[-1] for reference in feature_list["kept_references"]], f"kept columns: {feature_list}")
         verify_done(fixture.out, "fit", DIGEST)
         require(json.loads(out)["action"] == "fit" and json.loads(out)["resumed"] is False, "fit printed no summary")
 
@@ -884,9 +878,60 @@ def fit_cases(cases: Any, folder: Path) -> None:
             candidate = output_of(fixture, f"{BUNDLE}/result.json")["selection"]["registry_candidate"]
             require((candidate is not None) == (model in training_contract.PROMOTION_MODELS), f"{model} registry candidate is {candidate}")
 
+    def feature_list_of_every_model_and_population() -> None:
+        """The artifact ``job fit`` emits, for each model under both populations: the registry keys keep their meaning (only a promotion model has a slot,
+        references and columns) and the kept list is the fitted model's, registrable or not. Spatial significance is a declared stand-in."""
+        significant = {"status": "fitted", "p_value": 0.01, "statistic": 0.0, "islands": 0}
+        for model in training_contract.MODELS:
+            for population in ("primary", "sensitivity"):
+                fixture = Fixture(folder / f"kept_{model}_{population}", model=model)
+                fixture.rewrite_manifest(lambda manifest, population=population: manifest.update(population=population))
+                with mock.patch.object(suite, "moran_test", return_value=significant):
+                    code, _, error = run_action(fixture, "fit")
+                label = f"{model} {population}"
+                require(code == 0, f"fit of {label} failed: {error}")
+                result, listing = output_of(fixture, f"{BUNDLE}/result.json"), output_of(fixture, f"{BUNDLE}/feature_list.json")
+                slot = training_contract.MODEL_LISTS[model][0]
+                require(result["statuses"][slot]["status"] == "fitted", f"{label} did not fit: {result['statuses'][slot]}")
+                used = result["fitted_parameters"][slot]["used_references"]
+                expected = [reference for reference in SLOT_LISTS[slot] if reference in used]
+                require(
+                    expected and listing["kept_references"] == expected,
+                    f"{label}: kept references {listing['kept_references']}, the fitted design's are {expected}",
+                )
+                require(listing["kept_columns"] == [reference.split(":", 1)[-1] for reference in expected], f"{label}: kept columns {listing['kept_columns']}")
+                require(listing["fitted_slot"] == slot, f"{label}: fitted_slot is {listing['fitted_slot']}")
+                promotion = model in training_contract.PROMOTION_MODELS
+                keys = (listing["slot"], listing["references"], listing["columns"])
+                wanted = (slot, list(SLOT_LISTS[slot]), [reference.split(":", 1)[-1] for reference in SLOT_LISTS[slot]]) if promotion else (None, [], [])
+                require(keys == wanted, f"{label}: the registry keys are {keys}, expected {wanted}")
+
+    def feature_list_of_an_unfitted_run() -> None:
+        """A fixed-effects run whose predictor is missing in every row ends not_estimable with exit 0 (an owner decision is pending on that order). The
+        bundle says the run is unfitted: no fitted slot and no kept list."""
+
+        def remove_process(rows: list[dict[str, Any]]) -> None:
+            for row in rows:
+                row["process"] = None
+
+        fixture = Fixture(folder / "kept_unfitted", model="m6", adjust=remove_process)
+        code, _, error = run_action(fixture, "fit")
+        require(code == 0, f"fit failed: {error}")
+        require(
+            output_of(fixture, f"{BUNDLE}/result.json")["statuses"]["m6_fixed_effects"]["status"] == "not_estimable",
+            "the m6 run fitted with a missing predictor",
+        )
+        listing = output_of(fixture, f"{BUNDLE}/feature_list.json")
+        require(
+            listing == {"slot": None, "references": [], "columns": [], "fitted_slot": None, "kept_references": [], "kept_columns": []},
+            f"feature list: {listing}",
+        )
+
     cases.check("job_fit_writes_results_and_done", fitted)
     cases.check("job_fit_each_model_fits_only_its_own_model_and_tests", one_model_per_run)
     cases.check("job_fit_only_promotion_models_have_a_registry_candidate", candidate_only_for_promotion_models)
+    cases.check("job_fit_feature_list_of_every_model_and_population", feature_list_of_every_model_and_population)
+    cases.check("job_fit_feature_list_of_an_unfitted_run", feature_list_of_an_unfitted_run)
     cases.check("job_fit_trust_check_reads_saved_state", serialized_state_trusted)
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)

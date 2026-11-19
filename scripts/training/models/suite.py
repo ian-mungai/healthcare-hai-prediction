@@ -201,6 +201,7 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         "training_rows": len(training.rows),
         "holdout_rows": len(holdout.rows),
         "selected_references": list(prepare.kept_references_),
+        "used_references": list(prepare.used_references(training.rows[:1])),
         "training_missing_fraction": prepare.missing_rates_,
         "indicator_aliases": dict(prepare.indicator_aliases_),
         "constant_columns": dict(prepare.constant_columns_),
@@ -352,6 +353,13 @@ class ModelSuite:
     research: Mapping[str, Any]
     shap: Mapping[str, Any]
     sides: Mapping[str, Any] = field(default_factory=dict)
+    model_slot: str | None = None
+
+    def fitted_slot(self) -> str | None:
+        """The slot of the model this run fitted, registrable or not, or None when the run fitted none. A per-model run names its slot (``model_slot``); a
+        suite of all six slots has the registry candidate."""
+        slot = self.model_slot or self.candidate
+        return slot if slot is not None and self.slots[slot].status == "fitted" else None
 
     def to_result(self) -> dict[str, Any]:
         """Return stable bundle fields without pipelines, run IDs, timing or source row values."""
@@ -562,4 +570,4 @@ def fit_model(request: ModelRequest, model: str) -> ModelSuite:
     elif model == "m6":
         research["hospital_effects"] = fitted.details.get("mundlak", {"status": fitted.status, "reason": fitted.reason})
     request.deadline.check()
-    return ModelSuite(request, slots, select(slots, observed=holdout.y), select(slots, registrable=True, observed=holdout.y), research, shap, sides)
+    return ModelSuite(request, slots, select(slots, observed=holdout.y), select(slots, registrable=True, observed=holdout.y), research, shap, sides, slot)

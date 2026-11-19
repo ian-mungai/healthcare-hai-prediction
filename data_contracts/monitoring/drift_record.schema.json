@@ -65,6 +65,7 @@
       }
     }
   ],
+  "description": "The record the drift check writes now (schema version 2). Version 1 records, stored before excluded_features existed, lack that field; readers accept them and the writer never produces them.",
   "properties": {
     "config_sha256": {
       "pattern": "^[0-9a-f]{64}$",
@@ -218,7 +219,7 @@
       "type": "string"
     },
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "skip_reason": {
       "enum": [

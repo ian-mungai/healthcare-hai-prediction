@@ -159,9 +159,12 @@ def record(
     triggered: bool = False,
     population: str = "primary",
     excluded: tuple[str, ...] = (),
+    legacy: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
+    """A drift record in the shape the drift task writes now (schema version 2, with ``excluded_features``); ``legacy`` is the version 1 shape of a run
+    stored before the field existed."""
+    found = {
+        "schema_version": 1 if legacy else 2,
         "kind": "drift_record",
         "run_id": run,
         "hai_type": hai_type,
@@ -169,8 +172,8 @@ def record(
         "status": status,
         "skip_reason": "no_new_window" if status == "skipped" else None,
         "triggered": triggered,
-        "excluded_features": [{"name": name, "reason": "all_missing_in_reference"} for name in excluded],
     }
+    return found if legacy else found | {"excluded_features": [{"name": name, "reason": "all_missing_in_reference"} for name in excluded]}
 
 
 def bucket_with(
@@ -406,6 +409,56 @@ def a_notice_names_the_excluded_features(folder: Path) -> Problems:
     )
 
 
+def replays_a_legacy_record(folder: Path) -> Problems:
+    """A run stored by the drift task before ``excluded_features`` existed (schema version 1) is read again by ``decide`` as it always was: the decision is the
+    gate's, and no notice names an exclusion."""
+    lines: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, entry: logging.LogRecord) -> None:
+            lines.append(entry.getMessage())
+
+    with loaded_dag() as module:
+        logger = logging.getLogger(module.__name__)
+        handler = Capture(level=logging.INFO)
+        previous = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            quiet = decide(module, bucket_with([record("HAI_1", legacy=True), record("HAI_2", legacy=True, triggered=True)]))
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous)
+    types = quiet[0]["conf"]["hai_types"] if quiet else None
+    problems = [] if types == ["HAI_2"] else [f"the legacy records gave the types {types}, expected HAI_2 to train"]
+    return problems + ([f"a legacy record was reported with exclusions: {lines}"] if any("did not compare" in line for line in lines) else [])
+
+
+def native_decision(objects: dict[str, bytes]) -> Problems:
+    """Read the native-DAG scenario's staged drift objects through the real reader: a quiet run must train nothing and name HAI_1 as not drifted."""
+    s3 = MemoryS3()
+    for key, body in objects.items():
+        s3.put_object(Bucket=BUCKET, Key=key, Body=body)
+    with loaded_dag() as module:
+        try:
+            requests = decide(module, s3)
+        except RuntimeError as error:
+            return [f"the reader refused the staged objects: {error}"]
+    return [] if requests == [] else [f"a quiet staged run started {requests}"]
+
+
+def reads_the_native_fixture_records(folder: Path) -> Problems:
+    from scripts.orchestration import real_image_dags
+
+    return native_decision(real_image_dags.drift_objects(DRIFT_RUN, "m2"))
+
+
+def replays_the_native_fixture_in_its_legacy_shape(folder: Path) -> Problems:
+    from scripts.orchestration import real_image_dags
+
+    return native_decision(real_image_dags.drift_objects(DRIFT_RUN, "m2", legacy=True))
+
+
 def with_gate(s3: MemoryS3, **changes: Any) -> MemoryS3:
     """The bucket with the marker's gate decision changed, as a marker that was edited or written by another version would hold."""
     key = (BUCKET, f"drift/{DRIFT_RUN}/_complete.json")
@@ -491,9 +544,17 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("dag_a_skip_names_its_reason", a_skip_names_its_reason),
         ("dag_a_notice_names_the_excluded_features", a_notice_names_the_excluded_features),
         (
-            "dag_refuses_a_record_without_its_excluded_features",
+            "dag_refuses_a_current_record_without_its_excluded_features",
             refuses("excluded features", lambda: bucket_with([{key: value for key, value in record("HAI_1").items() if key != "excluded_features"}])),
         ),
+        ("dag_replays_a_legacy_record_without_the_field", replays_a_legacy_record),
+        (
+            "dag_refuses_a_legacy_record_with_a_malformed_field",
+            refuses("excluded features", lambda: bucket_with([record("HAI_1", legacy=True) | {"excluded_features": "c142"}])),
+        ),
+        ("dag_refuses_an_unknown_schema_version", refuses("schema version", lambda: bucket_with([record("HAI_1") | {"schema_version": 3}]))),
+        ("dag_reads_the_native_fixture_records", reads_the_native_fixture_records),
+        ("dag_replays_the_native_fixture_in_its_legacy_shape", replays_the_native_fixture_in_its_legacy_shape),
         (
             "dag_refuses_an_exclusion_for_another_reason",
             refuses("excluded features", lambda: bucket_with([record("HAI_1") | {"excluded_features": [{"name": "c142__value__number", "reason": "other"}]}])),

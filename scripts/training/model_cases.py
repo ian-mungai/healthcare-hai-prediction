@@ -113,11 +113,14 @@ def panel_standin(y: Any, x: Any, entities: Any, years: Any, names: Any) -> Any:
     return PanelFits(dict(zip(names, beta, strict=True)), effects)
 
 
+EMPTY_LIST: dict[str, Any] = {"slot": None, "references": [], "columns": [], "fitted_slot": None, "kept_references": [], "kept_columns": []}
+
+
 def scenarios() -> list[tuple[str, Callable[[], None]]]:
     """Return the predeclared model and analysis scenarios for the light caller runner."""
     from scripts.training import hac_validation, mediation, research_tests
     from scripts.training.models import panel, spatial, suite
-    from scripts.training.models.common import SLOTS, Dataset, Deadline, Feature, seed_for
+    from scripts.training.models.common import MODEL_SLOT, REGISTRABLE, SLOTS, Dataset, Deadline, Feature, seed_for
     from scripts.training.models.linear import OLSRegressor
     from scripts.training.models.preprocessing import FeatureBatch, FoldPreprocessor
     from scripts.training.models.trees import shap_values
@@ -1281,36 +1284,91 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                         "mediation compression changed an estimate or interval",
                     )
 
-    def bundle_feature_list_names_the_kept_features() -> None:
+    def kept_scenario(model: str, *, dead_on_list: bool = False) -> tuple[Any, tuple[str, ...], dict[str, Feature]]:
+        """A request whose ``model`` list holds a complete constant, an exact duplicate, two predictors with one missing pattern (one constant where
+        present), an all-missing one, a 60 % missing one and the ownership column. The fixed-effects model fits complete cases, so its list leaves out the two
+        predictors that are missing in most or all rows; ``dead_on_list`` puts the all-missing one back to show the outcome."""
+        names = ("constant", "duplicate", "twin_a", "twin_b", "dead", "sparse")
+        found = {name: Feature(f"feature_matrix_hospital:{name}", "number") for name in names}
+        found["group"] = Feature("feature_matrix_hospital_window:control_type_code", "category", family="hospital_window")
+        rows = tuple(
+            dict(
+                row,
+                constant=7.0,
+                duplicate=row["process"],
+                twin_a=None if index % 5 == 0 else 0.5 * row["extra"] + float(np.sin(index)),
+                twin_b=None if index % 5 == 0 else 7.0,
+                dead=None,
+                sparse=None if index % 5 < 3 else 1.0 + index % 7,
+            )
+            for index, row in enumerate(req.data.rows)
+        )
+        data = replace(req.data, rows=rows, features=(*req.data.features, *found.values()))
+        base = tuple(feature.reference for feature in req.data.features)
+        middle = ("constant", "duplicate", "twin_a", "twin_b") + (("dead", "sparse") if model != "m6" else ("dead",) if dead_on_list else ())
+        listed = (*base, *(found[name].reference for name in middle), found["group"].reference)
+        slot = MODEL_SLOT[model]
+        return replace(req, data=data, feature_lists={**req.feature_lists, slot: listed}), listed, found
+
+    def fitted_model_suite(model: str, changed: Any) -> Any:
+        """Run the real per-model fit. The spatial test is a declared stand-in (significant) so that m5 reaches its fit; native libraries are stand-ins."""
+        significant = {"status": "fitted", "p_value": 0.01, "statistic": 0.0, "islands": 0}
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin), patch.object(suite, "moran_test", return_value=significant):
+            return suite.fit_model(changed, model)
+
+    def bundle_feature_list_follows_the_fitted_design() -> None:
         from scripts.training import bundle
 
-        dead = Feature("feature_matrix_care_compare:dead", "number", "C142", "care_compare")
-        sparse = Feature("feature_matrix_care_compare:sparse", "number", "C145", "care_compare")
-        group = Feature("feature_matrix_hospital_window:control_type_code", "category", family="hospital_window")
-        rows = tuple(dict(row, dead=None, sparse=None if index % 5 < 3 else 1.0 + index % 7) for index, row in enumerate(req.data.rows))
-        data = replace(req.data, rows=rows, features=(*req.data.features, dead, sparse, group))
-        base = tuple(feature.reference for feature in req.data.features)
-        for slot in SLOTS:
-            # The fixed-effects model fits complete cases, so a column that is missing everywhere cannot be on its list; every other slot carries both.
-            listed = (*base, group.reference) if slot == "m6_fixed_effects" else (*base, dead.reference, sparse.reference, group.reference)
-            changed = replace(req, data=data, feature_lists={**req.feature_lists, slot: listed})
-            with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
-                result = suite.fit_slot(changed, slot)
-            require(result.status == "fitted", f"{slot} did not fit with a dead column on its list: {result.reason}")
-            document = bundle.feature_list_document(suite.ModelSuite(changed, {slot: result}, slot, slot, {}, {}))
-            require(document["references"] == list(listed), f"{slot}: references no longer hold the slot's whole list")
-            require(document["columns"] == [reference.split(":", 1)[-1] for reference in listed], f"{slot}: columns no longer hold the slot's whole list")
+        for model in MODEL_SLOT:
+            slot = MODEL_SLOT[model]
+            changed, listed, found = kept_scenario(model)
+            fitted = fitted_model_suite(model, changed)
+            result = fitted.slots[slot]
+            require(result.status == "fitted", f"{model} did not fit: {result.reason}")
+            document = bundle.feature_list_document(fitted)
             kept = document["kept_references"]
+            # The expectation comes from the fitted transform: the columns it still emits, and the sources of the missing indicators they share.
+            design = result.pipeline.named_steps["prepare"].transform(changed.data.split()[0].rows)
+            shared = {reference for name, aliases in design.reference_aliases.items() if name in design.names for reference in aliases}
+            expected = {reference for reference in listed if reference in design.references or reference in shared}
+            if model == "m3":
+                expected.add(found["group"].reference)
+            require(kept == [reference for reference in listed if reference in expected], f"{model}: the kept list is not the fitted design's sources: {kept}")
+            require(document["kept_columns"] == [reference.split(":", 1)[-1] for reference in kept], f"{model}: kept_columns do not follow kept_references")
+            require(document["fitted_slot"] == slot, f"{model}: the fitted slot is {document['fitted_slot']}")
             require(
-                kept == [reference for reference in listed if reference in kept] and set(kept) <= set(listed), f"{slot}: the kept list is not in list order"
+                (document["slot"], document["references"]) == ((slot, list(listed)) if slot in REGISTRABLE else (None, [])),
+                f"{model}: the registry keys changed",
             )
-            require(document["kept_columns"] == [reference.split(":", 1)[-1] for reference in kept], f"{slot}: kept_columns do not follow kept_references")
-            require(dead.reference not in kept and sparse.reference not in kept or slot == "m6_fixed_effects", f"{slot}: a dropped feature is in the kept list")
-            require(set(result.details["selected_references"]) <= set(kept), f"{slot}: the kept list lost a feature the preprocessing kept")
-            require(group.reference in kept, f"{slot}: the ownership column is used by the model and must be in the kept list")
-            require(base[0] in kept and req.cmi_reference in kept, f"{slot}: the kept list lost a complete feature")
-        empty = bundle.feature_list_document(suite.ModelSuite(req, {}, None, None, {}, {}))
-        require(empty == {"slot": None, "references": [], "columns": [], "kept_references": [], "kept_columns": []}, f"a run with no candidate lists {empty}")
+            require(document["columns"] == ([reference.split(":", 1)[-1] for reference in listed] if slot in REGISTRABLE else []), f"{model}: columns changed")
+            require(found["constant"].reference not in kept, f"{model}: a complete constant predictor is in the kept list")
+            require((found["duplicate"].reference in kept) == (model not in ("m1", "m3", "m5", "m6")), f"{model}: an exact duplicate is listed wrongly")
+            require(
+                (found["twin_b"].reference in kept) == (model != "m6"),
+                f"{model}: a predictor that survives only through a shared missing indicator is listed wrongly",
+            )
+            require(found["twin_a"].reference in kept and found["group"].reference in kept, f"{model}: a used predictor is missing from the kept list")
+            if model != "m6":
+                require(found["dead"].reference not in kept and found["sparse"].reference not in kept, f"{model}: a dropped predictor is in the kept list")
+            require(
+                set(result.details["selected_references"]) >= set(kept) - {found["group"].reference},
+                f"{model}: the kept list holds a source the selector dropped",
+            )
+
+    def an_unfitted_run_writes_no_kept_list() -> None:
+        from scripts.training import bundle
+
+        # A fixed-effects run with an all-missing predictor on its list ends not_estimable (complete cases are taken before the missing-feature drop; an owner
+        # decision is pending on that order). The run is unfitted, which the bundle must say apart from a fitted model that is not registrable.
+        changed, _, _ = kept_scenario("m6", dead_on_list=True)
+        fitted = fitted_model_suite("m6", changed)
+        require(fitted.slots["m6_fixed_effects"].status == "not_estimable", f"expected an unfitted m6, got {fitted.slots['m6_fixed_effects'].status}")
+        require(bundle.feature_list_document(fitted) == EMPTY_LIST, f"an unfitted run lists {bundle.feature_list_document(fitted)}")
+        spatial_run = replace(req, adjacency=())
+        with libraries(), patch.object(suite, "moran_test", return_value={"status": "not_estimable", "reason": "stand-in", "islands": 0}):
+            unfitted_spatial = suite.fit_model(spatial_run, "m5")
+        require(bundle.feature_list_document(unfitted_spatial) == EMPTY_LIST, "an m5 run whose spatial test is not significant lists features")
+        require(bundle.feature_list_document(suite.ModelSuite(req, {}, None, None, {}, {})) == EMPTY_LIST, "a suite with no slots lists features")
 
     def mediation_frozen_category_contrasts() -> None:
         rng = np.random.default_rng(61827)
@@ -1854,7 +1912,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("native_shap_failure", native_shap_failure),
         ("mediation_prepares_source_once", mediation_prepares_source_once),
         ("mediation_frozen_category_contrasts", mediation_frozen_category_contrasts),
-        ("bundle_feature_list_names_the_kept_features", bundle_feature_list_names_the_kept_features),
+        ("bundle_feature_list_follows_the_fitted_design", bundle_feature_list_follows_the_fitted_design),
+        ("bundle_feature_list_of_an_unfitted_run_is_empty", an_unfitted_run_writes_no_kept_list),
     ]
 
 

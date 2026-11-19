@@ -746,13 +746,22 @@ def triggered_confs(dag_id: str, run_id: str) -> list[Any]:
     return [item.conf for item in runs]
 
 
-def drift_objects(drift_run: str, model: str, *, gated: bool = True) -> dict[str, bytes]:
+def drift_objects(drift_run: str, model: str, *, gated: bool = True, legacy: bool = False) -> dict[str, bytes]:
     """The staged objects of a quiet drift run of ``model``: one drift record of HAI_1 that did not trigger, and the marker that lists it. ``gated`` adds the
-    gate decision of the drift rule (``decide_drift_gate``), as the drift task writes it; a marker without it is the one the drift DAG refuses."""
+    gate decision of the drift rule (``decide_drift_gate``), as the drift task writes it; a marker without it is the one the drift DAG refuses. The record has
+    the shape the drift task writes now (schema version 2, with ``excluded_features``); ``legacy`` gives the version 1 shape of a run stored before it."""
     import importlib
 
     training = importlib.import_module("orchestration.training_contract")
-    record = {"kind": "drift_record", "hai_type": "HAI_1", "run_id": drift_run, "triggered": False, "status": "checked", "population": "primary"}
+    record: dict[str, Any] = {
+        "kind": "drift_record",
+        "hai_type": "HAI_1",
+        "run_id": drift_run,
+        "triggered": False,
+        "status": "checked",
+        "population": "primary",
+    }
+    record |= {"schema_version": 1} if legacy else {"schema_version": 2, "excluded_features": []}
     body = json.dumps(record, sort_keys=True).encode()
     marker: dict[str, Any] = {"run_id": drift_run, "files": {"drift_HAI_1.json": hashlib.sha256(body).hexdigest()}}
     if gated:

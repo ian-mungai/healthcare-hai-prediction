@@ -91,9 +91,16 @@ def read_marker(s3: Any, bucket: str, drift_run: str) -> tuple[dict[str, Any], l
 
 
 def excluded_names(record: dict[str, Any]) -> list[str]:
-    """The names of the features the drift check left out of its comparison. A record whose list is missing or not a list of a name and the reason
-    ``all_missing_in_reference`` is refused: it was not written by the drift check of this repository."""
+    """The names of the features the drift check left out of its comparison, from a record of schema version 2 (the writer's) or 1 (stored before the field).
+
+    Version 2 must hold the list. A record of version 1, or of none, is read as it always was: the field may be absent (no exclusion), but a field that is there
+    must be well formed. Another version, or a list that is not made of a name and the reason ``all_missing_in_reference``, is refused."""
     name = f"drift_{record['hai_type']}.json"
+    version = record.get("schema_version", 1)
+    if version not in (1, 2) or isinstance(version, bool):
+        raise RuntimeError(f"the drift record {name} has the schema version {version!r}, which this reader does not know (1 and 2)")
+    if version == 1 and "excluded_features" not in record:
+        return []
     excluded = record.get("excluded_features")
     if not isinstance(excluded, list) or any(
         not isinstance(item, dict) or set(item) != {"name", "reason"} or not isinstance(item["name"], str) or item["reason"] != "all_missing_in_reference"
