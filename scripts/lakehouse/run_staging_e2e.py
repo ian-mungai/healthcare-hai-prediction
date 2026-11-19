@@ -33,6 +33,7 @@ import argparse
 import contextlib
 import csv
 import hashlib
+import importlib
 import io
 import json
 import re
@@ -52,6 +53,7 @@ from orchestration import launcher
 from scripts.lakehouse import (
     bronze_metadata,
     catalog,
+    dbt_disabled_nodes,
     geography_file_periods,
     ipps_file_labels,
     mmd_conditions,
@@ -146,6 +148,16 @@ TABLES = (
     "cms_cc_hac_reduction_program_hospital",
     "cms_cc_hvbp_tps",
 )
+
+
+def deferred_staging_tables() -> frozenset[str]:
+    """The bronze tables whose staging view is deferred (vars.deferred_models of the dbt project): bronze still holds them, silver has no view to count."""
+    yaml = importlib.import_module("yaml")
+    record = yaml.safe_load((REPO_ROOT / "dbt/dbt_project.yml").read_text())["vars"].get("deferred_models") or []
+    return frozenset(name.removeprefix("stg_") for item in record for name in item["models"] if name.startswith("stg_"))
+
+
+STAGED_TABLES = tuple(table for table in TABLES if table not in deferred_staging_tables())
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
     "83b9668d22a23b40def50b64725f9674dcaa821d0b2db5e43215e672cad69a71": "BRZ-016",
@@ -4273,6 +4285,20 @@ BRONZE_SHAPES_REFUSED: dict[str, tuple[str, ...]] = {
     "illinois_other_columns": ("illinois_report_card_csv", "missing entity_id, name", "page_text"),
     "illinois_one_column_short": ("illinois_report_card_csv", "missing county_name;"),
 }
+# The two global staging tests (rows against files, one row per file row) read every staged table. A planted bronze defect must fail the test that names
+# it, so a removed model can never leave them disabled without a failing case (dbt disables a test whose ref names a missing model and skips nothing).
+GLOBAL_CHECKS: dict[str, tuple[str, str]] = {
+    "staging_row_repeated_in_bronze": (
+        "assert_staging_unique_grain",
+        "INSERT INTO bronze.hcai_util_pages_csv SELECT * FROM bronze.hcai_util_pages_csv WHERE _row_number = 1;",
+    ),
+}
+# A file whose recorded row count differs from the rows its staging view holds (a copy counted twice, or a lost row). The case patches the row count of the
+# files model by one in the copy of the dbt project, so only the rows-against-files test sees the difference.
+COUNT_OFF_BY_ONE = "staging_rows_differ_from_file_rows"
+PROJECT_PATCHES: dict[str, tuple[str, str, str]] = {
+    COUNT_OFF_BY_ONE: ("models/silver/staging/stg_bronze__files.sql", "max(copies.row_count) as row_count", "max(copies.row_count) + 1 as row_count"),
+}
 COUNTY_CODE_REUSED = tuple(
     with_record(
         with_record(item, adjacent("Skagway Municipality, AK", "02230", "Hoonah-Angoon Census Area, AK", "02105")),
@@ -4779,7 +4805,7 @@ def expected(objects: Iterable[Stored]) -> dict[str, Any]:
         (table, digest, canonical[(table, digest)], str(entry["copies"]), str(entry["rows"]), "|".join(sorted(entry["releases"])), HELD.get(digest, ""))
         for (table, digest), entry in files.items()
     )
-    rows = {table: sum(entry["rows"] for (name, _), entry in files.items() if name == table) for table in TABLES}
+    rows = {table: sum(entry["rows"] for (name, _), entry in files.items() if name == table) for table in STAGED_TABLES}
     return {"copies": copies, "files": file_rows, "rows": rows}
 
 
@@ -5074,7 +5100,7 @@ MUA_SQL = (
 
 def per_table(query: str, prefix: str) -> str:
     """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
-    return "".join(f"SET VARIABLE checked_table = '{prefix}{table}';\n{query}" for table in TABLES)
+    return "".join(f"SET VARIABLE checked_table = '{prefix}{table}';\n{query}" for table in STAGED_TABLES)
 
 
 def unprefixed(rows: list[list[str]], prefix: str) -> dict[str, list[str]]:
@@ -5373,6 +5399,13 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
         shutil.rmtree(case_dir)
     case_dir.mkdir(parents=True)
     fixture_project(case_dir, objects, unlabelled)
+    if case in PROJECT_PATCHES:
+        relative, old, new = PROJECT_PATCHES[case]
+        patched = case_dir / "project" / relative
+        text = patched.read_text()
+        if old not in text:
+            raise RuntimeError(f"fixture {case}: the line to patch is not in {relative}")
+        patched.write_text(text.replace(old, new))
     (case_dir / "bronze.csv").write_text(fixture_csv(objects))
     (case_dir / "copies.csv").write_text(copies_csv(objects))
     (case_dir / "metadata.json").write_text(json.dumps(fixture_metadata(objects)))
@@ -5385,7 +5418,7 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     (case_dir / "file_preambles.csv").write_text(file_preambles_csv(objects))
     variables += f"SET VARIABLE file_preambles_csv = '{CONTAINER_OUT}/e2e/{case}/file_preambles.csv';\n"
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
-    rewrite = BRONZE_SHAPES[case][1] + "\n" if case in BRONZE_SHAPES else ""
+    rewrite = BRONZE_SHAPES[case][1] + "\n" if case in BRONZE_SHAPES else GLOBAL_CHECKS[case][1] + "\n" if case in GLOBAL_CHECKS else ""
     (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL + rewrite)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
     params = {**case_paths(case), "database": database, "sql_file": f"{CONTAINER_OUT}/e2e/{case}/bronze.sql"}
@@ -5496,6 +5529,14 @@ def view_shape(case: str, view: str) -> tuple[list[str], str]:
     database = f"{CONTAINER_OUT}/e2e/{case}/staging.duckdb"
     rows = duckdb_csv(database, f"SET VARIABLE checked_view = '{view}';\n{VIEW_SHAPE_SQL}")
     return [row[0] for row in rows[:-1]], rows[-1][0]
+
+
+GLOBAL_STAGING_TESTS = ("assert_staging_rows_match_files", "assert_staging_unique_grain")
+
+
+def case_manifest(case: str) -> dict[str, Any]:
+    """The dbt manifest of a fixture case's last build."""
+    return dict(json.loads((CASES / case / "target/manifest.json").read_text()))
 
 
 def model_message(case: str, node: str) -> str:
@@ -6176,6 +6217,8 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
     jobs += [(case, objects, frozenset()) for case, (objects, _sql, _view) in BRONZE_SHAPES.items()]
+    jobs += [(case, BASE, frozenset()) for case in GLOBAL_CHECKS]
+    jobs += [(COUNT_OFF_BY_ONE, BASE, frozenset())]
     results = build_cases(jobs, workers)
     code, statuses = built(results, "base")
     checks["base_build_passes"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
@@ -6719,6 +6762,18 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     for case, (test, _objects, _unlabelled) in FAILING.items():
         result = results[case]
         checks[f"{case}_fails_{test}"] = not isinstance(result, BaseException) and result[0] != 0 and result[1].get(test) == "fail"
+    # No node of the project is disabled (dbt disables a test whose ref names a missing model, with a warning and no skipped result), so the two global
+    # staging tests ran in the base build, and a planted defect fails the test that names it.
+    base_manifest = case_manifest("base")
+    checks["base_build_disables_no_node"] = dbt_disabled_nodes.disabled_nodes(base_manifest) == []
+    checks["global_staging_tests_ran_in_the_base_build"] = all(node_passes(name, built(results, "base")[1].get(name, "")) for name in GLOBAL_STAGING_TESTS)
+    for case, (test, _sql) in GLOBAL_CHECKS.items():
+        result = results[case]
+        checks[f"{case}_fails_{test}"] = not isinstance(result, BaseException) and result[0] != 0 and result[1].get(test) == "fail"
+    result = results[COUNT_OFF_BY_ONE]
+    checks[f"{COUNT_OFF_BY_ONE}_fails_assert_staging_rows_match_files"] = (
+        not isinstance(result, BaseException) and result[0] != 0 and result[1].get("assert_staging_rows_match_files") == "fail"
+    )
     # A table with no data column and no row reads as the typed empty result, and the rest of the project builds on it; any other difference of columns
     # stops the view and names the table and the columns.
     for case in BRONZE_SHAPES_EMPTY:
@@ -7379,9 +7434,10 @@ def real_stage(once: bool = False) -> dict[str, Any]:
             "distinct_files": int(distinct),
             "distinct_rows": int(rows),
             "copies": int(copies),
-            "view_rows": int(views[table]),
+            "view_rows": int(views[table]) if table in views else None,
         }
-        outcome["checks"][f"{table}_reconciles"] = models.get(table) == [objects, distinct, rows, copies] and views[table] == rows
+        # A table whose staging view is deferred has no view to count: its copies still reconcile with bronze.
+        outcome["checks"][f"{table}_reconciles"] = models.get(table) == [objects, distinct, rows, copies] and (table not in views or views[table] == rows)
     return outcome
 
 

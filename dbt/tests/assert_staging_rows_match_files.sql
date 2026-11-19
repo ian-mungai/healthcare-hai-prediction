@@ -1,7 +1,7 @@
 -- Fails for each staging view whose rows differ from the summed rows of its distinct files: no copy counted twice [166].
 with
 
-{% for table in var('copy_tables') %}
+{% for table in staged_copy_tables() %}
 staged_{{ table }} as (
     select
         '{{ table }}' as bronze_table,
@@ -11,7 +11,7 @@ staged_{{ table }} as (
 
 {% endfor %}
 staged as (
-    {{ union_copy_tables('staged_') }}
+    {{ union_copy_tables('staged_', staged_copy_tables()) }}
 ),
 
 files as (

@@ -2034,6 +2034,27 @@ def deleted_modules_left(removed: dict[str, list[str]], deleted: list[str], file
     return deleted_module_findings({module: prefixes for module, prefixes in dead.items() if prefixes}, files, roots, allowed)
 
 
+DEFERRAL_FILE = "dbt/dbt_project.yml"
+DEFERRAL_KEY = re.compile(r"^(\s*)deferred_models:")
+
+
+def without_deferral_record(lines: list[str]) -> list[str]:
+    """The project file's lines with the deferral record (the ``deferred_models`` key and everything indented under it) blanked, so the record can name the
+    deferred models while a reference anywhere else in the file still counts. Line numbers stay."""
+    kept, indent = [], None
+    for line in lines:
+        found = DEFERRAL_KEY.match(line)
+        if indent is None and found:
+            indent = len(found.group(1))
+            kept.append("")
+        elif indent is not None and (not line.strip() or len(line) - len(line.lstrip()) > indent):
+            kept.append("")
+        else:
+            indent = None
+            kept.append(line)
+    return kept
+
+
 def removed_names() -> list[Finding]:
     """A name the change removed is no longer referenced in any file that describes current behavior.
 
@@ -2063,6 +2084,8 @@ def removed_names() -> list[Finding]:
                     view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
                     if view is not None and kind == "config":
                         view = python_literals(view, without_paths) if path.endswith(".py") else [without_paths(line) for line in view]
+                    if view is not None and kind in ("dbt", "config") and path == DEFERRAL_FILE:
+                        view = without_deferral_record(view)
                     if view is not None and any(entry_kind == kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
                         view = None
                     views[path] = view

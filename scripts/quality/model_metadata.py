@@ -1465,12 +1465,13 @@ DEFERRED_FIELDS = ("reason", "decision", "trigger", "restore_from")
 DEFERRED_CONTRACTS = ("data_contracts/lakehouse/silver_publish.json", "data_contracts/lakehouse/silver_columns.json")
 
 
-def deferred_problems(root: Path, project_text: str, variables: dict[str, Any], models: dict[str, Model], declared: dict[str, Entry]) -> list[Problem]:
-    """Problems of the deferral record (vars.deferred_models in the project file): an incomplete record, and a deferred model that has SQL, a properties
-    entry or a silver contract entry again. A model comes back only when its record entry is removed with it, so it cannot return half-wired."""
-    record = variables.get(DEFERRED_VARIABLE)
-    if record is None:
+def deferred_problems(root: Path, project_text: str, variables: dict[str, Any], sql_files: dict[str, str], declared: dict[str, Entry]) -> list[Problem]:
+    """Problems of the deferral record (vars.deferred_models in the project file): an incomplete record, and a deferred model that has a SQL file (enabled
+    or disabled), a properties entry or a silver contract entry again. A model comes back only when its record entry is removed with it, so it cannot
+    return half-wired. No key and an empty list mean no deferral; a null or any other malformed value fails."""
+    if DEFERRED_VARIABLE not in variables:
         return []
+    record = variables[DEFERRED_VARIABLE]
     line = next((number for number, text in enumerate(project_text.splitlines(), start=1) if DEFERRED_VARIABLE in text), 1)
     if not isinstance(record, list) or not all(isinstance(item, dict) for item in record):
         return [Problem("deferred-record", PROJECT_FILE, line, f"vars.{DEFERRED_VARIABLE} must be a list of mappings")]
@@ -1485,7 +1486,7 @@ def deferred_problems(root: Path, project_text: str, variables: dict[str, Any], 
         if missing:
             problems.append(Problem("deferred-record", PROJECT_FILE, line, f"the deferral of {', '.join(names)} has no {', '.join(missing)}"))
         for name in names:
-            where = [models[name].path] if name in models else []
+            where = [sql_files[name]] if name in sql_files else []
             where += [declared[name].path] if name in declared else []
             where += [path for path, text in contracts.items() if f'"{name}"' in text]
             for path in where:
@@ -1511,8 +1512,10 @@ def load(root: Path) -> Project:
     macros, problems = read_macros(root, env, directories["macro-paths"])
     problems = [*properties.problems, *problems]
     models: dict[str, Model] = {}
+    sql_files: dict[str, str] = {}
     for path in files_under(directories["model-paths"], ".sql"):
         where = relative(root, path)
+        sql_files.setdefault(path.stem, where)
         if path.stem in models:
             problems.append(Problem("duplicate-entry", where, 1, f"model {path.stem} has more than one SQL file ({models[path.stem].path})"))
             continue
@@ -1524,7 +1527,7 @@ def load(root: Path) -> Project:
     variables = dict(project_data.get("vars") or {})
     scoped = variables.get(project_data["name"])
     variables.update(scoped if isinstance(scoped, dict) else {})
-    problems.extend(deferred_problems(root, read_text(root, PROJECT_FILE), variables, models, properties.models))
+    problems.extend(deferred_problems(root, read_text(root, PROJECT_FILE), variables, sql_files, properties.models))
     seeds = properties.seeds | {path.stem for path in files_under(directories["seed-paths"], ".csv")}
     ctx = Context(
         project_data["name"],

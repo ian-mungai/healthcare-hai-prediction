@@ -1,7 +1,7 @@
 -- Fails for each repeated file checksum and row number in a staging view: one row per row of each distinct file [166].
 with
 
-{% for table in var('copy_tables') %}
+{% for table in staged_copy_tables() %}
 grain_{{ table }} as (
     select
         '{{ table }}' as bronze_table,
@@ -17,7 +17,7 @@ grain_{{ table }} as (
 
 {% endfor %}
 repeated as (
-    {{ union_copy_tables('grain_') }}
+    {{ union_copy_tables('grain_', staged_copy_tables()) }}
 )
 
 select * from repeated

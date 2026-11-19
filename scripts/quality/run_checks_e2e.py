@@ -741,6 +741,10 @@ def step_workflow(*step_lines: str) -> str:
     return head + "".join(f"        {line}\n" for line in step_lines)
 
 
+DEFERRED_PROJECT = (
+    "name: sample\nversion: '1.0.0'\nvars:\n  deferred_models:\n"
+    f"    - models: [{OLD_MODEL}]\n      reason: gone\n      decision: owner\n      trigger: source\n      restore_from: git show abc\n"
+)
 INPUT_WORD_USE = {"scripts/warm.sh": f"{INPUT_NAME} --now\n"}  # The same word, as a program, still used in a script.
 ACTION_INPUTS = (
     f"name: setup\ndescription: setup\ninputs:\n  {INPUT_NAME}:\n    description: warm\n    default: 'false'\n  python-version:\n    description: version\n"
@@ -3385,6 +3389,32 @@ CASES = [
             "dbt/models/silver/orders.sql": "select id from {{ ref('MODEL') }}\n".replace("MODEL", OLD_MODEL),
         },
         delete=[f"dbt/models/staging/{OLD_MODEL}.sql"],
+    ),
+    *(
+        Case(
+            name,
+            "removed-names",
+            expect,
+            committed={f"dbt/models/staging/{OLD_MODEL}.sql": "select 1\n", "dbt/dbt_project.yml": DEFERRED_PROJECT},
+            files={"dbt/dbt_project.yml": project},
+            delete=[f"dbt/models/staging/{OLD_MODEL}.sql"],
+            reason=reason,
+        )
+        for name, expect, project, reason in (
+            ("dbt model deleted and named only in the deferral record of the project file", True, DEFERRED_PROJECT, ""),
+            (
+                "dbt model deleted, named in the project file outside the deferral record",
+                False,
+                DEFERRED_PROJECT + f"  other_models: [{OLD_MODEL}]\n",
+                f"dbt/dbt_project.yml:10: {OLD_MODEL} {LEFTOVER}",
+            ),
+            (
+                "dbt model deleted, named in the project file before the deferral record",
+                False,
+                DEFERRED_PROJECT.replace("vars:\n", f"vars:\n  earlier_models: [{OLD_MODEL}]\n", 1),
+                f"dbt/dbt_project.yml:4: {OLD_MODEL} {LEFTOVER}",
+            ),
+        )
     ),
     Case(
         "dependency removed, import remains",

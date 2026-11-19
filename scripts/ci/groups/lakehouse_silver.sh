@@ -7,6 +7,9 @@
 lakehouse_silver() {
   # The silver suites must match the kept-model contract, the moved checks and the baselines they are generated from.
   timed "lakehouse_silver: suite check" "$python_bin" -m scripts.lakehouse.run_silver_e2e --check-suites
+  # No model or test may be disabled by a ref to a missing model: dbt then skips the check with a warning and no failure.
+  timed "lakehouse_silver: dbt disabled nodes" "$python_bin" -m scripts.lakehouse.dbt_disabled_nodes
+  timed "lakehouse_silver: dbt disabled nodes cases" "$python_bin" -m scripts.lakehouse.run_dbt_disabled_nodes_e2e
   # The bounded dbt profiles against a real spill and a second cursor, with the pinned adapter from .tools/sqlfluff (DuckDB and dbt are not in .venv).
   timed "lakehouse_silver: DuckDB spill cases" "$repo_root/.tools/sqlfluff/bin/python" -m scripts.lakehouse.run_duckdb_spill_cases
   # A real silver layer build, with the selection that the build step passes, must keep its build marker: validation reads it first.
