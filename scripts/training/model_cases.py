@@ -325,20 +325,20 @@ CHAMPION_COLUMNS = CHAMPION_REFUSAL + "holds a bad columns key: "
 CHAMPION_DOCUMENT = CHAMPION_REFUSAL + "is "
 KEY_OUTCOMES: dict[str, str] = {
     "serving references absent": "refused KeyError references",
-    "serving references empty": "loaded, scoring fails ValueError",
-    "serving references text": "loaded, scoring fails KeyError",
+    "serving references empty": "refused ArtifactRefused",
+    "serving references text": "refused ArtifactRefused",
     "serving references null": "refused TypeError",
     "serving references number": "refused TypeError",
-    "serving references dict": "served",
-    "serving references not_text": "loaded, scoring fails KeyError",
+    "serving references dict": "refused ArtifactRefused",
+    "serving references not_text": "refused ArtifactRefused",
     "serving references empty_name": "loaded, scoring fails KeyError",
-    "serving columns absent": "refused KeyError columns",
-    "serving columns empty": "loaded, scoring fails ValueError",
-    "serving columns text": "loaded, scoring fails ValueError",
-    "serving columns null": "refused TypeError",
-    "serving columns number": "refused TypeError",
-    "serving columns dict": "served",
-    "serving columns not_text": "served",
+    "serving columns absent": "refused ArtifactRefused",
+    "serving columns empty": "refused ArtifactRefused",
+    "serving columns text": "refused ArtifactRefused",
+    "serving columns null": "refused ArtifactRefused",
+    "serving columns number": "refused ArtifactRefused",
+    "serving columns dict": "refused ArtifactRefused",
+    "serving columns not_text": "refused ArtifactRefused",
     "serving columns empty_name": "served",
     "promotion columns absent": CHAMPION_COLUMNS + "absent",
     "promotion columns empty": CHAMPION_COLUMNS + "an empty list",
@@ -389,15 +389,7 @@ KEY_OUTCOMES: dict[str, str] = {
 }
 KEY_LIMITS = frozenset(
     {
-        "serving references empty",
-        "serving references text",
-        "serving references dict",
-        "serving references not_text",
         "serving references empty_name",
-        "serving columns empty",
-        "serving columns text",
-        "serving columns dict",
-        "serving columns not_text",
         "serving columns empty_name",
     }
 )
