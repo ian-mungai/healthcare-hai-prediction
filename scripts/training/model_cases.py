@@ -234,13 +234,13 @@ def serving_outcome(document: Any, folder: Path, references: Sequence[str]) -> s
 
 
 def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Path) -> str:
-    """What the real promotion reader does with this champion list: its named refusal, or whether it scores the holdout."""
+    """What the real promotion reader does with this champion list: its named refusal with its detail, or whether it scores the holdout."""
     from scripts.training.job_failure import JobFailure
 
     try:
         score_with_the_real_promotion_reader(document, extract_columns, folder)
     except JobFailure as error:
-        return f"refused {error.name}"
+        return f"refused {error.name}: {error.detail}"
     return "scored"
 
 
@@ -255,9 +255,12 @@ def drift_outcome(document: Any, folder: Path) -> str:
     return "monitors " + ("kept" if features == document.get("kept_columns") else "every column" if features == document.get("columns") else str(features))
 
 
-# What each real reader does with the list of the real writer when one key it reads is damaged. Every refusal is named by the reader. The rows in
-# ``KEY_LIMITS`` are not: the reader serves, or scores, a list that it should refuse, or loads one that fails at every request. They pin today's behavior so
-# that hardening a reader changes a named row on purpose.
+# What each real reader does with the list of the real writer when one key it reads is damaged. Drift and promotion refuse every damaged list by name. The rows
+# in ``KEY_LIMITS`` are serving's: it serves a list that it should refuse, or loads one that fails at every request. They pin today's behavior so that
+# hardening the loader changes a named row on purpose.
+CHAMPION_REFUSAL = "refused champion_feature_list_invalid: the champion's feature list "
+CHAMPION_COLUMNS = CHAMPION_REFUSAL + "holds a bad columns key: "
+CHAMPION_DOCUMENT = CHAMPION_REFUSAL + "is "
 KEY_OUTCOMES: dict[str, str] = {
     "serving references absent": "refused KeyError references",
     "serving references empty": "loaded, scoring fails ValueError",
@@ -275,14 +278,18 @@ KEY_OUTCOMES: dict[str, str] = {
     "serving columns dict": "served",
     "serving columns not_text": "served",
     "serving columns empty_name": "served",
-    "promotion columns absent": "refused champion_features",
-    "promotion columns empty": "scored",
-    "promotion columns text": "refused champion_features",
-    "promotion columns null": "refused champion_features",
-    "promotion columns number": "refused champion_features",
-    "promotion columns dict": "scored",
-    "promotion columns not_text": "refused champion_features",
-    "promotion columns empty_name": "refused champion_features",
+    "promotion columns absent": CHAMPION_COLUMNS + "absent",
+    "promotion columns empty": CHAMPION_COLUMNS + "an empty list",
+    "promotion columns text": CHAMPION_COLUMNS + "text, not a list",
+    "promotion columns null": CHAMPION_COLUMNS + "null, not a list",
+    "promotion columns number": CHAMPION_COLUMNS + "a number, not a list",
+    "promotion columns dict": CHAMPION_COLUMNS + "an object, not a list",
+    "promotion columns not_text": CHAMPION_COLUMNS + "element 1 is a number, not text",
+    "promotion columns empty_name": CHAMPION_COLUMNS + "element 0 is an empty name",
+    "promotion columns repeat": CHAMPION_COLUMNS + "element 1 repeats an earlier name",
+    "promotion document list": CHAMPION_DOCUMENT + "a list, not an object",
+    "promotion document null": CHAMPION_DOCUMENT + "null, not an object",
+    "promotion document text": CHAMPION_DOCUMENT + "text, not an object",
     "drift columns absent": "refused artifact_invalid 2",
     "drift columns empty": "refused no_features 4",
     "drift columns text": "refused artifact_invalid 2",
@@ -322,8 +329,6 @@ KEY_LIMITS = frozenset(
         "serving columns dict",
         "serving columns not_text",
         "serving columns empty_name",
-        "promotion columns empty",
-        "promotion columns dict",
     }
 )
 
@@ -2249,7 +2254,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         """Each key a real reader reads (serving: references, columns; promotion: columns; drift: columns, kept_columns), taken from the real writer's list
         and made absent, empty, null, a number, a text, a dict, or a list with a non-text or an empty name. Drift's kept list also gets a repeat and an unknown
         column, and drift's columns are also damaged with no kept list, where the kept list cannot mask the damage. Each reader's outcome is the one in
-        ``KEY_OUTCOMES``; the rows in ``KEY_LIMITS`` are today's accepted-but-wrong behavior, listed so that they cannot change unseen. An absent key never
+        ``KEY_OUTCOMES``; the rows in ``KEY_LIMITS`` are serving's accepted-but-wrong behavior, listed so that they cannot change unseen. An absent key never
         serves: serving and promotion refuse it, drift refuses an absent ``columns`` and reads an absent kept list as none."""
         from scripts.training import bundle
 
@@ -2272,6 +2277,11 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                     found[label] = serving_outcome(damaged_list(document, key, kind), fresh(label), document["references"])
                 label = f"promotion columns {kind}"
                 found[label] = promotion_outcome(damaged_list(document, "columns", kind), document["columns"], fresh(label))
+            for kind, value in (("list", ["columns"]), ("null", None), ("text", "columns")):
+                label = f"promotion document {kind}"
+                found[label] = promotion_outcome(value, document["columns"], fresh(label))
+            label = "promotion columns repeat"
+            found[label] = promotion_outcome(damaged_list(document, "columns", "repeat"), document["columns"], fresh(label))
             for key, kinds in (("columns", shared), ("kept_columns", (*shared, "repeat", "unknown"))):
                 for kind in kinds:
                     label = f"drift {key} {kind}"

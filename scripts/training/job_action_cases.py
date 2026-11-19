@@ -1723,6 +1723,43 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         )
         require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, "an alias changed")
 
+    def champion_feature_list_damaged() -> None:
+        """A champion whose list has no usable ``columns`` is never scored: the check fails by name with the key and what was found, writes nothing,
+        tags no verdict and moves no alias. A list that is well formed but needs a column the extract lacks stays the verdict ``not_comparable``."""
+
+        class Counted(Predictor):
+            scored = 0
+
+            def predict(self, rows: Any) -> Any:
+                Counted.scored += 1
+                return super().predict(rows)
+
+        shapes = {
+            "absent": ({"slot": "m1_ols", "references": []}, "absent"),
+            "empty": ({"columns": []}, "an empty list"),
+            "text": ({"columns": "process"}, "text, not a list"),
+            "null": ({"columns": None}, "null, not a list"),
+            "number": ({"columns": 3}, "a number, not a list"),
+            "object": ({"columns": {"process": 1}}, "an object, not a list"),
+            "not_text": ({"columns": ["process", 2]}, "element 1 is a number, not text"),
+            "empty_name": ({"columns": ["", "cmi"]}, "element 0 is an empty name"),
+            "repeat": ({"columns": ["process", "process"]}, "element 1 repeats an earlier name"),
+            "not_an_object": (["process", "cmi"], "a list, not an object"),
+        }
+        for label, (document, found) in shapes.items():
+            fixture = promoted(folder / f"damaged_{label}", Counted(LABEL, constant=3.0))
+            next(fixture.tracking.root.glob("*/bundle/feature_list.json")).write_text(json.dumps(document) + "\n")
+            Counted.scored = 0
+            code, _, error = run_promotion(fixture)
+            require(code == job.EXIT_FAILED and failure_of(error) == "champion_feature_list_invalid", f"{label}: {code} {error}")
+            require(found in error, f"{label}: the failure does not say what was found ({found}): {error}")
+            require(label == "not_an_object" or "columns" in error, f"{label}: the failure does not name the key: {error}")
+            require(Counted.scored == 0, f"{label}: the champion was scored")
+            require(listing(fixture.out) == [], f"{label}: a refused check wrote output")
+            tags = fixture.tracking.models[name]["versions"][1]["tags"]
+            require("promotion_verdict" not in tags, f"{label}: the version got a verdict: {tags}")
+            require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, f"{label}: an alias changed")
+
     def champion_unloadable() -> None:
         fixture = promoted(folder / "unloadable")
         seed_champion(fixture)
@@ -1955,6 +1992,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_retry_adopts_run_whose_response_was_lost", lost_child_response)
     cases.check("job_promotion_check_refuses_holdout_leak", holdout_leak)
     cases.check("job_promotion_check_records_not_comparable_for_champion_columns_outside_extract", champion_columns)
+    cases.check("job_promotion_check_fails_a_damaged_champion_feature_list", champion_feature_list_damaged)
     cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)
     cases.check("job_promotion_check_fails_dirty_code", dirty_code)
     cases.check("job_promotion_check_retry_resumes_completed", retried)

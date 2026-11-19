@@ -3,7 +3,8 @@
 With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the same training years as the fit step's RQ1 test; a pass
 is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias and sets no alias: the research action
 chooses the one challenger of a type among the versions of m1, m2 and m4 that passed. A champion whose columns this run's extract lacks cannot be scored, and
-the version gets the verdict ``not_comparable``. The comparison files are written and checked before any version tag. The check reads the written Parquet
+the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns`` is never scored: the check fails with
+``champion_feature_list_invalid``. The comparison files are written and checked before any version tag. The check reads the written Parquet
 file back and repeats the rule on it.
 """
 
@@ -44,17 +45,50 @@ def names_for(hai_type: str) -> tuple[str, str]:
     return f"comparison_{hai_type}.parquet", f"comparison_{hai_type}.json"
 
 
+def champion_columns(document: Any) -> list[str]:
+    """Return the ``columns`` of a champion's feature list, or refuse a list whose ``columns`` is not a non-empty list of distinct, non-empty names.
+
+    The refusal is ``champion_feature_list_invalid``, a failure of the check and not the verdict ``not_comparable``: the champion's own artifact is damaged,
+    and no extract can repair that. The detail names the key and what was found, never a value.
+    """
+    kinds = {str: "text", bool: "a boolean", int: "a number", float: "a number", dict: "an object", list: "a list", type(None): "null"}
+    if not isinstance(document, Mapping):
+        raise JobFailure("champion_feature_list_invalid", f"the champion's feature list is {kinds.get(type(document), 'not JSON')}, not an object")
+
+    def refuse(found: str) -> JobFailure:
+        return JobFailure("champion_feature_list_invalid", f"the champion's feature list holds a bad columns key: {found}")
+
+    if "columns" not in document:
+        raise refuse("absent")
+    columns = document["columns"]
+    if not isinstance(columns, list):
+        raise refuse(f"{kinds.get(type(columns), 'not JSON')}, not a list")
+    if not columns:
+        raise refuse("an empty list")
+    seen: set[str] = set()
+    for index, name in enumerate(columns):
+        if not isinstance(name, str):
+            raise refuse(f"element {index} is {kinds.get(type(name), 'not JSON')}, not text")
+        if not name:
+            raise refuse(f"element {index} is an empty name")
+        if name in seen:
+            raise refuse(f"element {index} repeats an earlier name")
+        seen.add(name)
+    return columns
+
+
 def champion_predictions(
     store: Any, version: Any, name: str, manifest: Mapping[str, Any], rows: list[dict[str, Any]], year: int, scratch: Path
 ) -> dict[str, float]:
     """Load the champion and score the holdout, after the checks that it needs only extract columns and never trained on the holdout year."""
     try:
         listing = store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch))
-        columns = set(job_inputs.read_json(Path(listing), "champion_features")["columns"])
+        document = job_inputs.read_json(Path(listing), "champion_features")
     except JobFailure:
         raise
     except Exception as error:
         raise JobFailure("champion_features", f"the champion's feature list cannot be read: {type(error).__name__}: {error}") from None
+    columns = set(champion_columns(document))
     if not columns <= set(manifest["columns"]):
         raise JobFailure("champion_features", f"the champion needs columns the extract lacks: {sorted(columns - set(manifest['columns']))[0]}")
     window = store.get_run(version.run_id).data.tags.get("newest_window", "")
