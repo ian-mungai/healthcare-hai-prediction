@@ -6,6 +6,7 @@ import ast
 import contextlib
 import copy
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -730,6 +731,11 @@ def fit_cases(cases: Any, folder: Path) -> None:
             document["schema"] == 1 and document["slot"] == feature_list["slot"] == "m2_elastic_net", f"schema or slot: {document['schema']} {document['slot']}"
         )
         require(document["references"] == feature_list["references"], "references differ from feature_list.json")
+        reader = importlib.import_module("scripts.serving.mlflow_loader")
+        references, _ = reader.check_feature_list(feature_list)
+        reader.check_provenance_shape(output_of(fixture, f"{BUNDLE}/provenance.json"))
+        saved_rows, saved_predictions = reader.check_self_check(document, references)
+        require(len(saved_rows) == len(saved_predictions) == 8, "the serving reader reads the three files this writer wrote, unchanged")
         require(len(document["rows"]) == len(document["predictions"]) == 8, f"rows {len(document['rows'])}, predictions {len(document['predictions'])}")
         width = len(feature_list["references"])
         require(all(len(row) == width for row in document["rows"]), f"a row is not {width} cells wide")
@@ -799,6 +805,36 @@ def fit_cases(cases: Any, folder: Path) -> None:
             document = bundle.self_check_document(standin, features)
             require(document["rows"] == [[None if index == 0 else float(index), str(index)] for index in range(count)], f"{count} rows: {document['rows']}")
             require(document["predictions"] == [0.5 + index for index in range(count)], f"{count} rows: predictions {document['predictions']}")
+
+    def self_check_refuses_a_category_the_serving_reader_refuses() -> None:
+        """The serving reader refuses a text cell of more than 256 characters, so the writer refuses it first, by name, and never truncates: a category of 256
+        characters is written and read back, one of 257 stops the fit, and so does a category whose text is longer (a number saved in a category column)."""
+        reader = importlib.import_module("scripts.serving.mlflow_loader")
+        features = (Feature("view:kind", "category"),)
+
+        def document_for(category: Any) -> dict[str, Any]:
+            rows = ({"spine_key": "k0", "kind": category},)
+            standin = SimpleNamespace(
+                candidate="m2_elastic_net",
+                slots={"m2_elastic_net": SimpleNamespace(holdout_positions=(0,), predictions=(0.5,))},
+                request=SimpleNamespace(data=SimpleNamespace(split=lambda: (None, SimpleNamespace(rows=rows, keys=("k0",))))),
+            )
+            return bundle.self_check_document(standin, features)
+
+        saved = document_for("x" * 256)
+        require(saved["rows"] == [["x" * 256]], "a category of 256 characters was changed")
+        require(reader.check_self_check(saved, ("view:kind",)) == ([["x" * 256]], [0.5]), "the serving reader refused a category of 256 characters")
+        for label, category in (("257 characters", "x" * 257), ("a number of 301 digits", 10**300)):
+            try:
+                document_for(category)
+            except JobFailure as failure:
+                require(failure.name == "self_check_category_too_long", f"{label}: refused as {failure.name}")
+                require("x" * 20 not in failure.detail, f"{label}: the refusal repeats the value: {failure.detail}")
+            else:
+                raise AssertionError(f"a category of {label} was written to the self-check")
+        require(
+            bundle.MAX_CATEGORY_TEXT == reader.MAX_TEXT == 256, f"the writer bound {bundle.MAX_CATEGORY_TEXT} and the reader bound {reader.MAX_TEXT} differ"
+        )
 
     def self_check_only_for_a_candidate() -> None:
         """A model that cannot be registered saves no model folder and no self-check file; a registrable one saves both."""
@@ -1144,6 +1180,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_self_check_keeps_the_bundle_hash", self_check_keeps_bundle_hash)
     cases.check("job_fit_self_check_encodes_missing_values_as_null", self_check_encodes_missing_values)
     cases.check("job_fit_self_check_for_a_small_holdout", self_check_for_a_small_holdout)
+    cases.check("job_fit_self_check_refuses_a_category_the_serving_reader_refuses", self_check_refuses_a_category_the_serving_reader_refuses)
     cases.check("job_fit_self_check_only_for_a_registry_candidate", self_check_only_for_a_candidate)
     cases.check("job_fit_retry_resumes_completed", retried)
     cases.check("job_fit_retry_after_interrupt", interrupted)

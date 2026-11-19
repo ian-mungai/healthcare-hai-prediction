@@ -26,6 +26,8 @@ PARQUET_TYPES = {"varchar": "string", "double": "float64"}
 SAFE_MODULES = ("builtins", "collections", "numpy", "sklearn")
 SELF_CHECK_ROWS = 8
 SELF_CHECK_LEADING_ROWS = 6
+# The longest category text of a saved row. The serving loader refuses a longer text cell (``mlflow_loader.MAX_TEXT``), so the writer refuses it first.
+MAX_CATEGORY_TEXT = 256
 
 
 def prefix(hai_type: str) -> str:
@@ -110,10 +112,22 @@ def holdout_table(suite: ModelSuite) -> tuple[list[dict[str, Any]], dict[str, st
 
 
 def self_check_cell(feature: Feature, value: Any) -> float | str | None:
-    """Return one saved cell: null for a missing value, a number as a float and a category as its text, as the serving wrapper reads them."""
+    """Return one saved cell: null for a missing value, a number as a float and a category as its text, as the serving wrapper reads them.
+
+    A category text over ``MAX_CATEGORY_TEXT`` characters stops the fit by name, so that no bundle is published that the serving loader would refuse. It is
+    never truncated, because a cut category is another category.
+    """
     if missing(value):
         return None
-    return float(value) if feature.kind == "number" else str(value)
+    if feature.kind == "number":
+        return float(value)
+    text = str(value)
+    if len(text) > MAX_CATEGORY_TEXT:
+        raise JobFailure(
+            "self_check_category_too_long",
+            f"{feature.reference} holds a category of {len(text)} characters, and the self-check saves at most {MAX_CATEGORY_TEXT} so that serving can read it",
+        )
+    return text
 
 
 def self_check_document(suite: ModelSuite, features: Sequence[Feature]) -> dict[str, Any]:
