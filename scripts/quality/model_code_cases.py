@@ -29,7 +29,7 @@ from jsonschema import Draft202012Validator
 
 from scripts import model_code
 from scripts.process import run_command
-from scripts.quality import ci_groups
+from scripts.quality import ci_groups, model_code_behavior
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "data_contracts/training/model_contract.json"
@@ -43,10 +43,7 @@ OUTSIDE = (
 )
 # What the closure takes from the image-provided module. The stand-in below must define exactly these names.
 STAND_IN_NAMES = frozenset({"MODEL_LISTS"})
-STAND_IN = {
-    "orchestration/__init__.py": "",
-    "orchestration/training_contract.py": 'MODEL_LISTS = {"m1": ("m1_ols",), "m2": ("m2_elastic_net",), "m4": ("m4_boosting",)}\n',
-}
+STAND_IN = model_code_behavior.STAND_IN
 # Literal code for a clean interpreter (-I: no PYTHONPATH, no working directory on the path, no user site). It imports each trusted type of the repository and
 # prints where every repository module came from. The scratch folder and the type names are its arguments.
 PROBE = """
@@ -175,7 +172,6 @@ def case_planted_import_changes_the_closure() -> list[str]:
 TARGET = "scripts/training/models/probe_target.py"
 TARGET_MODULE = "scripts.training.models.probe_target"
 TREES = "scripts/training/models/trees.py"
-REFUSAL_REASONS = ("dynamic_import_refused", "import_outside", "closure_changed")
 
 # Text appended to trees.py (@T is the module the planted code reaches). Each entry reaches probe_target.py by a different route; every one must make the
 # closure grow by that file, and the record then verifies only after an explicit write.
@@ -209,6 +205,8 @@ JOINS = {
 }
 
 # Code the verifier cannot read: the write is refused and the verifier names the file and line. The reason is the start of the problem text.
+FETCH = 'from importlib import import_module as fetch_code\n\n\ndef _planted():\n    fetch_code("@T")\n\n\n'
+PACKAGE = "import scripts.training.models as pkg_alias\n\n\ndef _planted():\n    return pkg_alias.probe_target.VALUE\n\n\n"
 REFUSED = {
     "literal held in a variable": ('def _planted():\n    module = "@T"\n    importlib.import_module(module)\n', "dynamic_import_refused"),
     "literal held in a variable, optional": (
@@ -240,6 +238,50 @@ REFUSED = {
     "exec": ('def _planted():\n    exec("import @T")\n', "dynamic_import_refused"),
     "eval": ('def _planted():\n    eval("1")\n', "dynamic_import_refused"),
     "compile": ('def _planted():\n    compile("1", "x", "eval")\n', "dynamic_import_refused"),
+    "builtins exec by an imported alias": ('from builtins import exec as run_text\n\n\ndef _planted():\n    run_text("import @T")\n', "dynamic_import_refused"),
+    "builtins exec imported without an alias": ('from builtins import exec\n\n\ndef _planted():\n    exec("import @T")\n', "dynamic_import_refused"),
+    "builtins exec by attribute": ('import builtins\n\n\ndef _planted():\n    builtins.exec("import @T")\n', "dynamic_import_refused"),
+    "builtins eval by attribute through an alias": ('import builtins as b\n\n\ndef _planted():\n    return b.eval("40 + 2")\n', "dynamic_import_refused"),
+    "builtins compile by an imported alias": (
+        'from builtins import compile as build\n\n\ndef _planted():\n    return build("1", "x", "eval")\n',
+        "dynamic_import_refused",
+    ),
+    "exec stored in a variable": ("runner = exec\n", "dynamic_import_refused"),
+    "eval passed to a function": ('def _planted():\n    return list(map(eval, ["1"]))\n', "dynamic_import_refused"),
+    "wildcard import from importlib": ("from importlib import *\n", "dynamic_import_refused"),
+    "wildcard import from the standard library": ("from json import *\n", "dynamic_import_refused"),
+    "wildcard import from a repository module": ("from scripts.training.models.common import *\n", "dynamic_import_refused"),
+    "import alias rebound by an import in an unrelated function": (
+        FETCH + 'def _unrelated():\n    from json import loads as fetch_code\n    return fetch_code("1")\n',
+        "dynamic_import_refused",
+    ),
+    "import alias rebound by a parameter": (
+        'from importlib import import_module as fetch_code\n\n\ndef _planted():\n    fetch_code("@T")\n\n\ndef _other(fetch_code):\n    return fetch_code\n',
+        "dynamic_import_refused",
+    ),
+    "import alias rebound by an assignment": (
+        FETCH + "def _other():\n    fetch_code = len\n    return fetch_code\n",
+        "dynamic_import_refused",
+    ),
+    "import alias rebound by a loop variable": (
+        FETCH + "def _other():\n    for fetch_code in []:\n        pass\n",
+        "dynamic_import_refused",
+    ),
+    "importlib name rebound by a parameter": ("def _other(importlib):\n    return importlib\n", "dynamic_import_refused"),
+    "package alias rebound by a parameter": (
+        PACKAGE + "def _other(pkg_alias):\n    return pkg_alias\n",
+        "dynamic_import_refused",
+    ),
+    "package alias rebound by an import": (
+        PACKAGE + "def _other():\n    import json as pkg_alias\n    return pkg_alias\n",
+        "dynamic_import_refused",
+    ),
+    "imported package assigned with an annotation": (
+        "import scripts.training.models as pkg_alias\n\nother_alias: object = pkg_alias\n",
+        "dynamic_import_refused",
+    ),
+    "imported package assigned to another name": ("import scripts.training.models as pkg_alias\n\nother_alias = pkg_alias\n", "dynamic_import_refused"),
+    "imported repository module assigned to another name": ("from scripts.training.models import common\n\nother_alias = common\n", "dynamic_import_refused"),
     "search path change": ('import sys\n\nsys.path.insert(0, "/elsewhere")\n', "dynamic_import_refused"),
     "meta path change": ("import sys\n\nsys.meta_path.append(object())\n", "dynamic_import_refused"),
     "third-party package outside the lock group": ("import requests\n", "import_outside"),
@@ -272,6 +314,9 @@ CLEAN = {
     "attribute of a library": "def _planted():\n    return np.linalg.norm\n",
     "attribute through a package to a closure module": "import scripts.training.models as pkg\n\n\ndef _planted():\n    return pkg.common.Feature\n",
     "relative import of a closure module": "from .common import Feature as _Feature\n",
+    "the same import repeated in two functions": "def _first():\n    import json\n\n\ndef _second():\n    import json\n",
+    "a class imported from a repository module assigned to another name": "from scripts.training.models.common import Feature\n\nOtherFeature = Feature\n",
+    "a name that is no import bound in two places": "def _first(sparse):\n    return sparse\n\n\ndef _second():\n    sparse = 1\n    return sparse\n",
     "importlib.metadata": "import importlib.metadata\n\n\ndef _planted():\n    return importlib.metadata.version\n",
 }
 
@@ -374,6 +419,19 @@ REVIEWER = {
         "",
         "refused",
     ),
+    "round 2: builtins exec by an imported alias": (
+        "from builtins import exec as run_text\n",
+        '        run_text("import scripts.training.models.mixed")\n',
+        "refused",
+    ),
+    "round 2: builtins eval by attribute": ("import builtins\n", '        builtins.eval("40 + 2")\n', "refused"),
+    "round 2: builtins compile by an imported alias": ("from builtins import compile as build_code\n", '        build_code("1", "x", "eval")\n', "refused"),
+    "round 2: global alias hidden by an unrelated local import": (
+        'from importlib import import_module as fetch_code\n\n\ndef _unrelated():\n    from json import loads as fetch_code\n    return fetch_code("1")\n\n\n',
+        '        fetch_code("scripts.training.models.mixed")\n',
+        "refused",
+    ),
+    "round 2: wildcard import of importlib": ("from importlib import *\n", '        import_module("scripts.training.models.mixed")\n', "refused"),
 }
 
 
@@ -453,7 +511,7 @@ def check_inputs() -> list[str]:
 
     tracked = {line for line in run_command("git", ["ls-files"], cwd=ROOT, timeout=60, check=True).stdout.splitlines() if line}
     found = set()
-    for module in ("scripts/model_code.py", "scripts/quality/model_code_cases.py"):
+    for module in ("scripts/model_code.py", "scripts/quality/model_code_cases.py", "scripts/quality/model_code_behavior.py"):
         found |= set(source_inputs((ROOT / module).read_text(), tracked, rooted=True))
         found.add(module)
     record = read_record()
@@ -502,6 +560,128 @@ def case_launcher_inventory_lists_every_file_of_the_folders_it_reads() -> list[s
     tracked = [line for line in run_command("git", ["ls-files"], cwd=ROOT, timeout=60, check=True).stdout.splitlines() if line]
     folders = tuple(f"{folder}/" for folder in committed["folders"])
     return [f"{path} is under a folder the launcher suite reads and is not in the list" for path in tracked if path.startswith(folders) and path not in listed]
+
+
+# 1d. What the image checks at start: the record against the actual files, with no lock and no import analysis
+
+
+def image_tree(base: Path) -> Path:
+    """The files of an image root: the record and the recorded files only (no uv.lock, no contract)."""
+    record = read_record()
+    for name in [model_code.RECORD, *[item["path"] for item in record["files"]]]:
+        target = base / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    return base
+
+
+def case_image_check_passes_on_the_matching_files_without_a_lock() -> list[str]:
+    """The image's start check reads the record, hashes the actual files and compares: it passes on the real files and returns the recorded digest."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        problems = model_code.check_files(root)
+        digest = model_code.closure_digest(root)
+    expected = read_record()["closure_sha256"]
+    return [*problems, *([] if digest == expected else [f"closure_digest is {digest}, the record says {expected}"])]
+
+
+def case_image_check_fails_by_name() -> list[str]:
+    """A changed byte, a missing file and an extra record path each fail with the file named; a wrong recorded digest fails as a digest mismatch."""
+    problems = []
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        target = root / "scripts/training/models/linear.py"
+        target.write_bytes(target.read_bytes() + b"\n")
+        found = model_code.check_files(root)
+        if not any(text.startswith("file_changed") and "scripts/training/models/linear.py" in text for text in found):
+            problems.append(f"a changed byte raised {found}")
+        if not any(text.startswith("digest_mismatch") for text in found):
+            problems.append(f"a changed byte gave no digest_mismatch: {found}")
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        (root / "scripts/training/models/trees.py").unlink()
+        found = model_code.check_files(root)
+        if not any(text.startswith("file_missing") and "scripts/training/models/trees.py" in text for text in found):
+            problems.append(f"a missing file raised {found}")
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        record = read_record()
+        record["files"] = sorted([*record["files"], {"path": "scripts/training/models/extra.py", "size": 0, "sha256": "0" * 64}], key=lambda item: item["path"])
+        record["closure_sha256"] = model_code.digest(record["files"])
+        write_record(root, record)
+        found = model_code.check_files(root)
+        if not any(text.startswith("file_missing") and "scripts/training/models/extra.py" in text for text in found):
+            problems.append(f"an extra record path raised {found}")
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        record = read_record()
+        record["closure_sha256"] = "f" * 64
+        write_record(root, record)
+        if not any(text.startswith("digest_mismatch") for text in model_code.check_files(root)):
+            problems.append("a wrong recorded digest was not reported as digest_mismatch")
+    with tempfile.TemporaryDirectory() as folder:
+        found = model_code.check_files(Path(folder))
+        if not any(text.startswith("record_invalid") for text in found):
+            problems.append(f"an absent record raised {found}")
+    return problems
+
+
+def case_image_check_is_independent_of_the_import_rule() -> list[str]:
+    """The start check reads neither uv.lock nor the contract: it passes in a root that has neither."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = image_tree(Path(folder))
+        if (root / "uv.lock").exists() or (root / CONTRACT).exists():
+            return ["the image root was meant to have no lock and no contract"]
+        return model_code.check_files(root)
+
+
+# 1e. Behaviour: the closure alone fits, saves, loads and predicts every family
+
+
+class Skipped(Exception):
+    """A case that cannot run here: it is reported as skipped, never as passed silently, and fails under --require-libraries."""
+
+
+SETTINGS = {"require_libraries": False}
+
+
+def behaviour_outcome(edit: Callable[[Path], None] | None = None) -> model_code_behavior.Outcome:
+    outcome = model_code_behavior.run(ROOT, edit)
+    if outcome.skipped:
+        if SETTINGS["require_libraries"]:
+            raise AssertionError(f"needs the model_api libraries: {outcome.skipped}")
+        raise Skipped(outcome.skipped)
+    return outcome
+
+
+def case_clean_interpreter_fits_saves_loads_and_predicts_every_family() -> list[str]:
+    """With only the declared files and the stand-ins, every family constructs, fits a tiny frame, saves with skops, loads (trusted list) and predicts."""
+    outcome = behaviour_outcome()
+    expected = {"m1_ols", "m2_elastic_net", "m4_boosting", "m4_forest"}
+    return [*outcome.problems, *([] if set(outcome.families) == expected else [f"families run: {sorted(outcome.families)}"])]
+
+
+def remove_preprocessing(scratch: Path) -> None:
+    (scratch / "scripts/training/models/preprocessing.py").unlink()
+
+
+def plant_lazy_import(scratch: Path) -> None:
+    path = scratch / TREES
+    path.write_text(
+        path.read_text().replace(
+            "        return self.native_.predict(design.matrix)",
+            '        importlib.import_module("scripts.training.models.mixed")\n        return self.native_.predict(design.matrix)',
+        )
+    )
+
+
+def case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one() -> list[str]:
+    """The check is not vacuous: without a declared file, or with a prediction-time import of a file outside the closure, it fails."""
+    problems = []
+    for name, edit in (("a declared file is missing", remove_preprocessing), ("a prediction-time import needs mixed.py", plant_lazy_import)):
+        if not behaviour_outcome(edit).problems:
+            problems.append(f"{name}: the behaviour check passed")
+    return problems
 
 
 # 2. Import origins in a clean interpreter
@@ -827,6 +1007,11 @@ ORDER = [
     case_inputs_of_the_check_select_the_closure_group,
     case_each_selection_pattern_is_needed,
     case_launcher_inventory_lists_every_file_of_the_folders_it_reads,
+    case_image_check_passes_on_the_matching_files_without_a_lock,
+    case_image_check_fails_by_name,
+    case_image_check_is_independent_of_the_import_rule,
+    case_clean_interpreter_fits_saves_loads_and_predicts_every_family,
+    case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one,
     case_clean_interpreter_imports_every_trusted_type_from_declared_files,
     case_stand_in_matches_what_the_closure_takes,
     case_clean_interpreter_fails_when_a_declared_file_is_missing,
@@ -851,11 +1036,14 @@ def run(selected: list[str] | None = None) -> dict[str, dict[str, Any]]:
         if selected and name not in selected:
             continue
         started = time.monotonic()
+        skipped = ""
         try:
             problems = function()
+        except Skipped as skip:
+            problems, skipped = [], str(skip)
         except Exception as error:  # a case that raises fails by name and does not stop the rest
             problems = [f"raised {type(error).__name__}: {error}"]
-        results[name] = {"passed": not problems, "problems": problems, "seconds": round(time.monotonic() - started, 2)}
+        results[name] = {"passed": not problems, "skipped": skipped, "problems": problems, "seconds": round(time.monotonic() - started, 2)}
     return results
 
 
@@ -863,14 +1051,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the model code closure cases.")
     parser.add_argument("--output", type=Path, help="write the results as JSON to this file")
     parser.add_argument("--case", action="append", help="run only this case (repeatable)")
+    parser.add_argument("--require-libraries", action="store_true", help="fail, instead of skip, a case that needs the model_api libraries")
     arguments = parser.parse_args()
+    SETTINGS["require_libraries"] = arguments.require_libraries
     results = run(arguments.case)
     for name, result in results.items():
-        sys.stdout.write(f"{'PASS' if result['passed'] else 'FAIL'} {name} ({result['seconds']} s)\n")
+        label = "SKIP" if result["skipped"] else "PASS" if result["passed"] else "FAIL"
+        sys.stdout.write(f"{label} {name} ({result['seconds']} s)\n")
+        if result["skipped"]:
+            sys.stdout.write(f"    skipped: {result['skipped']}\n")
         for problem in result["problems"]:
             sys.stdout.write(f"    {problem}\n")
     failed = [name for name, result in results.items() if not result["passed"]]
-    sys.stdout.write(f"model code cases: {len(results) - len(failed)} of {len(results)} passed\n")
+    skipped = [name for name, result in results.items() if result["skipped"]]
+    sys.stdout.write(
+        f"model code cases: {len(results) - len(failed)} of {len(results)} passed"
+        + (f", {len(skipped)} of them skipped: {', '.join(skipped)}\n" if skipped else "\n")
+    )
     if arguments.output:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(json.dumps({"cases": results, "failed": failed}, indent=2) + "\n")

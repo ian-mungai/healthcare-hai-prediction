@@ -50,7 +50,7 @@ OUTSIDE_IMAGE = {("scripts/training/models/trees.py", "shap_values"): ("shap",)}
 # Functions that import by a name given at run time, and the other routes to code that the scan cannot follow (see ImportScan).
 DYNAMIC = frozenset({"__import__", "builtins.__import__", "importlib.__import__", "importlib.import_module", "pkgutil.resolve_name"})
 MODULE_OBJECTS = frozenset({"importlib", "pkgutil", "builtins"})
-REFUSED_NAMES = frozenset({"exec", "eval", "compile", "__builtins__"})
+REFUSED_NAMES = frozenset({"exec", "eval", "compile", "__builtins__", "builtins.exec", "builtins.eval", "builtins.compile"})
 REFUSED_PREFIXES = (
     "importlib.util",
     "importlib.machinery",
@@ -183,24 +183,42 @@ class ImportScan(ast.NodeVisitor):
         return ".".join([*base, *([module] if module else [])])
 
     def collect_aliases(self, tree: ast.Module) -> None:
+        """Bind each imported name to its dotted form. A name that means more than one thing in the file (imported twice differently, or imported and also
+        bound by an assignment, a parameter, a loop, a ``def`` or a ``class``) and that names a module or a dynamic-import function is refused: this scan
+        resolves each name once for the whole file, so it refuses a name it cannot resolve unambiguously."""
+        imported: dict[str, set[str]] = {}
+        first: dict[str, ast.AST] = {}
+        other: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    self.aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+                    name = alias.asname or alias.name.split(".")[0]
+                    imported.setdefault(name, set()).add(alias.name if alias.asname else alias.name.split(".")[0])
+                    first.setdefault(name, node)
             elif isinstance(node, ast.ImportFrom):
                 base = self.absolute(node.level, node.module)
-                if base is not None:
+                if base is not None and node.module != "__future__":
                     for alias in node.names:
-                        self.aliases[alias.asname or alias.name] = f"{base}.{alias.name}" if base else alias.name
-        for _ in range(3):
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    value = self.dotted(node.value)
-                    if value is not None and self.root_name(node.value) in self.aliases:
-                        for target in targets:
-                            if isinstance(target, ast.Name) and target.id not in self.aliases:
-                                self.aliases[target.id] = value
+                        if alias.name != "*":
+                            name = alias.asname or alias.name
+                            imported.setdefault(name, set()).add(f"{base}.{alias.name}" if base else alias.name)
+                            first.setdefault(name, node)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+                other.add(node.id)
+            elif isinstance(node, ast.arg):
+                other.add(node.arg)
+            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
+                other.add(node.name)
+        for name, values in imported.items():
+            self.aliases[name] = sorted(values)[0]
+            if (len(values) > 1 or name in other) and any(self.relevant(value) for value in values):
+                self.refuse(first[name], f"binds the name {name} more than once, and one binding is a module or a dynamic-import function")
+
+    def relevant(self, value: str) -> bool:
+        """Whether a dotted name must be resolved with certainty: a repository module or package, a dynamic-import function or module, or code execution."""
+        if value in DYNAMIC or value in MODULE_OBJECTS or value in REFUSED_NAMES or under(value, REFUSED_PREFIXES) or value.startswith("pkgutil."):
+            return True
+        return is_repository_name(self.root, value) and (module_file(self.root, value) is not None or (self.root / value.replace(".", "/")).is_dir())
 
     @staticmethod
     def root_name(node: ast.AST) -> str:
@@ -248,7 +266,20 @@ class ImportScan(ast.NodeVisitor):
         if name is None:
             self.outside.append(f"{self.path}:{node.lineno}: relative import beyond the repository root")
             return
+        if any(alias.name == "*" for alias in node.names):
+            self.refuse(node, f"uses a wildcard import from {name or node.module}, so the names it binds cannot be read")
         self.add(node, name, tuple(alias.name for alias in node.names))
+
+    def generic_visit(self, node: ast.AST) -> None:
+        if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+            self.assigned(node, node.value)
+        super().generic_visit(node)
+
+    def assigned(self, node: ast.AST, value: ast.expr) -> None:
+        """An imported module or dynamic-import name stored under another name would make a later use of the new name unreadable."""
+        resolved = self.dotted(value)
+        if resolved is not None and self.root_name(value) in self.aliases and self.relevant(resolved):
+            self.refuse(node, f"assigns {resolved} to another name, so a later use of that name cannot be read")
 
     def visit_Call(self, node: ast.Call) -> None:
         callee = self.dotted(node.func)
@@ -282,8 +313,8 @@ class ImportScan(ast.NodeVisitor):
 
     def reference(self, node: ast.AST, full: str, bare: str = "") -> None:
         """A name or attribute chain used as a value (a called dynamic-import function never gets here)."""
-        if bare in REFUSED_NAMES and bare not in self.aliases:
-            self.refuse(node, f"uses {bare}, which runs code this check cannot read")
+        if full in REFUSED_NAMES:
+            self.refuse(node, f"uses {full}, which runs code this check cannot read")
         elif full in DYNAMIC or (bare and full in MODULE_OBJECTS):
             self.refuse(node, f"uses {full} other than as the function a call names, so the import it makes cannot be read")
         elif under(full, REFUSED_PREFIXES) or (full.startswith("pkgutil.") and full != "pkgutil.resolve_name"):
@@ -524,6 +555,33 @@ def write(root: Path, generation: int, libraries: Collection[str] | None = None)
     record = build_record(root, generation, libraries)
     (root / RECORD).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     return record
+
+
+def closure_digest(root: Path) -> str:
+    """The digest of the files the record names, hashed from the actual files at ``root`` (for the serving image at start: no lock, no import analysis).
+    Raises RecordError when the record is invalid or one of its files is missing."""
+    record = read_record(root / RECORD)
+    missing = [item["path"] for item in record["files"] if not (root / item["path"]).is_file()]
+    if missing:
+        raise RecordError(f"file_missing: {', '.join(missing)}")
+    return digest(entries(root, (item["path"] for item in record["files"])))
+
+
+def check_files(root: Path) -> list[str]:
+    """The problems of the actual files at ``root`` against the record: ``record_invalid``, ``file_missing``, ``file_changed`` and ``digest_mismatch``.
+    Empty when every recorded file matches its entry and the files hash to ``closure_sha256``. It reads no ``uv.lock``, so the serving image can call it."""
+    try:
+        record = read_record(root / RECORD)
+    except RecordError as error:
+        return [f"record_invalid: {error}"]
+    problems = [f"file_missing: {item['path']}" for item in record["files"] if not (root / item["path"]).is_file()]
+    if problems:
+        return problems
+    actual = entries(root, (item["path"] for item in record["files"]))
+    problems = [f"file_changed: {item['path']}" for item, found in zip(record["files"], actual, strict=True) if found != item]
+    if digest(actual) != record["closure_sha256"]:
+        problems.append("digest_mismatch: the files do not hash to closure_sha256")
+    return problems
 
 
 def verify(root: Path, libraries: Collection[str] | None = None) -> list[str]:
