@@ -625,6 +625,43 @@ def case_image_check_fails_by_name() -> list[str]:
     return problems
 
 
+def case_closure_digest_of_the_repository_root_is_the_record_value() -> list[str]:
+    """closure_digest of the repository root equals closure_sha256 of the record (the value a bundle will store and the image will compare)."""
+    found, expected = model_code.closure_digest(ROOT), read_record()["closure_sha256"]
+    return [] if found == expected else [f"closure_digest is {found}, the record says {expected}"]
+
+
+def case_closure_digest_changes_with_one_byte_of_any_closure_file() -> list[str]:
+    """One added byte in any one recorded file, in a scratch copy, gives another digest than the record's."""
+    problems = []
+    expected = read_record()["closure_sha256"]
+    for item in read_record()["files"]:
+        with tempfile.TemporaryDirectory() as folder:
+            root = image_tree(Path(folder))
+            target = root / item["path"]
+            target.write_bytes(target.read_bytes() + b" ")
+            if model_code.closure_digest(root) == expected:
+                problems.append(f"one added byte in {item['path']} left closure_digest unchanged")
+    return problems
+
+
+def case_closure_digest_refuses_a_missing_file_by_name() -> list[str]:
+    """A recorded file that is absent raises RecordError naming it, for each recorded file: never a digest of the files that remain."""
+    problems = []
+    for item in read_record()["files"]:
+        with tempfile.TemporaryDirectory() as folder:
+            root = image_tree(Path(folder))
+            (root / item["path"]).unlink()
+            try:
+                found = model_code.closure_digest(root)
+            except model_code.RecordError as error:
+                if "file_missing" not in str(error) or item["path"] not in str(error):
+                    problems.append(f"{item['path']} missing raised RecordError without the reason and the name: {error}")
+            else:
+                problems.append(f"{item['path']} missing gave the digest {found} instead of an error")
+    return problems
+
+
 def case_image_check_is_independent_of_the_import_rule() -> list[str]:
     """The start check reads neither uv.lock nor the contract: it passes in a root that has neither."""
     with tempfile.TemporaryDirectory() as folder:
@@ -1029,6 +1066,9 @@ ORDER = [
     case_launcher_inventory_lists_every_file_of_the_folders_it_reads,
     case_image_check_passes_on_the_matching_files_without_a_lock,
     case_image_check_fails_by_name,
+    case_closure_digest_of_the_repository_root_is_the_record_value,
+    case_closure_digest_changes_with_one_byte_of_any_closure_file,
+    case_closure_digest_refuses_a_missing_file_by_name,
     case_image_check_is_independent_of_the_import_rule,
     case_clean_interpreter_fits_saves_loads_and_predicts_every_family,
     case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one,
