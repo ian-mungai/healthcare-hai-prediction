@@ -445,20 +445,42 @@ def materialization(path: Path, folders: dict[str, Any]) -> str:
 
 def silver_plan_steps() -> list[dict[str, Any]]:
     """Silver publishes every model it builds, each a table in the build file, the staging copies keyed by the grain their test proves."""
-    from scripts.lakehouse import silver_publish
+    from scripts.lakehouse import deferred_models, silver_publish
 
     yaml = importlib.import_module("yaml")
     plan = silver_publish.publish_plan("real")
     project = yaml.safe_load((ROOT / "dbt/dbt_project.yml").read_text())
     models = {path.stem: path for path in (ROOT / "dbt/models/silver").rglob("*.sql")}
-    copies = {f"stg_{table}" for table in project["vars"]["copy_tables"]}
+    copies = deferred_models.staging_models(project)
+    deferred = deferred_models.deferred_names(project)
     views = sorted(name for name, path in models.items() if materialization(path, project["models"]["hai"]) != "table")
-    keys = sorted(name for name in copies if plan.tables.get(name) != STAGING_GRAIN)
+    keys = staging_grain_gaps(copies, plan.tables)
     return [
         step("the silver plan names every silver dbt model", set(plan.tables) == set(models), unpublished=sorted(set(models) - set(plan.tables))),
         step("every silver model is built as a table, so the sealed copy holds its rows without the bronze catalog", not views, views=views[:5]),
         step("every staging copy is keyed by the file checksum and row number its grain test proves unique", bool(copies) and not keys, keys=keys[:5]),
+        step(
+            "a deferred model has no SQL file and no publish entry, and its table keeps no staging copy to key",
+            not (deferred & set(models)) and not (deferred & set(plan.tables)) and not (deferred & copies),
+            deferred=sorted(deferred),
+        ),
+        step(
+            "the grain check names a missing staging entry, and only a deferred staging model leaves the expected set",
+            staging_grain_gaps({"stg_kept", "stg_gone"}, {"stg_kept": STAGING_GRAIN}) == ["stg_gone"]
+            and staging_grain_gaps({"stg_kept"}, {"stg_kept": ("other",)}) == ["stg_kept"]
+            and deferred_models.staging_models(SAMPLE_PROJECT) == {"stg_a", "stg_b"} - {"stg_b"}
+            and deferred_models.staging_models({"vars": {"copy_tables": SAMPLE_PROJECT["vars"]["copy_tables"]}}) == {"stg_a", "stg_b"}
+            and deferred_models.staging_models({"vars": {**SAMPLE_PROJECT["vars"], "deferred_models": [{"models": ["int_b"]}]}}) == {"stg_a", "stg_b"},
+        ),
     ]
+
+
+SAMPLE_PROJECT = {"vars": {"copy_tables": {"a": "family", "b": "family"}, "deferred_models": [{"models": ["stg_b", "int_b"]}]}}
+
+
+def staging_grain_gaps(copies: set[str] | frozenset[str], tables: dict[str, Any]) -> list[str]:
+    """The staging models that the plan does not key by the file checksum and row number."""
+    return sorted(name for name in copies if tables.get(name) != STAGING_GRAIN)
 
 
 STRICTEST_NAME_LENGTH = 128

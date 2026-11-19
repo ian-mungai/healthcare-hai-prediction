@@ -12,7 +12,9 @@ The report in ``data/e2e/dbt_disabled_nodes/`` holds outcomes only.
 
 from __future__ import annotations
 
+import importlib
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse import dbt_disabled_nodes as nodes
+from scripts.lakehouse import deferred_models
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = "dbt/models/silver/staging/_bronze__sources.yml"
@@ -61,6 +64,15 @@ def cases() -> dict[str, bool]:
         base = Path(folder)
         shutil.copytree(ROOT / "dbt", base / "committed" / "dbt", ignore=shutil.ignore_patterns("target", "logs", "dbt_packages"))
         results["the_committed_project_disables_no_node"] = disabled_of(base / "committed" / "dbt", base / "committed" / "target") == []
+        project = importlib.import_module("yaml").safe_load((ROOT / "dbt/dbt_project.yml").read_text())
+        compiled = (base / "committed" / "target" / "compiled" / "hai" / "tests" / "assert_staging_rows_match_files.sql").read_text()
+        macro_tables = sorted(re.findall(r"^staged_([a-z0-9_]+) as \(", compiled, flags=re.MULTILINE))
+        results["the_macro_and_the_python_helper_agree_on_the_staged_tables"] = macro_tables == sorted(deferred_models.staged_tables(project)) and bool(
+            macro_tables
+        )
+        results["the_deferred_finance_table_is_in_copy_tables_and_not_staged"] = (
+            "hcai_finance_csv" in project["vars"]["copy_tables"] and "hcai_finance_csv" not in macro_tables
+        )
         removed = disabled_of(scratch(base / "removed", defer=False), base / "removed" / "target")
         results["a_table_without_a_staging_view_disables_both_global_tests_and_the_check_names_them"] = all(name in removed for name in GLOBAL_TESTS)
         deferred = disabled_of(scratch(base / "deferred", defer=True), base / "deferred" / "target")

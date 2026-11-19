@@ -54,6 +54,7 @@ from scripts.lakehouse import (
     bronze_metadata,
     catalog,
     dbt_disabled_nodes,
+    deferred_models,
     geography_file_periods,
     ipps_file_labels,
     mmd_conditions,
@@ -150,14 +151,14 @@ TABLES = (
 )
 
 
-def deferred_staging_tables() -> frozenset[str]:
-    """The bronze tables whose staging view is deferred (vars.deferred_models of the dbt project): bronze still holds them, silver has no view to count."""
+def staged_tables() -> tuple[str, ...]:
+    """The fixture tables that have a staging view: every table whose staging model the deferral record (vars.deferred_models) does not list."""
     yaml = importlib.import_module("yaml")
-    record = yaml.safe_load((REPO_ROOT / "dbt/dbt_project.yml").read_text())["vars"].get("deferred_models") or []
-    return frozenset(name.removeprefix("stg_") for item in record for name in item["models"] if name.startswith("stg_"))
+    wanted = set(deferred_models.staged_tables(yaml.safe_load((REPO_ROOT / "dbt/dbt_project.yml").read_text())))
+    return tuple(table for table in TABLES if table in wanted)
 
 
-STAGED_TABLES = tuple(table for table in TABLES if table not in deferred_staging_tables())
+STAGED_TABLES = staged_tables()
 HELD = {
     "61a3cfb84973b2997ca60b2ebdce129005a9267d452db0ee984d9ca1eefacc88": "BRZ-016",
     "83b9668d22a23b40def50b64725f9674dcaa821d0b2db5e43215e672cad69a71": "BRZ-016",

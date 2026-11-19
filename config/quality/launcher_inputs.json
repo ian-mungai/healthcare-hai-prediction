@@ -1866,6 +1866,7 @@
     "scripts/lakehouse/dbt_disabled_nodes.py",
     "scripts/lakehouse/dbt_package_archive.py",
     "scripts/lakehouse/deadline_trace.go",
+    "scripts/lakehouse/deferred_models.py",
     "scripts/lakehouse/dictionary.py",
     "scripts/lakehouse/duckdb_bounds.py",
     "scripts/lakehouse/duckdb_cli.py",
