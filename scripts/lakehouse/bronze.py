@@ -44,7 +44,7 @@ from typing import Any, Protocol
 
 from orchestration.training_contract import run_id_pattern
 from scripts.acquisition.raw_root import RAW_ROOT, read_roots, strip_root
-from scripts.lakehouse import person_fields
+from scripts.lakehouse import bronze_consumer_columns, person_fields
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
 from scripts.pseudonym_core import PseudonymizationError
@@ -54,6 +54,8 @@ TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 RETIRED = Path("config/lakehouse/retired_objects.json")
 # Tables taken out of the table map, dropped with their dictionaries and side rows [257].
 REMOVED = Path("config/lakehouse/removed_tables.json")
+# The columns each silver staging projection reads by name, derived from the models; a loaded table that lacks one of them fails the load by table and column.
+CONSUMER_COLUMNS = Path("config/lakehouse/bronze_consumer_columns.json")
 # A manifest with these fields and no objects list records one document by checksum [153].
 SINGLE_DOCUMENT = frozenset({"role", "sha256", "byte_count", "source_id"})
 DEPLOYMENT = Path("infra/deployment.auto.tfvars.json")
@@ -1149,6 +1151,10 @@ def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], nam
     from pyspark.sql import functions
 
     results: dict[str, dict[str, Any]] = {}
+    try:
+        consumers = bronze_consumer_columns.load(CONSUMER_COLUMNS)
+    except bronze_consumer_columns.ConsumerColumnsError as error:
+        raise BronzeError(str(error)) from error
     for table in config["tables"]:
         keys = {item["object_key"] for item in inputs if item["table"] == table["table"]}
         if not keys:
@@ -1164,6 +1170,13 @@ def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], nam
             "distinct_rows": int(distinct.agg(functions.sum("rows")).collect()[0][0] or 0),
         }
         expectations = [check["objects_match_inputs"]]
+        # The loaded table has every column its silver staging models read by name; a table of another layout stops here, before silver runs.
+        lacking = bronze_consumer_columns.missing(table["table"], frame.columns, check["rows"], consumers)
+        check["consumer_columns_declared"] = bronze_consumer_columns.declared(table["table"], consumers)
+        check["missing_consumer_columns"] = lacking
+        if lacking:
+            check["consumer_columns_refusal"] = bronze_consumer_columns.refusal(table["table"], lacking, frame.columns)
+        expectations.append(not lacking)
         # [207] The copies table agrees with the loaded rows: one loaded copy per file, and exactly the loaded objects.
         if spark.catalog.tableExists(f"{namespace}.stored_copies"):
             copies = spark.table(f"{namespace}.stored_copies").where(functions.col("table_name") == table["table"]).collect()
@@ -1570,6 +1583,9 @@ def main(argv: list[str] | None = None) -> int:
         label = f"{entry['collection']} {entry['dataset_id']} .{entry['file_name'].rsplit('.', 1)[-1].lower()}{kind}"
         unloaded[label] = unloaded.get(label, 0) + 1
     passed = all(check["passed"] for check in checks.values())
+    for check in checks.values():
+        if check.get("consumer_columns_refusal"):
+            sys.stderr.write(f"bronze: {check['consumer_columns_refusal']}\n")
     report = {
         "run_at_utc": stamp,
         "mode": "bootstrap_all" if args.bootstrap_all else "copies_only" if args.copies_only else "load",

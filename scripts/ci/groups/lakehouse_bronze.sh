@@ -7,6 +7,7 @@
 lakehouse_bronze() {
   timed "lakehouse_bronze: resource checks" "$python_bin" -m scripts.lakehouse.run_resource_checks
   timed "lakehouse_bronze: run lock E2E" "$python_bin" -m scripts.lakehouse.run_lock_e2e
+  timed "lakehouse_bronze: bronze consumer columns E2E" "$python_bin" -m scripts.lakehouse.run_bronze_consumer_columns_e2e
   timed "lakehouse_bronze: catalog journal E2E" "$python_bin" -m scripts.lakehouse.run_catalog_journal_e2e --output "$quality_output/catalog_journal"
   timed "lakehouse_bronze: catalog journal planted defects" "$python_bin" -m scripts.lakehouse.run_catalog_journal_defects --output "$quality_output/catalog_journal_defects"
   timed "lakehouse_bronze: provenance E2E" "$python_bin" -m scripts.lakehouse.run_provenance_e2e

@@ -24,6 +24,7 @@
   "journal_owner": "launcher",
   "stage_files": [
     "config/lakehouse/aws_bronze_templates.json",
+    "config/lakehouse/bronze_consumer_columns.json",
     "config/lakehouse/bronze_silver_readers.json",
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/person_policies.json",
@@ -39,6 +40,7 @@
     "scripts/lakehouse/__init__.py",
     "scripts/lakehouse/aws_bronze.py",
     "scripts/lakehouse/bronze.py",
+    "scripts/lakehouse/bronze_consumer_columns.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_pin.py",
     "scripts/lakehouse/bronze_writer.py",

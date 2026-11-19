@@ -306,6 +306,22 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     strict = bronze.load_table_map(table_map(root / "strict.json", [{**tables[0], "expected_distinct_rows": 99}, tables[1]]))
     results["verification_reports_a_count_mismatch"] = not bronze.verify(spark, strict, inputs, "bronze")["hai_hospital"]["passed"]
 
+    # A loaded table must have every column that silver reads by name: a declared table of another layout fails verification by table and column.
+    consumers = root / "consumer_columns.json"
+    loaded_columns = list(spark.table("bronze.hai_hospital").columns)
+    consumers.write_text(json.dumps({"version": 1, "tables": {"hai_hospital": loaded_columns}}))
+    with patch.object(bronze, "CONSUMER_COLUMNS", consumers):
+        results["verification_passes_a_table_with_every_consumer_column"] = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]["passed"]
+    consumers.write_text(json.dumps({"version": 1, "tables": {"hai_hospital": [*loaded_columns, "column_nobody_loaded"]}}))
+    with patch.object(bronze, "CONSUMER_COLUMNS", consumers):
+        refused = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]
+    results["verification_refuses_a_table_missing_a_consumer_column_by_name"] = (
+        not refused["passed"]
+        and refused["missing_consumer_columns"] == ["column_nobody_loaded"]
+        and "hai_hospital" in refused["consumer_columns_refusal"]
+        and "column_nobody_loaded" in refused["consumer_columns_refusal"]
+    )
+
     # [9] [17] [18] [44] Checksums, ragged rows, invalid UTF-8 and byte-order marks fail before anything is written.
     snapshots = spark.table("bronze.provider_of_services.snapshots").count()
     target = next(item for item in inputs if item["table"] == "provider_of_services")

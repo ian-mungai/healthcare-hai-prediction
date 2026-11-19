@@ -340,7 +340,7 @@
       "dependencies": {
         "orchestration/launcher.py": "sha256:bc235fb3720c5198f30630275b631c67619c963e77eaf33df75a33b5ac410150",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
-        "scripts/lakehouse/bronze.py": "sha256:bfe7a5fe2d41fd7590965fe5837fe46b33b2f69ba8ce10403b91440ec3c9a17c",
+        "scripts/lakehouse/bronze.py": "sha256:f6813e6c79b169f14f1541f0a1384750942c1eda86cb4d476b2513e5f44adf19",
         "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -361,7 +361,7 @@
       "dependencies": {
         "orchestration/launcher.py": "sha256:bc235fb3720c5198f30630275b631c67619c963e77eaf33df75a33b5ac410150",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
-        "scripts/lakehouse/bronze.py": "sha256:bfe7a5fe2d41fd7590965fe5837fe46b33b2f69ba8ce10403b91440ec3c9a17c",
+        "scripts/lakehouse/bronze.py": "sha256:f6813e6c79b169f14f1541f0a1384750942c1eda86cb4d476b2513e5f44adf19",
         "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -382,7 +382,7 @@
       "dependencies": {
         "orchestration/launcher.py": "sha256:bc235fb3720c5198f30630275b631c67619c963e77eaf33df75a33b5ac410150",
         "scripts/infrastructure/secret_store.py": "sha256:b2187eed0ed280184bef7abf0dc1c30cde4fe6581b15d088b106d931171763ed",
-        "scripts/lakehouse/bronze.py": "sha256:bfe7a5fe2d41fd7590965fe5837fe46b33b2f69ba8ce10403b91440ec3c9a17c",
+        "scripts/lakehouse/bronze.py": "sha256:f6813e6c79b169f14f1541f0a1384750942c1eda86cb4d476b2513e5f44adf19",
         "scripts/lakehouse/catalog.py": "sha256:7eeb9a12a92031176f7ec6fb4859a57bc0e6469a6c4481c69342f87d30f314c4",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
