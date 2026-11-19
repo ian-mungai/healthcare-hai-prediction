@@ -933,9 +933,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"],
         ),
         path_case(
-            "layer_gold_model_selects_gold_and_features",
+            "layer_gold_model_selects_silver_gold_and_features",
             "dbt/models/gold/dimensions/_dimensions__models.yml",
-            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_silver_model_selects_silver_gold_and_features",
@@ -981,9 +981,14 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_gold_dimension_no_layer_above_reads_selects_gold_and_features",
+            "layer_gold_dimension_no_layer_above_reads_selects_silver_gold_and_features",
             "dbt/models/gold/dimensions/dim_county.sql",
-            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_gold_only_model_edit_selects_the_declaration_check_in_silver",
+            "dbt/models/gold/dimensions/dim_date.sql",
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_staging_model_read_by_bronze_selects_every_layer",
@@ -1006,9 +1011,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         path_case("layer_saved_silver_suite_selects_silver_gold_and_features", "features/great_expectations/suites/silver_spatial.json", silver_downstream),
         path_case("layer_suite_baselines_are_read_by_bronze_first", "data_contracts/great_expectations/baselines.json", [*LAYERS, "orchestration_checks"]),
         path_case(
-            "layer_feature_model_is_read_by_gold_and_features",
+            "layer_features_only_model_edit_selects_the_declaration_check_in_silver",
             "dbt/models/features/int_spine_county_context.sql",
-            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_feature_recipe_seed_selects_gold_and_features",
@@ -1019,9 +1024,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         path_case("layer_bronze_table_map_selects_every_layer", "config/lakehouse/bronze_tables.json", [*LAYERS, "configuration_checks"]),
         staged_case(
             work,
-            "layer_staged_gold_model_selects_gold_and_features",
+            "layer_staged_gold_model_selects_silver_gold_and_features",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/gold/staged_copy.yml"]],
-            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         staged_case(
             work,
@@ -1045,9 +1050,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         ),
         path_case("layer_feast_image_folder_selects_features_only", "services/feature_store/requirements.in", ["lakehouse_features"]),
         path_case(
-            "layer_generated_matrix_model_selects_gold_and_features",
+            "layer_generated_matrix_model_selects_silver_gold_and_features",
             "dbt/models/features/matrix/feature_matrix_hospital.sql",
-            [*LAYERS[2:], "orchestration_checks", "sql_style"],
+            [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
     ]
     return [
@@ -1071,7 +1076,10 @@ DECLARATION_INPUTS = (
     "dbt/tests/assert_staging_unique_grain.sql",
     "dbt/dbt_project.yml",
     "dbt/models/silver/staging/_bronze__sources.yml",
+    "dbt/models/gold/dimensions/dim_date.sql",
+    "dbt/models/features/int_spine_county_context.sql",
     "config/lakehouse/bronze_consumer_columns.json",
+    "config/lakehouse/bronze_consumer_target_branches.json",
     "scripts/lakehouse/bronze_consumer_declare.py",
     "scripts/lakehouse/bronze_consumer_lineage.py",
 )
