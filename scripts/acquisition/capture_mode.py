@@ -421,7 +421,11 @@ def adapt_mmd(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any
     from scripts.acquisition import collect_mmd_api as collector
 
     mmd = spec["mmd"]
-    return Path(collector.execute(mmd["measure_id"], mmd["year"], True, False, root=folder, client=run.storage)["receipt_path"])
+    try:
+        result = collector.execute(mmd["measure_id"], mmd["year"], True, False, root=folder, client=run.storage)
+    except rate_limit.RateLimited as limited:
+        raise rate_limit_of(run, limited) from None
+    return Path(result["receipt_path"])
 
 
 def adapt_cms_owners(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:

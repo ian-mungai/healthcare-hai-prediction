@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from scripts.acquisition import rate_limit
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.cli_tools import executable, run_argv
@@ -60,6 +61,8 @@ def fetch(root: Path, name: str, url: str, allow_network: bool) -> tuple[bytes, 
         connection.request("GET", parsed.path + "?" + parsed.query, headers={"Accept": "application/json"})
         response = connection.getresponse()
         controls.response_status(response)
+        if response.status == 429:
+            raise rate_limit.from_response(response)
         content_type = response.getheader("Content-Type", "")
         require(response.status == 200 and "application/json" in content_type, f"MMD response status/type failed: {response.status}")
         body = controls.read(response, 16 * 1024**2 + 1)

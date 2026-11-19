@@ -19,6 +19,7 @@ from scripts.acquisition import (
     collect_census_acs_detailed,
     collect_census_acs_tables,
     collect_hud_api,
+    collect_mmd_api,
     hud_api_contract,
     hud_api_transport,
     rate_limit,
@@ -198,6 +199,7 @@ ADAPTERS = [
     ("adapt_census_detailed", collect_census_acs_detailed),
     ("adapt_census_tables", collect_census_acs_tables),
     ("adapt_hud_api", collect_hud_api),
+    ("adapt_mmd", collect_mmd_api),
 ]
 
 
@@ -211,15 +213,15 @@ def test_every_keyed_adapter_turns_a_typed_rate_limit_into_the_pausing_failure_w
         (None, (3600, "default")),
     ):
 
-        def limited(*_arguments: Any, header: str | None = header) -> None:
+        def limited(*_arguments: Any, header: str | None = header, **_keywords: Any) -> None:
             raise rate_limit.RateLimited(header)
 
         monkeypatch.setattr(collector, "execute", limited)
         monkeypatch.setattr(mode, "planned_item", lambda _run, _handler, _spec: ({}, {}))
         monkeypatch.setattr(mode, "client_for", lambda _run, _handler: None)
-        run = SimpleNamespace(api_request=None, clock=lambda: NOW)
+        run: Any = SimpleNamespace(api_request=None, clock=lambda: NOW, storage=None)
         with pytest.raises(mode.RateLimit) as caught:
-            getattr(mode, adapter)({}, {}, Path("."), run, None)
+            getattr(mode, adapter)({}, {"mmd": {"measure_id": "synthetic", "year": 2023}}, Path("."), run, None)
         check((caught.value.retry_after_seconds, caught.value.form) == expected, f"{adapter} {header!r}: {caught.value.retry_after_seconds}")
         check(str(caught.value) == "http_429", "the fixed reason that pauses the source")
     check("http_429" in mode.PAUSING, "that reason pauses")
@@ -256,6 +258,16 @@ def test_the_census_api_transport_stops_at_a_429_without_a_retry_and_keeps_the_h
     with pytest.raises(rate_limit.RateLimited) as caught:
         census_acs_api_transport.fetch(CENSUS_PLAN, CENSUS_BATCH, tmp_path, True, CLIENT, sleep=slept.append)
     check(caught.value.retry_after is None and len(sent) == 1 and slept == [], f"one attempt, no backoff: {sent} {slept}")
+
+
+def test_the_mmd_request_stops_at_a_429_with_the_typed_outcome_and_keeps_the_header(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    sent: list[str] = []
+    reply = limited_reply("1800")
+    monkeypatch.setattr(collect_mmd_api, "https_connection", connection_class(lambda _path: reply(), sent))
+    with pytest.raises(rate_limit.RateLimited) as caught:
+        collect_mmd_api.fetch(tmp_path, "page", "https://data.cms.gov/data-api/v1/mmd-tool/?measure=x", True)
+    check(caught.value.retry_after == "1800" and len(sent) == 1, f"one request: {sent}")
+    check(not list(tmp_path.iterdir()), "a rate limit stores no response and no metadata")
 
 
 def test_a_server_error_of_either_transport_is_still_retried_three_times(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
