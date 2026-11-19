@@ -36,6 +36,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET_RESOURCE = re.compile(r'^\s*(resource|data|ephemeral)\s+"(aws_secretsmanager_[a-z_]*|aws_ssm_parameter[a-z_]*)"', re.MULTILINE)
 NAME = secret_store.POSTGRES_PASSWORD
 STALL_SECONDS = 30.0
+# A check that loses the socket of a closing response ends about FIRST_BYTE_SECONDS after its deadline (the next read times out that long after the first byte).
+# A check that holds its deadline ends 0.0003 to 0.0021 s after it (40 runs under load). The allowance lies between the two.
+FIRST_BYTE_SECONDS = 0.35
+DEADLINE_ALLOWANCE = 0.2
 
 Case = Callable[[Path], dict[str, bool]]
 
@@ -859,6 +863,7 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
         ):
             server.users[served] = store.values[credential_name]
             server.stall_path, server.stall_http11, server.stall_seconds = "/api/3.0/mlflow/users/permissions/get", http11, STALL_SECONDS
+            server.first_byte_seconds = FIRST_BYTE_SECONDS
             check = tool.account_check(root)
             run_seconds, ensure_account = check.RUN_SECONDS, check.ensure_account
             check.RUN_SECONDS = 0.4
@@ -880,14 +885,12 @@ def serving_secrets_mlflow(root: Path) -> dict[str, bool]:
                     stall_code, stall = captured(lambda: tool.run(root, store.endpoint, server.url, ("HAI_1",)))
             finally:
                 check.RUN_SECONDS = run_seconds
-            # The check ends at its own absolute deadline: not before it, and long before the stall would end by itself (the stall lasts STALL_SECONDS,
-            # so a check that waited for it would end at least that long after the deadline). The allowance is generous because only a missed deadline matters.
             late = interval.get("ended", 0.0) - interval.get("deadline", 0.0)
             stalls.append(
                 stall_code == 1
                 and "deadline" in stall
                 and "mlflow_user: ready" not in stall
-                and 0.0 <= late < STALL_SECONDS / 2
+                and 0.0 <= late < DEADLINE_ALLOWANCE
                 and not server.release.is_set()
             )
     with StandIn(shared={}) as store, MlflowAuthStandIn(admin) as server:

@@ -70,8 +70,7 @@ def new_page_key() -> str:
 
 def reviewed_types(inputs: Path) -> str:
     """The ``model_api_hai_types`` setting, under ``variables``, of a services input file that must follow the services preparation schema."""
-    # Imported here: at the top of the module it enlarges the heap, and the resulting garbage collections push the stalled-response case of
-    # secret_store_cases past its 0.6 s limit.
+    # Imported here so that only a run that reads a services input file loads the package.
     from jsonschema import Draft202012Validator
 
     try:
