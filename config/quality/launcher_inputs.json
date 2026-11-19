@@ -220,12 +220,12 @@
     {
       "module": "scripts/lakehouse/bronze_consumer_declare.py",
       "pattern": "^dbt/(models|macros)/",
-      "why": "reviewed: target_branches_in lists the files under dbt/models and dbt/macros of the project at the root the caller names (rglob at scripts/lakehouse/bronze_consumer_declare.py:target_branches_in, folders BRANCH_FOLDERS) and reads each line, so the pattern is those two folders; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
+      "why": "reviewed: target_branches_in lists the files under dbt/models and dbt/macros of the project at the root the caller names (rglob at scripts/lakehouse/bronze_consumer_declare.py:293, in target_branches_in, folders BRANCH_FOLDERS) and reads each line, so the pattern is those two folders; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
     },
     {
       "module": "scripts/lakehouse/bronze_consumer_lineage.py",
       "pattern": null,
-      "why": "reviewed: read_models lists the compiled models under the compile target folder that the caller names (rglob at scripts/lakehouse/bronze_consumer_lineage.py:read_models), never a folder of the repository checkout that the launcher suite runs from; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
+      "why": "reviewed: read_models lists the compiled models under the compile target folder that the caller names (rglob at scripts/lakehouse/bronze_consumer_lineage.py:431, in read_models), never a folder of the repository checkout that the launcher suite runs from; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
     },
     {
       "module": "scripts/lakehouse/catalog_journal.py",
@@ -609,6 +609,7 @@
     "config/lakehouse/aws_bronze_templates.json",
     "config/lakehouse/bootstrap_ownership.json",
     "config/lakehouse/bronze_consumer_columns.json",
+    "config/lakehouse/bronze_consumer_target_branches.json",
     "config/lakehouse/bronze_silver_readers.json",
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/dbt_package_archive.json",
