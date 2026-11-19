@@ -309,18 +309,29 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     # A loaded table must have every column that silver reads by name: a declared table of another layout fails verification by table and column.
     consumers = root / "consumer_columns.json"
     loaded_columns = list(spark.table("bronze.hai_hospital").columns)
-    consumers.write_text(json.dumps({"version": 1, "tables": {"hai_hospital": loaded_columns}}))
+
+    def declare(entry: dict[str, Any]) -> None:
+        consumers.write_text(json.dumps({"version": 2, "tables": {"hai_hospital": entry}}))
+
+    declare({"columns": {name: ["stg_hai_hospital"] for name in loaded_columns}})
     with patch.object(bronze, "CONSUMER_COLUMNS", consumers):
-        results["verification_passes_a_table_with_every_consumer_column"] = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]["passed"]
-    consumers.write_text(json.dumps({"version": 1, "tables": {"hai_hospital": [*loaded_columns, "column_nobody_loaded"]}}))
+        passed = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]
+    results["verification_passes_a_table_with_every_consumer_column"] = passed["passed"] and passed["consumer_columns"] == "ok"
+    declare({"columns": {**{name: ["stg_hai_hospital"] for name in loaded_columns}, "column_nobody_loaded": ["int_one", "int_two"]}})
     with patch.object(bronze, "CONSUMER_COLUMNS", consumers):
         refused = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]
+        skipped = bronze.verify(spark, config, [item for item in inputs if item["table"] != "hai_hospital"], "bronze")
     results["verification_refuses_a_table_missing_a_consumer_column_by_name"] = (
         not refused["passed"]
         and refused["missing_consumer_columns"] == ["column_nobody_loaded"]
         and "hai_hospital" in refused["consumer_columns_refusal"]
-        and "column_nobody_loaded" in refused["consumer_columns_refusal"]
+        and "column_nobody_loaded (read by int_one, int_two)" in refused["consumer_columns_refusal"]
     )
+    results["verification_skips_a_declared_table_with_no_input_in_the_run"] = "hai_hospital" not in skipped
+    declare({"any": "a model reads every column"})
+    with patch.object(bronze, "CONSUMER_COLUMNS", consumers):
+        anything = bronze.verify(spark, config, inputs, "bronze")["hai_hospital"]
+    results["verification_passes_a_table_declared_any_and_says_so"] = anything["passed"] and anything["consumer_columns"] == "any"
 
     # [9] [17] [18] [44] Checksums, ragged rows, invalid UTF-8 and byte-order marks fail before anything is written.
     snapshots = spark.table("bronze.provider_of_services.snapshots").count()

@@ -1,153 +1,121 @@
-"""The bronze columns that silver models read by name, declared per table and checked after every bronze load.
+"""The bronze columns that silver reads by name, declared per table and checked after every bronze load.
 
-``config/lakehouse/bronze_consumer_columns.json`` lists, for each bronze CSV table that a staging projection reads, the columns that projection reads.
-The lists are not written by hand: the macro ``canonical_projection`` computes them from its own projection text and writes them as a
-``-- bronze_consumer_columns`` line into the compiled SQL, and ``derive`` reads those lines from a compile of the real dbt project (lint target, no
-catalog). ``--check`` fails when the committed file and the models disagree and names each table and column; ``--write`` regenerates the file. The bronze
-load calls ``missing`` after it loads a table and stops by table and column name before silver runs, so a table that holds another layout never reaches
-the silver build.
+``config/lakehouse/bronze_consumer_columns.json`` declares every bronze table that a compiled silver model reads. Each entry is one of:
 
-A table without a declaration is undeclared: nothing is checked for it, and it is not a pass. The models on ``canonical_rows`` read named columns only in the
-intermediate models downstream of their staging views; their lists are not derived yet.
+- ``columns``: the columns the models read, each with the models that read it (the union over every consumer; the models are kept for the error message);
+- ``any``: the table cannot be reduced to a column list (a model reads every column, or the layout is dynamic), with the reason. Nothing is checked for it,
+  and the declaration says so by table name.
+
+A table that a deferred staging view would read (``vars.deferred_models``) keeps a ``deferred`` note: it has no consumer now beyond the lineage readers.
+
+The lists are not written by hand. ``scripts.lakehouse.bronze_consumer_declare`` parses the compiled models (``bronze_consumer_lineage``) and writes the file
+with ``--write``; ``--check`` fails when the file and the models disagree, or when a staged table has no declaration, and names each table and column.
+
+At the bronze load, ``check_loaded`` compares a loaded table with its declaration and stops by table and column name before silver runs:
+
+- a table with no input object in this run is skipped (nothing was loaded, so nothing is checked; silver stops by itself on a table that does not exist);
+- a table with no rows passes, whatever its columns (a pruned table keeps the columns of its old files);
+- an ``any`` or undeclared table passes with that status recorded;
+- every other table must hold every declared column; extra columns are never a failure.
+
+This module reads only the standard library, because the bronze job runs without dbt or DuckDB; the host-only modules are imported when a command needs them.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "config/lakehouse/bronze_consumer_columns.json"
-DBT = ROOT / ".tools" / "sqlfluff" / "bin" / "dbt"
-MARKER = re.compile(r"^-- bronze_consumer_columns ([a-z][a-z0-9_]*): ([a-z0-9_,]+)$", re.MULTILINE)
-COMPILE_SECONDS = 300
-BASIS = (
-    "The bronze columns each staging projection reads, as the macro canonical_projection computes them from its projection text and writes them into the "
-    "compiled SQL. Regenerate with `.venv/bin/python -m scripts.lakehouse.bronze_consumer_columns --write`; "
-    "the bronze load refuses a table that lacks one of them."
-)
+VERSION = 2
+SHOWN = 12
 
 
 class ConsumerColumnsError(ValueError):
     """The contract file or the compile of the models cannot be read."""
 
 
-def compile_project(project: Path, target: Path, packages: Path | None = None) -> Path:
-    """Compile the dbt project with the lint target (an in-memory DuckDB with nothing attached) and return the folder of the compiled models."""
-    from scripts.process import run_command
+@dataclass(frozen=True)
+class Declaration:
+    """What the models read of one bronze table: the columns with their consumers, or ``any`` with the reason."""
 
-    environment = {
-        "DUCKDB_MEMORY_LIMIT": "2GB",
-        "JOB_THREADS": "1",
-        "DBT_PACKAGES_INSTALL_PATH": str((packages or ROOT / "data/analytics/dbt/dbt_packages").resolve()),
-    }
-    result = run_command(
-        str(DBT),
-        ["compile", "--target", "lint", "--project-dir", str(project), "--profiles-dir", str(project), "--target-path", str(target)],
-        env=environment,
-        timeout=COMPILE_SECONDS,
-    )
-    if result.returncode != 0:
-        raise ConsumerColumnsError(
-            f"dbt compile failed with code {result.returncode}: {result.stdout.strip().splitlines()[-1:] or result.stderr.strip()[-300:]}"
-        )
-    return target / "compiled"
+    columns: Mapping[str, tuple[str, ...]] | None
+    reason: str = ""
+    deferred: str = ""
 
 
-def derive(compiled: Path) -> dict[str, list[str]]:
-    """The declared columns of each table, read from the marker lines of the compiled models. Two models that read one table must agree."""
-    found: dict[str, list[str]] = {}
-    for path in sorted(compiled.rglob("*.sql")):
-        for table, names in MARKER.findall(path.read_text()):
-            listed = sorted(set(names.split(",")))
-            if found.setdefault(table, listed) != listed:
-                raise ConsumerColumnsError(f"{table}: two models read it through different column lists ({path.name})")
-    return dict(sorted(found.items()))
+@dataclass(frozen=True)
+class LoadCheck:
+    """The outcome of the declaration check of one table of one load: its status and the missing columns with their consumers."""
+
+    status: str
+    missing: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
-def render(derived: Mapping[str, Collection[str]]) -> str:
-    """The contract file text for the derived lists."""
-    document = {"version": 1, "basis": BASIS, "tables": {table: sorted(names) for table, names in sorted(derived.items())}}
-    return json.dumps(document, indent=2) + "\n"
-
-
-def load(path: Path) -> dict[str, list[str]]:
-    """Read the committed contract: table to sorted columns."""
+def load(path: Path) -> dict[str, Declaration]:
+    """Read the committed contract: table to declaration."""
     try:
         document = json.loads(path.read_text())
         tables = document["tables"]
-        if document["version"] != 1 or not isinstance(tables, dict):
+        if document["version"] != VERSION or not isinstance(tables, dict):
             raise ValueError("version or tables")
-        return {str(table): [str(name) for name in names] for table, names in tables.items()}
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        found: dict[str, Declaration] = {}
+        for table, entry in tables.items():
+            deferred = str(entry.get("deferred", ""))
+            if "any" in entry:
+                found[str(table)] = Declaration(None, str(entry["any"]), deferred)
+            else:
+                found[str(table)] = Declaration({str(name): tuple(str(model) for model in models) for name, models in entry["columns"].items()}, "", deferred)
+        return found
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         raise ConsumerColumnsError(f"{path}: the contract cannot be read ({error.__class__.__name__}); regenerate it with --write") from error
 
 
-def differences(derived: Mapping[str, Collection[str]], contract: Mapping[str, Collection[str]]) -> list[str]:
-    """One line for each table or column on which the models and the contract disagree, naming the table and the column."""
-    lines: list[str] = []
-    for table in sorted(set(derived) | set(contract)):
-        if table not in contract:
-            lines.append(f"{table}: a model reads it by name but the contract does not declare it")
-            continue
-        if table not in derived:
-            lines.append(f"{table}: the contract declares it but no model reads it by name")
-            continue
-        lines += [f"{table}: a model reads {name} but the contract does not declare it" for name in sorted(set(derived[table]) - set(contract[table]))]
-        lines += [f"{table}: the contract declares {name} but no model reads it" for name in sorted(set(contract[table]) - set(derived[table]))]
-    return lines
+def status(table: str, contract: Mapping[str, Declaration]) -> str:
+    """``undeclared``, ``any`` or ``columns`` for a table."""
+    if table not in contract:
+        return "undeclared"
+    return "any" if contract[table].columns is None else "columns"
 
 
-def declared(table: str, contract: Mapping[str, Collection[str]]) -> bool:
-    """Whether the contract declares the table. An undeclared table is checked for nothing."""
-    return table in contract
+def check_loaded(table: str, has_inputs: bool, present: Collection[str], rows: int, contract: Mapping[str, Declaration]) -> LoadCheck:
+    """The declaration check of one table of one load. Only a loaded table with rows and a column list can be refused, and only for a missing column."""
+    if not has_inputs:
+        return LoadCheck("skipped")
+    kind = status(table, contract)
+    if kind != "columns":
+        return LoadCheck(kind)
+    if rows == 0:
+        return LoadCheck("empty")
+    columns = contract[table].columns or {}
+    held = {name.lower() for name in present}
+    lacking = {name: models for name, models in sorted(columns.items()) if name not in held}
+    return LoadCheck("refused" if lacking else "ok", lacking)
 
 
-def missing(table: str, present: Collection[str], rows: int, contract: Mapping[str, Collection[str]]) -> list[str]:
-    """The declared columns a loaded table lacks. A table without rows has nothing to read, so it lacks none; an undeclared table lacks none."""
-    if rows == 0 or table not in contract:
-        return []
-    return sorted(set(contract[table]) - set(present))
-
-
-def refusal(table: str, lacking: Collection[str], present: Collection[str]) -> str:
-    """The message of a refused table: the table, the missing columns and the first present ones."""
+def refusal(table: str, lacking: Mapping[str, Sequence[str]], present: Collection[str]) -> str:
+    """The message of a refused table: the table, each missing column with the models that read it and the first present columns."""
     shown = sorted(present)
-    more = f" and {len(shown) - 12} more" if len(shown) > 12 else ""
+    more = f" and {len(shown) - SHOWN} more" if len(shown) > SHOWN else ""
     names = sorted(lacking)
-    extra = f" and {len(names) - 12} more" if len(names) > 12 else ""
-    return (
-        f"{table}: the loaded table lacks columns its silver models read: missing {', '.join(names[:12])}{extra}; the table has {', '.join(shown[:12])}{more}"
-    )
+    extra = f" and {len(names) - SHOWN} more" if len(names) > SHOWN else ""
+    detail = ", ".join(f"{name} (read by {', '.join(lacking[name][:3])}{' and more' if len(lacking[name]) > 3 else ''})" for name in names[:SHOWN])
+    return f"{table}: the loaded table lacks columns its silver models read: missing {detail}{extra}; the table has {', '.join(shown[:SHOWN])}{more}"
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Check or write the contract file against a compile of the real dbt project."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
-    parser.add_argument("--write", action="store_true", help="regenerate the contract file from the models")
-    parser.add_argument("--root", type=Path, default=ROOT, help="repository root")
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    import tempfile
+    """Check or write the contract file against a compile of the real dbt project (the commands of ``bronze_consumer_declare``)."""
+    from scripts.lakehouse import bronze_consumer_declare
 
-    with tempfile.TemporaryDirectory(prefix="bronze_columns_") as folder:
-        derived = derive(compile_project(args.root / "dbt", Path(folder) / "target", packages=ROOT / "data/analytics/dbt/dbt_packages"))
-    path = args.root / CONTRACT
-    if args.write:
-        path.write_text(render(derived))
-        sys.stdout.write(f"wrote {len(derived)} tables to {CONTRACT}\n")
-        return 0
-    lines = differences(derived, load(path))
-    for line in lines:
-        sys.stderr.write(f"{CONTRACT}: {line}\n")
-    if lines:
-        sys.stderr.write(f"{len(lines)} differences. Regenerate with: .venv/bin/python -m scripts.lakehouse.bronze_consumer_columns --write\n")
-        return 1
-    sys.stdout.write(f"bronze consumer columns ok: {len(derived)} tables\n")
-    return 0
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser.add_argument("--write", action="store_true", help="regenerate the contract file from the models")
+    parser.add_argument("--root", type=Path, default=None, help="repository root")
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    return bronze_consumer_declare.run(args.root, write=args.write)
 
 
 if __name__ == "__main__":

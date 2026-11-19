@@ -218,9 +218,9 @@
       "why": "reviewed: the unit model lists the drop-in files and unit files of the units folder it is given with glob and iterdir at scripts/infrastructure/systemd_model.py:76, :104 and :105 (self.units, set at :113 from the caller's argument), a stand-in folder that the infrastructure E2E builds in its workspace; no repository folder is listed"
     },
     {
-      "module": "scripts/lakehouse/bronze_consumer_columns.py",
+      "module": "scripts/lakehouse/bronze_consumer_lineage.py",
       "pattern": null,
-      "why": "reviewed: derive lists the compiled models under the target folder of a dbt compile (rglob at scripts/lakehouse/bronze_consumer_columns.py:derive) that the caller names, never a folder of the repository checkout that the launcher suite runs from; the bronze load imports only load, missing, declared and refusal, which read the one contract file"
+      "why": "reviewed: read_models lists the compiled models under the compile target folder that the caller names (rglob at scripts/lakehouse/bronze_consumer_lineage.py:read_models), never a folder of the repository checkout that the launcher suite runs from; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
     },
     {
       "module": "scripts/lakehouse/catalog_journal.py",
@@ -467,7 +467,7 @@
     "scripts/infrastructure/sts_stand_in.py": 1,
     "scripts/infrastructure/synthetic_workspace.py": 1,
     "scripts/infrastructure/systemd_model.py": 3,
-    "scripts/lakehouse/bronze_consumer_columns.py": 1,
+    "scripts/lakehouse/bronze_consumer_lineage.py": 1,
     "scripts/lakehouse/catalog_journal.py": 2,
     "scripts/lakehouse/dbt_package_archive.py": 3,
     "scripts/lakehouse/feature_allowlist.py": 2,
@@ -1854,6 +1854,9 @@
     "scripts/lakehouse/bridge_references.py",
     "scripts/lakehouse/bronze.py",
     "scripts/lakehouse/bronze_consumer_columns.py",
+    "scripts/lakehouse/bronze_consumer_declare.py",
+    "scripts/lakehouse/bronze_consumer_lineage.py",
+    "scripts/lakehouse/bronze_consumer_precheck.py",
     "scripts/lakehouse/bronze_dispatch.py",
     "scripts/lakehouse/bronze_entry_cases.py",
     "scripts/lakehouse/bronze_entry_stand_in.py",

@@ -1050,7 +1050,59 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*LAYERS[2:], "orchestration_checks", "sql_style"],
         ),
     ]
-    return [*cases, *reader_coverage_cases(work), *entry_point_cases(), *launcher_selection_cases(work), *launcher_always_cases(work)]
+    return [
+        *cases,
+        *declaration_check_cases(work),
+        *reader_coverage_cases(work),
+        *entry_point_cases(),
+        *launcher_selection_cases(work),
+        *launcher_always_cases(work),
+    ]
+
+
+DECLARATION_COMMAND = "-m scripts.lakehouse.bronze_consumer_columns"
+DECLARATION_INPUTS = (
+    "dbt/models/silver/staging/stg_illinois_report_card_csv.sql",
+    "dbt/models/silver/staging/stg_cms_hai_hospital.sql",
+    "dbt/models/silver/intermediate/int_hud_zip_county_holds.sql",
+    "dbt/macros/state_columns.sql",
+    "dbt/macros/canonical_rows.sql",
+    "dbt/seeds/acs_variable_map.csv",
+    "dbt/tests/assert_staging_unique_grain.sql",
+    "dbt/dbt_project.yml",
+    "dbt/models/silver/staging/_bronze__sources.yml",
+    "config/lakehouse/bronze_consumer_columns.json",
+    "scripts/lakehouse/bronze_consumer_declare.py",
+    "scripts/lakehouse/bronze_consumer_lineage.py",
+)
+
+
+def declaration_check_groups() -> list[str]:
+    """The groups whose body file runs the declaration drift and completeness check of the bronze consumer columns (the module command, not its E2E runner)."""
+    holders = []
+    for path in sorted((ROOT / "scripts/ci/groups").glob("*.sh")):
+        if re.search(rf"^\s*timed \"[^\"]+\" \"[^\"]+\" {re.escape(DECLARATION_COMMAND)}$", path.read_text(encoding="utf-8"), re.MULTILINE):
+            holders.append(path.stem)
+    return holders
+
+
+def declaration_check_cases(work: Path) -> list[dict[str, Any]]:
+    """Every input that can change a declared column selects the group that checks the declarations, so a model-only edit cannot skip the drift check."""
+    holders = declaration_check_groups()
+    cases: list[dict[str, Any]] = [{"case": "declaration_check_runs_in_exactly_one_group", "passed": len(holders) == 1, "groups": holders}]
+    for path in DECLARATION_INPUTS:
+        code, plan, error = select(work, "--scope", "paths", "--path", path)
+        run = plan["run"] if plan else []
+        cases.append(
+            {
+                "case": f"declaration_check_group_is_selected_by_{path.replace('/', '_').replace('.', '_')}",
+                "passed": code == 0 and len(holders) == 1 and holders[0] in run,
+                "holder": holders,
+                "run": run,
+                "error": error[-300:],
+            }
+        )
+    return cases
 
 
 LAUNCHER_IMPORTED = (

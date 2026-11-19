@@ -1171,12 +1171,12 @@ def verify(spark: Any, config: dict[str, Any], inputs: list[dict[str, Any]], nam
         }
         expectations = [check["objects_match_inputs"]]
         # The loaded table has every column its silver staging models read by name; a table of another layout stops here, before silver runs.
-        lacking = bronze_consumer_columns.missing(table["table"], frame.columns, check["rows"], consumers)
-        check["consumer_columns_declared"] = bronze_consumer_columns.declared(table["table"], consumers)
-        check["missing_consumer_columns"] = lacking
-        if lacking:
-            check["consumer_columns_refusal"] = bronze_consumer_columns.refusal(table["table"], lacking, frame.columns)
-        expectations.append(not lacking)
+        outcome = bronze_consumer_columns.check_loaded(table["table"], True, frame.columns, check["rows"], consumers)
+        check["consumer_columns"] = outcome.status
+        check["missing_consumer_columns"] = sorted(outcome.missing)
+        if outcome.missing:
+            check["consumer_columns_refusal"] = bronze_consumer_columns.refusal(table["table"], outcome.missing, frame.columns)
+        expectations.append(not outcome.missing)
         # [207] The copies table agrees with the loaded rows: one loaded copy per file, and exactly the loaded objects.
         if spark.catalog.tableExists(f"{namespace}.stored_copies"):
             copies = spark.table(f"{namespace}.stored_copies").where(functions.col("table_name") == table["table"]).collect()
