@@ -3,15 +3,16 @@
 With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the same training years as the fit step's RQ1 test; a pass
 is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias and sets no alias: the research action
 chooses the one challenger of a type among the versions of m1, m2 and m4 that passed. A champion whose columns this run's extract lacks cannot be scored, and
-the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns`` is never scored: the check fails with
-``champion_feature_list_invalid``. The comparison files are written and checked before any version tag. The check reads the written Parquet
-file back and repeats the rule on it.
+the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns``, or whose list file cannot be downloaded, read or
+parsed, is never loaded or scored: the check fails with ``champion_feature_list_invalid``. The comparison files are written and checked before any version
+tag. The check reads the written Parquet file back and repeats the rule on it.
 """
 
 from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 import tempfile
 from collections.abc import Mapping
@@ -77,18 +78,36 @@ def champion_columns(document: Any) -> list[str]:
     return columns
 
 
+def champion_document(store: Any, version: Any, scratch: Path) -> Any:
+    """Download and parse the champion's ``bundle/feature_list.json``, or refuse with ``champion_feature_list_invalid`` and say which step failed: the
+    download, a file that is missing or unreadable, or text that is not JSON. The detail holds the class of the error, never its text. Nothing here tells a
+    transport fault from a damaged file, so both refuse; the check is not retried inside the job."""
+    refusal = "champion_feature_list_invalid"
+    try:
+        listing = Path(store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch)))
+    except JobFailure:
+        raise
+    except FileNotFoundError:
+        raise JobFailure(refusal, "the champion's feature list file is missing") from None
+    except Exception as error:
+        raise JobFailure(refusal, f"the champion's feature list could not be downloaded: {type(error).__name__}") from None
+    try:
+        text = listing.read_bytes()
+    except FileNotFoundError:
+        raise JobFailure(refusal, "the champion's feature list file is missing") from None
+    except OSError as error:
+        raise JobFailure(refusal, f"the champion's feature list file is unreadable: {type(error).__name__}") from None
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        raise JobFailure(refusal, f"the champion's feature list is not JSON: {type(error).__name__}") from None
+
+
 def champion_predictions(
     store: Any, version: Any, name: str, manifest: Mapping[str, Any], rows: list[dict[str, Any]], year: int, scratch: Path
 ) -> dict[str, float]:
     """Load the champion and score the holdout, after the checks that it needs only extract columns and never trained on the holdout year."""
-    try:
-        listing = store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch))
-        document = job_inputs.read_json(Path(listing), "champion_features")
-    except JobFailure:
-        raise
-    except Exception as error:
-        raise JobFailure("champion_features", f"the champion's feature list cannot be read: {type(error).__name__}: {error}") from None
-    columns = set(champion_columns(document))
+    columns = set(champion_columns(champion_document(store, version, scratch)))
     if not columns <= set(manifest["columns"]):
         raise JobFailure("champion_features", f"the champion needs columns the extract lacks: {sorted(columns - set(manifest['columns']))[0]}")
     window = store.get_run(version.run_id).data.tags.get("newest_window", "")

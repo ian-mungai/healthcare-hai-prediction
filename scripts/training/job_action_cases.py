@@ -227,6 +227,7 @@ class Fixture:
         self.base_run = base_run
         self.tracking = tracking if tracking is not None else FileTracking(folder / "tracking")
         self.champion: Predictor | None = None
+        self.champion_loads: list[str] = []
         self.candidate: Any = None
         self.write_extract(mediator=mediator, hac=hac)
 
@@ -1557,6 +1558,7 @@ def run_promotion(fixture: Fixture, **patches: Any) -> tuple[int, str, str]:
 
     def loader(uri: str) -> Any:
         if uri.startswith("models:/"):
+            fixture.champion_loads.append(uri)
             if fixture.champion is None:
                 raise OSError("synthetic champion cannot be loaded")
             return fixture.champion
@@ -1724,8 +1726,9 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, "an alias changed")
 
     def champion_feature_list_damaged() -> None:
-        """A champion whose list has no usable ``columns`` is never scored: the check fails by name with the key and what was found, writes nothing,
-        tags no verdict and moves no alias. A list that is well formed but needs a column the extract lacks stays the verdict ``not_comparable``."""
+        """A champion whose list has no usable ``columns``, or whose list file is missing, unreadable or not JSON, is never loaded or scored: the check fails
+        by name with what was found, writes nothing, tags no verdict and moves no alias. A list that is well formed but needs a column the extract lacks
+        stays the verdict ``not_comparable``."""
 
         class Counted(Predictor):
             scored = 0
@@ -1734,26 +1737,53 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
                 Counted.scored += 1
                 return super().predict(rows)
 
-        shapes = {
-            "absent": ({"slot": "m1_ols", "references": []}, "absent"),
-            "empty": ({"columns": []}, "an empty list"),
-            "text": ({"columns": "process"}, "text, not a list"),
-            "null": ({"columns": None}, "null, not a list"),
-            "number": ({"columns": 3}, "a number, not a list"),
-            "object": ({"columns": {"process": 1}}, "an object, not a list"),
-            "not_text": ({"columns": ["process", 2]}, "element 1 is a number, not text"),
-            "empty_name": ({"columns": ["", "cmi"]}, "element 0 is an empty name"),
-            "repeat": ({"columns": ["process", "process"]}, "element 1 repeats an earlier name"),
-            "not_an_object": (["process", "cmi"], "a list, not an object"),
+        Plant = Callable[[Fixture, contextlib.ExitStack], None]
+
+        def refusing_download(error: Exception) -> Plant:
+            def plant(fixture: Fixture, stack: contextlib.ExitStack) -> None:
+                stack.enter_context(mock.patch.object(fixture.tracking, "download_artifacts", side_effect=error))
+
+            return plant
+
+        def listed(fixture: Fixture) -> Path:
+            return next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
+
+        def document(value: Any) -> Plant:
+            return lambda fixture, stack: listed(fixture).write_text(json.dumps(value) + "\n")
+
+        def raw(value: bytes) -> Plant:
+            return lambda fixture, stack: listed(fixture).write_bytes(value)
+
+        marker = "secret-marker"
+        shapes: dict[str, tuple[Plant, str]] = {
+            "absent": (document({"slot": "m1_ols", "references": []}), "absent"),
+            "empty": (document({"columns": []}), "an empty list"),
+            "text": (document({"columns": "process"}), "text, not a list"),
+            "null": (document({"columns": None}), "null, not a list"),
+            "number": (document({"columns": 3}), "a number, not a list"),
+            "object": (document({"columns": {"process": 1}}), "an object, not a list"),
+            "not_text": (document({"columns": ["process", 2]}), "element 1 is a number, not text"),
+            "empty_name": (document({"columns": ["", "cmi"]}), "element 0 is an empty name"),
+            "repeat": (document({"columns": ["process", "process"]}), "element 1 repeats an earlier name"),
+            "not_an_object": (document(["process", "cmi"]), "a list, not an object"),
+            "truncated_json": (raw(b'{"columns": ["process",'), "is not JSON: JSONDecodeError"),
+            "invalid_encoding": (raw(b'{"columns": ["\xff\xfe"]}'), "is not JSON: UnicodeDecodeError"),
+            "empty_file": (raw(b""), "is not JSON: JSONDecodeError"),
+            "missing_file": (lambda fixture, stack: listed(fixture).unlink(), "file is missing"),
+            "download_oserror": (refusing_download(OSError(marker)), "could not be downloaded: OSError"),
+            "download_error": (refusing_download(RuntimeError(marker)), "could not be downloaded: RuntimeError"),
         }
-        for label, (document, found) in shapes.items():
+        for label, (plant, found) in shapes.items():
             fixture = promoted(folder / f"damaged_{label}", Counted(LABEL, constant=3.0))
-            next(fixture.tracking.root.glob("*/bundle/feature_list.json")).write_text(json.dumps(document) + "\n")
             Counted.scored = 0
-            code, _, error = run_promotion(fixture)
+            with contextlib.ExitStack() as stack:
+                plant(fixture, stack)
+                code, _, error = run_promotion(fixture)
             require(code == job.EXIT_FAILED and failure_of(error) == "champion_feature_list_invalid", f"{label}: {code} {error}")
             require(found in error, f"{label}: the failure does not say what was found ({found}): {error}")
-            require(label == "not_an_object" or "columns" in error, f"{label}: the failure does not name the key: {error}")
+            require(marker not in error, f"{label}: the failure repeats the text of the exception: {error}")
+            require(label in ("not_an_object", "truncated_json") or "list" in error, f"{label}: the failure does not name the feature list: {error}")
+            require(fixture.champion_loads == [], f"{label}: the champion was loaded: {fixture.champion_loads}")
             require(Counted.scored == 0, f"{label}: the champion was scored")
             require(listing(fixture.out) == [], f"{label}: a refused check wrote output")
             tags = fixture.tracking.models[name]["versions"][1]["tags"]

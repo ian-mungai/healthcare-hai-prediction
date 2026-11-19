@@ -150,18 +150,38 @@ def serve_with_the_real_loader(document: Any, folder: Path, tags: dict[str, str]
         return mlflow_loader.MlflowLoader().load("HAI_1", "1"), scored
 
 
-def score_with_the_real_promotion_reader(document: Any, extract_columns: Sequence[str], folder: Path) -> dict[str, float]:
-    """Run the real ``promotion_check.champion_predictions`` on a champion with this feature list. Only the store calls and the model load are stand-ins."""
+def score_with_the_real_promotion_reader(
+    document: Any,
+    extract_columns: Sequence[str],
+    folder: Path,
+    *,
+    raw: bytes | None = None,
+    download: Callable[..., str] | None = None,
+    loads: list[str] | None = None,
+) -> dict[str, float]:
+    """Run the real ``promotion_check.champion_predictions`` on a champion with this feature list. Only the store calls and the model load are stand-ins.
+
+    ``raw`` writes these bytes as the list file instead of the document, ``download`` replaces the artifact download and each champion load is added to
+    ``loads``.
+    """
     from scripts.training import promotion_check
 
     listing = written(folder, "champion_feature_list.json", document)
+    if raw is not None:
+        listing.write_bytes(raw)
     store = SimpleNamespace(
-        download_artifacts=lambda run_id, path, scratch: str(listing),
+        download_artifacts=download or (lambda run_id, path, scratch: str(listing)),
         get_run=lambda run_id: SimpleNamespace(data=SimpleNamespace(tags={"newest_window": "2021"})),
     )
     rows = [{"spine_key": "000001:2022"}, {"spine_key": "000002:2022"}]
     pipeline = SimpleNamespace(predict=lambda frame: [1.0, 2.0])
-    with patch.object(promotion_check, "load_pipeline", return_value=pipeline):
+
+    def load(uri: str) -> Any:
+        if loads is not None:
+            loads.append(uri)
+        return pipeline
+
+    with patch.object(promotion_check, "load_pipeline", side_effect=load):
         return promotion_check.champion_predictions(
             store, SimpleNamespace(run_id="run1"), "hai_model_HAI_1", {"columns": list(extract_columns)}, rows, 2022, folder
         )
@@ -233,15 +253,42 @@ def serving_outcome(document: Any, folder: Path, references: Sequence[str]) -> s
     return "served"
 
 
-def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Path) -> str:
-    """What the real promotion reader does with this champion list: its named refusal with its detail, or whether it scores the holdout."""
+def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Path, **fault: Any) -> str:
+    """What the real promotion reader does with this champion list: its named refusal with its detail, or whether it scores the holdout. A refusal after the
+    champion was loaded says so, because a refused list must never reach the model load. ``fault`` is a raw file or a failing download."""
     from scripts.training.job_failure import JobFailure
 
+    loads: list[str] = []
     try:
-        score_with_the_real_promotion_reader(document, extract_columns, folder)
+        score_with_the_real_promotion_reader(document, extract_columns, folder, loads=loads, **fault)
     except JobFailure as error:
-        return f"refused {error.name}: {error.detail}"
+        return f"refused {error.name}: {error.detail}" + ("; the champion was loaded" if loads else "")
+    except Exception as error:
+        return f"raised {type(error).__name__}"
     return "scored"
+
+
+def refusing(error: Exception) -> Callable[..., str]:
+    """An artifact download that fails with this error."""
+
+    def download(run_id: str, path: str, scratch: str) -> str:
+        raise error
+
+    return download
+
+
+def unreadable_champion_list(kind: str, folder: Path) -> dict[str, Any]:
+    """The ``fault`` of one unreadable champion list file: its bytes, or a download that returns no file, a folder or an error."""
+    faults: dict[str, dict[str, Any]] = {
+        "truncated_json": {"raw": b'{"columns": ["process",'},
+        "invalid_encoding": {"raw": b'{"columns": ["\xff\xfe"]}'},
+        "empty_file": {"raw": b""},
+        "missing_file": {"download": lambda run_id, path, scratch: str(folder / "no_such_file.json")},
+        "unreadable_file": {"download": lambda run_id, path, scratch: str(folder)},
+        "download_oserror": {"download": refusing(OSError("secret-marker"))},
+        "download_error": {"download": refusing(RuntimeError("secret-marker"))},
+    }
+    return faults[kind]
 
 
 def drift_outcome(document: Any, folder: Path) -> str:
@@ -287,6 +334,13 @@ KEY_OUTCOMES: dict[str, str] = {
     "promotion columns not_text": CHAMPION_COLUMNS + "element 1 is a number, not text",
     "promotion columns empty_name": CHAMPION_COLUMNS + "element 0 is an empty name",
     "promotion columns repeat": CHAMPION_COLUMNS + "element 1 repeats an earlier name",
+    "promotion artifact truncated_json": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
+    "promotion artifact invalid_encoding": CHAMPION_REFUSAL + "is not JSON: UnicodeDecodeError",
+    "promotion artifact empty_file": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
+    "promotion artifact missing_file": CHAMPION_REFUSAL + "file is missing",
+    "promotion artifact unreadable_file": CHAMPION_REFUSAL + "file is unreadable: IsADirectoryError",
+    "promotion artifact download_oserror": CHAMPION_REFUSAL + "could not be downloaded: OSError",
+    "promotion artifact download_error": CHAMPION_REFUSAL + "could not be downloaded: RuntimeError",
     "promotion document list": CHAMPION_DOCUMENT + "a list, not an object",
     "promotion document null": CHAMPION_DOCUMENT + "null, not an object",
     "promotion document text": CHAMPION_DOCUMENT + "text, not an object",
@@ -2282,6 +2336,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 found[label] = promotion_outcome(value, document["columns"], fresh(label))
             label = "promotion columns repeat"
             found[label] = promotion_outcome(damaged_list(document, "columns", "repeat"), document["columns"], fresh(label))
+            for kind in ("truncated_json", "invalid_encoding", "empty_file", "missing_file", "unreadable_file", "download_oserror", "download_error"):
+                label = f"promotion artifact {kind}"
+                found[label] = promotion_outcome(document, document["columns"], fresh(label), **unreadable_champion_list(kind, folder))
             for key, kinds in (("columns", shared), ("kept_columns", (*shared, "repeat", "unknown"))):
                 for kind in kinds:
                     label = f"drift {key} {kind}"
