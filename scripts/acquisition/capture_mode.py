@@ -93,6 +93,14 @@ class ContractFailure(ValueError):
     """A unit's download or content failed its contract. The reason is a fixed code, never response text."""
 
 
+class RateLimit(ContractFailure):
+    """The publisher rate-limited a unit. The reason is the fixed code ``http_429``, which pauses the source; the delay it named is reported, never stored."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("http_429")
+        self.retry_after_seconds = retry_after_seconds
+
+
 class SpecError(ValueError):
     """A unit's specification cannot decide its request identity."""
 
@@ -370,9 +378,11 @@ def adapt_census_tables(unit: dict, spec: dict, folder: Path, run: CaptureRun, o
     from scripts.acquisition import collect_census_acs_tables as collector
 
     plan, batch = planned_item(run, "census_acs_tables", spec)
-    return Path(
-        collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_tables"), {}, run.api_request or api.live_request)["receipt_path"]
-    )
+    try:
+        result = collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_tables"), {}, run.api_request or api.live_request)
+    except api.RateLimited as limited:
+        raise RateLimit(limited.retry_after_seconds) from None
+    return Path(result["receipt_path"])
 
 
 def adapt_hud_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
@@ -1211,10 +1221,12 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             tried.add(source)
             counters["units_attempted"] += 1
             state["attempts"][key] = state["attempts"].get(key, 0) + 1
+            delay: int | None = None
             try:
                 result = attempt(run, unit, spec, key, opener, state, expected)
             except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
                 result = Result(key, unit, "failed", failure_reason(error))
+                delay = error.retry_after_seconds if isinstance(error, RateLimit) else None
             state["bytes_downloaded"] = observer.bytes
             if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
                 paused.add(source)
@@ -1222,7 +1234,10 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 counters[result.status] += 1
             done[result.status].append(entry(result))
             if run.log is not None:
-                run.log({"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status})
+                run.log(
+                    {"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status}
+                    | ({} if delay is None else {"retry_after_seconds": delay})
+                )
     return finish(run, started, observer, journal, state, done, outside, paused, counters, queue_sha256)
 
 

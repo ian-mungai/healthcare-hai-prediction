@@ -8,16 +8,19 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from scripts.acquisition import capture_mode as mode
 from scripts.acquisition import census_acs_tables_contract as contract
 from scripts.acquisition import census_acs_tables_transport, collection_layout, redownload, s3_store, task_role, transport
-from scripts.acquisition.run_census_acs_tables_e2e import Requests
+from scripts.acquisition import collect_census_acs_tables as collector
+from scripts.acquisition.run_census_acs_tables_e2e import Reply, Requests, connection_class, dictionary, response
 from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import REPO_ROOT, read_json
 from scripts.acquisition.tests.test_capture_mode import ROOT, World
+from scripts.acquisition.tests.test_task_keys import ENVIRONMENT, Cloud
 from scripts.acquisition.tests.test_task_owners import storage
 from scripts.infrastructure import startup_check
 from tests.support import check
@@ -118,19 +121,6 @@ def test_a_record_that_names_another_batch_is_refused() -> None:
     check(mode.receipt_problems(receipt, expected | {"plan_item": second["id"]}) == [], "its own batch passes")
 
 
-def test_the_run_counts_the_requests_of_the_tables_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[Any] = []
-    original = census_acs_tables_transport.https_connection
-
-    def record(observer: Any, connection: Any) -> Any:
-        seen.append(connection)
-        return connection
-
-    monkeypatch.setattr(mode, "observed_connection", record)
-    with mode.observing(mode.Observer(1)):
-        check(original in seen, "the transport's connection function is wrapped for the run")
-
-
 def test_two_units_of_one_url_each_get_a_record_and_a_second_run_sends_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     batches = [batch_of("S0101", 2010), batch_of("S0601", 2010)]
     world = table_world(tmp_path, monkeypatch, batches)
@@ -202,3 +192,111 @@ def test_every_attempted_unit_of_the_tracked_queue_has_its_own_key_and_a_handler
     check(len(set(keys)) == len(keys), f"{len(keys) - len(set(keys))} attempted units share a key with another unit")
     lacking = sorted({redownload.handler_mode(unit) for unit in attempted} - set(mode.ADAPTERS) - {"file"})
     check(not lacking, f"modes the capture loop would refuse as having no reviewed handler: {lacking}")
+
+
+class Limited(Reply):
+    """A 429 reply that names the publisher's delay."""
+
+    def __init__(self, seconds: int) -> None:
+        super().__init__(429, b"{}")
+        self.seconds = seconds
+
+    def getheader(self, name: str, default: str = "") -> str:
+        return str(self.seconds) if name == "Retry-After" else super().getheader(name, default)
+
+
+def served(path: str) -> Reply:
+    """What the Census host answers for one request path: a group dictionary or the group's county table."""
+    parsed = urlsplit(path)
+    year = int(parsed.path.split("/")[2])
+    if "/groups/" in parsed.path:
+        return Reply(200, dictionary(parsed.path.rsplit("/", 1)[-1].removesuffix(".json")))
+    return Reply(200, response(parse_qs(parsed.query)["get"][0][6:-1], year))
+
+
+def table_of(path: str) -> str:
+    parsed = urlsplit(path)
+    return parsed.path.rsplit("/", 1)[-1].removesuffix(".json") if "/groups/" in parsed.path else parse_qs(parsed.query)["get"][0][6:-1]
+
+
+class Host:
+    """The Census host and key service of one run: the real transport and collector, a fake HTTPS connection, a fake key store and recorded sleeps."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, answer: Any = served) -> None:
+        self.sent: list[str] = []
+        self.sleeps: list[float] = []
+        self.cloud = Cloud()
+        self.answer = answer
+        monkeypatch.setattr(collector, "fetch", partial(census_acs_tables_transport.fetch, sleep=self.sleeps.append))
+        monkeypatch.setattr(census_acs_tables_transport, "https_connection", connection_class(lambda path: self.answer(path), self.sent))
+
+    def run(self, world: World, **fields: Any) -> dict:
+        keys = partial(task_role.TaskKeys, environment=ENVIRONMENT, factory=self.cloud.factory)
+        return world.run(task_keys=keys, **fields)
+
+
+def test_a_rate_limit_after_an_earlier_success_pauses_the_source_and_a_resumed_run_skips_the_completed_unit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    batches = [batch_of("S0101", 2010), batch_of("S0601", 2010), batch_of("DP02", 2010)]
+    world = table_world(tmp_path, monkeypatch, batches)
+    host = Host(monkeypatch, lambda path: Limited(30) if table_of(path) == "S0601" else served(path))
+    messages: list[dict] = []
+    first = host.run(world, log=messages.append)
+    units = first["units"]
+    check(len(units["completed"]) == 1 and [item["reason"] for item in units["failed"]] == ["http_429"], f"{units}")
+    check(units["paused_sources"] == ["ACS"] and units["paused_not_attempted"] == [contract.queue_snapshot_id(batches[2])], f"the source is paused: {units}")
+    check(not any(table_of(path) == "DP02" for path in host.sent), f"no further ACS request after the 429: {host.sent}")
+    check(len(host.sent) == 3 and first["counters"]["http_requests"] == 3, f"two requests for the first unit and one 429: {host.sent}")
+    check(host.sleeps == [1, 1], f"only the spacing after the first unit's two requests, no backoff for the 429: {host.sleeps}")
+    limited = [item for item in messages if item.get("retry_after_seconds") is not None]
+    check(len(limited) == 1 and limited[0]["retry_after_seconds"] == 30 and limited[0]["status"] == "failed", f"the publisher's delay is reported: {messages}")
+    host.answer = served
+    listed = mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
+    second = host.run(world)
+    check(len(second["units"]["completed"]) == 2 and second["counters"]["skipped_complete"] == 1, f"{second['units']} {second['counters']}")
+    check(mode.check_run(storage(world.bucket), second, listed) == [], "the resumed run passes the evidence step")
+    check(len(world.records()) == 3, "every unit has its record after the resume")
+
+
+def test_a_server_error_is_retried_with_backoff_and_does_not_pause_the_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    batches = [batch_of("S0101", 2010), batch_of("S0601", 2010), batch_of("DP02", 2010)]
+    world = table_world(tmp_path, monkeypatch, batches)
+    host = Host(monkeypatch, lambda path: Reply(503, b"{}") if table_of(path) == "S0601" else served(path))
+    result = host.run(world)
+    units = result["units"]
+    check([item["reason"] for item in units["failed"]] == ["retryable_request"] and len(units["completed"]) == 2, f"{units}")
+    check(units["paused_sources"] == [] and not units["paused_not_attempted"], "a transient server error pauses nothing")
+    check(host.sleeps.count(2) == 1 and host.sleeps.count(4) == 1, f"three attempts with the two backoffs: {host.sleeps}")
+
+
+def test_the_run_counts_actual_sends_and_bytes_of_the_tables_transport_and_refuses_past_the_byte_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    batch = batch_of("S0101", 2010)
+    world = table_world(tmp_path, monkeypatch, [batch])
+    host = Host(monkeypatch)
+    result = host.run(world)
+    sizes = len(response("S0101", 2010)) + len(dictionary("S0101"))
+    check(len(result["units"]["completed"]) == 1 and len(host.sent) == 2, f"{result['units']} {host.sent}")
+    check(result["counters"]["http_requests"] == 2, f"the sends of this transport are counted: {result['counters']}")
+    check(result["counters"]["bytes_downloaded"] == sizes, f"the received bytes are counted: {result['counters']['bytes_downloaded']} of {sizes}")
+
+
+def test_the_byte_cap_refuses_a_response_the_tables_transport_reads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    batch = batch_of("S0101", 2010)
+    world = table_world(tmp_path, monkeypatch, [batch])
+    world.units[0]["bytes"] = 100
+    world.write_inputs({world.units[0]["snapshot_id"]: {"mode": MODE, "plan_item": batch["id"], "stored_data_files": [batch["file_name"]]}})
+    host = Host(monkeypatch)
+    result = host.run(world, byte_cap=5000)
+    check([item["reason"] for item in result["units"]["failed"]] == ["byte_cap_exceeded"], f"{result['units']}")
+    check(len(host.sent) == 1 and result["counters"]["http_requests"] == 1, f"one request was sent and counted: {host.sent}")
+    check(result["counters"]["bytes_downloaded"] > 0 and not world.records(), "the bytes read are counted and no record is written")
+
+
+def test_skipping_only_the_tables_transport_in_the_observer_loses_its_sends(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    batch = batch_of("S0101", 2010)
+    world = table_world(tmp_path, monkeypatch, [batch])
+    host = Host(monkeypatch)
+    monkeypatch.setattr(mode, "API_TRANSPORTS", tuple(module for module in mode.API_TRANSPORTS if module is not census_acs_tables_transport))
+    result = host.run(world)
+    check(len(host.sent) == 2 and result["counters"]["http_requests"] == 0, f"without the wrapping the sends are not counted: {result['counters']}")

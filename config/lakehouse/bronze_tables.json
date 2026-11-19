@@ -540,9 +540,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_dp02"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.DP02-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -558,9 +556,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_dp03"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.DP03-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -576,9 +572,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_dp04"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.DP04-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -594,9 +588,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_dp05"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.DP05-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -612,9 +604,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_s0101"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.S0101-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -630,9 +620,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_s0601"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.S0601-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -648,9 +636,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_s1701"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.S1701-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -666,9 +652,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_s2503"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.S2503-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -684,9 +668,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_s2701"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.S2701-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -702,9 +684,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_b16005"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.B16005-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -720,9 +700,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_b19013"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.B19013-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -738,9 +716,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_b25070"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.B25070-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -756,9 +732,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_b25091"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.B25091-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -774,9 +748,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_b26001"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.B26001-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"
@@ -792,9 +764,7 @@
       "encodings": [
         "utf-8"
       ],
-      "dataset_ids": [
-        "acs_c16001"
-      ],
+      "member_pattern": "^ACS(?:DP|ST|DT)5Y\\d{4}\\.C16001-Data\\.csv$",
       "byte_order_mark": true,
       "label_row": {
         "first_label": "Geography"

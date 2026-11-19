@@ -784,9 +784,39 @@ def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -
             return
         raise ValueError("The failing reply was accepted")
 
-    for status in (429, 500, 502, 503, 504):
+    for status in (500, 502, 503, 504):
         scenario(
             f"status_{status}_makes_exactly_three_attempts_then_fails_without_text", lambda status=status: attempts(status, 3, "transient publisher failure")
+        )
+    scenario("status_429_makes_one_attempt_and_is_a_typed_rate_limit", lambda: attempts(429, 1, "publisher rate limit"))
+
+    class Delayed(Reply):
+        """A 429 reply that names its delay in the Retry-After header."""
+
+        def __init__(self, delay: str) -> None:
+            super().__init__(429, b"{}")
+            self.delay = delay
+
+        def getheader(self, name: str, default: str = "") -> str:
+            return self.delay if name == "Retry-After" else super().getheader(name, default)
+
+    def delay_of(header: str) -> int:
+        sent: list[str] = []
+        try:
+            run_with(
+                lambda _path: Delayed(header),
+                lambda client, target: transport.fetch(plan, batch, target, True, client, transport.live_request, no_sleep),
+                sent,
+            )
+        except transport.RateLimited as limited:
+            require(len(sent) == 1, f"{len(sent)} requests for a rate limit")
+            return limited.retry_after_seconds
+        raise ValueError("The rate limit was accepted")
+
+    for header, seconds in (("45", 45), ("999999", 86400), ("soon", 0), ("", 0)):
+        scenario(
+            f"a_rate_limit_reports_the_delay_{header or 'absent'}",
+            lambda header=header, seconds=seconds: require(delay_of(header) == seconds, f"Delay {delay_of(header)} for {header!r}"),
         )
     scenario("a_redirect_is_refused_after_one_attempt", lambda: attempts(302, 1, "no redirect followed"))
 
