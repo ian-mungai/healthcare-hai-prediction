@@ -14,6 +14,7 @@ import argparse
 import copy
 import functools
 import hashlib
+import importlib
 import json
 import re
 import shutil
@@ -24,8 +25,6 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
-from jsonschema import Draft202012Validator
 
 from scripts import model_code
 from scripts.process import run_command
@@ -657,8 +656,10 @@ def behaviour_outcome(edit: Callable[[Path], None] | None = None) -> model_code_
 def case_clean_interpreter_fits_saves_loads_and_predicts_every_family() -> list[str]:
     """With only the declared files and the stand-ins, every family constructs, fits a tiny frame, saves with skops, loads (trusted list) and predicts."""
     outcome = behaviour_outcome()
-    expected = {"m1_ols", "m2_elastic_net", "m4_boosting", "m4_forest"}
-    return [*outcome.problems, *([] if set(outcome.families) == expected else [f"families run: {sorted(outcome.families)}"])]
+    expected = {"m1_ols": "fit, predict, save, load, predict_loaded", "m2_elastic_net": "fit, predict, save, load, predict_loaded"}
+    expected |= {"m4_boosting": "fit, predict, save, load, predict_loaded", "m4_forest": "fit, predict"}
+    steps = {name: ", ".join(done) for name, done in outcome.families.items()}
+    return [*outcome.problems, *([] if steps == expected else [f"steps completed: {steps}"])]
 
 
 def remove_preprocessing(scratch: Path) -> None:
@@ -676,12 +677,30 @@ def plant_lazy_import(scratch: Path) -> None:
 
 
 def case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one() -> list[str]:
-    """The check is not vacuous: without a declared file, or with a prediction-time import of a file outside the closure, it fails."""
+    """The check is not vacuous: without a declared file, or with a prediction-time import of a file outside the closure, it fails and names the file."""
     problems = []
-    for name, edit in (("a declared file is missing", remove_preprocessing), ("a prediction-time import needs mixed.py", plant_lazy_import)):
-        if not behaviour_outcome(edit).problems:
-            problems.append(f"{name}: the behaviour check passed")
+    for name, edit, module in (
+        ("a declared file is missing", remove_preprocessing, "preprocessing"),
+        ("a prediction-time import needs mixed.py", plant_lazy_import, "mixed"),
+    ):
+        found = behaviour_outcome(edit).problems
+        if not any(module in text for text in found):
+            problems.append(f"{name}: no problem names {module}: {found}")
     return problems
+
+
+def plant_prediction_failure(scratch: Path) -> None:
+    path = scratch / "scripts/training/models/linear.py"
+    path.write_text(path.read_text().replace("        return with_intercept(design.matrix) @ self.coefficients_", '        raise ValueError("planted")'))
+
+
+def case_behaviour_failure_names_the_family_and_the_step() -> list[str]:
+    """One broken family fails by name and step (m1_ols, predict) while the others still run, and the report never says "0 families failed" for a failure."""
+    outcome = behaviour_outcome(plant_prediction_failure)
+    named = [text for text in outcome.problems if text.startswith("m1_ols") and "predict" in text and "planted" in text]
+    problems = [] if named else [f"no problem names m1_ols and its predict step: {outcome.problems}"]
+    others = {"m2_elastic_net", "m4_boosting", "m4_forest"}
+    return [*problems, *([] if others <= set(outcome.families) else [f"the other families did not run: {sorted(outcome.families)}"])]
 
 
 # 2. Import origins in a clean interpreter
@@ -813,8 +832,9 @@ def case_missing_and_extra_files_fail() -> list[str]:
 # 4. The closed schema
 
 
-def schema_validator() -> Draft202012Validator:
-    return Draft202012Validator(json.loads((ROOT / model_code.SCHEMA).read_text()))
+def schema_validator() -> Any:
+    """The validator of the schema file. jsonschema is imported here, so the behaviour cases run in an image that lacks it."""
+    return importlib.import_module("jsonschema").Draft202012Validator(json.loads((ROOT / model_code.SCHEMA).read_text()))
 
 
 def mutated(change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
@@ -1012,6 +1032,7 @@ ORDER = [
     case_image_check_is_independent_of_the_import_rule,
     case_clean_interpreter_fits_saves_loads_and_predicts_every_family,
     case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one,
+    case_behaviour_failure_names_the_family_and_the_step,
     case_clean_interpreter_imports_every_trusted_type_from_declared_files,
     case_stand_in_matches_what_the_closure_takes,
     case_clean_interpreter_fails_when_a_declared_file_is_missing,
