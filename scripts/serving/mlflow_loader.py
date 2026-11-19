@@ -195,7 +195,12 @@ class MlflowLoader:
         mlflow = importlib.import_module("mlflow")
         pandas = importlib.import_module("pandas")
         name = self._contract["registered_models"][hai_type]
-        info = mlflow.MlflowClient().get_model_version(name, version)
+        info = refused(
+            model_code.run_within,
+            model_code.LOOKUP_SECONDS,
+            lambda cancel: mlflow.MlflowClient().get_model_version(name, version),
+            "the lookup of the model version",
+        )
         if info.source != f"runs:/{info.run_id}/model":
             raise ArtifactRefused("the model version's source is not runs:/<run_id>/model of its own run")
         feature_set = str(info.tags.get("feature_set", ""))

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import hashlib
 import importlib
 import json
@@ -33,8 +34,11 @@ import math
 import os
 import posixpath
 import re
+import socket
 import stat
 import sys
+import threading
+import time
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -641,9 +645,10 @@ MAX_NODES = 1024
 
 class DataRuleError(ValueError):
     """A bundle file or its fetch breaks a rule. ``rule`` names it: ``unreadable``, ``too_large`` (a file over its byte cap), ``not_a_file`` (a folder, a link
-    or another file where the fetch must leave one regular file), ``not_served`` (the run's artifacts are not on the tracking server), ``not_json``,
-    ``feature_list``, ``provenance``, ``self_check_not_object``, ``self_check_keys``, ``self_check_references``, ``self_check_row_count``,
-    ``self_check_row_width``, ``self_check_cells`` or ``self_check_predictions``. The message names the place and the rule, never a value of the file."""
+    or another file where the fetch must leave one regular file), ``not_served`` (the run's artifacts are not on the tracking server), ``deadline`` (a fetch
+    or a lookup did not finish in its time), ``not_json``, ``feature_list``, ``provenance``, ``self_check_not_object``, ``self_check_keys``,
+    ``self_check_references``, ``self_check_row_count``, ``self_check_row_width``, ``self_check_cells`` or ``self_check_predictions``. The message names the
+    place and the rule, never a value of the file."""
 
     def __init__(self, rule: str, detail: str) -> None:
         super().__init__(detail)
@@ -808,45 +813,179 @@ def check_self_check(document: Any, references: Sequence[str]) -> tuple[list[lis
 
 MODEL_FILE = "model/model.skops"
 STREAM_CHUNK = 1024 * 1024
+# One total deadline per fetch: the run lookup, the listing, the request with every retry and the whole body count against it. A socket timeout cannot do this
+# (a server that sends a byte every few seconds never trips it), so the fetch runs in a worker that the caller cancels. The sizes are provisional like the caps
+# (the first live load logs the real times). The JSON files (1 MiB at most) take well under a second from the host's local MLflow, so 30 seconds is a margin of
+# two orders and still a floor of 35 KiB/s. The model (64 MiB at most) takes about 6 seconds at 10 MiB/s, so 300 seconds is a margin of fifty and a floor of
+# 0.21 MiB/s. The four fetches of one load run one after the other, so one load waits 30 + 3 * 30 + 300 = 420 seconds at most for the network.
+JSON_FETCH_SECONDS = 30.0
+MODEL_FETCH_SECONDS = 300.0
+LOOKUP_SECONDS = 30.0
+# How often the caller looks at the clock, and how long it waits for a cancelled worker to end before it reports the deadline anyway: a body or a socket
+# read ends at once when its connection is shut down, so only a call that cannot be interrupted (a lookup or a listing that does not answer) costs the wait,
+# and the refusal then comes at the deadline plus this wait at most.
+POLL_SECONDS = 0.25
+GRACE_SECONDS = 2.0
 Fetch = Callable[[str, str, str, int], str]
 
 
-def write_limited(chunks: Iterable[bytes], local_path: str, limit: int, name: str) -> None:
+def monotonic() -> float:
+    """The clock of every deadline (a name of its own, so that a case can replace it with a test clock)."""
+    return time.monotonic()
+
+
+class Cancel:
+    """The cancel token of one worker. ``stop`` is final: after it no new file is created, and each registered closer has run (or runs when it is
+    registered), so a response that arrives late is closed at once."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.stopped = False
+        self.created = False
+        self.closers: list[Callable[[], None]] = []
+
+    def check(self, what: str) -> None:
+        if self.stopped:
+            raise DataRuleError("deadline", f"{what} was cancelled at its deadline")
+
+    def watch(self, closer: Callable[[], None]) -> None:
+        with self.lock:
+            stopped = self.stopped
+            if not stopped:
+                self.closers.append(closer)
+        if stopped:
+            closer()
+
+    def stop(self) -> None:
+        with self.lock:
+            self.stopped = True
+            closers, self.closers = self.closers, []
+        for closer in closers:
+            with contextlib.suppress(Exception):  # a closer that fails must not stop the others
+                closer()
+
+    def create(self, path: str) -> int:
+        """Create the new file of the worker, or refuse when the deadline already passed (the check and the creation are one step, so that no file appears
+        after ``stop``). A file that was not created here (it existed already) is never removed by the caller."""
+        with self.lock:
+            if self.stopped:
+                raise DataRuleError("deadline", f"the fetch into {os.path.basename(path)} was cancelled at its deadline")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            self.created = True
+            return descriptor
+
+
+def run_within[Outcome](seconds: float, work: Callable[[Cancel], Outcome], what: str) -> Outcome:
+    """Run ``work(cancel)`` in a worker thread and return its result, or raise its error, or at ``seconds`` stop and raise ``DataRuleError`` (``deadline``).
+
+    The caller looks at the clock while the worker runs, so a body that is read a byte at a time, a listing that does not answer and a request that is retried
+    all end at the deadline. At expiry the caller cancels the worker (its open response is closed) and waits ``GRACE_SECONDS`` for it to end. A worker that
+    is still inside a call that cannot be interrupted (a lookup that does not answer) is left to end when that call returns: it finds the token stopped,
+    creates no file and starts no request.
+    """
+    cancel = Cancel()
+    outcome: list[tuple[bool, Any]] = []
+
+    def target() -> None:
+        try:
+            outcome.append((True, work(cancel)))
+        except BaseException as error:  # the caller re-raises it
+            outcome.append((False, error))
+
+    worker = threading.Thread(target=target, name=f"model-fetch {what}", daemon=True)
+    worker.start()
+    expires = monotonic() + seconds
+    while worker.is_alive():
+        left = expires - monotonic()
+        if left <= 0:
+            cancel.stop()
+            worker.join(GRACE_SECONDS)
+            raise DataRuleError("deadline", f"{what} did not finish within its deadline of {seconds:g} seconds")
+        worker.join(min(left, POLL_SECONDS))
+    ok, value = outcome[0]
+    if not ok:
+        raise value
+    result: Outcome = value
+    return result
+
+
+def hang_up(response: Any) -> None:
+    """Close the connection of a streamed response from another thread: shut its socket down first (a read that waits in the socket then ends at once, which
+    ``close`` alone does not do), then close. The socket is the one the response reads from (``raw._fp.fp.raw._sock``, which stays when http.client has already
+    dropped the connection's own handle of a close-delimited response) or the connection's. Without either, ``close`` is all there is."""
+    raw = getattr(response, "raw", None)
+    for path in (("_fp", "fp", "raw", "_sock"), ("_connection", "sock")):
+        sock: Any = raw
+        for name in path:
+            sock = getattr(sock, name, None)
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+            break
+    response.close()
+
+
+def write_limited(chunks: Iterable[bytes], local_path: str, limit: int, name: str, cancel: Cancel | None = None) -> None:
     """Write the chunks to a new file at ``local_path`` (never through a link). The running total is checked before each write, so a chunk that would pass
-    ``limit`` is not written and the transport is not read any further. Raises ``DataRuleError`` (``too_large``)."""
+    ``limit`` is not written and the transport is not read any further. A stopped ``cancel`` ends the write at the next chunk and creates no file. Raises
+    ``DataRuleError`` (``too_large`` or ``deadline``)."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     written = 0
-    with os.fdopen(os.open(local_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as stream:
+    with os.fdopen(cancel.create(local_path) if cancel else os.open(local_path, flags, 0o600), "wb") as stream:
         for chunk in chunks:
+            if cancel is not None:
+                cancel.check(name)
             if written + len(chunk) > limit:
                 raise DataRuleError("too_large", f"{name} is over {limit} bytes")
             stream.write(chunk)
             written += len(chunk)
 
 
-def mlflow_fetch(run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
-    """Stream one file of a run to ``local_path`` and return that path, never more than ``limit`` bytes.
+def mlflow_fetch(run_id: str, artifact_path: str, local_path: str, limit: int, seconds: float | None = None) -> str:
+    """Stream one file of a run to ``local_path`` and return that path: never more than ``limit`` bytes and never longer than ``seconds`` (the default is
+    ``MODEL_FETCH_SECONDS`` for the model file and ``JSON_FETCH_SECONDS`` for any other). The caller chooses ``local_path``, the cap and the time: the artifact
+    never does. Any other reader of a run's single file can call it with its own path, cap and time.
 
     It does not call ``download_artifacts``, which lists the path and downloads every file below a folder with no limit (MLflow 3.17.2
-    ``artifact_repo.py:346``, ``http_artifact_repo.py:145``). It lists the path once, refuses a folder, then sends the one streamed GET of
-    ``_download_file`` and counts each chunk. The caller chooses ``local_path`` and the cap: the artifact never does. Raises ``DataRuleError``
-    (``not_served``, ``not_a_file`` or ``too_large``); a missing file or a failed request raises the MLflow or requests error as it is.
+    ``artifact_repo.py:346``, ``http_artifact_repo.py:145``). It looks up the run, lists the path once, refuses a folder, then sends the one streamed GET of
+    ``_download_file`` and counts each chunk, all inside the one deadline. At the deadline it closes the response, removes the file it wrote and raises
+    ``DataRuleError`` (``deadline``); on any other failure it removes the file too. Other errors: ``not_served``, ``not_a_file`` and ``too_large``; a missing
+    file or a failed request raises the MLflow or requests error as it is.
     """
-    mlflow = importlib.import_module("mlflow")
-    registry = importlib.import_module("mlflow.store.artifact.artifact_repository_registry")
-    http = importlib.import_module("mlflow.store.artifact.http_artifact_repo")
-    credentials = importlib.import_module("mlflow.utils.credentials")
-    rest = importlib.import_module("mlflow.utils.rest_utils")
-    repository = registry.get_artifact_repository(mlflow.MlflowClient().get_run(run_id).info.artifact_uri)
-    if not isinstance(repository, http.HttpArtifactRepository):
-        raise DataRuleError("not_served", "the run's artifacts are not served by the tracking server")
-    if repository.list_artifacts(artifact_path):
-        raise DataRuleError("not_a_file", f"{artifact_path} is a folder, not a file")
-    response = rest.http_request(credentials.get_default_host_creds(repository.artifact_uri), posixpath.join("/", artifact_path), "GET", stream=True)
+    cancel_ref: list[Cancel] = []
+
+    def transfer(cancel: Cancel) -> None:
+        cancel_ref.append(cancel)
+        mlflow = importlib.import_module("mlflow")
+        registry = importlib.import_module("mlflow.store.artifact.artifact_repository_registry")
+        http = importlib.import_module("mlflow.store.artifact.http_artifact_repo")
+        credentials = importlib.import_module("mlflow.utils.credentials")
+        rest = importlib.import_module("mlflow.utils.rest_utils")
+        repository = registry.get_artifact_repository(mlflow.MlflowClient().get_run(run_id).info.artifact_uri)
+        cancel.check(artifact_path)
+        if not isinstance(repository, http.HttpArtifactRepository):
+            raise DataRuleError("not_served", "the run's artifacts are not served by the tracking server")
+        if repository.list_artifacts(artifact_path):
+            raise DataRuleError("not_a_file", f"{artifact_path} is a folder, not a file")
+        cancel.check(artifact_path)
+        response = rest.http_request(credentials.get_default_host_creds(repository.artifact_uri), posixpath.join("/", artifact_path), "GET", stream=True)
+        cancel.watch(lambda: hang_up(response))
+        try:
+            cancel.check(artifact_path)
+            rest.augmented_raise_for_status(response)
+            write_limited(response.iter_content(chunk_size=STREAM_CHUNK), local_path, limit, artifact_path, cancel)
+        finally:
+            response.close()
+
+    if seconds is None:
+        seconds = MODEL_FETCH_SECONDS if artifact_path == MODEL_FILE else JSON_FETCH_SECONDS
     try:
-        rest.augmented_raise_for_status(response)
-        write_limited(response.iter_content(chunk_size=STREAM_CHUNK), local_path, limit, artifact_path)
-    finally:
-        response.close()
+        run_within(seconds, transfer, f"the fetch of {artifact_path}")
+    except BaseException:
+        if cancel_ref and cancel_ref[0].created:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(local_path)
+        raise
     return local_path
 
 

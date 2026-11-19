@@ -19,6 +19,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
@@ -161,6 +163,60 @@ def default_predictor(frame: list[dict[str, Any]]) -> list[float]:
     return [score([row["a"], row["b"], row["c"]])]
 
 
+class Clock:
+    """A test clock. Only the stand-ins move it, so a deadline of 300 seconds passes in milliseconds and never depends on the speed of the machine."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class Drip:
+    """A response whose body never ends: one byte at a time, each after a test-clock second and a millisecond of real time, so no single read is slow and
+    no byte count is near the cap. ``close`` is what a cancel calls, and a read after it fails as a closed connection does. If nothing cuts the drip off
+    after ``most`` bytes, the body raises ``AssertionError``, so that a missing deadline fails a case and never hangs it."""
+
+    def __init__(self, clock: Clock, most: int = 2000, stops_after: int | None = None) -> None:
+        self.clock = clock
+        self.most = most
+        self.stops_after = stops_after
+        self.pulled = 0
+        self.closed = False
+        self.status = 200
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        while True:
+            if self.closed:
+                raise OSError("the connection was closed")
+            if self.pulled >= self.most:
+                raise AssertionError("the drip was never cut off")
+            if self.stops_after is not None and self.pulled >= self.stops_after:
+                self.hang()
+            time.sleep(0.001)
+            self.clock.now += 1.0
+            self.pulled += 1
+            yield b"{"
+
+    def served(self) -> Drip:
+        """What the server answers to the GET: this response."""
+        return self
+
+    def hang(self) -> None:
+        """A read that waits in the socket for a byte that never comes: only closing the connection ends it."""
+        give_up = time.monotonic() + 5
+        while not self.closed:
+            if time.monotonic() > give_up:
+                raise AssertionError("the blocked read was never ended by closing the connection")
+            self.clock.now += 0.2
+            time.sleep(0.001)
+        raise OSError("the connection was closed")
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class Server:
     """The artifact store of the tracking server, as MLflow 3.17.2 sees it: files by path, a body that is longer than the file it names (``long``), a listing
     that shows the children of a folder and a streamed GET. It records each GET, the chunks pulled and the most bytes the watched folder held at a pull."""
@@ -172,6 +228,24 @@ class Server:
         self.pulled: dict[str, int] = {}
         self.peak = 0
         self.watch: Path | None = None
+        # The hooks of the deadline cases: a test clock that the stand-in advances while it works, seconds per chunk of a body, a body for a path that never
+        # ends (``drips``), gates that stall the listing or the request until the case releases them, and the paths whose response was closed.
+        self.clock: Clock | None = None
+        self.tick = 0.0
+        self.drips: dict[str, Callable[[], Any]] = {}
+        self.list_gates: dict[str, threading.Event] = {}
+        self.get_gates: dict[str, threading.Event] = {}
+        self.closed: list[str] = []
+
+    def wait(self, gate: threading.Event) -> None:
+        """Stall as a hung server does: the test clock moves on 0.2 seconds per millisecond until the case releases the gate."""
+        give_up = time.monotonic() + 20
+        while not gate.is_set():
+            if time.monotonic() > give_up:
+                raise AssertionError("the stalled call was never cut off")
+            if self.clock is not None:
+                self.clock.now += 0.2
+            time.sleep(0.001)
 
     def exists(self, path: str) -> bool:
         return path in self.files or path in self.long
@@ -181,6 +255,8 @@ class Server:
 
     def list_artifacts(self, path: str) -> list[Any]:
         """``ArtifactRepository.list_artifacts``: the entries directly below a folder, and an empty list for a file."""
+        if path in self.list_gates:
+            self.wait(self.list_gates[path])
         prefix = f"{path}/"
         heads: dict[str, bool] = {}
         for name in self.children(path):
@@ -196,6 +272,8 @@ class Server:
         data = None if path in self.long else self.files[path]
         size = self.long[path] if data is None else len(data)
         for start in range(0, size, chunk_size):
+            if self.clock is not None:
+                self.clock.now += self.tick
             self.pulled[path] = self.pulled.get(path, 0) + 1
             self.peak = max(self.peak, self.held())
             yield b"{" * min(chunk_size, size - start) if data is None else data[start : start + chunk_size]
@@ -203,8 +281,12 @@ class Server:
     def get(self, path: str) -> Any:
         """``http_request(host_creds, '/' + path, 'GET', stream=True)``: a 404 for no file and a 400 for a folder."""
         self.reads.append(path)
+        if path in self.get_gates:
+            self.wait(self.get_gates[path])
+        if path in self.drips:
+            return self.drips[path]()
         status = 200 if self.exists(path) else 400 if self.children(path) else 404
-        return SimpleNamespace(status=status, iter_content=lambda chunk_size: self.body(path, chunk_size), close=lambda: None)
+        return SimpleNamespace(status=status, iter_content=lambda chunk_size: self.body(path, chunk_size), close=lambda: self.closed.append(path))
 
     def download_artifacts(self, artifact_path: str, dst_path: str) -> str:
         """``ArtifactRepository.download_artifacts`` of 3.17.2: a listing decides file or folder, a folder is downloaded with every descendant, and
@@ -232,10 +314,16 @@ class Registry:
         self.default_calls: list[dict[str, Any]] = []
         self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
         self.sklearn = SimpleNamespace(load_model=self.load_model)
+        self.lookup_gate: threading.Event | None = None
         self.MlflowClient = lambda: SimpleNamespace(
-            get_model_version=lambda name, version: SimpleNamespace(run_id=RUN, tags=dict(self.tags), source=self.source),
+            get_model_version=self.model_version,
             get_run=lambda run_id: SimpleNamespace(info=SimpleNamespace(artifact_uri=ARTIFACT_URI)),
         )
+
+    def model_version(self, name: str, version: str) -> Any:
+        if self.lookup_gate is not None:
+            self.server.wait(self.lookup_gate)
+        return SimpleNamespace(run_id=RUN, tags=dict(self.tags), source=self.source)
 
     def load_model(self, uri: str) -> Any:
         self.sklearn_loads += 1
@@ -799,6 +887,124 @@ def another_file(local: str, data: bytes) -> str:
     return str(other)
 
 
+def fetch_workers() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name.startswith("model-fetch")]
+
+
+@contextlib.contextmanager
+def test_clock(w: World) -> Iterator[Clock]:
+    """The default fetch reads this clock, checks it every 5 milliseconds and waits 0.2 seconds at most for a worker it has cancelled."""
+    clock = Clock()
+    w.server.clock = clock
+    with (
+        mock.patch.object(model_code, "monotonic", clock, create=True),
+        mock.patch.object(model_code, "POLL_SECONDS", 0.005, create=True),
+        mock.patch.object(model_code, "GRACE_SECONDS", 0.2, create=True),
+    ):
+        yield clock
+
+
+def case_loader_default_fetch_is_cut_off_at_its_deadline(c: Checker) -> None:
+    """One fetch has one total deadline for its run lookup, its listing, its request with every retry and its body, however slowly the server answers.
+    A drip (a byte every second of the test clock, each read short, so no socket timeout trips), a read blocked in the socket, a stalled listing, a
+    stalled request and a stalled lookup are each refused as ``ArtifactRefused`` by the deadline of the file kind (30 seconds for the JSON files, 300 for the
+    model), the transport is stopped and closed, nothing remains on disk and no worker thread outlives its release. A fetch well inside its deadline is not
+    affected."""
+    json_seconds, model_seconds = model_code.JSON_FETCH_SECONDS, model_code.MODEL_FETCH_SECONDS
+    c.check("the model file may take longer than a JSON file", 0 < json_seconds < model_seconds)
+    c.check("64 MiB passes at 1 MiB/s with a margin of at least four", model_seconds * MIB >= 4 * mlflow_loader.MODEL_CAP and json_seconds * MIB >= 4 * MIB)
+
+    def cut_off(label: str, path: str, seconds: float, w: World, clock: Clock, error: Exception | None, model: Any) -> None:
+        c.check(
+            f"{label}: refused as ArtifactRefused naming the deadline (got {type(error).__name__ if error else 'a loaded model'}: {error})",
+            model is None and type(error).__name__ == "ArtifactRefused" and "deadline" in str(error),
+        )
+        c.check(
+            f"{label}: cut off at {seconds} seconds of the test clock, and not long after ({clock.now})",
+            seconds <= clock.now < seconds + 100,
+        )
+        c.check(f"{label}: no downloaded file or folder remains", w.leftover() == [])
+
+    for path, seconds in ((FEATURE_LIST, json_seconds), (PROVENANCE, json_seconds), (SELF_CHECK, json_seconds), (MODEL, model_seconds)):
+        with world() as w, test_clock(w) as clock:
+            drip = Drip(clock)
+            w.server.drips[path] = drip.served
+            model, error = w.attempt(use_default_fetch=True)
+            cut_off(f"{path}: a drip", path, seconds, w, clock, error, model)
+            c.check(f"{path}: the body was stopped after {drip.pulled} bytes, and its connection closed", drip.closed and drip.pulled < 1000)
+            c.check(f"{path}: no worker thread remains", fetch_workers() == [])
+    for path, seconds in ((FEATURE_LIST, json_seconds), (MODEL, model_seconds)):
+        with world() as w, test_clock(w) as clock:
+            blocked = Drip(clock, stops_after=5)
+            w.server.drips[path] = blocked.served
+            model, error = w.attempt(use_default_fetch=True)
+            cut_off(f"{path}: a read blocked in the socket", path, seconds, w, clock, error, model)
+            c.check(f"{path}: closing the connection ended the blocked read ({blocked.pulled} bytes came)", blocked.closed and blocked.pulled == 5)
+            c.check(f"{path}: no worker thread remains after a blocked read", fetch_workers() == [])
+    for path in (FEATURE_LIST, MODEL):
+        with world() as w, test_clock(w) as clock:
+            drip = Drip(clock)
+            w.server.drips[path] = drip.served
+            local = str(w.tmp / "fetched")
+            try:
+                model_code.mlflow_fetch(RUN, path, local, mlflow_loader.MODEL_CAP)
+                direct: Exception | None = None
+            except Exception as caught:
+                direct = caught
+            c.check(f"{path}: the fetch itself raises the rule 'deadline' ({direct!r})", getattr(direct, "rule", "") == "deadline")
+            c.check(
+                f"{path}: the file the drip had begun to write was removed by the fetch ({drip.pulled} bytes came)",
+                drip.pulled > 0 and not os.path.exists(local),
+            )
+    with world() as w, test_clock(w) as clock:
+        drip = Drip(clock)
+        w.server.drips["extract/other.parquet"] = drip.served
+        try:
+            model_code.mlflow_fetch(RUN, "extract/other.parquet", str(w.tmp / "other"), 10 * MIB, seconds=5.0)
+            other: Exception | None = None
+        except Exception as caught:
+            other = caught
+        c.check(
+            f"another reader's path, cap and time (5 seconds) go through the same fetch and are cut off at its own time ({other!r}, {clock.now})",
+            getattr(other, "rule", "") == "deadline" and 5.0 <= clock.now < 105.0 and not os.path.exists(w.tmp / "other"),
+        )
+    for stall, label in (("list_gates", "a stalled listing"), ("get_gates", "a stalled request with its retries")):
+        for path, seconds in ((FEATURE_LIST, json_seconds), (MODEL, model_seconds)):
+            with world() as w, test_clock(w) as clock:
+                gate = threading.Event()
+                getattr(w.server, stall)[path] = gate
+                model, error = w.attempt(use_default_fetch=True)
+                cut_off(f"{path}: {label}", path, seconds, w, clock, error, model)
+                reads_at_expiry = list(w.server.reads)
+                gate.set()
+                for worker in fetch_workers():
+                    worker.join(5)
+                c.check(f"{path}: {label}: the stalled call ended after its release and no worker remains", fetch_workers() == [])
+                c.check(f"{path}: {label}: nothing was requested or left on disk after the cut-off", w.leftover() == [] and w.server.reads == reads_at_expiry)
+                c.check(f"{path}: {label}: no byte of the late response was read", w.server.pulled.get(path, 0) == 0)
+                if stall == "get_gates":
+                    c.check(f"{path}: {label}: the response that arrived after the cut-off was closed", path in w.server.closed)
+    with world() as w, test_clock(w) as clock:
+        gate = threading.Event()
+        w.registry.lookup_gate = gate
+        model, error = w.attempt(use_default_fetch=True)
+        cut_off("a stalled lookup of the model version", "", json_seconds, w, clock, error, model)
+        gate.set()
+        c.check("a stalled lookup: nothing was downloaded", w.server.reads == [] and w.leftover() == [])
+    with world() as w, test_clock(w) as clock:
+        w.server.tick = 1.0
+        model, error = w.attempt(use_default_fetch=True)
+        c.check(f"a model of 1 MiB per second of the test clock loads, well inside its deadline ({error!r}, {clock.now} seconds)", model is not None)
+        c.check("the clock stood well inside the deadline", clock.now < model_seconds / 2 and w.leftover() == [])
+    with world(long={MODEL: mlflow_loader.MODEL_CAP}) as w, test_clock(w) as clock:
+        w.server.tick = 1.0
+        model, error = w.attempt(use_default_fetch=True)
+        c.check(
+            f"a model of exactly 64 MiB at 1 MiB per second of the test clock loads ({error!r}, {clock.now} seconds)",
+            model is not None and clock.now < model_seconds,
+        )
+
+
 def case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file(c: Checker) -> None:
     """Whatever a fetch returns must be the regular file at the path the loader chose (no symlink, no folder, no other file), whatever its content."""
     for path in FOUR:
@@ -985,6 +1191,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
         "mlflow loader",
     ),
     "loader_default_fetch_writes_four_fixed_names_into_one_folder": (case_loader_default_fetch_writes_four_fixed_names_into_one_folder, "mlflow loader"),
+    "loader_default_fetch_is_cut_off_at_its_deadline": (case_loader_default_fetch_is_cut_off_at_its_deadline, "mlflow loader"),
     "loader_refuses_a_fetch_that_returns_anything_but_the_expected_file": (
         case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file,
         "mlflow loader",
