@@ -172,7 +172,8 @@ class PrefixGuard:
     def __getattr__(self, name: str) -> object:
         return getattr(self.client, name)
 
-    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+    def check(self, operation: str, arguments: list[str] | None) -> None:
+        """Refuse the request unless it is a read, or a create-only put of a key this capture may write."""
         args = arguments or []
         if "--key" in args and operation not in READ_OPERATIONS:
             key = args[args.index("--key") + 1]
@@ -184,7 +185,14 @@ class PrefixGuard:
             require(
                 operation in READ_OPERATIONS or not operation.startswith(("put-", "delete-", "copy-", "restore-")), "AHRQ upload outside its collection prefix"
             )
+
+    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        self.check(operation, arguments)
         return self.client.call(service, operation, arguments)
+
+    def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+        self.check(operation, arguments)
+        return self.client.call_bounded(service, operation, arguments, timeout=timeout)
 
 
 def selected_policy(client: AwsCli | None) -> dict:

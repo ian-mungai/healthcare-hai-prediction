@@ -15,7 +15,7 @@ import zipfile
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from scripts.acquisition import ahrq_compendium_contract as contract
@@ -956,6 +956,31 @@ def adapted_scenarios(scenario: Any, plan: dict, data_entry: dict, doc_entry: di
         require(list(s3.objects) == [own], "A refused write reached storage")
 
     scenario("guard_refuses_a_write_outside_the_prefix_and_any_delete_before_it_is_sent", guard_refuses)
+
+    def bounded_guard() -> None:
+        class Recorder:
+            storage_policy = {"enabled": False}
+
+            def __init__(self) -> None:
+                self.sent: list[str] = []
+
+            def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+                self.sent.append(operation)
+                return {}
+
+        recorder = Recorder()
+        guard = store.PrefixGuard(cast(Any, recorder))
+        for operation in ("delete-object", "delete-objects", "put-bucket-policy"):
+            try:
+                guard.call_bounded("s3api", operation, ["--key", f"{contract.PUBLISHER_PREFIX}x"], timeout=5.0)
+            except ValueError as failure:
+                require("outside its collection prefix" in str(failure), f"Reason differs: {failure}")
+            else:
+                raise AssertionError(f"{operation} was not refused")
+        guard.call_bounded("s3api", "head-object", ["--key", "any/key"], timeout=5.0)
+        require(recorder.sent == ["head-object"], f"The bounded call sent {recorder.sent}")
+
+    scenario("guard_covers_the_bounded_call_path_as_well", bounded_guard)
 
     elsewhere = FakeS3()
 
