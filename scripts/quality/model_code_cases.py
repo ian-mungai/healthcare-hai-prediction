@@ -740,6 +740,23 @@ def case_behaviour_failure_names_the_family_and_the_step() -> list[str]:
     return [*problems, *([] if others <= set(outcome.families) else [f"the other families did not run: {sorted(outcome.families)}"])]
 
 
+def plant_nan_coefficients_in_the_saved_file(scratch: Path) -> None:
+    path = scratch / "scripts/training/models/linear.py"
+    line = "        return with_intercept(design.matrix) @ self.coefficients_"
+    state = "\n\n    def __getstate__(self):\n        state = dict(self.__dict__)\n"
+    state += '        state["coefficients_"] = np.full_like(self.coefficients_, np.nan)\n        return state'
+    path.write_text(path.read_text().replace(line, line + state))
+
+
+def case_behaviour_check_fails_when_the_loaded_predictions_are_not_finite() -> list[str]:
+    """A model saved with NaN coefficients loads without error and predicts NaN: the check fails by family and step instead of reporting every family passed."""
+    outcome = behaviour_outcome(plant_nan_coefficients_in_the_saved_file)
+    named = [text for text in outcome.problems if text.startswith("m1_ols: predict_loaded failed") and "not finite" in text]
+    problems = [] if named else [f"no problem names m1_ols, predict_loaded and the non-finite predictions: {outcome.problems}"]
+    others = {"m2_elastic_net", "m4_boosting", "m4_forest"}
+    return [*problems, *([] if others <= set(outcome.families) else [f"the other families did not run: {sorted(outcome.families)}"])]
+
+
 # 2. Import origins in a clean interpreter
 
 
@@ -1073,6 +1090,7 @@ ORDER = [
     case_clean_interpreter_fits_saves_loads_and_predicts_every_family,
     case_behaviour_check_fails_when_a_file_is_missing_or_a_lazy_import_needs_one,
     case_behaviour_failure_names_the_family_and_the_step,
+    case_behaviour_check_fails_when_the_loaded_predictions_are_not_finite,
     case_clean_interpreter_imports_every_trusted_type_from_declared_files,
     case_stand_in_matches_what_the_closure_takes,
     case_clean_interpreter_fails_when_a_declared_file_is_missing,

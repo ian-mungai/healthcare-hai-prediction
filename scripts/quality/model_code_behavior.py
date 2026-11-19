@@ -87,7 +87,12 @@ families = (
     ),
     (
         "m4_forest",
-        Pipeline([("prepare", FoldPreprocessor(features, forced=forced)), ("model", TreeRegressor("random_forest", 1, 1, {"n_estimators": 5}))]),
+        Pipeline(
+            [
+                ("prepare", FoldPreprocessor(features, forced=forced, native_missing=True)),
+                ("model", TreeRegressor("random_forest", 1, 1, {"n_estimators": 5})),
+            ]
+        ),
         False,
     ),
 )
@@ -113,6 +118,9 @@ with tempfile.TemporaryDirectory() as folder:
                 step = "predict_loaded"
                 after = np.asarray(loaded.predict(rows), dtype=np.float64)
                 from_frame = np.asarray(loaded.predict(frame), dtype=np.float64)
+                for array in (after, from_frame):
+                    if array.shape != (count,) or not np.isfinite(array).all():
+                        raise ValueError("loaded predictions are not finite")
                 difference = float(max(np.abs(before - after).max(), np.abs(before - from_frame).max()))
                 steps.append("predict_loaded")
             report["families"][name] = {"steps": steps, "difference": difference}
