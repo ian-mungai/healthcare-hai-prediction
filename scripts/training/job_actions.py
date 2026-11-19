@@ -501,7 +501,7 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
     metrics |= run_tracking.numbers("comparison_holdout_rows", result["selection"]["comparison_holdout_rows"])
     parent_files = [(base / name, "bundle") for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
     parent_files.append((inputs / "extract" / f"manifest_{hai_type}.json", "extract"))
-    parent_files += [(base / name, "bundle") for name in ("rq4_side.json",) if (base / name).is_file()]
+    parent_files += [(base / name, "bundle") for name in ("rq4_side.json", "self_check.json") if (base / name).is_file()]
     model = base / "model"
     tags = run_tags(context, record, config, parameters, manifest, digests)
     parent = run_tracking.RunSpec(

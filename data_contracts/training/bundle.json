@@ -17,7 +17,8 @@
   "optional_files": [
     "shap.json",
     "diagnostics.json",
-    "rq4_side.json"
+    "rq4_side.json",
+    "self_check.json"
   ],
   "provenance_fields": [
     "run_id",
@@ -26,7 +27,8 @@
     "git_commit",
     "git_dirty",
     "code_digest",
-    "resolved_versions"
+    "resolved_versions",
+    "model_code_closure_sha256"
   ],
   "reproducibility": {
     "encoding": "canonical_json",

@@ -21,6 +21,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import training_contract
+from scripts import model_code
 from scripts.features import feature_schema, feature_sets
 from scripts.features.training_extract import canonical, content_sha256
 from scripts.training import (
@@ -47,7 +48,7 @@ from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
-from scripts.training.models.common import REGISTRABLE, SLOTS, NotEstimable
+from scripts.training.models.common import REGISTRABLE, SLOTS, Feature, NotEstimable
 from scripts.training.presigned_probe import ProbingClient
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
@@ -240,6 +241,8 @@ class Fixture:
             "data_contracts/training/extract_manifest.schema.json",
             "data_contracts/training/model_contract.json",
             "config/training/census_regions.json",
+            model_code.RECORD,
+            *(item["path"] for item in json.loads((REAL / model_code.RECORD).read_text())["files"]),
         ):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REAL / name, self.root / name)
@@ -679,6 +682,12 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(result["input_hashes"]["extract_sha256"] == manifest["sha256"], "result.json does not record the extract it read")
         provenance = output_of(fixture, f"{BUNDLE}/provenance.json")
         require(set(contract["provenance_fields"]) <= set(provenance) and provenance["run_id"] == RUN, f"provenance: {sorted(provenance)}")
+        require("model_code_closure_sha256" in contract["provenance_fields"], f"bundle.json provenance_fields: {contract['provenance_fields']}")
+        require("self_check.json" in contract["optional_files"], f"bundle.json optional_files: {contract['optional_files']}")
+        require(
+            provenance.get("model_code_closure_sha256") == model_code.closure_digest(fixture.root) == model_code.closure_digest(REAL),
+            f"provenance closure value: {provenance.get('model_code_closure_sha256')}",
+        )
         require("run_id" not in json.dumps(result), "result.json carries a run-specific fact")
         require(
             provenance["inputs"]["auxiliary_files"]["hac.parquet"]["sha256"] == manifest["auxiliary_files"]["hac.parquet"]["sha256"],
@@ -698,6 +707,108 @@ def fit_cases(cases: Any, folder: Path) -> None:
             require(run_action(fixture, "fit")[0] == 0, "a fit failed")
         name = f"{BUNDLE}/result.json"
         require((first.out / name).read_bytes() == (second.out / name).read_bytes(), "two fits of one input gave different result.json bytes")
+
+    def holdout_row_of(fixture: Fixture, references: Sequence[str], cells: Sequence[Any]) -> dict[str, Any]:
+        """Return the one newest-window fixture row whose predictors are these cells, so a saved row can be traced back to its key."""
+        names = [reference.split(":", 1)[-1] for reference in references]
+        found = [row for row in fixture.rows if row["window_year"] == fixture.newest and [row[name] for name in names] == list(cells)]
+        require(len(found) == 1, f"{len(found)} holdout rows match the saved cells {cells}")
+        return found[0]
+
+    def self_check_written() -> None:
+        """The saved candidate has a self-check file: the design's keys, 8 rows of feature values in feature-list order, the candidate's own holdout
+        predictions, no identifier, year or label value, and the same bytes from the upload list, the done record and the contract."""
+        fixture = Fixture(folder / "self_check")
+        require(run_action(fixture, "fit")[0] == 0, "fit failed")
+        path = fixture.out / f"{BUNDLE}/self_check.json"
+        require(path.is_file(), f"no self_check.json: {listing(fixture.out)}")
+        raw = path.read_bytes()
+        document = json.loads(raw)
+        feature_list = output_of(fixture, f"{BUNDLE}/feature_list.json")
+        require(set(document) == {"schema", "slot", "references", "rows", "predictions"}, f"self_check keys: {sorted(document)}")
+        require(
+            document["schema"] == 1 and document["slot"] == feature_list["slot"] == "m2_elastic_net", f"schema or slot: {document['schema']} {document['slot']}"
+        )
+        require(document["references"] == feature_list["references"], "references differ from feature_list.json")
+        require(len(document["rows"]) == len(document["predictions"]) == 8, f"rows {len(document['rows'])}, predictions {len(document['predictions'])}")
+        width = len(feature_list["references"])
+        require(all(len(row) == width for row in document["rows"]), f"a row is not {width} cells wide")
+        require(raw == bundle.canonical(document), "self_check.json is not canonical JSON")
+        table = {row["spine_key"]: row["predicted_m2_elastic_net"] for row in read_parquet(fixture.out / f"{BUNDLE}/holdout_predictions.parquet")}
+        keys = [holdout_row_of(fixture, document["references"], row)["spine_key"] for row in document["rows"]]
+        require(len(set(keys)) == 8 and keys == sorted(keys), f"the saved rows are not 8 distinct holdout rows in key order: {keys}")
+        require(document["predictions"] == [table[key] for key in keys], "the saved predictions are not the candidate's holdout predictions")
+        text = raw.decode()
+        leaked = [word for word in ("spine_key", "ccn", "window_year", "observed_sir", LABEL) if word in text]
+        leaked += [value for row in fixture.rows for value in (row["spine_key"], row["ccn"]) if value in text]
+        require(not leaked, f"identifiers in self_check.json: {leaked[:3]}")
+        require(f"{BUNDLE}/self_check.json" in verify_done(fixture.out, "fit", DIGEST)["outputs"], "fit.done.json does not list self_check.json")
+
+    def self_check_keeps_bundle_hash() -> None:
+        """The new file is not an identity file: the bundle hash is the hash of the other files' digests, and a refit gives the same file bytes."""
+        first, second = Fixture(folder / "hash_a"), Fixture(folder / "hash_b")
+        for fixture in (first, second):
+            require(run_action(fixture, "fit")[0] == 0, "a fit failed")
+        name = f"{BUNDLE}/self_check.json"
+        require((first.out / name).read_bytes() == (second.out / name).read_bytes(), "two fits of one input gave different self_check.json bytes")
+        done = verify_done(first.out, "fit", DIGEST)["outputs"]
+        require(name in done and "self_check.json" not in bundle.IDENTITY_FILES, "self_check.json is an identity file or not in the done record")
+        without = {key: value for key, value in done.items() if key != name}
+        require(bundle.sha256_of(done, HAI_TYPE) == bundle.sha256_of(without, HAI_TYPE), "self_check.json changed the bundle hash")
+
+    def self_check_encodes_missing_values() -> None:
+        """A held-out row with missing predictors is saved with null in those cells, and the two rows with the most missing values join the first six."""
+
+        def blank(rows: list[dict[str, Any]]) -> None:
+            newest = [row for row in rows if row["window_year"] == max(item["window_year"] for item in rows)]
+            newest.sort(key=lambda row: row["spine_key"])
+            newest[-1]["process"] = newest[-1]["cmi"] = None
+            newest[-2]["process"] = None
+
+        fixture = Fixture(folder / "self_check_missing", adjust=blank)
+        code, _, error = run_action(fixture, "fit")
+        require(code == 0, f"fit failed: {error}")
+        document = output_of(fixture, f"{BUNDLE}/self_check.json")
+        names = [reference.split(":", 1)[-1] for reference in document["references"]]
+        rows = [holdout_row_of(fixture, document["references"], row) for row in document["rows"]]
+        newest = sorted(row["spine_key"] for row in fixture.rows if row["window_year"] == fixture.newest)
+        require(
+            [row["spine_key"] for row in rows][-2:] == [newest[-2], newest[-1]],
+            f"the rows with most missing values were not chosen: {[row['spine_key'] for row in rows]}",
+        )
+        require([row["spine_key"] for row in rows][:6] == newest[:6], "the first six rows by key were not chosen")
+        for saved, row in zip(document["rows"], rows, strict=True):
+            require(saved == [row[name] for name in names], f"a saved row differs from its fixture row: {saved}")
+        cells = {key: [saved[names.index(key)] for saved in document["rows"]] for key in ("process", "cmi")}
+        require(cells["process"][-2:] == [None, None] and cells["cmi"][-1] is None, f"missing values are not null: {cells}")
+        require("NaN" not in (fixture.out / f"{BUNDLE}/self_check.json").read_text(), "a NaN token in self_check.json")
+
+    def self_check_for_a_small_holdout() -> None:
+        """A holdout with fewer than 8 predicted rows saves every row it has, and one with a single row saves that row. The fit refuses a holdout under
+        the configured minimum, so this reaches the writer's own rule with a suite stand-in."""
+        features = (Feature("view:process", "number"), Feature("view:kind", "category"))
+        for count in (3, 1):
+            rows = tuple({"spine_key": f"k{index}", "process": float(index) if index else None, "kind": index} for index in range(count))
+            holdout = SimpleNamespace(rows=rows, keys=tuple(row["spine_key"] for row in rows))
+            result = SimpleNamespace(holdout_positions=tuple(range(count)), predictions=tuple(0.5 + index for index in range(count)))
+            standin = SimpleNamespace(
+                candidate="m2_elastic_net",
+                slots={"m2_elastic_net": result},
+                request=SimpleNamespace(data=SimpleNamespace(split=lambda holdout=holdout: (None, holdout))),
+            )
+            document = bundle.self_check_document(standin, features)
+            require(document["rows"] == [[None if index == 0 else float(index), str(index)] for index in range(count)], f"{count} rows: {document['rows']}")
+            require(document["predictions"] == [0.5 + index for index in range(count)], f"{count} rows: predictions {document['predictions']}")
+
+    def self_check_only_for_a_candidate() -> None:
+        """A model that cannot be registered saves no model folder and no self-check file; a registrable one saves both."""
+        for model in ("m1", "m3"):
+            fixture = Fixture(folder / f"self_check_{model}", model=model)
+            require(run_action(fixture, "fit")[0] == 0, f"fit of {model} failed")
+            saved = (fixture.out / f"{BUNDLE}/self_check.json").is_file()
+            require(
+                saved == (model in training_contract.PROMOTION_MODELS) == (fixture.out / f"{BUNDLE}/model").is_dir(), f"{model}: self_check saved is {saved}"
+            )
 
     def retried() -> None:
         fixture = Fixture(folder / "retried")
@@ -1029,6 +1140,11 @@ def fit_cases(cases: Any, folder: Path) -> None:
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
     cases.check("job_fit_result_is_reproducible", reproducible)
+    cases.check("job_fit_self_check_is_written_for_the_candidate", self_check_written)
+    cases.check("job_fit_self_check_keeps_the_bundle_hash", self_check_keeps_bundle_hash)
+    cases.check("job_fit_self_check_encodes_missing_values_as_null", self_check_encodes_missing_values)
+    cases.check("job_fit_self_check_for_a_small_holdout", self_check_for_a_small_holdout)
+    cases.check("job_fit_self_check_only_for_a_registry_candidate", self_check_only_for_a_candidate)
     cases.check("job_fit_retry_resumes_completed", retried)
     cases.check("job_fit_retry_after_interrupt", interrupted)
     cases.check("job_fit_done_conflict", conflict)
@@ -2103,7 +2219,9 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require("hac_validation.matched_hospitals" in children["hac_validation"]["metrics"], "HAC metrics are missing")
         require(all(len(values) == 1 for item in store.active().values() for values in item["metrics"].values()), "a metric was logged twice")
         artifacts = store.artifacts(run_id)
-        expected = [f"bundle/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
+        expected = [
+            f"bundle/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json", "self_check.json")
+        ]
         require(all(name in artifacts for name in expected), f"bundle artifacts: {artifacts}")
         require("model/model.bin" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}")
         require(f"dvc/{metafile.name}" in artifacts, f"the DVC metafile was not logged: {artifacts}")

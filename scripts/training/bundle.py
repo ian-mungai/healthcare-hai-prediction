@@ -16,12 +16,16 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts import model_code
 from scripts.training.job_failure import JobFailure
 from scripts.training.models.common import SLOTS, Feature
+from scripts.training.models.preprocessing import missing
 from scripts.training.models.suite import ModelSuite
 
 PARQUET_TYPES = {"varchar": "string", "double": "float64"}
 SAFE_MODULES = ("builtins", "collections", "numpy", "sklearn")
+SELF_CHECK_ROWS = 8
+SELF_CHECK_LEADING_ROWS = 6
 
 
 def prefix(hai_type: str) -> str:
@@ -105,6 +109,39 @@ def holdout_table(suite: ModelSuite) -> tuple[list[dict[str, Any]], dict[str, st
     return rows, columns
 
 
+def self_check_cell(feature: Feature, value: Any) -> float | str | None:
+    """Return one saved cell: null for a missing value, a number as a float and a category as its text, as the serving wrapper reads them."""
+    if missing(value):
+        return None
+    return float(value) if feature.kind == "number" else str(value)
+
+
+def self_check_document(suite: ModelSuite, features: Sequence[Feature]) -> dict[str, Any]:
+    """Return ``self_check.json``: feature values of a few holdout rows and the candidate's own holdout predictions for them.
+
+    The rows are the first six by key plus the two others with the most missing predictors (ties by key), or every predicted row when there are fewer than
+    eight. It saves no key, identifier, year or label, so a row cannot be traced to a hospital.
+    """
+    candidate = suite.candidate
+    if candidate is None:
+        raise ValueError("a self-check needs a registry candidate")
+    result = suite.slots[candidate]
+    holdout = suite.request.data.split()[1]
+    predicted = dict(zip(result.holdout_positions, result.predictions, strict=True))
+    ordered = sorted(predicted, key=lambda index: holdout.keys[index])
+    leading = ordered[:SELF_CHECK_LEADING_ROWS]
+    gaps = {index: sum(missing(holdout.rows[index][feature.name]) for feature in features) for index in ordered[SELF_CHECK_LEADING_ROWS:]}
+    extra = sorted(gaps, key=lambda index: (-gaps[index], holdout.keys[index]))[: SELF_CHECK_ROWS - SELF_CHECK_LEADING_ROWS]
+    chosen = sorted([*leading, *extra], key=lambda index: holdout.keys[index])
+    return {
+        "schema": 1,
+        "slot": candidate,
+        "references": [feature.reference for feature in features],
+        "rows": [[self_check_cell(feature, holdout.rows[index][feature.name]) for feature in features] for index in chosen],
+        "predictions": [float(predicted[index]) for index in chosen],
+    }
+
+
 def resolved_versions(contract: Mapping[str, Any]) -> dict[str, str | None]:
     """Return the installed version of each package the model contract requires, or null for one the image does not carry as a Python package."""
     found: dict[str, str | None] = {}
@@ -162,6 +199,7 @@ def build(
             "git_dirty": record.get("git_dirty"),
             "code_digest": record["code_digest"],
             "resolved_versions": resolved_versions(contract),
+            "model_code_closure_sha256": model_code.closure_digest(code_root),
             "inputs": inputs["records"],
         }
     )
@@ -176,6 +214,7 @@ def build(
         if candidate is not None:
             model = Path(scratch) / "model"
             check_trusted(suite.slots[candidate].pipeline, contract["serialization"]["trusted_types"])
+            files[f"{base}/self_check.json"] = canonical(self_check_document(suite, features))
             save_model(suite.slots[candidate].pipeline, model, features, contract, code_root)
             for path in sorted(model.rglob("*")):
                 if path.is_file():
