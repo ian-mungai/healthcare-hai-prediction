@@ -41,34 +41,22 @@ from scripts.serving.service import LoadedModel
 LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "data_contracts/training/model_contract.json"
-FEATURE_LIST = "bundle/feature_list.json"
-PROVENANCE = "bundle/provenance.json"
-SELF_CHECK = "bundle/self_check.json"
+FEATURE_LIST = model_code.FEATURE_LIST
+PROVENANCE = model_code.PROVENANCE
+SELF_CHECK = model_code.SELF_CHECK
 MODEL = "model/model.skops"
 PROXY_DOWNLOADS = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
 SET_NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
-DIGEST = re.compile(r"[0-9a-f]{64}")
-CLOSURE_KEY = "model_code_closure_sha256"
+# The byte caps and the text and count bounds of the data rules, which ``scripts/model_code.py`` holds for every reader of the bundle files.
+JSON_CAP = model_code.JSON_CAP
+MODEL_CAP = model_code.MODEL_CAP
+MAX_FEATURES = model_code.MAX_FEATURES
+MAX_TEXT = model_code.MAX_TEXT
 # The libraries whose recorded version must equal the installed one: a model saved with one release is not safe to load with another.
 LIBRARIES = ("scikit-learn", "xgboost", "numpy", "scipy")
-# Provisional bounds (the first live load logs the real sizes): each JSON file 1 MiB, the model 64 MiB, at most 2000 features, 256 characters per text.
-JSON_CAP = 1024 * 1024
-MODEL_CAP = 64 * 1024 * 1024
-MAX_FEATURES = 2000
-MAX_TEXT = 256
-MAX_ROWS = 8
 # The local names of the four files: the loader chooses them, the artifact never does.
 LOCAL_NAMES = {FEATURE_LIST: "feature_list.json", PROVENANCE: "provenance.json", SELF_CHECK: "self_check.json", MODEL: "model.skops"}
 STREAM_CHUNK = 1024 * 1024
-SELF_CHECK_KEYS = {"schema", "slot", "references", "rows", "predictions"}
-# The keys the training writer writes (``scripts/training/bundle.py``: ``feature_list_document`` and ``build``). Any other key is refused. The nested
-# metadata of a permitted key is checked under three budgets: values nested at most ``MAX_DEPTH`` containers deep, at most ``MAX_ENTRIES`` entries in one
-# container and at most ``MAX_NODES`` values in a document. The real ``inputs`` value nests three deep (inputs, auxiliary_files, one file's record).
-FEATURE_LIST_KEYS = {"slot", "references", "columns", "fitted_slot", "kept_references", "kept_columns"}
-PROVENANCE_KEYS = {"run_id", "timings", "try", "git_commit", "git_dirty", "code_digest", "resolved_versions", CLOSURE_KEY, "inputs"}
-MAX_DEPTH = 4
-MAX_ENTRIES = 64
-MAX_NODES = 1024
 # The prediction check: ``math.isclose(got, saved, rel_tol=REL_TOL, abs_tol=ABS_TOL)``. Equal closure and library versions leave only floating-point summation
 # order to differ (about 1e-15 relative), so 1e-9 leaves six orders of headroom and a wrong feature order or a changed model differs by far more.
 REL_TOL = 1e-9
@@ -156,116 +144,42 @@ def image_closure(root: Path) -> str:
     return actual
 
 
-def refuse_constant(token: str) -> Any:
-    raise ValueError(f"{token} is not a JSON number")
-
-
-def refuse_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    keys = [key for key, _ in pairs]
-    if len(keys) != len(set(keys)):
-        raise ValueError("a key appears twice")
-    return dict(pairs)
+def refused[Result](rule: Callable[..., Result], *arguments: Any) -> Result:
+    """Apply one data rule of ``scripts/model_code.py`` and report a broken rule as ``ArtifactRefused``."""
+    try:
+        return rule(*arguments)
+    except model_code.DataRuleError as error:
+        raise ArtifactRefused(str(error)) from error
 
 
 def read_json(path: str, name: str) -> Any:
-    """Read one downloaded file as JSON data: at most ``JSON_CAP`` bytes, one document, no duplicate key and no NaN or Infinity token."""
-    try:
-        with open(path, "rb") as stream:
-            data = stream.read(JSON_CAP + 1)
-    except OSError as error:
-        raise ArtifactRefused(f"{name} cannot be read") from error
-    if len(data) > JSON_CAP:
-        raise ArtifactRefused(f"{name} is over {JSON_CAP} bytes")
-    try:
-        return json.loads(data.decode(), object_pairs_hook=refuse_duplicates, parse_constant=refuse_constant)
-    except (UnicodeDecodeError, ValueError, RecursionError) as error:
-        raise ArtifactRefused(f"{name} is not one JSON document of finite numbers with no repeated key") from error
-
-
-def text_list(document: Mapping[str, Any], key: str, name: str) -> list[str]:
-    values = document.get(key)
-    if not isinstance(values, list) or len(values) > MAX_FEATURES or not all(isinstance(item, str) and len(item) <= MAX_TEXT for item in values):
-        raise ArtifactRefused(f"{name} must hold {key} as a list of at most {MAX_FEATURES} texts of at most {MAX_TEXT} characters")
-    return values
-
-
-def optional_text(value: Any, name: str) -> None:
-    if value is not None and not (isinstance(value, str) and len(value) <= MAX_TEXT):
-        raise ArtifactRefused(f"{name} must be null or text of at most {MAX_TEXT} characters")
-
-
-def check_metadata(value: Any, name: str, nodes: list[int]) -> None:
-    """Check a nested JSON value under the three budgets: null, a boolean, a finite number or short text, in objects and lists of at most ``MAX_DEPTH``
-    containers deep with at most ``MAX_ENTRIES`` entries each, and at most ``MAX_NODES`` values in the whole document (``nodes`` counts across calls).
-    It walks with a list of pending values, so a deep value never reaches the parser's recursion limit."""
-    pending = [(value, 1)]
-    while pending:
-        item, depth = pending.pop()
-        nodes[0] += 1
-        if nodes[0] > MAX_NODES:
-            raise ArtifactRefused(f"{name} holds more than {MAX_NODES} values")
-        if isinstance(item, dict | list):
-            if depth > MAX_DEPTH or len(item) > MAX_ENTRIES:
-                raise ArtifactRefused(f"{name} nests more than {MAX_DEPTH} deep or holds more than {MAX_ENTRIES} entries in one object or list")
-            if isinstance(item, dict):
-                if not all(isinstance(key, str) and len(key) <= MAX_TEXT for key in item):
-                    raise ArtifactRefused(f"{name} holds a key that is not text of at most {MAX_TEXT} characters")
-                item = list(item.values())
-            pending.extend((child, depth + 1) for child in item)
-        elif not (item is None or isinstance(item, bool) or (isinstance(item, str) and len(item) <= MAX_TEXT) or finite_number(item)):
-            raise ArtifactRefused(f"{name} holds a value that is not null, a boolean, a finite number or text of at most {MAX_TEXT} characters")
+    """Read one downloaded file as JSON data: at most ``JSON_CAP`` bytes, one UTF-8 document, no duplicate key and no NaN or Infinity token."""
+    return refused(model_code.read_json_file, path, name)
 
 
 def check_feature_list(document: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The closed shape of ``bundle/feature_list.json``: the six keys the writer writes. ``references`` and ``columns`` are required; the slots are null or text
-    and the two kept lists, when present, are texts of equal length."""
-    if not isinstance(document, dict):
-        raise ArtifactRefused(f"{FEATURE_LIST} must be one JSON object")
-    if not set(document) <= FEATURE_LIST_KEYS:
-        raise ArtifactRefused(f"{FEATURE_LIST} holds a key outside {sorted(FEATURE_LIST_KEYS)}")
-    references, columns = text_list(document, "references", FEATURE_LIST), text_list(document, "columns", FEATURE_LIST)
-    if len(references) != len(columns):
-        raise ArtifactRefused(f"{FEATURE_LIST} must list as many columns as references")
-    for key in ("slot", "fitted_slot"):
-        optional_text(document.get(key), f"{FEATURE_LIST} {key}")
-    kept = [text_list(document, key, FEATURE_LIST) for key in ("kept_references", "kept_columns") if key in document]
-    if len(kept) == 1 or (kept and len(kept[0]) != len(kept[1])):
-        raise ArtifactRefused(f"{FEATURE_LIST} must hold kept_references and kept_columns together, of equal length")
-    return tuple(references), tuple(columns)
+    """The closed shape of ``bundle/feature_list.json`` (the references and the columns it returns)."""
+    return refused(model_code.check_feature_list, document)
 
 
 def check_provenance_shape(provenance: Any) -> None:
-    """The closed shape of ``bundle/provenance.json``: the nine keys the writer writes, each value of its kind and within the metadata budgets."""
-    if not isinstance(provenance, dict):
-        raise ArtifactRefused(f"{PROVENANCE} must be one JSON object")
-    if not set(provenance) <= PROVENANCE_KEYS:
-        raise ArtifactRefused(f"{PROVENANCE} holds a key outside {sorted(PROVENANCE_KEYS)}")
-    nodes = [0]
-    for key, value in provenance.items():
-        check_metadata(value, f"{PROVENANCE} {key}", nodes)
-    for key in ("run_id", "git_commit", "code_digest"):
-        optional_text(provenance.get(key), f"{PROVENANCE} {key}")
-    dirty, attempt = provenance.get("git_dirty"), provenance.get("try")
-    if not (dirty is None or isinstance(dirty, bool)):
-        raise ArtifactRefused(f"{PROVENANCE} git_dirty must be null or a boolean")
-    if attempt is not None and not (isinstance(attempt, int | str) and not isinstance(attempt, bool)):
-        raise ArtifactRefused(f"{PROVENANCE} try must be null, an integer or text")
-    for key in ("timings", "inputs"):
-        if key in provenance and not isinstance(provenance[key], dict):
-            raise ArtifactRefused(f"{PROVENANCE} {key} must be an object")
-    versions = provenance.get("resolved_versions", {})
-    if not isinstance(versions, dict) or not all(version is None or isinstance(version, str) for version in versions.values()):
-        raise ArtifactRefused(f"{PROVENANCE} resolved_versions must be an object of texts and nulls")
+    """The closed shape of ``bundle/provenance.json``."""
+    refused(model_code.check_provenance, provenance)
+
+
+def check_self_check(document: Any, references: tuple[str, ...]) -> tuple[list[list[Any]], list[float]]:
+    """The shape of ``bundle/self_check.json`` as data (the rows and the predictions it returns)."""
+    return refused(model_code.check_self_check, document, references)
 
 
 def check_admission(provenance: Any, closure: str) -> None:
     """The closed shape of the provenance, then exact equality: the closure digest, then the four library versions."""
     check_provenance_shape(provenance)
-    recorded = provenance.get(CLOSURE_KEY)
+    recorded = provenance.get(model_code.CLOSURE_KEY)
     if recorded is None:
-        raise ModelCodeMissing(f"{PROVENANCE} holds no {CLOSURE_KEY}")
-    if not isinstance(recorded, str) or not DIGEST.fullmatch(recorded):
-        raise ArtifactRefused(f"{CLOSURE_KEY} must be 64 lowercase hex characters")
+        raise ModelCodeMissing(f"{PROVENANCE} holds no {model_code.CLOSURE_KEY}")
+    if not isinstance(recorded, str) or not model_code.DIGEST.fullmatch(recorded):
+        raise ArtifactRefused(f"{model_code.CLOSURE_KEY} must be 64 lowercase hex characters")
     if recorded != closure:
         raise ModelCodeMismatch(f"the model was trained with model code {recorded}, and this image holds {closure}")
     versions = provenance.get("resolved_versions")
@@ -279,48 +193,6 @@ def check_admission(provenance: Any, closure: str) -> None:
             installed = None
         if trained is None or trained != installed:
             raise LibraryMismatch(f"{library}: the model was trained with {trained}, and this image installs {installed}")
-
-
-def finite_number(value: Any) -> bool:
-    """Whether a JSON value is a number (not a boolean) that a float holds and that is finite: an integer of 400 digits is not."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return False
-    try:
-        return math.isfinite(float(value))
-    except OverflowError:
-        return False
-
-
-def check_cell(value: Any, row: int) -> None:
-    if value is None or (isinstance(value, str) and len(value) <= MAX_TEXT) or finite_number(value):
-        return
-    raise ArtifactRefused(f"{SELF_CHECK} row {row} holds a cell that is not null, a finite number or short text")
-
-
-def check_self_check(document: Any, references: tuple[str, ...]) -> tuple[list[list[Any]], list[float]]:
-    """The shape of ``bundle/self_check.json`` as data: a closed key set, the feature list's references, 1 to ``MAX_ROWS`` rows, as many finite predictions."""
-    if not isinstance(document, dict) or set(document) != SELF_CHECK_KEYS:
-        raise ArtifactRefused(f"{SELF_CHECK} must be one JSON object with exactly the keys {sorted(SELF_CHECK_KEYS)}")
-    if type(document["schema"]) is not int or document["schema"] != 1:
-        raise ArtifactRefused(f"{SELF_CHECK} must have schema 1")
-    if not isinstance(document["slot"], str) or len(document["slot"]) > MAX_TEXT:
-        raise ArtifactRefused(f"{SELF_CHECK} must name its slot as text")
-    if document["references"] != list(references):
-        raise ArtifactRefused(f"the references of {SELF_CHECK} differ from those of {FEATURE_LIST}")
-    rows, predictions = document["rows"], document["predictions"]
-    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_ROWS:
-        raise ArtifactRefused(f"{SELF_CHECK} must hold 1 to {MAX_ROWS} rows")
-    for index, row in enumerate(rows):
-        if not isinstance(row, list) or len(row) != len(references):
-            raise ArtifactRefused(f"{SELF_CHECK} row {index} must be a list with one cell per reference")
-        for value in row:
-            check_cell(value, index)
-    if not isinstance(predictions, list) or len(predictions) != len(rows):
-        raise ArtifactRefused(f"{SELF_CHECK} must hold one prediction per row")
-    for index, value in enumerate(predictions):
-        if not finite_number(value):
-            raise ArtifactRefused(f"{SELF_CHECK} prediction {index} must be a finite number")
-    return rows, [float(value) for value in predictions]
 
 
 def replay(predict: Callable[[Mapping[str, Any]], float], references: tuple[str, ...], rows: list[list[Any]], saved: list[float]) -> None:

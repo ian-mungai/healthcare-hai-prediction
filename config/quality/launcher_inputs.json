@@ -1984,6 +1984,7 @@
     "scripts/lakehouse/unit_records.py",
     "scripts/lakehouse/version_listing.py",
     "scripts/metrics_push.py",
+    "scripts/model_code.py",
     "scripts/orchestration/__init__.py",
     "scripts/orchestration/airflow_api.py",
     "scripts/orchestration/airflow_import_probe.py",

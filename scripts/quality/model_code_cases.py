@@ -11,6 +11,7 @@ cases that change files work on a scratch copy; none writes into the repository.
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import functools
 import hashlib
@@ -28,7 +29,7 @@ from typing import Any
 
 from scripts import model_code
 from scripts.process import run_command
-from scripts.quality import ci_groups, model_code_behavior
+from scripts.quality import ci_groups, data_rule_matrix, model_code_behavior
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "data_contracts/training/model_contract.json"
@@ -176,6 +177,79 @@ def case_image_provided_module_needs_only_the_standard_library() -> list[str]:
         outside = model_code.repository_imports(ROOT, name)
         if outside:
             problems.append(f"{name} imports repository modules {sorted(outside)}")
+    return problems
+
+
+def good_bundle_documents() -> dict[str, Any]:
+    """The three bundle documents of a model with two features, as the writer writes them (the closure value is a placeholder digest)."""
+    return {
+        data_rule_matrix.FEATURE_LIST: {"slot": "m2_elastic_net", "references": ["a:1", "b:2"], "columns": ["a", "b"], "fitted_slot": None},
+        data_rule_matrix.PROVENANCE: {
+            "run_id": "train_1",
+            "timings": {"fit_seconds": 1.5},
+            "model_code_closure_sha256": "0" * 64,
+            "resolved_versions": {"numpy": "2.5.3"},
+        },
+        data_rule_matrix.SELF_CHECK: {
+            "schema": 1,
+            "slot": "m2_elastic_net",
+            "references": ["a:1", "b:2"],
+            "rows": [[1.0, "x"], [None, "y"]],
+            "predictions": [0.5, 1.5],
+        },
+    }
+
+
+def apply_shared_rules(file: str, data: bytes, references: tuple[str, ...]) -> None:
+    """Parse and check one file with the shared functions, as every reader does. Raises ``model_code.DataRuleError``."""
+    document = model_code.parse_json(data, file)
+    if file == data_rule_matrix.FEATURE_LIST:
+        model_code.check_feature_list(document)
+    elif file == data_rule_matrix.PROVENANCE:
+        model_code.check_provenance(document)
+    else:
+        model_code.check_self_check(document, references)
+
+
+def case_shared_data_rules_name_the_rule_each_matrix_document_breaks() -> list[str]:
+    """Every document of the shared matrix (``scripts/quality/data_rule_matrix.py``) is refused with the rule the matrix names, or accepted when it names none.
+    The loader, the promote action and the promotion check run the same list, so a rule that one of them lacks fails their case."""
+    problems = []
+    good = good_bundle_documents()
+    references = tuple(good[data_rule_matrix.FEATURE_LIST]["references"])
+    entries = data_rule_matrix.entries()
+    if len({entry.name for entry in entries}) != len(entries):
+        problems.append("two entries of the matrix share a name")
+    for entry in entries:
+        built = data_rule_matrix.build(entry, good[entry.file])
+        data = built if isinstance(built, bytes) else (json.dumps(built, sort_keys=True) + "\n").encode()
+        try:
+            apply_shared_rules(entry.file, data, references)
+            found = ""
+        except model_code.DataRuleError as error:
+            found = error.rule
+        if found != entry.rule:
+            problems.append(f"{entry.name}: the shared rules gave {found or 'no refusal'}, and the matrix names {entry.rule or 'no refusal'}")
+    for file in (data_rule_matrix.FEATURE_LIST, data_rule_matrix.PROVENANCE, data_rule_matrix.SELF_CHECK):
+        try:
+            apply_shared_rules(file, (json.dumps(good[file]) + "\n").encode(), references)
+        except model_code.DataRuleError as error:
+            problems.append(f"the good {file} was refused as {error.rule}")
+    for probe in ("duplicate_schema_key", "utf16_self_check", "valid_provenance_with_an_unused_nan_field"):
+        if probe not in {entry.name for entry in entries}:
+            problems.append(f"the matrix lacks the reviewer's probe {probe}")
+    return problems
+
+
+def case_shared_data_rules_import_only_the_standard_library() -> list[str]:
+    """``scripts/model_code.py`` runs in the model API image and in the training code root as it is: its imports are all standard library, and it is not one of
+    the files of the closure record, so changing it does not change the closure digest."""
+    tree = ast.parse((ROOT / "scripts/model_code.py").read_text())
+    imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    imported |= {(node.module or "").split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.level == 0}
+    problems = [f"scripts/model_code.py imports {name}, which is not in the standard library" for name in sorted(imported - set(sys.stdlib_module_names))]
+    if "scripts/model_code.py" in {item["path"] for item in read_record()["files"]}:
+        problems.append("scripts/model_code.py is a file of the closure record, so a change to it would change the closure digest")
     return problems
 
 
@@ -1104,6 +1178,8 @@ ORDER = [
     case_image_provided_files_are_in_the_dockerfile,
     case_dockerfile_copies_exactly_the_files_of_the_record,
     case_image_provided_module_needs_only_the_standard_library,
+    case_shared_data_rules_name_the_rule_each_matrix_document_breaks,
+    case_shared_data_rules_import_only_the_standard_library,
     case_planted_import_changes_the_closure,
     case_imports_that_reach_a_file_join_the_closure,
     case_dynamic_imports_that_cannot_be_read_are_refused,

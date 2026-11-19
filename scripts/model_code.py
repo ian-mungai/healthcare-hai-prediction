@@ -12,6 +12,10 @@ time and a ``__pycache__`` folder never change it. Regenerate the record on purp
 
     .venv/bin/python -m scripts.model_code check [--root FOLDER]
     .venv/bin/python -m scripts.model_code write --generation N [--root FOLDER]
+
+The module also holds the data rules of the model's bundle files (``bundle/feature_list.json``, ``bundle/provenance.json`` and ``bundle/self_check.json``), the
+one home of the rules that every reader applies: the model API loader, the promote action and the promotion check. They are pure functions of the bytes or of
+the parsed document. They raise ``DataRuleError``, which names the rule that is broken, and each reader maps that to its own refusal.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import re
 import sys
 import tomllib
@@ -484,14 +489,8 @@ def import_closure(root: Path, libraries: Collection[str] | None = None) -> list
 def read_record(path: Path) -> dict[str, Any]:
     """Read and check the record against the closed schema (the same rules as ``model_code.schema.json``). Raises RecordError."""
 
-    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
-        keys = [key for key, _ in items]
-        if len(keys) != len(set(keys)):
-            raise RecordError("a key appears twice")
-        return dict(items)
-
     try:
-        record = json.loads(path.read_text(), object_pairs_hook=pairs)
+        record = json.loads(path.read_text(), object_pairs_hook=distinct_pairs)
     except (OSError, UnicodeDecodeError, ValueError) as error:
         raise RecordError(f"cannot read {path}: {error}") from error
     check_record(record)
@@ -607,6 +606,193 @@ def verify(root: Path, libraries: Collection[str] | None = None) -> list[str]:
     problems += [f"closure_changed: {path} is needed by the trusted modules and not in the record" for path in sorted(set(found) - listed)]
     problems += [f"closure_changed: {path} is in the record and not needed by the trusted modules" for path in sorted(listed - set(found))]
     return [*problems, *import_problems]
+
+
+# The data rules of the bundle files
+
+FEATURE_LIST = "bundle/feature_list.json"
+PROVENANCE = "bundle/provenance.json"
+SELF_CHECK = "bundle/self_check.json"
+CLOSURE_KEY = "model_code_closure_sha256"
+# Provisional bounds (the first live load logs the real sizes): each JSON file 1 MiB, the model 64 MiB, at most 2000 features, 256 characters per text.
+JSON_CAP = 1024 * 1024
+MODEL_CAP = 64 * 1024 * 1024
+MAX_FEATURES = 2000
+MAX_TEXT = 256
+MAX_ROWS = 8
+# The keys the training writer writes (``scripts/training/bundle.py``: ``feature_list_document`` and ``build``). Any other key is refused. The nested
+# metadata of a permitted key is checked under three budgets: values nested at most ``MAX_DEPTH`` containers deep, at most ``MAX_ENTRIES`` entries in one
+# container and at most ``MAX_NODES`` values in a document. The real ``inputs`` value nests three deep (inputs, auxiliary_files, one file's record).
+FEATURE_LIST_KEYS = frozenset({"slot", "references", "columns", "fitted_slot", "kept_references", "kept_columns"})
+PROVENANCE_KEYS = frozenset({"run_id", "timings", "try", "git_commit", "git_dirty", "code_digest", "resolved_versions", CLOSURE_KEY, "inputs"})
+SELF_CHECK_KEYS = frozenset({"schema", "slot", "references", "rows", "predictions"})
+MAX_DEPTH = 4
+MAX_ENTRIES = 64
+MAX_NODES = 1024
+
+
+class DataRuleError(ValueError):
+    """A bundle file breaks a data rule. ``rule`` names it: ``unreadable``, ``too_large``, ``not_json``, ``feature_list``, ``provenance``,
+    ``self_check_not_object``, ``self_check_keys``, ``self_check_references``, ``self_check_row_count``, ``self_check_row_width``, ``self_check_cells`` or
+    ``self_check_predictions``. The message names the place and the rule, never a value of the file."""
+
+    def __init__(self, rule: str, detail: str) -> None:
+        super().__init__(detail)
+        self.rule = rule
+
+
+def refuse_constant(token: str) -> Any:
+    raise ValueError(f"{token} is not a JSON number")
+
+
+def distinct_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """An ``object_pairs_hook`` that refuses an object with a repeated key."""
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("a key appears twice")
+    return dict(pairs)
+
+
+def parse_json(data: bytes, name: str) -> Any:
+    """Parse the bytes of one bundle file as one JSON document: at most ``JSON_CAP`` bytes, UTF-8 only (a byte order mark, UTF-16 and UTF-32 are refused),
+    no repeated key and no NaN or Infinity token. Raises ``DataRuleError`` with the rule ``too_large`` or ``not_json``."""
+    if len(data) > JSON_CAP:
+        raise DataRuleError("too_large", f"{name} is over {JSON_CAP} bytes")
+    try:
+        return json.loads(data.decode(), object_pairs_hook=distinct_pairs, parse_constant=refuse_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
+        raise DataRuleError("not_json", f"{name} is not one UTF-8 JSON document of finite numbers with no repeated key") from error
+
+
+def read_json_file(path: str, name: str) -> Any:
+    """Read at most ``JSON_CAP`` + 1 bytes of the file and parse them with ``parse_json``. A file that cannot be read is the rule ``unreadable``."""
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(JSON_CAP + 1)
+    except OSError as error:
+        raise DataRuleError("unreadable", f"{name} cannot be read") from error
+    return parse_json(data, name)
+
+
+def finite_number(value: Any) -> bool:
+    """Whether a JSON value is a number (not a boolean) that a float holds and that is finite: an integer of 400 digits is not."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
+def text_list(document: Mapping[str, Any], key: str, name: str) -> list[str]:
+    values = document.get(key)
+    if not isinstance(values, list) or len(values) > MAX_FEATURES or not all(isinstance(item, str) and len(item) <= MAX_TEXT for item in values):
+        raise DataRuleError("feature_list", f"{name} must hold {key} as a list of at most {MAX_FEATURES} texts of at most {MAX_TEXT} characters")
+    return values
+
+
+def optional_text(value: Any, rule: str, name: str) -> None:
+    if value is not None and not (isinstance(value, str) and len(value) <= MAX_TEXT):
+        raise DataRuleError(rule, f"{name} must be null or text of at most {MAX_TEXT} characters")
+
+
+def check_metadata(value: Any, name: str, nodes: list[int]) -> None:
+    """Check a nested JSON value under the three budgets: null, a boolean, a finite number or short text, in objects and lists of at most ``MAX_DEPTH``
+    containers deep with at most ``MAX_ENTRIES`` entries each, and at most ``MAX_NODES`` values in the whole document (``nodes`` counts across calls).
+    It walks with a list of pending values, so a deep value never reaches the parser's recursion limit."""
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        nodes[0] += 1
+        if nodes[0] > MAX_NODES:
+            raise DataRuleError("provenance", f"{name} holds more than {MAX_NODES} values")
+        if isinstance(item, dict | list):
+            if depth > MAX_DEPTH or len(item) > MAX_ENTRIES:
+                raise DataRuleError("provenance", f"{name} nests more than {MAX_DEPTH} deep or holds more than {MAX_ENTRIES} entries in one object or list")
+            if isinstance(item, dict):
+                if not all(isinstance(key, str) and len(key) <= MAX_TEXT for key in item):
+                    raise DataRuleError("provenance", f"{name} holds a key that is not text of at most {MAX_TEXT} characters")
+                item = list(item.values())
+            pending.extend((child, depth + 1) for child in item)
+        elif not (item is None or isinstance(item, bool) or (isinstance(item, str) and len(item) <= MAX_TEXT) or finite_number(item)):
+            raise DataRuleError("provenance", f"{name} holds a value that is not null, a boolean, a finite number or text of at most {MAX_TEXT} characters")
+
+
+def check_feature_list(document: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The closed shape of ``bundle/feature_list.json``: the six keys the writer writes. ``references`` and ``columns`` are required; the slots are null or text
+    and the two kept lists, when present, are texts of equal length. Returns the references and the columns. Raises ``DataRuleError`` (``feature_list``)."""
+    if not isinstance(document, dict):
+        raise DataRuleError("feature_list", f"{FEATURE_LIST} must be one JSON object")
+    if not set(document) <= FEATURE_LIST_KEYS:
+        raise DataRuleError("feature_list", f"{FEATURE_LIST} holds a key outside {sorted(FEATURE_LIST_KEYS)}")
+    references, columns = text_list(document, "references", FEATURE_LIST), text_list(document, "columns", FEATURE_LIST)
+    if len(references) != len(columns):
+        raise DataRuleError("feature_list", f"{FEATURE_LIST} must list as many columns as references")
+    for key in ("slot", "fitted_slot"):
+        optional_text(document.get(key), "feature_list", f"{FEATURE_LIST} {key}")
+    kept = [text_list(document, key, FEATURE_LIST) for key in ("kept_references", "kept_columns") if key in document]
+    if len(kept) == 1 or (kept and len(kept[0]) != len(kept[1])):
+        raise DataRuleError("feature_list", f"{FEATURE_LIST} must hold kept_references and kept_columns together, of equal length")
+    return tuple(references), tuple(columns)
+
+
+def check_provenance(provenance: Any) -> None:
+    """The closed shape of ``bundle/provenance.json``: the nine keys the writer writes, each value of its kind and within the metadata budgets. The closure
+    value is not judged here: each reader compares it with its own. Raises ``DataRuleError`` (``provenance``)."""
+    if not isinstance(provenance, dict):
+        raise DataRuleError("provenance", f"{PROVENANCE} must be one JSON object")
+    if not set(provenance) <= PROVENANCE_KEYS:
+        raise DataRuleError("provenance", f"{PROVENANCE} holds a key outside {sorted(PROVENANCE_KEYS)}")
+    nodes = [0]
+    for key, value in provenance.items():
+        check_metadata(value, f"{PROVENANCE} {key}", nodes)
+    for key in ("run_id", "git_commit", "code_digest"):
+        optional_text(provenance.get(key), "provenance", f"{PROVENANCE} {key}")
+    dirty, attempt = provenance.get("git_dirty"), provenance.get("try")
+    if not (dirty is None or isinstance(dirty, bool)):
+        raise DataRuleError("provenance", f"{PROVENANCE} git_dirty must be null or a boolean")
+    if attempt is not None and not (isinstance(attempt, int | str) and not isinstance(attempt, bool)):
+        raise DataRuleError("provenance", f"{PROVENANCE} try must be null, an integer or text")
+    for key in ("timings", "inputs"):
+        if key in provenance and not isinstance(provenance[key], dict):
+            raise DataRuleError("provenance", f"{PROVENANCE} {key} must be an object")
+    versions = provenance.get("resolved_versions", {})
+    if not isinstance(versions, dict) or not all(version is None or isinstance(version, str) for version in versions.values()):
+        raise DataRuleError("provenance", f"{PROVENANCE} resolved_versions must be an object of texts and nulls")
+
+
+def check_cell(value: Any, row: int) -> None:
+    if value is None or (isinstance(value, str) and len(value) <= MAX_TEXT) or finite_number(value):
+        return
+    raise DataRuleError("self_check_cells", f"{SELF_CHECK} row {row} holds a cell that is not null, a finite number or short text")
+
+
+def check_self_check(document: Any, references: Sequence[str]) -> tuple[list[list[Any]], list[float]]:
+    """The shape of ``bundle/self_check.json`` as data: a closed key set, schema 1, a slot of at most ``MAX_TEXT`` characters, the feature list's references,
+    1 to ``MAX_ROWS`` rows as wide as the references, cells that are null, finite numbers or short text, and as many finite predictions as rows. Returns the
+    rows and the predictions. Raises ``DataRuleError`` with the rule ``self_check_<part>``. The file is data only: no model runs."""
+    if not isinstance(document, dict):
+        raise DataRuleError("self_check_not_object", f"{SELF_CHECK} must be one JSON object")
+    if set(document) != SELF_CHECK_KEYS or type(document["schema"]) is not int or document["schema"] != 1:
+        raise DataRuleError("self_check_keys", f"{SELF_CHECK} must be one JSON object with exactly the keys {sorted(SELF_CHECK_KEYS)} and schema 1")
+    if not isinstance(document["slot"], str) or len(document["slot"]) > MAX_TEXT:
+        raise DataRuleError("self_check_keys", f"{SELF_CHECK} must name its slot as text of at most {MAX_TEXT} characters")
+    if document["references"] != list(references):
+        raise DataRuleError("self_check_references", f"the references of {SELF_CHECK} differ from those of {FEATURE_LIST}")
+    rows, predictions = document["rows"], document["predictions"]
+    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_ROWS:
+        raise DataRuleError("self_check_row_count", f"{SELF_CHECK} must hold 1 to {MAX_ROWS} rows")
+    for index, row in enumerate(rows):
+        if not isinstance(row, list) or len(row) != len(references):
+            raise DataRuleError("self_check_row_width", f"{SELF_CHECK} row {index} must be a list with one cell per reference")
+        for value in row:
+            check_cell(value, index)
+    if not isinstance(predictions, list) or len(predictions) != len(rows):
+        raise DataRuleError("self_check_predictions", f"{SELF_CHECK} must hold one prediction per row")
+    for index, value in enumerate(predictions):
+        if not finite_number(value):
+            raise DataRuleError("self_check_predictions", f"{SELF_CHECK} prediction {index} must be a finite number")
+    return rows, [float(value) for value in predictions]
 
 
 def main(argv: Sequence[str] | None = None) -> int:

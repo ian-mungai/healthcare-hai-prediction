@@ -29,6 +29,7 @@ from unittest import mock
 
 from scripts import model_code
 from scripts.features.feast_harness import Checker
+from scripts.quality import data_rule_matrix
 from scripts.serving import mlflow_loader
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -868,6 +869,24 @@ def case_loader_refuses_unknown_deep_or_oversized_fields_of_the_feature_list_and
         c.check(f"a provenance with null commit, dirty flag and run_id and an integer try loads ({error!r})", model is not None)
 
 
+def case_loader_agrees_with_the_shared_matrix_of_bundle_documents(c: Checker) -> None:
+    """Every document of the shared matrix (``scripts/quality/data_rule_matrix.py``) is refused as ``ArtifactRefused`` by the loader, or loads when the matrix
+    names no rule. The promote action and the promotion check run the same list, so the readers cannot drift apart: the reviewer's probes (a repeated schema
+    key, a UTF-16 self-check, a valid provenance with an unused NaN field) and the slot and feature-list bounds are in it."""
+    paths = {data_rule_matrix.FEATURE_LIST: FEATURE_LIST, data_rule_matrix.PROVENANCE: PROVENANCE, data_rule_matrix.SELF_CHECK: SELF_CHECK}
+    good = good_documents(model_code.closure_digest(ROOT))
+    for entry in data_rule_matrix.entries():
+        path = paths[entry.file]
+        built = data_rule_matrix.build(entry, good[path])
+        raw = {path: built if isinstance(built, bytes) else canonical(built)}
+        if entry.rule:
+            refused(c, f"matrix {entry.name}", "ArtifactRefused", raw=raw)
+        else:
+            with world(raw=raw) as w:
+                model, error = w.attempt()
+                c.check(f"matrix {entry.name}: loads (error: {error!r})", model is not None)
+
+
 def case_loader_reads_the_feature_set_from_the_tags(c: Checker) -> None:
     """The loader reads the model's feature set and the set's schema hash from the version tags; a set model with no set hash does not load."""
 
@@ -974,6 +993,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
         case_loader_refuses_unknown_deep_or_oversized_fields_of_the_feature_list_and_provenance,
         "mlflow loader",
     ),
+    "loader_agrees_with_the_shared_matrix_of_bundle_documents": (case_loader_agrees_with_the_shared_matrix_of_bundle_documents, "mlflow loader"),
     "loader_reads_the_feature_set": (case_loader_reads_the_feature_set_from_the_tags, "mlflow loader feast"),
     "image_start_refuses_files_that_differ_from_their_record": (case_image_start_refuses_files_that_differ_from_their_record, "mlflow loader"),
 }
