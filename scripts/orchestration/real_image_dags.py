@@ -1041,7 +1041,7 @@ def cases_catalog() -> dict[str, Scenario]:
 
     def stage_bronze_request(rig: Any) -> None:
         pair, _ = c.table_pair()
-        rig.stage.stage(c.BRONZE_RUN, "bronze_request.json", {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": c.INVENTORY})
+        rig.stage.stage(c.BRONZE_RUN, "bronze_request.json", c.bronze_request(pair))
 
     def bronze_jobs_ran(rig: Any, facts: dict[str, Any]) -> None:
         """The stage job then the load job launched, each with the full launch record of a job that succeeded."""

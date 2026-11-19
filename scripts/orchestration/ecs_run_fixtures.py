@@ -33,6 +33,12 @@ def collections_of_table_map() -> dict[str, str]:
     return {entry["table"]: entry["collection"] for entry in json.loads((ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"]}
 
 
+def bronze_request(tables: list[str]) -> dict[str, object]:
+    """The ``bronze_request.json`` of a real load that the stage job stages: exactly the keys the launch check reads (``ecs_preflight.BRONZE_REQUEST_KEYS``),
+    with no table left out."""
+    return {"tables": tables, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
+
+
 def table_pair() -> tuple[list[str], str]:
     """Two tables of one collection and one table of another, in table map order."""
     by_collection: dict[str, list[str]] = {}

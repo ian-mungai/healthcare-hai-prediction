@@ -953,6 +953,47 @@ def the_api_stand_in_serves_signed_requests_and_refuses_a_wrong_secret() -> None
         require(token_problem(signed(claims, "HS256"), SIGNING, now) is not None, "another algorithm was accepted")
 
 
+def the_bronze_request_the_image_run_stages_passes_the_launch_check() -> None:
+    """The bronze DAG's load job launches only on a staged ``bronze_request.json`` that the launch check accepts (``ecs_preflight.bronze_request_reader``). The
+    image run does not run the stage job, so its scenario stages that request itself: it must be the shape the stage phase writes, or the DAG fails in the image
+    at ``bronze_load`` with a refusal that no pipeline case shows. The request of every bronze DAG step is read here by the launch check, and the key sets the
+    stage phase writes and the launch accepts are the same."""
+    from orchestration import ecs_preflight
+    from scripts.lakehouse import bronze_run
+    from scripts.orchestration import real_image_dags as image
+    from scripts.orchestration.ecs_run_fixtures import collections_of_table_map
+
+    require(
+        bronze_run.REQUEST_KEYS == ecs_preflight.BRONZE_REQUEST_KEYS,
+        f"the stage phase writes {bronze_run.REQUEST_KEYS}, the launch accepts {ecs_preflight.BRONZE_REQUEST_KEYS}",
+    )
+    modes = image.rig_modules().cases
+    bucket = modes.BUCKET
+    steps = [
+        (name, step) for name, scenario in image.cases_catalog().items() for step in scenario.steps if step.dag_id == "bronze_dag" and step.prepare is not None
+    ]
+    require(steps, "no image scenario stages a bronze request for the bronze DAG")
+    for name, step in steps:
+        rig = image.cases_catalog()[name].rig()
+        step.prepare(rig)
+        reader = ecs_preflight.bronze_request_reader(rig.stage, bucket, collections_of_table_map())
+        try:
+            values = reader(step.params["run_id"])
+        except Exception as error:
+            raise AssertionError(f"{name}: the launch check refused the bronze request that the image run stages: {type(error).__name__}: {error}") from None
+        require(values["BRONZE_TARGET"] == "real" and not values["BRONZE_DRY_RUN"], f"{name}: the checked values are {values}")
+        # The DAG's two tasks over the same rig, through the shipped step runner: the stage job and the load job each launch once.
+        with modes.world(rig, "bronze_dag", dict(step.params)) as current:
+            states = {task: current.step(task) for task in ("bronze_stage", "bronze_load")}
+        sent = len([call for call in rig.ecs.calls if call[0] == "run_task"])
+        require(
+            states == {"bronze_stage": "succeeded", "bronze_load": "succeeded"} and sent == 2,
+            f"{name}: the bronze DAG tasks ended {states} with {sent} RunTask calls",
+        )
+        if step.check is not None:
+            step.check(rig, {"run_task_calls": sent})  # the launch records of both jobs, as the image run checks them
+
+
 def the_image_scenarios_of_the_first_dag_hold_against_the_stand_in_run() -> None:
     """Every first-DAG step of the real-image scenarios (``real_image_dags.py``) is run here under the scheduler model of this file, against the rig's own
     code binding: the task states, the run state and the checks of the API must hold, and a step run with another start or another failing stage must break
@@ -1170,6 +1211,7 @@ CASES: dict[str, Callable[[], None]] = {
     "a_model_route_that_never_appears_or_never_ends_fails_visibly": a_model_route_that_never_appears_or_never_ends_fails_visibly,
     "a_paused_or_missing_dag_fails_the_pipeline_before_any_child_starts": a_paused_or_missing_dag_fails_the_pipeline_before_any_child_starts,
     "the_api_stand_in_serves_signed_requests_and_refuses_a_wrong_secret": the_api_stand_in_serves_signed_requests_and_refuses_a_wrong_secret,
+    "the_bronze_request_the_image_run_stages_passes_the_launch_check": the_bronze_request_the_image_run_stages_passes_the_launch_check,
     "the_image_scenarios_of_the_first_dag_hold_against_the_stand_in_run": the_image_scenarios_of_the_first_dag_hold_against_the_stand_in_run,
     "the_runtime_reads_runs_pauses_and_task_states_through_the_signed_rest_api": the_runtime_reads_runs_pauses_and_task_states_through_the_signed_rest_api,
 }

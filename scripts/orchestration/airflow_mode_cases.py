@@ -101,6 +101,7 @@ from scripts.orchestration.ecs_run_fixtures import (
     SERVE_RUN,
     SILVER_RUN,
     TRAIN_PARAMS,
+    bronze_request,
     collections_of_table_map,
     table_pair,
 )
@@ -796,7 +797,7 @@ def promotion_needs_no_approval() -> None:
 
 def bronze_request_is_checked_and_bound() -> None:
     pair, other = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
+    good = bronze_request(pair)
     params = {"run_id": BRONZE_RUN, "mode": "real"}
     rig = Rig()
     with world(rig, "ingestion_dag", params) as current:
@@ -824,7 +825,7 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
     takes at most 8192 characters of container overrides, all containers together (the fake refuses more, as the service does). The tables travel in the
     staged request, which each phase reads and checks against its digest, and never in the overrides of the pin, load or check container."""
     names = list(collections_of_table_map())
-    good = {"tables": names, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
+    good = bronze_request(names)
     ingestion, bronze = "ingestion_0f0f0f0f", "bronze_0f0f0f0f"
     rig = Rig()
     rig.stage_runs(ingestion)
@@ -850,7 +851,7 @@ def a_bronze_run_runs_the_code_of_its_ingestion_run() -> None:
     its pipeline, to the code of its ingestion run, and its bronze job fetches that code. A bronze run with code staged by hand keeps that code, and a
     binding is never replaced."""
     pair, _ = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
+    good = bronze_request(pair)
     ingestion, bronze = "ingestion_0b0b0b0b", "bronze_0b0b0b0b"
     rig = Rig()
     rig.stage_runs(ingestion)
@@ -908,7 +909,7 @@ def the_stage_job_runs_before_the_request_exists_and_the_bronze_job_after() -> N
     source inventory, and then the ``bronze`` job under the same run ID. A launch is keyed by the run and the job, so each job has its own launch record.
     The stage launch needs no staged request and runs the code of the ingestion run. Airflow writes none of the staged inputs."""
     pair, _ = table_pair()
-    good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY, "skipped_tables": []}
+    good = bronze_request(pair)
     ingestion, bronze = "ingestion_0e0e0e0e", "bronze_0e0e0e0e"
     rig = Rig()
     rig.stage_runs(ingestion)
