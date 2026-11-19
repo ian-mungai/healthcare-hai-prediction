@@ -1734,6 +1734,7 @@
     "scripts/acquisition/tests/test_capture.py",
     "scripts/acquisition/tests/test_capture_mode.py",
     "scripts/acquisition/tests/test_census_acs_tables_queue.py",
+    "scripts/acquisition/tests/test_census_tables_capture_mode.py",
     "scripts/acquisition/tests/test_check_baseline_run.py",
     "scripts/acquisition/tests/test_code_root_mmd_plans.py",
     "scripts/acquisition/tests/test_collection_layout.py",

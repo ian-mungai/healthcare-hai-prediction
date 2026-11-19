@@ -25,6 +25,7 @@ from scripts.acquisition import (
     collect_bls_api,
     collect_census_acs_api,
     collect_census_acs_detailed,
+    collect_census_acs_tables,
     collect_hud_api,
     collect_mmd_api,
     collection_layout,
@@ -878,6 +879,7 @@ ADAPTER_MODULES = {
     "bls_api_v2": collect_bls_api,
     "census_acs_api": collect_census_acs_api,
     "census_acs_detailed": collect_census_acs_detailed,
+    "census_acs_tables": collect_census_acs_tables,
     "hud_api": collect_hud_api,
     "mmd_api": collect_mmd_api,
     "cms_owners_org": store_cms_owners,
@@ -922,7 +924,7 @@ def test_each_collector_adapter_asks_its_collector_for_a_local_capture_and_never
     arguments, options = calls[0]
     at = SWITCH_AT.get(handler, 4)
     check(arguments[at - 1] is True and arguments[at] is False, f"the network is on and storing is off: {arguments}")
-    if handler in {"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"}:
+    if handler in {"bls_api_v2", "census_acs_api", "census_acs_detailed", "census_acs_tables", "hud_api"}:
         check(arguments[5].storage is chosen, "a keyed collector reads its key through the run's storage")
     if handler in {"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"}:
         check("the-opener" in arguments, "the counting transport is the one passed on")

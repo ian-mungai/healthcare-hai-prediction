@@ -1250,6 +1250,7 @@ PLANNED = {
     "bls_api_v2": ("bls_api_contract", "load_plan", "batches", "batch_id"),
     "census_acs_api": ("census_acs_api_contract", "load_plans", "batches", "batch_id"),
     "census_acs_detailed": ("census_acs_detailed_contract", "load_plan", "batches", "batch_id"),
+    "census_acs_tables": ("census_acs_tables_contract", "load_plan", "batches", "batch_id"),
     "hud_api": ("hud_api_contract", "load_plans", "batches", "batch_id"),
     "hud_xlsx": ("hud_xlsx_contract", "load_plan", "batches", "batch_id"),
     "wonder_export": ("wonder_export_contract", "load_plan", "batches", "batch_id"),
@@ -1343,6 +1344,17 @@ def adapt_census_detailed(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or collector.live_request
+    return Path(
+        collector.execute(plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, request)["receipt_path"]
+    )
+
+
+def adapt_census_tables(unit: dict, run: Run) -> Path:
+    from scripts.acquisition import census_acs_tables_transport as transport
+    from scripts.acquisition import collect_census_acs_tables as collector
+
+    plan, batch = planned(unit, run)
+    request = run.api_request or transport.live_request
     return Path(
         collector.execute(plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, request)["receipt_path"]
     )
@@ -1487,6 +1499,7 @@ ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
     "bls_api_v2": adapt_bls,
     "census_acs_api": adapt_census_api,
     "census_acs_detailed": adapt_census_detailed,
+    "census_acs_tables": adapt_census_tables,
     "hud_api": adapt_hud_api,
     "mmd_api": adapt_mmd,
     "hud_xlsx": adapt_hud_xlsx,

@@ -35,6 +35,7 @@ from typing import Any
 from scripts.acquisition import (
     bls_api_transport,
     census_acs_api_transport,
+    census_acs_tables_transport,
     collect_mmd_api,
     hud_api_transport,
     redownload,
@@ -59,11 +60,12 @@ UNIT_FOLDER = re.compile(r"[a-f0-9]{64}")
 MANUAL_MODES = redownload.MANUAL_MODES
 COLLECTOR_MODES = frozenset(redownload.PLANNED) | {"mmd_api"}
 SKIPPED_ROLES = frozenset({"capture_receipt", "transport_audit", "archive_inventory"})
-API_TRANSPORTS: tuple[Any, ...] = (bls_api_transport, census_acs_api_transport, hud_api_transport, collect_mmd_api)
+API_TRANSPORTS: tuple[Any, ...] = (bls_api_transport, census_acs_api_transport, census_acs_tables_transport, hud_api_transport, collect_mmd_api)
 LINEAGE_ID = {
     "bls_api_v2": "batch_id",
     "census_acs_api": "batch_id",
     "census_acs_detailed": "batch_id",
+    "census_acs_tables": "batch_id",
     "hud_api": "batch_id",
     "cms_owners_org": "release_id",
     "onc_mu_hospital": "file_id",
@@ -363,6 +365,16 @@ def adapt_census_detailed(unit: dict, spec: dict, folder: Path, run: CaptureRun,
     return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_detailed"), {}, request)["receipt_path"])
 
 
+def adapt_census_tables(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import census_acs_tables_transport as api
+    from scripts.acquisition import collect_census_acs_tables as collector
+
+    plan, batch = planned_item(run, "census_acs_tables", spec)
+    return Path(
+        collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_tables"), {}, run.api_request or api.live_request)["receipt_path"]
+    )
+
+
 def adapt_hud_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
     from scripts.acquisition import collect_hud_api as collector
     from scripts.acquisition import hud_api_transport as api
@@ -405,6 +417,7 @@ ADAPTERS: dict[str, Callable[..., Path]] = {
     "bls_api_v2": adapt_bls,
     "census_acs_api": adapt_census_api,
     "census_acs_detailed": adapt_census_detailed,
+    "census_acs_tables": adapt_census_tables,
     "hud_api": adapt_hud_api,
     "mmd_api": adapt_mmd,
     "cms_owners_org": adapt_cms_owners,

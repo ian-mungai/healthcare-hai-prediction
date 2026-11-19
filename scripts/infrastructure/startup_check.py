@@ -925,6 +925,10 @@ def census_detailed_plans() -> list[Path]:
     return [importlib.import_module("scripts.acquisition.census_acs_detailed_contract").PLAN_PATH]
 
 
+def census_tables_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.census_acs_tables_contract").PLAN_PATH]
+
+
 def hcai_plans() -> list[Path]:
     return [importlib.import_module("scripts.acquisition.hcai_util_contract").PLAN_PATH]
 
@@ -937,6 +941,7 @@ PLAN_PATHS = {
     "hud_api": hud_plans,
     "census_acs_api": census_plans,
     "census_acs_detailed": census_detailed_plans,
+    "census_acs_tables": census_tables_plans,
     "hcai_util_workbook": hcai_plans,
 }
 
