@@ -1207,6 +1207,22 @@ def store_source(sources: FakeSources, collection: str, file_name: str, *, statu
     sources.put(f"{collection}/manifests/release_date=2026-01-01/synthetic_capture/synthetic/manifest.json", json.dumps(manifest).encode())
 
 
+def store_role_correction(sources: FakeSources, collection: str) -> None:
+    """Add a valid correction manifest that supersedes the manifest of ``store_source`` and changes its object's role from data to reference (the reviewer's
+    reproduction). Both manifests stay stored; ordinary discovery then drops the superseded matching entry because no earlier generation published it."""
+    (key, version), raw = next(
+        (identity, body)
+        for identity, body in sources.objects.items()
+        if identity[0].startswith(collection + "/manifests/") and identity[0].endswith("/manifest.json")
+    )
+    corrected = json.loads(raw)
+    stored = corrected["objects"][0]["object"]
+    corrected["supersedes"] = {"key": key, "version_id": version, "sha256": hashlib.sha256(raw).hexdigest()}
+    corrected["correction"] = {"changes": [{"key": stored["key"], "version_id": stored["version_id"], "from_role": "data", "to_role": "reference"}]}
+    corrected["objects"][0]["role"] = "reference"
+    sources.put(collection + "/manifests/correction/manifest.json", json.dumps(corrected).encode())
+
+
 def register_bronze_command(s3: FakeS3, glue: FakeGlue, sources: FakeSources | None = None) -> tuple[int, str]:
     out = io.StringIO()
     arguments = ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET]
@@ -1316,6 +1332,47 @@ def case_bronze_register_never_trusts_a_complete_record_over_the_source_collecti
         "only_a_rejected_capture_keeps_the_table_required": rejected_code == 1 and f"bronze.{ABSENT}: required" in rejected_text,
         "an_object_under_the_raw_root_keeps_the_table_required": raw_code == 1 and f"bronze.{ABSENT}: required" in raw_text,
     }
+
+
+def case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest() -> Check:
+    """Review round 4, M1. A valid correction manifest supersedes the manifest of a matching object and changes the object's role from data to reference. Both
+    stay stored, no earlier generation published the superseded copy, and the table has no metadata and no Glue entry. The route must still count the
+    superseded copy: under the bucket root and under ``raw/``, the table stays required."""
+    names = glue_mirror.layer_tables("bronze")
+    collection = bronze_table_entry()["collection"]
+    checks: Check = {}
+    for label, root in (("root", ""), ("raw", "raw/")):
+        sources = FakeSources()
+        store_source(sources, root + collection, "hcai_util_2026.xlsx")
+        before = FakeGlue()
+        register_bronze_command(bronze_bucket("bronze_00000001"), before, sources)
+        store_role_correction(sources, root + collection)
+        glue = FakeGlue()
+        code, text = register_bronze_command(bronze_bucket("bronze_00000001"), glue, sources)
+        checks[f"{label}_the_table_is_required_before_and_after_the_correction"] = (
+            f"bronze.{ABSENT}: required" in text and ("bronze", ABSENT) not in before.tables
+        )
+        checks[f"{label}_the_command_fails_clearly_for_the_table"] = code == 1 and f"bronze.{ABSENT}: failed" in text and "left out" not in text
+        checks[f"{label}_every_other_table_registers"] = len(glue.tables) == len(names) - 1
+    return checks
+
+
+def case_the_glue_source_cases_fail_when_the_evidence_is_discarded() -> Check:
+    """Review round 4, L1 for the Glue route: real discovery runs and its answer is thrown away. The source-presence cases must notice."""
+    from scripts.lakehouse import bronze_unsourced
+
+    real = bronze_unsourced.source_evidence
+
+    def discarding(*arguments: Any, **keywords: Any) -> frozenset[str]:
+        real(*arguments, **keywords)
+        return frozenset()
+
+    with mock.patch.object(bronze_unsourced, "source_evidence", discarding):
+        held = {
+            "the_source_collection_case": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection(),
+            "the_role_correction_case": case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest(),
+        }
+    return {f"{name}_fails_when_the_evidence_is_discarded": not all(checks.values()) for name, checks in held.items()}
 
 
 def case_bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata() -> Check:
@@ -1613,6 +1670,10 @@ CASES: dict[str, Callable[[], Check]] = {
         case_bronze_register_never_leaves_out_a_table_that_has_metadata_or_trusts_a_forged_record
     ),
     "bronze_register_never_trusts_a_complete_record_over_the_source_collection": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection,
+    "bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest": (
+        case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest
+    ),
+    "the_glue_source_cases_fail_when_the_evidence_is_discarded": case_the_glue_source_cases_fail_when_the_evidence_is_discarded,
     "bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata": (
         case_bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata
     ),

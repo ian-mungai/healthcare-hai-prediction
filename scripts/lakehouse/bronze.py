@@ -487,6 +487,7 @@ def discover(
     roots: tuple[str, ...] | None = None,
     retired_before: dict[str, str | None] | None = None,
     previous_observations: Iterable[dict[str, Any]] = (),
+    count_superseded: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """List the chosen tables' inputs from the S3 manifests under each read root; return them with the unselected data objects.
 
@@ -497,6 +498,10 @@ def discover(
 
     Objects on the retired list are skipped and reported as retired, matched on key, version and SHA-256; every list
     entry under a discovered collection must match a manifest object [146] to [148].
+
+    A matching copy that a later manifest supersedes is returned only when an earlier generation published it (``published_observations``), so a load never
+    adds an observation of a copy that was replaced before it was ever loaded. With ``count_superseded`` every matching superseded copy is returned, whatever
+    was published: the catalog registrations use that to ask whether a table has any source history at all.
     """
     if not isinstance(retired, RetiredObjects):
         if retired:
@@ -571,7 +576,7 @@ def discover(
                     raise BronzeError(f"{target['key']}: selected by two tables ({', '.join(table['table'] for table in matches)})")
                 if replacement and matches:
                     item = input_item(matches[0], manifest, manifest_key, manifest_version, raw, target, stored, chain, entry_index)
-                    if item["observation_id"] not in published_observations:
+                    if item["observation_id"] not in published_observations and not count_superseded:
                         continue
                     item.update(retired=is_retired, superseded_by_manifest_key=replacement[0], superseded_by_manifest_version_id=replacement[1])
                     item["retirement_record_json"] = retired.records[identity] if is_retired else None

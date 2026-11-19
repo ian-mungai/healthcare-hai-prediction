@@ -101,10 +101,19 @@ def source_evidence(storage: bronze.Storage, bucket: str, config: dict[str, Any]
     """The tables, of ``tables``, that have a source object or observation history in the table map's own collection.
 
     This is the loader's own discovery (collection, manifests, member pattern or dataset IDs, retirement) over both read roots, so a loadable object, an
-    object whose capture was rejected, a retired object and a superseded copy all count. A listing or read that fails raises: nothing is guessed.
+    object whose capture was rejected, a retired object and every matching superseded copy count. Superseded copies count whether or not an earlier generation
+    published them (``count_superseded``), because a correction that moved an object out of the table's roles leaves the history behind.
+
+    ``config`` must be a table map as ``bronze.load_table_map`` returns it (it adds the roles and encodings that discovery reads): a map without the named
+    table or its defaults raises ``UnsourcedError``, so a malformed map cannot pass as a refusal. A listing or read that fails raises: nothing is guessed.
     """
     names = list(tables)
     if not names:
         return frozenset()
-    found, excluded = bronze.discover(storage, bucket, config, names, bronze.RetiredObjects(), roots=READ_ROOTS)
+    by_name = {entry.get("table"): entry for entry in config.get("tables", []) if isinstance(entry, dict)}
+    for name in names:
+        entry = by_name.get(name)
+        if entry is None or not isinstance(entry.get("roles"), list) or not isinstance(entry.get("encodings"), list):
+            raise UnsourcedError(f"{name}: the table map is malformed for discovery (it lacks the table or the roles and encodings that the map loader adds)")
+    found, excluded = bronze.discover(storage, bucket, config, names, bronze.RetiredObjects(), roots=READ_ROOTS, count_superseded=True)
     return frozenset({item["table"] for item in found} | {entry["copy"]["table"] for entry in excluded if "copy" in entry})

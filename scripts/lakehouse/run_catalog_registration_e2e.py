@@ -22,8 +22,9 @@ from types import CodeType, FunctionType
 from typing import Any
 from unittest.mock import patch
 
+from scripts.lakehouse import bronze, bronze_unsourced
 from scripts.lakehouse import register_aws_catalog as reg
-from scripts.lakehouse.run_glue_mirror_e2e import FakeSources, store_source
+from scripts.lakehouse.run_glue_mirror_e2e import FakeSources, store_role_correction, store_source
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = frozenset({("bronze", "source_table"), ("silver", "silver_table"), ("silver", "publish_runs"), ("gold", "gold_table"), ("gold", "publish_runs")})
@@ -283,74 +284,130 @@ def successful_inventory() -> None:
 
 
 GHOST = ("bronze", "ghost_table")
-GHOST_MAP = {"namespace": "bronze", "tables": [{"table": "ghost_table", "collection": "org/ghost", "dataset_ids": ["synthetic"], "format": "csv"}]}
+GHOST_ENTRY = {"table": "ghost_table", "collection": "org/ghost", "dataset_ids": ["synthetic"], "format": "csv"}
 
 
-def routed(fixture: Fixture, sources: FakeSources | None) -> reg.RegistrationIO:
+def normalized_map(entry: dict[str, Any]) -> dict[str, Any]:
+    """A table map as production reads it: through ``bronze.load_table_map``, which adds the roles and encodings that discovery needs."""
+    with TemporaryDirectory(prefix="table_map_") as folder:
+        path = Path(folder) / "bronze_tables.json"
+        path.write_text(json.dumps({"version": 1, "namespace": "bronze", "tables": [entry]}))
+        return bronze.load_table_map(path)
+
+
+GHOST_MAP = normalized_map(GHOST_ENTRY)
+EVIDENCE = "holds a source object or observation history"
+
+
+def routed(fixture: Fixture, sources: FakeSources | None, table_map: dict[str, Any] | None = None) -> reg.RegistrationIO:
     """The registration services plus the route's own source listing and the table map it reconciles an omission against."""
-    return replace(fixture.io, sources=sources, table_map=GHOST_MAP)
+    return replace(fixture.io, sources=sources, table_map=GHOST_MAP if table_map is None else table_map)
 
 
-def prepare_omitting(fixture: Fixture, io: reg.RegistrationIO) -> reg.Inventory:
-    return reg.prepare_read_inventory(
-        io, REQUIRED, fixture.receipts, bucket="synthetic-bucket", reservation_prefix="synthetic_aws_reader", deadline=100, unsourced=frozenset({GHOST})
-    )
+def omit(fixture: Fixture, io: reg.RegistrationIO, entry: str) -> reg.Inventory | reg.RegistrationResult:
+    """One of the two API entry points, asked to leave ``GHOST`` out of the required set."""
+    arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({GHOST})}
+    if entry == "prepare":
+        return reg.prepare_read_inventory(io, REQUIRED, fixture.receipts, **arguments)
+    return reg.register_read_catalog(io, REQUIRED, fixture.receipts, **arguments)
 
 
-def refused_as_coverage(call: Callable[[], object], name: str) -> None:
-    try:
-        call()
-    except reg.RegistrationError as error:
-        require(error.code == "coverage", f"{name}: expected coverage, received {error.code}")
-    else:
-        raise AssertionError(f"{name}: an omission that the route could not prove was accepted")
+ENTRIES = ("prepare", "register")
+
+
+def refused(fixture: Fixture, io: reg.RegistrationIO, name: str, message: str) -> None:
+    """Both entry points refuse with ``coverage`` and the message that names this cause, before anything is reserved or written."""
+    for entry in ENTRIES:
+        try:
+            omit(fixture, io, entry)
+        except reg.RegistrationError as error:
+            require(error.code == "coverage" and message in str(error), f"{name} ({entry}): refused for another cause: {error.code} {error}")
+        else:
+            raise AssertionError(f"{name} ({entry}): an omission that the route could not prove was accepted")
+        require(not fixture.destination.posts and not fixture.destination.namespace_posts, f"{name} ({entry}): the destination changed before the refusal")
+
+
+def accepted(entry: str, io: reg.RegistrationIO, fixture: Fixture) -> None:
+    outcome = omit(fixture, io, entry)
+    inventory = outcome if isinstance(outcome, reg.Inventory) else outcome.inventory
+    require({pin.identifier for pin in inventory.tables} == REQUIRED, f"{entry}: the empty collection control changed the coverage")
 
 
 def an_unsourced_table_that_exists_in_the_source_catalog_is_refused() -> None:
     """Review round 2 (High): a record that skips a table is no evidence when the source catalog holds a table of that name."""
     fixture = Fixture()
     fixture.source.tables[GHOST] = copy.deepcopy(fixture.source.tables[("bronze", "source_table")])
-    io = routed(fixture, FakeSources())
-    for call in ("prepare", "register"):
-        arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({GHOST})}
-        refused_as_coverage(
-            lambda call=call, arguments=arguments: (
-                reg.prepare_read_inventory(io, REQUIRED, fixture.receipts, **arguments)
-                if call == "prepare"
-                else reg.register_read_catalog(io, REQUIRED, fixture.receipts, **arguments)
-            ),
-            call,
-        )
-        require(not fixture.destination.posts and not fixture.destination.namespace_posts, f"{call}: the destination changed before the refusal")
-    clean = Fixture()
-    inventory = prepare_omitting(clean, routed(clean, FakeSources()))
-    require({pin.identifier for pin in inventory.tables} == REQUIRED, "an unsourced table that has no catalog table changed the coverage")
+    refused(fixture, routed(fixture, FakeSources()), "a table in the source catalog", "exists in the source catalog")
+    for entry in ENTRIES:
+        clean = Fixture()
+        accepted(entry, routed(clean, FakeSources()), clean)
+
+
+def source_presence_cases() -> None:
+    """Every kind of source evidence refuses through both entry points, and each reaches successful discovery: the table map is the real loader's output and
+    the cause named is the evidence, not a read error."""
+    fixture = Fixture()
+    sourced = FakeSources()
+    store_source(sourced, "org/ghost", "ghost.csv")
+    rejected = FakeSources()
+    store_source(rejected, "org/ghost", "ghost.csv", status="rejected")
+    raw_root = FakeSources()
+    store_source(raw_root, "raw/org/ghost", "ghost.csv")
+    kinds = {"a stored source object": sourced, "a rejected capture only": rejected, "an object under the raw root": raw_root}
+    for root in ("", "raw/"):
+        corrected = FakeSources()
+        store_source(corrected, root + "org/ghost", "ghost.csv")
+        store_role_correction(corrected, root + "org/ghost")
+        kinds[f"a superseded copy whose role a correction changed ({root or 'root'})"] = corrected
+    for name, sources in kinds.items():
+        refused(fixture, routed(fixture, sources), name, EVIDENCE)
+    for entry in ENTRIES:
+        clean = Fixture()
+        accepted(entry, routed(clean, FakeSources()), clean)
 
 
 def an_omission_needs_the_routes_own_source_listing_and_finds_no_object_or_history() -> None:
-    """Review round 3, M1: a record alone never authorizes an omission. The route lists the table's own collection with its own credentials and leaves the
-    table out only when that finds no source object and no observation history."""
+    """Review rounds 3 and 4: a record alone never authorizes an omission. Source presence refuses for the evidence itself;
+    the empty collection is the control."""
+    source_presence_cases()
     fixture = Fixture()
-    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, None)), "no source listing")
+    refused(fixture, routed(fixture, None), "no source listing", "needs the caller's own source reader")
+    require(not fixture.reservations.entries, "a refused omission reserved something")
+
+
+def a_malformed_table_map_and_a_failed_read_are_refused_for_their_own_cause() -> None:
+    """Review round 4, L1: a map the real loader did not normalize, and a listing that fails, each refuse with a message of their own, so neither can pass as
+    the evidence case."""
+    fixture = Fixture()
     sourced = FakeSources()
     store_source(sourced, "org/ghost", "ghost.csv")
-    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, sourced)), "a stored source object")
-    rejected = FakeSources()
-    store_source(rejected, "org/ghost", "ghost.csv", status="rejected")
-    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, rejected)), "a rejected capture only")
-    raw_root = FakeSources()
-    store_source(raw_root, "raw/org/ghost", "ghost.csv")
-    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, raw_root)), "an object under the raw root")
+    refused(
+        fixture, routed(fixture, sourced, {"namespace": "bronze", "tables": [GHOST_ENTRY]}), "a map without the loader's defaults", "table map is malformed"
+    )
+    refused(fixture, routed(fixture, sourced, {"namespace": "bronze", "tables": []}), "a map without the table", "table map is malformed")
 
     class Failing(FakeSources):
         def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
             raise reg.RegistrationError("transport", "Synthetic listing failure")
 
-    refused_as_coverage(lambda: prepare_omitting(fixture, routed(fixture, Failing())), "a listing that fails")
-    require(not fixture.destination.posts and not fixture.reservations.entries, "a refused omission reserved or wrote something")
-    clean = Fixture()
-    inventory = prepare_omitting(clean, routed(clean, FakeSources()))
-    require({pin.identifier for pin in inventory.tables} == REQUIRED, "the empty collection control changed the coverage")
+    refused(fixture, routed(fixture, Failing()), "a listing that fails", "could not be listed")
+    require(not fixture.reservations.entries, "a refused omission reserved something")
+
+
+def the_source_cases_fail_when_the_evidence_is_discarded() -> None:
+    """Review round 4, L1: the planted defect (real discovery runs, its answer is thrown away) must fail the source-presence cases."""
+    real = bronze_unsourced.source_evidence
+
+    def discarding(*arguments: Any, **keywords: Any) -> frozenset[str]:
+        real(*arguments, **keywords)
+        return frozenset()
+
+    with patch.object(bronze_unsourced, "source_evidence", discarding):
+        try:
+            source_presence_cases()
+        except AssertionError:
+            return
+    raise AssertionError("the source-presence cases pass although the evidence is discarded")
 
 
 def empty_destination() -> None:
@@ -883,6 +940,8 @@ def cases() -> list[tuple[str, Callable[[], None]]]:
             "an omission needs the route's own source listing and finds no object or history",
             an_omission_needs_the_routes_own_source_listing_and_finds_no_object_or_history,
         ),
+        ("a malformed table map and a failed read are refused for their own cause", a_malformed_table_map_and_a_failed_read_are_refused_for_their_own_cause),
+        ("the source cases fail when the evidence is discarded", the_source_cases_fail_when_the_evidence_is_discarded),
         ("empty destination namespaces", empty_destination),
         ("failed namespace preparation", namespace_failure),
         ("late namespace reply stops mutation", late_namespace_reply),

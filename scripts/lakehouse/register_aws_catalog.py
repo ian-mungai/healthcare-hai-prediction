@@ -674,6 +674,8 @@ def check_unsourced_absent(io: RegistrationIO, unsourced: Collection[TableId], b
     names = sorted(name for namespace, name in unsourced if namespace == "bronze")
     try:
         evidence = bronze_unsourced.source_evidence(io.sources, bucket, dict(io.table_map), names)
+    except bronze_unsourced.UnsourcedError:
+        raise RegistrationError("coverage", "the bronze table map is malformed for discovery, so the omission cannot be checked") from None
     except Exception:
         raise RegistrationError("coverage", "the source collection of an omitted table could not be listed") from None
     if evidence:

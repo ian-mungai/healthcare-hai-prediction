@@ -200,6 +200,11 @@ def test_a_file_under_another_key_is_not_evidence_and_a_wrong_record_under_a_run
         bronze_unsourced.read_unsourced(Bucket({key_of(RUN_A): FORGED}), BUCKET)
 
 
+def normalized(name: str) -> dict[str, Any]:
+    """A table entry as ``bronze.load_table_map`` returns it, with the roles and encodings that discovery reads."""
+    return {"table": name, "roles": ["data"], "encodings": ["utf-8"]}
+
+
 class Glue:
     """The one Glue call the omission check may use. ``tables`` holds existing entries; ``error`` is raised as a service error for every table."""
 
@@ -226,7 +231,7 @@ class Registered:
         monkeypatch.setattr(glue_mirror, "layer_tables", lambda layer: ["alpha", "beta", "gamma"])
         monkeypatch.setattr(glue_mirror, "silver_bronze_sources", lambda *arguments: {"alpha"})
         monkeypatch.setattr(
-            glue_mirror, "bronze_table_map", lambda: {"namespace": "bronze", "tables": [{"table": name} for name in ("alpha", "beta", "gamma")]}
+            glue_mirror, "bronze_table_map", lambda: {"namespace": "bronze", "tables": [normalized(name) for name in ("alpha", "beta", "gamma")]}
         )
 
         def register_from_s3(config: Any, layer: str, tables: list[str], *rest: Any, **keywords: Any) -> dict[str, Any]:
@@ -234,6 +239,7 @@ class Registered:
             return {"status": "ok", "tables": {name: "created" for name in tables}}
 
         def discover(storage: Any, bucket: str, config: Any, names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+            check(keywords.get("count_superseded") is True, "the omission evidence did not count superseded copies")
             self.discoveries.append((list(names), keywords.get("roots")))
             if discovery_error:
                 raise ClientError({"Error": {"Code": discovery_error, "Message": "stand-in"}}, "ListObjectVersions")
@@ -350,12 +356,90 @@ def test_the_source_evidence_is_real_discovery_over_both_read_roots_and_counts_h
     seen: list[Any] = []
 
     def discover(storage: Any, bucket: str, config: Any, names: list[str], *rest: Any, **keywords: Any) -> tuple[list[dict[str, Any]], list[Any]]:
+        check(keywords.get("count_superseded") is True, "the omission evidence did not count superseded copies")
         seen.append((list(names), keywords.get("roots")))
         return [{"table": "a"}], [{"copy": {"table": "b"}}, {"collection": "c", "file_name": "x.csv"}]
 
     monkeypatch.setattr(bronze_unsourced.bronze, "discover", discover)
     check(
-        bronze_unsourced.source_evidence(object(), BUCKET, {"tables": []}, ["a", "b", "c"]) == {"a", "b"}, "the evidence is the loadable and the history tables"
+        bronze_unsourced.source_evidence(object(), BUCKET, {"tables": [normalized(name) for name in "abc"]}, ["a", "b", "c"]) == {"a", "b"},
+        "the evidence is the loadable and the history tables",
     )
     check(seen == [(["a", "b", "c"], ("", "raw/"))], f"{seen}")
     check(bronze_unsourced.source_evidence(object(), BUCKET, {"tables": []}, []) == frozenset() and len(seen) == 1, "an empty candidate list listed the bucket")
+
+
+def sourced_collection(root: str, correct: bool) -> tuple[Any, dict[str, Any]]:
+    """The real selectors of ``hcai_util_workbook_sheet_rows``, a stored workbook object with its manifest and, with ``correct``, a valid correction manifest
+    that supersedes it and changes the object's role from data to reference. Returns the source stand-in and a one-table map as the loader reads it."""
+    from scripts.lakehouse import bronze
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    entry = next(table for table in bronze.load_table_map()["tables"] if table["table"] == TABLE)
+    sources = stand_in.FakeSources()
+    stand_in.store_source(sources, root + entry["collection"], "hcai_util_2026.xlsx")
+    if correct:
+        stand_in.store_role_correction(sources, root + entry["collection"])
+    return sources, {"namespace": "bronze", "tables": [entry]}
+
+
+@pytest.mark.parametrize("root", ["", "raw/"])
+def test_a_superseded_copy_whose_role_a_correction_changed_still_counts_as_source_history_under_each_read_root(root: str) -> None:
+    """Review round 4, M1: ordinary discovery drops a superseded copy that no earlier generation published, so the omission evidence must count it itself."""
+    from scripts.lakehouse import bronze
+
+    for correct in (False, True):
+        sources, config = sourced_collection(root, correct)
+        check(bronze_unsourced.source_evidence(sources, BUCKET, config, [TABLE]) == {TABLE}, f"correction {correct}, root {root!r}: the table has no evidence")
+    found, excluded = bronze.discover(sources, BUCKET, config, [TABLE], bronze.RetiredObjects(), roots=("", "raw/"))
+    check(found == [] and excluded == [], f"the loader's own discovery changed: {found} {excluded}")
+
+
+def test_the_evidence_refuses_a_table_map_the_loader_did_not_normalize_and_a_table_the_map_lacks() -> None:
+    """Review round 4, L1: a map without the loader's defaults used to fail inside discovery with a bare ``KeyError`` that the callers reported as a refusal."""
+    sources, config = sourced_collection("", False)
+    entry = {key: value for key, value in config["tables"][0].items() if key not in {"roles", "encodings"}}
+    for bad in ({"tables": [entry]}, {"tables": []}, {"tables": [{**entry, "roles": ["data"]}]}):
+        with pytest.raises(bronze_unsourced.UnsourcedError, match="table map is malformed"):
+            bronze_unsourced.source_evidence(sources, BUCKET, bad, [TABLE])
+
+
+def test_a_failed_read_propagates_and_is_never_counted_as_evidence_or_absence() -> None:
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    class Failing(stand_in.FakeSources):
+        def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "stand-in"}}, "ListObjectVersions")
+
+    _, config = sourced_collection("", False)
+    with pytest.raises(ClientError):
+        bronze_unsourced.source_evidence(Failing(), BUCKET, config, [TABLE])
+
+
+def test_a_rejected_capture_that_a_correction_also_supersedes_counts_and_a_file_the_selector_does_not_match_does_not() -> None:
+    """Other kinds of history the omission evidence must keep (round 4 search): rejected then superseded counts, a stored file that the table's selector
+    does not match is not this table's source, and a correction the loader cannot validate fails the read instead of counting as absence."""
+    from scripts.lakehouse import bronze
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    sources, config = sourced_collection("", False)
+    collection = config["tables"][0]["collection"]
+    rejected = stand_in.FakeSources()
+    stand_in.store_source(rejected, collection, "hcai_util_2026.xlsx", status="rejected")
+    stand_in.store_role_correction(rejected, collection)
+    check(bronze_unsourced.source_evidence(rejected, BUCKET, config, [TABLE]) == {TABLE}, "a rejected and superseded capture was not counted")
+    other = stand_in.FakeSources()
+    stand_in.store_source(other, collection, "unrelated_file.xlsx")
+    check(
+        bronze_unsourced.source_evidence(other, BUCKET, config, [TABLE]) == frozenset(),
+        "a file that the selector does not match counted as this table's source",
+    )
+    broken = stand_in.FakeSources()
+    stand_in.store_source(broken, collection, "hcai_util_2026.xlsx")
+    stand_in.store_role_correction(broken, collection)
+    (key, version), body = next((identity, raw) for identity, raw in broken.objects.items() if "/correction/" in identity[0])
+    document = json.loads(body)
+    document["objects"][0]["object"]["byte_count"] = 1
+    broken.put(key, json.dumps(document).encode())
+    with pytest.raises(bronze.BronzeError):
+        bronze_unsourced.source_evidence(broken, BUCKET, config, [TABLE])
