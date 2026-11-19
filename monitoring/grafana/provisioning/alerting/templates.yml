@@ -10,19 +10,39 @@ templates:
   - orgId: 1
     name: hai_sns
     template: |
-      {{ define "hai.safe10" -}}
+      {{ define "hai.safe13" -}}
       {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
-      {{ if gt (len $v) 10 }}{{ printf "%.7s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{ if gt (len $v) 13 }}{{ printf "%.10s..." $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 
-      {{ define "hai.safe12" -}}
+      {{ define "hai.safe17" -}}
       {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
-      {{ if gt (len $v) 12 }}{{ printf "%.9s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{ if gt (len $v) 17 }}{{ printf "%.14s..." $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 
-      {{ define "hai.safe20" -}}
+      {{ define "hai.safe32" -}}
       {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
-      {{ if gt (len $v) 20 }}{{ printf "%.17s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{ if gt (len $v) 32 }}{{ printf "%.29s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.mid10" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 10 }}{{ reReplaceAll `^(.{4}).*(.{4})$` "${1}..${2}" $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.mid14" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 14 }}{{ reReplaceAll `^(.{6}).*(.{6})$` "${1}..${2}" $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.mid20" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 20 }}{{ reReplaceAll `^(.{9}).*(.{9})$` "${1}..${2}" $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.dag" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace | reReplaceAll `_dag$` "" -}}
+      {{ if gt (len $v) 20 }}{{ reReplaceAll `^(.{9}).*(.{9})$` "${1}..${2}" $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 
       {{ define "hai.safe22" -}}
@@ -33,11 +53,6 @@ templates:
       {{ define "hai.safe24" -}}
       {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
       {{ if gt (len $v) 24 }}{{ printf "%.21s..." $v }}{{ else }}{{ $v }}{{ end }}
-      {{- end }}
-
-      {{ define "hai.safe45" -}}
-      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
-      {{ if gt (len $v) 45 }}{{ printf "%.42s..." $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 
       {{ define "hai.sentences" -}}
@@ -61,12 +76,23 @@ templates:
       {{ . | tz "America/Los_Angeles" | date "3:04 PM MST, Jan 2 2006" }} [{{ . | tz "UTC" | date "15:04" }} UTC]
       {{- end }}
 
+      {{ define "hai.model_short" -}}
+      {{ if eq . "m1" }}OLS (m1){{ else if eq . "m2" }}Elastic (m2){{ else if eq . "m3" }}Mixed (m3){{ else if eq . "m4" }}Gradient (m4){{ else if eq . "m5" }}Spatial (m5){{ else if eq . "m6" }}Fixed (m6){{ else }}{{ template "hai.safe13" . }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.hai_short" -}}
+      {{ if eq . "HAI_1" }}CLABSI (HAI_1){{ else if eq . "HAI_2" }}CAUTI (HAI_2){{ else if eq . "HAI_3" }}SSI colon (HAI_3){{ else if eq . "HAI_4" }}SSI hyst (HAI_4){{ else if eq . "HAI_5" }}MRSA (HAI_5){{ else if eq . "HAI_6" }}C. diff (HAI_6){{ else }}{{ template "hai.safe17" . }}{{ end }}
+      {{- end }}
+
       {{ define "hai.subject_target" -}}
-      {{ if .Labels.dag_id }} ({{ template "hai.safe12" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ template "hai.safe12" . }}{{ end }})
-      {{- else if .Labels.job }} (job {{ template "hai.safe10" .Labels.job }}{{ with .Labels.phase }}, phase {{ template "hai.safe10" . }}{{ end }})
+      {{ $instance := or .Labels.model_set .Labels.job_type -}}
+      {{ $both := and .Labels.model_set .Labels.job_type -}}
+      {{ if .Labels.dag_id }} ({{ template "hai.dag" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ template "hai.mid14" . }}{{ end }})
+      {{- else if and .Labels.job $instance }} ({{ template "hai.mid10" .Labels.job }}{{ if not $both }}{{ with .Labels.phase }}, {{ template "hai.mid10" . }}{{ end }}{{ end }}{{ with .Labels.model_set }}, {{ template "hai.model_short" . }}{{ end }}{{ with .Labels.job_type }}, {{ template "hai.hai_short" . }}{{ end }})
+      {{- else if .Labels.job }} (job {{ template "hai.mid10" .Labels.job }}{{ with .Labels.phase }}, phase {{ template "hai.mid10" . }}{{ end }})
       {{- else if .Labels.hai_type }} ({{ template "hai.hai_name" .Labels.hai_type }})
       {{- else if .Labels.feature_set }} (set {{ template "hai.model_name" .Labels.feature_set }})
-      {{- else if .Labels.service }} (service {{ template "hai.safe20" .Labels.service }})
+      {{- else if .Labels.service }} (service {{ template "hai.mid20" .Labels.service }})
       {{- end }}
       {{- end }}
 
@@ -185,7 +211,7 @@ templates:
       {{ $firing := len .Alerts.Firing -}}
       {{ $resolved := len .Alerts.Resolved -}}
       {{ if gt $firing 0 }}FIRING{{ else }}RESOLVED{{ end }}:
-      {{- with .CommonAnnotations.headline }} {{ template "hai.safe45" . }}{{ else }}{{ with .CommonLabels.alertname }} {{ template "hai.safe45" . }}{{ else }} Alert{{ end }}{{ end }}
+      {{- with .CommonAnnotations.headline }} {{ template "hai.safe32" . }}{{ else }}{{ with .CommonLabels.alertname }} {{ template "hai.safe32" . }}{{ else }} Alert{{ end }}{{ end }}
       {{- if eq (len .Alerts) 1 }}{{ with index .Alerts 0 }}{{ template "hai.subject_target" . }}{{ end }}
       {{- else }} ({{ if $firing }}{{ $firing }} firing{{ end }}{{ if and $firing $resolved }}, {{ end }}{{ if $resolved }}{{ $resolved }} resolved{{ end }})
       {{- end }}

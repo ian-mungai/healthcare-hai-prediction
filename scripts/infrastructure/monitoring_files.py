@@ -46,20 +46,26 @@ TEMPLATE_PARTS = (
     "hai.sns.message",
     "hai.model_name",
     "hai.hai_name",
+    "hai.model_short",
+    "hai.hai_short",
     "hai.alert",
     "hai.time",
     "hai.which",
     "hai.subject_target",
     "hai.line",
-    "hai.safe10",
-    "hai.safe12",
-    "hai.safe20",
+    "hai.sentences",
+    "hai.safe13",
+    "hai.safe17",
     "hai.safe22",
     "hai.safe24",
-    "hai.safe45",
+    "hai.safe32",
+    "hai.mid10",
+    "hai.mid14",
+    "hai.mid20",
+    "hai.dag",
 )
 NOTICE_ANNOTATIONS = ("headline", "recovered", "resolved_affects", "resolved_next", "affects", "next_step", "dashboard")
-HEADLINE_LIMIT = 45
+HEADLINE_LIMIT = 32
 CONTACT_NAME = "hai_sns"
 TOPIC_REFERENCE = "${ALERTS_TOPIC_ARN}"
 STATIC_CREDENTIALS = ("access_key", "secret_key", "profile", "role_arn")
@@ -587,6 +593,11 @@ def template_problems(root: Path, contact: Any) -> list[str]:
         found = dict(re.findall(r'\{\{ (?:else )?if eq \. "([^"]+)" \}\}(.+?) \(\1\)', text.split(f'define "{part}"', 1)[-1].split("{{- end }}", 1)[0]))
         if found != dict(labels):
             problems.append(f"{TEMPLATES}: {part} names {found}, but the contract names {dict(labels)}")
+    for part, labels in (("hai.model_short", training_contract.MODEL_LABELS), ("hai.hai_short", training_contract.HAI_LABELS)):
+        body = text.split(f'define "{part}"', 1)[-1].split("{{- end }}", 1)[0]
+        found = dict(re.findall(r'\{\{ (?:else )?if eq \. "([^"]+)" \}\}(.+?) \(\1\)', body))
+        if set(found) != set(labels) or any(not labels[key].startswith(name) for key, name in found.items()):
+            problems.append(f"{TEMPLATES}: {part} must give each key a short name that starts the contract name, but it names {found}")
     return problems
 
 

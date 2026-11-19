@@ -86,7 +86,7 @@ groups:
           severity: warning
         annotations:
           summary: A host job phase stopped sending heartbeats for 3 minutes without an exit push, so it was killed or lost. Its last heartbeat shows its memory.
-          headline: 'Host job stopped sending heartbeats'
+          headline: 'Host job went silent'
           recovered: 'This job phase sends heartbeats again or has finished.'
           resolved_affects: 'The output of the lost run is still missing. Layers after it may be behind.'
           resolved_next: 'Check in Airflow that a new run of this job phase has finished.'
@@ -129,7 +129,7 @@ groups:
           severity: warning
         annotations:
           summary: A host job phase used more than 90 percent of the host job cap at its peak.
-          headline: 'Host job used almost all of its memory'
+          headline: 'Host job near its memory cap'
           recovered: 'The latest peak of this job phase is at or under 90 percent of the host job cap.'
           resolved_affects: 'A larger input can still run out of memory.'
           resolved_next: 'Check the peak memory of the next run on the HAI host jobs dashboard.'

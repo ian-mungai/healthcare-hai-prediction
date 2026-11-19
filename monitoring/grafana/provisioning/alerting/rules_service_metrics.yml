@@ -222,7 +222,7 @@ groups:
           severity: warning
         annotations:
           summary: Grafana alert rules fail to evaluate, so some alerts cannot fire.
-          headline: 'Grafana alert rules fail to evaluate'
+          headline: 'Grafana rules fail to evaluate'
           recovered: 'Grafana evaluates its alert rules again.'
           resolved_affects: 'An alert that should have fired in the gap may be missing.'
           resolved_next: 'Open the HAI Grafana dashboard and check the rules of the gap.'
@@ -266,7 +266,7 @@ groups:
           severity: warning
         annotations:
           summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure and a first failure after a restart also count).
-          headline: 'Grafana cannot deliver notifications'
+          headline: 'Grafana cannot send alert emails'
           recovered: 'The notification failure condition has cleared.'
           resolved_affects: 'Emails that failed to send are not sent again, so you may have missed alerts.'
           resolved_next: 'Open Grafana, then Alerting, then Contact points. Read the delivery status of the hai_sns contact point.'
@@ -310,7 +310,7 @@ groups:
           severity: warning
         annotations:
           summary: The Grafana alert scheduler runs more than a minute behind, so alerts fire late.
-          headline: 'Grafana alert scheduler is behind'
+          headline: 'Grafana scheduler is behind'
           recovered: 'The Grafana alert scheduler is on time again.'
           resolved_affects: 'Alerts fired late in the gap.'
           resolved_next: 'Open the HAI host capacity dashboard and check the host load.'

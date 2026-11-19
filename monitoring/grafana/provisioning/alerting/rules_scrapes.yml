@@ -88,7 +88,7 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the OpenMetadata admin port.
-          headline: 'OpenMetadata metrics are not reachable'
+          headline: 'OpenMetadata metrics unreachable'
           recovered: 'Prometheus reaches the OpenMetadata admin port again.'
           resolved_affects: 'OpenMetadata metrics are missing for the gap.'
           resolved_next: 'Open the HAI OpenMetadata dashboard and check the current health.'
@@ -264,7 +264,7 @@ groups:
           severity: warning
         annotations:
           summary: Prometheus cannot scrape the Postgres exporter.
-          headline: 'Postgres exporter is not reachable'
+          headline: 'Postgres exporter unreachable'
           recovered: 'Prometheus reaches the Postgres exporter again.'
           resolved_affects: 'Postgres metrics are missing for the gap.'
           resolved_next: 'Open the HAI infrastructure dashboard and check the current values.'

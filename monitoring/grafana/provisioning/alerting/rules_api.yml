@@ -44,7 +44,7 @@ groups:
           severity: critical
         annotations:
           summary: Prometheus cannot scrape the model API. Expected until the API runs on the host.
-          headline: 'Model API metrics are unreachable'
+          headline: 'Model API metrics unreachable'
           recovered: 'Prometheus scrapes the model API again.'
           resolved_affects: 'API metrics are missing for the gap. Requests in the gap do not show on the dashboards.'
           resolved_next: 'Open the HAI overview dashboard and check that the API serves requests.'
@@ -176,7 +176,7 @@ groups:
           severity: critical
         annotations:
           summary: The model API read an online feature store that is not ready for 10 minutes. The store is loading, absent or unreadable, so the API refuses predictions of that feature set.
-          headline: 'Online store is not ready for the API'
+          headline: 'Online store not ready for API'
           recovered: 'The online store of this feature set is ready again.'
           resolved_affects: 'Predictions of this feature set were refused while the store was not ready.'
           resolved_next: 'Open the HAI feature store dashboard and check the result of the online reload.'

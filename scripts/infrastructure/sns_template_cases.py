@@ -438,6 +438,56 @@ def subject_is_valid_for_every_rule_state_and_text(root: Path) -> dict[str, bool
     }
 
 
+INSTANCE_OF_JOB = {"features": "model_set", "train": "model_set", "promote": "job_type", "serve": "job_type"}
+JOB_RULES = ("job_failed", "job_vanished", "job_peak_memory_near_cap", "dbt_tests_failed", "quality_checks_failed", "spark_tasks_failed")
+REAL_TASKS = ("job", "dbt_build", "publish", "check")
+
+
+def real_label_sets(root: Path) -> dict[str, list[dict[str, str]]]:
+    """The label sets that the real DAG ids, job names, phases, models and infection types give each rule."""
+    from orchestration import training_contract
+    from scripts import metrics_push
+
+    sets: dict[str, list[dict[str, str]]] = {
+        "airflow_dag_run_failed": [{"dag_id": name} for name in sorted(dag_ids(root))],
+        "airflow_task_failed": [{"dag_id": name, "task_id": task} for name in sorted(dag_ids(root)) for task in REAL_TASKS],
+        "promotion_rolled_back": [{"hai_type": key} for key in training_contract.HAI_TYPES],
+        "online_reload_failed": [{"feature_set": key} for key in training_contract.MODELS],
+        "drift_triggered": [
+            {"job": "drift", "phase": "check", "model_set": model, "job_type": key} for model in training_contract.MODELS for key in training_contract.HAI_TYPES
+        ],
+    }
+    jobs: list[dict[str, str]] = []
+    for job, phases in metrics_push.JOB_PHASES.items():
+        for phase in phases:
+            kind = INSTANCE_OF_JOB.get(job)
+            values = training_contract.MODELS if kind == "model_set" else training_contract.HAI_TYPES if kind == "job_type" else (None,)
+            jobs += [{"job": job, "phase": phase, **({kind: value} if kind and value else {})} for value in values]
+    for uid in JOB_RULES:
+        sets[uid] = jobs
+    return sets
+
+
+def subjects_stay_distinct_for_real_names(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    sets = real_label_sets(root)
+    uids = list(sets)
+    notices = [notification([alert("firing", rules[uid], labels)]) for uid in uids for labels in sets[uid]]
+    subjects = [subject for subject, _ in render(root, notices)]
+    checks: dict[str, bool] = {}
+    start = 0
+    for uid in uids:
+        found = subjects[start : start + len(sets[uid])]
+        start += len(sets[uid])
+        twins = sorted({subject for subject in found if found.count(subject) > 1})
+        named(
+            checks,
+            f"{uid}: {len(found)} real label sets give {len(set(found))} different subjects" + (f", for example {twins[0]!r}" if twins else ""),
+            not twins,
+        )
+    return checks
+
+
 def body_is_clean_for_every_rule_and_text(root: Path) -> dict[str, bool]:
     rules = rules_of(root)
     cases = hostile_notifications(rules)
@@ -508,7 +558,7 @@ WORDING = {
     "lineage_delivery_failing": {"recovered": "No new lineage delivery failure was recorded in the last 15 minutes."},
     "grafana_notifications_failing": {"recovered": "The notification failure condition has cleared."},
     "drift_triggered": {"next_step": "drift_monitoring_dag"},
-    "api_down": {"headline": "Model API metrics are unreachable", "affects": "API metrics are unavailable. Predictions may also be unavailable."},
+    "api_down": {"headline": "Model API metrics unreachable", "affects": "API metrics are unavailable. Predictions may also be unavailable."},
     "mlflow_metrics_down": {"affects": "Check MLflow itself"},
     "service_health_down": {"summary": "A service that should be running does not pass its health check."},
     "host_oom_kill": {"next_step": "host and ECS task logs"},
@@ -571,6 +621,7 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "alert_email_subject_is_valid_for_every_rule_state_and_text": subject_is_valid_for_every_rule_state_and_text,
     "alert_email_body_is_clean_for_every_rule_and_text": body_is_clean_for_every_rule_and_text,
     "alert_email_many_alerts_show_a_bounded_number_of_blocks": many_alerts_show_a_bounded_number_of_blocks,
+    "alert_email_subjects_stay_distinct_for_real_names": subjects_stay_distinct_for_real_names,
     "alert_email_resolved_alerts_say_only_what_is_true": resolved_alerts_say_only_what_is_true,
     "alert_email_texts_match_the_rules_they_describe": texts_match_the_rules_they_describe,
 }

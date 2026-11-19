@@ -44,7 +44,7 @@ groups:
           severity: warning
         annotations:
           summary: An ECS service runs fewer tasks than it should.
-          headline: 'An ECS service runs too few tasks'
+          headline: 'ECS service runs too few tasks'
           recovered: 'The service runs all its tasks again.'
           resolved_affects: 'Work that the service should have done in the gap may be missing.'
           resolved_next: 'Open the HAI services and disk dashboard and check the service.'

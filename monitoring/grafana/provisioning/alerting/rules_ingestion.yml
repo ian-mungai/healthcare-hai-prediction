@@ -43,7 +43,7 @@ groups:
           severity: warning
         annotations:
           summary: A publisher retry run ended with files that were not captured, so the month's capture is incomplete.
-          headline: 'Publisher files still missing after retry'
+          headline: 'Files missing after retry'
           recovered: 'The latest publisher retry run has no missing file.'
           resolved_affects: 'A bronze run that started before the capture was complete may have kept the earlier capture of those files.'
           resolved_next: 'Read the next bronze notice to see if any file was carried over.'
