@@ -132,11 +132,6 @@
           "hold_key"
         ]
       },
-      "int_hcai_finance_values": {
-        "merge_key": [
-          "finance_row_key"
-        ]
-      },
       "int_hcai_util_facility_periods": {
         "merge_key": [
           "util_row_key"
@@ -688,12 +683,6 @@
         ]
       },
       "stg_county_adjacency_2010_text_lines": {
-        "merge_key": [
-          "_member_sha256",
-          "_row_number"
-        ]
-      },
-      "stg_hcai_finance_csv": {
         "merge_key": [
           "_member_sha256",
           "_row_number"

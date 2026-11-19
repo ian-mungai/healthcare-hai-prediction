@@ -4,13 +4,6 @@ with
 
 staged as (
     select
-        'hcai_finance_csv' as bronze_table,
-        _member_sha256 as member_sha256,
-        count(*) as staged_rows
-    from {{ ref('stg_hcai_finance_csv') }}
-    group by _member_sha256
-    union all
-    select
         'hcai_util_pages_csv' as bronze_table,
         _member_sha256 as member_sha256,
         count(*) as staged_rows
@@ -33,13 +26,6 @@ staged as (
 ),
 
 typed as (
-    select
-        'hcai_finance_csv' as bronze_table,
-        member_sha256,
-        count(*) as typed_rows
-    from {{ ref('int_hcai_finance_values') }}
-    group by member_sha256
-    union all
     select
         bronze_table,
         member_sha256,

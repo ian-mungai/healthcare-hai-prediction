@@ -9,11 +9,6 @@ with
 
 leaked as (
     select
-        'stg_hcai_finance_csv' as table_name,
-        t::varchar as row_text
-    from {{ ref('stg_hcai_finance_csv') }} as t
-    union all
-    select
         'stg_hcai_util_pages_csv' as table_name,
         t::varchar as row_text
     from {{ ref('stg_hcai_util_pages_csv') }} as t
@@ -27,11 +22,6 @@ leaked as (
         'stg_illinois_report_card_csv' as table_name,
         t::varchar as row_text
     from {{ ref('stg_illinois_report_card_csv') }} as t
-    union all
-    select
-        'int_hcai_finance_values' as table_name,
-        t::varchar as row_text
-    from {{ ref('int_hcai_finance_values') }} as t
     union all
     select
         'int_hcai_util_facility_periods' as table_name,

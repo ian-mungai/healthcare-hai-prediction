@@ -30,6 +30,18 @@ vars:
   # the history features. Reviewed: the feature phase reads no other variable (feature_allowlist.REVIEWED_VARS), and the value must be a whole year.
   first_window_year: 2018
   # Bronze tables whose stored copies staging resolves (failure modes 166 to 177), with each table's source family.
+  # Silver models that are deferred, with the owner decision and the trigger. model_metadata fails while a listed model has SQL, a properties entry or a
+  # silver contract entry: remove its entry here in the same change that restores it, with its YAML, its tests, its contract entries and its macros.
+  deferred_models:
+    - models: [stg_hcai_finance_csv, int_hcai_finance_values]
+      reason: >-
+        The two models read the long-form HCAI Complete Data Set (oshpd_id, rpe, pagecolumnline, values). Those objects were retired for privacy and are not
+        queued, and bronze.hcai_finance_csv holds 20 wide-form Hospital Annual Selected File objects, so the first live silver run (silver_5763ca12, Nov 18
+        2026) stopped on the missing column. The models were built only against synthetic fixtures. Nothing downstream reads their values. The bronze table
+        stays loaded; stg_bronze__file_copies reads its lineage columns.
+      decision: "Owner A, Nov 18 2026, about 9:21 PM PST, recorded in the project standard under HCAI finance silver models deferred with a trigger"
+      trigger: "A long-form HCAI finance source or a reviewed wide-form HCAI finance source is loadable in bronze (the finance source is decided with the HCAI registry decision D3)"
+      restore_from: "git show 90ab31f:dbt/models/silver/staging/stg_hcai_finance_csv.sql and git show 90ab31f:dbt/models/silver/intermediate/int_hcai_finance_values.sql; the macros hcai_finance_value_form, hcai_finance_staging_projection and hcai_finance_hold_reason, the finance branch of int_state_source_holds, the tests, YAML and contract entries are in the same commit"
   copy_tables:
     cms_hai_hospital: hai
     cms_hai_state: hai

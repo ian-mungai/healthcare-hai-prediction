@@ -21,14 +21,6 @@ util_sources as (
 
 held as (
     select
-        'hcai_finance_csv' as bronze_table,
-        stg._member_sha256 as member_sha256,
-        stg._row_number as source_row_number,
-        {{ hcai_finance_hold_reason('stg') }} as hold_reason,
-        null::varchar as hold_detail
-    from {{ ref('stg_hcai_finance_csv') }} as stg
-    union all
-    select
         sources.bronze_table,
         sources._member_sha256 as member_sha256,
         sources._row_number as source_row_number,

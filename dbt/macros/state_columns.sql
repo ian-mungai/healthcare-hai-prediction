@@ -317,36 +317,6 @@ count(*) filter (where trim({{ column }}) <> '' and ({{ state_number(column) }})
 }
 {%- endmacro %}
 
-{% macro hcai_finance_value_form(column) %}
-{#- The form of a financial-disclosure value, from the shapes that cannot spell a person: blank, the redaction mark, a missing token, a number (what state_number
-    types, with or without thousands separators and whatever its length), a number in parentheses, an M/D/YYYY date or one
-    letter or yes or no. Any other text is other and never carried into silver; line-specific rules wait for the HCAI dictionary review. -#}
-{%- set value = "trim(" ~ column ~ ")" -%}
-case
-    when coalesce({{ value }}, '') = '' then 'blank'
-    when {{ value }} = '[REDACTED]' then 'redacted'
-    when {{ value }} in {{ state_missing_token_list() }} then 'missing_token'
-    when ({{ state_number(column) }}) is not null then 'number'
-    when {{ value }} like '(%)' and ({{ state_number('substr(' ~ value ~ ', 2, length(' ~ value ~ ') - 2)') }}) is not null then 'parenthesised_number'
-    when regexp_full_match({{ value }}, '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}') then 'date'
-    when regexp_full_match(upper({{ value }}), '[A-Z]|YES|NO') then 'flag'
-    else 'other'
-end
-{%- endmacro %}
-
-{% macro hcai_finance_staging_projection() %}
-{#- The financial-disclosure columns staging carries: the identifiers only when they have the shape of an OSHPD number, a date and a publisher code, and the value only
-    in a reviewed form (hcai_finance_value_form), with its form. The raw value, which can name a person, never leaves bronze. -#}
-bronze._object_key,
-    bronze._member_sha256,
-    bronze._row_number,
-    case when regexp_full_match(trim(bronze.oshpd_id), '[0-9]{9}') then trim(bronze.oshpd_id) end as oshpd_id,
-    case when {{ state_date_shape('bronze.rpe') }} then trim(bronze.rpe) end as rpe,
-    case when regexp_full_match(trim(bronze.pagecolumnline), '[0-9]+(\.[0-9]+){2,3}') then trim(bronze.pagecolumnline) end as pagecolumnline,
-    {{ hcai_finance_value_form('bronze.values') }} as value_form,
-    case when {{ hcai_finance_value_form('bronze.values') }} not in ('other', 'blank') then trim(bronze.values) end as value_text
-{%- endmacro %}
-
 {% macro hcai_util_staging_projection() %}
 {#- The utilization columns staging carries: the facility number only in the shape of one, the period dates only in a date or serial shape, the descriptors and
     the typed numbers (hcai_util_numeric_columns, hcai_util_coordinate_columns) only when blank, a missing token or a number, and the names of the number columns
@@ -413,16 +383,6 @@ bronze._object_key,
         case when not {{ state_numeric_safe('bronze.numerator') }} then 'numerator' end,
         case when not {{ state_numeric_safe('bronze.denominator') }} then 'denominator' end
     ), '') as unsafe_value_fields
-{%- endmacro %}
-
-{% macro hcai_finance_hold_reason(alias) %}
-{#- Why a financial-disclosure row cannot be kept, or null: the facility, period or code is not in its published shape, or the value is not in a reviewed form. -#}
-case
-    when {{ alias }}.oshpd_id is null then 'facility_not_a_facility_number'
-    when {{ state_date(alias ~ '.rpe') }} is null then 'period_not_a_date'
-    when {{ alias }}.pagecolumnline is null then 'line_not_a_publisher_code'
-    when {{ alias }}.value_form = 'other' then 'value_not_a_reviewed_form'
-end
 {%- endmacro %}
 
 {% macro hcai_util_hold_reason(alias, county) %}

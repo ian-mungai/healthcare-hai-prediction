@@ -9,7 +9,7 @@ Run from the repository root with Docker running:
 Each fixture case writes a small bronze database, runs ``dbt build`` against it in the analytics image and compares the
 models with expectations computed here, independently of the SQL. Each case runs on its own copy of the dbt project,
 whose label and twin seeds are written by the real generator (``ipps_file_labels``) from the fixture's names and whose
-POS period seed names the fixture's POS files. The state sources (California HCAI finance and utilization, Illinois report card) are checked
+POS period seed names the fixture's POS files. The state sources (California HCAI utilization and Illinois report card) are checked
 for the latest release, the held rows, the county and reviewed CCN matches and the absence of every person, phone and address cell.
 The failing cases must fail one named dbt test each: a name clash under
 one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
@@ -717,9 +717,10 @@ def macro_list(macro: str) -> tuple[str, ...]:
     return tuple(re.findall(r"^\s+'([a-z0-9_]+)',$", body, flags=re.MULTILINE))
 
 
-# The bronze columns of the state sources (group E): HCAI financial disclosure (a long table; the first layout has a leading _id column),
+# The bronze columns of the state sources (group E): the HCAI selected file (wide; no silver model reads it),
 # HCAI utilization (one 354-column layout whose person columns bronze pseudonymizes) and the Illinois Hospital Report Card.
-HCAI_FINANCE_COLUMNS = ("u_id", "oshpd_id", "rpe", "pagecolumnline", "values")
+# The wide-form Hospital Annual Selected File that bronze holds as hcai_finance_csv (a sample of its columns). No silver model reads it.
+HCAI_FINANCE_COLUMNS = ("u_id", "data_item", "definition", "fac_no", "fac_name", "end_date", "day_per", "county_name", "bed_lic", "gr_pt_rev", "net_income")
 HCAI_UTIL_COLUMNS = (
     "description",
     # The descriptor columns the utilization model keeps as text.
@@ -2216,39 +2217,23 @@ GROUP_E = (
         "hcai_finance_csv",
         "hf1",
         "2023-06-30",
-        "finance_2015.csv",
+        "CA_history_fixture_a.csv",
         sha("state_finance_a"),
-        14,
+        3,
         records=(
-            cc(u_id="1", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="0.1.1", values="FIXTURE HEALTH SYSTEM"),
-            cc(u_id="2", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,234,567"),
-            cc(u_id="3", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.4", values="[REDACTED]"),
-            cc(u_id="4", oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.1", values="-45.5"),
-            cc(u_id="5", oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.2", values="(250)"),
-            cc(u_id="6", oshpd_id="100000002", rpe="13/45/2015", pagecolumnline="2.1.3", values="10"),
-            cc(u_id="7", oshpd_id="10000X003", rpe="06/30/2015", pagecolumnline="3.1.1", values="5"),
-            cc(u_id="8", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="3.3.1.40", values="12"),
-            cc(u_id="9", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="0.1.14", values="Consulting by SENTINEL_PERSON"),
-            cc(u_id="10", oshpd_id="SENTINEL_FACILITY", rpe="06/30/2015", pagecolumnline="3.1.2", values="5"),
-            cc(u_id="11", oshpd_id="100000001", rpe="SENTINEL_DATE", pagecolumnline="3.1.3", values="5"),
-            cc(u_id="12", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="SENTINEL_LINE", values="5"),
-            cc(u_id="13", oshpd_id="100000003", rpe="06/30/2015", pagecolumnline="4.1.1", values="123456789"),
-            cc(u_id="14", oshpd_id="100000003", rpe="06/30/2015", pagecolumnline="4.1.2", values="1e6"),
+            cc(u_id="1", fac_no="100000001", fac_name="FIXTURE HEALTH SYSTEM", end_date="06/30/2015", day_per="365", bed_lic="120", gr_pt_rev="1,234,567"),
+            cc(u_id="2", fac_no="100000002", fac_name="FIXTURE REGIONAL", end_date="12/31/2015", day_per="365", bed_lic="80", net_income="-45.5"),
+            cc(u_id="3", fac_no="100000003", fac_name="FIXTURE CLINIC", end_date="06/30/2015", day_per="181", bed_lic="10", net_income="(250)"),
         ),
     ),
     Stored(
         "hcai_finance_csv",
         "hf2",
         "2024-06-30",
-        "finance_2015_revised.csv",
+        "CA_history_fixture_b.csv",
         sha("state_finance_b"),
-        4,
-        records=(
-            cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,300,000"),
-            cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.6", values="77"),
-            cc(oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.x", values="7"),
-            cc(oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.1", values="SENTINEL_PSEUDONYM_NEWEST"),
-        ),
+        1,
+        records=(cc(u_id="1", fac_no="100000001", fac_name="FIXTURE HEALTH SYSTEM", end_date="06/30/2015", day_per="365", gr_pt_rev="1,300,000"),),
     ),
     Stored(
         "hcai_util_pages_csv",
@@ -4256,37 +4241,37 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         frozenset(),
     ),
 }
-# A bronze table whose columns differ from the ones its staging view reads (live finding of Nov 18 2026: silver_5763ca12 stopped on a Binder Error for
-# stg_hcai_finance_csv). Each case rewrites the table after the fixture tables exist. A table with no data column and no row reads as a typed empty result; a
-# table with other columns, or one column fewer, stops the view with a message that names the table and the columns.
+# A bronze table whose columns differ from the ones its staging view reads (live finding of Nov 18 2026: silver_5763ca12 stopped on a Binder Error
+# for the HCAI finance staging view, whose bronze table held another dataset). Each case rewrites the table after the fixture tables exist. A table with
+# no row reads as a typed empty result whatever its columns; a table with rows and other columns, or one column fewer, stops the view with a message that
+# names the table and the columns.
 LINEAGE_ONLY = "CREATE OR REPLACE TABLE bronze.{table} AS SELECT _object_key, _member_sha256, _row_number FROM bronze.{table} WHERE false;"
-OTHER_COLUMNS = "CREATE OR REPLACE TABLE bronze.{table} AS SELECT _object_key, _member_sha256, _row_number, 'page' AS page_text FROM bronze.{table};"
-WITHOUT_FINANCE = tuple(item for item in BASE if item.table != "hcai_finance_csv")
+OTHER_COLUMNS = "CREATE OR REPLACE TABLE bronze.{table} AS SELECT _object_key, _member_sha256, _row_number, 'page' AS page_text FROM bronze.{table}{rows};"
 WITHOUT_NONRESPONSE = tuple(item for item in BASE if item.table != "hcai_util_nonresponse_csv")
 # case -> (objects, SQL on the fixture tables, the view that reads the table)
 BRONZE_SHAPES: dict[str, tuple[tuple[Stored, ...], str, str]] = {
-    "finance_without_data_columns": (WITHOUT_FINANCE, LINEAGE_ONLY.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
     "nonresponse_without_data_columns": (WITHOUT_NONRESPONSE, LINEAGE_ONLY.format(table="hcai_util_nonresponse_csv"), "stg_hcai_util_nonresponse_csv"),
-    "finance_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
-    "finance_other_columns_no_rows": (WITHOUT_FINANCE, OTHER_COLUMNS.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
-    "finance_one_column_short": (
-        BASE,
-        "CREATE OR REPLACE TABLE bronze.hcai_finance_csv AS SELECT * EXCLUDE (rpe) FROM bronze.hcai_finance_csv;",
-        "stg_hcai_finance_csv",
+    "nonresponse_other_columns_no_rows": (
+        WITHOUT_NONRESPONSE,
+        OTHER_COLUMNS.format(table="hcai_util_nonresponse_csv", rows=" WHERE false"),
+        "stg_hcai_util_nonresponse_csv",
     ),
-    "util_pages_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_pages_csv"), "stg_hcai_util_pages_csv"),
-    "util_nonresponse_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_nonresponse_csv"), "stg_hcai_util_nonresponse_csv"),
-    "illinois_other_columns": (BASE, OTHER_COLUMNS.format(table="illinois_report_card_csv"), "stg_illinois_report_card_csv"),
+    "util_pages_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_pages_csv", rows=""), "stg_hcai_util_pages_csv"),
+    "util_nonresponse_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_nonresponse_csv", rows=""), "stg_hcai_util_nonresponse_csv"),
+    "illinois_other_columns": (BASE, OTHER_COLUMNS.format(table="illinois_report_card_csv", rows=""), "stg_illinois_report_card_csv"),
+    "illinois_one_column_short": (
+        BASE,
+        "CREATE OR REPLACE TABLE bronze.illinois_report_card_csv AS SELECT * EXCLUDE (county_name) FROM bronze.illinois_report_card_csv;",
+        "stg_illinois_report_card_csv",
+    ),
 }
-BRONZE_SHAPES_EMPTY = ("finance_without_data_columns", "nonresponse_without_data_columns")
+BRONZE_SHAPES_EMPTY = ("nonresponse_without_data_columns", "nonresponse_other_columns_no_rows")
 # case -> the words the refusal of the view must hold: the table and the columns it names
 BRONZE_SHAPES_REFUSED: dict[str, tuple[str, ...]] = {
-    "finance_other_columns": ("hcai_finance_csv", "missing oshpd_id, rpe, pagecolumnline, values", "page_text"),
-    "finance_other_columns_no_rows": ("hcai_finance_csv", "missing oshpd_id, rpe, pagecolumnline, values", "page_text"),
-    "finance_one_column_short": ("hcai_finance_csv", "missing rpe;"),
     "util_pages_other_columns": ("hcai_util_pages_csv", "missing fac_no, fac_name", "page_text"),
     "util_nonresponse_other_columns": ("hcai_util_nonresponse_csv", "missing fac_no, fac_name", "page_text"),
     "illinois_other_columns": ("illinois_report_card_csv", "missing entity_id, name", "page_text"),
+    "illinois_one_column_short": ("illinois_report_card_csv", "missing county_name;"),
 }
 COUNTY_CODE_REUSED = tuple(
     with_record(
@@ -4894,11 +4879,6 @@ ONC_ATTESTATIONS_SQL = (
     "SELECT ccn, coalesce(program_year::VARCHAR, ''), coalesce(attestation_month::VARCHAR, ''), coalesce(attestation_year::VARCHAR, ''), "
     "coalesce(vendor_name, '') FROM int_onc_attestation_rows ORDER BY ALL;"
 )
-HCAI_FINANCE_SQL = (
-    "SELECT facility_id, report_period_end::VARCHAR, page_column_line, code_layout, coalesce(page_number::VARCHAR, ''), "
-    "coalesce(column_number::VARCHAR, ''), coalesce(line_number::VARCHAR, ''), coalesce(value_published, ''), coalesce(value_number::VARCHAR, ''), "
-    "value_form, is_redacted::VARCHAR, publication_date::VARCHAR, is_latest_release::VARCHAR FROM int_hcai_finance_values ORDER BY ALL;"
-)
 HCAI_UTIL_SQL = (
     "SELECT fac_no, response_status, period_begin_date::VARCHAR, period_end_date::VARCHAR, period_begin_published, period_end_published, "
     "report_year::VARCHAR, coalesce(county_fips, ''), county_source, coalesce(zip_code, ''), coalesce(tot_lic_beds::VARCHAR, ''), "
@@ -4915,9 +4895,9 @@ STATE_HOLD_DETAIL_SQL = "SELECT bronze_table, hold_reason, hold_detail FROM int_
 # Every published state table, staging views included: a sentinel in any of them is a leak. The second figure counts the planted ones in bronze.
 STATE_SENTINELS_SQL = (
     "SELECT (SELECT count(*) FROM ("
-    "SELECT t::VARCHAR AS line FROM stg_hcai_finance_csv AS t UNION ALL SELECT t::VARCHAR FROM stg_hcai_util_pages_csv AS t "
+    "SELECT t::VARCHAR AS line FROM stg_hcai_util_pages_csv AS t "
     "UNION ALL SELECT t::VARCHAR FROM stg_hcai_util_nonresponse_csv AS t UNION ALL SELECT t::VARCHAR FROM stg_illinois_report_card_csv AS t "
-    "UNION ALL SELECT t::VARCHAR FROM int_hcai_finance_values AS t UNION ALL SELECT t::VARCHAR FROM int_hcai_util_facility_periods AS t "
+    "UNION ALL SELECT t::VARCHAR FROM int_hcai_util_facility_periods AS t "
     "UNION ALL SELECT t::VARCHAR FROM int_illinois_report_card_values AS t UNION ALL SELECT t::VARCHAR FROM int_state_source_holds AS t"
     ") WHERE line LIKE '%SENTINEL_%')::VARCHAR, "
     "(SELECT count(*) FROM lakehouse.bronze.hcai_util_pages_csv WHERE fac_admin_name LIKE 'SENTINEL_%')::VARCHAR;"
@@ -5460,7 +5440,6 @@ def read_models(case: str) -> dict[str, Any]:
         "hhs_sources": [tuple(row) for row in duckdb_csv(database, HHS_SOURCES_SQL)],
         "onc_chpl": [tuple(row) for row in duckdb_csv(database, ONC_CHPL_SQL)],
         "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
-        "hcai_finance": [tuple(row) for row in duckdb_csv(database, HCAI_FINANCE_SQL)],
         "hcai_util": [tuple(row) for row in duckdb_csv(database, HCAI_UTIL_SQL)],
         "illinois": [tuple(row) for row in duckdb_csv(database, ILLINOIS_SQL)],
         "state_holds": [tuple(row) for row in duckdb_csv(database, STATE_HOLDS_SQL)],
@@ -6625,18 +6604,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     # State sources: the revised release is the latest, a value in parentheses keeps its text, the four-component code keeps its full key, the serial
     # dates decode, a rejected text, number, county or period is held without an echo, the reviewed match gives a CCN and no person, phone or address
     # cell or rejected text reaches any published state table.
-    page_column_line = "page_column_line"
-    checks["hcai_finance_match_expected"] = base.get("hcai_finance") == [
-        ("100000001", "2015-06-30", "1.2.3", page_column_line, "1", "2", "3", "1,234,567", "1234567.0", "number", "false", "2023-06-30", "false"),
-        ("100000001", "2015-06-30", "1.2.3", page_column_line, "1", "2", "3", "1,300,000", "1300000.0", "number", "false", "2024-06-30", "true"),
-        ("100000001", "2015-06-30", "1.2.4", page_column_line, "1", "2", "4", "[REDACTED]", "", "redacted", "true", "2023-06-30", "true"),
-        ("100000001", "2015-06-30", "1.2.6", page_column_line, "1", "2", "6", "77", "77.0", "number", "false", "2024-06-30", "true"),
-        ("100000001", "2015-06-30", "3.3.1.40", "four_part_code", "3", "", "", "12", "12.0", "number", "false", "2023-06-30", "true"),
-        ("100000002", "2015-12-31", "2.1.1", page_column_line, "2", "1", "1", "-45.5", "-45.5", "number", "false", "2023-06-30", "false"),
-        ("100000002", "2015-12-31", "2.1.2", page_column_line, "2", "1", "2", "(250)", "", "parenthesised_number", "false", "2023-06-30", "true"),
-        ("100000003", "2015-06-30", "4.1.1", page_column_line, "4", "1", "1", "123456789", "123456789.0", "number", "false", "2023-06-30", "true"),
-        ("100000003", "2015-06-30", "4.1.2", page_column_line, "4", "1", "2", "1e6", "1000000.0", "number", "false", "2023-06-30", "true"),
-    ]
     full_year = ("2023-01-01", "2023-12-31")
     checks["hcai_util_match_expected"] = base.get("hcai_util") == [
         (
@@ -6691,10 +6658,6 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("1007", "103", "2022-01-01", "2022-12-31", "17031", "name_match", "2.0", "2", "", "", "", "2025-12-31", "true"),
     ]
     checks["state_holds_match_expected"] = base.get("state_holds") == [
-        ("hcai_finance_csv", "facility_not_a_facility_number", "2"),
-        ("hcai_finance_csv", "line_not_a_publisher_code", "2"),
-        ("hcai_finance_csv", "period_not_a_date", "2"),
-        ("hcai_finance_csv", "value_not_a_reviewed_form", "3"),
         ("hcai_util_pages_csv", "county_not_matched", "2"),
         ("hcai_util_pages_csv", "facility_not_a_facility_number", "2"),
         ("hcai_util_pages_csv", "period_not_a_date", "2"),
@@ -7368,10 +7331,7 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     )
     outcome["hhs_onc"] = dict(duckdb_csv(database, hhs_onc_sql))
     state_sql = (
-        "SELECT 'hcai_finance', count(*)::VARCHAR || ' rows, ' || count(DISTINCT facility_id)::VARCHAR || ' facilities, ' "
-        "|| count(*) FILTER (WHERE is_redacted)::VARCHAR || ' redacted, ' || count(*) FILTER (WHERE is_latest_release)::VARCHAR || ' latest' "
-        "FROM int_hcai_finance_values "
-        "UNION ALL SELECT 'hcai_util', count(*)::VARCHAR || ' rows, ' || count(DISTINCT fac_no)::VARCHAR || ' facilities, ' "
+        "SELECT 'hcai_util', count(*)::VARCHAR || ' rows, ' || count(DISTINCT fac_no)::VARCHAR || ' facilities, ' "
         "|| count(*) FILTER (WHERE response_status = 'nonresponse')::VARCHAR || ' non-respondents, ' "
         "|| count(DISTINCT member_sha256)::VARCHAR || ' files' FROM int_hcai_util_facility_periods "
         "UNION ALL SELECT 'illinois', count(*)::VARCHAR || ' rows, ' || count(DISTINCT entity_id)::VARCHAR || ' entities, ' "
@@ -7379,8 +7339,6 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         "FROM int_illinois_report_card_values "
         "UNION ALL SELECT 'state_holds ' || bronze_table || ' ' || hold_reason, count(*)::VARCHAR "
         "FROM int_state_source_holds GROUP BY bronze_table, hold_reason "
-        "UNION ALL SELECT 'reconcile hcai_finance', (SELECT count(*) FROM stg_hcai_finance_csv)::VARCHAR || ' = ' || "
-        "((SELECT count(*) FROM int_hcai_finance_values) + (SELECT count(*) FROM int_state_source_holds WHERE bronze_table = 'hcai_finance_csv'))::VARCHAR "
         "UNION ALL SELECT 'reconcile hcai_util', "
         "((SELECT count(*) FROM stg_hcai_util_pages_csv) + (SELECT count(*) FROM stg_hcai_util_nonresponse_csv))::VARCHAR "
         "|| ' = ' || ((SELECT count(*) FROM int_hcai_util_facility_periods) + (SELECT count(*) FROM int_state_source_holds "

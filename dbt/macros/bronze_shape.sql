@@ -1,5 +1,6 @@
-{#- What a staging view needs of its bronze table before it reads named columns from it. A table that has none of the data columns and no rows reads as a typed
-    empty result; a table that is absent, or whose columns differ from the ones the view reads, stops the build and names the table and the columns. -#}
+{#- What a staging view needs of its bronze table before it reads named columns from it. A table without rows reads as a typed empty result, whatever its
+    columns (a table pruned to nothing keeps the columns of its old files); a table that is absent, or that has rows and columns that differ from the ones the
+    view reads, stops the build and names the table and the columns. -#}
 
 {% macro bronze_projection_columns(projection, flags='') %}
 {#- The bronze columns a projection reads: every name written as bronze.<name>, without the flag columns that the bronze CTE adds itself. Read from the
@@ -15,8 +16,9 @@
 {%- endmacro %}
 
 {% macro bronze_shape(table, required) %}
-{#- 'present' when the bronze table has every column in required (a table without rows is present and reads as empty); 'empty' when it has no data column and no
-    row; otherwise a refusal that names the table and the columns. Only the data columns count for 'empty': a lineage column starts with an underscore. -#}
+{#- 'present' when the bronze table has every column in required (a table without rows is present and reads as empty); 'empty' when it lacks a column and has no
+    row; otherwise a refusal that names the table and the columns. Nothing is read when the project is only parsed or compiled for linting (target lint has no
+    catalog). -#}
 {%- if not execute or target.name == 'lint' -%}
     {{ return('present') }}
 {%- endif -%}
@@ -34,17 +36,10 @@
 {%- if missing | length == 0 -%}
     {{ return('present') }}
 {%- endif -%}
-{%- set data = [] -%}
-{%- for name in found -%}
-    {%- if not name.startswith('_') -%}
-        {%- do data.append(name) -%}
-    {%- endif -%}
-{%- endfor -%}
-{%- if data | length == 0 -%}
-    {%- set count = run_query('select count(*) from ' ~ relation).columns[0].values()[0] -%}
-    {%- if count == 0 -%}
-        {{ return('empty') }}
-    {%- endif -%}
+{%- set counted = run_query('select count(*) from ' ~ relation) -%}
+{%- set count = counted.rows[0][0] -%}
+{%- if count == 0 -%}
+    {{ return('empty') }}
 {%- endif -%}
 {{ exceptions.raise_compiler_error('bronze table ' ~ table ~ ' does not have the columns its silver view reads: missing ' ~ bronze_names_text(missing) ~ '; the table has ' ~ bronze_names_text(found)) }}
 {%- endmacro %}

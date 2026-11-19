@@ -1088,51 +1088,6 @@
       "severity": "structural"
     },
     {
-      "id": "int_hcai_finance_values.columns",
-      "table": "int_hcai_finance_values",
-      "type": "ExpectTableColumnsToMatchSet",
-      "kwargs": {
-        "column_set": [
-          "member_sha256",
-          "source_row_number",
-          "facility_id",
-          "report_period_end",
-          "page_column_line",
-          "value_form",
-          "value_published",
-          "publication_date",
-          "line_code_parts",
-          "is_latest_release",
-          "finance_row_key",
-          "code_layout",
-          "page_number",
-          "column_number",
-          "line_number",
-          "value_number",
-          "is_redacted"
-        ]
-      },
-      "severity": "structural"
-    },
-    {
-      "id": "int_hcai_finance_values.has_rows",
-      "table": "int_hcai_finance_values",
-      "type": "ExpectTableRowCountToBeBetween",
-      "kwargs": {
-        "min_value": 1
-      },
-      "severity": "structural"
-    },
-    {
-      "id": "int_hcai_finance_values.types",
-      "table": "int_hcai_finance_values",
-      "type": "UnexpectedRowsExpectation",
-      "kwargs": {
-        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('member_sha256', 'VARCHAR'), ('source_row_number', 'BIGINT'), ('facility_id', 'VARCHAR'), ('report_period_end', 'DATE'), ('page_column_line', 'VARCHAR'), ('value_form', 'VARCHAR'), ('value_published', 'VARCHAR'), ('publication_date', 'DATE'), ('line_code_parts', 'INTEGER[]'), ('is_latest_release', 'BOOLEAN'), ('finance_row_key', 'VARCHAR'), ('code_layout', 'VARCHAR'), ('page_number', 'INTEGER'), ('column_number', 'INTEGER'), ('line_number', 'INTEGER'), ('value_number', 'DOUBLE'), ('is_redacted', 'BOOLEAN')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_hcai_finance_values' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
-      },
-      "severity": "structural"
-    },
-    {
       "id": "int_hcai_util_facility_periods.columns",
       "table": "int_hcai_util_facility_periods",
       "type": "ExpectTableColumnsToMatchSet",

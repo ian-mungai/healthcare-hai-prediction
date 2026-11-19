@@ -251,6 +251,19 @@ def replacing(path: str, old: str, new: str) -> tuple[tuple[str, str, str], ...]
     return ((path, old, new),)
 
 
+def deferred_project(models: str, **fields: str) -> str:
+    """The sample project file with a deferral record for the named models, each field replaceable (an empty text blanks it)."""
+    record = {
+        "reason": "The source is not loadable.",
+        "decision": "Owner decision of the test.",
+        "trigger": "A source is loadable.",
+        "restore_from": "git show abc1234",
+    }
+    record.update(fields)
+    lines = "".join(f"      {name}: {value!r}\n" for name, value in record.items())
+    return BASE[PROJECT] + f"  deferred_models:\n    - models: [{models}]\n{lines}"
+
+
 PACKAGE_REF_RELATIONSHIP = replacing(FACTS, "    columns:\n      - name: amount\n", RELATIONSHIP_COLUMN)
 DIM_COUNTY_DESIGN = replacing(FACTS, "Dimensions: none. Measures: amount", "Dimensions: dim_county. Measures: amount")
 
@@ -1668,6 +1681,22 @@ def make_cases() -> list[Case]:
             code=0,
             scope=STAGED_SCOPE,
         ),
+        Case("deferred_model_absent_passes", "model metadata ok", "", files={PROJECT: deferred_project("stg_gone")}, code=0),
+        Case("deferred_model_returns", "deferred-model", "stg_raw_public", files={PROJECT: deferred_project("stg_raw_public")}),
+        Case(
+            "deferred_model_entry_left_in_properties",
+            "deferred-model",
+            "stg_gone",
+            files={PROJECT: deferred_project("stg_gone"), STAGING: BASE[STAGING] + model_entry("stg_gone", "Public")},
+        ),
+        Case(
+            "deferred_model_named_in_publish_contract",
+            "deferred-model",
+            "stg_gone",
+            files={PROJECT: deferred_project("stg_gone"), "data_contracts/lakehouse/silver_publish.json": '{"tables": {"stg_gone": {}}}\n'},
+        ),
+        Case("deferred_record_without_trigger", "deferred-record", "trigger", files={PROJECT: deferred_project("stg_gone", trigger="")}),
+        Case("deferred_record_without_restore_place", "deferred-record", "restore_from", files={PROJECT: deferred_project("stg_gone", restore_from="")}),
         Case("scope_unrelated_change", "Skipped", "", files={"NOTES.txt": "unrelated\n"}, code=0, scope=STAGED_SCOPE),
     ]
 

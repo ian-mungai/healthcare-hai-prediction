@@ -339,7 +339,7 @@ sources:
             description: Row position within the file, from 1.
             data_tests: [not_null]
       - name: hcai_finance_csv
-        description: California HCAI annual hospital financial disclosure in long form (facility, period end, page, column and line, value), every stored copy. The stored copy is the privacy-filtered derivative.
+        description: California HCAI Hospital Annual Selected File in wide form (one row per facility and period), every stored copy. No silver model reads its columns while the finance models are deferred (vars.deferred_models in dbt_project.yml); stg_bronze__file_copies reads its lineage columns.
         meta:
           classification: Public
         columns:

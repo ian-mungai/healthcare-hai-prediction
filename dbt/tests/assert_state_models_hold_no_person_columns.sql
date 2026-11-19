@@ -19,11 +19,9 @@ from information_schema.columns as schema_columns
 left join withheld on schema_columns.column_name = withheld.column_name
 where
     schema_columns.table_name in (
-        'stg_hcai_finance_csv',
         'stg_hcai_util_pages_csv',
         'stg_hcai_util_nonresponse_csv',
         'stg_illinois_report_card_csv',
-        'int_hcai_finance_values',
         'int_hcai_util_facility_periods',
         'int_illinois_report_card_values',
         'int_state_source_holds'
@@ -36,5 +34,4 @@ where
         or schema_columns.column_name like '%street%'
         or schema_columns.column_name like '%pseudonym%'
         or (schema_columns.table_name = 'int_state_source_holds' and schema_columns.column_name like '%published%')
-        or (schema_columns.table_name = 'stg_hcai_finance_csv' and schema_columns.column_name in ('values', 'u_id'))
     )

@@ -109,7 +109,9 @@ PACKAGE_MACROS = frozenset({"dbt_utils.get_column_values"})
 MUTATORS = frozenset({"append", "extend", "update", "pop", "clear", "insert", "remove", "setdefault", "sort", "reverse", "add", "discard"})
 STRING_METHODS = frozenset({"startswith", "endswith", "lower", "upper", "strip", "split", "replace"})
 STEP_LIMIT = 200000
-HARMLESS_CONTEXT_CALLS = frozenset({"adapter.quote", "exceptions.raise_compiler_error", "exceptions.warn", "modules.re.fullmatch"})
+HARMLESS_CONTEXT_CALLS = frozenset(
+    {"adapter.quote", "adapter.get_columns_in_relation", "exceptions.raise_compiler_error", "exceptions.warn", "modules.re.fullmatch", "modules.re.findall"}
+)
 BINARY = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.truediv, "//": operator.floordiv, "%": operator.mod}
 COMPARISONS = {
     "eq": operator.eq,
@@ -1458,6 +1460,46 @@ def measure_inventory(columns: dict[str, list[tuple[str, str]]], lines: dict[str
     return measures, problems
 
 
+DEFERRED_VARIABLE = "deferred_models"
+DEFERRED_FIELDS = ("reason", "decision", "trigger", "restore_from")
+DEFERRED_CONTRACTS = ("data_contracts/lakehouse/silver_publish.json", "data_contracts/lakehouse/silver_columns.json")
+
+
+def deferred_problems(root: Path, project_text: str, variables: dict[str, Any], models: dict[str, Model], declared: dict[str, Entry]) -> list[Problem]:
+    """Problems of the deferral record (vars.deferred_models in the project file): an incomplete record, and a deferred model that has SQL, a properties
+    entry or a silver contract entry again. A model comes back only when its record entry is removed with it, so it cannot return half-wired."""
+    record = variables.get(DEFERRED_VARIABLE)
+    if record is None:
+        return []
+    line = next((number for number, text in enumerate(project_text.splitlines(), start=1) if DEFERRED_VARIABLE in text), 1)
+    if not isinstance(record, list) or not all(isinstance(item, dict) for item in record):
+        return [Problem("deferred-record", PROJECT_FILE, line, f"vars.{DEFERRED_VARIABLE} must be a list of mappings")]
+    problems: list[Problem] = []
+    contracts = {path: (root / path).read_text() for path in DEFERRED_CONTRACTS if (root / path).is_file()}
+    for item in record:
+        names = item.get("models")
+        missing = [name for name in DEFERRED_FIELDS if not isinstance(item.get(name), str) or not item[name].strip()]
+        if not isinstance(names, list) or not names or not all(isinstance(name, str) and name for name in names):
+            problems.append(Problem("deferred-record", PROJECT_FILE, line, "a deferral entry needs a nonempty list in models"))
+            continue
+        if missing:
+            problems.append(Problem("deferred-record", PROJECT_FILE, line, f"the deferral of {', '.join(names)} has no {', '.join(missing)}"))
+        for name in names:
+            where = [models[name].path] if name in models else []
+            where += [declared[name].path] if name in declared else []
+            where += [path for path, text in contracts.items() if f'"{name}"' in text]
+            for path in where:
+                problems.append(
+                    Problem(
+                        "deferred-model",
+                        path,
+                        1,
+                        f"{name} is recorded as deferred in {PROJECT_FILE}: remove its entry there before it returns, and its files before it stays deferred",
+                    )
+                )
+    return problems
+
+
 def load(root: Path) -> Project:
     """Return project metadata, dependencies and compiled column origins for the repository at root; raise CannotRun for unreadable inputs."""
     env = environment()
@@ -1482,6 +1524,7 @@ def load(root: Path) -> Project:
     variables = dict(project_data.get("vars") or {})
     scoped = variables.get(project_data["name"])
     variables.update(scoped if isinstance(scoped, dict) else {})
+    problems.extend(deferred_problems(root, read_text(root, PROJECT_FILE), variables, models, properties.models))
     seeds = properties.seeds | {path.stem for path in files_under(directories["seed-paths"], ".csv")}
     ctx = Context(
         project_data["name"],
