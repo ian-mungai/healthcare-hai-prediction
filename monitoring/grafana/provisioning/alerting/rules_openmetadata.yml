@@ -46,6 +46,8 @@ groups:
           summary: A health check of OpenMetadata reports a failure.
           headline: 'OpenMetadata health check fails'
           recovered: 'The OpenMetadata health checks pass again.'
+          resolved_affects: 'Catalog updates from the time of the failure may be missing.'
+          resolved_next: 'Open the HAI OpenMetadata dashboard and check the current health.'
           affects: 'The data catalog may be unavailable or out of date.'
           next_step: 'Open the HAI OpenMetadata dashboard to see which check fails.'
           dashboard: 'HAI OpenMetadata'
@@ -87,7 +89,9 @@ groups:
         annotations:
           summary: The scheduler could not deliver lineage events to OpenMetadata in the last 15 minutes. The tasks still ran, but the catalog lineage is behind.
           headline: 'Lineage events are not delivered'
-          recovered: 'Lineage events reach OpenMetadata again.'
+          recovered: 'No new lineage delivery failure was recorded in the last 15 minutes.'
+          resolved_affects: 'Events that failed earlier may not have been delivered, so the catalog lineage may stay behind.'
+          resolved_next: 'Check on the HAI OpenMetadata dashboard if the catalog caught up.'
           affects: 'The tasks still run, but the catalog lineage is behind.'
           next_step: 'Check that OpenMetadata is up. The HAI OpenMetadata dashboard shows the failures.'
           dashboard: 'HAI OpenMetadata'

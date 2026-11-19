@@ -44,7 +44,9 @@ groups:
         annotations:
           summary: A promotion of a challenger was rolled back, so the Production model of the type may have changed.
           headline: 'Model promotion was rolled back'
-          recovered: 'No promotion of this type is rolled back now.'
+          recovered: 'No rolled-back promotion is recorded for this type now.'
+          resolved_affects: 'The rollback itself is not undone.'
+          resolved_next: 'Open the HAI models dashboard and check the Production model of this type.'
           affects: 'The Production model of this infection type may have changed.'
           next_step: 'Open the HAI models dashboard to see the Production model. Read the research run in Airflow.'
           dashboard: 'HAI models'

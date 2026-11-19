@@ -284,7 +284,7 @@ def contact_point_has_no_subject(root: Path) -> dict[str, bool]:
 
 
 def rule_has_no_next_step(root: Path) -> dict[str, bool]:
-    note = "          next_step: 'Open Airflow, find the failed run of this job and read its task log. Fix the cause and run it again.'\n"
+    note = "          next_step: 'Open Airflow and find the failed run of this job. Read its task log. Fix the cause and rerun the failed task.'\n"
     return reported(root, lambda tree: edit(tree, RULES_JOBS, note, ""), "has no next_step annotation")
 
 

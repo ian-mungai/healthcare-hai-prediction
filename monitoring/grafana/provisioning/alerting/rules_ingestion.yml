@@ -44,7 +44,9 @@ groups:
         annotations:
           summary: A publisher retry run ended with files that were not captured, so the month's capture is incomplete.
           headline: 'Publisher files still missing after retry'
-          recovered: 'No file is missing after the latest retry run.'
+          recovered: 'The latest publisher retry run has no missing file.'
+          resolved_affects: 'A bronze run that started before the capture was complete may have kept the earlier capture of those files.'
+          resolved_next: 'Read the next bronze notice to see if any file was carried over.'
           affects: 'The capture of the month is incomplete. Bronze keeps the earlier capture of those files.'
           next_step: 'Open the HAI ingestion dashboard to see how many files are missing. Then read the ingestion run record.'
           dashboard: 'HAI ingestion'
@@ -85,6 +87,8 @@ groups:
           summary: The latest bronze stage left tables out of the pipeline run, so those tables are not loaded in it.
           headline: 'Bronze stage skipped tables'
           recovered: 'The latest bronze stage skipped no table.'
+          resolved_affects: 'The earlier run that skipped tables still lacks them.'
+          resolved_next: 'Check that the tables load in the next bronze run.'
           affects: 'The skipped tables are not loaded in the pipeline run.'
           next_step: 'Read the bronze run notice and its run record. Check if the tables should have a source file.'
           dashboard: 'HAI ingestion'

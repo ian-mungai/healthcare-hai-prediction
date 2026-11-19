@@ -58,7 +58,7 @@ TEMPLATE_PARTS = (
     "hai.safe24",
     "hai.safe45",
 )
-NOTICE_ANNOTATIONS = ("headline", "recovered", "affects", "next_step", "dashboard")
+NOTICE_ANNOTATIONS = ("headline", "recovered", "resolved_affects", "resolved_next", "affects", "next_step", "dashboard")
 HEADLINE_LIMIT = 45
 CONTACT_NAME = "hai_sns"
 TOPIC_REFERENCE = "${ALERTS_TOPIC_ARN}"

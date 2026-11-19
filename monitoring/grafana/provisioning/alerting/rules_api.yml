@@ -44,9 +44,11 @@ groups:
           severity: critical
         annotations:
           summary: Prometheus cannot scrape the model API. Expected until the API runs on the host.
-          headline: 'Model API is down'
-          recovered: 'Prometheus reaches the model API again.'
-          affects: 'The model API gives no predictions. This is expected until the API runs on the host.'
+          headline: 'Model API metrics are unreachable'
+          recovered: 'Prometheus scrapes the model API again.'
+          resolved_affects: 'API metrics are missing for the gap. Requests in the gap do not show on the dashboards.'
+          resolved_next: 'Open the HAI overview dashboard and check that the API serves requests.'
+          affects: 'API metrics are unavailable. Predictions may also be unavailable.'
           next_step: 'If the API should run, check its task on the host. If it is not deployed yet, no action is needed.'
           dashboard: 'HAI overview'
 
@@ -87,8 +89,10 @@ groups:
         annotations:
           summary: More than 5 percent of API requests ended in a server error for 10 minutes.
           headline: 'Model API returns server errors'
-          recovered: 'The model API error rate is back under 5 percent.'
-          affects: 'Some predictions fail.'
+          recovered: 'The share of failed API requests is back at or under 5 percent.'
+          resolved_affects: 'Requests that failed in that time were not answered. Callers may need to retry them.'
+          resolved_next: 'Read the model API log of that time to find the cause.'
+          affects: 'More than 5 percent of requests fail, so some predictions fail.'
           next_step: 'Read the model API log on the host to find the failing requests.'
           dashboard: 'HAI overview'
 
@@ -129,9 +133,11 @@ groups:
         annotations:
           summary: The 95th percentile API latency exceeded 1 second for 10 minutes.
           headline: 'Model API is slow'
-          recovered: 'The model API latency is back under 1 second.'
-          affects: 'Predictions take longer than 1 second for the slowest 5 percent of requests.'
-          next_step: 'Open the HAI overview dashboard to see the latency, then read the model API log.'
+          recovered: 'The 95th percentile API latency is back at or under 1 second.'
+          resolved_affects: 'Requests in that time were slower than usual.'
+          resolved_next: 'Open the HAI overview dashboard and check that the latency stays low.'
+          affects: 'The slowest 5 percent of requests take longer than 1 second.'
+          next_step: 'Open the HAI overview dashboard to see the latency. Then read the model API log.'
           dashboard: 'HAI overview'
 
       - uid: api_online_store_not_ready
@@ -172,6 +178,8 @@ groups:
           summary: The model API read an online feature store that is not ready for 10 minutes. The store is loading, absent or unreadable, so the API refuses predictions of that feature set.
           headline: 'Online store is not ready for the API'
           recovered: 'The online store of this feature set is ready again.'
+          resolved_affects: 'Predictions of this feature set were refused while the store was not ready.'
+          resolved_next: 'Open the HAI feature store dashboard and check the result of the online reload.'
           affects: 'The model API refuses predictions of this feature set.'
           next_step: 'Check the reload of this feature set at host start. Read the log of the reload step.'
           dashboard: 'HAI feature store'

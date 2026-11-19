@@ -47,7 +47,9 @@ groups:
         annotations:
           summary: Polaris answered more than three requests with a 5xx status in ten minutes.
           headline: 'Polaris returns server errors'
-          recovered: 'Polaris returns no more server errors.'
+          recovered: 'The recorded server-error count is no longer above three in ten minutes.'
+          resolved_affects: 'Jobs that used the catalog during the errors may have failed.'
+          resolved_next: 'Open the HAI Polaris dashboard and check the jobs of that time in Airflow.'
           affects: 'Catalog reads or writes may fail.'
           next_step: 'Read the Polaris log on the host. The HAI Polaris dashboard shows the error rate.'
           dashboard: 'HAI Polaris'
@@ -89,7 +91,9 @@ groups:
         annotations:
           summary: The Polaris Java heap has stayed above 90% of its maximum. A heap with no defined maximum raises no alert.
           headline: 'Polaris heap is almost full'
-          recovered: 'The Polaris heap is back under 90 percent.'
+          recovered: 'The Polaris heap is back at or under 90 percent.'
+          resolved_affects: 'Polaris may have slowed down while the heap was high.'
+          resolved_next: 'Watch the HAI Polaris dashboard to see that the heap stays low.'
           affects: 'Polaris may slow down or stop.'
           next_step: 'Watch the HAI Polaris dashboard. Plan more memory for Polaris if the heap stays high.'
           dashboard: 'HAI Polaris'
@@ -131,7 +135,9 @@ groups:
         annotations:
           summary: MLflow answered more than three requests with a 5xx status in ten minutes.
           headline: 'MLflow returns server errors'
-          recovered: 'MLflow returns no more server errors.'
+          recovered: 'The recorded server-error count is no longer above three in ten minutes.'
+          resolved_affects: 'Steps that used MLflow during the errors may have failed.'
+          resolved_next: 'Open the HAI MLflow dashboard and check the runs of that time in Airflow.'
           affects: 'Training and promotion steps may fail to log or read runs.'
           next_step: 'Read the MLflow log on the host. The HAI MLflow dashboard shows the error rate.'
           dashboard: 'HAI MLflow'
@@ -173,7 +179,9 @@ groups:
         annotations:
           summary: The 95th percentile of MLflow request time has stayed above five seconds.
           headline: 'MLflow is slow'
-          recovered: 'MLflow requests are fast again.'
+          recovered: 'The 95th percentile of MLflow request time is back at or under five seconds.'
+          resolved_affects: 'Steps that used MLflow in that time may have run slowly.'
+          resolved_next: 'Open the HAI MLflow dashboard and check that the request time stays low.'
           affects: 'Training and promotion steps may run into their time limits.'
           next_step: 'Open the HAI MLflow dashboard to see the request time. Read the MLflow log.'
           dashboard: 'HAI MLflow'
@@ -216,6 +224,8 @@ groups:
           summary: Grafana alert rules fail to evaluate, so some alerts cannot fire.
           headline: 'Grafana alert rules fail to evaluate'
           recovered: 'Grafana evaluates its alert rules again.'
+          resolved_affects: 'An alert that should have fired in the gap may be missing.'
+          resolved_next: 'Open the HAI Grafana dashboard and check the rules of the gap.'
           affects: 'Some alerts cannot fire.'
           next_step: 'Open the HAI Grafana dashboard. Read the Grafana log to find the failing rule.'
           dashboard: 'HAI Grafana'
@@ -257,7 +267,9 @@ groups:
         annotations:
           summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure and a first failure after a restart also count).
           headline: 'Grafana cannot deliver notifications'
-          recovered: 'Grafana delivers its notifications again.'
+          recovered: 'The notification failure condition has cleared.'
+          resolved_affects: 'Emails that failed to send are not sent again, so you may have missed alerts.'
+          resolved_next: 'Open Grafana, then Alerting, then Contact points. Read the delivery status of the hai_sns contact point.'
           affects: 'You may miss alert emails.'
           next_step: 'Open Grafana. Go to Alerting, then Contact points. Read the error of the hai_sns contact point.'
           dashboard: 'HAI Grafana'
@@ -300,6 +312,8 @@ groups:
           summary: The Grafana alert scheduler runs more than a minute behind, so alerts fire late.
           headline: 'Grafana alert scheduler is behind'
           recovered: 'The Grafana alert scheduler is on time again.'
+          resolved_affects: 'Alerts fired late in the gap.'
+          resolved_next: 'Open the HAI host capacity dashboard and check the host load.'
           affects: 'Alerts fire late.'
           next_step: 'Open the HAI host capacity dashboard to see if the host is under load.'
           dashboard: 'HAI Grafana'

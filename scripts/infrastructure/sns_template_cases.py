@@ -47,7 +47,7 @@ LABELS_NOT_SHOWN = {"le", "outcome"}
 INSTANCE_LABELS = {"model_set", "job_type"}
 WITH_INSTANCE_LABELS = {"drift_triggered"}
 EXTRA_LABELS = {"service_tasks_missing": ["service"], "service_health_down": ["service"]}
-LINE_LIMIT_BEFORE_NEXT_STEP = 14
+LINE_LIMIT_BEFORE_NEXT_STEP = 16
 SUBJECT_LIMIT = 90
 SNS_SUBJECT_LIMIT = 100
 ALERT_BLOCK_LIMIT = 10
@@ -72,17 +72,20 @@ BLANKET = ("Nothing is affected now.", "No action is needed.")
 GENERIC_CLEARED = "The alert condition has cleared."
 RESOLVED_FIELDS = ("recovered", "resolved_affects", "resolved_next")
 JOB_FAILED_FIRING = """What happened:
-A host job phase failed or was interrupted. No later run of it has succeeded.
+A host job phase failed or was interrupted.
+No later run of it has succeeded.
 
 When:
 Started at 10:13 AM PST, Nov 19 2026 [18:13 UTC]
 
 What it affects:
 Job silver, phase build.
-The job phase did not finish, so the steps that need its output do not run.
+The job phase did not succeed, so the layers after it do not run on its output.
 
 What to do next:
-Open Airflow, find the failed run of this job and read its task log. Fix the cause and run it again.
+Open Airflow and find the failed run of this job.
+Read its task log.
+Fix the cause and rerun the failed task.
 
 Where to look:
 Dashboard: HAI host jobs in Grafana.
@@ -95,8 +98,10 @@ Phase: build
 Severity: warning
 Alert rule: JobFailed"""
 JOB_FAILED_RESOLVED = """What happened:
-This alert has cleared. A later run of this job phase succeeded.
-Earlier problem: A host job phase failed or was interrupted. No later run of it has succeeded.
+This alert has cleared.
+A later run of this job phase succeeded.
+Earlier problem: A host job phase failed or was interrupted.
+No later run of it has succeeded.
 
 When:
 Cleared at 1:08 PM PST, Nov 19 2026 [21:08 UTC]
@@ -104,10 +109,10 @@ Began at 10:13 AM PST, Nov 19 2026 [18:13 UTC]
 
 What it affects:
 Job silver, phase build.
-Nothing is affected now.
+Layers after this job phase may still be behind, because they did not run while it failed.
 
 What to do next:
-No action is needed.
+Open Airflow and check that the DAGs after this layer have run since the success.
 
 Where to look:
 Dashboard: HAI host jobs in Grafana.
@@ -219,6 +224,11 @@ def shape_problems(subject: str, message: str, expected: Sequence[str] = BLOCKS)
     return found
 
 
+def as_lines(text: str) -> str:
+    """The text as the template prints it: each sentence on its own line."""
+    return re.sub(r"\.[ ]+", ".\n", str(text))
+
+
 def named(checks: dict[str, bool], name: str, ok: bool) -> None:
     """Record one named check."""
     checks[name] = bool(ok)
@@ -240,7 +250,11 @@ def resolved_alert_is_exact(root: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     named(checks, "the subject says RESOLVED first", subject == "RESOLVED: Host job failed (job silver, phase build)")
     named(checks, "the message is the reviewed text", message == JOB_FAILED_RESOLVED)
-    named(checks, "the message says what cleared, that no action is needed and the earlier problem one line lower", "No action is needed." in message)
+    named(
+        checks,
+        "the message says what cleared and what may still be behind, not that nothing is affected",
+        "Layers after this job phase may still be behind" in message and not any(text in message for text in BLANKET),
+    )
     named(checks, "the message has the shape", not shape_problems(subject, message))
     return checks
 
@@ -279,7 +293,11 @@ def mixed_group_counts_and_orders_its_alerts(root: Path) -> dict[str, bool]:
         "the firing alert is first and the resolved alert second",
         "Task: load" in first and "Started at" in first and "Task: check" in second and "Cleared at" in second,
     )
-    named(checks, "the resolved alert says what cleared and that no action is needed", "This alert has cleared." in second and "No action is needed." in second)
+    named(
+        checks,
+        "the resolved alert says what cleared and what may still be behind",
+        "This alert has cleared." in second and "Other tasks of the DAG can still fail." in second,
+    )
     return checks
 
 
@@ -316,10 +334,11 @@ def every_rule_reads_well(root: Path) -> dict[str, bool]:
         annotations = rules[uid]["annotations"]
         problems = shape_problems(subject, message)
         if state == "firing":
-            problems += [f"{key} is missing" for key in FIRING_FIELDS if annotations[key] not in message]
+            problems += [f"{key} is missing" for key in FIRING_FIELDS if as_lines(annotations[key]) not in message]
         else:
-            problems += [f"{key} is missing" for key in ("recovered", "summary") if annotations[key] not in message]
-            problems += [] if "No action is needed." in message else ["no action is needed is missing"]
+            problems += [
+                f"{key} is missing" for key in ("recovered", "summary", "resolved_affects", "resolved_next") if as_lines(annotations[key]) not in message
+            ]
         if annotations["headline"] not in subject or f"Dashboard: {annotations['dashboard']} in Grafana." not in message:
             problems.append("the headline or the dashboard is missing")
         named(checks, f"{uid} {state}: {'; '.join(problems) if problems else 'reads well'}", not problems)
@@ -455,7 +474,7 @@ def resolved_alerts_say_only_what_is_true(root: Path) -> dict[str, bool]:
     for uid, (_, message) in zip(states, notices, strict=True):
         annotations = rules[uid]["annotations"]
         problems = [text for text in BLANKET if text in message]
-        problems += [f"{key} is missing" for key in RESOLVED_FIELDS if not annotations.get(key) or annotations[key] not in message]
+        problems += [f"{key} is missing" for key in RESOLVED_FIELDS if not annotations.get(key) or as_lines(annotations[key]) not in message]
         named(checks, f"{uid}: {'; '.join(problems) if problems else 'the cleared text is the rule text'}", not problems)
     bare = {"status": "resolved", "labels": {"alertname": "SomethingNew", "severity": "warning"}, "annotations": {}, "startsAt": STARTS, "endsAt": ENDS}
     ((_, message),) = render(root, [notification([bare])])
@@ -539,4 +558,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "alert_email_subject_is_valid_for_every_rule_state_and_text": subject_is_valid_for_every_rule_state_and_text,
     "alert_email_body_is_clean_for_every_rule_and_text": body_is_clean_for_every_rule_and_text,
     "alert_email_many_alerts_show_a_bounded_number_of_blocks": many_alerts_show_a_bounded_number_of_blocks,
+    "alert_email_resolved_alerts_say_only_what_is_true": resolved_alerts_say_only_what_is_true,
+    "alert_email_texts_match_the_rules_they_describe": texts_match_the_rules_they_describe,
 }

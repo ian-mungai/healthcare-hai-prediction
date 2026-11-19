@@ -40,6 +40,10 @@ templates:
       {{ if gt (len $v) 45 }}{{ printf "%.42s..." $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 
+      {{ define "hai.sentences" -}}
+      {{ . | reReplaceAll `\.[ ]+` ".\n" }}
+      {{- end }}
+
       {{ define "hai.line" -}}
       {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | trimSpace -}}
       {{ if gt (len $v) 200 }}{{ printf "%.197s..." $v }}{{ else }}{{ $v }}{{ end }}
@@ -82,15 +86,20 @@ templates:
       {{ $affects := "" -}}{{ with .Annotations.affects }}{{ $affects = . }}{{ end -}}
       {{ $next := "" -}}{{ with .Annotations.next_step }}{{ $next = . }}{{ end -}}
       {{ $dashboard := "" -}}{{ with .Annotations.dashboard }}{{ $dashboard = . }}{{ end -}}
+      {{ $resolvedAffects := "The alert condition has cleared. Earlier work may still need attention." -}}{{ with .Annotations.resolved_affects }}{{ $resolvedAffects = . }}{{ end -}}
+      {{ $resolvedNext := "Check the affected run and its downstream tasks." -}}{{ with .Annotations.resolved_next }}{{ $resolvedNext = . }}{{ end -}}
       {{ $details := or .Labels.alertname .Labels.severity $which -}}
       What happened:
       {{- if $resolved }}
-      This alert has cleared.{{ with .Annotations.recovered }} {{ . }}{{ end }}
+      This alert has cleared.
+      {{- with .Annotations.recovered }}
+      {{ template "hai.sentences" . }}
+      {{- end }}
       {{- if $summary }}
-      Earlier problem: {{ $summary }}
+      Earlier problem: {{ template "hai.sentences" $summary }}
       {{- end }}
       {{- else if $summary }}
-      {{ $summary }}
+      {{ template "hai.sentences" $summary }}
       {{- else }}
       {{ with .Labels.alertname }}{{ template "hai.line" . }} is firing.{{ else }}An alert is firing.{{ end }}
       {{- end }}
@@ -109,18 +118,18 @@ templates:
       {{ template "hai.which" . }}
       {{- end }}
       {{- if $resolved }}
-      Nothing is affected now.
+      {{ template "hai.sentences" $resolvedAffects }}
       {{- else if $affects }}
-      {{ $affects }}
+      {{ template "hai.sentences" $affects }}
       {{- end }}
       {{- end }}
       {{- if or $resolved $next }}
 
       What to do next:
       {{- if $resolved }}
-      No action is needed.
+      {{ template "hai.sentences" $resolvedNext }}
       {{- else }}
-      {{ $next }}
+      {{ template "hai.sentences" $next }}
       {{- end }}
       {{- end }}
       {{- if $dashboard }}
