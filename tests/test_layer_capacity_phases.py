@@ -92,7 +92,17 @@ def run(monkeypatch: pytest.MonkeyPatch, work: Path, layer: str, phase: str, cho
             seen["child"] = json.loads(layer_run.run_module(job, "timeit", ["-n", "1", "-r", "1", statement]).splitlines()[0])
         raise Reached
 
+    def at_boundary(real_check: Any) -> Any:
+        """The derived values the environment holds at the moment a startup check starts."""
+
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            seen.setdefault("boundary", {name: os.environ.get(name, "") for name in DERIVED})
+            return real_check(*args, **kwargs)
+
+        return wrapped
+
     real = stand_in(work)
+    monkeypatch.setattr(layer_run.startup_check, "check_build", at_boundary(layer_run.startup_check.check_build))
     monkeypatch.setattr(layer_run.task_capacity, "apply", (lambda *_a, **_k: None) if skip else real)
     monkeypatch.setattr(layer_run, "task_deadline", lambda _job: contextlib.nullcontext())
     monkeypatch.setattr(layer_run, "check_code_run", lambda _job: None)
@@ -118,6 +128,15 @@ def test_every_phase_derives_its_limits_before_its_engine_reads_them(monkeypatch
     check(seen["env"] == want, f"{label(path)} holds the derived values for its profile: {seen['env']} != {want}")
     check(seen["reads"]["temp"]["max_temp_directory_size"] == f"{want['HAI_DUCKDB_MAX_TEMP_BYTES']}B", f"the DuckDB cap is the derived one: {seen['reads']}")
     check(seen["reads"]["options"]["threads"] == want["JOB_THREADS"], f"the engine options carry the derived threads: {seen['reads']['options']}")
+
+
+@pytest.mark.parametrize("path", [path for path in PATHS if path[1] == "build"], ids=label)
+def test_a_build_holds_its_derived_limits_when_its_startup_check_starts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: tuple[str, str, str]) -> None:
+    """The build check reads the spill cap that only the derivation sets, so every build (silver, gold, each features set) derives first."""
+    layer, phase, chosen = path
+    seen = run(monkeypatch, tmp_path, layer, phase, chosen)
+    want = expected(tmp_path, layer, phase)
+    check(seen.get("boundary") == want, f"{label(path)} holds the derived values at the startup boundary: {seen.get('boundary')} != {want}")
 
 
 def test_the_features_build_holds_fewer_threads_than_the_other_phases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
