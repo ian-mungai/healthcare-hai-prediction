@@ -331,35 +331,90 @@ def walk(document: Any, prefix: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
     return found
 
 
-def generic(path: tuple[Any, ...]) -> tuple[Any, ...]:
-    """A path with every list position replaced by ``*``, so a row for ``tables[0]`` also stands for ``tables[1]``."""
-    return tuple("*" if isinstance(step, int) else step for step in path)
+def normalized(file: str, path: tuple[Any, ...]) -> tuple[Any, ...]:
+    """A path with every list position replaced by ``*``, so a row for ``tables[0]`` also stands for ``tables[1]``; the manifest's source ids are replaced
+    too, because every source is one shape. Node ids stay, because a model, the operational model and a test node are read differently."""
+    steps = tuple("*" if isinstance(step, int) else step for step in path)
+    return ("sources", "*", *steps[2:]) if file == MANIFEST and steps[:1] == ("sources",) and len(steps) > 1 else steps
 
 
-# Paths in the base documents that no rule of this tool reads (the bronze loader reads the first three groups and rejects bad values with its own words,
-# which the command line turns into exit 2; the fuzz below covers them).
-IGNORED = {
+# Paths in the base documents that no rule of this tool reads (the bronze loader reads the first groups and rejects bad values with its own words, which
+# the command line turns into exit 2; the fuzz below covers them).
+IGNORED: dict[str, list[tuple[Any, ...]]] = {
     MAP: [
         ("version",),
         ("namespace",),
         ("classification",),
         ("tables", "*", "dataset_ids"),
+        ("tables", "*", "dataset_ids", "*"),
         ("tables", "*", "encodings"),
+        ("tables", "*", "encodings", "*"),
         ("tables", "*", "dictionary", "file_pattern"),
     ],
     PROJECT: [("name",), ("version",), ("config-version",), ("profile",), ("vars", "other")],
     MANIFEST: [],
 }
 
+# Items of a list whose bad items are tried through the list's own coverage row (a ``[5]`` in ``roles``, a ``[5]`` in a dependency list), listed by path.
+ELEMENTS: dict[str, list[tuple[Any, ...]]] = {
+    MAP: [("tables", "*", "roles", "*")],
+    PROJECT: [],
+    MANIFEST: [("nodes", uid, "depends_on", "nodes", "*") for uid in (MODEL, OPERATIONAL_UID)],
+}
+
+# Whole subtrees below a classified path that nothing reads: each path here is listed in ACCEPTED with arbitrary values, so what lies under it is free.
+IGNORED_SUBTREES: dict[str, list[tuple[Any, ...]]] = {MAP: [], PROJECT: [], MANIFEST: [("nodes", TEST_NODE, "depends_on")]}
+
+
+def classified_paths(file: str) -> set[tuple[Any, ...]]:
+    """Every normalized path the inventory names for one file: coverage rows, accepted extras, ignored paths and covered list items. A container is
+    classified only by its own entry, never by an entry for one of its descendants or ancestors."""
+    rows = {normalized(file, path) for f, path, _ in COVERAGE + ACCEPTED if f == file}
+    return rows | {normalized(file, path) for path in IGNORED[file] + ELEMENTS[file]}
+
+
+def unclassified_paths(file: str, document: Any, classified: set[tuple[Any, ...]] | None = None) -> list[tuple[Any, ...]]:
+    """The normalized paths of ``document`` (containers and leaves) that the inventory does not name exactly and that no ignored subtree contains."""
+    names = classified_paths(file) if classified is None else classified
+    subtrees = IGNORED_SUBTREES[file]
+    found = {normalized(file, path) for path in walk(document)}
+    return sorted((path for path in found if path not in names and not any(path[: len(top)] == top and len(path) > len(top) for top in subtrees)), key=repr)
+
 
 @pytest.mark.parametrize("file", [MAP, PROJECT, MANIFEST])
 def test_every_path_of_every_base_document_is_classified(file: str) -> None:
-    """A path that is neither a coverage row, an accepted extra nor listed as unread is a value the table does not mention: a new read needs a row."""
-    known = [generic(path) for f, path, _ in COVERAGE + ACCEPTED if f == file] + [generic(path) for path in IGNORED[file]]
-    unclassified = [
-        path for path in walk(BASES[file]()) if not any(generic(path)[: len(row)] == row or row[: len(generic(path))] == generic(path) for row in known)
-    ]
-    check(unclassified == [], f"{file}: paths with no row in the table: {unclassified}")
+    """Every path of the base document, container or leaf, is named by a coverage row, an accepted extra, an ignored path or a covered list item: a new
+    path in the fixture needs an entry of its own. This bounds the claim to the fixtures; a read in the source that no fixture holds is not found here."""
+    check(unclassified_paths(file, BASES[file]()) == [], f"{file}: paths with no entry in the inventory: {unclassified_paths(file, BASES[file]())}")
+
+
+@pytest.mark.parametrize("file", [MAP, PROJECT, MANIFEST])
+def test_a_path_the_inventory_does_not_name_is_reported_whatever_its_ancestors_say(file: str) -> None:
+    """The completeness check itself fails on a leaf, a container and a list item that are not named, at the top and below classified containers."""
+    base = BASES[file]()
+    below = {MAP: ("tables", 0), PROJECT: ("vars",), MANIFEST: ("nodes", MODEL)}[file]
+    for where in ((), below):
+        for name, value in (("new_leaf", 1), ("new_container", {"inner": 1}), ("new_list", [1])):
+            document = set_path(base, (*where, name), value)
+            found = unclassified_paths(file, document)
+            check(found != [] and normalized(file, (*where, name)) in found, f"{file}: {where}/{name} was accepted: {found}")
+            if name != "new_leaf":
+                check(
+                    any(path[: len(where) + 1] == normalized(file, (*where, name)) and len(path) > len(where) + 1 for path in found), f"{file}: {name} children"
+                )
+
+
+NAMED_AND_WALKED = [
+    (file, path) for file in (MAP, PROJECT, MANIFEST) for path in sorted(classified_paths(file) & {normalized(file, p) for p in walk(BASES[file]())}, key=repr)
+]
+
+
+@pytest.mark.parametrize(("file", "path"), NAMED_AND_WALKED, ids=[f"{file}:{'.'.join(map(str, path))}" for file, path in NAMED_AND_WALKED])
+def test_dropping_any_one_named_path_makes_the_check_fail(file: str, path: tuple[Any, ...]) -> None:
+    """Each entry of the inventory that the base document holds is needed: with that one entry removed, the check reports it."""
+    remaining = classified_paths(file) - {path}
+    found = unclassified_paths(file, BASES[file](), remaining)
+    check(path in found, f"{file}: {path} is still classified without its entry: {found}")
 
 
 @pytest.mark.parametrize("file", [MAP, PROJECT, MANIFEST])
