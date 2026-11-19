@@ -1315,12 +1315,39 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         {"build": build, "validate": validate, "verify": verify, "export": export, "maintain": maintain}[phase](job)
 
 
-def startup(job: Job, phase: str) -> None:
-    """The host job startup check at the first code step (pin), at the start of the build (whose image holds the DuckDB extensions) and before Feast."""
+def startup(job: Job, phase: str, derived: bool = True) -> None:
+    """The host job startup check at the first code step (pin), at the start of the build (whose image holds the DuckDB extensions) and before Feast.
+
+    ``derived`` is False when the task capacity could not be derived: the build check then runs what does not depend on it and marks the rest not executed."""
     if phase in ("pin", "feast"):
         startup_check.check_phase(job.layer, phase)
     elif phase == "build":
-        startup_check.check_build(job.layer, job.mode, job.folder / "snapshot/project/profiles.yml")
+        startup_check.check_build(job.layer, job.mode, job.folder / "snapshot/project/profiles.yml", derived)
+
+
+def begin(job: Job, phase: str, profile: str) -> None:
+    """The startup check and the capacity derivation of one phase, in the order the phase needs.
+
+    Every phase checks first and derives second, because its check reads no derived limit. The build check selects the dbt target, and that reads the spill
+    cap which only ``task_capacity`` derives (the task definition does not name it), so the build derives first. A refused derivation does not hide the
+    findings that do not depend on it: the check still runs (the dependent target check is marked not executed), and a refusal of both names both causes."""
+    if phase != "build":
+        startup(job, phase)
+        task_capacity.apply(profile)
+        return
+    refused: task_capacity.CapacityError | None = None
+    try:
+        task_capacity.apply(profile)
+    except task_capacity.CapacityError as error:
+        refused = error
+    try:
+        startup(job, phase, derived=refused is None)
+    except startup_check.StartupCheckError as failed:
+        if refused is not None:
+            raise StepError(f"{failed}; the task capacity was also refused: {refused}") from None
+        raise
+    if refused is not None:
+        raise refused
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1387,14 +1414,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise StepError(
                 "CODE_RUN_ID is not set to a code run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)"
             )
-        profile = capacity_profile(args.layer, args.phase)
-        if args.phase == "build":
-            # The build check selects the dbt target, and that reads the spill cap which only task_capacity derives (the task definition does not name it).
-            task_capacity.apply(profile)
-            startup(job, args.phase)
-        else:
-            startup(job, args.phase)
-            task_capacity.apply(profile)
+        begin(job, args.phase, capacity_profile(args.layer, args.phase))
         with task_deadline(job):
             if args.phase != "pin" and not launch_phase():
                 check_code_run(job)

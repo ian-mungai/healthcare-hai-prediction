@@ -120,3 +120,43 @@ def test_the_isolated_child_of_the_check_gets_the_derived_cap(monkeypatch: pytes
     code = drive(monkeypatch, tmp_path)
     err = capsys.readouterr().err
     check(code == 0 and SETTING not in err, f"the child check passes with the derived cap: {err}")
+
+
+def test_a_capacity_refusal_keeps_the_independent_findings_and_names_both_causes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A valid explicit cap, 1 GiB of task memory and a missing extension file: the extension finding is independent of the capacity, so it still shows."""
+    live_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("HAI_DUCKDB_MAX_TEMP_BYTES", "1048576")
+    for path in (tmp_path / "extensions").rglob("aws.duckdb_extension"):
+        path.write_bytes(b"")
+        path.rename(path.with_suffix(".moved"))
+    check(drive(monkeypatch, tmp_path, memory_mib=1024) == 1, "the build stops")
+    err = capsys.readouterr().err
+    check("dbt_extension_missing lakehouse_task" in err and "aws" in err.split("dbt_extension_missing")[1], f"the extension finding shows: {err}")
+    check("below the floor" in err, f"the capacity cause shows beside it: {err}")
+    check(err.index("startup_check:") < err.index("below the floor"), f"the check speaks first: {err}")
+
+
+def test_a_capacity_refusal_marks_the_target_check_as_not_executed_when_it_needs_the_cap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No explicit cap and no derivation: the dbt target depends on the cap, so it is not executed, and the log says so beside the capacity cause."""
+    live_environment(monkeypatch, tmp_path)
+    check(drive(monkeypatch, tmp_path, memory_mib=1024) == 1, "the build stops")
+    err = capsys.readouterr().err
+    check("dbt_target_not_executed" in err and "not executed" in err, f"the dependent check is marked: {err}")
+    check(SETTING not in err and "below the floor" in err, f"the capacity cause is the one named, not a false spill finding: {err}")
+    check("ok task_environment" in err, f"the independent task environment check still ran: {err}")
+
+
+def test_a_capacity_refusal_still_reports_a_refused_credential_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The credential checks of the target do not depend on the cap either."""
+    live_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "SYNTHETIC")
+    monkeypatch.delenv("HAI_DUCKDB_MAX_TEMP_BYTES", raising=False)
+    check(drive(monkeypatch, tmp_path, memory_mib=1024) == 1, "the build stops")
+    err = capsys.readouterr().err
+    check("task_credential_source_refused" in err and "below the floor" in err, f"both causes show: {err}")

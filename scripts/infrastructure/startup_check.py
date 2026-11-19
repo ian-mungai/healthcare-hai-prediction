@@ -146,6 +146,8 @@ AWS_REGIONS = frozenset(
 )
 AWS_HOST = re.compile(r"(s3|api\.ecr)\.(" + "|".join(sorted(AWS_REGIONS)) + r")\.amazonaws\.com")
 SPILL_CODE = "temporary_storage_settings_incomplete"
+# The target check needs the spill cap that the task capacity derives. When that derivation failed, the check is not run, and the finding says so.
+NOT_EXECUTED = "not executed: the task capacity could not be derived, so the spill settings that select the target are unknown"
 CREDENTIAL_CODES = frozenset(
     {
         "task_credential_source_refused",
@@ -247,6 +249,7 @@ PHRASES = frozenset(
         "present)",
         "the build target was refused",
         SPILL_CODE,
+        NOT_EXECUTED,
         "is a runnable plan mode with no file list in the startup check, so its files would go unchecked",
         "root:",
         "does not read as a JSON object",
@@ -273,6 +276,7 @@ CODES = frozenset(
         "dbt_extension_directory_missing",
         "dbt_extension_missing",
         "dbt_target_refused",
+        "dbt_target_not_executed",
         "input_file",
         "input_file_missing",
         "input_file_unreadable",
@@ -293,6 +297,7 @@ EITHER = frozenset({"credentials"})
 BUILD_CODES = frozenset(
     {
         "dbt_target_refused",
+        "dbt_target_not_executed",
         "dbt_profile_unreadable",
         "dbt_target_unknown",
         "dbt_target",
@@ -538,14 +543,14 @@ def bind_environment(flags: Mapping[str, bool], findings: list[dict[str, Any]]) 
     return reports
 
 
-def bind_build(layer: str, findings: list[dict[str, Any]]) -> list[Report]:
+def bind_build(layer: str, findings: list[dict[str, Any]], derived: bool = True) -> list[Report]:
     """A build request: the task environment, from the parent's own environment, and, unless the layer writes its own profile, one target finding."""
     environment = check_task_environment()
     if len(findings) != (1 if layer == "features" else 2) or not same(findings[0], environment):
         raise InvalidRecords
     reports = [(environment.name, environment.ok, render(environment.detail))]
     if layer != "features":
-        if findings[1]["c"] not in BUILD_CODES:
+        if findings[1]["c"] not in BUILD_CODES or (findings[1]["c"] == "dbt_target_not_executed" and derived):
             raise InvalidRecords
         reports.append((findings[1]["c"], findings[1]["o"], render(findings[1]["d"])))
     return reports
@@ -617,7 +622,7 @@ def bind(request: Mapping[str, Any], findings: list[dict[str, Any]]) -> list[Rep
     if kind == "environment":
         return bind_environment(request["flags"], findings)
     if kind == "build":
-        return bind_build(request["layer"], findings)
+        return bind_build(request["layer"], findings, request.get("derived", True) is True)
     if kind == "files":
         return bind_files([Need(**item) for item in request["needs"]], Path(request.get("roots", {}).get("code") or request["cwd"]), findings)
     return bind_queue(findings)
@@ -1170,8 +1175,12 @@ def check_target(target: str, profiles: Path) -> Finding:
     return Finding("dbt_target", True, join(shown, phrase("(extensions"), names, phrase("present)")))
 
 
-def build_findings(layer: str, mode: str, profiles: Path) -> list[Finding]:
-    """The target the build would select and what that target needs on disk. A features build writes its own profile."""
+def build_findings(layer: str, mode: str, profiles: Path, derived: bool = True) -> list[Finding]:
+    """The target the build would select and what that target needs on disk. A features build writes its own profile.
+
+    The target depends on the spill settings, and the cap of those is derived by the task capacity. With ``derived`` False that derivation failed: a target
+    that still resolves (an explicit cap in the environment) is checked in full, because its credentials and extension files do not depend on the capacity,
+    and a target that needs the missing cap is reported as not executed instead of as an incomplete setting."""
     pipeline_error = importlib.import_module("orchestration.pipeline_protocol").PipelineError
     pipeline_build = importlib.import_module("scripts.lakehouse.pipeline_build")
 
@@ -1183,7 +1192,9 @@ def build_findings(layer: str, mode: str, profiles: Path) -> list[Finding]:
             code = ecs_engine.refusal_code(error, "the build target was refused")
             findings.append(Finding("dbt_target_refused", False, label("cred", code, phrase("the build target was refused"))))
         except ecs_engine.TemporaryStorageError:
-            findings.append(Finding("dbt_target_refused", False, phrase(SPILL_CODE)))
+            findings.append(
+                Finding("dbt_target_not_executed", False, phrase(NOT_EXECUTED)) if not derived else Finding("dbt_target_refused", False, phrase(SPILL_CODE))
+            )
         else:
             findings.append(check_target(target, profiles))
     return findings
@@ -1232,7 +1243,7 @@ def execute(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     if kind == "environment":
         return records_of(environment_findings(**request["flags"]))
     if kind == "build":
-        return records_of(build_findings(request["layer"], request["mode"], Path(request["profiles"])))
+        return records_of(build_findings(request["layer"], request["mode"], Path(request["profiles"]), request.get("derived", True) is True))
     roots = {name: Path(path) for name, path in request.get("roots", {}).items()}
     if kind == "queue":
         document = json.loads(Path(request["queue"]).read_text(encoding="utf-8"))
@@ -1264,10 +1275,11 @@ def run_environment(job: str, *, polaris: bool = False, mlflow: bool = False, op
     return run_checks({"kind": "environment", "job": job, "cwd": absolute("."), "flags": flags})
 
 
-def run_build(layer: str, mode: str, profiles: Path) -> str | None:
+def run_build(layer: str, mode: str, profiles: Path, derived: bool = True) -> str | None:
     if not in_ecs_job():
         return None
-    return run_checks({"kind": "build", "job": layer, "cwd": absolute("."), "layer": layer, "mode": mode, "profiles": absolute(profiles)})
+    request = {"kind": "build", "job": layer, "cwd": absolute("."), "layer": layer, "mode": mode, "profiles": absolute(profiles), "derived": derived}
+    return run_checks(request)
 
 
 def run_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | None = None) -> str | None:

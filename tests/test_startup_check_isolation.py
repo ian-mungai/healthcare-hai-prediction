@@ -340,7 +340,10 @@ def test_every_fixed_phrase_the_checks_use_is_on_the_list() -> None:
         and isinstance(node.args[0].value, str)
     }
     check(used <= startup_check.PHRASES, f"phrases used but not listed: {sorted(used - startup_check.PHRASES)}")
-    check(used | {startup_check.SPILL_CODE} >= startup_check.PHRASES, f"phrases listed but never used: {sorted(startup_check.PHRASES - used)}")
+    check(
+        used | {startup_check.SPILL_CODE, startup_check.NOT_EXECUTED} >= startup_check.PHRASES,
+        f"phrases listed but never used: {sorted(startup_check.PHRASES - used)}",
+    )
 
 
 def test_the_known_modes_cover_every_mode_the_harness_lists() -> None:

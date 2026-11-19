@@ -34,13 +34,13 @@ def layer_selection(layer: str) -> list[str]:
 
 def build_target(layer: str, mode: str) -> str:
     """Select bounded profiles when configured and native task credentials for real silver."""
-    bounded = bool(duckdb_temp_settings())
     if in_task() and mode == "publish_fixture" and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
         raise PipelineError("fixture_role_session_refused")
     try:
         task = validate_task_credentials(require_catalog=layer == "silver" and mode == "real")
     except RuntimeError as error:
         raise PipelineError(refusal_code(error, "task_credential_check_failed")) from None
+    bounded = bool(duckdb_temp_settings())  # read after the credential checks: an incomplete spill setting never hides a refused credential source
     if layer == "gold":
         return "pinned_silver_bounded" if bounded else "pinned_silver"
     if mode == "publish_fixture":

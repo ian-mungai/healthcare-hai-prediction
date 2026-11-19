@@ -25,7 +25,10 @@ from scripts.lakehouse import ecs_engine, layer_run, task_capacity
 ROOT = Path(__file__).resolve().parents[2]
 GIB = 1024**3
 MIB = 1024**2
-# Each AWS job entry point and the first call of its main that starts work with an engine: the limits are derived before it.
+# Each AWS job entry point and the first call of its main that starts work with an engine: the limits are derived before it. The layer driver derives in
+# ``begin`` (which orders the check and the derivation of a phase), so its main calls ``begin`` and ``begin`` calls ``task_capacity.apply``. This source check
+# is the cheap complement of the run-time cases of tests/test_layer_capacity_phases.py and tests/test_job_capacity_entry_points.py, which run every phase
+# through its real main with the real derivation and fail a phase that starts before it.
 ENTRY_POINTS = {
     "scripts/lakehouse/layer_run.py": "dispatch",
     "scripts/lakehouse/bronze_run.py": "dispatch",
@@ -33,6 +36,7 @@ ENTRY_POINTS = {
     "monitoring/aws_run.py": "deadline",
     "scripts/lakehouse/aws_bronze.py": "execute",
 }
+DERIVING_CALLS = {"scripts/lakehouse/layer_run.py": "begin"}
 GUARD = {"Name": "guard", "KnownStatus": "RUNNING"}
 PHASE = {"Name": "build", "KnownStatus": "RUNNING"}
 PENDING = {"Name": "publish", "KnownStatus": "PENDING"}
@@ -305,13 +309,17 @@ def case_apply_leaves_the_spill_cap_unset_without_a_spill_folder(root: Path) -> 
 def case_entry_points_derive_their_limits_before_an_engine_starts(root: Path) -> None:
     for relative, engine in ENTRY_POINTS.items():
         tree = ast.parse((ROOT / relative).read_text())
-        mains = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "main"]
-        expect(mains, f"{relative} has no main")
-        calls = [node for node in ast.walk(mains[0]) if isinstance(node, ast.Call)]
-        derive = [node.lineno for node in calls if ast.unparse(node.func) == "task_capacity.apply"]
+        functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+        expect("main" in functions, f"{relative} has no main")
+        calls = [node for node in ast.walk(functions["main"]) if isinstance(node, ast.Call)]
+        named = DERIVING_CALLS.get(relative, "task_capacity.apply")
+        derive = [node.lineno for node in calls if ast.unparse(node.func) == named]
         start = [node.lineno for node in calls if ast.unparse(node.func) == engine]
-        expect(derive, f"{relative} main does not call task_capacity.apply")
+        expect(derive, f"{relative} main does not call {named}")
         expect(start and min(derive) < min(start), f"{relative} derives its limits after it starts work with {engine}")
+        if named != "task_capacity.apply":
+            inner = [node for node in ast.walk(functions[named]) if isinstance(node, ast.Call) and ast.unparse(node.func) == "task_capacity.apply"]
+            expect(inner, f"{relative} {named} does not call task_capacity.apply")
 
 
 def case_the_layers_choose_the_profile_by_phase(root: Path) -> None:
