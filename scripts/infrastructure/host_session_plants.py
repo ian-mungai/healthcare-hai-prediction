@@ -305,10 +305,10 @@ RELOAD_PLANTS: dict[str, tuple[str, str]] = {
     "skips with an unresolved promotion": ("            production()\n", ""),
     "skips without checking the held run": ("            check_held_run(model, skipped[0], set_hash, holds)\n", ""),
     "takes a held run whose base run is no run ID": (
-        '    if not problems and not reads.RUN_ID.fullmatch(hold["base_run"]):\n        problems = ["base_run"]\n',
+        '    if not problems and not reads.STORED_RUN.fullmatch(hold["base_run"]):\n        problems = ["base_run"]\n',
         "",
     ),
-    "takes an older release whose base run is no run ID": ('        if not reads.RUN_ID.fullmatch(record["base_run"]):\n', "        if False:\n"),
+    "takes an older release whose base run is no run ID": ('        if not reads.STORED_RUN.fullmatch(record["base_run"]):\n', "        if False:\n"),
     "takes a held run without its base run": ('("base_run", "set_schema_sha256"))', '("set_schema_sha256",))'),
     "takes a held run on another schema": ('{"feature_set": model, "run_id": run, "set_schema_sha256": set_hash}', '{"feature_set": model, "run_id": run}'),
     "takes any text as the schema hash of a load record": (
