@@ -41,7 +41,7 @@ SAMPLE_VALUES = {
     "service": "airflow",
     "kind": "row_counts",
 }
-SAMPLE_OVERRIDES = {"drift_triggered": {"job": "drift", "phase": "check"}}
+SAMPLE_OVERRIDES = {"drift_triggered": {"job": "drift", "phase": "check"}, "spark_tasks_failed": {"job": "bronze", "phase": "load"}}
 LABELS_NOT_SHOWN = {"le", "outcome"}
 # A job that runs once carries no model set and no HAI type, so its alerts carry no such label (the email of the silver job shows job and phase only).
 INSTANCE_LABELS = {"model_set", "job_type"}

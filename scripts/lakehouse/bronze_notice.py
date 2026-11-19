@@ -37,7 +37,7 @@ def carried_over_notice(
         pieces.append(f"carried over {count(len(files), 'file')}")
         happened.append(f"Bronze run {bronze_run} loaded the earlier capture of {count(len(files), 'source file')}.\nNo capture of a newer one exists.")
         affects.append("The tables built from these files may hold older data.")
-        next_steps.append("Read the file list in the run record. Then decide if the earlier capture is good enough. If it is, no action is needed.")
+        next_steps.append("Read the file list in the run record.\nThen decide if the earlier capture is good enough.\nIf it is, no action is needed.")
         details.append(f"Files carried over: {len(files)}")
     if skipped:
         pieces.append(f"left out {count(len(skipped), 'table')}")
@@ -46,7 +46,7 @@ def carried_over_notice(
         one = len(skipped) == 1
         covered = "the skipped table" if one else "the skipped tables"
         affects.append(f"No table of this run and no record of it covers {covered}, so {'it is' if one else 'they are'} not loaded in this run.")
-        next_steps.append("Check if the skipped table should have a source file. If it should, find out why the ingestion run did not capture one.")
+        next_steps.append("Check if the skipped table should have a source file.\nIf it should, find out why the ingestion run did not capture one.")
         details.append(f"Tables skipped: {len(skipped)}")
     if files:
         details.extend(listed("Carried-over files", list(files)))
