@@ -188,8 +188,11 @@ class Fixture:
         flags: dict[str, float] | None = None,
         population: str = "primary",
         late: Callable[[dict[str, Any]], Any] | None = None,
+        adjust_type: dict[str, Callable[[list[dict[str, Any]]], None]] | None = None,
     ) -> None:
         self.run = run
+        # Changes the rows of one type's extract only, so one type of a run can be left unestimable while another fits.
+        self.adjust_type = adjust_type or {}
         self.folder = prepare(folder, run_id=run)
         self.extract = folder / "in/extract"
         self.extract.mkdir(parents=True)
@@ -312,6 +315,8 @@ class Fixture:
             rows = [
                 {key: value for key, value in row.items() if key in kept} | {label: row[LABEL], weight: 1.0 + index % 5} for index, row in enumerate(self.rows)
             ]
+            if hai_type in self.adjust_type:
+                self.adjust_type[hai_type](rows)
             columns = {key: kind for key, kind in FIXTURE_COLUMNS.items() if key in kept} | {label: "double", weight: "double"}
             years = [row["window_year"] for row in self.rows]
             manifest = {

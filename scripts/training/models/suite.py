@@ -120,6 +120,7 @@ def _panel_rows(request: ModelRequest, data: Dataset) -> PanelSample:
         "maximum_missing_fraction": MAX_MISSING_FRACTION,
         "declared_count": len(declared),
         "kept_references": list(kept),
+        "kept": [{"reference": reference, "missing_fraction": rates[reference]} for reference in kept],
         "dropped": [{"reference": feature.reference, "missing_fraction": rates[feature.reference]} for feature in declared if feature.reference not in kept],
     }
     data = data.subset(complete)

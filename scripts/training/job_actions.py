@@ -117,6 +117,17 @@ def model_statuses(folder: Path, hai_types: Sequence[str], model: str) -> dict[s
     return found
 
 
+def training_outcome(folder: Path, hai_types: Sequence[str], model: str) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    """Read the saved fit results and return the requested types that were fitted and, for every other type, its status and reason.
+
+    A run that fitted none of its types has no model to show for it. This reads only what the fit saved, so the caller runs it after the bundles, the MLflow
+    runs and the completion records are written, and a failure never loses them.
+    """
+    statuses = model_statuses(folder, hai_types, model)
+    fitted = [hai_type for hai_type, found in statuses.items() if found["status"] == "fitted"]
+    return fitted, {hai_type: found for hai_type, found in statuses.items() if found["status"] != "fitted"}
+
+
 def check_targets(root: Path) -> None:
     """Check the target and earlier-outcome lists against the gold control bridge, as the guard does."""
     try:

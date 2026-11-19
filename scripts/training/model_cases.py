@@ -836,6 +836,14 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         selection = result.details["panel_selection"]
         require([entry["reference"] for entry in selection["dropped"]] == ["feature_matrix_county_context:sparse"], f"wrong dropped predictors: {selection}")
         require("feature_matrix_county_context:part" in selection["kept_references"], "the kept predictor was dropped")
+        part = "feature_matrix_county_context:part"
+        original = sum(row["part"] is None for row in training.rows) / len(training.rows)
+        require(0.3 < original < 0.5, f"the fixture does not hold a kept predictor with a nonzero original missing share: {original}")
+        kept_fractions = {entry["reference"]: entry["missing_fraction"] for entry in selection["kept"]}
+        require(list(kept_fractions) == list(selection["kept_references"]), f"the kept fractions do not follow the kept references: {selection}")
+        require(math.isclose(kept_fractions[part], original), f"a kept predictor lost its original missing fraction: {kept_fractions[part]} != {original}")
+        require(selection["dropped"][0]["missing_fraction"] > 0.5 >= max(kept_fractions.values()), "kept and dropped fractions do not meet at the threshold")
+        require(result.details["training_missing_fraction"][part] == 0.0, "the complete-row fraction is not recorded separately from the original one")
         left = sum(row["part"] is not None for row in training.rows)
         require(result.details["panel_fitting_rows"] == left, f"complete cases were not kept on the kept set: {result.details['panel_fitting_rows']} != {left}")
         require(result.details["dropped_incomplete_row_count"] == len(training.rows) - left, "the incomplete row count is wrong")

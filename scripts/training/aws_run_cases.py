@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from orchestration import code_digest
+from orchestration import code_digest, training_contract
 from scripts.features import publication_reads, training_extract
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
 from scripts.orchestration.ecs_fake import client_error
@@ -31,8 +31,9 @@ from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
 from scripts.training import guards, mlflow_alias_stand_in, promote_receipt, promotion_check
 from scripts.training import production_record as production_record_module
-from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
+from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, single_window, standins
 from scripts.training.job_cases import COMMIT, DIGEST
+from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.lane_b_cases import RUN
 from scripts.training.mlflow_service_stand_in import CLUSTER, PROFILE, REGION, SERVICE, MlflowService
 from scripts.training.step_records import verify_done, write_done
@@ -42,6 +43,7 @@ TRACKING = "http://10.0.1.20:5100"
 BUCKET = "example-project-data-dev"
 LOGIN = "-".join(("synthetic", "login", "value", "0123456789"))
 TRAIN_STEPS = ["version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check"]
+M6_STEPS = ["version_extract", "fit", "hac_validate", "log_run"]
 
 
 def call(*arguments: str) -> tuple[int, str, str]:
@@ -177,10 +179,10 @@ def prepare_cases(cases: Any, folder: Path) -> None:
     refuses("prepare_refuses_archive_with_no_commit", "commit")
 
 
-def staged_train(folder: Path, model: str = "m2") -> Fixture:
+def staged_train(folder: Path, model: str = "m2", **options: Any) -> Fixture:
     """A fixture of the AWS lane with the guard and the extract complete, the state the train phase starts from."""
-    fixture = Fixture(folder, model=model)
-    (fixture.folder / "training_parameters.json").write_text(json.dumps({**PARAMETERS, "model": model}) + "\n")
+    fixture = Fixture(folder, model=model, **options)
+    (fixture.folder / "training_parameters.json").write_text(json.dumps({**PARAMETERS, "model": model, "hai_types": list(fixture.hai_types)}) + "\n")
     (fixture.folder / "in/guard").mkdir(parents=True)
     (fixture.folder / "in/guard/guard.json").write_text(json.dumps(GUARD, sort_keys=True) + "\n")
     for step, directory in (("guard", fixture.folder / "in/guard"), ("extract", fixture.extract)):
@@ -267,6 +269,84 @@ def train_cases(cases: Any, folder: Path) -> None:
         require(lines_of(error)[-1]["step"] == "log_run", f"the failure names another step: {error}")
         require(not (fixture.folder / "in/promotion_check").exists(), "promotion_check ran after log_run failed")
 
+    def nothing_fitted_fails_with_the_records_kept() -> None:
+        """Every requested type unfitted: the phase fails by name after the bundles, the MLflow run and every completion record are saved."""
+        fixture = staged_train(folder / "nothing_fitted", "m6", hospitals=120, adjust=single_window)
+        code, out, error = train(fixture)
+        require(code == EXIT_FAILED, f"a run that fitted nothing ended with exit {code}: {out} {error}")
+        failure = lines_of(error)[-1]
+        require(failure["step"] == "outcome" and failure["failure"] == "nothing_fitted", f"the failure is not named: {failure}")
+        require(HAI_TYPE in failure["detail"] and "not_estimable" in failure["detail"], f"the failure does not name the type and its status: {failure}")
+        require("no complete repeated training hospitals" in failure["detail"], f"the failure does not give the reason: {failure}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS, f"an action did not run before the outcome: {out}")
+        for step in M6_STEPS:
+            verify_done(fixture.folder / "in" / step, step, DIGEST)
+        require((fixture.folder / "in/fit" / f"bundles/bundle_{HAI_TYPE}/result.json").is_file(), "the diagnostic bundle is gone")
+        (parent,) = fixture.tracking.parents().values()
+        require(
+            parent["params"]["model_status"] == "not_estimable" and "model_reason" in parent["params"], f"the MLflow record lost the status: {parent['params']}"
+        )
+        require(len(fixture.tracking.active()) > 1, "the child runs were not logged")
+
+    def partly_fitted_passes_and_names_the_unfitted_type() -> None:
+        """One type fitted and one not: the phase passes, and its output names every unfitted type with its reason."""
+        fixture = staged_train(folder / "partly_fitted", "m6", hai_types=("HAI_1", "HAI_2"), hospitals=120, adjust_type={"HAI_2": single_window})
+        code, out, error = train(fixture)
+        require(code == 0, f"a partly fitted run failed: {error}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS, f"steps: {out}")
+        (outcome,) = [item for item in lines_of(out) if "outcome" in item]
+        require(outcome["outcome"] == "partly_fitted" and outcome["fitted"] == ["HAI_1"], f"the outcome line: {outcome}")
+        require(list(outcome["unfitted"]) == ["HAI_2"] and outcome["unfitted"]["HAI_2"]["status"] == "not_estimable", f"unfitted types: {outcome}")
+        require("no complete repeated training hospitals" in outcome["unfitted"]["HAI_2"]["reason"], f"the unfitted type has no reason: {outcome}")
+        require(len(fixture.tracking.parents()) == 2, "a type was not logged")
+
+    def every_fitted_run_prints_no_outcome() -> None:
+        """A run with every type fitted is unchanged: no outcome line, the same steps."""
+        fixture = staged_train(folder / "all_fitted", "m6", hospitals=60)
+        code, out, error = train(fixture)
+        require(code == 0, f"a fitted run failed: {error}")
+        require([item["step"] for item in lines_of(out) if "step" in item] == M6_STEPS, f"steps: {out}")
+        require(not [item for item in lines_of(out) if "outcome" in item], f"a fitted run printed an outcome line: {out}")
+
+    def every_model_is_judged_by_its_own_slot() -> None:
+        """The check is the shared training outcome: for m1 to m6 it reads the run's own slot, fails on zero fitted types and names the unfitted ones."""
+        from scripts.training import bundle, job_actions
+
+        def written(model: str, name: str, statuses: dict[str, str]) -> Path:
+            work = folder / f"outcome_{model}_{name}"
+            slot = training_contract.MODEL_LISTS[model][0]
+            for hai_type, status in statuses.items():
+                target = work / bundle.prefix(hai_type) / "result.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                own = {"status": status, "reason": "" if status == "fitted" else "the panel has nothing to estimate"}
+                target.write_text(json.dumps({"statuses": {slot: own, "other_slot": {"status": "fitted", "reason": ""}}}))
+            return work
+
+        types = ["HAI_1", "HAI_2"]
+        for model in training_contract.MODEL_LISTS:
+            none = {"HAI_1": "not_estimable", "HAI_2": "not_converged"}
+            fitted, unfitted = job_actions.training_outcome(written(model, "none", none), types, model)
+            require(fitted == [] and list(unfitted) == types and unfitted["HAI_2"]["status"] == "not_converged", f"{model} none fitted: {fitted} {unfitted}")
+            both = {"HAI_1": "fitted", "HAI_2": "fitted"}
+            require(job_actions.training_outcome(written(model, "both", both), types, model) == (types, {}), f"{model} all fitted")
+            mixed = {"HAI_1": "fitted", "HAI_2": "not_estimable"}
+            fitted, unfitted = job_actions.training_outcome(written(model, "mixed", mixed), types, model)
+            require(fitted == ["HAI_1"] and list(unfitted) == ["HAI_2"], f"{model} partly fitted: {fitted} {unfitted}")
+
+    def an_unreadable_fit_result_fails_by_name() -> None:
+        """A missing saved fit result is a named failure of the outcome, never an unhandled error."""
+        from scripts.training import aws_run
+
+        work = folder / "outcome_unreadable"
+        work.mkdir(parents=True)
+        (work / "training_parameters.json").write_text(json.dumps({**PARAMETERS, "model": "m6"}) + "\n")
+        try:
+            aws_run.accept_outcome(work)
+        except aws_run.StepFailed as failure:
+            require(failure.step == "outcome" and failure.failure == "outcome_unreadable" and failure.code == EXIT_FAILED, f"the failure: {failure.failure}")
+        else:
+            raise ValueError("a missing fit result was accepted")
+
     def refuses_prerequisite() -> None:
         fixture = staged_train(folder / "prerequisite")
         (fixture.extract / "extract.done.json").unlink()
@@ -289,6 +369,11 @@ def train_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_run_train_refuses_changed_extract_output", refuses_changed_extract)
     cases.check("aws_run_train_stops_after_progress_and_names_the_step", stops_after_progress)
     cases.check("aws_run_train_refuses_missing_prerequisite", refuses_prerequisite)
+    cases.check("aws_run_train_nothing_fitted_fails_with_the_records_kept", nothing_fitted_fails_with_the_records_kept)
+    cases.check("aws_run_train_partly_fitted_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
+    cases.check("aws_run_train_every_fitted_run_prints_no_outcome", every_fitted_run_prints_no_outcome)
+    cases.check("aws_run_train_every_model_is_judged_by_its_own_slot", every_model_is_judged_by_its_own_slot)
+    cases.check("aws_run_train_an_unreadable_fit_result_fails_by_name", an_unreadable_fit_result_fails_by_name)
 
     def refuses_login(name: str, variable: str) -> None:
         def case() -> None:

@@ -10,7 +10,10 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
 - ``extract`` (feature store image): runs the extraction against the catalog and the Feast registry of the data bucket.
 - ``train`` (training image): logs in to MLflow with MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD, because the server grants nothing without a login.
   It then runs the actions of the run's model (``training_contract.train_steps``): ``version_extract``, ``fit``, ``hac_validate`` and ``log_run``, the
-  ``mediation`` for m2 and the ``promotion_check`` for m1, m2 and m4.
+  ``mediation`` for m2 and the ``promotion_check`` for m1, m2 and m4. After the last action has saved its records, the phase reads the saved fit results
+  (``accept_outcome``): a run that fitted none of its requested types fails with ``nothing_fitted`` and names each type's status and reason, so the launcher
+  records a failed training run and the bundles and MLflow runs stay. A run that fitted at least one type passes and prints one ``outcome`` line that names
+  every unfitted type with its reason. The check holds for every model.
 - ``research`` (training image, a separate task): checks the research parameters (``research_dag``), records the code identity and runs the ``research`` action,
   which reads the finished MLflow runs of m1, m2 and m4 on one ``base_run``, runs RQ1 and RQ4 and sets the one ``challenger`` alias of each type. It stores
   ``research/<run>/research_<type>.json`` once. It moves no production alias.
@@ -513,7 +516,30 @@ def train(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
         step = run_action(work, run, mode, action)
         sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
         steps.append(step)
+    accept_outcome(work)
     return steps
+
+
+def accept_outcome(work: Path) -> None:
+    """Judge the finished training phase by the saved model statuses, after every bundle, MLflow run and completion record is written.
+
+    A run that fitted none of its requested types fails by name, which the launcher records as a failed training run. A run that fitted at least one type
+    passes and prints the unfitted types with their reasons, so a type that cannot be estimated never discards the others.
+    """
+    from scripts.training import job_actions
+    from scripts.training.job_inputs import InputError
+
+    parameters = recorded_parameters(work)
+    hai_types, model = [str(hai_type) for hai_type in parameters["hai_types"]], str(parameters["model"])
+    try:
+        fitted, unfitted = job_actions.training_outcome(work / "in" / "fit", hai_types, model)
+    except (InputError, OSError, KeyError, ValueError) as error:
+        raise StepFailed("outcome", EXIT_FAILED, "outcome_unreadable", f"the saved fit results cannot be read: {error}") from None
+    named = "; ".join(f"{hai_type}: {found['status']}: {found['reason']}" for hai_type, found in unfitted.items())
+    if not fitted:
+        raise StepFailed("outcome", EXIT_FAILED, "nothing_fitted", f"model {model} was fitted for none of {', '.join(hai_types)} ({named})")
+    if unfitted:
+        sys.stdout.write(json.dumps({"outcome": "partly_fitted", "model": model, "fitted": fitted, "unfitted": unfitted}, sort_keys=True) + "\n")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
