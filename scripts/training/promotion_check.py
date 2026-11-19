@@ -6,31 +6,41 @@ chooses the one challenger of a type among the versions of m1, m2 and m4 that pa
 the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns``, or whose list file cannot be downloaded, read or
 parsed, is never loaded or scored: the check fails with ``champion_feature_list_invalid``. The comparison files are written and checked before any version
 tag. The check reads the written Parquet file back and repeats the rule on it.
+
+A model is read as data only, never through ``mlflow.sklearn.load_model`` (which reads ``MLmodel``, imports the artifact's code folder and takes trusted types
+from the artifact): the challenger from its own ``model.skops`` and the champion from the four fixed files of its run, fetched one by one through the bounded
+fetch of ``scripts/model_code.py`` (1 MiB for a JSON file, 64 MiB for the model, one deadline each). Both are read with skops under the trusted types of this
+code root's own model contract. Before its model file is fetched, the champion must record the model code closure of this job's own code and must have a
+self-check that passes the data rules of the model API: a champion that does not is refused by name (``model_code_closure_missing`` for one trained before the
+closure was recorded). With no champion nothing of this applies and the baseline is the reference, as before.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib
-import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from scripts.training import bundle, job_actions, job_inputs, promotion, registry, research_tests, run_tracking, step_records
+from scripts import model_code
+from scripts.training import bundle, job_actions, job_inputs, promote, promotion, registry, research_tests, run_tracking, step_records
 from scripts.training.job_failure import JobFailure
 from scripts.training.models.common import Deadline, ModelError, seed_for
 
 PROMOTION_SECONDS = 600.0
 
 
-def load_pipeline(uri: str) -> Any:
-    """Load a saved scikit-learn pipeline from a models URI or a folder with the training image's MLflow."""
-    return importlib.import_module("mlflow.sklearn").load_model(uri)
+# The bounded single-file fetch of one run's file (a name here so that a case can replace the transport).
+fetch_file = model_code.mlflow_fetch
+
+
+def load_pipeline(path: str, trusted: Sequence[str]) -> Any:
+    """Read one saved model file as data: skops under the trusted types of this code root's own model contract, never a list from the artifact."""
+    return model_code.load_data_only(path, trusted)
 
 
 def predict(pipeline: Any, rows: list[dict[str, Any]]) -> dict[str, float]:
@@ -78,45 +88,83 @@ def champion_columns(document: Any) -> list[str]:
     return columns
 
 
-def champion_document(store: Any, version: Any, scratch: Path) -> Any:
-    """Download and parse the champion's ``bundle/feature_list.json``, or refuse with ``champion_feature_list_invalid`` and say which step failed: the
-    download (including an artifact that is not found), a downloaded file that is missing or unreadable, or text that is not JSON. Every detail ends with the
-    class of the error and never holds its text. Nothing here tells a transport fault from a damaged file, so both refuse; the job does not retry."""
-    refusal = "champion_feature_list_invalid"
+# For each file of a champion: its name in a refusal, then the reason for a file that cannot be fetched or read, for one over its cap and for one that is not
+# JSON.
+CHAMPION_FILES = {
+    model_code.PROVENANCE: ("provenance", "model_provenance_unreadable", "model_provenance_unreadable", "model_provenance_unreadable"),
+    model_code.FEATURE_LIST: ("feature list", "champion_feature_list_invalid", "champion_feature_list_invalid", "champion_feature_list_invalid"),
+    model_code.SELF_CHECK: ("self-check", "self_check_missing", "self_check_too_large", "self_check_not_json"),
+    model_code.MODEL_FILE: ("model file", "champion_unloadable", "champion_unloadable", "champion_unloadable"),
+}
+
+
+def champion_file(version: Any, path: str, folder: str) -> str:
+    """Fetch one file of the champion's run to its fixed name in ``folder`` through the bounded fetch, and require one regular file. A failure is a named
+    refusal that says which step failed and never holds the text of an error (a deadline says so: ``champion_fetch_deadline``)."""
+    label, unreadable, oversize, _ = CHAMPION_FILES[path]
+    cap = model_code.MODEL_CAP if path == model_code.MODEL_FILE else model_code.JSON_CAP
     try:
-        listing = Path(store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch)))
+        return model_code.fetch_regular_file(fetch_file, str(version.run_id), path, os.path.join(folder, os.path.basename(path)), cap)
     except JobFailure:
         raise
+    except model_code.DataRuleError as error:
+        if error.rule == "deadline":
+            raise JobFailure("champion_fetch_deadline", f"the champion's {label} was not fetched in time: {error}") from None
+        if error.rule == "too_large":
+            raise JobFailure(oversize, f"the champion's {label} is over its byte cap") from None
+        raise JobFailure(unreadable, f"the champion's {label} was not fetched as one regular file") from None
     except Exception as error:
-        raise JobFailure(refusal, f"the champion's feature list could not be downloaded: {type(error).__name__}") from None
+        raise JobFailure(unreadable, f"the champion's {label} could not be downloaded: {type(error).__name__}") from None
+
+
+def champion_document(version: Any, path: str, folder: str) -> Any:
+    """Fetch a champion's JSON file and parse it with the data rules of the model API (one UTF-8 document, no repeated key, no NaN or Infinity), or refuse by
+    the reason of the file. Every detail ends with the class of the error and never holds its text. Nothing here tells a transport fault from a damaged file, so
+    both refuse; the job does not retry."""
+    label, unreadable, oversize, not_json = CHAMPION_FILES[path]
+    local = champion_file(version, path, folder)
     try:
-        text = listing.read_bytes()
-    except FileNotFoundError as error:
-        raise JobFailure(refusal, f"the champion's feature list file is missing after the download: {type(error).__name__}") from None
-    except OSError as error:
-        raise JobFailure(refusal, f"the champion's feature list file is unreadable: {type(error).__name__}") from None
-    try:
-        return json.loads(text)
-    except ValueError as error:
-        raise JobFailure(refusal, f"the champion's feature list is not JSON: {type(error).__name__}") from None
+        return model_code.read_json_file(local, path)
+    except model_code.DataRuleError as error:
+        cause = type(error.__cause__).__name__
+        if error.rule == "not_json":
+            raise JobFailure(not_json, f"the champion's {label} is not JSON: {cause}") from None
+        if error.rule == "too_large":
+            raise JobFailure(oversize, f"the champion's {label} is over its byte cap") from None
+        raise JobFailure(unreadable, f"the champion's {label} file is unreadable: {cause}") from None
 
 
 def champion_predictions(
-    store: Any, version: Any, name: str, manifest: Mapping[str, Any], rows: list[dict[str, Any]], year: int, scratch: Path
+    store: Any, version: Any, name: str, manifest: Mapping[str, Any], rows: list[dict[str, Any]], year: int, root: Path, trusted: Sequence[str]
 ) -> dict[str, float]:
-    """Load the champion and score the holdout, after the checks that it needs only extract columns and never trained on the holdout year."""
-    columns = set(champion_columns(champion_document(store, version, scratch)))
-    if not columns <= set(manifest["columns"]):
-        raise JobFailure("champion_features", f"the champion needs columns the extract lacks: {sorted(columns - set(manifest['columns']))[0]}")
-    window = store.get_run(version.run_id).data.tags.get("newest_window", "")
-    if not window.isdigit() or int(window) > year:
-        raise JobFailure("holdout_leak", f"the champion's newest window is {window or 'unknown'}, so its training years may include the holdout year {year}")
-    try:
-        pipeline = load_pipeline(f"models:/{name}@{registry.CHAMPION_ALIAS}")
-    except JobFailure:
-        raise
-    except Exception as error:
-        raise JobFailure("champion_unloadable", f"{type(error).__name__}: {error}") from None
+    """Admit the champion, then read it as data and score the holdout.
+
+    The admission comes first and reads no model: its provenance must hold the closure digest of this job's own code root (``promote.check_closure``), its
+    feature list must hold the bounds of the model API and its self-check must pass the model API's shape rules (``promote.check_self_check``). Then the checks
+    that it needs only extract columns and never trained on the holdout year. Only then is its model file fetched and read with skops under ``trusted``.
+    """
+    with tempfile.TemporaryDirectory(prefix="champion_") as folder:
+        promote.check_closure(champion_document(version, model_code.PROVENANCE, folder), root)
+        document = champion_document(version, model_code.FEATURE_LIST, folder)
+        columns = set(champion_columns(document))
+        try:
+            references = list(model_code.check_feature_list(document)[0])
+        except model_code.DataRuleError as error:
+            raise JobFailure("champion_feature_list_invalid", f"the champion's feature list breaks a bound of the model API: {error}") from None
+        promote.check_self_check(champion_document(version, model_code.SELF_CHECK, folder), references)
+        if not columns <= set(manifest["columns"]):
+            raise JobFailure("champion_features", f"the champion needs columns the extract lacks: {sorted(columns - set(manifest['columns']))[0]}")
+        window = store.get_run(version.run_id).data.tags.get("newest_window", "")
+        if not window.isdigit() or int(window) > year:
+            raise JobFailure(
+                "holdout_leak", f"the champion's newest window is {window or 'unknown'}, so its training years may include the holdout year {year}"
+            )
+        try:
+            pipeline = load_pipeline(champion_file(version, model_code.MODEL_FILE, folder), trusted)
+        except JobFailure:
+            raise
+        except Exception as error:
+            raise JobFailure("champion_unloadable", f"{type(error).__name__}: {error}") from None
     return predict(pipeline, rows)
 
 
@@ -214,7 +262,8 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     )
     year = max(row["window_year"] for row in extract_rows)
     holdout = [row for row in extract_rows if row["window_year"] == year]
-    challenger = predict(load_pipeline(str(base / "model")), holdout)
+    trusted = contract["serialization"]["trusted_types"]
+    challenger = predict(load_pipeline(str(base / model_code.MODEL_FILE), trusted), holdout)
     current = registry.champion(store, name)
     config = job_inputs.config_of(root)
     baseline: dict[str, Any] | None = None
@@ -222,7 +271,7 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
         rival, baseline = baseline_predictions(hai_type, extract_rows, config, root, parameters["model"], job_inputs.cmi_of(inputs / "extract", manifest))
     else:
         try:
-            rival = champion_predictions(store, current, name, manifest, holdout, year, scratch)
+            rival = champion_predictions(store, current, name, manifest, holdout, year, root, trusted)
         except JobFailure as failure:
             if failure.name != "champion_features":
                 raise

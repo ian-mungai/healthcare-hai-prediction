@@ -170,34 +170,51 @@ def score_with_the_real_promotion_reader(
     folder: Path,
     *,
     raw: bytes | None = None,
-    download: Callable[..., str] | None = None,
+    fetch: Callable[..., str] | None = None,
     loads: list[str] | None = None,
 ) -> dict[str, float]:
-    """Run the real ``promotion_check.champion_predictions`` on a champion with this feature list. Only the store calls and the model load are stand-ins.
+    """Run the real ``promotion_check.champion_predictions`` on a champion with this feature list. Only the store calls, the fetch and the model read are
+    stand-ins.
 
-    ``raw`` writes these bytes as the list file instead of the document, ``download`` replaces the artifact download and each champion load is added to
-    ``loads``.
+    The fetch writes the champion's four files at the local path it is given: the provenance with the closure digest of the repository's own record, the feature
+    list (``raw`` bytes instead of the document when given), a self-check of one row of zeros and a model token. ``fetch`` replaces it (a failing or a
+    misbehaving transport) and each champion read is added to ``loads``.
     """
+    from scripts import model_code
     from scripts.training import promotion_check
 
-    listing = written(folder, "champion_feature_list.json", document)
-    if raw is not None:
-        listing.write_bytes(raw)
-    store = SimpleNamespace(
-        download_artifacts=download or (lambda run_id, path, scratch: str(listing)),
-        get_run=lambda run_id: SimpleNamespace(data=SimpleNamespace(tags={"newest_window": "2021"})),
-    )
+    root = Path(__file__).resolve().parents[2]
+    references = document.get("references") if isinstance(document, dict) else None
+    references = references if isinstance(references, list) and all(isinstance(item, str) for item in references) else []
+    files: dict[str, Any] = {
+        "bundle/provenance.json": {model_code.CLOSURE_KEY: model_code.closure_digest(root)},
+        "bundle/feature_list.json": document,
+        "bundle/self_check.json": {"schema": 1, "slot": "m1_ols", "references": references, "rows": [[0.0] * len(references)], "predictions": [0.5]},
+        "model/model.skops": "champion",
+    }
+
+    def write(run_id: str, path: str, local_path: str, limit: int) -> str:
+        data = raw if raw is not None and path == "bundle/feature_list.json" else (json.dumps(files[path]) + "\n").encode()
+        Path(local_path).write_bytes(data)
+        return local_path
+
+    def routed(run_id: str, path: str, local_path: str, limit: int) -> str:
+        """The ``fetch`` fault applies to the feature list only: the other three files are good."""
+        return fetch(run_id, path, local_path, limit) if fetch is not None and path == "bundle/feature_list.json" else write(run_id, path, local_path, limit)
+
+    store = SimpleNamespace(get_run=lambda run_id: SimpleNamespace(data=SimpleNamespace(tags={"newest_window": "2021"})))
     rows = [{"spine_key": "000001:2022"}, {"spine_key": "000002:2022"}]
     pipeline = SimpleNamespace(predict=lambda frame: [1.0, 2.0])
+    trusted = json.loads((root / "data_contracts/training/model_contract.json").read_text())["serialization"]["trusted_types"]
 
-    def load(uri: str) -> Any:
+    def load(path: str, found: Any) -> Any:
         if loads is not None:
-            loads.append(uri)
+            loads.append(path)
         return pipeline
 
-    with patch.object(promotion_check, "load_pipeline", side_effect=load):
+    with patch.object(promotion_check, "load_pipeline", side_effect=load), patch.object(promotion_check, "fetch_file", create=True, side_effect=routed):
         return promotion_check.champion_predictions(
-            store, SimpleNamespace(run_id="run1"), "hai_model_HAI_1", {"columns": list(extract_columns)}, rows, 2022, folder
+            store, SimpleNamespace(run_id="run1"), "hai_model_HAI_1", {"columns": list(extract_columns)}, rows, 2022, root, trusted
         )
 
 
@@ -269,7 +286,7 @@ def serving_outcome(document: Any, folder: Path, references: Sequence[str]) -> s
 
 def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Path, **fault: Any) -> str:
     """What the real promotion reader does with this champion list: its named refusal with its detail, or whether it scores the holdout. A refusal after the
-    champion was loaded says so, because a refused list must never reach the model load. ``fault`` is a raw file or a failing download."""
+    champion was loaded says so, because a refused list must never reach the model load. ``fault`` is a raw file or a failing fetch."""
     from scripts.training.job_failure import JobFailure
 
     loads: list[str] = []
@@ -283,12 +300,18 @@ def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Pat
 
 
 def refusing(error: Exception) -> Callable[..., str]:
-    """An artifact download that fails with this error."""
+    """A fetch that fails with this error."""
 
-    def download(run_id: str, path: str, scratch: str) -> str:
+    def fetch(run_id: str, path: str, local_path: str, limit: int) -> str:
         raise error
 
-    return download
+    return fetch
+
+
+def folder_instead_of_file(run_id: str, path: str, local_path: str, limit: int) -> str:
+    """A fetch that leaves a folder where the file must be."""
+    Path(local_path).mkdir()
+    return local_path
 
 
 def unreadable_champion_list(kind: str, folder: Path) -> dict[str, Any]:
@@ -297,11 +320,11 @@ def unreadable_champion_list(kind: str, folder: Path) -> dict[str, Any]:
         "truncated_json": {"raw": b'{"columns": ["process",'},
         "invalid_encoding": {"raw": b'{"columns": ["\xff\xfe"]}'},
         "empty_file": {"raw": b""},
-        "missing_file": {"download": lambda run_id, path, scratch: str(folder / "no_such_file.json")},
-        "unreadable_file": {"download": lambda run_id, path, scratch: str(folder)},
-        "download_missing": {"download": refusing(FileNotFoundError("secret-marker"))},
-        "download_oserror": {"download": refusing(OSError("secret-marker"))},
-        "download_error": {"download": refusing(RuntimeError("secret-marker"))},
+        "missing_file": {"fetch": lambda run_id, path, local_path, limit: local_path},
+        "unreadable_file": {"fetch": folder_instead_of_file},
+        "download_missing": {"fetch": refusing(FileNotFoundError("secret-marker"))},
+        "download_oserror": {"fetch": refusing(OSError("secret-marker"))},
+        "download_error": {"fetch": refusing(RuntimeError("secret-marker"))},
     }
     return faults[kind]
 
@@ -352,9 +375,9 @@ KEY_OUTCOMES: dict[str, str] = {
     "promotion artifact truncated_json": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
     "promotion artifact invalid_encoding": CHAMPION_REFUSAL + "is not JSON: UnicodeDecodeError",
     "promotion artifact empty_file": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
-    "promotion artifact missing_file": CHAMPION_REFUSAL + "file is missing after the download: FileNotFoundError",
+    "promotion artifact missing_file": CHAMPION_REFUSAL + "was not fetched as one regular file",
     "promotion artifact download_missing": CHAMPION_REFUSAL + "could not be downloaded: FileNotFoundError",
-    "promotion artifact unreadable_file": CHAMPION_REFUSAL + "file is unreadable: IsADirectoryError",
+    "promotion artifact unreadable_file": CHAMPION_REFUSAL + "was not fetched as one regular file",
     "promotion artifact download_oserror": CHAMPION_REFUSAL + "could not be downloaded: OSError",
     "promotion artifact download_error": CHAMPION_REFUSAL + "could not be downloaded: RuntimeError",
     "promotion document list": CHAMPION_DOCUMENT + "a list, not an object",

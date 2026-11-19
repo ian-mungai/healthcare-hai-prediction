@@ -266,7 +266,7 @@ def case_one_home_for_the_bounded_fetch_and_the_data_only_read() -> list[str]:
             if isinstance(node, ast.FunctionDef) and node.name in homes:
                 homes[node.name].append(str(path.relative_to(ROOT)))
     problems = [f"{name} is defined in {found}, not once in scripts/model_code.py" for name, found in homes.items() if found != ["scripts/model_code.py"]]
-    for reader in ("scripts/serving/mlflow_loader.py",):
+    for reader in ("scripts/serving/mlflow_loader.py", "scripts/training/promotion_check.py"):
         text = (ROOT / reader).read_text()
         problems += [f"{reader} does not call model_code.{name}" for name in ("fetch_regular_file", "load_data_only") if f"model_code.{name}" not in text]
         if 'import_module("mlflow.sklearn")' in text or "pickle" in text:

@@ -16,6 +16,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import date
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -50,7 +51,6 @@ from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
 from scripts.training.models.common import REGISTRABLE, SLOTS, Feature, NotEstimable
-from scripts.training.presigned_probe import ProbingClient
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
@@ -231,6 +231,12 @@ class Fixture:
         self.champion: Predictor | None = None
         self.champion_loads: list[str] = []
         self.candidate: Any = None
+        # What the promotion check reads: the path and cap of each fetch, the path and trusted list of each model read, and the champion's run.
+        self.fetched: list[str] = []
+        self.fetch_limits: dict[str, int] = {}
+        self.fetch_faults: dict[str, Callable[[str, str, str, int], str]] = {}
+        self.loads: list[tuple[str, tuple[str, ...]]] = []
+        self.champion_run = ""
         self.write_extract(mediator=mediator, hac=hac)
 
     def code_root(self) -> None:
@@ -380,6 +386,20 @@ class Fixture:
         (self.extract / f"manifest_{hai_type}.json").write_bytes(canonical(manifest) + b"\n")
 
 
+def tracking_fetch(fixture: Fixture, run_id: str, path: str, local_path: str, limit: int) -> str:
+    """Stand in for ``model_code.mlflow_fetch``: copy one file of the run from the tracking stand-in to ``local_path`` and record the path and the cap. A file
+    the run lacks raises FileNotFoundError, as the transport does."""
+    fixture.fetched.append(path)
+    fixture.fetch_limits[path] = limit
+    if path in fixture.fetch_faults:
+        return fixture.fetch_faults[path](run_id, path, local_path, limit)
+    source = fixture.tracking.root / run_id / path
+    if not source.is_file():
+        raise FileNotFoundError(path)
+    shutil.copyfile(source, local_path)
+    return local_path
+
+
 @contextlib.contextmanager
 def standins(fixture: Fixture) -> Iterator[None]:
     """Run the job with the fixture's code root, the host Parquet reader, the tracking client stand-in and the numerical library stand-ins."""
@@ -391,6 +411,7 @@ def standins(fixture: Fixture) -> Iterator[None]:
         mock.patch.object(bundle, "save_model", save_model_standin),
         mock.patch.object(bundle, "SAFE_MODULES", (*bundle.SAFE_MODULES, "scripts.training.model_test_support")),
         mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
+        mock.patch.object(promotion_check, "fetch_file", create=True, side_effect=partial(tracking_fetch, fixture)),
         mock.patch.dict(
             os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100", "DVC_REMOTE_URL": str(fixture.folder / "dvc_remote"), "DVC_NO_ANALYTICS": "1"}
         ),
@@ -636,7 +657,7 @@ def save_model_standin(pipeline: Any, folder: Path, features: Any, contract: Any
     """Stand in for mlflow.sklearn.save_model: write a token for the pipeline and the bare feature columns the signature would list."""
     folder.mkdir(parents=True)
     SAVED[str(id(pipeline))] = pipeline
-    (folder / "model.bin").write_text(str(id(pipeline)))
+    (folder / "model.skops").write_text(str(id(pipeline)))
     (folder / "MLmodel").write_text(json.dumps({"columns": [feature.name for feature in features], "format": contract["serialization"]["format"]}) + "\n")
 
 
@@ -1677,18 +1698,33 @@ def baseline_of(fixture: Fixture) -> tuple[dict[str, float], dict[str, float]]:
     )
 
 
+def champion_lists(columns: Sequence[str]) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
+    """The references, the feature list and the self-check of a champion with these columns (one row of ones that the self-check saves)."""
+    references = [f"facility.{name}" for name in columns]
+    feature_list = {"slot": "m1_ols", "references": references, "columns": list(columns)}
+    saved = {"schema": 1, "slot": "m1_ols", "references": references, "rows": [[1.0] * len(columns)], "predictions": [1.0]}
+    return references, feature_list, saved
+
+
 def seed_champion(fixture: Fixture, *, newest_window: str = "2023", columns: tuple[str, ...] = ("process", "cmi", "extra")) -> str:
-    """Put a production version of the type in the registry stand-in, with the source run and feature list the check reads."""
+    """Put a production version of the type in the registry stand-in, with the source run and the four files the check reads: a provenance that holds the
+    closure digest of this fixture's code root, the feature list, the self-check and the model file."""
     store = fixture.tracking
     name = f"hai_model_{HAI_TYPE}"
     store.models[name] = {"tags": {}, "versions": [], "aliases": {}}
     run = store.create_run("0", tags={"newest_window": newest_window, "run_id": CHAMPION_PARENT_RUN, "step_key": "parent"}).info.run_id
     target = store.root / run / "bundle"
     target.mkdir(parents=True)
-    (target / "feature_list.json").write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": list(columns)}) + "\n")
+    _, feature_list, saved = champion_lists(columns)
+    (target / "feature_list.json").write_text(json.dumps(feature_list) + "\n")
+    (target / "self_check.json").write_text(json.dumps(saved) + "\n")
+    (target / "provenance.json").write_text(json.dumps({"run_id": "champion_train", model_code.CLOSURE_KEY: model_code.closure_digest(fixture.root)}) + "\n")
+    (store.root / run / "model").mkdir()
+    (store.root / run / "model/model.skops").write_text("champion")
     store.create_model_version(name, f"runs:/{run}/model", run_id=run, tags={"bundle_sha256": "e" * 64})
     store.set_registered_model_alias(name, "production", "1")
     store.calls.clear()
+    fixture.champion_run = run
     return run
 
 
@@ -1709,13 +1745,15 @@ def run_promotion(fixture: Fixture, **patches: Any) -> tuple[int, str, str]:
     """Run promotion_check with the model loader replaced by stand-ins: the saved candidate and, when seeded, the champion."""
     label = LABEL
 
-    def loader(uri: str) -> Any:
-        if uri.startswith("models:/"):
-            fixture.champion_loads.append(uri)
+    def loader(path: str, trusted: Any) -> Any:
+        fixture.loads.append((path, tuple(trusted)))
+        content = Path(path).read_text()
+        if content == "champion":
+            fixture.champion_loads.append(path)
             if fixture.champion is None:
                 raise OSError("synthetic champion cannot be loaded")
             return fixture.champion
-        return fixture.candidate if fixture.candidate is not None else SAVED[(Path(uri) / "model.bin").read_text()]
+        return fixture.candidate if fixture.candidate is not None else SAVED[content]
 
     del label
     with mock.patch.object(promotion_check, "load_pipeline", side_effect=loader):
@@ -1844,28 +1882,124 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_promotion(fixture)
         require(code == job.EXIT_FAILED and failure_of(error) == "holdout_leak" and listing(fixture.out) == [], f"{code} {error}")
 
-    def reads_the_champion_features_through_the_tracking_server() -> None:
-        """The check opens its store with the real ``run_tracking.open_store`` and reads the champion's ``bundle/feature_list.json`` (the download of
-        ``champion_predictions``). A client with no download setting reads it from S3 with a presigned URL, which the job cannot reach."""
-        fixture = promoted(folder / "presigned", Predictor(LABEL, constant=3.0))
-        client = ProbingClient(fixture.tracking)
-        library = SimpleNamespace(import_module=lambda name: SimpleNamespace(MlflowClient=lambda tracking_uri: client))
-        with (
-            standins(fixture),
-            mock.patch.object(run_tracking, "open_store", REAL_OPEN_STORE),
-            mock.patch.object(run_tracking, "importlib", library),
-            mock.patch.object(promotion_check, "load_pipeline", side_effect=lambda uri: fixture.champion),
-        ):
-            code, _, error = call(fixture.arguments("promotion_check", None))
+    def champion_run_file(fixture: Fixture, path: str) -> Path:
+        return fixture.tracking.root / fixture.champion_run / path
+
+    def rewrite_champion(fixture: Fixture, columns: tuple[str, ...]) -> None:
+        """Give the champion a feature list and a self-check of these columns, so that the two still agree."""
+        _, feature_list, saved = champion_lists(columns)
+        champion_run_file(fixture, "bundle/feature_list.json").write_text(json.dumps(feature_list) + "\n")
+        champion_run_file(fixture, "bundle/self_check.json").write_text(json.dumps(saved) + "\n")
+
+    def champion_is_read_as_data_only() -> None:
+        """The check reads a champion through the bounded fetch of ``model_code`` and nothing else: its provenance, feature list and self-check (1 MiB cap) and
+        then its model file (64 MiB cap), never ``MLmodel``, never the code folder, never ``download_artifacts``, and the model through the trusted types of the
+        code root's own contract. A planted code folder and an ``MLmodel`` that trusts one more type change nothing. The challenger is read from its own
+        ``model.skops`` under the same list."""
+        fixture = promoted(folder / "data_only", Predictor(LABEL, constant=3.0))
+        marker = fixture.folder / "written_by_artifact_code"
+        champion = fixture.tracking.root / fixture.champion_run / "model"
+        (champion / "MLmodel").write_text("trusted_types: [evil.Thing]\n")
+        (champion / "code").mkdir()
+        (champion / "code/evil.py").write_text(f"open({str(marker)!r}, 'w')\n")
+        trusted = json.loads((fixture.root / "data_contracts/training/model_contract.json").read_text())["serialization"]["trusted_types"]
+        with mock.patch.object(fixture.tracking, "download_artifacts", side_effect=AssertionError("download_artifacts was called")):
+            code, _, error = run_promotion(fixture)
+        require(code == 0, f"a champion with a planted code folder failed the check: {code} {error}")
+        wanted = ["bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json", "model/model.skops"]
+        require(fixture.fetched == wanted, f"the check fetched {fixture.fetched}, not exactly the four fixed paths in order")
         require(
-            code == 0 and client.direct_reads == 0,
-            f"promotion_check read the champion's features over the presigned path ({client.direct_reads} reads): {code} {error}",
+            fixture.fetch_limits == {name: model_code.MODEL_CAP if name.endswith(".skops") else model_code.JSON_CAP for name in wanted},
+            f"caps: {fixture.fetch_limits}",
         )
+        require(not marker.exists(), "the planted artifact code ran")
+        require(
+            len(fixture.loads) == 2 and all(found == tuple(trusted) and found for _, found in fixture.loads),
+            f"the model reads did not use the contract's own list: {fixture.loads}",
+        )
+        require([Path(path).name for path, _ in fixture.loads] == ["model.skops", "model.skops"], f"model reads: {fixture.loads}")
+
+    def no_champion_reads_no_champion_file() -> None:
+        """With no champion (the first champion) the check reads no champion file and scores the candidate against the baseline, as before."""
+        fixture = promoted(folder / "no_champion_files")
+        code, _, error = run_promotion(fixture)
+        require(code == 0 and fixture.fetched == [] and fixture.champion_loads == [], f"{code} {error} {fixture.fetched}")
+        require(len(fixture.loads) == 1 and Path(fixture.loads[0][0]).name == "model.skops", f"only the candidate is read: {fixture.loads}")
+
+    def champion_fetch_deadline() -> None:
+        """A fetch of any of the champion's four files that reaches its deadline is refused by name, as ``champion_fetch_deadline``, and the check writes and
+        tags nothing: the shared fetch (``model_code.mlflow_fetch``) raises the rule ``deadline`` and the check never waits longer."""
+
+        def late(run_id: str, path: str, local_path: str, limit: int) -> str:
+            raise model_code.DataRuleError("deadline", f"the fetch of {path} did not finish within its deadline")
+
+        for path in ("bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json", "model/model.skops"):
+            fixture = promoted(folder / f"fetch_deadline_{Path(path).stem}", Predictor(LABEL, constant=3.0))
+            fixture.fetch_faults[path] = late
+            code, _, error = run_promotion(fixture)
+            require(code == job.EXIT_FAILED and failure_of(error) == "champion_fetch_deadline", f"{path}: {code} {error}")
+            require(fixture.champion_loads == [] and listing(fixture.out) == [], f"{path}: the champion was loaded or output was written")
+            require("promotion_verdict" not in fixture.tracking.models[name]["versions"][1]["tags"], f"{path}: the version got a verdict")
+
+    def champion_admission() -> None:
+        """A champion is admitted before its model file is read: its provenance must hold the closure digest of this job's own code root and its self-check must
+        pass the data rules of the model API. A champion that predates the closure record is refused by name (the owner deletes such models at rollout). A
+        refused champion is never fetched past its self-check, never loaded and never scored, and the check writes and tags nothing."""
+        refusals: dict[str, tuple[Callable[[Fixture], None], str]] = {}
+
+        def provenance(**changes: Any) -> Callable[[Fixture], None]:
+            def plant(fixture: Fixture) -> None:
+                path = champion_run_file(fixture, "bundle/provenance.json")
+                document = {**json.loads(path.read_text()), **changes}
+                path.write_text(json.dumps({key: value for key, value in document.items() if value is not None}) + "\n")
+
+            return plant
+
+        def write(path: str, data: bytes) -> Callable[[Fixture], None]:
+            return lambda fixture: champion_run_file(fixture, path).write_bytes(data)
+
+        def remove(path: str) -> Callable[[Fixture], None]:
+            return lambda fixture: champion_run_file(fixture, path).unlink()
+
+        def self_check(**changes: Any) -> Callable[[Fixture], None]:
+            def plant(fixture: Fixture) -> None:
+                path = champion_run_file(fixture, "bundle/self_check.json")
+                path.write_text(json.dumps({**json.loads(path.read_text()), **changes}) + "\n")
+
+            return plant
+
+        refusals["predates_the_closure_record"] = (provenance(**{model_code.CLOSURE_KEY: None}), "model_code_closure_missing")
+        refusals["trained_with_other_model_code"] = (provenance(**{model_code.CLOSURE_KEY: "0" * 64}), "model_code_closure_mismatch")
+        refusals["provenance_with_a_repeated_key"] = (write("bundle/provenance.json", b'{"run_id": "a", "run_id": "b"}'), "model_provenance_unreadable")
+        refusals["provenance_in_utf16"] = (write("bundle/provenance.json", json.dumps({"run_id": "a"}).encode("utf-16")), "model_provenance_unreadable")
+        refusals["provenance_with_an_unknown_key"] = (provenance(note="x"), "model_provenance_unreadable")
+        refusals["no_provenance_file"] = (remove("bundle/provenance.json"), "model_provenance_unreadable")
+        refusals["no_self_check_file"] = (remove("bundle/self_check.json"), "self_check_missing")
+        refusals["self_check_with_a_repeated_key"] = (write("bundle/self_check.json", b'{"schema": 2, "schema": 1}'), "self_check_not_json")
+        refusals["self_check_in_utf16"] = (write("bundle/self_check.json", json.dumps({"schema": 1}).encode("utf-16")), "self_check_not_json")
+        refusals["self_check_with_no_rows"] = (self_check(rows=[], predictions=[]), "self_check_row_count")
+        refusals["self_check_with_a_slot_of_257_characters"] = (self_check(slot="x" * 257), "self_check_keys")
+        refusals["self_check_with_other_references"] = (self_check(references=["a", "b", "c"]), "self_check_references")
+        refusals["feature_list_over_the_bounds"] = (
+            lambda fixture: champion_run_file(fixture, "bundle/feature_list.json").write_text(
+                json.dumps({"slot": "m1_ols", "references": ["r"] * 2001, "columns": ["process"] * 2001}) + "\n"
+            ),
+            "champion_feature_list_invalid",
+        )
+        for label, (plant, reason) in refusals.items():
+            fixture = promoted(folder / f"admission_{label}", Predictor(LABEL, constant=3.0))
+            plant(fixture)
+            code, _, error = run_promotion(fixture)
+            require(code == job.EXIT_FAILED and failure_of(error) == reason, f"{label}: {code} {error}")
+            require("model/model.skops" not in fixture.fetched and fixture.champion_loads == [], f"{label}: the champion's model was read: {fixture.fetched}")
+            require(listing(fixture.out) == [], f"{label}: a refused check wrote output")
+            tags = fixture.tracking.models[name]["versions"][1]["tags"]
+            require("promotion_verdict" not in tags, f"{label}: the version got a verdict: {tags}")
+            require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, f"{label}: an alias changed")
 
     def champion_columns() -> None:
         fixture = promoted(folder / "columns", Predictor(LABEL, constant=3.0))
-        feature_list = next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
-        feature_list.write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": ["process", "unknown_column"]}) + "\n")
+        rewrite_champion(fixture, ("process", "unknown_column"))
         code, _, error = run_promotion(fixture)
         require(code == 0, f"a champion this extract cannot score failed the run: {error}")
         require(
@@ -1892,17 +2026,20 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 
         Plant = Callable[[Fixture, contextlib.ExitStack], None]
 
-        def refusing_download(error: Exception) -> Plant:
-            def plant(fixture: Fixture, stack: contextlib.ExitStack) -> None:
-                stack.enter_context(mock.patch.object(fixture.tracking, "download_artifacts", side_effect=error))
+        def faulty(fixture: Fixture, fault: Callable[[str, str, str, int], str]) -> None:
+            fixture.fetch_faults["bundle/feature_list.json"] = fault
 
-            return plant
+        def refusing_download(error: Exception) -> Plant:
+            def raises(run_id: str, path: str, local_path: str, limit: int) -> str:
+                raise error
+
+            return lambda fixture, stack: faulty(fixture, raises)
 
         def gone_after_download(fixture: Fixture, stack: contextlib.ExitStack) -> None:
-            stack.enter_context(mock.patch.object(fixture.tracking, "download_artifacts", return_value=str(fixture.folder / "gone.json")))
+            faulty(fixture, lambda run_id, path, local_path, limit: local_path)
 
         def listed(fixture: Fixture) -> Path:
-            return next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
+            return champion_run_file(fixture, "bundle/feature_list.json")
 
         def document(value: Any) -> Plant:
             return lambda fixture, stack: listed(fixture).write_text(json.dumps(value) + "\n")
@@ -1925,7 +2062,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             "truncated_json": (raw(b'{"columns": ["process",'), "is not JSON: JSONDecodeError"),
             "invalid_encoding": (raw(b'{"columns": ["\xff\xfe"]}'), "is not JSON: UnicodeDecodeError"),
             "empty_file": (raw(b""), "is not JSON: JSONDecodeError"),
-            "missing_after_download": (gone_after_download, "file is missing after the download: FileNotFoundError"),
+            "missing_after_download": (gone_after_download, "was not fetched as one regular file"),
             "missing_artifact": (lambda fixture, stack: listed(fixture).unlink(), "could not be downloaded: FileNotFoundError"),
             "download_not_found": (refusing_download(FileNotFoundError(marker)), "could not be downloaded: FileNotFoundError"),
             "download_oserror": (refusing_download(OSError(marker)), "could not be downloaded: OSError"),
@@ -2150,10 +2287,11 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     def champion_deadline() -> None:
         fixture = promoted(folder / "champion_deadline", Predictor(LABEL, constant=3.0))
 
-        def slow_champion(uri: str) -> Any:
-            if uri.startswith("models:/"):
+        def slow_champion(path: str, trusted: Any) -> Any:
+            content = Path(path).read_text()
+            if content == "champion":
                 time.sleep(5)
-            return SAVED[(Path(uri) / "model.bin").read_text()]
+            return fixture.champion if content == "champion" else SAVED[content]
 
         with mock.patch.object(job, "budget", return_value=2.0), mock.patch.object(promotion_check, "load_pipeline", side_effect=slow_champion):
             code, _, error = run_action(fixture, "promotion_check")
@@ -2197,7 +2335,10 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_champion_reads_only_the_missing_alias_answer_as_none", champion_reads_only_the_missing_alias_answer_as_none)
     cases.check("job_promotion_check_champion_load_deadline_named", champion_deadline)
     cases.check("job_promotion_check_needs_tracking_uri", no_uri)
-    cases.check("job_promotion_check_reads_the_champion_features_through_the_tracking_server", reads_the_champion_features_through_the_tracking_server)
+    cases.check("job_promotion_check_reads_a_champion_as_data_only_through_the_bounded_fetch", champion_is_read_as_data_only)
+    cases.check("job_promotion_check_reads_no_champion_file_without_a_champion", no_champion_reads_no_champion_file)
+    cases.check("job_promotion_check_admits_a_champion_by_its_closure_and_self_check_before_reading_its_model", champion_admission)
+    cases.check("job_promotion_check_names_a_champion_fetch_that_reaches_its_deadline", champion_fetch_deadline)
 
 
 def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:
@@ -2260,7 +2401,9 @@ def log_run_cases(cases: Any, folder: Path) -> None:
             f"bundle/{name}" for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json", "self_check.json")
         ]
         require(all(name in artifacts for name in expected), f"bundle artifacts: {artifacts}")
-        require("model/model.bin" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}")
+        require(
+            "model/model.skops" in artifacts and "model/MLmodel" in artifacts and f"extract/manifest_{HAI_TYPE}.json" in artifacts, f"artifacts: {artifacts}"
+        )
         require(f"dvc/{metafile.name}" in artifacts, f"the DVC metafile was not logged: {artifacts}")
         mediation_id = next(key for key, item in store.active().items() if item["tags"].get("step_key") == "rq3_mediation")
         require(f"result/mediation_{HAI_TYPE}.json" in store.artifacts(mediation_id), "the mediation result was not logged on its child run")

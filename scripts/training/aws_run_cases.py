@@ -194,8 +194,8 @@ def staged_train(folder: Path, model: str = "m2", **options: Any) -> Fixture:
 def train(fixture: Fixture, **changes: str | None) -> tuple[int, str, str]:
     """Run the train phase of the fixture's run with the job stand-ins and the AWS task environment."""
 
-    def loader(uri: str) -> Any:
-        return SAVED[(Path(uri) / "model.bin").read_text()]
+    def loader(path: str, trusted: Any) -> Any:
+        return SAVED[Path(path).read_text()]
 
     with standins(fixture), environment(**changes), mock.patch.object(promotion_check, "load_pipeline", side_effect=loader):
         os.environ.pop("DVC_REMOTE_URL", None)
