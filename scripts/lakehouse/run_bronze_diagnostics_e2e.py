@@ -641,8 +641,8 @@ def bootstrap_repair_case(
     deployment.write_text('{"data_bucket_name":"synthetic"}')
     original_build = bronze_metadata.build
 
-    def build(chosen: Any, inputs: Any, excluded: Any, previous: Any, all_tables: Any) -> Any:
-        rows = original_build(chosen, inputs, excluded, previous, all_tables)
+    def build(chosen: Any, inputs: Any, excluded: Any, previous: Any, all_tables: Any, unsourced: Any = ()) -> Any:
+        rows = original_build(chosen, inputs, excluded, previous, all_tables, unsourced)
         events.append(("validated", list(chosen)))
         return rows
 
