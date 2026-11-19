@@ -596,11 +596,14 @@ FORGERIES: dict[str, Callable[[dict], Any]] = {
 }
 
 
-def refused_without_a_trace(world: World, reason: str, before: set[str]) -> None:
+def refused_without_a_trace(world: World, reason: str, before: set[str], paused: bool = False) -> None:
     result = world.run()
     check([item["reason"] for item in result["units"]["refused"]] == [reason], f"the unit is refused with its reason: {result['units']}")
     check(result["units"]["failed"] == [] and result["units"]["completed"] == [], "it is neither failed nor completed")
-    check(result["units"]["paused_sources"] == [], "the source is not paused: its download passed its contract")
+    check(
+        result["units"]["paused_sources"] == ([SOURCE] if paused else []),
+        f"a forged intent leaves the source open, a failed storage read pauses it: {result['units']}",
+    )
     check(result["counters"]["objects_created"] == 0 and result["counters"]["intents_created"] == 0, str(result["counters"]))
     added = {f"{ROOT}ingestion_runs/run02/run.json", f"{ROOT}ingestion_runs/run02/state/000001.json"}
     check(world.bucket.names() - before == added, f"only the run's own objects were added: {sorted(world.bucket.names() - before - added)}")
@@ -620,7 +623,7 @@ def test_a_forged_intent_stops_the_unit_visibly_and_never_gets_a_new_snapshot_id
 def test_an_unreadable_intent_stops_the_unit_visibly(tmp_path: Path) -> None:
     world, _ = crashed_world(tmp_path, dated=False)
     world.bucket.unreadable_prefix = INTENTS
-    refused_without_a_trace(world, "intent_unreadable", set(world.bucket.names()))
+    refused_without_a_trace(world, "intent_unreadable", set(world.bucket.names()), paused=True)
 
 
 def test_the_skip_listing_never_reads_the_intent_prefix_and_an_intent_alone_is_not_a_skip(tmp_path: Path) -> None:
@@ -1159,6 +1162,77 @@ def deny_puts(world: World, monkeypatch: pytest.MonkeyPatch, prefix: str, nth: i
 
 def listed(world: World) -> list[dict]:
     return mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
+
+
+def fail_listing_of_unit(world: World, monkeypatch: pytest.MonkeyPatch, index: int, nth: int) -> None:
+    """Raise a genuine SDK error on the nth listing of one unit's records folder and let every other listing through."""
+    prefix, original, seen = record.unit_prefix(ROOT, world.unit_key(index)), world.bucket.list_objects_v2, []
+
+    def listing(**arguments: Any) -> dict:
+        if arguments["Prefix"] == prefix:
+            seen.append(prefix)
+            if len(seen) == nth:
+                raise world.bucket.missing("ListObjectsV2", "AccessDenied")
+        return original(**arguments)
+
+    monkeypatch.setattr(world.bucket, "list_objects_v2", listing)
+
+
+def assert_source_paused_after(world: World, result: dict, before: list[dict], failed_index: int, reason: str = "storage_contract") -> None:
+    """The unit before the fault completed, the faulting unit failed by name, the next unit sent nothing and was reported paused, and the run is on record."""
+    first, second, third = (unit["url"] for unit in world.units)
+    check(world.site.asked == [first, second], f"the unit after the fault sends no request: {world.site.asked}")
+    units = result["units"]
+    check(len(units["completed"]) + len(units["changed"]) == 1, f"only the unit before the fault finished: {units}")
+    check(
+        [(item["snapshot_id"], item["reason"]) for item in units["failed"] + units["refused"]] == [(world.units[failed_index]["snapshot_id"], reason)],
+        str(units),
+    )
+    check(units["paused_sources"] == [SOURCE] and units["paused_not_attempted"] == [world.units[2]["snapshot_id"]], f"the source is paused: {units}")
+    check(f"{ROOT}ingestion_runs/{result['run_id']}/run.json" in world.bucket.names(), "the run record was saved")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(
+        len(problems) == 2 and sum("was not attempted" in item for item in problems) == 1, f"the evidence step names the failed and the paused unit: {problems}"
+    )
+    check(third not in world.site.asked, "the third unit was never requested")
+
+
+@pytest.mark.parametrize(("recheck", "nth"), [(False, 2), (True, 1), (True, 2)], ids=["generation", "monthly_recheck", "monthly_generation"])
+def test_a_records_listing_error_after_an_earlier_success_pauses_the_source_so_no_later_unit_sends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recheck: bool, nth: int
+) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv", "c.csv"])
+    fail_listing_of_unit(world, monkeypatch, 1, nth)
+    before = listed(world)
+    result = world.run(recheck=recheck)
+    assert_source_paused_after(world, result, before, 1)
+
+
+def test_an_unreadable_record_of_a_monthly_recheck_after_an_earlier_success_pauses_the_source(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv", "c.csv"])
+    world.run()
+    world.site.asked.clear()
+    world.bucket.unreadable_prefix = record.unit_prefix(ROOT, world.unit_key(1))
+    before = listed(world)
+    result = world.run(recheck=True)
+    first, second = world.units[0]["url"], world.units[1]["url"]
+    check(world.site.asked == [first, second], f"the unit after the unreadable record sends no request: {world.site.asked}")
+    units = result["units"]
+    check(units["paused_sources"] == [SOURCE] and units["paused_not_attempted"] == [world.units[2]["snapshot_id"]], f"the source is paused: {units}")
+    check(len(units["refused"]) == 1 and units["refused"][0]["snapshot_id"] == world.units[1]["snapshot_id"], f"the unit is refused by name: {units}")
+    check(any("was not attempted" in item for item in mode.check_run(storage(world.bucket), result, before)), "the evidence step names the paused unit")
+
+
+def test_a_refused_upload_after_an_earlier_success_pauses_the_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "calibration").mkdir()
+    calibration = World(tmp_path / "calibration", ["a.csv"])
+    calibration.run()
+    per_unit = len(calibration.bucket.names(DATASETS))
+    world = World(tmp_path, ["a.csv", "b.csv", "c.csv"])
+    deny_puts(world, monkeypatch, DATASETS, per_unit + 1)
+    before = listed(world)
+    result = world.run()
+    assert_source_paused_after(world, result, before, 1)
 
 
 def sibling(world: World, name: str, names: list[str]) -> World:

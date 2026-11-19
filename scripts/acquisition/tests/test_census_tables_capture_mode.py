@@ -412,6 +412,40 @@ def test_a_listing_error_of_the_store_fails_only_its_own_source_by_name_and_an_u
         check(text not in json.dumps(result), f"no SDK message text reaches the run record: {text}")
 
 
+@pytest.mark.parametrize(("recheck", "nth"), [(False, 2), (True, 1)], ids=["generation", "monthly_recheck"])
+def test_a_records_listing_error_after_an_earlier_success_pauses_its_source_and_an_unrelated_source_still_completes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, recheck: bool, nth: int
+) -> None:
+    world, batches = three_units(tmp_path, monkeypatch)
+    other, _ = with_cms_unit(world, tmp_path)
+    host = Host(monkeypatch)
+    prefix, real, seen = completion_record.unit_prefix(ROOT, world.unit_key(1)), world.bucket.list_objects_v2, []
+
+    def listing(**arguments: Any) -> dict:
+        if arguments["Prefix"] == prefix:
+            seen.append(prefix)
+            if len(seen) == nth:
+                raise world.bucket.missing("ListObjectsV2", "AccessDenied")
+        return real(**arguments)
+
+    monkeypatch.setattr(world.bucket, "list_objects_v2", listing)
+    before = mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
+    result = host.run(world, recheck=recheck)
+    units = result["units"]
+    finished = units["changed"] if recheck else units["completed"]
+    check(not any(table_of(path) == "DP02" for path in host.sent), f"no ACS request after the fault: {host.sent}")
+    check(units["paused_sources"] == ["ACS"], f"the faulting source is paused: {units}")
+    check(units["paused_not_attempted"] == [contract.queue_snapshot_id(batches[2])], f"its next unit waits: {units}")
+    check([item["source_id"] for item in units["failed"]] == ["ACS"] and units["failed"][0]["reason"] == "storage_contract", f"it is named: {units['failed']}")
+    check(sorted(item["source_id"] for item in finished) == ["ACS", other], f"the earlier ACS unit and the unrelated source finished: {finished}")
+    check(
+        len(world.site.asked) == 1 and f"{ROOT}ingestion_runs/run01/run.json" in world.bucket.names(),
+        "the unrelated unit was requested and the run is on record",
+    )
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(len(problems) == 2, f"the evidence step names the failed and the paused unit only: {problems}")
+
+
 def test_a_cooldown_that_cannot_be_saved_stops_the_run_before_another_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     world, _batches = three_units(tmp_path, monkeypatch)
     host = Host(monkeypatch, lambda path: Limited(3600) if table_of(path) == "S0601" else served(path))

@@ -230,11 +230,26 @@ def observed_request(observer: Observer, request: Callable | None) -> Callable |
     return call
 
 
+ABSENT_CODES = frozenset({"404", "NoSuchKey", "NoSuchVersion", "NotFound"})
+
+
 class Journal:
-    """The keys this run created, noted at the storage boundary when a create succeeds, so a failed upload keeps the creates before its failure."""
+    """The keys this run created, noted at the storage boundary when a create succeeds, so a failed upload keeps the creates before its failure.
+
+    ``faults`` counts the storage calls that failed, for any reason except the two answers the run asks for: a create that found its key taken (the
+    create-once answer) and a head that found no object. It counts at the boundary itself, so a failure that a caller turns into a refusal or a problem text is
+    counted as well as one that propagates. The run reads it around each unit and pauses the unit's source when it moved, whichever position the unit has in
+    its source.
+    """
 
     def __init__(self) -> None:
         self.keys: list[str] = []
+        self.faults = 0
+
+    def fault(self, operation: str, error: StorageError) -> None:
+        answer = (operation == "put-object" and error.code in redownload.CREATE_CONFLICTS) or (operation == "head-object" and error.code in ABSENT_CODES)
+        if not answer:
+            self.faults += 1
 
 
 class JournalStorage:
@@ -244,12 +259,20 @@ class JournalStorage:
         self.inner, self.journal = inner, journal
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
-        reply = self.inner.call(service, operation, arguments)
+        try:
+            reply = self.inner.call(service, operation, arguments)
+        except StorageError as error:
+            self.journal.fault(operation, error)
+            raise
         self.note(operation, arguments)
         return reply
 
     def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
-        reply = self.inner.call_bounded(service, operation, arguments, timeout=timeout)
+        try:
+            reply = self.inner.call_bounded(service, operation, arguments, timeout=timeout)
+        except StorageError as error:
+            self.journal.fault(operation, error)
+            raise
         self.note(operation, arguments)
         return reply
 
@@ -464,7 +487,7 @@ ADAPTERS: dict[str, Callable[..., Path]] = {
     "hcai_util_workbook": adapt_hcai_util,
     "onc_mu_hospital": adapt_onc_mu,
 }
-PAUSING = frozenset({"bls_quota", "http_429"})
+PAUSING = frozenset({"bls_quota", "http_429", "storage_contract"})
 INTENT_REASONS = frozenset({"intent_forged", "intent_unreadable"})
 
 
@@ -551,7 +574,10 @@ def listing_page(call: Callable[..., dict], operation: str, storage: Any, **argu
     try:
         return call(**named(storage), **arguments)
     except (ClientError, BotoCoreError) as error:
-        raise StorageError(operation, task_role.error_code(error)) from None
+        failure = StorageError(operation, task_role.error_code(error))
+        if (journal := getattr(storage, "journal", None)) is not None:
+            journal.fault(operation, failure)
+        raise failure from None
 
 
 def list_objects(storage: Any, prefix: str) -> list[dict]:
@@ -1064,6 +1090,7 @@ def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, 
     ended = "changed" if rechecks(run, unit) else "completed"
     if create_new(run.storage, target, body):
         return Result(key, unit, ended, reason)
+    mark = None if run.journal is None else run.journal.faults
     for read in range(CONFLICT_READS):
         try:
             read_record(run.storage, target, run.root)
@@ -1073,6 +1100,8 @@ def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, 
             continue
         except records.RecordError as error:
             return Result(key, unit, "refused", str(error))
+        if run.journal is not None and mark is not None:
+            run.journal.faults = mark
         problems = verify_record(run.storage, target, run.root, expected)
         return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, ended, reason)
     raise ContractFailure("completion_conflict_unreadable")
@@ -1275,6 +1304,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 if first:
                     paused.add(source)
                 continue
+            decided = journal.faults
             try:
                 verdict, why = decide_skip(run, unit, key, run.clock(), expected)
             except StorageError as error:
@@ -1282,6 +1312,8 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 done["failed"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": failure_reason(error)})
                 paused.add(source)
                 continue
+            if journal.faults != decided:
+                paused.add(source)
             if verdict != "go":
                 if verdict == "complete":
                     done["skipped_complete"].append(key)
@@ -1304,6 +1336,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             counters["units_attempted"] += 1
             state["attempts"][key] = state["attempts"].get(key, 0) + 1
             limited: RateLimit | None = None
+            started_with = journal.faults
             try:
                 result = attempt(run, unit, spec, key, opener, state, expected)
             except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
@@ -1314,6 +1347,8 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 seconds, form = (limited.retry_after_seconds, limited.form) if limited else (source_cooldown.DEFAULT_SECONDS, "default")
                 cooling[source] = save_cooldown(run, source, seconds, form).isoformat()
             if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
+                paused.add(source)
+            if journal.faults != started_with:
                 paused.add(source)
             if result.status in {"unchanged", "changed"}:
                 counters[result.status] += 1
