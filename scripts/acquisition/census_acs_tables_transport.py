@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
-from scripts.acquisition import api_keys, echo_guard
+from scripts.acquisition import api_keys, echo_guard, rate_limit
 from scripts.acquisition import census_acs_tables_contract as contract
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_contract import digest
@@ -31,15 +31,6 @@ DATA_PATH = re.compile(r"/data/[0-9]{4}/acs/acs5(?:/subject|/profile)?")
 DICTIONARY_PATH = re.compile(r"/data/[0-9]{4}/acs/acs5(?:/subject|/profile)?/groups/[A-Z0-9]+\.json")
 TRANSIENT = {500, 502, 503, 504}
 RATE_LIMITED = 429
-MAX_RETRY_AFTER = 86400
-
-
-class RateLimited(ValueError):
-    """The publisher answered 429. It is never retried here: the caller pauses the source and reports the publisher's delay in whole seconds."""
-
-    def __init__(self, retry_after_seconds: int) -> None:
-        super().__init__("Census publisher rate limit")
-        self.retry_after_seconds = retry_after_seconds
 
 
 def bounded_get(url: str, target: str, cap: int, label: str) -> bytes:
@@ -58,8 +49,7 @@ def bounded_get(url: str, target: str, cap: int, label: str) -> bytes:
         response = connection.getresponse()
         controls.response_status(response)
         if response.status == RATE_LIMITED:
-            delay = response.getheader("Retry-After", "")
-            raise RateLimited(min(int(delay), MAX_RETRY_AFTER) if delay.isdigit() else 0)
+            raise rate_limit.from_response(response)
         if response.status in TRANSIENT:
             raise RetryableRequest("Census transient publisher failure")
         require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")

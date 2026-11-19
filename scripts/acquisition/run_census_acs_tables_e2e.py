@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts.acquisition import api_keys
+from scripts.acquisition import api_keys, rate_limit
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import census_acs_tables_contract as contract
 from scripts.acquisition import census_acs_tables_transport as transport
@@ -778,7 +778,7 @@ def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -
         sent: list[str] = []
         try:
             fetch_with(status, sent)
-        except (RetryableRequest, ValueError) as failure:
+        except (RetryableRequest, ValueError, rate_limit.RateLimited) as failure:
             require(error in str(failure) and KEY not in str(failure), f"Unexpected refusal: {failure}")
             require(len(sent) == expected, f"{len(sent)} requests for status {status}, expected {expected}")
             return
@@ -788,7 +788,7 @@ def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -
         scenario(
             f"status_{status}_makes_exactly_three_attempts_then_fails_without_text", lambda status=status: attempts(status, 3, "transient publisher failure")
         )
-    scenario("status_429_makes_one_attempt_and_is_a_typed_rate_limit", lambda: attempts(429, 1, "publisher rate limit"))
+    scenario("status_429_makes_one_attempt_and_is_a_typed_rate_limit", lambda: attempts(429, 1, "Publisher rate limit"))
 
     class Delayed(Reply):
         """A 429 reply that names its delay in the Retry-After header."""
@@ -800,7 +800,7 @@ def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -
         def getheader(self, name: str, default: str = "") -> str:
             return self.delay if name == "Retry-After" else super().getheader(name, default)
 
-    def delay_of(header: str) -> int:
+    def delay_of(header: str) -> str | None:
         sent: list[str] = []
         try:
             run_with(
@@ -808,15 +808,24 @@ def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -
                 lambda client, target: transport.fetch(plan, batch, target, True, client, transport.live_request, no_sleep),
                 sent,
             )
-        except transport.RateLimited as limited:
+        except rate_limit.RateLimited as limited:
             require(len(sent) == 1, f"{len(sent)} requests for a rate limit")
-            return limited.retry_after_seconds
+            return limited.retry_after
         raise ValueError("The rate limit was accepted")
 
-    for header, seconds in (("45", 45), ("999999", 86400), ("soon", 0), ("", 0)):
+    long_header = "9" * (rate_limit.HEADER_LIMIT + 1)
+    for name, header, kept in (
+        ("seconds", "45", "45"),
+        ("a_large_value_is_not_shortened", "999999", "999999"),
+        ("an_http_date", "Wed, 18 Nov 2026 19:00:00 GMT", "Wed, 18 Nov 2026 19:00:00 GMT"),
+        ("text", "soon", "soon"),
+        ("absent", "", None),
+        ("over_the_bound", long_header, None),
+        ("a_control_character", "4\n5", None),
+    ):
         scenario(
-            f"a_rate_limit_reports_the_delay_{header or 'absent'}",
-            lambda header=header, seconds=seconds: require(delay_of(header) == seconds, f"Delay {delay_of(header)} for {header!r}"),
+            f"a_rate_limit_reports_the_header_{name}",
+            lambda header=header, kept=kept: require(delay_of(header) == kept, f"Header {delay_of(header)!r} for {header!r}"),
         )
     scenario("a_redirect_is_refused_after_one_attempt", lambda: attempts(302, 1, "no redirect followed"))
 

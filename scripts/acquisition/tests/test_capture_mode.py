@@ -40,6 +40,7 @@ from scripts.acquisition import completion_record as record
 from scripts.acquisition import ingestion_intent as intent
 from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload_route as route
+from scripts.acquisition.run_cms_owners_e2e import Response
 from scripts.acquisition.run_cms_owners_e2e import synthetic_plan as owners_plan
 from scripts.acquisition.run_onc_mu_e2e import body as onc_body
 from scripts.acquisition.run_onc_mu_e2e import locked as onc_locked
@@ -647,6 +648,25 @@ def test_a_source_pauses_when_its_first_unit_fails_its_contract(tmp_path: Path) 
     check(result["units"]["failed"][0]["reason"] == "html_instead_of_data", str(result["units"]["failed"]))
     state = world.bucket.names(f"{ROOT}ingestion_runs/run01/state/")
     check(len(state) == 1, f"the changed state was saved once: {sorted(state)}")
+
+
+def test_a_429_of_the_generic_download_path_stores_the_default_cooldown_and_the_next_run_sends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(transport.time, "sleep", lambda _seconds: None)
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    url = world.units[0]["url"]
+    world.site.override[url] = Response(b"", url, 429)
+    now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    resume = now + datetime.timedelta(seconds=3600)
+    first = world.run(clock=lambda: now)
+    check([item["reason"] for item in first["units"]["failed"]] == ["http_429"], str(first["units"]))
+    check(first["source_cooldowns"] == {SOURCE: resume.isoformat()}, f"the default delay, since this path carries no header: {first.get('source_cooldowns')}")
+    asked = len(world.site.asked)
+    second = world.run(clock=lambda: now)
+    check(len(world.site.asked) == asked and second["counters"]["http_requests"] == 0, f"no request before the cooldown ends: {world.site.asked}")
+    check(second["units"]["paused_sources"] == [SOURCE] and len(second["units"]["paused_not_attempted"]) == 2, str(second["units"]))
+    world.site.override.clear()
+    third = world.run(clock=lambda: resume)
+    check(len(third["units"]["completed"]) == 2 and "source_cooldowns" not in third, f"{third['units']}")
 
 
 MEMBERS = [

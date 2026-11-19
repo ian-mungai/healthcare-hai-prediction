@@ -6,7 +6,9 @@ read back by version and closed by one create-once completion record. Before it 
 snapshot ID its objects are stored under, so a retry after a crash stores under the same keys (``ingestion_intent.py``). The working folder is deleted
 after the record, or after a failure. A monthly run (``recheck``) that downloads a payload an older record has while the newest record has another writes a
 reversion record that names the older record's objects (``recheck_unit``), and writes nothing when the newest record has the payload. The first attempted
-unit of a source that fails its contract pauses that source for the run. The run writes one
+unit of a source that fails its contract pauses that source for the run. A publisher's HTTP 429 also pauses its source and stores a create-once cooldown under
+``<root>ingestion_cooldowns/<source_id>/`` (``source_cooldown.py``). A later run of that root, whatever its run ID, sends no request to the source before the
+resume time and reports the source paused with that time. A cooldown that cannot be read or saved never allows a request. The run writes one
 run record and, only when something was attempted, one state object under ``<root>ingestion_runs/<run_id>/``. One run owns its process while it executes:
 it replaces process-wide transport functions, host variables and redirect routes, so a second run started in the same process raises ``RunInProgress``.
 It sits beside the earlier redownload and compare paths in ``redownload.py``, which later work removes.
@@ -38,9 +40,11 @@ from scripts.acquisition import (
     census_acs_tables_transport,
     collect_mmd_api,
     hud_api_transport,
+    rate_limit,
     redownload,
     redownload_controls,
     redownload_route,
+    source_cooldown,
     task_role,
     transport,
 )
@@ -94,11 +98,13 @@ class ContractFailure(ValueError):
 
 
 class RateLimit(ContractFailure):
-    """The publisher rate-limited a unit. The reason is the fixed code ``http_429``, which pauses the source; the delay it named is reported, never stored."""
+    """The publisher rate-limited a unit. The reason is the fixed code ``http_429``, which pauses the source. The delay is the publisher's Retry-After in
+    whole seconds (``form`` says how it was named, or ``default``), and the run stores it as the source's cooldown."""
 
-    def __init__(self, retry_after_seconds: int) -> None:
+    def __init__(self, retry_after_seconds: int, form: str = "seconds") -> None:
         super().__init__("http_429")
         self.retry_after_seconds = retry_after_seconds
+        self.form = form
 
 
 class SpecError(ValueError):
@@ -345,6 +351,12 @@ def planned_item(run: CaptureRun, handler: str, spec: Mapping[str, Any]) -> tupl
     return matches[0]
 
 
+def rate_limit_of(run: CaptureRun, limited: rate_limit.RateLimited) -> RateLimit:
+    """The pausing failure of a typed 429: the publisher's Retry-After header normalized to whole seconds against the run's clock, or the stated default."""
+    seconds, form = source_cooldown.retry_after_seconds(limited.retry_after, run.clock())
+    return RateLimit(seconds, form)
+
+
 def adapt_bls(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
     from scripts.acquisition import bls_api_transport as api
     from scripts.acquisition import collect_bls_api as collector
@@ -362,7 +374,11 @@ def adapt_census_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, open
     from scripts.acquisition import collect_census_acs_api as collector
 
     plan, batch = planned_item(run, "census_acs_api", spec)
-    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_api"), {}, run.api_request or api.request_live)["receipt_path"])
+    try:
+        result = collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_api"), {}, run.api_request or api.request_live)
+    except rate_limit.RateLimited as limited:
+        raise rate_limit_of(run, limited) from None
+    return Path(result["receipt_path"])
 
 
 def adapt_census_detailed(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
@@ -370,7 +386,11 @@ def adapt_census_detailed(unit: dict, spec: dict, folder: Path, run: CaptureRun,
 
     plan, batch = planned_item(run, "census_acs_detailed", spec)
     request = run.api_request or collector.live_request
-    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_detailed"), {}, request)["receipt_path"])
+    try:
+        result = collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_detailed"), {}, request)
+    except rate_limit.RateLimited as limited:
+        raise rate_limit_of(run, limited) from None
+    return Path(result["receipt_path"])
 
 
 def adapt_census_tables(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
@@ -380,8 +400,8 @@ def adapt_census_tables(unit: dict, spec: dict, folder: Path, run: CaptureRun, o
     plan, batch = planned_item(run, "census_acs_tables", spec)
     try:
         result = collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_tables"), {}, run.api_request or api.live_request)
-    except api.RateLimited as limited:
-        raise RateLimit(limited.retry_after_seconds) from None
+    except rate_limit.RateLimited as limited:
+        raise rate_limit_of(run, limited) from None
     return Path(result["receipt_path"])
 
 
@@ -390,7 +410,11 @@ def adapt_hud_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener:
     from scripts.acquisition import hud_api_transport as api
 
     plan, batch = planned_item(run, "hud_api", spec)
-    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "hud_api"), {}, run.api_request or api.request_live)["receipt_path"])
+    try:
+        result = collector.execute(plan, batch, folder, True, False, client_for(run, "hud_api"), {}, run.api_request or api.request_live)
+    except rate_limit.RateLimited as limited:
+        raise rate_limit_of(run, limited) from None
+    return Path(result["receipt_path"])
 
 
 def adapt_mmd(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
@@ -822,7 +846,7 @@ def tally_writes(root: str, keys: Iterable[str]) -> dict[str, int]:
             counts["intents_created"] += 1
         elif key.startswith(task_role.BLS_LEDGER_PREFIX):
             counts["bls_ledger_entries_added"] += 1
-        elif key.startswith(f"{root}{records.RUNS_FOLDER}"):
+        elif key.startswith((f"{root}{records.RUNS_FOLDER}", f"{root}{source_cooldown.FOLDER}")):
             counts["run_objects"] += 1
         else:
             counts["objects_created"] += 1
@@ -1137,6 +1161,28 @@ def decide_skip(run: CaptureRun, unit: Mapping[str, Any], key: str, now: datetim
     return "go", None
 
 
+def cooldown_status(run: CaptureRun, source: str, now: datetime) -> tuple[str, datetime | None]:
+    """Whether a source may be asked at NOW: ``open``, ``cooling`` with its resume time, or ``unreadable``.
+
+    The resume time is the largest one saved under the source's cooldown folder by any run of this root. A listing that fails or a key that is no cooldown
+    record gives ``unreadable``, and the caller treats it as blocked, so a request is never sent on a cooldown that cannot be read.
+    """
+    try:
+        keys = [item["Key"] for item in list_objects(run.storage, source_cooldown.prefix(run.root, source))]
+        latest = source_cooldown.latest(run.root, source, keys)
+    except (StorageError, source_cooldown.CooldownError):
+        return "unreadable", None
+    return ("cooling", latest) if latest is not None and now < latest else ("open", None)
+
+
+def save_cooldown(run: CaptureRun, source: str, seconds: int, form: str) -> datetime:
+    """Save the source's cooldown create-once and return its resume time. A failed save raises, so the run stops before another request."""
+    observed = run.clock()
+    until = source_cooldown.resume_time(observed, seconds)
+    put_once(run, source_cooldown.key(run.root, source, until, run.run_id), source_cooldown.body(source, run.run_id, observed, seconds, form, until))
+    return until
+
+
 def entry(result: Result) -> dict[str, Any]:
     return {"unit_key": result.key, "source_id": result.unit["source_id"], "snapshot_id": result.unit["snapshot_id"], "reason": result.reason}
 
@@ -1182,6 +1228,8 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
     outside: dict[str, list[str]] = {"manual_not_attempted": [], "keyed_not_attempted": [], "paused_not_attempted": []}
     paused: set[str] = set()
     tried: set[str] = set()
+    checked: set[str] = set()
+    cooling: dict[str, str] = {}
     with observing(observer):
         for unit in units:
             if unit["disposition"] not in redownload.ACTIVE:
@@ -1218,16 +1266,29 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 else:
                     done["refused"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why})
                 continue
+            if source not in checked:
+                checked.add(source)
+                found, until = cooldown_status(run, source, run.clock())
+                if found != "open":
+                    cooling[source] = "unreadable" if until is None else until.isoformat()
+            if source in cooling:
+                outside["paused_not_attempted"].append(unit["snapshot_id"])
+                if run.log is not None:
+                    run.log({"snapshot_id": unit["snapshot_id"], "source_id": source, "status": "paused_cooldown", "resume_at_utc": cooling[source]})
+                continue
             tried.add(source)
             counters["units_attempted"] += 1
             state["attempts"][key] = state["attempts"].get(key, 0) + 1
-            delay: int | None = None
+            limited: RateLimit | None = None
             try:
                 result = attempt(run, unit, spec, key, opener, state, expected)
             except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
                 result = Result(key, unit, "failed", failure_reason(error))
-                delay = error.retry_after_seconds if isinstance(error, RateLimit) else None
+                limited = error if isinstance(error, RateLimit) else None
             state["bytes_downloaded"] = observer.bytes
+            if result.reason == source_cooldown.REASON:
+                seconds, form = (limited.retry_after_seconds, limited.form) if limited else (source_cooldown.DEFAULT_SECONDS, "default")
+                cooling[source] = save_cooldown(run, source, seconds, form).isoformat()
             if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
                 paused.add(source)
             if result.status in {"unchanged", "changed"}:
@@ -1236,9 +1297,9 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             if run.log is not None:
                 run.log(
                     {"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status}
-                    | ({} if delay is None else {"retry_after_seconds": delay})
+                    | ({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds})
                 )
-    return finish(run, started, observer, journal, state, done, outside, paused, counters, queue_sha256)
+    return finish(run, started, observer, journal, state, done, outside, paused | set(cooling), counters, queue_sha256, cooling)
 
 
 def finish(
@@ -1252,8 +1313,13 @@ def finish(
     paused: set[str],
     counters: Counter,
     queue_sha256: str,
+    cooling: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Save the run state, derive the counters from the observer and the journal, and store the run record last."""
+    """Save the run state, derive the counters from the observer and the journal, and store the run record last.
+
+    ``paused`` also holds the sources that wait on a cooldown. ``cooling`` names each such source with the time it may be asked again, ``unreadable`` when its
+    cooldown could not be read; the run record lists it as ``source_cooldowns`` only when it is not empty.
+    """
     state["paused_sources"] = sorted(paused)
     save_state(run, state)
     done["skipped_complete"].sort()
@@ -1281,6 +1347,8 @@ def finish(
         "writes": writes,
         "units": {**done, "paused_sources": sorted(paused), **outside},
     }
+    if cooling:
+        run_record["source_cooldowns"] = dict(sorted(cooling.items()))
     save_run_record(run, run_record)
     return run_record
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -154,6 +156,7 @@ def test_a_unit_whose_response_fails_its_contract_fails_alone_with_a_fixed_reaso
     check(failed[0]["snapshot_id"] == contract.queue_snapshot_id(batches[1]) and failed[0]["reason"] == "registry_contract", str(failed))
     check("ACS" not in result["units"]["paused_sources"], "a failure after the source's first attempt does not pause it")
     check(len(world.records()) == 2, "the failed unit wrote no record")
+    check(not world.bucket.names(f"{ROOT}ingestion_cooldowns/") and "source_cooldowns" not in result, "a contract failure stores no cooldown")
 
 
 def tracked_needs() -> list[startup_check.Need]:
@@ -195,14 +198,14 @@ def test_every_attempted_unit_of_the_tracked_queue_has_its_own_key_and_a_handler
 
 
 class Limited(Reply):
-    """A 429 reply that names the publisher's delay."""
+    """A 429 reply that names the publisher's delay, as seconds or as the header text given, or names none."""
 
-    def __init__(self, seconds: int) -> None:
+    def __init__(self, value: int | str | None) -> None:
         super().__init__(429, b"{}")
-        self.seconds = seconds
+        self.value = None if value is None else str(value)
 
     def getheader(self, name: str, default: str = "") -> str:
-        return str(self.seconds) if name == "Retry-After" else super().getheader(name, default)
+        return self.value if name == "Retry-After" and self.value is not None else super().getheader(name, default)
 
 
 def served(path: str) -> Reply:
@@ -235,28 +238,130 @@ class Host:
         return world.run(task_keys=keys, **fields)
 
 
-def test_a_rate_limit_after_an_earlier_success_pauses_the_source_and_a_resumed_run_skips_the_completed_unit(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+COOLDOWNS = f"{ROOT}ingestion_cooldowns/"
+
+
+def cooldown_names(world: World) -> list[str]:
+    return sorted(world.bucket.names(COOLDOWNS))
+
+
+def three_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[World, list[dict]]:
     batches = [batch_of("S0101", 2010), batch_of("S0601", 2010), batch_of("DP02", 2010)]
-    world = table_world(tmp_path, monkeypatch, batches)
-    host = Host(monkeypatch, lambda path: Limited(30) if table_of(path) == "S0601" else served(path))
+    return table_world(tmp_path, monkeypatch, batches), batches
+
+
+def test_a_rate_limit_after_an_earlier_success_pauses_the_source_and_stores_when_it_may_resume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    world, batches = three_units(tmp_path, monkeypatch)
+    now = datetime.now(UTC).replace(microsecond=0)
+    host = Host(monkeypatch, lambda path: Limited(3600) if table_of(path) == "S0601" else served(path))
     messages: list[dict] = []
-    first = host.run(world, log=messages.append)
-    units = first["units"]
+    first = host.run(world, clock=lambda: now, log=messages.append)
+    units, resume = first["units"], now + timedelta(seconds=3600)
     check(len(units["completed"]) == 1 and [item["reason"] for item in units["failed"]] == ["http_429"], f"{units}")
     check(units["paused_sources"] == ["ACS"] and units["paused_not_attempted"] == [contract.queue_snapshot_id(batches[2])], f"the source is paused: {units}")
     check(not any(table_of(path) == "DP02" for path in host.sent), f"no further ACS request after the 429: {host.sent}")
     check(len(host.sent) == 3 and first["counters"]["http_requests"] == 3, f"two requests for the first unit and one 429: {host.sent}")
     check(host.sleeps == [1, 1], f"only the spacing after the first unit's two requests, no backoff for the 429: {host.sleeps}")
     limited = [item for item in messages if item.get("retry_after_seconds") is not None]
-    check(len(limited) == 1 and limited[0]["retry_after_seconds"] == 30 and limited[0]["status"] == "failed", f"the publisher's delay is reported: {messages}")
+    check(
+        len(limited) == 1 and limited[0]["retry_after_seconds"] == 3600 and limited[0]["status"] == "failed", f"the publisher's delay is reported: {messages}"
+    )
+    check(first["source_cooldowns"] == {"ACS": resume.isoformat()}, f"the run record says when the source may resume: {first.get('source_cooldowns')}")
+    check(cooldown_names(world) == [f"{COOLDOWNS}ACS/{resume:%Y%m%dT%H%M%SZ}.run01.json"], f"one cooldown record: {cooldown_names(world)}")
+    (name,) = cooldown_names(world)
+    body = json.loads(world.bucket.objects[name][1])
+    check(body["retry_after_seconds"] == 3600 and body["retry_after_form"] == "seconds" and body["not_before_utc"] == resume.isoformat(), str(body))
+    problems = mode.check_run(storage(world.bucket), first, [])
+    check(not any("cooldown" in problem for problem in problems), f"the evidence step accepts the cooldown write: {problems}")
+
+
+def test_a_rerun_before_the_cooldown_ends_sends_nothing_and_a_rerun_after_it_resumes_the_unfinished_units(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    world, batches = three_units(tmp_path, monkeypatch)
+    now = datetime.now(UTC).replace(microsecond=0)
+    host = Host(monkeypatch, lambda path: Limited(3600) if table_of(path) == "S0601" else served(path))
+    host.run(world, clock=lambda: now)
+    resume = now + timedelta(seconds=3600)
     host.answer = served
+    sent = len(host.sent)
+    for moment in (now, resume - timedelta(seconds=1)):
+        messages: list[dict] = []
+        blocked = host.run(world, clock=lambda moment=moment: moment, log=messages.append)
+        check(len(host.sent) == sent and blocked["counters"]["http_requests"] == 0, f"no ACS request before the cooldown ends: {blocked['counters']}")
+        check(
+            blocked["units"]["paused_sources"] == ["ACS"] and blocked["source_cooldowns"] == {"ACS": resume.isoformat()},
+            f"the source is reported paused: {blocked['units']}",
+        )
+        check(
+            sorted(blocked["units"]["paused_not_attempted"]) == sorted(contract.queue_snapshot_id(batch) for batch in batches[1:]),
+            f"the unfinished units wait: {blocked['units']}",
+        )
+        check(blocked["counters"]["skipped_complete"] == 1 and not blocked["units"]["failed"], "a verified completion is still skipped, nothing fails")
+        waiting = [item for item in messages if item["status"] == "paused_cooldown"]
+        check(len(waiting) == 2 and all(item["resume_at_utc"] == resume.isoformat() for item in waiting), f"the log names the resume time: {messages}")
+    check(len(world.records()) == 1 and len(cooldown_names(world)) == 1, "the blocked runs wrote no record and no new cooldown")
     listed = mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
-    second = host.run(world)
-    check(len(second["units"]["completed"]) == 2 and second["counters"]["skipped_complete"] == 1, f"{second['units']} {second['counters']}")
-    check(mode.check_run(storage(world.bucket), second, listed) == [], "the resumed run passes the evidence step")
-    check(len(world.records()) == 3, "every unit has its record after the resume")
+    resumed = host.run(world, clock=lambda: resume)
+    check(len(resumed["units"]["completed"]) == 2 and resumed["counters"]["skipped_complete"] == 1, f"{resumed['units']} {resumed['counters']}")
+    check("source_cooldowns" not in resumed and resumed["units"]["paused_sources"] == [], "nothing is reported paused once the cooldown has ended")
+    check(len(world.records()) == 3 and len(cooldown_names(world)) == 1, "every unit has its record and the old cooldown stays as history")
+    check(mode.check_run(storage(world.bucket), resumed, listed) == [], "the resumed run passes the evidence step")
+
+
+@pytest.mark.parametrize(
+    ("case", "seconds", "form"), [("none", 3600, "default"), ("garbage", 3600, "default"), ("date", 7200, "http_date"), ("seconds", 90, "seconds")]
+)
+def test_the_cooldown_follows_the_publishers_header_in_either_form_and_defaults_when_it_is_missing_or_malformed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str, seconds: int, form: str
+) -> None:
+    world, _batches = three_units(tmp_path, monkeypatch)
+    now = datetime.now(UTC).replace(microsecond=0)
+    value = {"none": None, "garbage": "soon", "date": format_datetime(now + timedelta(seconds=7200), usegmt=True), "seconds": 90}[case]
+    host = Host(monkeypatch, lambda path: Limited(value) if table_of(path) == "S0601" else served(path))
+    first = host.run(world, clock=lambda: now)
+    resume = now + timedelta(seconds=seconds)
+    check(first["source_cooldowns"] == {"ACS": resume.isoformat()}, f"{case}: {first.get('source_cooldowns')}")
+    (name,) = cooldown_names(world)
+    body = json.loads(world.bucket.objects[name][1])
+    check(body["retry_after_seconds"] == seconds and body["retry_after_form"] == form, f"{case}: {body}")
+
+
+def test_an_unreadable_cooldown_blocks_the_source_instead_of_allowing_a_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    world, batches = three_units(tmp_path, monkeypatch)
+    host = Host(monkeypatch)
+    real = mode.list_objects
+
+    def listing(store: Any, prefix: str) -> list[dict]:
+        if "ingestion_cooldowns/" in prefix:
+            raise mode.StorageError("list cooldowns", "AccessDenied")
+        return real(store, prefix)
+
+    monkeypatch.setattr(mode, "list_objects", listing)
+    result = host.run(world)
+    check(not host.sent and result["counters"]["http_requests"] == 0, f"no request when the cooldown cannot be read: {host.sent}")
+    check(len(result["units"]["paused_not_attempted"]) == len(batches) and result["units"]["paused_sources"] == ["ACS"], f"{result['units']}")
+    check(result["source_cooldowns"] == {"ACS": "unreadable"} and not world.records(), f"{result.get('source_cooldowns')}")
+
+
+def test_a_cooldown_that_cannot_be_saved_stops_the_run_before_another_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    world, _batches = three_units(tmp_path, monkeypatch)
+    host = Host(monkeypatch, lambda path: Limited(3600) if table_of(path) == "S0601" else served(path))
+    real = mode.put_once
+
+    def put(run: Any, key: str, body: bytes) -> None:
+        if "ingestion_cooldowns/" in key:
+            raise mode.StorageError("save cooldown", "AccessDenied")
+        real(run, key, body)
+
+    monkeypatch.setattr(mode, "put_once", put)
+    with pytest.raises(mode.StorageError):
+        host.run(world)
+    check(len(host.sent) == 3 and not cooldown_names(world), f"the run stopped at the 429: {host.sent}")
+    monkeypatch.setattr(mode, "put_once", real)
+    host.answer = served
+    rerun = host.run(world)
+    check(len(rerun["units"]["completed"]) == 2 and not cooldown_names(world), "without a saved cooldown the next run is not blocked, and none was invented")
 
 
 def test_a_server_error_is_retried_with_backoff_and_does_not_pause_the_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -268,6 +373,7 @@ def test_a_server_error_is_retried_with_backoff_and_does_not_pause_the_source(mo
     check([item["reason"] for item in units["failed"]] == ["retryable_request"] and len(units["completed"]) == 2, f"{units}")
     check(units["paused_sources"] == [] and not units["paused_not_attempted"], "a transient server error pauses nothing")
     check(host.sleeps.count(2) == 1 and host.sleeps.count(4) == 1, f"three attempts with the two backoffs: {host.sleeps}")
+    check(not cooldown_names(world) and "source_cooldowns" not in result, "a transient server error stores no cooldown")
 
 
 def test_the_run_counts_actual_sends_and_bytes_of_the_tables_transport_and_refuses_past_the_byte_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

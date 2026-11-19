@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
-from scripts.acquisition import api_keys, echo_guard
+from scripts.acquisition import api_keys, echo_guard, rate_limit
 from scripts.acquisition import hud_api_contract as contract
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition.bls_api_transport import RetryableRequest
@@ -32,7 +32,9 @@ def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
         connection.request("GET", parsed.path + "?" + urlencode(parameters), headers=headers)
         response = connection.getresponse()
         controls.response_status(response)
-        if response.status in {429, 500, 502, 503, 504}:
+        if response.status == 429:
+            raise rate_limit.from_response(response)
+        if response.status in {500, 502, 503, 504}:
             raise RetryableRequest("HUD transient publisher failure")
         require(
             response.status == 200 and "json" in response.getheader("Content-Type", ""),
