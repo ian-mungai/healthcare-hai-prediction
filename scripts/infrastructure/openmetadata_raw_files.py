@@ -331,4 +331,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, s3_client: Any =
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # ``python -m`` loads this file as ``__main__``, and ``openmetadata_mlmodel_edges`` imports the module by its package name: a second copy with classes of
+    # its own, so its ``WriteFailed`` is not the one that ``main`` catches. Run the package copy, so that every module shares one set of classes.
+    from scripts.infrastructure.openmetadata_raw_files import main as packaged_main
+
+    sys.exit(packaged_main(sys.argv[1:]))

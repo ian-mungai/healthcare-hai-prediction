@@ -363,4 +363,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``polaris_writer`` imports the module by its package name: a second copy with classes of its own,
+    # so its ``CatalogError`` is not the one that ``main`` catches. Run the package copy, so that every module shares one set of classes.
+    from scripts.lakehouse.catalog import main as packaged_main
+
+    raise SystemExit(packaged_main())
