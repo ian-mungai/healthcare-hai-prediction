@@ -1,3 +1,4 @@
+# The owner steps that turn the restore on and the restore drill are in docs/restore_after_teardown.md.
 variable "restore_after_teardown_prepared" {
   description = "Prepare the three task roles of the restore after a teardown: the Postgres backup service (creates objects under pg_backups/ once), the postgres task's restore (lists and reads pg_backups/) and the MLflow user step (reads three parameters). Off by default."
   type        = bool
