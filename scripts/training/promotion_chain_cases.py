@@ -166,7 +166,7 @@ def promotion_chain_cases(cases: Any, folder: Path) -> None:
         code, _, error = phase(world, "notify", notice_parameters("promoted"))
         require(code == 0 and len(world.sent) == 1, f"the notice was not sent once: {code} {error} {world.sent}")
         sent = world.sent[0]
-        require(sent["TopicArn"] == TOPIC and sent["Subject"] == f"model promoted: {HAI_TYPE}", f"notice: {sent}")
+        require(sent["TopicArn"] == TOPIC and sent["Subject"] == "Model promoted for CLABSI (HAI_1)" and HAI_TYPE == "HAI_1", f"notice: {sent}")
         challenger = world.record["promotion"]["challenger"]
         require(challenger["model"] in sent["Message"] and f"version {number}" in sent["Message"], f"the notice names no candidate: {sent['Message']}")
         receipt = stored(world, "notice")

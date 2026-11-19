@@ -330,6 +330,11 @@ MODEL_LISTS = {
     "m6": ("m6_fixed_effects",),
 }
 MODELS = tuple(MODEL_LISTS)
+# The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
+MODEL_LABELS = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
+HAI_LABELS = {"HAI_1": "CLABSI", "HAI_2": "CAUTI", "HAI_3": "SSI colon", "HAI_4": "SSI hysterectomy", "HAI_5": "MRSA", "HAI_6": "C. difficile"}
+if tuple(MODEL_LABELS) != MODELS or tuple(HAI_LABELS) != HAI_TYPES:
+    raise ValueError("MODEL_LABELS and HAI_LABELS must name exactly the models and HAI types of the contract")
 FEATURE_DAGS = {f"features_{model}_dag": model for model in MODELS}
 # The DAGs the first DAG waits for after the features base (each model's set, its drift check, its training run and, for a promotion model, the research), and
 # the catalog DAG, which it never waits for. Every DAG of the pipeline must be active (not paused) for a run to go through: this is the inventory that the

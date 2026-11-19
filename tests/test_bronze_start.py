@@ -105,16 +105,6 @@ def test_a_record_without_its_units_is_refused() -> None:
             schedule.carried_over(bad, [])
 
 
-def test_the_notice_names_every_carried_over_file_and_the_run() -> None:
-    files = [f"source_{index}__20261101T000000Z__abc" for index in range(150)]
-    subject, message = schedule.carried_over_notice(f"bronze_{HEX}", files)
-    check(f"bronze_{HEX}" in subject and "150" in subject, subject)
-    check(all(name in message for name in files), "the notice leaves a carried-over file out")
-    check(len(subject) <= 100, "an SNS subject holds 100 characters")
-    none_subject, none_message = schedule.carried_over_notice(f"bronze_{HEX}", [])
-    check("no file" in none_subject.lower() and "no file" in none_message.lower(), f"{none_subject} {none_message}")
-
-
 def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts.lakehouse import bronze_run
 

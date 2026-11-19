@@ -41,15 +41,9 @@ from typing import Any
 import duckdb
 
 from monitoring import drift_check, drift_config
-from monitoring.drift_check import HAI_TYPES, YEAR, CheckError, deadline
+from monitoring.drift_check import YEAR, CheckError, deadline
 from monitoring.live_workspace import export_run_files, place_snapshot, set_aside_incomplete_snapshots, snapshot_identity, write_bytes
-from orchestration.training_contract import MODELS, RUN_ID
-
-# The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
-MODEL_NAMES = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
-HAI_NAMES = {"HAI_1": "CLABSI", "HAI_2": "CAUTI", "HAI_3": "SSI colon", "HAI_4": "SSI hysterectomy", "HAI_5": "MRSA", "HAI_6": "C. difficile"}
-if tuple(MODEL_NAMES) != MODELS or tuple(HAI_NAMES) != HAI_TYPES:
-    raise ValueError("MODEL_NAMES and HAI_NAMES must name exactly the models and HAI types of the contract")
+from orchestration.training_contract import HAI_LABELS, MODEL_LABELS, MODELS, RUN_ID
 
 RecordSink = Callable[[dict[str, Any]], None]
 RECORD_SINKS: tuple[RecordSink, ...] = ()
@@ -57,7 +51,7 @@ RECORD_SINKS: tuple[RecordSink, ...] = ()
 
 def project_name(model: str, hai_type: str) -> str:
     """The Evidently project of a model and an HAI type: each key with the name beside it."""
-    return f"{model} {MODEL_NAMES[model]} {hai_type} {HAI_NAMES[hai_type]}"
+    return f"{model} {MODEL_LABELS[model]} {hai_type} {HAI_LABELS[hai_type]}"
 
 
 LIVE_RUNS = ".live_runs"

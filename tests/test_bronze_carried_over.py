@@ -153,7 +153,7 @@ def test_a_skipped_table_with_no_carried_over_file_is_recorded_and_noticed_once_
         len(store.published) == 1 and "empty_data" in store.published[0]["Message"] and "no source object" in store.published[0]["Message"],
         f"{store.published}",
     )
-    check("empty_data" in store.published[0]["Subject"] or "skipped" in store.published[0]["Subject"], store.published[0]["Subject"])
+    check("left out 1 table" in store.published[0]["Subject"], store.published[0]["Subject"])
     stored = json.loads(store.objects[RECORD_KEY])
     check(stored["skipped_tables"] == EMPTY, f"the immutable record does not name the skipped table: {stored}")
     again = carried(store, skipped=EMPTY)

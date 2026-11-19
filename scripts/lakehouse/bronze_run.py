@@ -52,7 +52,7 @@ from orchestration import ingestion_schedule
 from orchestration.training_contract import PIPELINE_DAG, PIPELINE_RUN, compose_run_id, run_id_parts, run_id_pattern
 from scripts import metrics_push, phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
-from scripts.lakehouse import bronze, bronze_mirror, bronze_pin, provenance, task_capacity
+from scripts.lakehouse import bronze, bronze_mirror, bronze_notice, bronze_pin, provenance, task_capacity
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, SKIPPED_REASON, DispatchError, check_dispatch, check_skipped
 from scripts.process import TimeoutExpired, run_command
 
@@ -577,7 +577,7 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
         document["notice"] = "not sent: no alerts topic"
     else:
         document["notice"] = CLAIMED
-        message = ingestion_schedule.carried_over_notice(run, files or [], skipped)
+        message = bronze_notice.carried_over_notice(run, original, files or [], skipped)
     if not put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json", json_bytes(document)):
         return recorded_carried_over(client, bucket, run)
     if message is not None:

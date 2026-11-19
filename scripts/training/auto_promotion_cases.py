@@ -224,7 +224,7 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         require(
             auto_promotion.notify(client, "arn:aws:sns:example-region:example-account:alerts", "HAI_1", "promoted", "m2 version 4") == "m-1", "no message ID"
         )
-        require(sent[0]["Subject"] == "model promoted: HAI_1" and "m2 version 4" in sent[0]["Message"], f"notice: {sent}")
+        require(sent[0]["Subject"] == "Model promoted for CLABSI (HAI_1)" and "m2 version 4" in sent[0]["Message"], f"notice: {sent}")
         raises(lambda: auto_promotion.notify(client, "arn", "HAI_1", "approved", "x"), "outcome")
         require(len(sent) == 1, "a refused notice was sent")
 
@@ -257,7 +257,7 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         client = SimpleNamespace(publish=publish)
         topic = "arn:aws:sns:example-region:example-account:alerts"
         require(auto_promotion.notify(client, topic, "HAI_1", "promoted_not_rolled_out", said["promoted_not_rolled_out"]) == "m-2", "no message ID")
-        require(sent[0]["Subject"] == "model promoted_not_rolled_out: HAI_1", f"subject: {sent[0]['Subject']}")
+        require(sent[0]["Subject"] == "Model promoted but not rolled out for CLABSI (HAI_1)", f"subject: {sent[0]['Subject']}")
 
     def command_line() -> None:
         research, report = folder / "research.json", folder / "report.json"

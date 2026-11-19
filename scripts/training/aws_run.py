@@ -416,7 +416,7 @@ def notify(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     else:
         detail = auto_promotion.notice_detail(record, chain_record(client, destination, "canary", parameters), parameters["outcome"])
         try:
-            message_id = auto_promotion.notify(sns_client(), topic, parameters["hai_type"], parameters["outcome"], detail)
+            message_id = auto_promotion.notify(sns_client(), topic, parameters["hai_type"], parameters["outcome"], detail, parameters["research_run"])
         except (RuntimeError, OSError, ValueError, ClientError, BotoCoreError) as error:
             raise StepFailed("notify", EXIT_FAILED, "publish_failed", f"{type(error).__name__}: {error}") from None
         store_chain_record(

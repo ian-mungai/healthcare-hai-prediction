@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orchestration import training_contract
+from orchestration import owner_notice, training_contract
 from scripts.process import run_command
 from scripts.serving import compare, replay
 from scripts.training import job_inputs, promote, registry, run_tracking
@@ -194,7 +194,7 @@ def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, o
     """What the owner reads about a type's challenger: the model and version, for a hold the failed checks of the canary or that none was stored, and for a
     promotion of a first champion (a record whose ``production_version`` is None) that it went without a canary under the owner's one-time exception."""
     challenger = record["promotion"]["challenger"]
-    candidate = f"{challenger['model']} version {challenger['version']}"
+    candidate = f"{owner_notice.model_name(challenger['model'])} version {challenger['version']}"
     first = FIRST_CHAMPION if "production_version" in record["promotion"] and record["promotion"]["production_version"] is None else ""
     if outcome == "promoted":
         return f"{candidate} is the Production model and the API serves it alone.{first}"
@@ -224,11 +224,56 @@ def release(model: str, features_run: str) -> str:
     return str(json.loads(done.stdout)["outcome"])
 
 
-def notify(client: Any, topic_arn: str, hai_type: str, outcome: str, detail: str) -> str:
+AIRFLOW = "Open Airflow with: bash scripts/open_ui.sh airflow"
+OUTCOME_NOTICES = {
+    "promoted": (
+        "Model promoted for {name}",
+        "The challenger model of {name} was promoted.",
+        "The Production model of {name} changed.",
+        "No action is needed.",
+    ),
+    "promoted_not_rolled_out": (
+        "Model promoted but not rolled out for {name}",
+        "The challenger model of {name} was promoted, but not rolled out.",
+        "The Production model of {name} changed. The API may not serve it everywhere yet.",
+        f"Open the research run in Airflow and read the log of the step that failed.\n{AIRFLOW}",
+    ),
+    "held": (
+        "Challenger model held back for {name}",
+        "The challenger model of {name} was not promoted.",
+        "The Production model of {name} did not change.",
+        f"No action is needed unless you want this challenger promoted. To see the steps of the research run:\n{AIRFLOW}",
+    ),
+    "rolled_back": (
+        "Promotion rolled back for {name}",
+        "A promotion of a challenger model of {name} was rolled back.",
+        "The Production model of {name} may have changed.",
+        f"Open the research run in Airflow and read the log of the step that failed.\n{AIRFLOW}",
+    ),
+}
+
+
+def promotion_notice(hai_type: str, outcome: str, detail: str, run: str | None = None, now: Any = None) -> tuple[str, str]:
+    """The subject and the message of the owner notice of a type's challenger: what happened, when, what it affects, what to do next, the research run
+    when it is known, and the type and the outcome."""
+    subject, happened, affects, next_step = (text.format(name=owner_notice.hai_name(hai_type)) for text in OUTCOME_NOTICES[outcome])
+    notice = owner_notice.Notice(
+        subject=subject,
+        happened=f"{happened}\n{detail}".strip(),
+        affects=affects,
+        next_step=next_step,
+        where=(f"Research run: {run}", "Airflow DAG: research_dag") if run else (),
+        details=(f"Infection type: {owner_notice.hai_name(hai_type)}", f"Outcome: {outcome}"),
+    )
+    return owner_notice.render(notice, now)
+
+
+def notify(client: Any, topic_arn: str, hai_type: str, outcome: str, detail: str, run: str | None = None) -> str:
     """Tell the owner what happened to a type's challenger through the alerts topic and return the message ID."""
     if outcome not in OUTCOMES or hai_type not in training_contract.HAI_TYPES:
         raise ValueError(f"the notice needs an outcome in {', '.join(OUTCOMES)} and an HAI type")
-    answer = client.publish(TopicArn=topic_arn, Subject=f"model {outcome}: {hai_type}"[:100], Message=f"{hai_type}: {outcome}. {detail}"[:1000])
+    subject, message = promotion_notice(hai_type, outcome, detail, run)
+    answer = client.publish(TopicArn=topic_arn, Subject=subject, Message=message)
     return str(answer["MessageId"])
 
 
