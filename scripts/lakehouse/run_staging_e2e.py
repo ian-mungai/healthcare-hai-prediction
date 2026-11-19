@@ -2459,8 +2459,9 @@ UTIL_LISTING_WITH_UNSAFE_VALUE = tuple(
 UTIL_LISTING_WITH_UNMATCHED_COUNTY = tuple(
     with_record(item, util_row(fac_no="106000026", fac_name="UNMATCHED FIXTURE HOSPITAL", county="Atlantis")) for item in UTIL_LISTING
 )
-# A newer demonstration row on the entity, measure and period of a real value (the base fixture's entity 1001, measure 101 and 2022): it is no report of that
-# entity, so it must not change which value is the latest of the real key.
+# A newer demonstration row on the entity, measure and period of a real value (the base fixture's entity 1001, measure 101 and 2022). Like any held newest row
+# it takes part in the ranking of releases, so no older row of that key is latest: the same result as before the demonstration reason existed, when the row
+# was held as county_not_matched.
 IL_DEMONSTRATION_ON_REAL_KEY = (
     Stored(
         "illinois_report_card_csv",
@@ -6980,12 +6981,14 @@ def state_unreported_checks(results: dict[str, tuple[int, dict[str, str]] | Base
         "state_unreported_files_build_passes": code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items()),
         "state_unreported_files_hold_reasons": state_case_rows(STATE_UNREPORTED_CASE, STATE_HOLDS_SQL) == [tuple(row) for row in STATE_UNREPORTED_HOLDS],
         "state_unreported_page_file_with_serials_types": typed == [("106000031", "2023-01-01", "2023-12-31"), ("106000032", "2023-01-01", "2023-12-31")],
-        # Demonstration rows, in a file of their own or on the key of a real value, change no typed Illinois row and no latest flag.
-        "state_demonstration_rows_leave_typed_illinois_unchanged": state_case_rows(STATE_UNREPORTED_CASE, ILLINOIS_SQL) == base_illinois,
-        "state_demonstration_row_on_a_real_key_builds_and_changes_no_typed_row": demonstration_code == 0
+        # A demonstration file with keys of its own changes no typed Illinois row and no latest flag.
+        "state_demonstration_file_leaves_typed_illinois_unchanged": state_case_rows(STATE_UNREPORTED_CASE, ILLINOIS_SQL) == base_illinois,
+        # A newer demonstration row on a real key is a held newest row, as county_not_matched was before: the real key keeps its three rows and none is latest.
+        "state_demonstration_row_on_a_real_key_leaves_no_older_row_latest": demonstration_code == 0
         and bool(demonstration_statuses)
         and all(node_passes(name, status) for name, status in demonstration_statuses.items())
-        and state_case_rows(STATE_DEMONSTRATION_KEY_CASE, ILLINOIS_SQL) == base_illinois,
+        and state_case_rows(STATE_DEMONSTRATION_KEY_CASE, ILLINOIS_SQL)
+        == [(*row[:-1], "false") if row[:2] == ("1001", "101") else row for row in base_illinois],
     }
 
 
