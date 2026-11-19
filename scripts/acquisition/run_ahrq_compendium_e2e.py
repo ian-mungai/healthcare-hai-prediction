@@ -235,6 +235,7 @@ def exercise(root: Path) -> list[dict]:
         default_run_scenarios(scenario, plan, data_entry, doc_entry, root, downloads)
         single_copy_scenarios(scenario, plan, data_entry, root, downloads)
         adapted_scenarios(scenario, plan, data_entry, doc_entry, root, downloads, receipt_path)
+        round2_scenarios(scenario, plan, data_entry, doc_entry, root, downloads)
 
         def tampered_plan() -> None:
             original = plan_path.read_bytes()
@@ -625,7 +626,25 @@ def tree(folder: Path) -> dict:
     return {str(p.relative_to(folder)): fingerprint(p) if p.is_file() else "folder" for p in sorted(folder.rglob("*"))} if folder.exists() else {}
 
 
-def command(argv: list[str], target: Path, client: FakeS3 | None = None) -> int:
+class LogRecorder:
+    """Stand in for the store's logger: keep every line, and with a probe note what had been sent to storage when the line was written."""
+
+    def __init__(self, probe: Any = None) -> None:
+        self.lines: list[tuple[str, Any]] = []
+        self.errors: list[str] = []
+        self.probe = probe
+
+    def info(self, message: str, *args: Any) -> None:
+        self.lines.append((message, self.probe() if self.probe else None))
+
+    def error(self, message: str, *args: Any) -> None:
+        self.errors.append(message)
+
+    def text(self) -> str:
+        return "\n".join([m for m, _ in self.lines] + self.errors)
+
+
+def command(argv: list[str], target: Path, client: FakeS3 | None = None, env: dict[str, str] | None = None, log: LogRecorder | None = None) -> int:
     """Run the real command line against a target folder; only its exit code is returned."""
     with (
         patch.object(sys, "argv", ["store_ahrq_compendium", *argv]),
@@ -633,6 +652,8 @@ def command(argv: list[str], target: Path, client: FakeS3 | None = None) -> int:
         patch.object(store, "load_configuration", lambda path: (SETTINGS.copy(), None)),
         patch.object(store, "load_policy", lambda: FakeS3().storage_policy, create=True),
         patch.object(store, "runtime", lambda: (client, OUTPUTS)),
+        patch.object(store, "LOGGER", log or store.LOGGER),
+        patch.dict(os.environ, env or {}),
     ):
         try:
             store.main()
@@ -1026,6 +1047,350 @@ def adapted_scenarios(scenario: Any, plan: dict, data_entry: dict, doc_entry: di
         require("ahrq_hospital_linkage" not in tables, "A person policy exists for the AHRQ table; its reviewed headers hold no person column")
 
     scenario("ahrq_table_has_no_person_policy_because_its_headers_hold_no_person_column", no_person_policy_entry)
+
+
+class ReadingFake(FakeS3):
+    """A fake store whose bounded call path is answered by the same fake, so no case can reach the real AWS command."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: list[float] = []
+        self.bounded_failure: str | None = None
+        self.damaged: str | None = None
+
+    def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+        self.timeouts.append(timeout)
+        if self.bounded_failure:
+            raise s3_store.StorageError(operation, self.bounded_failure)
+        return self.call(service, operation, arguments)
+
+
+class StepClock:
+    """A clock that moves a fixed step at every read, so a deadline case needs no sleeping."""
+
+    def __init__(self, step: float) -> None:
+        self.now, self.step = 0.0, step
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+def operations(s3: FakeS3) -> set[str]:
+    return {operation for operation, _ in s3.calls}
+
+
+def round2_scenarios(scenario: Any, plan: dict, data_entry: dict, doc_entry: dict, root: Path, downloads: Path) -> None:
+    """Review round 1: S3 proof before any local copy goes, an explicit capture root, a confined local folder and the retrospective release basis."""
+    verify_s3_scenarios(scenario, plan, root, downloads)
+    root_choice_scenarios(scenario, plan, root, downloads)
+    confinement_scenarios(scenario, plan, data_entry, root, downloads)
+    release_basis_scenarios(scenario, plan, data_entry, root, downloads)
+
+
+def stored_all(root: Path, name: str, downloads: Path, plan: dict) -> tuple[Path, ReadingFake]:
+    """Store every planned synthetic file into a fake store; return the local folder and the store."""
+    target, s3 = root / name, ReadingFake()
+    results, held = run_all(plan, target, downloads, True, s3, OUTPUTS)
+    require(len(results) == len(plan["files"]) and not held, f"Setup did not store every file: {held}")
+    return target, s3
+
+
+def verify_s3_scenarios(scenario: Any, plan: dict, root: Path, downloads: Path) -> None:
+    """--verify-s3 reads every recorded version back, fails closed, and only then says the local copies may go."""
+    count = len(plan["files"])
+
+    def verified(target: Path, s3: ReadingFake, argv: list[str] | None = None) -> tuple[int, LogRecorder]:
+        log = LogRecorder()
+        return command(argv or ["--verify-s3"], target, s3, log=log), log
+
+    def after_clearing() -> None:
+        target, s3 = stored_all(root, "v_cleared", downloads, plan)
+        before_calls = len(s3.calls)
+        replay = run_all(plan, target, downloads, True, s3, OUTPUTS)
+        require(len(replay[0]) == count and len(s3.calls) == before_calls, "The local replay changed")
+        s3.objects.clear()
+        code, log = verified(target, s3)
+        require(code != 0 and '"status": "verified_on_s3"' not in log.text(), f"Cleared objects were reported as proven: exit {code}: {log.text()[:300]}")
+        require("NOT PROVEN" in log.text() and "Do not remove" in log.text(), f"The summary does not warn: {log.text()[-300:]}")
+        for file in plan["files"]:
+            require(file["file_name"] in log.text(), f"{file['file_name']} is not named")
+
+    scenario("verify_s3_fails_when_every_remote_object_is_gone_though_the_local_record_says_stored", after_clearing)
+
+    def passing() -> None:
+        target, s3 = stored_all(root, "v_pass", downloads, plan)
+        before = inventory(target)
+        s3.calls.clear()
+        code, log = verified(target, s3)
+        require(code == 0, f"Exit {code}: {log.text()[:400]}")
+        lines = [json.loads(m) for m, _ in log.lines if m.startswith("{")]
+        proven = [line for line in lines if line.get("status") == "verified_on_s3"]
+        require(len(proven) == count and {line["file_name"] for line in proven} == {f["file_name"] for f in plan["files"]}, f"Lines differ: {lines}")
+        require(all(line["bucket"] == SETTINGS["data_bucket_name"] and line["objects_verified"] == 4 for line in proven), f"Line fields differ: {proven[0]}")
+        summary = log.lines[-1][0]
+        require(f"All {count} files are proven on S3" in summary and "may now be removed" in summary, f"Summary differs: {summary}")
+        require(operations(s3) <= {"head-object", "get-object"}, f"A non-read call was made: {operations(s3)}")
+        require(before == inventory(target), "The verify mode wrote local files")
+        require(max(s3.timeouts) <= store.VERIFY_OBJECT_SECONDS and bool(s3.timeouts), "A read was not bounded")
+
+    scenario("verify_s3_proves_every_file_by_reading_the_recorded_versions_and_writes_nothing", passing)
+
+    def damaged(change: Any, error: str, no_download: bool = False) -> Any:
+        def run() -> None:
+            target, s3 = stored_all(root, f"v_{error[:12].replace(' ', '_')}_{id(change)}", downloads, plan)
+            change(s3, target)
+            s3.calls.clear()
+            results, failed = store.verify_remote(plan, target, s3)
+            require(len(failed) >= 1 and all(error in f["reason"] for f in failed), f"Reasons differ: {failed}")
+            require(not any(r["file_name"] in {f["file_name"] for f in failed} for r in results), "A failed file was also reported proven")
+            if no_download:
+                fetched = [args[args.index("--key") + 1] for operation, args in s3.calls if operation == "get-object"]
+                require(s3.damaged is not None and s3.damaged not in fetched, "The object was downloaded before the size was checked")
+
+        return run
+
+    def other_version(s3: ReadingFake, target: Path) -> None:
+        key = next(k for k in s3.objects if k.endswith(".xlsx") or k.endswith(".xls"))
+        s3.objects[key]["VersionId"] = "version_other"
+
+    def other_bytes(s3: ReadingFake, target: Path) -> None:
+        key = next(k for k in s3.objects if k.endswith(".xlsx") or k.endswith(".xls"))
+        s3.objects[key]["body"] = s3.objects[key]["body"][:-1] + b"X"
+
+    def other_size(s3: ReadingFake, target: Path) -> None:
+        key = next(k for k in s3.objects if k.endswith(".xlsx") or k.endswith(".xls"))
+        s3.objects[key]["ContentLength"] += 4096
+        s3.damaged = key
+
+    def no_receipt(s3: ReadingFake, target: Path) -> None:
+        next(target.glob("files/*/capture/receipt.json")).unlink()
+
+    def not_stored(s3: ReadingFake, target: Path) -> None:
+        done = next(target.glob("files/*/completed.json"))
+        done.unlink()
+
+    scenario("verify_s3_refuses_a_wrong_version", damaged(other_version, "AHRQ S3 version differs"))
+    scenario("verify_s3_refuses_changed_bytes", damaged(other_bytes, "Downloaded S3 version differs"))
+    scenario("verify_s3_refuses_a_larger_object_before_downloading_it", damaged(other_size, "AHRQ S3 object size differs", no_download=True))
+    scenario("verify_s3_refuses_a_missing_receipt", damaged(no_receipt, "AHRQ receipt missing"))
+    scenario("verify_s3_refuses_a_file_with_no_completion_record", damaged(not_stored, "AHRQ completion missing"))
+
+    def timeout() -> None:
+        target, s3 = stored_all(root, "v_timeout", downloads, plan)
+        s3.bounded_failure = "request_unconfirmed"
+        results, failed = store.verify_remote(plan, target, s3)
+        require(not results and len(failed) == count and all("request_unconfirmed" in f["reason"] for f in failed), f"Timeouts differ: {failed}")
+        code, log = verified(target, s3)
+        require(code != 0 and "NOT PROVEN" in log.text(), f"A timeout passed: {code}")
+
+    scenario("verify_s3_fails_closed_on_a_read_timeout", timeout)
+
+    def deadline() -> None:
+        target, s3 = stored_all(root, "v_deadline", downloads, plan)
+        results, failed = store.verify_remote(plan, target, s3, clock=StepClock(store.VERIFY_TOTAL_SECONDS / 6))
+        require(len(failed) >= 1 and any("deadline" in f["reason"] for f in failed), f"The whole-run deadline did not stop the run: {failed}")
+        require(all(t <= store.VERIFY_OBJECT_SECONDS for t in s3.timeouts), "A read was given more than the per-object limit")
+
+    scenario("verify_s3_stops_at_its_whole_run_deadline", deadline)
+
+    def wrong_partial() -> None:
+        target, s3 = stored_all(root, "v_partial", downloads, plan)
+        other_bytes(s3, target)
+        code, log = verified(target, s3)
+        require(code != 0 and "NOT PROVEN" in log.text(), f"One bad file passed: {code}")
+        require(any("verified_on_s3" in m for m, _ in log.lines), "The good files were not reported")
+        require("may now be removed" not in log.text(), "The summary allows removal with one file unproven")
+
+    scenario("verify_s3_exits_nonzero_when_any_file_is_not_proven_and_never_allows_removal", wrong_partial)
+
+    def exclusive() -> None:
+        target, s3 = root / "v_both", ReadingFake()
+        code = command(["--verify-s3", "--execute"], target, s3)
+        require(code != 0 and not s3.objects and not target.exists(), f"Both modes ran: {code}")
+
+    scenario("verify_s3_and_execute_cannot_be_combined", exclusive)
+
+    def local_wording() -> None:
+        target, s3 = stored_all(root, "v_wording", downloads, plan)
+        log = LogRecorder()
+        require(command(["--downloads", str(downloads), "--execute"], target, s3, log=log) == 0, "The local replay failed")
+        text = log.text()
+        require("local_record_of_upload" in text and '"stored"' not in text, f"The local result reads as proof: {text[:300]}")
+        require("not a check of S3" in log.lines[-1][0] and "--verify-s3" in log.lines[-1][0], f"The summary does not point to --verify-s3: {log.lines[-1][0]}")
+
+    scenario("local_result_is_called_a_local_record_and_points_to_verify_s3", local_wording)
+
+    def cleared_repro() -> None:
+        target, s3 = root / "v_repro", ReadingFake()
+        first = run_all(plan, target, downloads, True, s3, OUTPUTS)
+        s3.objects.clear()
+        calls = len(s3.calls)
+        again = run_all(plan, target, downloads, True, s3, OUTPUTS)
+        require(again == first and len(s3.calls) == calls, "The local path changed")
+        require(bool(store.verify_remote(plan, target, s3)[1]), "The remote check accepted cleared objects")
+
+    scenario("reviewer_reproduction_cleared_objects_replay_stays_local_and_verify_catches_it", cleared_repro)
+
+
+def root_choice_scenarios(scenario: Any, plan: dict, root: Path, downloads: Path) -> None:
+    """An inherited HAI_CAPTURE_ROOT never picks the destination: the command line chooses it, and the full destination is printed before any upload."""
+    test_root = "ingestion_test/ingestion_0a1b2c3d/"
+    base = ["--downloads", str(downloads), "--execute"]
+
+    def refused(name: str, argv: list[str], env: dict[str, str]) -> Any:
+        def run() -> None:
+            target, s3, log = root / name, ReadingFake(), LogRecorder()
+            code = command(argv, target, s3, env=env, log=log)
+            require(code != 0 and not s3.objects and not any(op == "put-object" for op, _ in s3.calls), f"Uploaded under an unchosen root: exit {code}")
+            require(not target.exists(), "A local effect happened before the refusal")
+            require("HAI_CAPTURE_ROOT" in log.text() and test_root in log.text(), f"The refusal does not name the variable and root: {log.text()[:300]}")
+
+        return run
+
+    scenario("inherited_test_root_without_a_command_line_choice_is_refused_before_any_effect", refused("r_inherit", base, {"HAI_CAPTURE_ROOT": test_root}))
+    scenario(
+        "inherited_root_different_from_the_command_line_choice_is_refused",
+        refused("r_differ", [*base, "--capture-root", "raw/"], {"HAI_CAPTURE_ROOT": test_root}),
+    )
+    scenario("inherited_root_is_refused_even_for_the_read_only_run", refused("r_dry", ["--downloads", str(downloads)], {"HAI_CAPTURE_ROOT": test_root}))
+
+    def puts_of(s3: FakeS3) -> list[str]:
+        return [args[args.index("--key") + 1] for operation, args in s3.calls if operation == "put-object"]
+
+    def chosen(env: dict[str, str]) -> Any:
+        def run() -> None:
+            target, s3 = root / f"r_chosen_{len(env)}", ReadingFake()
+            log = LogRecorder(probe=lambda: len(puts_of(s3)))
+            code = command([*base, "--capture-root", test_root], target, s3, env=env, log=log)
+            require(code == 0, f"The explicit choice was refused: {code}: {log.text()[:300]}")
+            keys = puts_of(s3)
+            require(bool(keys) and all(k.startswith(test_root) for k in keys), f"A key left the chosen root: {keys[:3]}")
+            printed = [json.loads(m)["destination"] for m, _ in log.lines if m.startswith('{"destination"')]
+            require(len(printed) == 1, "The destination line was not printed exactly once")
+            destination = printed[0]
+            require(
+                destination["bucket"] == SETTINGS["data_bucket_name"] and destination["key_prefix"] == f"{test_root}ahrq/health_system_compendium/",
+                f"Destination differs: {destination}",
+            )
+            first = next(i for i, (m, _) in enumerate(log.lines) if m.startswith('{"destination"'))
+            require(log.lines[first][1] == 0, "The destination was printed after an upload had started")
+
+        return run
+
+    scenario("explicit_test_root_stores_under_it_and_prints_the_destination_before_the_first_upload", chosen({}))
+    scenario("explicit_root_that_equals_the_environment_is_accepted", chosen({"HAI_CAPTURE_ROOT": test_root}))
+
+    def default_destination() -> None:
+        target, s3 = root / "r_default", ReadingFake()
+        log = LogRecorder()
+        require(command(base, target, s3, log=log) == 0, f"The default root was refused: {log.text()[:300]}")
+        destination = next(json.loads(m)["destination"] for m, _ in log.lines if m.startswith('{"destination"'))
+        require(
+            destination["key_prefix"] == "ahrq/health_system_compendium/" and destination["capture_root"].startswith("(none"),
+            f"Destination differs: {destination}",
+        )
+        require(all(k.startswith("ahrq/health_system_compendium/") for k in puts_of(s3)), "A default-root key left the prefix")
+
+    scenario("default_root_needs_no_choice_and_the_destination_names_the_bucket_and_prefix", default_destination)
+
+
+def confinement_scenarios(scenario: Any, plan: dict, data_entry: dict, root: Path, downloads: Path) -> None:
+    """A symbolic link inside the tool's own folder never lets a write land outside it."""
+
+    def escape(name: str) -> Any:
+        def run() -> None:
+            target, outside, s3 = root / f"c_{name}", root / f"c_{name}_outside", ReadingFake()
+            outside.mkdir(parents=True)
+            branch = target / "files" / data_entry["id"]
+            location = {"files": target / "files", "id": branch, "source": branch / "source", "capture": branch / "capture"}[name]
+            location.parent.mkdir(parents=True, exist_ok=True)
+            location.symlink_to(outside, target_is_directory=True)
+            execute(plan, data_entry, target, downloads, True, s3, OUTPUTS)
+
+        return run
+
+    def nothing_outside(name: str) -> Any:
+        def run() -> None:
+            outside = root / f"c_{name}_outside"
+            require(not any(outside.rglob("*")), f"Files were written outside the tool's folder: {sorted(p.name for p in outside.rglob('*'))}")
+
+        return run
+
+    for name in ("files", "id", "source", "capture"):
+        scenario(f"symlinked_{name}_folder_is_refused", escape(name), "outside the tool's own folder")
+        scenario(f"symlinked_{name}_folder_leaves_the_target_untouched", nothing_outside(name))
+
+    def symlinked_completion() -> None:
+        target, s3 = root / "c_done_link", ReadingFake()
+        execute(plan, data_entry, target, downloads, False, s3, OUTPUTS)
+        done = target / "files" / data_entry["id"] / "completed.json"
+        done.symlink_to(root / "c_done_link_elsewhere.json")
+        execute(plan, data_entry, target, downloads, True, s3, OUTPUTS)
+
+    scenario("symlinked_completion_record_is_refused", symlinked_completion, "outside the tool's own folder")
+
+
+def release_basis_scenarios(scenario: Any, plan: dict, data_entry: dict, root: Path, downloads: Path) -> None:
+    """A capture that precedes the release record is stored on an explicit, checked basis; one that follows it says so."""
+    early = "2026-11-08T20:45:00+00:00"
+
+    def retrospective() -> None:
+        target = root / "b_early"
+        with patch.object(store.download_metadata, "download_created_at", lambda path: early):
+            execute(plan, data_entry, target, downloads, False, None, OUTPUTS)
+        receipt = verify_local(target / "files" / data_entry["id"] / "capture/receipt.json")
+        basis = json.loads(receipt["lineage"]["extraction_or_query"])["release_basis"]
+        recorded = read_json(REPO_ROOT / contract.RELEASE_PATH)["recorded_at_utc"]
+        require(basis["relation"] == "capture_precedes_release_record", f"Relation differs: {basis}")
+        require(basis["capture_time_utc"] == early and basis["release_record_time_utc"] == recorded, f"Times differ: {basis}")
+        require(
+            "after the fact" in basis["authorization"] and "exact" in basis["authorization"], f"The basis does not say it authorizes after the fact: {basis}"
+        )
+        require(any("precedes the release record" in w for w in receipt["quality_profile"]["warnings"]), "The receipt warnings do not state the order")
+
+    scenario("capture_before_the_release_record_states_the_retrospective_basis_with_both_times", retrospective)
+
+    def contemporaneous() -> None:
+        target = root / "b_late"
+        with patch.object(store.download_metadata, "download_created_at", lambda path: "2026-11-19T12:00:00+00:00"):
+            execute(plan, data_entry, target, downloads, False, None, OUTPUTS)
+        receipt = verify_local(target / "files" / data_entry["id"] / "capture/receipt.json")
+        basis = json.loads(receipt["lineage"]["extraction_or_query"])["release_basis"]
+        require(basis["relation"] == "capture_follows_release_record", f"Relation differs: {basis}")
+        require(
+            not any("precedes the release record" in w for w in receipt["quality_profile"]["warnings"]), "A later capture carries the retrospective warning"
+        )
+
+    scenario("capture_after_the_release_record_says_it_follows_it", contemporaneous)
+
+    def tampered(change: Any) -> Any:
+        def run() -> None:
+            target = root / f"b_tamper_{id(change)}"
+            with patch.object(store.download_metadata, "download_created_at", lambda path: early):
+                execute(plan, data_entry, target, downloads, False, None, OUTPUTS)
+            path = target / "files" / data_entry["id"] / "capture/receipt.json"
+            receipt = read_json(path)
+            lineage = json.loads(receipt["lineage"]["extraction_or_query"])
+            change(lineage)
+            receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
+            path.chmod(0o644)
+            path.write_bytes(encoded_json(receipt))
+            verify_local(path)
+
+        return run
+
+    scenario("receipt_without_the_release_basis_is_refused", tampered(lambda lineage: lineage.pop("release_basis")), "release basis differs")
+    scenario(
+        "receipt_that_calls_an_earlier_capture_later_is_refused",
+        tampered(lambda lineage: lineage["release_basis"].update(relation="capture_follows_release_record")),
+        "release basis differs",
+    )
+    scenario(
+        "receipt_with_another_record_time_is_refused",
+        tampered(lambda lineage: lineage["release_basis"].update(release_record_time_utc="2026-11-01T00:00:00+00:00")),
+        "release basis differs",
+    )
 
 
 def main() -> None:

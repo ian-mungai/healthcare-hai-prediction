@@ -9,9 +9,12 @@ the reference-document download, with a data role for the six linkage workbooks 
 import argparse
 import json
 import logging
+import os
 import re
 import sys
-from contextlib import nullcontext
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -22,12 +25,14 @@ from scripts.acquisition.bls_api_transport import collection_lock
 from scripts.acquisition.capture import base_receipt, receipt_validator, validate_receipt
 from scripts.acquisition.collect_hud_api import runtime
 from scripts.acquisition.collect_mmd_api import artifact
-from scripts.acquisition.collection_layout import capture_root, load_routes, object_prefix
+from scripts.acquisition.collection_layout import CAPTURE_ROOT_VARIABLE, capture_root, load_routes, object_prefix
 from scripts.acquisition.dataset_layout import source_folder
 from scripts.acquisition.legacy_versions import plan_matches
-from scripts.acquisition.s3_store import AwsCli, component, encoded_json, fingerprint, upload_snapshot, write_once
+from scripts.acquisition.raw_root import RAW_ROOT, is_test_root
+from scripts.acquisition.s3_store import AwsCli, StorageError, component, encoded_json, fingerprint, upload_snapshot, verify_version, write_once
 from scripts.acquisition.single_copy import load_policy
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
+from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +44,38 @@ def planned_download(entry: dict, downloads: Path) -> bytes:
     body = contract.read_download(entry, downloads)
     require((contract.digest(body), len(body)) == (entry["sha256"], entry["bytes"]), "AHRQ download differs from the plan")
     return body
+
+
+OUTSIDE = "AHRQ local folder is outside the tool's own folder"
+
+
+def confine(root: Path, branch: Path, file_name: str) -> None:
+    """Refuse a local destination that is, or passes through, a symbolic link, or that resolves outside the owned folder, before anything is written.
+
+    Every folder and file this tool writes for one planned file is named here, so a link at any of them is caught without listing the folder.
+    """
+    base, folder = root.resolve(), source_folder(contract.SOURCE_ID)
+    capture = branch / "capture"
+    destinations = [
+        root / "files",
+        branch,
+        branch / "source",
+        branch / "source" / file_name,
+        branch / "source" / "download.json",
+        branch / "completed.json",
+        capture,
+        capture / "receipt.json",
+        capture / "raw",
+        capture / "raw" / file_name,
+        capture / "evidence",
+        capture / "evidence" / "download_proof.json",
+        capture / "s3_collections_reconciliation.json",
+        capture / "s3_collections",
+        capture / "s3_collections" / folder,
+        capture / "s3_collections" / folder / "manifest.json",
+    ]
+    for path in destinations:
+        require(not path.is_symlink() and path.resolve().is_relative_to(base), OUTSIDE)
 
 
 def stage(entry: dict, downloads: Path, branch: Path) -> Path:
@@ -109,6 +146,7 @@ def make_receipt(plan: dict, entry: dict, cached: Path, branch: Path) -> Path:
         tool_name="browser_ahrq_download",
         tool_version="1.0.0",
     )
+    basis = contract.release_basis(download["created_at_utc"])
     receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, original) for i, (name, _, role, original) in enumerate(files, 1)]
     receipt["artifacts"][0].update(media_type=entry["media_type"], hash_scope="complete_file")
     receipt["quality_profile"].update(
@@ -118,6 +156,7 @@ def make_receipt(plan: dict, entry: dict, cached: Path, branch: Path) -> Path:
             "Saved by hand in a browser; retrieval time is the file creation time; no HTTP status or headers exist for it.",
             "AHRQ publishes no terms text for these files; the evidence checked is the terms record in the receipt lineage, and no reuse license is inferred.",
             "The registry access hold was lifted for this capture by the owner's recorded release.",
+            *([contract.BASIS_WARNING] if basis["relation"] == "capture_precedes_release_record" else []),
         ],
     )
     receipt["lineage"]["extraction_or_query"] = json.dumps(
@@ -133,6 +172,7 @@ def make_receipt(plan: dict, entry: dict, cached: Path, branch: Path) -> Path:
             "code_sha256": contract.require_code(),
             "access_release_sha256": plan["access_release"]["sha256"],
             "terms_record": contract.TERMS_RECORD,
+            "release_basis": basis,
             "model_eligible": False,
         }
     )
@@ -245,11 +285,25 @@ def verify_storage(path: Path, receipt: dict, settings: dict, policy: dict) -> N
     check_object(manifests[0]["object"], manifest_path, "capture_receipt", True)
 
 
+def check_completion(plan: dict, entry: dict, branch: Path, receipt_path: Path, receipt: dict) -> dict:
+    """Read the local completion record of one file and check it against the receipt, the stored reconciliation file and the plan."""
+    done_path = branch / "completed.json"
+    require(done_path.is_file(), "AHRQ completion missing: no record that this file was stored")
+    done = read_json(done_path)
+    require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["file_id"] == entry["id"], "AHRQ completion receipt differs")
+    reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
+    require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "AHRQ completion storage evidence differs")
+    require(done["model_eligible"] is False and done["status"] == "stored" and plan_matches(plan, done["plan_sha256"]), "AHRQ completion hold differs")
+    return done
+
+
 def execute(plan: dict, entry: dict, root: Path, downloads: Path, upload: bool, client: AwsCli | None, outputs: dict, read_only: bool = False) -> dict:
     """Run the integrated capture/storage path for one file; a valid completion, or a read-only run, performs no writes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()) and entry in plan["files"], "AHRQ selected plan or file differs")
-    capture_root()  # a root outside the two allowed forms is refused before any effect
+    capture_root()  # a root outside the allowed forms is refused before any effect
     branch = root / "files" / entry["id"]
+    if not read_only:
+        confine(root, branch, entry["file_name"])
     receipt_path = branch / "capture/receipt.json"
     if not receipt_path.exists():
         contract.require_code()
@@ -270,11 +324,7 @@ def execute(plan: dict, entry: dict, root: Path, downloads: Path, upload: bool, 
     require(json.loads(receipt["lineage"]["extraction_or_query"])["file_id"] == entry["id"], "AHRQ selected file differs from receipt")
     done_path = branch / "completed.json"
     if done_path.exists():
-        done = read_json(done_path)
-        require(done["receipt_sha256"] == fingerprint(receipt_path)[0] and done["file_id"] == entry["id"], "AHRQ completion receipt differs")
-        reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
-        require(done["reconciliation_sha256"] == fingerprint(reconciliation)[0], "AHRQ completion storage evidence differs")
-        require(done["model_eligible"] is False and done["status"] == "stored" and plan_matches(plan, done["plan_sha256"]), "AHRQ completion hold differs")
+        done = check_completion(plan, entry, branch, receipt_path, receipt)
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings, selected_policy(client))
         return done
@@ -320,12 +370,141 @@ def run_all(
     return results, held
 
 
+VERIFY_OBJECT_SECONDS = 120.0
+VERIFY_TOTAL_SECONDS = 1800.0
+LOCAL_STATUS = {"stored": "local_record_of_upload"}
+LOCAL_NOTE = "These results come from local records of past uploads and are not a check of S3. Run --verify-s3 before removing any local copy."
+
+
+class ReadOnlyReader:
+    """Hand the version check a client that only reads objects, within the per-object limit and the deadline of the whole run."""
+
+    def __init__(self, client: AwsCli, deadline: float, clock: Callable[[], float]) -> None:
+        self.client, self.deadline, self.clock = client, deadline, clock
+
+    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        require(service == "s3api" and operation in READ_OPERATIONS, "AHRQ verification may only read stored objects")
+        remaining = self.deadline - self.clock()
+        require(remaining > 0, "AHRQ verification deadline reached")
+        return self.client.call_bounded(service, operation, arguments, timeout=min(VERIFY_OBJECT_SECONDS, remaining))
+
+
+def verify_object(reader: ReadOnlyReader, record: dict, sha256: str, size: int) -> None:
+    """Read one recorded version: its size is checked by a HEAD before any download, then the stored bytes are hashed and compared."""
+    require(0 < size <= contract.MAX_BYTES, "AHRQ S3 object size is outside the planned bound")
+    head = reader.call("s3api", "head-object", ["--key", record["key"], "--version-id", record["version_id"]])
+    require(head.get("VersionId") == record["version_id"], "AHRQ S3 version differs from the recorded one")
+    require(head.get("ContentLength") == size, "AHRQ S3 object size differs from the record")
+    verify_version(cast(AwsCli, reader), record["key"], record["version_id"], sha256, size)
+
+
+def key_prefix(key: str) -> str:
+    """The collection prefix of a stored key, with any capture root before it; a content-addressed key has none."""
+    return key[: key.index(contract.PUBLISHER_PREFIX) + len(contract.PUBLISHER_PREFIX)] if contract.PUBLISHER_PREFIX in key else "(content-addressed key)"
+
+
+def verify_remote_file(plan: dict, entry: dict, root: Path, client: AwsCli, reader: ReadOnlyReader) -> dict:
+    """Prove one file on S3: its local records are consistent, then every recorded object is read back at its exact version."""
+    branch = root / "files" / entry["id"]
+    receipt_path = branch / "capture/receipt.json"
+    require(receipt_path.is_file(), "AHRQ receipt missing: nothing is recorded as stored for this file")
+    receipt = verify_local(receipt_path)
+    require(json.loads(receipt["lineage"]["extraction_or_query"])["file_id"] == entry["id"], "AHRQ selected file differs from receipt")
+    check_completion(plan, entry, branch, receipt_path, receipt)
+    verify_storage(receipt_path, receipt, client.configuration, client.storage_policy)
+    reconciliation = read_json(receipt_path.parent / "s3_collections_reconciliation.json")
+    objects = [(e["storage_path"], e["object"]) for e in reconciliation["objects"]] + [("manifest.json", reconciliation["manifests"][0]["object"])]
+    for path, record in objects:
+        planned = path == f"raw/{entry['file_name']}"
+        expected = (entry["sha256"], entry["bytes"]) if planned else (record["sha256"], record["byte_count"])
+        require((record["sha256"], record["byte_count"]) == expected, "AHRQ stored record differs from the locked plan")
+        verify_object(reader, record, *expected)
+    return {
+        "file_name": entry["file_name"],
+        "vintage": entry["vintage"],
+        "status": "verified_on_s3",
+        "objects_verified": len(objects),
+        "bucket": objects[0][1]["bucket"],
+        "key_prefix": key_prefix(objects[0][1]["key"]),
+    }
+
+
+def verify_remote(plan: dict, root: Path, client: AwsCli, clock: Callable[[], float] = time.monotonic) -> tuple[list[dict], list[dict]]:
+    """Read back every planned file from S3 without writing anywhere; return the proven files and the files that are not proven, with the reason."""
+    reader, results, failed = ReadOnlyReader(client, clock() + VERIFY_TOTAL_SECONDS, clock), [], []
+    for entry in plan["files"]:
+        try:
+            results.append(verify_remote_file(plan, entry, root, client, reader))
+        except StorageError as error:
+            failed.append({"file_name": entry["file_name"], "file_id": entry["id"], "reason": f"AHRQ S3 read failed: {error.code}"})
+        except CaptureError as error:
+            failed.append({"file_name": entry["file_name"], "file_id": entry["id"], "reason": f"AHRQ S3 check failed: {error}"})
+        except (ValueError, OSError, KeyError) as error:
+            reason = str(error) if isinstance(error, ValueError) and str(error).startswith("AHRQ") else type(error).__name__
+            failed.append({"file_name": entry["file_name"], "file_id": entry["id"], "reason": reason})
+    return results, failed
+
+
+def verification_summary(total: int, results: list[dict], failed: list[dict]) -> str:
+    """Say in plain words whether every planned file is proven on S3, and whether the local copies may go."""
+    if len(results) == total and not failed:
+        return (
+            f"All {total} files are proven on S3: each recorded version was read back and matches the locked hash and size. "
+            "The local copies may now be removed."
+        )
+    names = ", ".join(sorted({f["file_name"] for f in failed}) or ["no file was checked"])
+    return f"NOT PROVEN on S3: {names}. Do not remove any local copy."
+
+
+def root_choice(requested: str | None) -> str:
+    """The capture root the command line chose. An environment root that the command line did not choose, or an unsupported form, is refused."""
+    inherited = os.environ.get(CAPTURE_ROOT_VARIABLE, "")
+    chosen = "" if requested is None else requested
+    require(
+        inherited in {"", chosen},
+        f"AHRQ capture root: {CAPTURE_ROOT_VARIABLE} is {inherited!r} but the command line does not choose it. "
+        f"Pass --capture-root {inherited} or unset the variable.",
+    )
+    require(chosen in {"", RAW_ROOT} or is_test_root(chosen), f"AHRQ capture root: {chosen!r} is not raw/ or ingestion_test/<run>/")
+    return chosen
+
+
+@contextmanager
+def chosen_root(chosen: str) -> Iterator[str]:
+    """Run with the chosen capture root in the environment the storage writer reads, and put the earlier value back afterwards."""
+    previous = os.environ.get(CAPTURE_ROOT_VARIABLE)
+    os.environ[CAPTURE_ROOT_VARIABLE] = chosen
+    try:
+        yield chosen
+    finally:
+        if previous is None:
+            os.environ.pop(CAPTURE_ROOT_VARIABLE, None)
+        else:
+            os.environ[CAPTURE_ROOT_VARIABLE] = previous
+
+
+def destination(client: AwsCli, root: str) -> dict:
+    """The full destination, printed before any storage call: the configured bucket, the key prefix and whether the single-copy policy adds content keys."""
+    return {
+        "bucket": client.configuration["data_bucket_name"],
+        "key_prefix": f"{root}{contract.PUBLISHER_PREFIX}",
+        "capture_root": root or "(none, the original layout)",
+        "single_copy_content_keys": f"{root}bronze_objects/sha256/ and {root}bronze_evidence/sha256/" if client.storage_policy["enabled"] else "off",
+    }
+
+
 def main() -> None:
-    """Validate offline and read-only by default; write a plan for review with --build-plan; opt into every write, including S3, with --execute."""
+    """Validate offline by default; --build-plan writes the plan; --execute is the only write; --verify-s3 proves the stored files by reading S3."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--downloads", type=Path, default=Path.home() / "Downloads" / "ahrq_compendium")
     parser.add_argument("--build-plan", action="store_true", help="Bind the reviewed request list to the saved files; writes the plan and its lock")
-    parser.add_argument("--execute", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--execute", action="store_true")
+    modes.add_argument("--verify-s3", action="store_true", help="Read every stored object back at its recorded version; writes and deletes nothing")
+    parser.add_argument(
+        "--capture-root",
+        help="The bucket root to use: raw/ or ingestion_test/<run>/. Omit it for the original layout; an environment root is refused unless this names it",
+    )
     parser.add_argument("--validate-receipt", type=Path)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -339,14 +518,35 @@ def main() -> None:
         write_once(contract.PLAN_PATH.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
         sys.stdout.write(json.dumps({"plan": str(contract.PLAN_PATH), "files": [f["file_name"] for f in plan["files"]]}) + "\n")
         return
-    plan = contract.load_plan()
-    client, outputs = runtime() if args.execute else (None, {})
-    results, held = run_all(plan, ROOT, args.downloads, args.execute, client, outputs, not args.execute)
+    try:
+        chosen = root_choice(args.capture_root)
+    except ValueError as error:
+        LOGGER.error(str(error))
+        sys.exit(2)
+    with chosen_root(chosen) as root:
+        plan = contract.load_plan()
+        client, outputs = runtime() if (args.execute or args.verify_s3) else (None, {})
+        if client is not None:
+            LOGGER.info(json.dumps({"destination": destination(client, root)}))
+        if args.verify_s3:
+            proven, failed = verify_remote(plan, ROOT, cast(AwsCli, client))
+            for line in proven:
+                LOGGER.info(json.dumps(line, sort_keys=True))
+            for item in failed:
+                LOGGER.error(json.dumps({"status": "not_verified_on_s3"} | item, sort_keys=True))
+            LOGGER.info(verification_summary(len(plan["files"]), proven, failed))
+            sys.exit(0 if len(proven) == len(plan["files"]) and not failed else 1)
+        results, held = run_all(plan, ROOT, args.downloads, args.execute, client, outputs, not args.execute)
     for result in results:
-        LOGGER.info(json.dumps({k: result[k] for k in ("file_name", "vintage", "status")}, sort_keys=True))
+        LOGGER.info(
+            json.dumps(
+                {"file_name": result["file_name"], "vintage": result["vintage"], "status": LOCAL_STATUS.get(result["status"], result["status"])}, sort_keys=True
+            )
+        )
     for item in held:
         LOGGER.error(json.dumps({"status": "held"} | item, sort_keys=True))
-    LOGGER.info(json.dumps({"completed": len(results), "held": [h["file_name"] for h in held]}))
+    note = {"note": LOCAL_NOTE} if any(r["status"] == "stored" for r in results) else {}
+    LOGGER.info(json.dumps({"completed": len(results), "held": [h["file_name"] for h in held]} | note))
     sys.exit(1 if held else 0)
 
 

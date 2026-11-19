@@ -10,6 +10,7 @@ decision rests on is one closed terms record that every receipt carries, and no 
 
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -58,6 +59,30 @@ USE_RESTRICTIONS = [
     "Each vintage reflects systems in its own year or the year before; read its reference date from the technical document.",
     "Preserve all source and measure holds; no model approval.",
 ]
+
+
+# The owner saved the 13 files at about 12:45 PM PST on Nov 8 2026 (20:45 UTC). The release record that lifts the AHRQ hold was written at 23:59 UTC the
+# same day. Unlike reference_download_contract.require_release, this contract does not refuse a capture that precedes its release record: the record
+# names these exact files (origin URL, SHA-256 and size in the locked plan) and authorizes storing them after the fact. The receipt states that basis
+# with both times (release_basis), replay checks it, and the record is never backdated.
+BASIS_BEFORE = (
+    "The release record names these exact files, each bound by origin URL, SHA-256 and size in the locked plan, and authorizes their storage after the fact: "
+    "the owner saved them before the record was written."
+)
+BASIS_AFTER = "The release record was written before this capture and names the exact files bound in the locked plan."
+BASIS_WARNING = "The download precedes the release record; the record authorizes storing these exact files after the fact (see release_basis in the lineage)."
+
+
+def release_basis(captured_at_utc: str) -> dict:
+    """The stated basis on which this capture is stored against the release record: which came first, both times and what the record authorizes."""
+    recorded = read_json(REPO_ROOT / RELEASE_PATH)["recorded_at_utc"]
+    before = datetime.fromisoformat(captured_at_utc) < datetime.fromisoformat(recorded)
+    return {
+        "relation": "capture_precedes_release_record" if before else "capture_follows_release_record",
+        "capture_time_utc": captured_at_utc,
+        "release_record_time_utc": recorded,
+        "authorization": BASIS_BEFORE if before else BASIS_AFTER,
+    }
 
 
 def digest(body: bytes) -> str:
@@ -183,6 +208,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(needed in SOURCE_RELEASE_COVERS.get(Path(RELEASE_PATH).name, frozenset()), "AHRQ release binding differs: the record does not cover this file")
     require(lineage.get("terms_record") == TERMS_RECORD, "AHRQ terms record differs")
     acq = receipt["acquisition"]
+    require(lineage.get("release_basis") == release_basis(acq["retrieved_at_utc"]), "AHRQ release basis differs")
     mode = "download" if entry["role"] == "data" else "reference_document"
     require(
         acq["requested_url"] == acq["resolved_url"] == entry["origin_url"]
