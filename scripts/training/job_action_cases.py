@@ -8,6 +8,7 @@ import copy
 import hashlib
 import importlib
 import io
+import itertools
 import json
 import os
 import re
@@ -1927,17 +1928,23 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(len(fixture.loads) == 1 and Path(fixture.loads[0][0]).name == "model.skops", f"only the candidate is read: {fixture.loads}")
 
     def champion_fetch_deadline() -> None:
-        """A fetch of any of the champion's four files that reaches its deadline is refused by name, as ``champion_fetch_deadline``, and the check writes and
-        tags nothing: the shared fetch (``model_code.mlflow_fetch``) raises the rule ``deadline`` and the check never waits longer."""
+        """A fetch of any of the champion's four files that reaches its deadline, or that is refused because the one worker slot of the shared fetch stays
+        taken, is refused by name, as ``champion_fetch_deadline``, and the check writes and tags nothing: the shared fetch (``model_code.mlflow_fetch``) raises
+        the rule ``deadline`` or ``busy`` and the check never waits longer."""
 
-        def late(run_id: str, path: str, local_path: str, limit: int) -> str:
-            raise model_code.DataRuleError("deadline", f"the fetch of {path} did not finish within its deadline")
+        def late(rule: str) -> Callable[[str, str, str, int], str]:
+            def fetch(run_id: str, path: str, local_path: str, limit: int) -> str:
+                raise model_code.DataRuleError(rule, f"the fetch of {path} did not finish within its deadline")
 
-        for path in ("bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json", "model/model.skops"):
-            fixture = promoted(folder / f"fetch_deadline_{Path(path).stem}", Predictor(LABEL, constant=3.0))
-            fixture.fetch_faults[path] = late
+            return fetch
+
+        for rule, path in itertools.product(
+            ("deadline", "busy"), ("bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json", "model/model.skops")
+        ):
+            fixture = promoted(folder / f"fetch_{rule}_{Path(path).stem}", Predictor(LABEL, constant=3.0))
+            fixture.fetch_faults[path] = late(rule)
             code, _, error = run_promotion(fixture)
-            require(code == job.EXIT_FAILED and failure_of(error) == "champion_fetch_deadline", f"{path}: {code} {error}")
+            require(code == job.EXIT_FAILED and failure_of(error) == "champion_fetch_deadline", f"{rule} {path}: {code} {error}")
             require(fixture.champion_loads == [] and listing(fixture.out) == [], f"{path}: the champion was loaded or output was written")
             require("promotion_verdict" not in fixture.tracking.models[name]["versions"][1]["tags"], f"{path}: the version got a verdict")
 

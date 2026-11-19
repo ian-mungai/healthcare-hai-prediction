@@ -28,7 +28,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from scripts.features import feast_aws_cases, online_cases
@@ -2897,6 +2897,42 @@ def case_startup_failed_load(c: Checker) -> None:
         c.check("the late load makes the service live and ready", not worker.is_alive() and s.api.live().status == 200 and s.api.health().status == 200)
 
 
+def case_startup_ceiling_and_fetch_deadlines_compose(c: Checker) -> None:
+    """The service's 1800 second first-load ceiling and the loader's own fetch deadlines (420 seconds of network for one load) are two limits that end
+    different things: the ceiling fails the liveness route of a service that was never ready (``load_timeout``, so the container is replaced), and each wait of
+    a load ends at its deadline whatever the ceiling says, so a pass never hangs. Two types whose version lookups never answer: the first lookup is cut off at
+    30 seconds and its worker stays inside MLflow, the second is refused by name as busy without a worker of its own, the pass returns on its own, the service
+    is not ready, liveness reads ``load_timeout`` while the pass is past the ceiling and ``load_failed`` after it, one worker at most is alive, and once the
+    stalled call returns the next pass loads both types and the service is ready."""
+    with loader_cases.world() as w, loader_cases.test_clock(w), contextlib.ExitStack() as stack:
+        loader = loader_cases.mlflow_loader.MlflowLoader(root=w.root)
+        s = stack.enter_context(startup_world(("HAI_1", "HAI_2"), cast(Any, loader), canary=False, defer_first_load=True, first_load_seconds=1800.0))
+        gate = threading.Event()
+        w.registry.lookup_gate = gate
+        first_pass = in_thread(s.api.refresh, "compose_first_pass")
+        c.check("the first lookup starts and stalls", wait_until(lambda: w.registry.lookups >= 1))
+        s.clock.now += 1801.0
+        c.check(
+            "a pass past the ceiling fails the liveness route as load_timeout", s.api.live().status == 503 and s.api.live().body == {"status": "load_timeout"}
+        )
+        c.check("the pass returns by itself: every wait ended at its own deadline", wait_until(lambda: not first_pass.is_alive(), START_DEADLINE))
+        c.check("the service is not ready and no type loaded", not s.api.ready() and s.api.health().status == 503)
+        c.check("after the pass the liveness route says load_failed, not a hang", s.api.live().status == 503 and s.api.live().body == {"status": "load_failed"})
+        c.check(
+            f"one worker at most is alive and only one lookup was made ({len(loader_cases.fetch_workers())}, {w.registry.lookups})",
+            len(loader_cases.fetch_workers()) <= 1 and w.registry.lookups == 1,
+        )
+        gate.set()
+        for worker in loader_cases.fetch_workers():
+            worker.join(START_DEADLINE)
+        c.check("the stalled call returned: no worker remains and the slot is free", loader_cases.fetch_workers() == [] and loader_cases.slot_free())
+        w.registry.lookup_gate = None
+        s.api.refresh()
+        c.check(
+            "the next pass loads both types and the service is ready and live", s.api.ready() and s.api.health().status == 200 and s.api.live().status == 200
+        )
+
+
 def case_startup_lifecycle(c: Checker) -> None:
     """The starting state lasts until the first full load succeeded, not until the first manifest pass ended. A deployment that appears after an empty pass is
     loaded under the same deadline, and a prediction during any load before the first readiness is refused at once, for the type that is loaded as well."""
@@ -3573,6 +3609,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "previous_record_format": (case_previous_record_format, "deploy compatibility"),
     "liveness_without_a_deployment": (case_liveness_without_a_deployment, "api monitoring"),
     "startup_binds_before_the_load": (case_startup_binds_before_the_load, "api startup"),
+    "startup_ceiling_and_fetch_deadlines_compose": (case_startup_ceiling_and_fetch_deadlines_compose, "api startup mlflow loader"),
     "startup_failed_load": (case_startup_failed_load, "api startup"),
     "main_binds_before_the_load": (case_main_binds_before_the_load, "api startup"),
     "startup_lifecycle": (case_startup_lifecycle, "api startup"),

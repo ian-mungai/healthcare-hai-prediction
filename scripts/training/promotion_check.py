@@ -100,7 +100,8 @@ CHAMPION_FILES = {
 
 def champion_file(version: Any, path: str, folder: str) -> str:
     """Fetch one file of the champion's run to its fixed name in ``folder`` through the bounded fetch, and require one regular file. A failure is a named
-    refusal that says which step failed and never holds the text of an error (a deadline says so: ``champion_fetch_deadline``)."""
+    refusal that says which step failed and never holds the text of an error (a deadline, or the one worker slot of the shared fetch staying taken by an
+    earlier cancelled call, is ``champion_fetch_deadline``)."""
     label, unreadable, oversize, _ = CHAMPION_FILES[path]
     cap = model_code.MODEL_CAP if path == model_code.MODEL_FILE else model_code.JSON_CAP
     try:
@@ -108,7 +109,7 @@ def champion_file(version: Any, path: str, folder: str) -> str:
     except JobFailure:
         raise
     except model_code.DataRuleError as error:
-        if error.rule == "deadline":
+        if error.rule in ("deadline", "busy"):
             raise JobFailure("champion_fetch_deadline", f"the champion's {label} was not fetched in time: {error}") from None
         if error.rule == "too_large":
             raise JobFailure(oversize, f"the champion's {label} is over its byte cap") from None

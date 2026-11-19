@@ -646,9 +646,9 @@ MAX_NODES = 1024
 class DataRuleError(ValueError):
     """A bundle file or its fetch breaks a rule. ``rule`` names it: ``unreadable``, ``too_large`` (a file over its byte cap), ``not_a_file`` (a folder, a link
     or another file where the fetch must leave one regular file), ``not_served`` (the run's artifacts are not on the tracking server), ``deadline`` (a fetch
-    or a lookup did not finish in its time), ``not_json``, ``feature_list``, ``provenance``, ``self_check_not_object``, ``self_check_keys``,
-    ``self_check_references``, ``self_check_row_count``, ``self_check_row_width``, ``self_check_cells`` or ``self_check_predictions``. The message names the
-    place and the rule, never a value of the file."""
+    or a lookup did not finish in its time), ``busy`` (the one worker slot stayed taken by an abandoned call for the whole deadline), ``not_json``,
+    ``feature_list``, ``provenance``, ``self_check_not_object``, ``self_check_keys``, ``self_check_references``, ``self_check_row_count``,
+    ``self_check_row_width``, ``self_check_cells`` or ``self_check_predictions``. The message names the place and the rule, never a value of the file."""
 
     def __init__(self, rule: str, detail: str) -> None:
         super().__init__(detail)
@@ -826,6 +826,13 @@ LOOKUP_SECONDS = 30.0
 # and the refusal then comes at the deadline plus this wait at most.
 POLL_SECONDS = 0.25
 GRACE_SECONDS = 2.0
+# The bound on abandoned work. A call that cannot be interrupted (a lookup, a listing, a request that waits for its headers or reads a metadata body inside
+# MLflow) keeps its worker thread, one socket and one response buffer after its deadline. At most ``MAX_WORKERS`` = 1 such worker can be alive at once in one
+# process, for the model API and for the promotion job alike: every wait of this module goes through ``run_within``, which takes the one ``WORKER_SLOT`` before
+# it starts a worker and gives it back only when that worker has really ended, so a later wait finds the slot taken and is refused by name (``busy``) at its own
+# deadline without starting a thread or sending a request. A body that is being streamed leaves nothing: its socket is shut down and its worker ends at once.
+MAX_WORKERS = 1
+WORKER_SLOT = threading.Lock()
 Fetch = Callable[[str, str, str, int], str]
 
 
@@ -881,20 +888,35 @@ def run_within[Outcome](seconds: float, work: Callable[[Cancel], Outcome], what:
     The caller looks at the clock while the worker runs, so a body that is read a byte at a time, a listing that does not answer and a request that is retried
     all end at the deadline. At expiry the caller cancels the worker (its open response is closed) and waits ``GRACE_SECONDS`` for it to end. A worker that
     is still inside a call that cannot be interrupted (a lookup that does not answer) is left to end when that call returns: it finds the token stopped,
-    creates no file and starts no request.
+    creates no file and starts no request. The one ``WORKER_SLOT`` is taken before the worker starts, inside the same deadline (the time spent waiting for it
+    counts against ``seconds``, so it adds no budget), and given back by the worker itself when it ends, even after the caller gave up: a call that finds the
+    slot taken for the whole deadline raises ``DataRuleError`` (``busy``) and starts nothing.
     """
     cancel = Cancel()
     outcome: list[tuple[bool, Any]] = []
+    expires = monotonic() + seconds
+    while True:
+        left = expires - monotonic()
+        if WORKER_SLOT.acquire(timeout=max(min(left, POLL_SECONDS), 0.0)):
+            break
+        if left <= 0:
+            raise DataRuleError("busy", f"{what} was refused as busy: an earlier call that was cancelled at its deadline still holds the one worker")
 
     def target() -> None:
         try:
-            outcome.append((True, work(cancel)))
-        except BaseException as error:  # the caller re-raises it
-            outcome.append((False, error))
+            try:
+                outcome.append((True, work(cancel)))
+            except BaseException as error:  # the caller re-raises it
+                outcome.append((False, error))
+        finally:
+            WORKER_SLOT.release()
 
     worker = threading.Thread(target=target, name=f"model-fetch {what}", daemon=True)
-    worker.start()
-    expires = monotonic() + seconds
+    try:
+        worker.start()
+    except BaseException:
+        WORKER_SLOT.release()
+        raise
     while worker.is_alive():
         left = expires - monotonic()
         if left <= 0:

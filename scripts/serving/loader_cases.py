@@ -315,12 +315,14 @@ class Registry:
         self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
         self.sklearn = SimpleNamespace(load_model=self.load_model)
         self.lookup_gate: threading.Event | None = None
+        self.lookups = 0
         self.MlflowClient = lambda: SimpleNamespace(
             get_model_version=self.model_version,
             get_run=lambda run_id: SimpleNamespace(info=SimpleNamespace(artifact_uri=ARTIFACT_URI)),
         )
 
     def model_version(self, name: str, version: str) -> Any:
+        self.lookups += 1
         if self.lookup_gate is not None:
             self.server.wait(self.lookup_gate)
         return SimpleNamespace(run_id=RUN, tags=dict(self.tags), source=self.source)
@@ -901,7 +903,17 @@ def test_clock(w: World) -> Iterator[Clock]:
         mock.patch.object(model_code, "POLL_SECONDS", 0.005, create=True),
         mock.patch.object(model_code, "GRACE_SECONDS", 0.2, create=True),
     ):
-        yield clock
+        try:
+            yield clock
+        finally:
+            for worker in fetch_workers():
+                worker.join(5)
+
+
+def slot_free() -> bool:
+    """Whether the one worker slot of the shared fetch is free (a module without the slot, as before the repair, has no bound to hold)."""
+    slot = getattr(model_code, "WORKER_SLOT", None)
+    return slot is None or not slot.locked()
 
 
 def case_loader_default_fetch_is_cut_off_at_its_deadline(c: Checker) -> None:
@@ -932,7 +944,7 @@ def case_loader_default_fetch_is_cut_off_at_its_deadline(c: Checker) -> None:
             model, error = w.attempt(use_default_fetch=True)
             cut_off(f"{path}: a drip", path, seconds, w, clock, error, model)
             c.check(f"{path}: the body was stopped after {drip.pulled} bytes, and its connection closed", drip.closed and drip.pulled < 1000)
-            c.check(f"{path}: no worker thread remains", fetch_workers() == [])
+            c.check(f"{path}: no worker thread remains and the worker slot is free", fetch_workers() == [] and slot_free())
     for path, seconds in ((FEATURE_LIST, json_seconds), (MODEL, model_seconds)):
         with world() as w, test_clock(w) as clock:
             blocked = Drip(clock, stops_after=5)
@@ -1003,6 +1015,89 @@ def case_loader_default_fetch_is_cut_off_at_its_deadline(c: Checker) -> None:
             f"a model of exactly 64 MiB at 1 MiB per second of the test clock loads ({error!r}, {clock.now} seconds)",
             model is not None and clock.now < model_seconds,
         )
+
+
+def stall_lookup(w: World, gate: threading.Event) -> None:
+    w.registry.lookup_gate = gate
+
+
+def stall_listing(w: World, gate: threading.Event) -> None:
+    w.server.list_gates[FEATURE_LIST] = gate
+
+
+def stall_request(w: World, gate: threading.Event) -> None:
+    w.server.get_gates[FEATURE_LIST] = gate
+
+
+def case_loader_deadline_refusals_never_hold_more_than_one_worker(c: Checker) -> None:
+    """Calls that cannot be interrupted (a lookup, a listing and a request with its retries that never answer) are abandoned at their deadline, and the worker
+    stays inside MLflow until the call returns. One process-wide slot, taken before a worker starts and given back only when that worker ends, bounds the
+    abandoned work: four refusals in a row leave one live worker, never 1, 2, 3 and 4 (the count before the slot), the later attempts start no worker, send no
+    request and are refused by name (``busy``) at their own deadline, and when the stalled call finally returns the count is zero, the slot is free and a normal
+    load works. The body phase leaves nothing running: its worker ends when the connection is shut down."""
+    bound = getattr(model_code, "MAX_WORKERS", 1)
+    c.check("the bound is one abandoned worker", bound == 1)
+    stalls: tuple[tuple[str, Callable[[World, threading.Event], None]], ...] = (
+        ("a lookup that never answers", stall_lookup),
+        ("a listing that never answers", stall_listing),
+        ("a request that is retried and never answers", stall_request),
+    )
+    for label, stall in stalls:
+        with world() as w, test_clock(w) as clock:
+            gate = threading.Event()
+            stall(w, gate)
+            alive, errors, started = [], [], []
+            for attempt in range(4):
+                begun = clock.now
+                model, error = w.attempt(use_default_fetch=True)
+                errors.append(error)
+                alive.append(len(fetch_workers()))
+                started.append(clock.now - begun)
+                c.check(
+                    f"{label}, attempt {attempt + 1}: refused as ArtifactRefused ({type(error).__name__ if error else 'a loaded model'})",
+                    model is None and type(error).__name__ == "ArtifactRefused",
+                )
+            c.check(f"{label}: the live workers after each of four refusals are {alive}, never more than {bound}", max(alive) <= bound)
+            c.check(f"{label}: the first attempt names the deadline", "deadline" in str(errors[0]))
+            c.check(
+                f"{label}: each later attempt is refused by name as busy, started no worker ({[str(e)[:60] for e in errors[1:]]})",
+                all("busy" in str(e) for e in errors[1:]),
+            )
+            c.check(
+                f"{label}: every refusal came at its own deadline on the test clock, none waited for the stall ({[round(s) for s in started]})",
+                all(30 <= s < 130 for s in started),
+            )
+            c.check(
+                f"{label}: the stalled call is the only one made ({w.registry.lookups} lookups, {w.server.reads} requests)",
+                w.registry.lookups <= 1 and len(w.server.reads) <= 1,
+            )
+            c.check(f"{label}: the slot is held while the stalled call runs", not slot_free())
+            gate.set()
+            for worker in fetch_workers():
+                worker.join(5)
+            c.check(f"{label}: when the stalled call returns no worker remains and the slot is free", fetch_workers() == [] and slot_free())
+            c.check(f"{label}: nothing was written, requested or left on disk", w.leftover() == [] and w.server.pulled == {})
+            w.registry.lookup_gate = None
+            w.server.list_gates.clear()
+            w.server.get_gates.clear()
+            model, error = w.attempt(use_default_fetch=True)
+            c.check(f"{label}: a normal load after the released slot works ({error!r})", model is not None and slot_free() and fetch_workers() == [])
+    with world() as w, test_clock(w) as clock:
+        gate = threading.Event()
+        w.registry.lookup_gate = gate
+        w.attempt(use_default_fetch=True)
+        begun = clock.now
+        try:
+            model_code.mlflow_fetch(RUN, FEATURE_LIST, str(w.tmp / "waiting"), MIB, seconds=5.0)
+            waited: Exception | None = None
+        except Exception as caught:
+            waited = caught
+        c.check(
+            f"a fetch that waits for the slot is refused at its own 5 second deadline as busy ({waited!r})",
+            getattr(waited, "rule", "") == "busy" and 5.0 <= clock.now - begun < 105.0,
+        )
+        c.check("it started no worker and wrote nothing", len(fetch_workers()) <= 1 and not os.path.exists(w.tmp / "waiting") and w.server.reads == [])
+        gate.set()
 
 
 def case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file(c: Checker) -> None:
@@ -1192,6 +1287,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     ),
     "loader_default_fetch_writes_four_fixed_names_into_one_folder": (case_loader_default_fetch_writes_four_fixed_names_into_one_folder, "mlflow loader"),
     "loader_default_fetch_is_cut_off_at_its_deadline": (case_loader_default_fetch_is_cut_off_at_its_deadline, "mlflow loader"),
+    "loader_deadline_refusals_never_hold_more_than_one_worker": (case_loader_deadline_refusals_never_hold_more_than_one_worker, "mlflow loader"),
     "loader_refuses_a_fetch_that_returns_anything_but_the_expected_file": (
         case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file,
         "mlflow loader",
