@@ -141,6 +141,34 @@ def case_image_provided_files_are_in_the_dockerfile() -> list[str]:
     return [f"{name} is not copied by {DOCKERFILE}" for name in read_record()["image_provided"] if name not in copied]
 
 
+def dockerfile_copies() -> set[str]:
+    """The repository paths that the model API Dockerfile copies into /app, from its COPY lines (the destination folder plus each source's file name)."""
+    copied: set[str] = set()
+    for line in (ROOT / DOCKERFILE).read_text().splitlines():
+        if not line.startswith("COPY"):
+            continue
+        tokens = [token for token in line.split()[1:] if not token.startswith("--")]
+        *sources, destination = tokens
+        if not destination.startswith("/app/"):
+            continue
+        folder = destination.removeprefix("/app/")
+        copied |= {folder + Path(source).name if folder.endswith("/") else folder for source in sources}
+    return copied
+
+
+def case_dockerfile_copies_exactly_the_files_of_the_record() -> list[str]:
+    """The image holds the model code: the files under scripts/training that the Dockerfile copies are exactly the record's files, and the verifier, the
+    record and the model contract come with them."""
+    copied = dockerfile_copies()
+    wanted = {item["path"] for item in read_record()["files"]}
+    held = {name for name in copied if name.startswith("scripts/training/")}
+    problems = [f"{name} is in the record and {DOCKERFILE} does not copy it" for name in sorted(wanted - held)]
+    problems += [f"{DOCKERFILE} copies {name}, which the record does not list" for name in sorted(held - wanted)]
+    problems += [f"{name} is not copied by {DOCKERFILE}" for name in (model_code.RECORD, "scripts/model_code.py", CONTRACT) if name not in copied]
+    problems += [f"{DOCKERFILE} copies {name}, which is not a file of the repository" for name in sorted(copied) if not (ROOT / name).is_file()]
+    return problems
+
+
 def case_image_provided_module_needs_only_the_standard_library() -> list[str]:
     """The image-provided module imports no repository module, so nothing hides behind it."""
     problems = []
@@ -1074,6 +1102,7 @@ ORDER = [
     case_closure_equals_import_closure,
     case_closure_roots_come_from_the_contract,
     case_image_provided_files_are_in_the_dockerfile,
+    case_dockerfile_copies_exactly_the_files_of_the_record,
     case_image_provided_module_needs_only_the_standard_library,
     case_planted_import_changes_the_closure,
     case_imports_that_reach_a_file_join_the_closure,

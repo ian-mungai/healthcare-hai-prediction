@@ -278,8 +278,16 @@
       "repository_group": "serving",
       "runs_as": "ECS service on the host when model_api_enabled is true",
       "entry_check": {
-        "modules": ["scripts.serving.main"],
-        "files": ["data_contracts/serving/predictions.json", "feature_store/feature_store_aws.yaml"]
+        "modules": [
+          "scripts.serving.main",
+          "scripts.model_code",
+          "scripts.training.models.common",
+          "scripts.training.models.elastic",
+          "scripts.training.models.linear",
+          "scripts.training.models.preprocessing",
+          "scripts.training.models.trees"
+        ],
+        "files": ["data_contracts/serving/predictions.json", "data_contracts/training/model_code.json", "feature_store/feature_store_aws.yaml"]
       }
     },
     "streamlit": {

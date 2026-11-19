@@ -35,7 +35,7 @@ from scripts.features import feast_aws_cases, online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker, settle_threads, stop_worker
 from scripts.infrastructure import push_images, secret_store
-from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, mlflow_loader, predictions, replay, service
+from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, loader_cases, manifests, metrics, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -3355,98 +3355,6 @@ def case_main_binds_before_the_load(c: Checker) -> None:
         c.check("a server that never starts loads no model", s.loader.attempts == [] and not s.loader.started.is_set())
 
 
-PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
-
-
-class ProbingMlflow:
-    """The MLflow 3.17.2 client over an artifact server that stores artifacts in S3.
-
-    A client with no ``MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD`` setting asks ``/server-info``, which advertises presigned downloads for an S3 destination, and
-    reads each file straight from S3. The ECS task reaches the tracking server only, so that read fails and MLflow hides the cause behind one generic
-    ``MlflowException``. With the setting ``false`` the client streams each file through the tracking server. Both artifact entry points of the loader (the
-    run file download and the ``models:/`` model download) check the setting when they are called.
-    """
-
-    def __init__(self, listing: Path) -> None:
-        self.listing = listing
-        self.direct_reads = 0
-        self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
-        self.sklearn = SimpleNamespace(load_model=self.load_model)
-        self.tags = {"feature_schema_sha256": "hash1"}
-        self.MlflowClient = lambda: SimpleNamespace(get_model_version=lambda name, version: SimpleNamespace(run_id="run1", tags=dict(self.tags)))
-
-    def proxied(self, what: str) -> bool:
-        if os.environ.get(PROXY_SWITCH, "").lower() == "false":
-            return True
-        self.direct_reads += 1
-        raise RuntimeError(f"MlflowException: Failed to download artifacts from path {what!r}, please ensure that the path is correct.")
-
-    def download_artifacts(self, run_id: str, artifact_path: str) -> str:
-        self.proxied(artifact_path)
-        return str(self.listing)
-
-    def load_model(self, uri: str) -> Any:
-        self.proxied(uri)
-        return SimpleNamespace(predict=lambda frame: [0.25])
-
-
-def case_loader_reads_artifacts_through_the_tracking_server(c: Checker) -> None:
-    """The loader keeps every artifact download on the tracking server: the presigned path that an S3 artifact store advertises is unreachable from the task."""
-    with tempfile.TemporaryDirectory() as folder:
-        listing = Path(folder) / "feature_list.json"
-        listing.write_text(json.dumps({"references": ["a:1"], "columns": ["a"]}))
-        library = ProbingMlflow(listing)
-        frames = SimpleNamespace(DataFrame=lambda rows: rows)
-        environment = {key: value for key, value in os.environ.items() if key != PROXY_SWITCH}
-        with mock.patch.dict(sys.modules, {"mlflow": library, "pandas": frames}), mock.patch.dict(os.environ, environment, clear=True):
-            try:
-                model = mlflow_loader.MlflowLoader().load(HAI, PRODUCTION)
-                failure = ""
-            except RuntimeError as error:
-                model, failure = None, str(error)
-            c.check("the loader loads the version without a direct read of the artifact store", model is not None and library.direct_reads == 0 and not failure)
-            c.check(
-                "the loaded version carries its feature references and schema hash",
-                model is not None and model.references == ("a:1",) and model.schema_hash == "hash1",
-            )
-            c.check("the loaded model predicts", model is not None and model.predict({"a:1": 1.0}) == 0.25)
-            c.check("the setting is false for every later download in the process", os.environ.get(PROXY_SWITCH) == "false")
-
-
-def case_loader_reads_the_feature_set(c: Checker) -> None:
-    """The loader reads the model's feature set and the set's schema hash from the version tags; a set model with no set hash does not load."""
-    with tempfile.TemporaryDirectory() as folder:
-        listing = Path(folder) / "feature_list.json"
-        listing.write_text(json.dumps({"references": ["a:1"], "columns": ["a"]}))
-        library = ProbingMlflow(listing)
-        frames = SimpleNamespace(DataFrame=lambda rows: rows)
-
-        def loaded(tags: dict[str, str]) -> service.LoadedModel | None:
-            library.tags = tags
-            with mock.patch.dict(sys.modules, {"mlflow": library, "pandas": frames}):
-                try:
-                    return mlflow_loader.MlflowLoader().load(HAI, PRODUCTION)
-                except ValueError:
-                    return None
-
-        both = {"feature_schema_sha256": "whole", "feature_set": "m2", "feature_set_schema_sha256": "setdigest"}
-        model = loaded(both)
-        c.check("a version tagged with a set loads for that set", model is not None and model.feature_set == "m2")
-        c.check("its schema hash is the set's, which the set's marker holds", model is not None and model.schema_hash == "setdigest")
-        c.check("its references stay the ones of its feature list", model is not None and model.references == ("a:1",))
-        old = loaded({"feature_schema_sha256": "whole"})
-        c.check(
-            "a version with no set tag loads for the single path with the whole schema hash",
-            old is not None and (old.feature_set, old.schema_hash) == ("", "whole"),
-        )
-        c.check("a version tagged with a set but no set hash does not load", loaded({"feature_schema_sha256": "whole", "feature_set": "m2"}) is None)
-        c.check(
-            "a version tagged with an empty set loads for the single path",
-            (lambda m: m is not None and m.feature_set == "")(loaded({**both, "feature_set": ""})),
-        )
-        c.check("a version with a set tag that is not text of a set name does not load", loaded({**both, "feature_set": "M 2/x"}) is None)
-
-
 def case_marker_metrics(c: Checker) -> None:
     """The model API reports what its marker reads show (the state of each feature set's online store, when it was materialized, how many entities it holds,
     when the API last read it) and counts each features refusal by one closed reason. A set name and a state are the only labels besides the reason."""
@@ -3674,10 +3582,9 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "startup_readiness_by_type": (case_startup_readiness_by_type, "api startup"),
     "startup_ready_log_line": (case_startup_ready_log_line, "api startup"),
     "startup_build_and_readiness": (case_startup_build_and_readiness, "api startup"),
-    "loader_reads_artifacts_through_the_tracking_server": (case_loader_reads_artifacts_through_the_tracking_server, "api mlflow"),
-    "loader_reads_the_feature_set": (case_loader_reads_the_feature_set, "api mlflow feast"),
     "set_model_served": (case_set_model_served, "feast api"),
     "metrics": (case_metrics, "monitoring"),
     "marker_metrics": (case_marker_metrics, "monitoring feast"),
     "dag_contract": (case_dag, "dag"),
+    **loader_cases.CASES,
 }

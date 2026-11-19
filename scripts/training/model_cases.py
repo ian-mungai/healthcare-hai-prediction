@@ -127,27 +127,43 @@ def written(folder: Path, name: str, document: Any) -> Path:
 
 
 def serve_with_the_real_loader(document: Any, folder: Path, tags: dict[str, str] | None = None) -> tuple[Any, list[list[str]]]:
-    """Load a version through the real serving loader.
+    """Load a version through the real serving loader, which reads data only: the feature list, the provenance, the saved prediction check and the model file.
 
-    Only the MLflow transport is a stand-in (registry record, artifact download, model load), and so is the pandas frame, a list of the row dicts, because
-    the training environment has no pandas. Returns the loaded model and the column names of every frame the pipeline scored.
+    Only the transports are stand-ins: the MLflow registry record, the download call (the loader's ``fetch`` seam, writing each file into the folder the
+    loader gives), skops (it returns a model whose ``predict`` scores 0.5) and the pandas frame, a list of the row dicts, because the training environment has
+    no pandas. The provenance holds the closure digest of the image's own record and one version for each of the four libraries, and the saved check holds one
+    row of zeros that scores 0.5. Returns the loaded model and the column names of every frame the pipeline scored after the load.
     """
     mlflow_loader = importlib.import_module("scripts.serving.mlflow_loader")
-    listing = written(folder, "served_feature_list.json", document)
     scored: list[list[str]] = []
 
     def predict(frame: Any) -> list[float]:
         scored.append(list(frame[0]))
         return [0.5]
 
-    version = SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1", **(tags or {})})
-    library = SimpleNamespace(
-        MlflowClient=lambda: SimpleNamespace(get_model_version=lambda name, number: version),
-        artifacts=SimpleNamespace(download_artifacts=lambda run_id, artifact_path: str(listing)),
-        sklearn=SimpleNamespace(load_model=lambda uri: SimpleNamespace(predict=predict)),
-    )
-    with patch.dict(sys.modules, {"mlflow": library, "pandas": SimpleNamespace(DataFrame=list)}), patch.dict(os.environ):
-        return mlflow_loader.MlflowLoader().load("HAI_1", "1"), scored
+    closure = mlflow_loader.MlflowLoader().closure
+    references = document["references"]
+    files = {
+        "bundle/feature_list.json": document,
+        "bundle/provenance.json": {"model_code_closure_sha256": closure, "resolved_versions": {name: "1" for name in mlflow_loader.LIBRARIES}},
+        "bundle/self_check.json": {"schema": 1, "slot": "m1_ols", "references": references, "rows": [[0.0] * len(references)], "predictions": [0.5]},
+        "model/model.skops": "stand-in",
+    }
+
+    def fetch(run_id: str, path: str, destination: str) -> str:
+        target = Path(destination) / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(files[path]) + "\n")
+        return str(target)
+
+    version = SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1", **(tags or {})}, source="runs:/run1/model")
+    library = SimpleNamespace(MlflowClient=lambda: SimpleNamespace(get_model_version=lambda name, number: version))
+    skops = SimpleNamespace(load=lambda path, trusted=None: SimpleNamespace(predict=predict))
+    modules = {"mlflow": library, "pandas": SimpleNamespace(DataFrame=list), "skops": skops, "skops.io": skops}
+    with patch.dict(sys.modules, modules), patch.dict(os.environ), patch.object(mlflow_loader, "installed_version", lambda name: "1"):
+        model = mlflow_loader.MlflowLoader(fetch=fetch).load("HAI_1", "1")
+        scored.clear()
+        return model, scored
 
 
 def score_with_the_real_promotion_reader(
