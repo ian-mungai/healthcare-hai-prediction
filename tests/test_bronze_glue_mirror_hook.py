@@ -54,6 +54,7 @@ def enabled(**changes: Any) -> glue_mirror.MirrorConfig:
 def hook(
     namespace: str = "bronze", config: glue_mirror.MirrorConfig | None = None, glue: Any = None, source: Any = None, run_id: str = RUN, **keywords: Any
 ) -> dict[str, Any]:
+    keywords.setdefault("read_loader", lambda *_: {})
     return bronze_mirror.mirror_after_load(
         None,
         namespace,
@@ -142,7 +143,7 @@ def test_a_failure_never_raises_and_is_reported_with_its_cause(label: str, glue:
 
 def test_a_missing_glue_client_setting_is_a_reported_failure_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AWS_REGION", raising=False)
-    report = bronze_mirror.mirror_after_load(None, "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=None, config=enabled())
+    report = bronze_mirror.mirror_after_load(None, "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=None, config=enabled(), read_loader=lambda *_: {})
     check(report["status"] == "failed" and "AWS_REGION" in report["reason"], f"{report}")
 
 
@@ -249,3 +250,101 @@ def test_the_qualification_namespace_reaches_the_hook_as_its_own_namespace(tmp_p
 def test_the_run_id_must_be_a_bronze_run_id(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         run_main(tmp_path, extra=["--run-id", "silver_0a1b2c3d"])
+
+
+# Review round 2: the side tables that a load commits beside the mapped tables.
+
+SIDE = ["column_map", "file_metadata", "file_preambles", "stored_copies"]
+SIDE_SNAPSHOTS = {"column_map": 71, "file_metadata": 72, "file_preambles": 73, "stored_copies": 74}
+
+
+class Reader:
+    """The read of the loader tables' committed snapshots: only the side tables that exist in the catalog come back."""
+
+    def __init__(self, present: dict[str, int]) -> None:
+        self.present, self.asked = present, []
+
+    def __call__(self, _spark: Any, _namespace: str, tables: Any) -> dict[str, int]:
+        self.asked.append(list(tables))
+        return {name: self.present[name] for name in tables if name in self.present}
+
+
+def reader(present: dict[str, int]) -> Reader:
+    return Reader(present)
+
+
+def test_the_hook_and_the_by_hand_register_name_the_same_bronze_tables() -> None:
+    listed = {str(item["table"]) for item in json.loads(glue_mirror.BRONZE_TABLES.read_text())["tables"]}
+    by_hand = set(glue_mirror.layer_tables("bronze"))
+    from_the_hook = set(glue_mirror.bronze_table_set(sorted(listed)))
+    check(from_the_hook == by_hand, f"hook only: {sorted(from_the_hook - by_hand)}, by hand only: {sorted(by_hand - from_the_hook)}")
+    check(set(SIDE) <= from_the_hook and set(SIDE) == set(glue_mirror.bronze_loader_tables()), f"{glue_mirror.bronze_loader_tables()}")
+
+
+def test_the_side_tables_are_the_ones_the_table_map_and_silver_declare() -> None:
+    declared = set(json.loads(glue_mirror.BRONZE_TABLES.read_text())["classification"]["loader_tables"])
+    check(set(glue_mirror.bronze_loader_tables()) == declared, "the shared side table list is not the table map's loader tables")
+    check(declared <= glue_mirror.silver_bronze_sources(), "a loader table is not a source of silver, so silver would not resolve it")
+
+
+def test_a_load_into_an_empty_mirror_registers_the_side_tables_with_the_mapped_ones() -> None:
+    glue, read = FakeGlue(), reader(SIDE_SNAPSHOTS)
+    report = hook(glue=glue, read_loader=read)
+    check(report["status"] == "ok" and set(report["tables"]) == {*TABLES, *SIDE}, f"{report}")
+    check(set(glue.tables) == {("bronze", name) for name in [*TABLES, *SIDE]}, f"registered: {sorted(glue.tables)}")
+    for name, snapshot in SIDE_SNAPSHOTS.items():
+        held = glue.tables[("bronze", name)]["Parameters"]
+        check(held["metadata_location"] == metadata_file(name, snapshot) and held["hai_snapshot_id"] == str(snapshot), f"{name}: {held}")
+    check(read.asked == [SIDE], f"the loader tables were read as {read.asked}")
+
+
+def test_a_second_load_advances_the_side_table_pointers() -> None:
+    glue = FakeGlue()
+    hook(glue=glue, read_loader=reader(SIDE_SNAPSHOTS))
+    later = {**SIDE_SNAPSHOTS, "file_metadata": 82, "stored_copies": 84}
+    report = hook(glue=glue, read_loader=reader(later), snapshots={"alpha_data": 43, "beta_data": 42})
+    check(report["tables"]["file_metadata"] == "updated" and report["tables"]["stored_copies"] == "updated", f"{report}")
+    check(report["tables"]["column_map"] == "unchanged" and report["tables"]["file_preambles"] == "unchanged", f"{report}")
+    check(glue.tables[("bronze", "file_metadata")]["Parameters"]["metadata_location"] == metadata_file("file_metadata", 82), "file_metadata did not advance")
+
+
+def test_a_side_table_the_catalog_does_not_hold_yet_is_not_mirrored_and_is_no_failure() -> None:
+    glue = FakeGlue()
+    report = hook(glue=glue, read_loader=reader({"file_metadata": 72, "column_map": 71}))
+    check(report["status"] == "ok" and set(report["tables"]) == {*TABLES, "file_metadata", "column_map"}, f"{report}")
+
+
+def test_a_partial_load_mirrors_its_tables_and_the_side_tables_and_no_other_mapped_table() -> None:
+    glue = FakeGlue()
+    report = hook(glue=glue, snapshots={"alpha_data": 41}, read_loader=reader(SIDE_SNAPSHOTS))
+    check(set(report["tables"]) == {"alpha_data", *SIDE}, f"{report}")
+
+
+def test_the_side_table_reads_run_inside_the_deadline_and_a_failed_read_is_a_reported_failure() -> None:
+    def broken(_spark: Any, _namespace: str, _tables: Any) -> dict[str, int]:
+        raise RuntimeError("catalog unreachable")
+
+    glue = FakeGlue()
+    report = hook(glue=glue, read_loader=broken)
+    check(report["status"] == "failed" and "catalog unreachable" in report["reason"] and glue.writes() == [], f"{report}")
+
+
+def test_the_side_tables_are_not_read_while_the_mirror_is_off_or_in_a_test_namespace() -> None:
+    for namespace, config in (("bronze", replace(glue_mirror.load_config(), enabled=False)), ("bronze_e2e", None)):
+        read = reader(SIDE_SNAPSHOTS)
+        report = hook(namespace=namespace, config=config, read_loader=read)
+        check(report["status"] == "skipped" and read.asked == [], f"{namespace}: {report} {read.asked}")
+
+
+def test_the_default_read_takes_the_exact_snapshots_of_the_side_tables_that_exist() -> None:
+    spark = SimpleNamespace(catalog=SimpleNamespace(tableExists=lambda name: name != "bronze.file_preambles"))
+    asked: list[tuple[str, list[str]]] = []
+
+    def snapshots(_spark: Any, namespace: str, names: list[str]) -> dict[str, int]:
+        asked.append((namespace, list(names)))
+        return {name: SIDE_SNAPSHOTS[name] for name in names}
+
+    with mock.patch.object(bronze, "table_snapshots", snapshots):
+        found = bronze_mirror.loader_snapshots(spark, "bronze", SIDE)
+    check(asked == [("bronze", ["column_map", "file_metadata", "stored_copies"])], f"{asked}")
+    check(found == {"column_map": 71, "file_metadata": 72, "stored_copies": 74}, f"{found}")

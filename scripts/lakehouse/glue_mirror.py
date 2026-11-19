@@ -35,7 +35,7 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -588,11 +588,22 @@ def silver_bronze_sources(path: Path = SILVER_BRONZE_SOURCES) -> set[str]:
     return tables
 
 
+def bronze_loader_tables(path: Path = BRONZE_TABLES) -> list[str]:
+    """The side tables that every bronze load commits beside the mapped tables: ``classification.loader_tables`` of the bronze table map."""
+    return sorted(json.loads(path.read_text())["classification"]["loader_tables"])
+
+
+def bronze_table_set(tables: Iterable[str], loader_tables: Iterable[str] | None = None) -> list[str]:
+    """The bronze tables to mirror for ``tables`` that a load or the table map names: those tables and the loader side tables. The bronze load's hook
+    (``bronze_mirror``) and the by-hand ``register`` both take their set from this function, so they cannot disagree."""
+    return sorted({*tables, *(bronze_loader_tables() if loader_tables is None else loader_tables)})
+
+
 def layer_tables(layer: str) -> list[str]:
-    """The tables a layer mirrors: the tables of its publish contract, and for bronze the listed bronze tables plus the bronze sources of silver."""
+    """The tables a layer mirrors: those of its publish contract, and for bronze the listed tables, the loader side tables and the sources of silver."""
     if layer == "bronze":
         listed = {str(item["table"]) for item in json.loads(BRONZE_TABLES.read_text())["tables"]}
-        return sorted(listed | silver_bronze_sources())
+        return sorted({*bronze_table_set(listed), *silver_bronze_sources()})
     return list(layer_plan(layer).tables)
 
 

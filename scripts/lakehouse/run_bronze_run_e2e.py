@@ -31,7 +31,7 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration import raw_lineage
-from scripts.lakehouse import bronze, bronze_metadata, bronze_pin, bronze_run
+from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_pin, bronze_run
 from scripts.quality import lock_env
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -46,6 +46,7 @@ TABLES = [
 CATALOG: list[Path] = []
 DEFECTS: set[str] = set()
 LOADS: list[list[str]] = []
+CLOCK = [0]
 STORAGE: list[FakeStorage] = []
 STAGED: dict[str, bytes] = {}
 
@@ -70,6 +71,10 @@ class FakeClient:
         if arguments["Key"] not in self.puts:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no such key"}}, "GetObject")
         return {"Body": io.BytesIO(self.puts[arguments["Key"]])}
+
+    def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
+        """The owner's listing of one run's attempt records (the task role cannot list)."""
+        return {"Contents": [{"Key": key} for key in sorted(self.puts) if key.startswith(arguments["Prefix"])], "IsTruncated": False}
 
 
 class Publisher:
@@ -199,14 +204,16 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     checks = {name: {"passed": "report_failed" not in DEFECTS, "objects_match_inputs": True} for name in names}
     shown = [name for name in names if name != "beta_data"] if "report_missing_table" in DEFECTS else names
     snapshots = {name: 100 + position for position, name in enumerate(names)}
-    report = {"mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
+    CLOCK[0] += 1
+    stamp = f"20261118T23{CLOCK[0]:02d}00Z"
+    report = {"run_at_utc": stamp, "mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
     report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
     report["mirror"] = stand_in_mirror(namespace, names)
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if "no_report" not in DEFECTS:
-        (folder / f"report_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json").write_text(json.dumps(report, sort_keys=True))
+        (folder / f"report_{stamp}.json").write_text(json.dumps(report, sort_keys=True))
     sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")
 
 
@@ -328,22 +335,87 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     require(set(catalog()) == {"bronze.alpha_data", "bronze.beta_data", "bronze_dictionary.alpha_data", "bronze_dictionary.beta_data"}, sorted(catalog()))
     require("bronze_chain_dag" in case.out and RUN in case.out, "the success line names the chain trigger for this run")
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
-    require(
-        record["mirror"] == {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "created"}}, f"the run record lacks the mirror outcome: {record}"
-    )
-    require("glue mirror ok" in case.out, "the check phase does not show the mirror outcome")
+    require("mirror" not in record, f"the load receipt carries the mirror outcome: {record}")
     raw_lineage.loaded_objects(record, "check.json", RUN)
+    latest = attempts()[-1]
+    require(
+        latest["mirror"] == {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "created"}}, f"the attempt record lacks the outcome: {latest}"
+    )
+    require(latest["bronze_run"] == RUN and latest["metadata_generation"] == "1", f"the attempt is not bound to the run and the generation: {latest}")
+    require("glue mirror ok" in case.out, "the check phase does not show the mirror outcome")
+
+
+def attempts() -> list[dict[str, Any]]:
+    """The attempt records of the run as the owner reads them, oldest first."""
+    return bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)
 
 
 def case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown(case: Case) -> None:
-    """The load is committed before the mirror runs: a Glue failure fails no phase, is kept in the run record and is shown by name."""
+    """The load is committed before the mirror runs: a Glue failure fails no phase, is kept as an attempt record and is shown by name."""
     DEFECTS.add("mirror_failed")
     require(case.chain() == [0, 0, 0], case.err)
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
-    require(record["mirror"]["status"] == "failed" and "AccessDeniedException" in record["mirror"]["reason"], f"{record.get('mirror')}")
+    latest = attempts()[-1]["mirror"]
+    require(latest["status"] == "failed" and "AccessDeniedException" in latest["reason"], f"{latest}")
     require(record["snapshots"] == {"alpha_data": 100, "beta_data": 101} and "bronze_chain_dag" in case.out, "the failed mirror held back the committed run")
     require("glue mirror FAILED" in case.err and "alpha_data" in case.err, f"the failed mirror is not shown: {case.err}")
     raw_lineage.loaded_objects(record, "check.json", RUN)
+
+
+def retry(case: Case, defect: str | None) -> list[int]:
+    """The same run again: a fresh workspace, the same bucket and the same run ID. The bucket keeps the load receipt of the first attempt."""
+    DEFECTS.clear()
+    if defect:
+        DEFECTS.add(defect)
+    case.shas = None
+    return case.chain(label="retry")
+
+
+def case_a_retry_failing_the_mirror_after_a_success_keeps_the_receipt(case: Case) -> None:
+    require(case.chain() == [0, 0, 0], case.err)
+    receipt = STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"]
+    require(retry(case, "mirror_failed") == [0, 0, 0], case.err)
+    require(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"] == receipt, "the retry replaced the load receipt")
+    found = attempts()
+    require([item["mirror"]["status"] for item in found] == ["ok", "failed"], f"{[item['mirror']['status'] for item in found]}")
+    latest = bronze_mirror.latest_attempt(STORAGE[0].client, BUCKET, RUN)
+    require(latest is not None and latest["mirror"]["status"] == "failed", "the latest attempt is not the failed retry")
+    require("glue mirror FAILED" in case.err, "the failed retry is not shown")
+
+
+def case_a_retry_repairing_the_mirror_keeps_the_receipt(case: Case) -> None:
+    DEFECTS.add("mirror_failed")
+    require(case.chain() == [0, 0, 0], case.err)
+    receipt = STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"]
+    require(retry(case, None) == [0, 0, 0], case.err)
+    require(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"] == receipt, "the retry replaced the load receipt")
+    found = attempts()
+    require([item["mirror"]["status"] for item in found] == ["failed", "ok"], f"{[item['mirror']['status'] for item in found]}")
+    latest = bronze_mirror.latest_attempt(STORAGE[0].client, BUCKET, RUN)
+    require(latest is not None and latest["mirror"]["tables"] == {"alpha_data": "created", "beta_data": "created"}, "the repair is not the latest")
+    require(found[0]["report_sha256"] != found[1]["report_sha256"], "two attempts share one record")
+
+
+def case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record(case: Case) -> None:
+    require(case.chain() == [0, 0, 0], case.err)
+    require(case.phase("check") == 0, case.err)
+    require(len(attempts()) == 1, f"a repeated check wrote {len(attempts())} attempt records")
+
+
+def case_an_attempt_record_that_cannot_be_written_fails_no_phase_and_is_named(case: Case) -> None:
+    """A code refresh can come before the IAM apply that grants the new key: the run stays committed and the missing record is shown."""
+    client = STORAGE[0].client
+    original = client.put_object
+
+    def refuse(**arguments: Any) -> dict[str, Any]:
+        if "/mirror_" in arguments["Key"]:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no grant"}}, "PutObject")
+        return original(**arguments)
+
+    with mock.patch.object(client, "put_object", refuse):
+        require(case.chain() == [0, 0, 0], case.err)
+    require(f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts and "bronze_chain_dag" in case.out, "the run was held back")
+    require("mirror attempt record was not written" in case.err and "AccessDenied" in case.err, f"the missing record is not named: {case.err}")
 
 
 def case_a_loader_report_with_a_malformed_mirror_outcome_is_refused(case: Case) -> None:
@@ -500,7 +572,9 @@ def case_a_real_run_records_the_files_it_carried_over(case: Case) -> None:
     stored = STORAGE[0].client.puts
     key = f"lakehouse/bronze_runs/{RUN}/carried_over.json"
     record_key = f"lakehouse/bronze_runs/{RUN}/check.json"
-    require(sorted(stored) == sorted([key, record_key]), sorted(stored))
+    attempt = [name for name in stored if "/mirror_" in name]
+    require(len(attempt) == 1 and attempt[0].startswith(f"lakehouse/bronze_runs/{RUN}/mirror_"), sorted(stored))
+    require(sorted(stored) == sorted([key, record_key, *attempt]), sorted(stored))
     objects, snapshots = raw_lineage.loaded_objects(json.loads(stored[record_key]), record_key, RUN)
     require({item["table"] for item in objects} == {"alpha_data", "beta_data"} and set(snapshots) == {"alpha_data", "beta_data"}, (objects, snapshots))
     document = json.loads(stored[key])
@@ -876,6 +950,10 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a real run writes only bronze and its dictionary and names the chain trigger": case_real_run_writes_only_bronze,
     "a failed Glue mirror leaves the run passed and is recorded and shown": case_a_failed_glue_mirror_leaves_the_run_passed_and_is_recorded_and_shown,
     "a loader report with a malformed mirror outcome is refused": case_a_loader_report_with_a_malformed_mirror_outcome_is_refused,
+    "a retry that fails the mirror after a success shows the failure and keeps the receipt": case_a_retry_failing_the_mirror_after_a_success_keeps_the_receipt,
+    "a retry that repairs a failed mirror shows the repair and keeps the receipt": case_a_retry_repairing_the_mirror_keeps_the_receipt,
+    "a repeated check of the same report makes no second attempt record": case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record,
+    "an attempt record that cannot be written fails no phase and is named": case_an_attempt_record_that_cannot_be_written_fails_no_phase_and_is_named,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
