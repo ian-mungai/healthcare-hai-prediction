@@ -22,6 +22,7 @@ import tarfile
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -31,7 +32,8 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration import raw_lineage
-from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_pin, bronze_run
+from scripts.lakehouse import bronze, bronze_metadata, bronze_mirror, bronze_pin, bronze_run, glue_mirror
+from scripts.lakehouse import run_glue_mirror_e2e as glue_stand_in
 from scripts.quality import lock_env
 
 REVISION = "0123456789abcdef0123456789abcdef01234567"
@@ -161,16 +163,42 @@ def archive(folder: Path) -> tuple[Path, str]:
     return path, sha_of(path)
 
 
-def stand_in_mirror(namespace: str, names: list[str]) -> dict[str, Any]:
-    """The ``mirror`` section of the loader report: a real run's tables are registered, the qualification twin mirrors nothing, a failure is reported."""
+class MirrorSource:
+    """The Polaris side of the hook: the metadata file of each committed snapshot and the columns of every table."""
+
+    def pointer(self, table: str, snapshot_id: int) -> str:
+        return f"s3://{BUCKET}/lakehouse/bronze/{table}/metadata/00001-aaaaaaaa-0000-0000-0000-{snapshot_id:012d}.metadata.json"
+
+    def columns(self, table: str) -> list[tuple[str, str]]:
+        return list(glue_stand_in.COLUMNS)
+
+
+def stand_in_mirror(namespace: str, names: list[str], snapshots: dict[str, int], unsourced: list[str], config: dict[str, Any]) -> dict[str, Any]:
+    """The ``mirror`` section of the loader report. The report is the REAL hook's (``bronze_mirror.mirror_after_load``) over a Glue stand-in and a source
+    stand-in with no version history, so the run records exactly what the combined code reports: the registrations, the tables the stage left out and, before
+    the IAM apply (``iam_not_applied``: Glue answers AccessDeniedException), the failure. ``mirror_failed`` and ``mirror_malformed`` still force a report."""
     if "mirror_malformed" in DEFECTS:
         return {"status": "great", "tables": names}
-    if namespace != "bronze":
-        return {"status": "skipped", "reason": "mode qualify is a test mode", "tables": {}}
     if "mirror_failed" in DEFECTS:
         reason = "alpha_data failed: AccessDeniedException from Glue"
         return {"status": "failed", "reason": reason, "tables": {names[0]: "failed: AccessDeniedException from Glue", **dict.fromkeys(names[1:], "created")}}
-    return {"status": "ok", "tables": dict.fromkeys(names, "created")}
+    glue = glue_stand_in.FakeGlue(fail={"get_table": "AccessDeniedException"} if "iam_not_applied" in DEFECTS else {})
+    history = bronze.S3Storage.from_client(glue_stand_in.VersionedClient(glue_stand_in.FakeSources(), glue_stand_in.FakeS3()))
+    return bronze_mirror.mirror_after_load(
+        None,
+        namespace,
+        names,
+        snapshots,
+        RUN,
+        source=MirrorSource(),
+        glue=glue,
+        config=replace(glue_mirror.load_config(), enabled=True),
+        read_loader=lambda *_: ({}, []),
+        unsourced=unsourced,
+        history=history,
+        bucket=BUCKET,
+        table_map=config,
+    )
 
 
 def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> None:
@@ -209,7 +237,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     report = {"run_at_utc": stamp, "mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
     report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
-    report["mirror"] = stand_in_mirror(namespace, names)
+    report["mirror"] = stand_in_mirror(namespace, names, snapshots, unsourced, config)
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if "no_report" not in DEFECTS:
@@ -432,6 +460,28 @@ def case_a_first_run_before_the_iam_apply_is_unavailable(case: Case) -> None:
     require(verdict["state"] == "unavailable" and key in verdict["reason"], f"{verdict}")
 
 
+def case_before_the_iam_apply_the_hook_fails_and_the_run_commits(case: Case) -> None:
+    """The combined code before the owner's IAM apply: Glue answers AccessDeniedException to the real hook, and the role may not write the attempt record.
+    The hook never raises, the mirror is ``failed`` in the loader report, every phase exits 0, the run record, the carried-over record and the chain hint are
+    written and the acceptance of the mirror is ``unavailable`` (never a pass)."""
+    DEFECTS.add("iam_not_applied")
+    with refusing_attempts(case):
+        codes = case.chain()
+    require(codes == [0, 0, 0], f"{codes} {case.err}")
+    puts = STORAGE[0].client.puts
+    require(
+        f"lakehouse/bronze_runs/{RUN}/check.json" in puts and f"lakehouse/bronze_runs/{RUN}/carried_over.json" in puts, "the run's records were not written"
+    )
+    require("bronze_chain_dag" in case.out, "the run was held back")
+    require("glue mirror failed" in case.out and "AccessDeniedException" in case.out, f"the failed mirror is not named: {case.out}")
+    require("glue mirror FAILED" in case.err and "the run stays committed" in case.err, f"the failure is not on standard error: {case.err}")
+    key = bronze_mirror.attempt_key(RUN, 1)
+    require(key in case.err and "AccessDenied" in case.err, f"the missing attempt record is not named: {case.err}")
+    require(not any("/mirror_" in written for written in puts), f"an attempt record was written without its grant: {sorted(puts)}")
+    verdict = bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)
+    require(verdict["state"] == "unavailable", f"{verdict}")
+
+
 def case_a_retry_without_its_record_fails_its_check(case: Case) -> None:
     """The run has a recorded success. Its retry fails in Glue and the role may not write the retry's record (a revocation): the history would end on the older
     pass, so the retry's check phase fails, names the exact key, the report and the generation, and leaves the committed load and its receipt as they are."""
@@ -514,6 +564,10 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     claim = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over.json"])
     require(claim["skipped_tables"] == report["skipped_tables"], f"the carried-over record does not name the skipped table: {claim}")
     require(len(notices.calls) == 1 and "empty_data" in notices.calls[0]["Message"], f"the owner notice: {notices.calls}")
+    mirror = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)[-1]["mirror"]
+    registered = {name: text for name, text in mirror["tables"].items() if text == "created"}
+    require(mirror["status"] == "ok" and sorted(registered) == sorted(tables), f"the real hook did not register the loaded tables: {mirror}")
+    require(mirror["tables"]["empty_data"] == bronze_mirror.LEFT_OUT, f"the hook did not leave the stage's skipped table out like the register: {mirror}")
     outcome = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"])
     require(outcome["notice"] == "sent", f"{outcome}")
 
@@ -912,8 +966,24 @@ IMAGE = ROOT / "services/lakehouse/spark"
 LOCAL_PACKAGES = ("scripts", "orchestration", "services", "features", "config")
 
 
+# Functions that run only on the owner's host and never in the Spark image, so the imports inside them are not part of the image's closure. The by-hand bronze
+# register of the Glue mirror reads the run records through ``bronze_unsourced`` (``orchestration.raw_lineage``, which needs jsonschema); the image imports
+# ``glue_mirror`` (the gold publish and the bronze hook do) and never calls it. A module-level import of the same module is still followed.
+HOST_ONLY_FUNCTIONS = {"scripts.lakehouse.glue_mirror": {"bronze_register_tables"}}
+
+
+def host_only_nodes(module: str, tree: ast.AST) -> set[int]:
+    """The ids of the nodes inside the host-only functions of ``module``."""
+    skipped: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in HOST_ONLY_FUNCTIONS.get(module, ()):
+            skipped |= {id(inner) for inner in ast.walk(node)}
+    return skipped
+
+
 def third_party_imports(module: str) -> dict[str, set[str]]:
-    """Every third-party package that the module and the repository modules it imports can import, with their importers (static, lazy imports included)."""
+    """Every third-party package that the module and the repository modules it imports can import, with their importers (static, lazy imports included, except
+    in the host-only functions)."""
     seen: set[str] = set()
     found: dict[str, set[str]] = {}
 
@@ -926,7 +996,11 @@ def third_party_imports(module: str) -> dict[str, set[str]]:
         if name in seen or path is None:
             return
         seen.add(name)
-        for node in ast.walk(ast.parse(path.read_text())):
+        tree = ast.parse(path.read_text())
+        skipped = host_only_nodes(name, tree)
+        for node in ast.walk(tree):
+            if id(node) in skipped:
+                continue
             names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
             if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
@@ -954,6 +1028,17 @@ def case_the_spark_image_has_every_package_the_driver_imports(case: Case) -> Non
     require("/opt/spark/python" in (IMAGE / "Dockerfile").read_text(), "the image must put pyspark on PYTHONPATH")
     missing = sorted(set(needed) - image_packages(requirements))
     require(not missing, f"the Spark image does not install {missing}")
+    glue_source = ast.parse((ROOT / "scripts/lakehouse/glue_mirror.py").read_text())
+    outside = [
+        node.lineno
+        for node in ast.walk(glue_source)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and "bronze_unsourced" in ast.dump(node)
+        and id(node) not in host_only_nodes("scripts.lakehouse.glue_mirror", glue_source)
+    ]
+    require(
+        not outside, f"glue_mirror imports bronze_unsourced outside its host-only function (lines {outside}), so the Spark image would need its import chain"
+    )
     without = "\n".join(line for line in requirements.splitlines() if not line.startswith("pdfplumber=="))
     require(sorted(set(needed) - image_packages(without)) == ["pdfplumber"], "a requirements file without pdfplumber must be caught")
 
@@ -1011,6 +1096,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a retry that repairs a failed mirror shows the repair and keeps the receipt": case_a_retry_repairing_the_mirror_keeps_the_receipt,
     "a repeated check of the same report makes no second attempt record": case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record,
     "a first run before the IAM apply fails no phase and is unavailable to the acceptance": case_a_first_run_before_the_iam_apply_is_unavailable,
+    "before the IAM apply the hook fails, every phase exits 0 and the run commits": case_before_the_iam_apply_the_hook_fails_and_the_run_commits,
     "a retry whose record cannot be written fails its check after a recorded success": case_a_retry_without_its_record_fails_its_check,
     "a first load never recorded is not accepted on a later retry's record": case_a_first_load_never_recorded_is_not_accepted,
     "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,

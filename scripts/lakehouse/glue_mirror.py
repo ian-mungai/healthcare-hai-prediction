@@ -659,7 +659,7 @@ def bronze_register_tables(s3: Any, bucket: str, glue: Any, database: str, sourc
         try:
             storage = sources if sources is not None else bronze.S3Storage.from_client(s3)
             for name in sorted(bronze_unsourced.source_evidence(storage, bucket, bronze_table_map(), rest)):
-                kept[name] = "the source collection holds a source object or observation history"
+                kept[name] = bronze_unsourced.HISTORY_REASON
         except Exception as error:
             raise MirrorError(f"the source collection of a bronze table cannot be listed: {explain(error)}") from error
     left_out = [name for name in candidates if name not in kept]

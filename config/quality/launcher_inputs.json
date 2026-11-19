@@ -1845,6 +1845,7 @@
     "scripts/lakehouse/bronze_entry_stand_in.py",
     "scripts/lakehouse/bronze_metadata.py",
     "scripts/lakehouse/bronze_mirror.py",
+    "scripts/lakehouse/bronze_mirror_signoff.py",
     "scripts/lakehouse/bronze_namespace_cases.py",
     "scripts/lakehouse/bronze_pin.py",
     "scripts/lakehouse/bronze_run.py",

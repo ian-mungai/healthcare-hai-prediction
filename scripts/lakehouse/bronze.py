@@ -1488,6 +1488,7 @@ def main(argv: list[str] | None = None) -> int:
     from scripts.lakehouse import bronze_metadata, bronze_mirror, bronze_pin, dictionary
 
     inventory = bronze_pin.read_inventory(args.inventory.read_bytes()) if args.inventory else None
+    history = storage
     if inventory is not None:
         storage = bronze_pin.PinnedStorage(storage, inventory)
     everything = metadata_tables(config, names, config["namespace"]) if args.selected_metadata else [table["table"] for table in config["tables"]]
@@ -1554,7 +1555,9 @@ def main(argv: list[str] | None = None) -> int:
             index_sha256 = bronze_metadata.write_bootstrap(metadata, index_path)
             metadata_index = {"generation": generation, "path": str(index_path), "sha256": index_sha256}
             # The load and its metadata generation are committed. The mirror reports its own failure and never undoes them.
-            mirror = bronze_mirror.mirror_after_load(spark, config["namespace"], names, snapshots, args.run_id)
+            mirror = bronze_mirror.mirror_after_load(
+                spark, config["namespace"], names, snapshots, args.run_id, unsourced=unsourced, history=history, bucket=bucket, table_map=config
+            )
     except (BronzeError, bronze_metadata.MetadataError) as error:
         sys.stderr.write(f"bronze: {error}\n")
         return 1

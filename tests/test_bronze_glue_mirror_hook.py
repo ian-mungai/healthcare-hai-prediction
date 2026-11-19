@@ -170,11 +170,21 @@ def test_the_deadline_starts_when_the_hook_is_entered() -> None:
 # The real ``bronze.main`` with its service boundaries replaced, to pin where the hook sits in the load.
 
 
+HOOK_KEYWORDS: list[dict[str, Any]] = []
+
+
 def run_main(
-    tmp_path: Path, *, passed: bool = True, namespace: str | None = None, hook_result: Any = None, extra: list[str] | None = None
+    tmp_path: Path,
+    *,
+    passed: bool = True,
+    namespace: str | None = None,
+    hook_result: Any = None,
+    extra: list[str] | None = None,
+    left_out: tuple[str, ...] = (),
 ) -> tuple[int, dict[str, Any], list[str]]:
     steps: list[str] = []
-    table_map = {"namespace": "bronze", "tables": [{"table": name, "group": "g"} for name in TABLES]}
+    HOOK_KEYWORDS.clear()
+    table_map = {"namespace": "bronze", "tables": [{"table": name, "group": "g"} for name in (*TABLES, *left_out)]}
     checks = {name: {"passed": passed} for name in TABLES}
 
     def step(name: str, value: Any = None) -> Any:
@@ -186,11 +196,13 @@ def run_main(
 
     def mirror(spark: Any, space: str, names: list[str], snapshots: dict[str, int], run_id: str | None = None, **_keywords: Any) -> dict[str, Any]:
         steps.append(f"mirror {space} {sorted(snapshots)} {run_id}")
+        HOOK_KEYWORDS.append(_keywords)
         return hook_result or {"status": "ok", "tables": dict.fromkeys(snapshots, "created")}
 
     metadata = [{"generation": "g1"}]
     spark = SimpleNamespace(stop=lambda: steps.append("stop"))
     arguments = ["--tables", ",".join(TABLES), "--bucket", "example-bucket", "--task-role"] + (["--namespace", namespace] if namespace else []) + (extra or [])
+    arguments += ["--unsourced-tables", ",".join(left_out)] if left_out else []
     with (
         mock.patch.dict("sys.modules", {"scripts.lakehouse.session": SimpleNamespace(spark_session=lambda *_a, **_k: spark, job_memory=lambda: "1g")}),
         mock.patch.object(bronze, "load_table_map", return_value=table_map),
@@ -228,6 +240,17 @@ def test_the_loader_runs_the_hook_after_the_metadata_generation_is_published_and
     )
     check(steps[-2:] == [f"mirror bronze {sorted(TABLES)} {RUN}", "stop"], f"the hook ran after the session stopped or not last: {steps}")
     check(report["mirror"] == {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "created"}}, f"{report.get('mirror')}")
+
+
+def test_the_loader_tells_the_hook_the_tables_it_left_out_and_the_reader_that_lists_the_source_history(tmp_path: Path) -> None:
+    """The live branch's exclusion stays upstream of the hook (``check_unsourced`` runs first); the hook is told the same list, the loader's own S3 reader
+    (taken before the pinned replay wrapper, which has no history), the bucket and the table map."""
+    status, report, _ = run_main(tmp_path, extra=["--run-id", RUN], left_out=("gamma_data",))
+    check(status == 0 and report["passed"] is True and report["unsourced_tables"] == ["gamma_data"], f"{status} {report}")
+    given = HOOK_KEYWORDS[0]
+    check(given["unsourced"] == ["gamma_data"] and given["bucket"] == "example-bucket", f"{given}")
+    check({entry["table"] for entry in given["table_map"]["tables"]} == {*TABLES, "gamma_data"}, f"{given['table_map']}")
+    check(given["history"] is not None, "the hook was given no source reader")
 
 
 def test_a_failed_mirror_leaves_the_load_committed_and_passing_and_is_in_the_report(tmp_path: Path) -> None:

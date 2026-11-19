@@ -7,9 +7,18 @@ other test namespaces mirror nothing, and nothing runs while ``enabled`` is fals
 
 The mirrored set is what the load committed: the snapshot of each table the load names (a table that the load left out is simply not mirrored) and the
 snapshot of each loader side table that has one (``file_metadata``, ``stored_copies``, ``column_map`` and ``file_preambles``), read after the metadata
-generation is published. A side table is absent (no table yet: not named), waiting (the table exists and no commit wrote a row to it, as ``column_map`` after a
-first load of headerless formats: reported as not mirrored yet, and it blocks nothing) or committed (mirrored). ``glue_mirror.bronze_table_set`` is the one
-function that names the set, and the by-hand ``register`` takes it from there too. A rerun of the load registers whatever is missing or stale.
+generation is published. A side table is absent (no table yet: not named), waiting (the table exists and no commit wrote a row to it, as
+``column_map`` after a first load of headerless formats: reported as not mirrored yet, and it blocks nothing) or committed (mirrored).
+``glue_mirror.bronze_table_set`` is the one function that names the set, and the by-hand ``register`` takes it from there too. A rerun of the load
+registers whatever is missing or stale.
+
+A table the load left out for lack of a source object (``--unsourced-tables``, named by the stage and checked by ``bronze.check_unsourced``) is left
+out of the hook's registration as ``glue_mirror register --layer bronze`` leaves it out, on the same evidence: the version history of its own source
+collection (``bronze_source_history.source_evidence``, a delete-marked manifest included). With no history it is reported ``left out``. With history
+it is required and the load committed no snapshot for it, so the mirror is ``failed`` (the other tables are still registered); a history read that
+fails is a failed mirror too. Nothing is read when the mirror is off, in a test namespace or when the load left nothing out. On a full bootstrap the
+hook registers the same set as the register, less the tables silver reads that the load left out (the Spark image has no dbt sources to say which: the
+register keeps those required).
 
 The load is already committed, so the hook never raises and never undoes it. The report (status, reason, one outcome per table) goes into the loader
 report and standard error when it failed. ``check.json`` is the immutable receipt of the load and a retry runs the hook again, so the check phase
@@ -40,6 +49,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from scripts.lakehouse import bronze_source_history as source_history
 from scripts.lakehouse import glue_mirror
 
 REAL_NAMESPACE = "bronze"
@@ -54,6 +64,8 @@ ATTEMPT_KEYS = {"schema", "bronze_run", "sequence", "metadata_generation", "repo
 SHA256 = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"bronze_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}")
 WAITING = "not mirrored: no committed snapshot yet"
+LEFT_OUT = "left out: the load left it out for lack of a source object, and its source collection holds no source object or observation history"
+REQUIRED = f"failed: required, but the load committed no snapshot for it: {source_history.HISTORY_REASON}"
 
 
 class AttemptError(ValueError):
@@ -77,6 +89,23 @@ def loader_snapshots(spark: Any, namespace: str, tables: Sequence[str]) -> tuple
     return found, waiting
 
 
+def unsourced_outcomes(unsourced: Sequence[str], history: Any, bucket: str, table_map: Mapping[str, Any] | None) -> dict[str, str]:
+    """The outcome of each table the load left out, on the evidence that ``glue_mirror register --layer bronze`` uses (``source_history.source_evidence``).
+
+    The stage and ``bronze.check_unsourced`` already left the table out upstream, on the pinned inventory's current versions. The register also lists
+    the table's own source collection with every version and delete marker, because a manifest that a delete marker hides leaves every earlier
+    version readable: a table with such history is required, so it is a failed outcome (the load committed no snapshot for it). A table with none is
+    left out. ``history`` must list version history (``bronze.S3Storage.list_history``); a reader that cannot, or a listing that fails, raises and
+    nothing is guessed.
+    """
+    if not unsourced:
+        return {}
+    if table_map is None:
+        raise ValueError("the table map is not available to read the source history with")
+    required = source_history.source_evidence(history, bucket, dict(table_map), list(unsourced))
+    return {name: REQUIRED if name in required else LEFT_OUT for name in unsourced}
+
+
 def mirror_after_load(
     spark: Any,
     namespace: str,
@@ -87,6 +116,10 @@ def mirror_after_load(
     glue: Any = None,
     config: Any = None,
     read_loader: Callable[[Any, str, Sequence[str]], tuple[Mapping[str, int], Sequence[str]]] | None = None,
+    unsourced: Sequence[str] = (),
+    history: Any = None,
+    bucket: str = "",
+    table_map: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Register the committed snapshot of each loaded table of ``names``, and of each loader side table that exists, in the bronze Glue mirror database.
 
@@ -107,6 +140,10 @@ def mirror_after_load(
             "reading the snapshots of the loader tables", read_loader or loader_snapshots, spark, namespace, glue_mirror.bronze_loader_tables()
         )
         committed = {**loaded, **{name: int(snapshot) for name, snapshot in side.items()}}
+        try:
+            left_out = budget.run("reading the source history of the tables the load left out", unsourced_outcomes, unsourced, history, bucket, table_map)
+        except Exception as error:
+            left_out = {name: f"failed: the source history of its collection could not be read: {glue_mirror.explain(error)}" for name in unsourced}
         if source is None:
             from scripts.lakehouse.session import CATALOG
 
@@ -114,7 +151,10 @@ def mirror_after_load(
         if glue is None:
             glue = budget.run("creating the Glue client", glue_mirror.glue_client)
         report = glue_mirror.mirror(config, namespace, mode, committed, source, glue, run_id or HAND_RUN, budget)
-        report["tables"] = {**report["tables"], **dict.fromkeys(waiting, WAITING)}
+        report["tables"] = {**report["tables"], **dict.fromkeys(waiting, WAITING), **left_out}
+        required = sorted(name for name, text in left_out.items() if text.startswith("failed: "))
+        if required and report["status"] != "failed":
+            report = {**report, "status": "failed", "reason": "; ".join(f"{name}: {left_out[name].removeprefix('failed: ')}" for name in required)}
     except Exception as error:
         report = {"status": "failed", "reason": glue_mirror.explain(error), "tables": {}}
     if report["status"] == "failed":
@@ -284,7 +324,7 @@ def main(argv: Sequence[str] | None = None, client: Any = None) -> int:
     except AttemptError as error:
         sys.stdout.write(f"acceptance: unavailable: {error}\n")
         return 1
-    sys.stderr.write("the recorded outcome only, not a sign-off: python -m scripts.lakehouse.bronze_mirror_signoff also needs the matching task's result\n")
+    sys.stderr.write("the recorded outcome only, not a sign-off: the bronze_mirror_signoff command (see its docstring) also needs the matching task's result\n")
     sys.stdout.write(render(verdict))
     return 0 if verdict["state"] in ("ok", "unchanged", "skipped") else 1
 
