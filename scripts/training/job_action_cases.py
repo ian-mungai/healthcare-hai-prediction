@@ -1773,6 +1773,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             "download_oserror": (refusing_download(OSError(marker)), "could not be downloaded: OSError"),
             "download_error": (refusing_download(RuntimeError(marker)), "could not be downloaded: RuntimeError"),
         }
+        columns_shapes = ("absent", "empty", "text", "null", "number", "object", "not_text", "empty_name", "repeat")
         for label, (plant, found) in shapes.items():
             fixture = promoted(folder / f"damaged_{label}", Counted(LABEL, constant=3.0))
             Counted.scored = 0
@@ -1782,7 +1783,8 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             require(code == job.EXIT_FAILED and failure_of(error) == "champion_feature_list_invalid", f"{label}: {code} {error}")
             require(found in error, f"{label}: the failure does not say what was found ({found}): {error}")
             require(marker not in error, f"{label}: the failure repeats the text of the exception: {error}")
-            require(label in ("not_an_object", "truncated_json") or "list" in error, f"{label}: the failure does not name the feature list: {error}")
+            require("feature list" in error, f"{label}: the failure does not name the feature list: {error}")
+            require(label not in columns_shapes or "columns" in error, f"{label}: the failure does not name the key: {error}")
             require(fixture.champion_loads == [], f"{label}: the champion was loaded: {fixture.champion_loads}")
             require(Counted.scored == 0, f"{label}: the champion was scored")
             require(listing(fixture.out) == [], f"{label}: a refused check wrote output")
