@@ -45,7 +45,7 @@ templates:
       {{- end }}
 
       {{ define "hai.line" -}}
-      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | trimSpace -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f-\x{a0}\x{1680}\x{2000}-\x{200b}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]+` " " | trimSpace -}}
       {{ if gt (len $v) 200 }}{{ printf "%.197s..." $v }}{{ else }}{{ $v }}{{ end }}
       {{- end }}
 

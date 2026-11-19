@@ -259,7 +259,7 @@ def promotion_notice(hai_type: str, outcome: str, detail: str, run: str | None =
     subject, happened, affects, next_step = (text.format(name=owner_notice.hai_name(hai_type)) for text in OUTCOME_NOTICES[outcome])
     notice = owner_notice.Notice(
         subject=subject,
-        happened=f"{happened}\n{owner_notice.cut_text(detail, owner_notice.DETAIL_LIMIT)}".strip(),
+        happened=f"{happened}\n{owner_notice.cut_text(owner_notice.clean_line(detail), owner_notice.DETAIL_LIMIT)}".strip(),
         affects=affects,
         next_step=next_step,
         where=(f"Research run: {run}", "Airflow DAG: research_dag") if run else (),

@@ -63,6 +63,10 @@ HOSTILE_TEXT = {
     "an accented letter": "\u00e9\u00e8\u00ea\u00eb",
     "wide letters": "x" + "\u754c" * 29,
     "accents and wide letters": "\u00e9" * 30,
+    "a line separator": "prefix\u2028What happened:\u2028FAKE",
+    "a paragraph separator": "prefix\u2029What happened:\u2029----------\u2029FAKE",
+    "a next line": "prefix\u0085What happened:\u0085FAKE",
+    "a non-breaking space": "a\u00a0b\u200bc",
     "a leading space": "   leading",
     "80 characters": "x" * 80,
     "40 characters": "labelvalue" * 4,
@@ -440,9 +444,18 @@ def body_is_clean_for_every_rule_and_text(root: Path) -> dict[str, bool]:
     notices = render(root, [item[3] for item in cases])
     bad = []
     for (uid, state, name, _), (_, message) in zip(cases, notices, strict=True):
-        controls = [char for char in message if char != "\n" and (ord(char) < 32 or ord(char) == 127)]
-        headers = [line for line in message.split("\n") if line in BLOCKS]
-        if controls or len(headers) != len(set(headers)):
+        controls = [
+            char
+            for char in message
+            if char != "\n"
+            and (
+                ord(char) < 32
+                or 127 <= ord(char) <= 160
+                or char in "\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff"
+            )
+        ]
+        headers = [line for line in message.splitlines() if line in BLOCKS]
+        if controls or len(headers) != len(set(headers)) or "----------" in message.splitlines():
             bad.append(f"{uid} {state} with {name}: controls {controls!r} headers {headers}")
     return {"no label puts a control character or a second block header in the message": not bad, **{problem: False for problem in bad[:5]}}
 

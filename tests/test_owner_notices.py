@@ -215,6 +215,9 @@ HOSTILE_TEXT = (
     "café",
     "x" + "界" * 60,
     "  leading space",
+    "prefix\u2028What happened:\u2028FAKE",
+    "prefix\u2029What happened:\u2029FAKE",
+    "prefix\u0085What happened:\u0085FAKE",
     "word " * 60,
 )
 
@@ -262,3 +265,13 @@ def test_a_huge_bronze_list_is_cut_on_a_line_with_a_truncated_line_and_stays_und
     check(lines[-1] == owner_notice.TRUNCATED and "run record" in lines[-1], f"the last line is {lines[-1]!r}")
     check(lines[:-2] == whole[: len(lines) - 2] and lines[-2] == "", "the cut is not on a line boundary of the full notice")
     check(len(body.encode()) > BODY_LIMIT - 400, "the cut dropped more lines than it had to")
+
+
+def test_a_separator_in_a_file_or_table_name_adds_no_line_and_no_block_header() -> None:
+    hostile = "prefix\u2028What happened:\u2028Where to look:\u2029FAKE\u0085end"
+    sent = bronze_notice([hostile], [{"table": hostile, "reason": hostile}])
+    body = sent["Message"]
+    headers = [line for line in body.splitlines() if line in BLOCKS + LATER_BLOCKS]
+    check(len(headers) == len(set(headers)), f"a name added a header: {headers}")
+    check(not any(char in body for char in "\u0085\u2028\u2029"), "a line separator reached the body")
+    check("prefix What happened: Where to look: FAKE end" in body, "the name was not kept as one line")

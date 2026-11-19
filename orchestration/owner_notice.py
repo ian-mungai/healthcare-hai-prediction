@@ -73,10 +73,19 @@ def hai_name(key: str) -> str:
     return f"{training_contract.HAI_LABELS[key]} ({key})" if key in training_contract.HAI_LABELS else key
 
 
+# Every character that ends or breaks a line or counts as a space, including the Unicode separators U+0085, U+2028 and U+2029.
+LINE_BREAKS = re.compile("[\x00-\x20\x7f-\xa0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+
+
+def clean_line(text: object) -> str:
+    """A value as one line: every break and space character becomes one space, with no space at either end. Use it for each name that comes from data."""
+    return LINE_BREAKS.sub(" ", str(text)).strip()
+
+
 def shorten(text: str, limit: int = SUBJECT_LIMIT) -> str:
     """A subject SNS accepts: printable ASCII on one line. Controls and spaces become one space, a letter outside ASCII becomes ``?``, and a text longer
     than the limit is cut at a word end with ``...``."""
-    line = re.sub(r"[^ -~]", "?", re.sub(r"[\x00-\x20\x7f]+", " ", text)).strip()
+    line = re.sub(r"[^ -~]", "?", clean_line(text))
     if len(line) <= limit:
         return line
     return line[: limit - len(ELLIPSIS)].rsplit(" ", 1)[0].rstrip(" ,:") + ELLIPSIS

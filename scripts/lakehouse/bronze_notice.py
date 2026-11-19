@@ -17,7 +17,7 @@ def count(number: int, noun: str) -> str:
 
 def listed(title: str, items: Sequence[str]) -> list[str]:
     """A titled list of at most ``NOTICE_LIST_LIMIT`` lines, with a last line that says how many more the run record holds."""
-    lines = [f"{title}:", *[f"- {item}" for item in items[:NOTICE_LIST_LIMIT]]]
+    lines = [f"{title}:", *[f"- {owner_notice.clean_line(item)}" for item in items[:NOTICE_LIST_LIMIT]]]
     if len(items) > NOTICE_LIST_LIMIT:
         lines.append(f"and {len(items) - NOTICE_LIST_LIMIT} more (the run record lists them all)")
     return lines
