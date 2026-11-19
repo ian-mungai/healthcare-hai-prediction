@@ -11,12 +11,16 @@ cases that change files work on a scratch copy; none writes into the repository.
 from __future__ import annotations
 
 import argparse
+import copy
+import functools
 import hashlib
 import json
+import re
 import shutil
 import sys
 import tempfile
 import time
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -25,6 +29,7 @@ from jsonschema import Draft202012Validator
 
 from scripts import model_code
 from scripts.process import run_command
+from scripts.quality import ci_groups
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "data_contracts/training/model_contract.json"
@@ -77,6 +82,7 @@ def scratch_tree(base: Path, root: Path = ROOT) -> Path:
         target = base / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / name, target)
+    (base / "uv.lock").symlink_to(root / "uv.lock")
     return base
 
 
@@ -162,6 +168,340 @@ def case_planted_import_changes_the_closure() -> list[str]:
         problems = model_code.verify(scratch)
     needed = [text for text in problems if text.startswith("closure_changed") and "scripts/training/models/mixed.py" in text]
     return [] if needed else [f"no closure_changed problem for mixed.py in {problems}"]
+
+
+# 1b. Every way a closure module can reach code outside the closure
+
+TARGET = "scripts/training/models/probe_target.py"
+TARGET_MODULE = "scripts.training.models.probe_target"
+TREES = "scripts/training/models/trees.py"
+REFUSAL_REASONS = ("dynamic_import_refused", "import_outside", "closure_changed")
+
+# Text appended to trees.py (@T is the module the planted code reaches). Each entry reaches probe_target.py by a different route; every one must make the
+# closure grow by that file, and the record then verifies only after an explicit write.
+JOINS = {
+    "plain import": "import @T\n",
+    "import as": "import @T as probe\n",
+    "from-import of a module": "from scripts.training.models import probe_target\n",
+    "from-import of a module as": "from scripts.training.models import probe_target as probe\n",
+    "from-import of a name as": "from @T import VALUE as probe_value\n",
+    "relative from-import of a module": "from . import probe_target\n",
+    "relative from-import of a name": "from .probe_target import VALUE\n",
+    "import in a function": "def _planted():\n    import @T\n",
+    "import in a class body": "class _Planted:\n    import @T\n",
+    "import in try and except ImportError": "try:\n    import @T\nexcept ImportError:\n    pass\n",
+    "import under TYPE_CHECKING": "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from @T import VALUE\n",
+    "importlib literal in a function": 'def _planted():\n    importlib.import_module("@T")\n',
+    "importlib module alias": 'import importlib as il\n\n\ndef _planted():\n    il.import_module("@T")\n',
+    "import_module alias": 'from importlib import import_module as load_module\n\n\ndef _planted():\n    load_module("@T")\n',
+    "import_module by its own name": 'from importlib import import_module\n\n\ndef _planted():\n    import_module("@T")\n',
+    "import_module keyword argument": 'def _planted():\n    importlib.import_module(name="@T")\n',
+    "import_module relative with a package": 'def _planted():\n    importlib.import_module(".probe_target", package="scripts.training.models")\n',
+    "importlib.__import__": 'def _planted():\n    importlib.__import__("@T")\n',
+    "builtins.__import__": 'import builtins\n\n\ndef _planted():\n    builtins.__import__("@T")\n',
+    "__import__ literal": 'def _planted():\n    __import__("@T")\n',
+    "__import__ with fromlist in try and except": 'try:\n    __import__("@T", fromlist=["VALUE"])\nexcept ModuleNotFoundError:\n    pass\n',
+    "pkgutil.resolve_name dotted": 'import pkgutil\n\n\ndef _planted():\n    pkgutil.resolve_name("@T.VALUE")\n',
+    "pkgutil.resolve_name colon": 'import pkgutil as pk\n\n\ndef _planted():\n    pk.resolve_name("@T:VALUE")\n',
+    "attribute through the package alias": "import scripts.training.models as pkg_alias\n\n\ndef _planted():\n    return pkg_alias.probe_target.VALUE\n",
+    "attribute through the full dotted path": "import scripts.training.models\n\n\ndef _planted():\n    return scripts.training.models.probe_target.VALUE\n",
+    "attribute through a from-imported package": "from scripts.training import models as pkg\n\n\ndef _planted():\n    return pkg.probe_target.VALUE\n",
+}
+
+# Code the verifier cannot read: the write is refused and the verifier names the file and line. The reason is the start of the problem text.
+REFUSED = {
+    "literal held in a variable": ('def _planted():\n    module = "@T"\n    importlib.import_module(module)\n', "dynamic_import_refused"),
+    "literal held in a variable, optional": (
+        'try:\n    _module = "@T"\n    importlib.import_module(_module)\nexcept ModuleNotFoundError:\n    pass\n',
+        "dynamic_import_refused",
+    ),
+    "concatenated name": ('def _planted():\n    importlib.import_module("scripts.training.models." + "probe_target")\n', "dynamic_import_refused"),
+    "f-string name": ('def _planted(x):\n    importlib.import_module(f"scripts.training.models.{x}")\n', "dynamic_import_refused"),
+    "parameter as name": ("def _planted(name):\n    importlib.import_module(name)\n", "dynamic_import_refused"),
+    "__import__ with a variable": ("def _planted(name):\n    __import__(name)\n", "dynamic_import_refused"),
+    "__import__ with a variable, optional": ('try:\n    _m = "@T"\n    __import__(_m)\nexcept ModuleNotFoundError:\n    pass\n', "dynamic_import_refused"),
+    "__import__ with a level": ('def _planted():\n    __import__("probe_target", globals(), None, [], 1)\n', "dynamic_import_refused"),
+    "pkgutil.resolve_name with a variable": ("import pkgutil\n\n\ndef _planted(name):\n    pkgutil.resolve_name(name)\n", "dynamic_import_refused"),
+    "alias called with a variable": ("from importlib import import_module as load\n\n\ndef _planted(name):\n    load(name)\n", "dynamic_import_refused"),
+    "starred arguments": ("def _planted(args):\n    importlib.import_module(*args)\n", "dynamic_import_refused"),
+    "no arguments": ("def _planted():\n    importlib.import_module()\n", "dynamic_import_refused"),
+    "relative name without a package": ('def _planted():\n    importlib.import_module(".probe_target")\n', "dynamic_import_refused"),
+    "relative name with a variable package": ('def _planted(p):\n    importlib.import_module(".probe_target", package=p)\n', "dynamic_import_refused"),
+    "fromlist held in a variable": ('def _planted(names):\n    __import__("@T", fromlist=names)\n', "dynamic_import_refused"),
+    "importlib module passed to getattr": ('def _planted():\n    return getattr(importlib, "import_module")("@T")\n', "dynamic_import_refused"),
+    "import function stored in a variable": ('def _planted():\n    loader = importlib.import_module\n    loader("@T")\n', "dynamic_import_refused"),
+    "import function alias stored": ("from importlib import import_module as a\n\nb = a\n", "dynamic_import_refused"),
+    "__import__ stored": ("loader = __import__\n", "dynamic_import_refused"),
+    "builtins module passed to getattr": ('import builtins\n\n\ndef _planted():\n    return getattr(builtins, "__import__")("@T")\n', "dynamic_import_refused"),
+    "__builtins__": ("def _planted():\n    return __builtins__\n", "dynamic_import_refused"),
+    "importlib.util": ('import importlib.util\n\n\ndef _planted():\n    importlib.util.spec_from_file_location("x", "x.py")\n', "dynamic_import_refused"),
+    "importlib.machinery": ("import importlib.machinery as machinery\n\n\ndef _planted():\n    return machinery.SourceFileLoader\n", "dynamic_import_refused"),
+    "runpy": ('import runpy\n\n\ndef _planted():\n    runpy.run_module("@T")\n', "dynamic_import_refused"),
+    "exec": ('def _planted():\n    exec("import @T")\n', "dynamic_import_refused"),
+    "eval": ('def _planted():\n    eval("1")\n', "dynamic_import_refused"),
+    "compile": ('def _planted():\n    compile("1", "x", "eval")\n', "dynamic_import_refused"),
+    "search path change": ('import sys\n\nsys.path.insert(0, "/elsewhere")\n', "dynamic_import_refused"),
+    "meta path change": ("import sys\n\nsys.meta_path.append(object())\n", "dynamic_import_refused"),
+    "third-party package outside the lock group": ("import requests\n", "import_outside"),
+    "third-party package in try and except ImportError": ("try:\n    import torch\nexcept ImportError:\n    torch = None\n", "import_outside"),
+    "third-party package in a function": ("def _planted():\n    import yaml\n", "import_outside"),
+    "from a third-party package": ("from requests import get\n", "import_outside"),
+    "third-party sub-package": ("import torch.nn\n", "import_outside"),
+    "third-party package by importlib": ('def _planted():\n    importlib.import_module("requests")\n', "import_outside"),
+    "third-party package by __import__ in try": ('try:\n    __import__("requests")\nexcept ModuleNotFoundError:\n    pass\n', "import_outside"),
+    "third-party package by an alias": ('from importlib import import_module as lm\n\n\ndef _planted():\n    lm("pandas_gbq")\n', "import_outside"),
+    "third-party package by pkgutil": ('import pkgutil\n\n\ndef _planted():\n    pkgutil.resolve_name("requests.get")\n', "import_outside"),
+    "shap outside its function": ('def _planted():\n    importlib.import_module("shap")\n', "import_outside"),
+    "relative import beyond the repository root": ("from ...... import x\n", "import_outside"),
+    "repository module that does not exist": ("import scripts.training.models.ghost\n", "closure_changed"),
+    "repository module that does not exist, by importlib": (
+        'def _planted():\n    importlib.import_module("scripts.training.models.ghost")\n',
+        "closure_changed",
+    ),
+}
+
+# Imports the rule allows: they leave the closure exactly as it is.
+CLEAN = {
+    "optional standard library import": "try:\n    import zoneinfo\nexcept ImportError:\n    zoneinfo = None\n",
+    "standard library by importlib": 'def _planted():\n    importlib.import_module("statistics")\n',
+    "standard library by __import__": '__import__("textwrap")\n',
+    "standard library by an alias": 'from importlib import import_module as lm\n\n\ndef _planted():\n    lm("fractions")\n',
+    "library of the lock group": "import sklearn.tree\nfrom scipy import sparse\n",
+    "library of the lock group by importlib": 'def _planted():\n    importlib.import_module("scipy.sparse")\n',
+    "library of the lock group by an alias": 'from importlib import import_module as lm\n\n\ndef _planted():\n    lm("statsmodels.api")\n',
+    "attribute of a library": "def _planted():\n    return np.linalg.norm\n",
+    "attribute through a package to a closure module": "import scripts.training.models as pkg\n\n\ndef _planted():\n    return pkg.common.Feature\n",
+    "relative import of a closure module": "from .common import Feature as _Feature\n",
+    "importlib.metadata": "import importlib.metadata\n\n\ndef _planted():\n    return importlib.metadata.version\n",
+}
+
+
+@functools.cache
+def lock_libraries() -> frozenset[str]:
+    return model_code.allowed_libraries(ROOT)
+
+
+def planted_tree(base: Path, text: str, target_module: str = TARGET_MODULE) -> Path:
+    """A scratch copy whose trees.py ends with the planted text, beside a probe module that holds one constant."""
+    scratch = scratch_tree(base)
+    (scratch / TARGET).write_text("VALUE = 1\n")
+    path = scratch / TREES
+    path.write_text(path.read_text() + "\n\n" + text.replace("@T", target_module))
+    return scratch
+
+
+def attempt_write(scratch: Path) -> tuple[list[str] | None, str]:
+    """The files of the record that write would make, or None with the refusal text."""
+    try:
+        return [item["path"] for item in model_code.build_record(scratch, 1, lock_libraries())["files"]], ""
+    except model_code.RecordError as error:
+        return None, str(error)
+
+
+def case_imports_that_reach_a_file_join_the_closure() -> list[str]:
+    """Every static and literal dynamic route to another repository file (aliases, relative, nested, optional, attribute) puts that file in the closure."""
+    problems = []
+    original = [item["path"] for item in read_record()["files"]]
+    for name, text in JOINS.items():
+        with tempfile.TemporaryDirectory() as folder:
+            scratch = planted_tree(Path(folder), text)
+            files, refusal = attempt_write(scratch)
+            if files is None:
+                problems.append(f"{name}: write was refused: {refusal}")
+            elif TARGET not in files or sorted(set(files) - {TARGET}) != sorted(original):
+                problems.append(f"{name}: the closure would be {files}")
+            else:
+                (scratch / model_code.RECORD).write_text(json.dumps(model_code.build_record(scratch, 1, lock_libraries()), indent=2, sort_keys=True) + "\n")
+                left = model_code.verify(scratch, lock_libraries())
+                if left:
+                    problems.append(f"{name}: the regenerated record still fails: {left}")
+    return problems
+
+
+def case_dynamic_imports_that_cannot_be_read_are_refused() -> list[str]:
+    """What the verifier cannot read or allow is refused outright: the write fails, the record file is not touched and the verifier names the reason."""
+    problems = []
+    for name, (text, reason) in REFUSED.items():
+        with tempfile.TemporaryDirectory() as folder:
+            scratch = planted_tree(Path(folder), text)
+            before = (scratch / model_code.RECORD).read_bytes()
+            files, refusal = attempt_write(scratch)
+            if files is not None:
+                problems.append(f"{name}: write was not refused and would list {files}")
+                continue
+            try:
+                model_code.write(scratch, 1, lock_libraries())
+                problems.append(f"{name}: write did not raise")
+            except model_code.RecordError:
+                pass
+            if (scratch / model_code.RECORD).read_bytes() != before:
+                problems.append(f"{name}: a refused write changed the record file")
+            found = [text for text in model_code.verify(scratch, lock_libraries()) if text.startswith(reason)]
+            if not found:
+                problems.append(f"{name}: the verifier gave no {reason} problem")
+            elif not any(TREES in text for text in found):
+                problems.append(f"{name}: the problem does not name the file: {found}")
+    return problems
+
+
+def case_allowed_imports_leave_the_closure_unchanged() -> list[str]:
+    """The standard library (also optional or by literal dynamic import), the lock group libraries and attribute access inside the closure change nothing."""
+    problems = []
+    original = sorted(item["path"] for item in read_record()["files"])
+    for name, text in CLEAN.items():
+        with tempfile.TemporaryDirectory() as folder:
+            scratch = planted_tree(Path(folder), text)
+            files, refusal = attempt_write(scratch)
+            if files is None:
+                problems.append(f"{name}: write was refused: {refusal}")
+            elif sorted(files) != original:
+                problems.append(f"{name}: the closure would be {files}")
+    return problems
+
+
+# The four mutations of the round 1 review: (text placed after "import importlib" at the top of trees.py, text placed inside TreeRegressor.predict, outcome).
+REVIEWER = {
+    "static import": ("from scripts.training.models import mixed as _review_mixed\n", "", "joins"),
+    "lazy alias": ("from importlib import import_module as load_module\n", '        load_module("scripts.training.models.mixed")\n', "joins"),
+    "lazy variable": ("", '        module = "scripts.training.models.mixed"\n        importlib.import_module(module)\n', "refused"),
+    "optional built-in": (
+        'try:\n    __import__("scripts.training.models.mixed", fromlist=["ModelError"])\nexcept ModuleNotFoundError:\n    pass\n',
+        "",
+        "joins",
+    ),
+    "optional variable": (
+        'try:\n    _module = "scripts.training.models.mixed"\n    importlib.import_module(_module)\nexcept ModuleNotFoundError:\n    pass\n',
+        "",
+        "refused",
+    ),
+}
+
+
+def case_reviewer_planted_defects_are_caught() -> list[str]:
+    """The mutations of the round 1 review, placed as the reviewer placed them, with the real mixed.py: each puts mixed.py in the closure or is refused."""
+    tail = "        return self.native_.predict(design.matrix)"
+    problems = []
+    for name, (header, inside, outcome) in REVIEWER.items():
+        with tempfile.TemporaryDirectory() as folder:
+            scratch = scratch_tree(Path(folder))
+            shutil.copyfile(ROOT / "scripts/training/models/mixed.py", scratch / "scripts/training/models/mixed.py")
+            path = scratch / TREES
+            text = path.read_text()
+            if tail not in text or "import importlib\n" not in text:
+                problems.append(f"{name}: trees.py no longer has the place the mutation needs")
+                continue
+            path.write_text(text.replace(tail, inside + tail).replace("import importlib\n", "import importlib\n" + header, 1))
+            files, refusal = attempt_write(scratch)
+            if outcome == "joins" and (files is None or "scripts/training/models/mixed.py" not in files):
+                problems.append(f"{name}: expected mixed.py in the closure, got {files} {refusal}")
+            if outcome == "refused" and files is not None:
+                problems.append(f"{name}: expected a refusal, write would list {files}")
+    return problems
+
+
+def case_third_party_names_come_from_the_lock() -> list[str]:
+    """The allowed third-party names are the direct packages of the model_api group of uv.lock (read again here from the lock), with their import names."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
+    owners = [package for package in lock["package"] if "model-api" in package.get("dev-dependencies", {})]
+    if len(owners) != 1:
+        return [f"{len(owners)} packages of the lock own a model-api group"]
+    named = {entry["name"].lower().replace("-", "_") for entry in owners[0]["dev-dependencies"]["model-api"]}
+    libraries = lock_libraries()
+    problems = [
+        f"{name} is not allowed" for name in ("numpy", "sklearn", "scipy", "statsmodels", "xgboost", "skops", "mlflow", "pandas") if name not in libraries
+    ]
+    problems += [f"{name} is allowed but is not in the model_api group" for name in ("shap", "yaml", "requests", "torch", "pytest") if name in libraries]
+    problems += [
+        f"{name} of the lock group has no import name in the set" for name in sorted(named) if name not in libraries and name not in model_code.IMPORT_NAMES
+    ]
+    return problems
+
+
+def case_shap_exception_is_limited_to_its_function() -> list[str]:
+    """trees.py imports shap, which the model_api group lacks, only inside shap_values. The exception covers that function only, and a stale one is reported."""
+    problems = []
+    if (TREES, "shap_values") not in model_code.OUTSIDE_IMAGE:
+        problems.append("the exception for shap_values is not declared")
+    with tempfile.TemporaryDirectory() as folder:
+        scratch = scratch_tree(Path(folder))
+        path = scratch / TREES
+        text = path.read_text()
+        path.write_text(
+            text.replace('    shap = importlib.import_module("shap")\n', "    shap = None\n").replace(
+                '    explainer_error = importlib.import_module("shap.utils._exceptions").ExplainerError\n', "    explainer_error = Exception\n"
+            )
+        )
+        found = model_code.verify(scratch, lock_libraries())
+        if not any(item.startswith("exception_unused") for item in found):
+            problems.append(f"an exception with no import behind it was not reported: {found}")
+    with tempfile.TemporaryDirectory() as folder:
+        scratch = scratch_tree(Path(folder))
+        path = scratch / TREES
+        path.write_text(path.read_text().replace("def shap_values(", "def explain_values(", 1))
+        found = model_code.verify(scratch, lock_libraries())
+        if not any(item.startswith("import_outside") and "shap" in item for item in found):
+            problems.append(f"shap in a function without the exception was not refused: {found}")
+    return problems
+
+
+# 1c. The inputs of the check select the check
+
+
+def check_inputs() -> list[str]:
+    """Every file the record check and these cases read, found two ways: the files the modules name in their strings and the files the constants name."""
+    from scripts.quality.source_reads import source_inputs
+
+    tracked = {line for line in run_command("git", ["ls-files"], cwd=ROOT, timeout=60, check=True).stdout.splitlines() if line}
+    found = set()
+    for module in ("scripts/model_code.py", "scripts/quality/model_code_cases.py"):
+        found |= set(source_inputs((ROOT / module).read_text(), tracked, rooted=True))
+        found.add(module)
+    record = read_record()
+    found |= {item["path"] for item in record["files"]} | set(record["image_provided"])
+    found |= {model_code.RECORD, model_code.SCHEMA, CONTRACT, DOCKERFILE, "uv.lock", "scripts/process.py"}
+    return sorted(path for path in found if path in tracked or (ROOT / path).exists())
+
+
+GROUP = "repository_code_checks"
+
+
+def case_inputs_of_the_check_select_the_closure_group() -> list[str]:
+    """A change to any file the closure check reads (record, schema, contract, Dockerfile, lock, closure) runs its CI group."""
+    config = ci_groups.load()
+    problems = []
+    for path in check_inputs():
+        selected = ci_groups.plan("paths", "core", paths=[path], config=config)["run"]
+        if GROUP not in selected:
+            problems.append(f"{path} does not run {GROUP}")
+    return problems
+
+
+def case_each_selection_pattern_is_needed() -> list[str]:
+    """Without the patterns that match it, a path stops selecting the group: it is no accident of another pattern or of the fall-through."""
+    config = ci_groups.load()
+    problems = []
+    global_patterns = config["global"]
+    for path in check_inputs():
+        if any(re.search(pattern, path) for pattern in global_patterns):
+            continue
+        mutant = copy.deepcopy(config)
+        mutant["groups"][GROUP] = [pattern for pattern in config["groups"][GROUP] if not re.search(pattern, path)]
+        if mutant["groups"][GROUP] == config["groups"][GROUP]:
+            problems.append(f"{path} matches no pattern of {GROUP}")
+            continue
+        run = ci_groups.plan("paths", "core", paths=[path], config=mutant)["run"]
+        if GROUP in run:
+            problems.append(f"{path} still runs {GROUP} without its pattern (another path, a global pattern or an unclassified fall-through selects it)")
+    return problems
+
+
+def case_launcher_inventory_lists_every_file_of_the_folders_it_reads() -> list[str]:
+    """The launcher input list names every tracked file under a folder it lists (data_contracts/training, which holds the record, is read whole)."""
+    committed = json.loads((ROOT / "config/quality/launcher_inputs.json").read_text())
+    listed = set(committed["files"])
+    tracked = [line for line in run_command("git", ["ls-files"], cwd=ROOT, timeout=60, check=True).stdout.splitlines() if line]
+    folders = tuple(f"{folder}/" for folder in committed["folders"])
+    return [f"{path} is under a folder the launcher suite reads and is not in the list" for path in tracked if path.startswith(folders) and path not in listed]
 
 
 # 2. Import origins in a clean interpreter
@@ -478,6 +818,15 @@ ORDER = [
     case_image_provided_files_are_in_the_dockerfile,
     case_image_provided_module_needs_only_the_standard_library,
     case_planted_import_changes_the_closure,
+    case_imports_that_reach_a_file_join_the_closure,
+    case_dynamic_imports_that_cannot_be_read_are_refused,
+    case_allowed_imports_leave_the_closure_unchanged,
+    case_reviewer_planted_defects_are_caught,
+    case_third_party_names_come_from_the_lock,
+    case_shap_exception_is_limited_to_its_function,
+    case_inputs_of_the_check_select_the_closure_group,
+    case_each_selection_pattern_is_needed,
+    case_launcher_inventory_lists_every_file_of_the_folders_it_reads,
     case_clean_interpreter_imports_every_trusted_type_from_declared_files,
     case_stand_in_matches_what_the_closure_takes,
     case_clean_interpreter_fails_when_a_declared_file_is_missing,

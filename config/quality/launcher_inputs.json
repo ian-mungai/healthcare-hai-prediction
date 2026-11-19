@@ -694,6 +694,8 @@
     "data_contracts/training/feature_list.schema.json",
     "data_contracts/training/hac_year_mapping.schema.json",
     "data_contracts/training/lock_evidence.schema.json",
+    "data_contracts/training/model_code.json",
+    "data_contracts/training/model_code.schema.json",
     "data_contracts/training/model_contract.json",
     "data_contracts/training/model_contract.schema.json",
     "data_contracts/training/models.schema.json",
