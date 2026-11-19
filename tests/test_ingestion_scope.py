@@ -307,7 +307,8 @@ def test_counts_move_by_the_formula_when_the_reader_graph_changes() -> None:
     q4 = scope.projected_counts(roots=3, dictionaries=2, extra_loader_sources=1)
     plain = scope.projected_counts(roots=3, dictionaries=2)
     check((q4["declared"] - plain["declared"], q4["mirror_names"] - plain["mirror_names"], q4["pins"] - plain["pins"]) == (1, 1, 0), f"{q4} {plain}")
-    check(after["derived_variants"]["q4_b_index_table_declared"]["silver_declared_sources"] == after["counts"]["silver_declared_sources"] + 1, "report variant")
+    delivered = after["counts_by_q4_state"]["index_delivered"]
+    check(delivered["declared"] == after["counts"]["silver_declared_sources"] + 1, "the index-delivered state declares one more source")
 
 
 # 10. Idempotence and the command line.
@@ -337,3 +338,17 @@ def test_a_failing_run_exits_1_names_the_problem_and_writes_no_report(tmp_path: 
     check(code == 1, f"exit {code}")
     check("t_ghost" in capsys.readouterr().out, "the undefined table is not named")
     check(not out.exists(), "a failing run wrote a report")
+
+
+def test_a_real_parse_past_its_deadline_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The real pinned dbt is started with a deadline that cannot be met: the runner stops it, and the command exits 2 naming the deadline."""
+    models, declared, copies, table_map = base_project()
+    project = write_project(synthetic_files(models, declared, copies), tmp_path)
+    map_path = tmp_path / "map.json"
+    map_path.write_text(json.dumps(table_map))
+    monkeypatch.setattr(dbt_manifest_labels, "PARSE_SECONDS", 0.05)
+    out = tmp_path / "report.json"
+    code = scope.main(["--project", str(project), "--table-map", str(map_path), "--no-packages", "--out", str(out)])
+    check(code == 2, f"exit {code}")
+    check("dbt parse" in capsys.readouterr().err, "the failed parse is not named")
+    check(not out.exists(), "a timed-out run wrote a report")

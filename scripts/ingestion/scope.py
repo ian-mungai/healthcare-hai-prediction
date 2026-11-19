@@ -12,8 +12,11 @@ Output contract:
 
 * The report is JSON with sorted keys, two-space indent and one trailing newline. It holds no time and no host path, so two runs on the same tree give the
   same bytes. The parse seconds go to the output line and to the optional ``--timing-out`` file, never into the report.
-* The report is written only when ``problems`` is empty (exit 0). A run with a problem prints each one by name, writes no report and exits 1. A run that
-  cannot parse exits 2.
+* The report is written only when ``problems`` is empty (exit 0), to a temporary file that replaces the report atomically. A run with a scope problem
+  prints each one by name, writes no report and exits 1. A run whose input cannot be read or parsed (a malformed table map or dbt_project.yml, a missing file,
+  a parse that fails or passes its deadline, a report that cannot be written) prints the file or step by name and exits 2. A process-cleanup failure of the
+  parser (a process group that survived KILL) is not turned into an exit code: it propagates, so the process module's own exit status applies. A caller
+  must require exit 0 of the current run before it reads or binds the file: an older report at the path is not touched by a failing run.
 * Equality with another document (the S2 draft, a committed registry file) is :func:`equality_problems`: the consumer-scope projection only. It never reads
   acquisition annotations (queue counts, queued-output flags, notes), gap records, policy relationships or retained history.
 
@@ -26,6 +29,8 @@ import argparse
 import hashlib
 import importlib
 import json
+import os
+import re
 import sys
 import tempfile
 import time
@@ -34,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse import bronze, dbt_package_archive, pins
+from scripts.process import LaunchesNotStopped, ProcessGroupSurvived, SessionListingFailed, TimeoutExpired
 from scripts.quality import dbt_manifest_labels
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,8 +95,8 @@ class ScopeError(RuntimeError):
 def projected_counts(roots: int, dictionaries: int, extra_loader_sources: int = 0) -> dict[str, int]:
     """The derived counts of a reader graph by formula: mapped = roots + dictionaries; declared = roots + loaders; pins = roots + 1; mirror = mapped + loaders.
 
-    ``extra_loader_sources`` counts loader-style tables declared as dbt sources but not mapped (Q4 B's ``source_objects`` is one): each adds a declared source
-    and a mirror name and no pin. Recompute with the report; never freeze these numbers.
+    ``extra_loader_sources`` counts loader-style tables declared as dbt sources but not mapped (the Q4 = C index table ``source_objects`` is one, once the
+    index is delivered): each adds a declared source and a mirror name and no pin. Recompute with the report; never freeze these numbers.
     """
     loaders = len(LOADER_TABLES) + extra_loader_sources
     return {"mapped": roots + dictionaries, "declared": roots + loaders, "pins": roots + 1, "mirror_names": roots + dictionaries + loaders}
@@ -99,11 +105,26 @@ def projected_counts(roots: int, dictionaries: int, extra_loader_sources: int = 
 def read_copy_tables(project_dir: Path) -> dict[str, str]:
     """The ``copy_tables`` variable of the dbt project: bronze table to source family."""
     yaml = importlib.import_module("yaml")
-    document = yaml.safe_load((project_dir / "dbt_project.yml").read_text())
-    copy_tables = (document.get("vars") or {}).get("copy_tables")
+    path = project_dir / "dbt_project.yml"
+    try:
+        document = yaml.safe_load(path.read_text())
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
+        raise ScopeError(f"{path} is not valid YAML: {error}") from error
+    copy_tables = ((document.get("vars") or {}) if isinstance(document, dict) else {}).get("copy_tables")
     if not isinstance(copy_tables, dict):
-        raise ScopeError(f"{project_dir / 'dbt_project.yml'} has no copy_tables variable")
+        raise ScopeError(f"{path} has no copy_tables variable")
     return {str(table): str(family) for table, family in copy_tables.items()}
+
+
+def load_map(path: Path) -> dict[str, Any]:
+    """Read and validate the table map with the bronze loader; every way the file can be invalid is a ScopeError naming it; a missing file stays an OSError."""
+    try:
+        document = bronze.load_table_map(path)
+    except (ValueError, KeyError, TypeError, AttributeError, re.error) as error:
+        raise ScopeError(f"{path} is not a valid table map: {type(error).__name__}: {error}") from error
+    if not isinstance(document, dict) or not isinstance(document.get("tables"), list):
+        raise ScopeError(f"{path} is not a valid table map: it has no list of tables")
+    return document
 
 
 def bronze_readers(manifest: Mapping[str, Any]) -> dict[str, list[str]]:
@@ -148,6 +169,10 @@ def _scope_problems(
 
 def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy_tables: Mapping[str, str]) -> tuple[dict[str, Any], list[str]]:
     """Derive the scope report and its problems from a parsed manifest, a table map document and the copy_tables variable. Pure: reads nothing."""
+    names = [str(entry["table"]) for entry in table_map["tables"]]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise ScopeError(f"the table map repeats {', '.join(repeated)}")
     mapped = {str(entry["table"]): entry for entry in table_map["tables"]}
     readers = bronze_readers(manifest)
     operational = set(OPERATIONAL_MODELS)
@@ -200,7 +225,8 @@ def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy
         "silver_pins_if_dictionaries_declared": len(pinned_all),
         "glue_mirror_bronze_names": len(mirror),
     }
-    q4 = projected_counts(len(roots), len(dictionaries), extra_loader_sources=1)
+    interim = projected_counts(len(roots), len(dictionaries))
+    delivered = projected_counts(len(roots), len(dictionaries), extra_loader_sources=1)
     report = {
         "kind": KIND,
         "schema_version": SCHEMA_VERSION,
@@ -227,33 +253,54 @@ def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy
             },
             "glue_mirror_names": {"map_union_declared": len(mirror)},
         },
-        "derived_variants": {
-            "q4_b_index_table_declared": {
-                "silver_declared_sources": q4["declared"],
-                "silver_pins": q4["pins"],
-                "glue_mirror_bronze_names": q4["mirror_names"],
-            }
-        },
+        "counts_by_q4_state": {"interim": interim, "index_delivered": delivered},
         "problems": sorted(problems),
     }
     return report, sorted(problems)
 
 
-def _projected(entries: Sequence[Mapping[str, Any]], keys: Sequence[str]) -> dict[str, dict[str, Any]]:
-    """Entries by table name, each cut down to the projected keys; a missing key shows as None."""
-    return {str(entry["table"]): {key: entry.get(key) for key in keys} for entry in entries}
+def _canonical(document: Any) -> str:
+    """Canonical JSON text of a document: two rows are byte identical when these texts are equal."""
+    return json.dumps(document, sort_keys=True, separators=(",", ":"))
+
+
+def _projected(entries: Sequence[Mapping[str, Any]], keys: Sequence[str], where: str, found: list[str]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Entries by table name, each cut down to the projected keys, and the set of tables that appear twice with different rows; both are named in ``found``.
+
+    A row without a table name is named. A table that appears twice is named with both definitions, unless the two rows are byte identical; a conflicting
+    table is left out of the field comparison by the caller, so the answer never depends on which duplicate comes first.
+    """
+    first: dict[str, Mapping[str, Any]] = {}
+    conflicts: set[str] = set()
+    for entry in entries:
+        if "table" not in entry:
+            found.append(f"{where}: an entry has no table name")
+            continue
+        table = str(entry["table"])
+        if table not in first:
+            first[table] = entry
+        elif _canonical(first[table]) != _canonical(entry):
+            conflicts.add(table)
+            shown = sorted(_canonical({key: row.get(key) for key in keys}) for row in (first[table], entry))
+            outside = " (the rows differ only outside the projection)" if shown[0] == shown[1] else ""
+            found.append(f"{where}: {table} appears twice with different definitions{outside}: {shown[0]} and {shown[1]}")
+    return {table: {key: row.get(key) for key in keys} for table, row in first.items()}, conflicts
 
 
 def equality_problems(report: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
     """Where the consumer-scope projection of ``report`` differs from ``expected`` (a report or a draft). An empty list means equal.
 
     The projection is the table lists with the keys of :data:`PROJECTION`, the twelve :data:`COUNT_KEYS` and the silver declaration facts. List order is
-    ignored: entries are matched by table name. A table on one side only, a changed key or a changed count is named. Acquisition annotations, gap records,
+    ignored: entries are matched by table name. A table on one side only, a changed key or a changed count is named. A table repeated within one side is
+    named with both definitions (and never resolved to one of them) unless the repeated rows are byte identical. Acquisition annotations, gap records,
     policy relationships, retained history and descriptive text are not compared.
     """
     found: list[str] = []
     for group, keys in PROJECTION.items():
-        ours, theirs = _projected(report[group], keys), _projected(expected[group], keys)
+        ours, ours_conflicts = _projected(report[group], keys, f"{group} (report)", found)
+        theirs, theirs_conflicts = _projected(expected[group], keys, f"{group} (expected document)", found)
+        skip = ours_conflicts | theirs_conflicts
+        ours, theirs = ({table: row for table, row in side.items() if table not in skip} for side in (ours, theirs))
         found.extend(f"{group}: {table} is in the report only" for table in sorted(set(ours) - set(theirs)))
         found.extend(f"{group}: {table} is in the expected document only" for table in sorted(set(theirs) - set(ours)))
         for table in sorted(set(ours) & set(theirs)):
@@ -290,12 +337,24 @@ def report_bytes(report: Mapping[str, Any]) -> bytes:
     return (json.dumps(report, indent=2, sort_keys=True) + "\n").encode()
 
 
+def write_atomically(path: Path, data: bytes) -> None:
+    """Write ``data`` to a temporary file beside ``path`` and replace ``path`` with it, so a failed write leaves an older file whole and no temporary file."""
+    handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(data)
+        os.replace(name, path)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
 def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None) -> tuple[dict[str, Any], list[str], float]:
     """Parse a dbt project with the pinned dbt and derive its scope; returns the report, its problems and the parse seconds.
 
     ``root`` is the repository whose locked package archive supplies the dbt packages; None parses without packages (a synthetic project).
     """
-    table_map = bronze.load_table_map(table_map_path)
+    table_map = load_map(table_map_path)
     copy_tables = read_copy_tables(project_dir)
     with tempfile.TemporaryDirectory(prefix="hai_scope_") as scratch:
         work = Path(scratch)
@@ -304,7 +363,14 @@ def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None)
             dbt_manifest_labels.install_packages(root, work / "dbt_packages")
             packages = work / "dbt_packages"
         began = time.monotonic()
-        manifest = dbt_manifest_labels.parse_manifest(project_dir, project_dir, work, packages)
+        try:
+            manifest = dbt_manifest_labels.parse_manifest(project_dir, project_dir, work, packages)
+        except ProcessGroupSurvived:
+            raise
+        except TimeoutExpired as expired:
+            raise ScopeError(f"the dbt parse of {project_dir} did not finish within {expired.timeout} s") from expired
+        except json.JSONDecodeError as error:
+            raise ScopeError(f"the dbt parse of {project_dir} left a manifest.json that is not valid JSON: {error}") from error
         seconds = time.monotonic() - began
     report, problems = derive_scope(manifest, table_map, copy_tables)
     return report, problems, seconds
@@ -321,19 +387,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         report, problems, seconds = scope_of_project(arguments.project, arguments.table_map, None if arguments.no_packages else ROOT)
-    except (ScopeError, bronze.BronzeError, dbt_manifest_labels.ManifestError, dbt_package_archive.ArchiveError, OSError) as error:
+        for line in problems:
+            sys.stdout.write(f"{line}\n")
+        counts = report["counts"]
+        summary = f"roots {counts['in_scope_data']}, dictionaries {counts['dictionary']}, leaving {counts['leaving']}, dbt parse {seconds:.1f} s"
+        sys.stdout.write(f"scope report: {'fail' if problems else 'ok'} ({len(problems)} problems, {summary})\n")
+        if arguments.timing_out is not None:
+            write_atomically(arguments.timing_out, (json.dumps({"dbt_parse_seconds": round(seconds, 3)}, indent=2) + "\n").encode())
+        if problems:
+            return 1
+        write_atomically(arguments.out, report_bytes(report))
+    except (ProcessGroupSurvived, LaunchesNotStopped, SessionListingFailed):
+        raise
+    except (ScopeError, dbt_manifest_labels.ManifestError, dbt_package_archive.ArchiveError, OSError) as error:
         sys.stderr.write(f"scope report: cannot derive: {error}\n")
         return 2
-    for line in problems:
-        sys.stdout.write(f"{line}\n")
-    counts = report["counts"]
-    summary = f"roots {counts['in_scope_data']}, dictionaries {counts['dictionary']}, leaving {counts['leaving']}, dbt parse {seconds:.1f} s"
-    sys.stdout.write(f"scope report: {'fail' if problems else 'ok'} ({len(problems)} problems, {summary})\n")
-    if arguments.timing_out is not None:
-        arguments.timing_out.write_text(json.dumps({"dbt_parse_seconds": round(seconds, 3)}, indent=2) + "\n")
-    if problems:
-        return 1
-    arguments.out.write_bytes(report_bytes(report))
     return 0
 
 
