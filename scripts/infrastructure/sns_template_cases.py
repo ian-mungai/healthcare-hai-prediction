@@ -48,9 +48,29 @@ INSTANCE_LABELS = {"model_set", "job_type"}
 WITH_INSTANCE_LABELS = {"drift_triggered"}
 EXTRA_LABELS = {"service_tasks_missing": ["service"], "service_health_down": ["service"]}
 LINE_LIMIT_BEFORE_NEXT_STEP = 14
-SUBJECT_LIMIT = 100
+SUBJECT_LIMIT = 90
+SNS_SUBJECT_LIMIT = 100
+ALERT_BLOCK_LIMIT = 10
+MESSAGE_LIMIT = 60_000
 WORD_LIMIT = 25
 FIRING_FIELDS = ("summary", "affects", "next_step")
+HOSTILE_TEXT = {
+    "a line break": "line\nbreak",
+    "a tab": "tab\there",
+    "a carriage return": "a\rb",
+    "a control character": "bell\x07x",
+    "an emoji": "rocket \U0001f680",
+    "an accented letter": "\u00e9\u00e8\u00ea\u00eb",
+    "wide letters": "x" + "\u754c" * 29,
+    "accents and wide letters": "\u00e9" * 30,
+    "a leading space": "   leading",
+    "80 characters": "x" * 80,
+    "40 characters": "labelvalue" * 4,
+}
+SUBJECT_KEYS = ("dag_id", "task_id", "job", "phase", "hai_type", "feature_set", "service", "model_set", "job_type")
+BLANKET = ("Nothing is affected now.", "No action is needed.")
+GENERIC_CLEARED = "The alert condition has cleared."
+RESOLVED_FIELDS = ("recovered", "resolved_affects", "resolved_next")
 JOB_FAILED_FIRING = """What happened:
 A host job phase failed or was interrupted. No later run of it has succeeded.
 
@@ -161,11 +181,20 @@ def render(root: Path, notifications: Sequence[dict[str, Any]], mode: str = "zer
     return [(item["subject"], item["message"]) for item in json.loads(done.stdout)]
 
 
+def subject_problems(subject: str) -> list[str]:
+    """Why an SNS subject would be invalid or cut: it must be printable ASCII on one line, not start with a space and stay under the chosen limit."""
+    found = []
+    if not subject or subject != subject.strip() or not subject.isascii() or not subject.isprintable():
+        found.append(f"the subject is not printable ASCII on one line without outer spaces: {subject!r}")
+    if len(subject) > SUBJECT_LIMIT:
+        found.append(f"the subject has {len(subject)} characters, over the limit of {SUBJECT_LIMIT}: {subject!r}")
+    return found
+
+
 def shape_problems(subject: str, message: str, expected: Sequence[str] = BLOCKS) -> list[str]:
     """Everything wrong with an alert email: the subject, the blocks and their order, debris of the template and a key without its name."""
     found: list[str] = []
-    if not subject.strip() or "\n" in subject or len(subject) > SUBJECT_LIMIT:
-        found.append(f"the subject is empty, has a line break or is over {SUBJECT_LIMIT} characters: {subject!r}")
+    found.extend(subject_problems(subject))
     if not re.match(r"^(FIRING|RESOLVED):", subject):
         found.append(f"the subject does not start with the state: {subject!r}")
     lines = message.split("\n")
@@ -355,6 +384,126 @@ def missing_keys_read_the_same_as_empty_text(root: Path) -> dict[str, bool]:
     return {"zero mode and default mode render every rule the same": render(root, notices, "zero") == render(root, notices, "default")}
 
 
+def hostile_notifications(rules: dict[str, dict[str, Any]]) -> list[tuple[str, str, str, dict[str, Any]]]:
+    """Every rule in both states with each hostile text in every label the subject reads, and with the longest real values."""
+    found = []
+    for uid, rule in rules.items():
+        for state in ("firing", "resolved"):
+            for name, text in HOSTILE_TEXT.items():
+                found.append((uid, state, name, notification([alert(state, rule, dict.fromkeys(SUBJECT_KEYS, text))])))
+    return found
+
+
+def subject_is_valid_for_every_rule_state_and_text(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    cases = hostile_notifications(rules)
+    notices = render(root, [item[3] for item in cases])
+    bad = [
+        f"{uid} {state} with {name}: {'; '.join(subject_problems(subject))}"
+        for (uid, state, name, _), (subject, _) in zip(cases, notices, strict=True)
+        if subject_problems(subject)
+    ]
+    grouped = [alert("firing", rules["airflow_task_failed"], {"dag_id": text, "task_id": text}) for text in HOSTILE_TEXT.values()]
+    mixed = [alert("resolved", rules["job_failed"], {"job": text, "phase": text}) for text in HOSTILE_TEXT.values()]
+    big = render(root, [notification(grouped * 20), notification(mixed + grouped * 30)])
+    bad += [
+        f"a group of {count}: {'; '.join(subject_problems(subject))}" for count, (subject, _) in zip((220, 281), big, strict=True) if subject_problems(subject)
+    ]
+    return {
+        f"{len(cases) + 2} notifications, every subject is ASCII, on one line and under {SUBJECT_LIMIT} characters": not bad,
+        **{problem: False for problem in bad[:5]},
+    }
+
+
+def body_is_clean_for_every_rule_and_text(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    cases = hostile_notifications(rules)
+    notices = render(root, [item[3] for item in cases])
+    bad = []
+    for (uid, state, name, _), (_, message) in zip(cases, notices, strict=True):
+        controls = [char for char in message if char != "\n" and (ord(char) < 32 or ord(char) == 127)]
+        headers = [line for line in message.split("\n") if line in BLOCKS]
+        if controls or len(headers) != len(set(headers)):
+            bad.append(f"{uid} {state} with {name}: controls {controls!r} headers {headers}")
+    return {"no label puts a control character or a second block header in the message": not bad, **{problem: False for problem in bad[:5]}}
+
+
+def many_alerts_show_a_bounded_number_of_blocks(root: Path) -> dict[str, bool]:
+    task = rules_of(root)["airflow_task_failed"]
+    alerts = [alert("firing", task, {"dag_id": "x" * 200 + str(index), "task_id": "y" * 200}) for index in range(300)]
+    ((subject, message),) = render(root, [notification(alerts)])
+    blocks = message.split("\n\n----------\n\n")
+    checks: dict[str, bool] = {}
+    named(checks, "no more than the limit of alert blocks is shown", message.count("Alert rule: AirflowTaskFailed") == ALERT_BLOCK_LIMIT)
+    named(
+        checks,
+        "the last line says how many alerts are not shown",
+        message.split("\n")[-1] == f"{300 - ALERT_BLOCK_LIMIT} more alerts are not shown. Open Alerting in Grafana to see them all.",
+    )
+    named(checks, "the first line still counts every alert", message.startswith("300 alerts: 300 firing.\n"))
+    named(checks, "the subject counts every alert", subject == "FIRING: Airflow task failed (300 firing)")
+    named(checks, f"the message stays under {MESSAGE_LIMIT} bytes", len(message.encode()) < MESSAGE_LIMIT)
+    named(checks, "the blocks before the last line are whole", len(blocks) == ALERT_BLOCK_LIMIT)
+    return checks
+
+
+def resolved_alerts_say_only_what_is_true(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    states = [uid for uid in rules]
+    notices = render(root, [notification([alert("resolved", rules[uid])]) for uid in states])
+    checks: dict[str, bool] = {}
+    for uid, (_, message) in zip(states, notices, strict=True):
+        annotations = rules[uid]["annotations"]
+        problems = [text for text in BLANKET if text in message]
+        problems += [f"{key} is missing" for key in RESOLVED_FIELDS if not annotations.get(key) or annotations[key] not in message]
+        named(checks, f"{uid}: {'; '.join(problems) if problems else 'the cleared text is the rule text'}", not problems)
+    bare = {"status": "resolved", "labels": {"alertname": "SomethingNew", "severity": "warning"}, "annotations": {}, "startsAt": STARTS, "endsAt": ENDS}
+    ((_, message),) = render(root, [notification([bare])])
+    named(
+        checks,
+        "a rule with no resolved text says the condition cleared and that earlier work may need attention",
+        GENERIC_CLEARED in message and "Earlier work may still need attention." in message and not any(text in message for text in BLANKET),
+    )
+    return checks
+
+
+WORDING = {
+    "airflow_task_failed": {"recovered": "This task has no recorded failure in the last hour.", "affects": "A failed attempt may delay later tasks."},
+    "airflow_dag_run_failed": {"recovered": "This DAG has no recorded failed run in the last hour."},
+    "host_job_room_low": {"recovered": "The idle-host placement warning has cleared."},
+    "polaris_server_errors": {"recovered": "The recorded server-error count is no longer above three in ten minutes."},
+    "mlflow_server_errors": {"recovered": "The recorded server-error count is no longer above three in ten minutes."},
+    "lineage_delivery_failing": {"recovered": "No new lineage delivery failure was recorded in the last 15 minutes."},
+    "grafana_notifications_failing": {"recovered": "The notification failure condition has cleared."},
+    "drift_triggered": {"next_step": "drift_monitoring_dag"},
+    "api_down": {"headline": "Model API metrics are unreachable", "affects": "API metrics are unavailable. Predictions may also be unavailable."},
+    "mlflow_metrics_down": {"affects": "Check MLflow itself"},
+    "service_health_down": {"summary": "A service that should be running does not pass its health check."},
+    "host_oom_kill": {"next_step": "host and ECS task logs"},
+}
+FORBIDDEN = ("Decide if you retrain", "Nothing is affected now", "No action is needed")
+MANUAL_WORK_THE_PIPELINE_DOES = ("retrain the model", "rerun the dbt", "reload it again")
+
+
+def dag_ids(root: Path) -> set[str]:
+    return {match for path in sorted((root / "dags").glob("*.py")) for match in re.findall(r'dag_id="([a-z_]+)"', path.read_text(encoding="utf-8"))}
+
+
+def texts_match_the_rules_they_describe(root: Path) -> dict[str, bool]:
+    rules = rules_of(root)
+    known = dag_ids(root)
+    checks: dict[str, bool] = {}
+    for uid, wanted in WORDING.items():
+        for key, text in wanted.items():
+            named(checks, f"{uid}.{key} says {text!r}", text in str(rules[uid]["annotations"].get(key, "")))
+    for uid, rule in rules.items():
+        joined = " ".join(str(value) for value in rule["annotations"].values())
+        named(checks, f"{uid}: no blanket assurance or manual decision", not any(text in joined for text in FORBIDDEN))
+        named(checks, f"{uid}: every DAG it names exists", all(name in known for name in re.findall(r"\b([a-z]+(?:_[a-z]+)*_dag)\b", joined)))
+        named(checks, f"{uid}: no step the pipeline does by itself", not any(text in joined for text in MANUAL_WORK_THE_PIPELINE_DOES))
+    return checks
+
+
 def words_of(text: str) -> list[str]:
     return [sentence for sentence in re.split(r"(?<=[.!?])\s+", text.strip()) if sentence]
 
@@ -387,4 +536,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "alert_email_times_use_the_los_angeles_clock": times_use_the_los_angeles_clock,
     "alert_email_missing_keys_read_as_empty_text": missing_keys_read_the_same_as_empty_text,
     "alert_email_annotations_follow_the_writing_preferences": annotations_follow_the_writing_preferences,
+    "alert_email_subject_is_valid_for_every_rule_state_and_text": subject_is_valid_for_every_rule_state_and_text,
+    "alert_email_body_is_clean_for_every_rule_and_text": body_is_clean_for_every_rule_and_text,
 }

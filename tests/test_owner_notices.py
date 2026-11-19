@@ -202,3 +202,41 @@ def test_a_subject_over_the_limit_is_cut_at_a_word_and_a_notice_without_one_is_r
     cut = owner_notice.shorten(long)
     check(len(cut) <= 100 and cut.endswith("...") and "\n" not in cut, cut)
     check(owner_notice.shorten("one\nline  here") == "one line here", "line breaks stay in a subject")
+
+
+SUBJECT_LIMIT = 90
+BODY_LIMIT = 100_000
+HOSTILE_TEXT = (
+    "line\nbreak",
+    "tab\there",
+    "carriage\rreturn",
+    "bell\x07x",
+    "rocket \U0001f680",
+    "café",
+    "x" + "界" * 60,
+    "  leading space",
+    "word " * 60,
+)
+
+
+def subject_problems(subject: str) -> list[str]:
+    """Why an SNS subject would be invalid or cut: it must be printable ASCII on one line, not start with a space and stay under the chosen limit."""
+    found = []
+    if not subject or subject != subject.strip() or not subject.isascii() or not subject.isprintable():
+        found.append(f"not printable ASCII on one line without outer spaces: {subject!r}")
+    if len(subject) > SUBJECT_LIMIT:
+        found.append(f"{len(subject)} characters, over {SUBJECT_LIMIT}")
+    return found
+
+
+@pytest.mark.parametrize("text", HOSTILE_TEXT)
+def test_a_subject_is_ascii_on_one_line_and_under_the_limit_whatever_the_text(text: str) -> None:
+    check(not subject_problems(owner_notice.shorten(text)), f"{owner_notice.shorten(text)!r}")
+    check(not subject_problems(owner_notice.shorten(f"Bronze run {text} left out 1 table")), "a run name with hostile text")
+
+
+@pytest.mark.parametrize("outcome", training_contract.PROMOTION_OUTCOMES)
+def test_every_python_subject_follows_the_subject_rule(outcome: str) -> None:
+    check(not subject_problems(promotion_notice(outcome)["Subject"]), promotion_notice(outcome)["Subject"])
+    long = [f"source_{index}__20261101T000000Z__abc" for index in range(5)]
+    check(not subject_problems(bronze_notice(long, [{"table": "t", "reason": "r"}])["Subject"]), "the bronze subject")

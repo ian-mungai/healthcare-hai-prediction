@@ -10,6 +10,7 @@ named by its abbreviation) with UTC in brackets. A model or an infection type is
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -18,7 +19,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from orchestration import training_contract
 
 OWNER_ZONE = "America/Los_Angeles"
-SUBJECT_LIMIT = 100
+# SNS allows 100 characters and Grafana cuts a subject at 100 bytes. Ten characters of room keep both from ever acting on a subject.
+SUBJECT_LIMIT = 90
 ELLIPSIS = "..."
 
 
@@ -67,8 +69,9 @@ def hai_name(key: str) -> str:
 
 
 def shorten(text: str, limit: int = SUBJECT_LIMIT) -> str:
-    """The text on one line, cut at a word end with ``...`` when it is longer than the limit."""
-    line = " ".join(text.split())
+    """A subject SNS accepts: printable ASCII on one line. Controls and spaces become one space, a letter outside ASCII becomes ``?``, and a text longer
+    than the limit is cut at a word end with ``...``."""
+    line = re.sub(r"[^ -~]", "?", re.sub(r"[\x00-\x20\x7f]+", " ", text)).strip()
     if len(line) <= limit:
         return line
     return line[: limit - len(ELLIPSIS)].rsplit(" ", 1)[0].rstrip(" ,:") + ELLIPSIS

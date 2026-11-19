@@ -10,12 +10,47 @@ templates:
   - orgId: 1
     name: hai_sns
     template: |
+      {{ define "hai.safe10" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 10 }}{{ printf "%.7s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.safe12" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 12 }}{{ printf "%.9s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.safe20" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 20 }}{{ printf "%.17s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.safe22" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 22 }}{{ printf "%.19s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.safe24" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 24 }}{{ printf "%.21s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.safe45" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | reReplaceAll `[^ -~]` "?" | trimSpace -}}
+      {{ if gt (len $v) 45 }}{{ printf "%.42s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
+      {{ define "hai.line" -}}
+      {{ $v := . | reReplaceAll `[\x00-\x20\x7f]+` " " | trimSpace -}}
+      {{ if gt (len $v) 200 }}{{ printf "%.197s..." $v }}{{ else }}{{ $v }}{{ end }}
+      {{- end }}
+
       {{ define "hai.model_name" -}}
-      {{ if eq . "m1" }}OLS baseline (m1){{ else if eq . "m2" }}Elastic Net (m2){{ else if eq . "m3" }}Mixed effects (m3){{ else if eq . "m4" }}Gradient boosting (m4){{ else if eq . "m5" }}Spatial (m5){{ else if eq . "m6" }}Fixed effects (m6){{ else }}{{ . }}{{ end }}
+      {{ if eq . "m1" }}OLS baseline (m1){{ else if eq . "m2" }}Elastic Net (m2){{ else if eq . "m3" }}Mixed effects (m3){{ else if eq . "m4" }}Gradient boosting (m4){{ else if eq . "m5" }}Spatial (m5){{ else if eq . "m6" }}Fixed effects (m6){{ else }}{{ template "hai.safe22" . }}{{ end }}
       {{- end }}
 
       {{ define "hai.hai_name" -}}
-      {{ if eq . "HAI_1" }}CLABSI (HAI_1){{ else if eq . "HAI_2" }}CAUTI (HAI_2){{ else if eq . "HAI_3" }}SSI colon (HAI_3){{ else if eq . "HAI_4" }}SSI hysterectomy (HAI_4){{ else if eq . "HAI_5" }}MRSA (HAI_5){{ else if eq . "HAI_6" }}C. difficile (HAI_6){{ else }}{{ . }}{{ end }}
+      {{ if eq . "HAI_1" }}CLABSI (HAI_1){{ else if eq . "HAI_2" }}CAUTI (HAI_2){{ else if eq . "HAI_3" }}SSI colon (HAI_3){{ else if eq . "HAI_4" }}SSI hysterectomy (HAI_4){{ else if eq . "HAI_5" }}MRSA (HAI_5){{ else if eq . "HAI_6" }}C. difficile (HAI_6){{ else }}{{ template "hai.safe24" . }}{{ end }}
       {{- end }}
 
       {{ define "hai.time" -}}
@@ -23,20 +58,20 @@ templates:
       {{- end }}
 
       {{ define "hai.subject_target" -}}
-      {{ if .Labels.dag_id }} ({{ printf "%.30s" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ printf "%.30s" . }}{{ end }})
-      {{- else if .Labels.job }} (job {{ printf "%.20s" .Labels.job }}{{ with .Labels.phase }}, phase {{ printf "%.20s" . }}{{ end }})
+      {{ if .Labels.dag_id }} ({{ template "hai.safe12" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ template "hai.safe12" . }}{{ end }})
+      {{- else if .Labels.job }} (job {{ template "hai.safe10" .Labels.job }}{{ with .Labels.phase }}, phase {{ template "hai.safe10" . }}{{ end }})
       {{- else if .Labels.hai_type }} ({{ template "hai.hai_name" .Labels.hai_type }})
-      {{- else if .Labels.feature_set }} (feature set {{ template "hai.model_name" .Labels.feature_set }})
-      {{- else if .Labels.service }} (service {{ printf "%.30s" .Labels.service }})
+      {{- else if .Labels.feature_set }} (set {{ template "hai.model_name" .Labels.feature_set }})
+      {{- else if .Labels.service }} (service {{ template "hai.safe20" .Labels.service }})
       {{- end }}
       {{- end }}
 
       {{ define "hai.which" -}}
-      {{ if .Labels.job }}Job {{ .Labels.job }}{{ with .Labels.phase }}, phase {{ . }}{{ end }}{{ with .Labels.model_set }}, model {{ template "hai.model_name" . }}{{ end }}{{ with .Labels.job_type }}, infection type {{ template "hai.hai_name" . }}{{ end }}.
-      {{- else if .Labels.dag_id }}DAG {{ .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ . }}{{ end }}.
+      {{ if .Labels.job }}Job {{ template "hai.line" .Labels.job }}{{ with .Labels.phase }}, phase {{ template "hai.line" . }}{{ end }}{{ with .Labels.model_set }}, model {{ template "hai.model_name" . }}{{ end }}{{ with .Labels.job_type }}, infection type {{ template "hai.hai_name" . }}{{ end }}.
+      {{- else if .Labels.dag_id }}DAG {{ template "hai.line" .Labels.dag_id }}{{ with .Labels.task_id }}, task {{ template "hai.line" . }}{{ end }}.
       {{- else if .Labels.hai_type }}Infection type {{ template "hai.hai_name" .Labels.hai_type }}.
       {{- else if .Labels.feature_set }}Feature set {{ template "hai.model_name" .Labels.feature_set }}.
-      {{- else if .Labels.service }}Service {{ .Labels.service }}.
+      {{- else if .Labels.service }}Service {{ template "hai.line" .Labels.service }}.
       {{- end }}
       {{- end }}
 
@@ -57,7 +92,7 @@ templates:
       {{- else if $summary }}
       {{ $summary }}
       {{- else }}
-      {{ with .Labels.alertname }}{{ . }} is firing.{{ else }}An alert is firing.{{ end }}
+      {{ with .Labels.alertname }}{{ template "hai.line" . }} is firing.{{ else }}An alert is firing.{{ end }}
       {{- end }}
 
       When:
@@ -99,10 +134,10 @@ templates:
 
       Details:
       {{- with .Labels.job }}
-      Job: {{ . }}
+      Job: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.phase }}
-      Phase: {{ . }}
+      Phase: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.model_set }}
       Model: {{ template "hai.model_name" . }}
@@ -117,22 +152,22 @@ templates:
       Feature set: {{ template "hai.model_name" . }}
       {{- end }}
       {{- with .Labels.dag_id }}
-      DAG: {{ . }}
+      DAG: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.task_id }}
-      Task: {{ . }}
+      Task: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.service }}
-      Service: {{ . }}
+      Service: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.kind }}
-      Check group: {{ . }}
+      Check group: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.severity }}
-      Severity: {{ . }}
+      Severity: {{ template "hai.line" . }}
       {{- end }}
       {{- with .Labels.alertname }}
-      Alert rule: {{ . }}
+      Alert rule: {{ template "hai.line" . }}
       {{- end }}
       {{- end }}
       {{- end }}
@@ -141,7 +176,7 @@ templates:
       {{ $firing := len .Alerts.Firing -}}
       {{ $resolved := len .Alerts.Resolved -}}
       {{ if gt $firing 0 }}FIRING{{ else }}RESOLVED{{ end }}:
-      {{- with .CommonAnnotations.headline }} {{ . }}{{ else }}{{ with .CommonLabels.alertname }} {{ . }}{{ else }} Alert{{ end }}{{ end }}
+      {{- with .CommonAnnotations.headline }} {{ template "hai.safe45" . }}{{ else }}{{ with .CommonLabels.alertname }} {{ template "hai.safe45" . }}{{ else }} Alert{{ end }}{{ end }}
       {{- if eq (len .Alerts) 1 }}{{ with index .Alerts 0 }}{{ template "hai.subject_target" . }}{{ end }}
       {{- else }} ({{ if $firing }}{{ $firing }} firing{{ end }}{{ if and $firing $resolved }}, {{ end }}{{ if $resolved }}{{ $resolved }} resolved{{ end }})
       {{- end }}

@@ -41,9 +41,25 @@ CONTACT = f"{ALERTING}/contact_points.yml"
 POLICIES = f"{ALERTING}/policies.yml"
 TEMPLATES = f"{ALERTING}/templates.yml"
 TEMPLATE_GROUP = "hai_sns"
-TEMPLATE_PARTS = ("hai.sns.subject", "hai.sns.message", "hai.model_name", "hai.hai_name", "hai.alert", "hai.time", "hai.which", "hai.subject_target")
+TEMPLATE_PARTS = (
+    "hai.sns.subject",
+    "hai.sns.message",
+    "hai.model_name",
+    "hai.hai_name",
+    "hai.alert",
+    "hai.time",
+    "hai.which",
+    "hai.subject_target",
+    "hai.line",
+    "hai.safe10",
+    "hai.safe12",
+    "hai.safe20",
+    "hai.safe22",
+    "hai.safe24",
+    "hai.safe45",
+)
 NOTICE_ANNOTATIONS = ("headline", "recovered", "affects", "next_step", "dashboard")
-HEADLINE_LIMIT = 60
+HEADLINE_LIMIT = 45
 CONTACT_NAME = "hai_sns"
 TOPIC_REFERENCE = "${ALERTS_TOPIC_ARN}"
 STATIC_CREDENTIALS = ("access_key", "secret_key", "profile", "role_arn")

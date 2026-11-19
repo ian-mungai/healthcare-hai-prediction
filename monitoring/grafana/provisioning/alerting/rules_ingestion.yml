@@ -43,7 +43,7 @@ groups:
           severity: warning
         annotations:
           summary: A publisher retry run ended with files that were not captured, so the month's capture is incomplete.
-          headline: 'Publisher files are still missing after the retry'
+          headline: 'Publisher files still missing after retry'
           recovered: 'No file is missing after the latest retry run.'
           affects: 'The capture of the month is incomplete. Bronze keeps the earlier capture of those files.'
           next_step: 'Open the HAI ingestion dashboard to see how many files are missing. Then read the ingestion run record.'
