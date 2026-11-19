@@ -1,0 +1,339 @@
+"""The scope report derives the default bronze scope from a fresh dbt parse (design v3 step S2, tests 1 to 10).
+
+Synthetic dbt projects cover the logic one case at a time. The real project and mutated copies of it cover the numbers and the independent removal,
+addition and undefined-source cases. Nothing here reads S3 or the network, and the repository is not written.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import shutil
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from orchestration import ecs_lineage
+from scripts.ingestion import scope
+from scripts.lakehouse import bronze, glue_mirror, pins
+from scripts.process import run_command
+from scripts.quality import dbt_manifest_labels
+from tests.support import check
+
+ROOT = Path(__file__).resolve().parents[1]
+TABLE_MAP = ROOT / "config/lakehouse/bronze_tables.json"
+SOURCES = ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
+OPERATIONAL = "stg_bronze__file_copies"
+READ = "union all select 1 from {{ source('bronze', 'TABLE') }}\n"
+PROFILES = "synth:\n  target: lint\n  outputs:\n    lint:\n      type: duckdb\n      path: ':memory:'\n      threads: 1\n"
+
+
+def map_entry(table: str, dictionary: str | None = None) -> dict[str, Any]:
+    """One valid table map entry for a synthetic collection; ``dictionary`` names the table that documents it."""
+    entry: dict[str, Any] = {"table": table, "group": "synthetic", "collection": "pub/coll", "format": "csv", "dataset_ids": [table], "encodings": ["utf-8"]}
+    if dictionary:
+        entry["dictionary"] = {"table": dictionary, "file_pattern": "dictionary"}
+    return entry
+
+
+def map_document(*entries: dict[str, Any]) -> dict[str, Any]:
+    """A table map document around entries; dictionary tables are ``csv_rows`` entries."""
+    return {"version": 1, "namespace": "bronze", "classification": "Public", "tables": list(entries)}
+
+
+def dictionary_entry(table: str) -> dict[str, Any]:
+    """A table map entry that can serve as a dictionary."""
+    return {**map_entry(table), "format": "csv_rows"}
+
+
+def synthetic_files(models: dict[str, list[str]], declared: list[str], copy_tables: dict[str, str]) -> dict[str, str]:
+    """A synthetic dbt project: one model per name reading the listed bronze tables, the operational copy model and the sources file."""
+    sources = "version: 2\nsources:\n  - name: bronze\n    schema: bronze\n    tables:\n"
+    sources += "".join(f"      - name: {name}\n" for name in [*scope.LOADER_TABLES, *declared])
+    copies = "".join(f"    {name}: {family}\n" for name, family in copy_tables.items()) or "    {}\n"
+    project = f"name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nmodel-paths: [models]\nvars:\n  copy_tables:\n{copies}"
+    files = {"dbt_project.yml": project, "profiles.yml": PROFILES, "models/_sources.yml": sources}
+    for model, tables in models.items():
+        files[f"models/{model}.sql"] = "select 1 as id\n" + "".join(READ.replace("TABLE", table) for table in tables)
+    return files
+
+
+def write_project(files: dict[str, str], work: Path) -> Path:
+    """Write the synthetic project files under ``work/project`` and return that folder."""
+    project = work / "project"
+    for relative, text in files.items():
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return project
+
+
+def derive(files: dict[str, str], table_map: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Parse a synthetic project with the pinned dbt and derive its scope."""
+    with tempfile.TemporaryDirectory(prefix="hai_scope_test_") as scratch:
+        work = Path(scratch)
+        project = write_project(files, work)
+        manifest = dbt_manifest_labels.parse_manifest(project, project, work)
+        return scope.derive_scope(manifest, table_map, scope.read_copy_tables(project))
+
+
+def base_project() -> tuple[dict[str, list[str]], list[str], dict[str, str], dict[str, Any]]:
+    """Two roots (one with a dictionary), the dictionary table and one leaving table, with the operational model reading both roots."""
+    models = {"stg_a": ["t_a"], "stg_b": ["t_b"], OPERATIONAL: ["t_a", "t_b"]}
+    declared = ["t_a", "t_b"]
+    copies = {"t_a": "alpha", "t_b": "beta"}
+    table_map = map_document(map_entry("t_a", "t_dict"), map_entry("t_b"), dictionary_entry("t_dict"), map_entry("t_gone"))
+    return models, declared, copies, table_map
+
+
+@pytest.fixture(scope="module")
+def real_scope() -> Iterator[tuple[dict[str, Any], list[str], float]]:
+    """The scope of the repository's own project, parsed once for the cases that read it."""
+    yield scope.scope_of_project(ROOT / "dbt", TABLE_MAP, ROOT)
+
+
+def mutated_real(change: Any) -> tuple[dict[str, Any], list[str]]:
+    """The scope of a scratch copy of the real dbt project after ``change(project_dir)`` edited it."""
+    with tempfile.TemporaryDirectory(prefix="hai_scope_real_") as scratch:
+        project = Path(scratch) / "dbt"
+        shutil.copytree(ROOT / "dbt", project)
+        change(project)
+        report, problems, _ = scope.scope_of_project(project, TABLE_MAP, ROOT)
+        return report, problems
+
+
+# 1. Removal case.
+def test_a_table_no_model_reads_drops_out_of_the_roots_even_when_copy_tables_names_it() -> None:
+    """The reader goes away, so the table is no root. The stale copy_tables entry is a named problem, not a root."""
+    models, declared, copies, table_map = base_project()
+    models["stg_b"] = []
+    report, problems = derive(synthetic_files(models, declared, copies), table_map)
+    check([entry["table"] for entry in report["in_scope"]] == ["t_a"], f"t_b must leave the roots: {report['in_scope']}")
+    check(any("t_b" in line and "copy_tables" in line for line in problems), f"the stale copy_tables entry t_b is not named: {problems}")
+
+
+def test_removal_in_the_real_project_names_the_stale_copy_table() -> None:
+    """The real project with one staging model repointed: acs_b16005 loses its only analytical reader."""
+
+    def repoint(project: Path) -> None:
+        (project / "models/silver/staging/stg_acs_b16005.sql").write_text("{{ canonical_rows('acs_b19013') }}\n")
+
+    report, problems = mutated_real(repoint)
+    check("acs_b16005" not in {entry["table"] for entry in report["in_scope"]}, "acs_b16005 is still a root after its reader moved")
+    check(any("acs_b16005" in line and "copy_tables" in line for line in problems), f"no problem names acs_b16005: {problems}")
+
+
+# 2. Addition case.
+def test_a_table_a_model_starts_reading_becomes_a_root() -> None:
+    """A new reader of a mapped table makes it a root; with copy_tables updated the report is clean."""
+    models, declared, copies, table_map = base_project()
+    models["stg_gone"] = ["t_gone"]
+    declared.append("t_gone")
+    models[OPERATIONAL] = ["t_a", "t_b", "t_gone"]
+    report, problems = derive(synthetic_files(models, declared, {**copies, "t_gone": "gamma"}), table_map)
+    check([entry["table"] for entry in report["in_scope"]] == ["t_a", "t_b", "t_gone"], f"t_gone must become a root: {report['in_scope']}")
+    check(problems == [], f"unexpected problems: {problems}")
+    check(report["leaving"] == [], f"nothing should leave: {report['leaving']}")
+
+
+def test_addition_in_the_real_project_names_the_missing_copy_table() -> None:
+    """A model that reads a leaving table of the real map makes it a root, and the missing copy_tables entry is named."""
+
+    def add_reader(project: Path) -> None:
+        sources = project / "models/silver/staging/_bronze__sources.yml"
+        sources.write_text(sources.read_text() + "      - name: cms_pos_clia\n")
+        (project / "models/silver/staging/stg_probe_reader.sql").write_text("{{ canonical_rows('cms_pos_clia') }}\n")
+
+    report, problems = mutated_real(add_reader)
+    check("cms_pos_clia" in {entry["table"] for entry in report["in_scope"]}, "cms_pos_clia is not a root after a model reads it")
+    check(any("cms_pos_clia" in line and "copy_tables" in line for line in problems), f"no problem names cms_pos_clia: {problems}")
+
+
+# 3. Circle case.
+def test_a_copy_tables_entry_with_no_analytical_reader_fails_by_name() -> None:
+    """copy_tables names t_gone, whose only reader is the operational copy model: the loop is a named problem."""
+    models, declared, copies, table_map = base_project()
+    models[OPERATIONAL] = ["t_a", "t_b", "t_gone"]
+    declared.append("t_gone")
+    report, problems = derive(synthetic_files(models, declared, {**copies, "t_gone": "gamma"}), table_map)
+    check(any("t_gone" in line and "copy_tables" in line for line in problems), f"the circle on t_gone is not named: {problems}")
+    check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "a table only the operational model reads became a root")
+
+
+# 4. Fake undefined table.
+def test_a_model_reading_a_source_outside_the_map_fails_by_name() -> None:
+    """The source is declared to dbt but is no mapped table and no loader table: the report names the model and the table."""
+    models, declared, copies, table_map = base_project()
+    models["stg_ghost"] = ["t_ghost"]
+    _, problems = derive(synthetic_files(models, [*declared, "t_ghost"], copies), table_map)
+    check(any("stg_ghost" in line and "t_ghost" in line for line in problems), f"the undefined source is not named: {problems}")
+
+
+def test_undefined_source_in_the_real_project_fails_by_name() -> None:
+    """A model of the real project reads a bronze source that the real map lacks."""
+
+    def add_ghost(project: Path) -> None:
+        sources = project / "models/silver/staging/_bronze__sources.yml"
+        sources.write_text(sources.read_text() + "      - name: zz_not_mapped\n")
+        (project / "models/silver/staging/stg_probe_ghost.sql").write_text("select * from {{ source('bronze', 'zz_not_mapped') }}\n")
+
+    _, problems = mutated_real(add_ghost)
+    check(any("stg_probe_ghost" in line and "zz_not_mapped" in line for line in problems), f"the undefined source is not named: {problems}")
+
+
+# 5. Operational exclusion.
+def test_the_operational_model_alone_does_not_make_a_root() -> None:
+    """t_only is read by stg_bronze__file_copies and by nothing else: it is no root and the operational model is not an analytical reader."""
+    models, declared, copies, table_map = base_project()
+    models[OPERATIONAL] = ["t_a", "t_b", "t_gone"]
+    report, _ = derive(synthetic_files(models, [*declared, "t_gone"], copies), table_map)
+    names = {entry["table"] for entry in report["in_scope"]}
+    check(names == {"t_a", "t_b"}, f"only the analytically read tables are roots: {names}")
+    check(all(entry["operational_readers"] == [OPERATIONAL] for entry in report["in_scope"]), "each root must list the operational reader apart")
+    check(all(OPERATIONAL not in entry["analytical_readers"] for entry in report["in_scope"]), "the operational model counted as an analytical reader")
+
+
+# 6. Real project.
+def test_real_project_has_74_roots_11_dictionaries_and_246_leaving(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """The counts at this base: 74 data roots, 11 dictionaries, 85 in default scope, 246 leaving of 331 mapped; no problem."""
+    report, problems, _ = real_scope
+    check(problems == [], f"the real project has problems: {problems}")
+    counts = report["counts"]
+    got = (counts["mapped"], counts["in_scope_data"], counts["dictionary"], counts["default_scope"], counts["leaving"])
+    check(got == (331, 74, 11, 85, 246), f"counts: {got}")
+    check((len(report["in_scope"]), len(report["dictionary"]), len(report["leaving"])) == (74, 11, 246), "the lists disagree with the counts")
+
+
+def test_a_dictionary_is_the_table_named_by_an_in_scope_table(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """Each dictionary of the report is named by at least one root, and no root's dictionary is missing."""
+    report, _, _ = real_scope
+    table_map = {entry["table"]: entry for entry in bronze.load_table_map(TABLE_MAP)["tables"]}
+    wanted = {table_map[entry["table"]]["dictionary"]["table"] for entry in report["in_scope"] if "dictionary" in table_map[entry["table"]]}
+    check(wanted == {entry["table"] for entry in report["dictionary"]}, f"dictionary tables differ: {wanted ^ {e['table'] for e in report['dictionary']}}")
+
+
+# 7. Derived sets.
+def test_pins_lineage_and_mirror_names_derive_from_the_scope(real_scope: tuple[dict[str, Any], list[str], float], tmp_path: Path) -> None:
+    """Pins come from the real pins function, the silver lineage from the real lineage function and the mirror names from the real mirror function."""
+    report, _, _ = real_scope
+    roots = {entry["table"] for entry in report["in_scope"]}
+    scope_tables = roots | {entry["table"] for entry in report["dictionary"]}
+    declared = roots | set(scope.LOADER_TABLES)
+    pinned = pins.pinned_tables(scope_tables, declared)
+    check(len(pinned) == 75 == report["counts"]["silver_pins"], f"pins: {len(pinned)} against {report['counts']['silver_pins']}")
+    reduced = copy.deepcopy(bronze.load_table_map(TABLE_MAP))
+    reduced["tables"] = [entry for entry in reduced["tables"] if entry["table"] in scope_tables]
+    root = tmp_path / "root"
+    for relative in (ecs_lineage.HOST_FILE, ecs_lineage.JOBS_FILE, SOURCES.relative_to(ROOT), *ecs_lineage.CONTRACT_FILES.values()):
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, root / relative)
+    (root / ecs_lineage.BRONZE_TABLES_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (root / ecs_lineage.BRONZE_TABLES_FILE).write_text(json.dumps(reduced))
+    lineage = ecs_lineage.declared_lineage("silver", root=root)["inputs"]
+    check(sorted(item["name"].rsplit(".", 1)[-1] for item in lineage) == pinned, "the silver lineage inputs differ from the pins")
+    reduced_path = tmp_path / "reduced_map.json"
+    reduced_path.write_text(json.dumps(reduced))
+    patched = pytest.MonkeyPatch()
+    patched.setattr(glue_mirror, "BRONZE_TABLES", reduced_path)
+    try:
+        names = glue_mirror.layer_tables("bronze")
+    finally:
+        patched.undo()
+    check(
+        len(names) == 89 == report["counts"]["glue_mirror_bronze_names"], f"mirror names: {len(names)} against {report['counts']['glue_mirror_bronze_names']}"
+    )
+    check(report["counts"]["silver_declared_sources"] == 78 == report["silver_source_declaration"]["pins"]["current_yml_declared_sources"], "declared sources")
+    check(report["counts"]["silver_pins_if_dictionaries_declared"] == 86, "pins with the dictionaries declared")
+
+
+# 8. Equality.
+def expected_from(report: dict[str, Any]) -> dict[str, Any]:
+    """A draft-shaped document: the report's projected keys plus acquisition annotations and text the equality rule must ignore."""
+    document = copy.deepcopy(report)
+    for group in ("in_scope", "dictionary", "leaving"):
+        for entry in document[group]:
+            entry.update(queue_units=300, queued_output_selected=False, collection_without_queue_unit=False, notes=["annotation"])
+    document["counts"].update(default_scope_without_queued_output=22, leaving_with_queue_units=236)
+    document["silver_source_declaration"]["decision"] = "text"
+    document["gap_records"] = ["not S2's"]
+    return document
+
+
+def test_equality_ignores_acquisition_annotations_and_names_the_first_difference(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """The report equals a draft-shaped document in every consumer-scope key. A changed reader set, dictionary relationship or count is named."""
+    report, _, _ = real_scope
+    expected = expected_from(report)
+    check(scope.equality_problems(report, expected) == [], "annotations and text must not change equality")
+    first = expected["in_scope"][0]["table"]
+    expected["in_scope"][0]["analytical_readers"] = ["somebody_else"]
+    expected["dictionary"][0]["required_by"] = ["nobody"]
+    expected["counts"]["silver_pins"] = 74
+    expected["leaving"].reverse()
+    found = scope.equality_problems(report, expected)
+    check(any(first in line and "analytical_readers" in line for line in found), f"reader change not named: {found}")
+    check(any(expected["dictionary"][0]["table"] in line and "required_by" in line for line in found), f"dictionary change not named: {found}")
+    check(any("silver_pins" in line for line in found), f"count change not named: {found}")
+    check(len(found) == 3, f"only the three real differences count, order does not: {found}")
+
+
+def test_equality_names_a_missing_and_an_extra_table(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """A table present on one side only is named, so a dropped or added root cannot pass as a count change."""
+    report, _, _ = real_scope
+    expected = expected_from(report)
+    dropped = expected["in_scope"].pop()["table"]
+    found = scope.equality_problems(report, expected)
+    check(any(dropped in line for line in found), f"the table missing from the expected side is not named: {found}")
+
+
+# 9. Counts derive, never freeze.
+def test_counts_move_by_the_formula_when_the_reader_graph_changes() -> None:
+    """One more root with a new dictionary moves mapped by 2, declared by 1, pins by 1 and mirror names by 2; Q4 B adds one declared and one mirror name."""
+    models, declared, copies, table_map = base_project()
+    before, _ = derive(synthetic_files(models, declared, copies), table_map)
+    models["stg_c"] = ["t_c"]
+    models[OPERATIONAL] = ["t_a", "t_b", "t_c"]
+    bigger = map_document(*table_map["tables"], map_entry("t_c", "t_dict_c"), dictionary_entry("t_dict_c"))
+    after, problems = derive(synthetic_files(models, [*declared, "t_c"], {**copies, "t_c": "gamma"}), bigger)
+    check(problems == [], f"unexpected problems: {problems}")
+    keys = ("in_scope_data", "dictionary", "default_scope", "silver_declared_sources", "silver_pins", "glue_mirror_bronze_names")
+    moved = {key: after["counts"][key] - before["counts"][key] for key in keys}
+    check(
+        moved == {"in_scope_data": 1, "dictionary": 1, "default_scope": 2, "silver_declared_sources": 1, "silver_pins": 1, "glue_mirror_bronze_names": 2},
+        str(moved),
+    )
+    q4 = scope.projected_counts(roots=3, dictionaries=2, extra_loader_sources=1)
+    plain = scope.projected_counts(roots=3, dictionaries=2)
+    check((q4["declared"] - plain["declared"], q4["mirror_names"] - plain["mirror_names"], q4["pins"] - plain["pins"]) == (1, 1, 0), f"{q4} {plain}")
+    check(after["derived_variants"]["q4_b_index_table_declared"]["silver_declared_sources"] == after["counts"]["silver_declared_sources"] + 1, "report variant")
+
+
+# 10. Idempotence and the command line.
+def test_two_runs_give_identical_bytes_and_the_timing_stays_outside(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The report file is byte identical across runs; the parse seconds are in the sidecar and the output line, never in the report."""
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    timing = tmp_path / "timing.json"
+    before = run_command("git", ["status", "--porcelain"], cwd=ROOT, check=True).stdout
+    check(scope.main(["--out", str(first), "--timing-out", str(timing)]) == 0, "first run failed")
+    check(scope.main(["--out", str(second)]) == 0, "second run failed")
+    check(first.read_bytes() == second.read_bytes(), "two runs differ")
+    check("dbt parse" in capsys.readouterr().out, "the run does not print its parse seconds")
+    check(0 < json.loads(timing.read_text())["dbt_parse_seconds"] < scope.PARSE_SECONDS, "the sidecar holds no parse seconds")
+    check("seconds" not in first.read_text(), "the report holds timing")
+    check(run_command("git", ["status", "--porcelain"], cwd=ROOT, check=True).stdout == before, "the run changed the repository")
+
+
+def test_a_failing_run_exits_1_names_the_problem_and_writes_no_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A synthetic project with an undefined source: exit 1, the table is named, and no report file exists."""
+    models, declared, copies, table_map = base_project()
+    models["stg_ghost"] = ["t_ghost"]
+    project = write_project(synthetic_files(models, [*declared, "t_ghost"], copies), tmp_path)
+    map_path = tmp_path / "map.json"
+    map_path.write_text(json.dumps(table_map))
+    out = tmp_path / "report.json"
+    code = scope.main(["--project", str(project), "--table-map", str(map_path), "--no-packages", "--out", str(out)])
+    check(code == 1, f"exit {code}")
+    check("t_ghost" in capsys.readouterr().out, "the undefined table is not named")
+    check(not out.exists(), "a failing run wrote a report")
