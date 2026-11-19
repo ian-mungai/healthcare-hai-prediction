@@ -24,14 +24,20 @@ inner join files on bronze._object_key = files.canonical_object_key
 {% endmacro %}
 
 {% macro canonical_projection(table, projection, flags='') %}
+{%- set required = bronze_projection_columns(projection, flags) -%}
+{%- set shape = bronze_shape(table, required) -%}
 -- One copy of each stored file, read through an explicit projection of safe columns: nothing else of the bronze row is carried into silver [166] [172].
 with
+
+bronze_rows as (
+    {{ bronze_source_rows(table, required, shape) }}
+),
 
 bronze as (
     select
         *{% if flags %},
         {{ flags }}{% endif %}
-    from {{ source('bronze', table) }}
+    from bronze_rows
 ),
 
 files as (

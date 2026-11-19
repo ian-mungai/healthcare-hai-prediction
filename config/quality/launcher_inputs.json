@@ -703,6 +703,7 @@
     "data_contracts/training/redundant_features.schema.json",
     "data_contracts/training/targets.schema.json",
     "dbt/dbt_project.yml",
+    "dbt/macros/bronze_shape.sql",
     "dbt/macros/build_marker_hooks.sql",
     "dbt/macros/build_provenance.sql",
     "dbt/macros/canonical_rows.sql",

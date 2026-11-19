@@ -4256,6 +4256,38 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
         frozenset(),
     ),
 }
+# A bronze table whose columns differ from the ones its staging view reads (live finding of Nov 18 2026: silver_5763ca12 stopped on a Binder Error for
+# stg_hcai_finance_csv). Each case rewrites the table after the fixture tables exist. A table with no data column and no row reads as a typed empty result; a
+# table with other columns, or one column fewer, stops the view with a message that names the table and the columns.
+LINEAGE_ONLY = "CREATE OR REPLACE TABLE bronze.{table} AS SELECT _object_key, _member_sha256, _row_number FROM bronze.{table} WHERE false;"
+OTHER_COLUMNS = "CREATE OR REPLACE TABLE bronze.{table} AS SELECT _object_key, _member_sha256, _row_number, 'page' AS page_text FROM bronze.{table};"
+WITHOUT_FINANCE = tuple(item for item in BASE if item.table != "hcai_finance_csv")
+WITHOUT_NONRESPONSE = tuple(item for item in BASE if item.table != "hcai_util_nonresponse_csv")
+# case -> (objects, SQL on the fixture tables, the view that reads the table)
+BRONZE_SHAPES: dict[str, tuple[tuple[Stored, ...], str, str]] = {
+    "finance_without_data_columns": (WITHOUT_FINANCE, LINEAGE_ONLY.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
+    "nonresponse_without_data_columns": (WITHOUT_NONRESPONSE, LINEAGE_ONLY.format(table="hcai_util_nonresponse_csv"), "stg_hcai_util_nonresponse_csv"),
+    "finance_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
+    "finance_other_columns_no_rows": (WITHOUT_FINANCE, OTHER_COLUMNS.format(table="hcai_finance_csv"), "stg_hcai_finance_csv"),
+    "finance_one_column_short": (
+        BASE,
+        "CREATE OR REPLACE TABLE bronze.hcai_finance_csv AS SELECT * EXCLUDE (rpe) FROM bronze.hcai_finance_csv;",
+        "stg_hcai_finance_csv",
+    ),
+    "util_pages_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_pages_csv"), "stg_hcai_util_pages_csv"),
+    "util_nonresponse_other_columns": (BASE, OTHER_COLUMNS.format(table="hcai_util_nonresponse_csv"), "stg_hcai_util_nonresponse_csv"),
+    "illinois_other_columns": (BASE, OTHER_COLUMNS.format(table="illinois_report_card_csv"), "stg_illinois_report_card_csv"),
+}
+BRONZE_SHAPES_EMPTY = ("finance_without_data_columns", "nonresponse_without_data_columns")
+# case -> the words the refusal of the view must hold: the table and the columns it names
+BRONZE_SHAPES_REFUSED: dict[str, tuple[str, ...]] = {
+    "finance_other_columns": ("hcai_finance_csv", "missing oshpd_id, rpe, pagecolumnline, values", "page_text"),
+    "finance_other_columns_no_rows": ("hcai_finance_csv", "missing oshpd_id, rpe, pagecolumnline, values", "page_text"),
+    "finance_one_column_short": ("hcai_finance_csv", "missing rpe;"),
+    "util_pages_other_columns": ("hcai_util_pages_csv", "missing fac_no, fac_name", "page_text"),
+    "util_nonresponse_other_columns": ("hcai_util_nonresponse_csv", "missing fac_no, fac_name", "page_text"),
+    "illinois_other_columns": ("illinois_report_card_csv", "missing entity_id, name", "page_text"),
+}
 COUNTY_CODE_REUSED = tuple(
     with_record(
         with_record(item, adjacent("Skagway Municipality, AK", "02230", "Hoonah-Angoon Census Area, AK", "02105")),
@@ -5373,7 +5405,8 @@ def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[st
     (case_dir / "file_preambles.csv").write_text(file_preambles_csv(objects))
     variables += f"SET VARIABLE file_preambles_csv = '{CONTAINER_OUT}/e2e/{case}/file_preambles.csv';\n"
     variables += f"SET VARIABLE column_map_csv = '{CONTAINER_OUT}/e2e/{case}/column_map.csv';\n"
-    (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL)
+    rewrite = BRONZE_SHAPES[case][1] + "\n" if case in BRONZE_SHAPES else ""
+    (case_dir / "bronze.sql").write_text(variables + FIXTURE_SQL + rewrite)
     database = f"{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb"
     params = {**case_paths(case), "database": database, "sql_file": f"{CONTAINER_OUT}/e2e/{case}/bronze.sql"}
     result = launch("fixture_init", f"init-{case}", [], params, case)
@@ -5471,6 +5504,30 @@ def read_models(case: str) -> dict[str, Any]:
             )
         ],
     }
+
+
+VIEW_SHAPE_SQL = (
+    "SELECT column_name || ' ' || data_type FROM information_schema.columns WHERE table_name = getvariable('checked_view') ORDER BY ordinal_position;"
+    "SELECT count(*)::VARCHAR FROM query_table(getvariable('checked_view'));"
+)
+
+
+def view_shape(case: str, view: str) -> tuple[list[str], str]:
+    """The columns (name and type, in order) and the row count of a staging view in a fixture case's build."""
+    database = f"{CONTAINER_OUT}/e2e/{case}/staging.duckdb"
+    rows = duckdb_csv(database, f"SET VARIABLE checked_view = '{view}';\n{VIEW_SHAPE_SQL}")
+    return [row[0] for row in rows[:-1]], rows[-1][0]
+
+
+def model_message(case: str, node: str) -> str:
+    """The dbt message of a model in a fixture case's last build, or an empty text when the build wrote none."""
+    path = CASES / case / "target/run_results.json"
+    if not path.exists():
+        return ""
+    for item in json.loads(path.read_text())["results"]:
+        if item["unique_id"].split(".")[2] == node:
+            return str(item.get("message") or "")
+    return ""
 
 
 def refuses(action: Any, fragment: str) -> bool:
@@ -6139,6 +6196,7 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("county_code_reused_in_latest_list", COUNTY_CODE_REUSED, frozenset()),
     ]
     jobs += [(case, objects, unlabelled) for case, (_test, objects, unlabelled) in FAILING.items()]
+    jobs += [(case, objects, frozenset()) for case, (objects, _sql, _view) in BRONZE_SHAPES.items()]
     results = build_cases(jobs, workers)
     code, statuses = built(results, "base")
     checks["base_build_passes"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
@@ -6698,6 +6756,20 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     for case, (test, _objects, _unlabelled) in FAILING.items():
         result = results[case]
         checks[f"{case}_fails_{test}"] = not isinstance(result, BaseException) and result[0] != 0 and result[1].get(test) == "fail"
+    # A table with no data column and no row reads as the typed empty result, and the rest of the project builds on it; any other difference of columns
+    # stops the view and names the table and the columns.
+    for case in BRONZE_SHAPES_EMPTY:
+        view = BRONZE_SHAPES[case][2]
+        code, statuses = built(results, case)
+        checks[f"{case}_builds"] = code == 0 and bool(statuses) and all(node_passes(name, status) for name, status in statuses.items())
+        checks[f"{case}_reads_typed_and_empty"] = view_shape(case, view) == (view_shape("base", view)[0], "0")
+    for case, fragments in BRONZE_SHAPES_REFUSED.items():
+        view = BRONZE_SHAPES[case][2]
+        result = results[case]
+        message = model_message(case, view)
+        checks[f"{case}_refused_by_name"] = (
+            not isinstance(result, BaseException) and result[0] != 0 and result[1].get(view) == "error" and all(part in message for part in fragments)
+        )
     # The base outputs' hash lets a serial and a parallel run on the same code be compared.
     FIXTURE_EVIDENCE["base_outputs_sha256"] = hashlib.sha256(json.dumps(base, sort_keys=True, default=str).encode()).hexdigest()
     FIXTURE_EVIDENCE["case_errors"] = {case: str(result) for case, result in sorted(results.items()) if isinstance(result, BaseException)}
