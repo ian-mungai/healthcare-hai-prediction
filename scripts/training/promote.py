@@ -154,8 +154,13 @@ def feature_references(document: Any) -> list[str]:
 
 
 def is_number(value: Any) -> bool:
-    """A JSON number that is not a boolean and is finite."""
-    return isinstance(value, int | float) and not isinstance(value, bool) and (isinstance(value, int) or math.isfinite(value))
+    """A JSON number that is not a boolean and is finite as a float: an integer beyond the float range is not one, as in the loader."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def check_self_check(document: Any, references: list[str]) -> None:

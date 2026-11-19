@@ -1217,6 +1217,7 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
     refuses("a_self_check_cell_that_is_a_list", "self_check_cells", self_check_with(rows=[[[1], "private", 1.2], row]))
     refuses("a_self_check_cell_of_over_256_characters", "self_check_cells", self_check_with(rows=[[120, "x" * 257, 1.2], row]))
     refuses("a_self_check_cell_that_is_not_a_number", "self_check_cells", self_check_with(rows=[[nan, "private", 1.2], row]))
+    refuses("a_self_check_cell_that_is_an_integer_beyond_the_float_range", "self_check_cells", self_check_with(rows=[[10**400, "private", 1.2], row]))
     refuses(
         "a_self_check_cell_that_overflows",
         "self_check_cells",
@@ -1225,6 +1226,7 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
     refuses("a_self_check_with_one_prediction_too_few", "self_check_predictions", self_check_with(predictions=[0.9]))
     refuses("a_self_check_prediction_that_is_not_a_number", "self_check_predictions", self_check_with(predictions=[0.9, nan]))
     refuses("a_self_check_prediction_that_is_infinite", "self_check_predictions", self_check_with(predictions=[infinity, 1.1]))
+    refuses("a_self_check_prediction_that_is_an_integer_beyond_the_float_range", "self_check_predictions", self_check_with(predictions=[10**400, 1.1]))
     refuses("a_self_check_prediction_that_is_text", "self_check_predictions", self_check_with(predictions=["0.9", 1.1]))
     refuses("a_self_check_prediction_that_is_a_boolean", "self_check_predictions", self_check_with(predictions=[True, 1.1]))
     refuses("a_self_check_whose_predictions_are_not_a_list", "self_check_predictions", self_check_with(predictions=0.9))
