@@ -189,6 +189,145 @@ def monitor_with_the_real_baseline_reader(document: Any, folder: Path) -> tuple[
     return result, json.loads((out / "features.json").read_text())
 
 
+def must_be_read(label: str, call: Callable[[], Any]) -> Any:
+    """Run one reader call on a list that the reader must accept; a named refusal of it fails the case instead of ending the runner."""
+    from monitoring.drift_check import CheckError
+    from scripts.training.job_failure import JobFailure
+
+    try:
+        return call()
+    except (CheckError, JobFailure) as error:
+        raise AssertionError(f"{label}: the reader refused the list: {error}") from None
+
+
+def damaged_list(document: dict[str, Any], key: str, kind: str) -> dict[str, Any]:
+    """Return a copy of the list with one key absent, empty, of a wrong type or holding a bad element, to see how a reader treats it."""
+    names = list(document[key])
+    changed = {name: value for name, value in document.items() if name != key}
+    if kind == "absent":
+        return changed
+    damage = {
+        "empty": [],
+        "text": names[0],
+        "null": None,
+        "number": 5,
+        "dict": dict.fromkeys(names, 1),
+        "not_text": [names[0], 2, *names[2:]],
+        "empty_name": ["", *names[1:]],
+        "repeat": [names[0], names[0], *names[2:]],
+        "unknown": [names[0], "no_such_column"],
+    }
+    return changed | {key: damage[kind]}
+
+
+def serving_outcome(document: Any, folder: Path, references: Sequence[str]) -> str:
+    """What the real serving loader does with this list: its refusal by exception, or whether the loaded model scores a row of the real references."""
+    try:
+        served, _ = serve_with_the_real_loader(document, folder)
+    except (KeyError, TypeError, ValueError) as error:
+        return f"refused {type(error).__name__}" + (f" {error.args[0]}" if isinstance(error, KeyError) else "")
+    try:
+        served.predict(dict.fromkeys(references, 1.0))
+    except (KeyError, TypeError, ValueError) as error:
+        return f"loaded, scoring fails {type(error).__name__}"
+    return "served"
+
+
+def promotion_outcome(document: Any, extract_columns: Sequence[str], folder: Path) -> str:
+    """What the real promotion reader does with this champion list: its named refusal, or whether it scores the holdout."""
+    from scripts.training.job_failure import JobFailure
+
+    try:
+        score_with_the_real_promotion_reader(document, extract_columns, folder)
+    except JobFailure as error:
+        return f"refused {error.name}"
+    return "scored"
+
+
+def drift_outcome(document: Any, folder: Path) -> str:
+    """What the real drift baseline reader does with this list: its named refusal and exit code, or the columns it monitors."""
+    from monitoring.drift_check import CheckError
+
+    try:
+        _, features = monitor_with_the_real_baseline_reader(document, folder)
+    except CheckError as error:
+        return f"refused {error.name} {error.code}"
+    return "monitors " + ("kept" if features == document.get("kept_columns") else "every column" if features == document.get("columns") else str(features))
+
+
+# What each real reader does with the list of the real writer when one key it reads is damaged. Every refusal is named by the reader. The rows in
+# ``KEY_LIMITS`` are not: the reader serves, or scores, a list that it should refuse, or loads one that fails at every request. They pin today's behavior so
+# that hardening a reader changes a named row on purpose.
+KEY_OUTCOMES: dict[str, str] = {
+    "serving references absent": "refused KeyError references",
+    "serving references empty": "loaded, scoring fails ValueError",
+    "serving references text": "loaded, scoring fails KeyError",
+    "serving references null": "refused TypeError",
+    "serving references number": "refused TypeError",
+    "serving references dict": "served",
+    "serving references not_text": "loaded, scoring fails KeyError",
+    "serving references empty_name": "loaded, scoring fails KeyError",
+    "serving columns absent": "refused KeyError columns",
+    "serving columns empty": "loaded, scoring fails ValueError",
+    "serving columns text": "loaded, scoring fails ValueError",
+    "serving columns null": "refused TypeError",
+    "serving columns number": "refused TypeError",
+    "serving columns dict": "served",
+    "serving columns not_text": "served",
+    "serving columns empty_name": "served",
+    "promotion columns absent": "refused champion_features",
+    "promotion columns empty": "scored",
+    "promotion columns text": "refused champion_features",
+    "promotion columns null": "refused champion_features",
+    "promotion columns number": "refused champion_features",
+    "promotion columns dict": "scored",
+    "promotion columns not_text": "refused champion_features",
+    "promotion columns empty_name": "refused champion_features",
+    "drift columns absent": "refused artifact_invalid 2",
+    "drift columns empty": "refused no_features 4",
+    "drift columns text": "refused artifact_invalid 2",
+    "drift columns null": "refused artifact_invalid 2",
+    "drift columns number": "refused artifact_invalid 2",
+    "drift columns dict": "refused artifact_invalid 2",
+    "drift columns not_text": "refused artifact_invalid 2",
+    "drift columns empty_name": "refused artifact_invalid 2",
+    "drift columns absent without a kept list": "refused artifact_invalid 2",
+    "drift columns empty without a kept list": "refused no_features 4",
+    "drift columns text without a kept list": "refused artifact_invalid 2",
+    "drift columns null without a kept list": "refused artifact_invalid 2",
+    "drift columns number without a kept list": "refused artifact_invalid 2",
+    "drift columns dict without a kept list": "refused artifact_invalid 2",
+    "drift columns not_text without a kept list": "refused artifact_invalid 2",
+    "drift columns empty_name without a kept list": "refused artifact_invalid 2",
+    "drift kept_columns absent": "monitors every column",
+    "drift kept_columns empty": "refused no_features 4",
+    "drift kept_columns text": "refused artifact_invalid 2",
+    "drift kept_columns null": "monitors every column",
+    "drift kept_columns number": "refused artifact_invalid 2",
+    "drift kept_columns dict": "refused artifact_invalid 2",
+    "drift kept_columns not_text": "refused artifact_invalid 2",
+    "drift kept_columns empty_name": "refused artifact_invalid 2",
+    "drift kept_columns repeat": "refused artifact_invalid 2",
+    "drift kept_columns unknown": "refused artifact_invalid 2",
+}
+KEY_LIMITS = frozenset(
+    {
+        "serving references empty",
+        "serving references text",
+        "serving references dict",
+        "serving references not_text",
+        "serving references empty_name",
+        "serving columns empty",
+        "serving columns text",
+        "serving columns dict",
+        "serving columns not_text",
+        "serving columns empty_name",
+        "promotion columns empty",
+        "promotion columns dict",
+    }
+)
+
+
 def scenarios() -> list[tuple[str, Callable[[], None]]]:
     """Return the predeclared model and analysis scenarios for the light caller runner."""
     from scripts.training import hac_validation, mediation, research_tests
@@ -2070,14 +2209,17 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     def feature_list_reaches_the_real_readers() -> None:
         """The real writer's list, with and without the keys of the kept list, through the three real readers: serving and promotion read the whole reviewed
-        list, drift reads the kept columns when it has them and every column when it has not. A reader that took a key it must not read fails here."""
+        list, drift reads the kept columns when it has them and every column when it has not. A reader that took a key it must not read, or required a key
+        that an older list lacks, fails here. Two older shapes are sent: the legacy list (``slot``, ``references``, ``columns``, which every writer from the
+        first fit bundle to ``de30648~1`` wrote, so version 4 holds it) and the two keys the readers read, with no ``slot``."""
         from scripts.training import bundle
         from scripts.training.job_failure import JobFailure
 
         for model in ("m1", "m2", "m4"):
             changed, _, _ = kept_scenario(model)
             document = bundle.feature_list_document(fitted_model_suite(model, changed))
-            old = {key: document[key] for key in ("slot", "references", "columns")}
+            legacy = {key: document[key] for key in ("slot", "references", "columns")}
+            read_keys = {key: document[key] for key in ("references", "columns")}
             require(document["slot"] in REGISTRABLE and document["references"], f"{model}: the writer's list is not a registry list: {document}")
             require(
                 0 < len(document["kept_columns"]) < len(document["columns"]) and set(document["kept_columns"]) <= set(document["columns"]),
@@ -2086,24 +2228,66 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             dropped = sorted(set(document["columns"]) - set(document["kept_columns"]))[0]
             with tempfile.TemporaryDirectory() as scratch:
                 folder = Path(scratch)
-                for label, shape in (("two-key", old), ("six-key", document)):
+                for label, shape in (("legacy three-key", legacy), ("reader two-key", read_keys), ("six-key", document)):
                     served, frames = serve_with_the_real_loader(shape, folder)
                     require(served.references == tuple(document["references"]), f"{model} {label}: serving references {served.references}")
                     row = {reference: float(index) for index, reference in enumerate(document["references"])}
                     require(served.predict(row) == 0.5 and frames == [document["columns"]], f"{model} {label}: serving scored the columns {frames}")
-                    require(
-                        score_with_the_real_promotion_reader(shape, document["columns"], folder) == {"000001:2022": 1.0, "000002:2022": 2.0},
-                        f"{model} {label}: promotion did not score a champion whose columns the extract holds",
-                    )
+                    scored = must_be_read(f"{model} {label}: promotion", partial(score_with_the_real_promotion_reader, shape, document["columns"], folder))
+                    require(scored == {"000001:2022": 1.0, "000002:2022": 2.0}, f"{model} {label}: promotion scored {scored}")
                     try:
                         score_with_the_real_promotion_reader(shape, [name for name in document["columns"] if name != dropped], folder)
                     except JobFailure as error:
                         require(error.name == "champion_features" and dropped in str(error), f"{model} {label}: promotion named {error}")
                     else:
                         raise AssertionError(f"{model} {label}: promotion accepted an extract that lacks the listed column {dropped}")
-                    result, features = monitor_with_the_real_baseline_reader(shape, folder)
+                    result, features = must_be_read(f"{model} {label}: drift", partial(monitor_with_the_real_baseline_reader, shape, folder))
                     expected = document["kept_columns"] if shape is document else document["columns"]
                     require(features == expected and result.features == expected, f"{model} {label}: drift monitors {features}, expected {expected}")
+
+    def feature_list_keys_absent_empty_or_of_a_wrong_type() -> None:
+        """Each key a real reader reads (serving: references, columns; promotion: columns; drift: columns, kept_columns), taken from the real writer's list
+        and made absent, empty, null, a number, a text, a dict, or a list with a non-text or an empty name. Drift's kept list also gets a repeat and an unknown
+        column, and drift's columns are also damaged with no kept list, where the kept list cannot mask the damage. Each reader's outcome is the one in
+        ``KEY_OUTCOMES``; the rows in ``KEY_LIMITS`` are today's accepted-but-wrong behavior, listed so that they cannot change unseen. An absent key never
+        serves: serving and promotion refuse it, drift refuses an absent ``columns`` and reads an absent kept list as none."""
+        from scripts.training import bundle
+
+        changed, _, _ = kept_scenario("m1")
+        document = bundle.feature_list_document(fitted_model_suite("m1", changed))
+        require(0 < len(document["kept_columns"]) < len(document["columns"]) and len(document["columns"]) > 3, f"the fixture list is too short: {document}")
+        shared = ("absent", "empty", "text", "null", "number", "dict", "not_text", "empty_name")
+        found: dict[str, str] = {}
+        with tempfile.TemporaryDirectory() as scratch:
+            folder = Path(scratch)
+
+            def fresh(label: str) -> Path:
+                path = folder / label.replace(" ", "_")
+                path.mkdir()
+                return path
+
+            for kind in shared:
+                for key in ("references", "columns"):
+                    label = f"serving {key} {kind}"
+                    found[label] = serving_outcome(damaged_list(document, key, kind), fresh(label), document["references"])
+                label = f"promotion columns {kind}"
+                found[label] = promotion_outcome(damaged_list(document, "columns", kind), document["columns"], fresh(label))
+            for key, kinds in (("columns", shared), ("kept_columns", (*shared, "repeat", "unknown"))):
+                for kind in kinds:
+                    label = f"drift {key} {kind}"
+                    found[label] = drift_outcome(damaged_list(document, key, kind), fresh(label))
+            legacy = {key: value for key, value in document.items() if not key.startswith("kept_")}
+            for kind in shared:
+                label = f"drift columns {kind} without a kept list"
+                found[label] = drift_outcome(damaged_list(legacy, "columns", kind), fresh(label))
+        different = [
+            f"{label}: {found.get(label)!r}, expected {KEY_OUTCOMES.get(label)!r}"
+            for label in sorted({*found, *KEY_OUTCOMES})
+            if found.get(label) != KEY_OUTCOMES.get(label)
+        ]
+        require(not different, "a reader treats a damaged key differently: " + "; ".join(different))
+        require(set(KEY_OUTCOMES) >= KEY_LIMITS, "a limit row names no outcome")
+        require(not [label for label in KEY_LIMITS if KEY_OUTCOMES[label].startswith("refused")], "a refusal is listed as a limit")
 
     def non_registrable_lists_are_refused_by_the_readers_that_need_features() -> None:
         """m3, m5 and m6 are fitted but never registered: their list has an empty registry part and a kept list (the ownership column is left out of m6's).
@@ -2205,6 +2389,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("bundle_feature_list_follows_the_fitted_design", bundle_feature_list_follows_the_fitted_design),
         ("bundle_feature_list_of_an_unfitted_run_is_empty", an_unfitted_run_writes_no_kept_list),
         ("feature_list_reaches_the_real_readers", feature_list_reaches_the_real_readers),
+        ("feature_list_keys_absent_empty_or_of_a_wrong_type", feature_list_keys_absent_empty_or_of_a_wrong_type),
         ("non_registrable_lists_are_refused_by_the_readers_that_need_features", non_registrable_lists_are_refused_by_the_readers_that_need_features),
     ]
 
