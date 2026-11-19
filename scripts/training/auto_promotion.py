@@ -201,6 +201,8 @@ def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, o
     if outcome == "promoted_not_rolled_out":
         served = "the API serves no model of this type yet" if first else "the API still serves the earlier deployment"
         return f"{candidate} is the Production model, but its release or rollout failed, so {served}.{first}"
+    if outcome == "rolled_back":
+        return f"The promotion of {candidate} was reversed. Check the promotion record for the serving version and the reason."
     reason = (
         "no canary result was stored" if canary is None else f"the canary failed {', '.join(canary['failed'])}" if canary["failed"] else "the canary passed"
     )

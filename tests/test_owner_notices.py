@@ -275,3 +275,15 @@ def test_a_separator_in_a_file_or_table_name_adds_no_line_and_no_block_header() 
     check(len(headers) == len(set(headers)), f"a name added a header: {headers}")
     check(not any(char in body for char in "\u0085\u2028\u2029"), "a line separator reached the body")
     check("prefix What happened: Where to look: FAKE end" in body, "the name was not kept as one line")
+
+
+ROLLED_BACK_RECORD = {"promotion": {"challenger": {"model": "m2", "version": 4}, "production_version": "3"}}
+
+
+@pytest.mark.parametrize("canary", [{"failed": []}, {"failed": ["within_time_limit"]}, None])
+def test_a_rollback_says_it_was_reversed_whatever_the_canary_said(canary: dict[str, Any] | None) -> None:
+    text = auto_promotion.notice_detail(ROLLED_BACK_RECORD, canary, "rolled_back")
+    check("reversed" in text and "promotion record" in text and "Elastic Net (m2) version 4" in text, text)
+    check("stays a challenger" not in text and "canary passed" not in text and "canary failed" not in text, f"a hold reason in a rollback: {text}")
+    body = promotion_notice("rolled_back")["Message"]
+    check("stays a challenger" not in body and "was rolled back." in body, body)
