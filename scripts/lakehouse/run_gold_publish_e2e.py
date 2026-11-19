@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -478,7 +478,7 @@ def silver_plan_steps() -> list[dict[str, Any]]:
 SAMPLE_PROJECT = {"vars": {"copy_tables": {"a": "family", "b": "family"}, "deferred_models": [{"models": ["stg_b", "int_b"]}]}}
 
 
-def staging_grain_gaps(copies: set[str] | frozenset[str], tables: dict[str, Any]) -> list[str]:
+def staging_grain_gaps(copies: set[str] | frozenset[str], tables: Mapping[str, tuple[str, ...]]) -> list[str]:
     """The staging models that the plan does not key by the file checksum and row number."""
     return sorted(name for name in copies if tables.get(name) != STAGING_GRAIN)
 

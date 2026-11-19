@@ -5099,9 +5099,34 @@ MUA_SQL = (
 )
 
 
-def per_table(query: str, prefix: str) -> str:
-    """Return the query once per table, each run after setting the checked_table variable to the prefixed table name."""
-    return "".join(f"SET VARIABLE checked_table = '{prefix}{table}';\n{query}" for table in STAGED_TABLES)
+def per_table(query: str, prefix: str, tables: Iterable[str]) -> str:
+    """Return the query once per given table, each run after setting the checked_table variable to the prefixed table name."""
+    return "".join(f"SET VARIABLE checked_table = '{prefix}{table}';\n{query}" for table in tables)
+
+
+def bronze_counts_query() -> str:
+    """The bronze count query over every bronze table of the fixture, including a table whose staging model is deferred."""
+    return per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze.", TABLES)
+
+
+def view_rows_query() -> str:
+    """The row count query over the staging views: only the tables that have one."""
+    return per_table(VIEW_ROWS_SQL, "stg_", STAGED_TABLES)
+
+
+def queried_tables(sql: str, prefix: str) -> list[str]:
+    """The tables a per_table query names, in order."""
+    return re.findall(rf"checked_table = '{re.escape(prefix)}([^']+)'", sql)
+
+
+def query_coverage_checks() -> dict[str, bool]:
+    """The tables each reader query covers: bronze every copy (a deferred staging model keeps its bronze table), the views only the staged tables."""
+    bronze = queried_tables(bronze_counts_query(), "lakehouse.bronze.")
+    views = queried_tables(view_rows_query(), "stg_")
+    return {
+        "bronze_count_query_covers_every_bronze_table": bronze == list(TABLES),
+        "view_row_query_covers_only_the_staged_tables": views == list(STAGED_TABLES) and len(views) < len(bronze),
+    }
 
 
 def unprefixed(rows: list[list[str]], prefix: str) -> dict[str, list[str]]:
@@ -5443,7 +5468,7 @@ def read_models(case: str) -> dict[str, Any]:
     attach = CASES / case / "attach.sql"
     attach.write_text(f"ATTACH '{CONTAINER_OUT}/e2e/{case}/fixture_lakehouse.duckdb' AS lakehouse (READ_ONLY);\n")
     init = f"{CONTAINER_OUT}/e2e/{case}/attach.sql"
-    rows = {table: int(values[0]) for table, values in unprefixed(duckdb_csv(database, per_table(VIEW_ROWS_SQL, "stg_"), init), "stg_").items()}
+    rows = {table: int(values[0]) for table, values in unprefixed(duckdb_csv(database, view_rows_query(), init), "stg_").items()}
     return {
         "copies": [tuple(row) for row in duckdb_csv(database, COPIES_SQL)],
         "files": [tuple(row) for row in duckdb_csv(database, FILES_SQL)],
@@ -6207,7 +6232,7 @@ OWNER_BRIDGE = tuple(
 
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     """Build every fixture case (in parallel when asked), then run each check in order and return its outcome."""
-    checks: dict[str, bool] = {}
+    checks: dict[str, bool] = dict(query_coverage_checks())
     want = expected(BASE)
     jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]] = [
         ("base", BASE, frozenset()),
@@ -7417,7 +7442,7 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         "WHERE l.is_survey_layout AND l.repeated_fields = 0 AND r.source_row_number > l.header_row_number;",
     )[0]
     outcome["checks"]["occmix_source_rows_reconcile"] = int(occmix_counts[0]) > 0 and occmix_counts[0] == occmix_counts[1]
-    bronze = unprefixed(duckdb_csv(database, per_table(BRONZE_COUNTS_SQL, "lakehouse.bronze."), init), "lakehouse.bronze.")
+    bronze = unprefixed(duckdb_csv(database, bronze_counts_query(), init), "lakehouse.bronze.")
     # Bronze loads one copy per file, so its objects equal the distinct files; the copies table lists every copy.
     model_sql = (
         "SELECT f.bronze_table, count(*)::VARCHAR, count(*)::VARCHAR, sum(f.row_count)::VARCHAR, sum(f.copy_count)::VARCHAR "
@@ -7426,7 +7451,7 @@ def real_stage(once: bool = False) -> dict[str, Any]:
     models = {row[0]: row[1:] for row in duckdb_csv(database, model_sql)}
     copies_sql = "SELECT table_name, count(*)::VARCHAR FROM lakehouse.bronze.stored_copies GROUP BY 1 ORDER BY 1;"
     stored_copies = dict(duckdb_csv(database, copies_sql, init))
-    views = {table: values[0] for table, values in unprefixed(duckdb_csv(database, per_table(VIEW_ROWS_SQL, "stg_"), init), "stg_").items()}
+    views = {table: values[0] for table, values in unprefixed(duckdb_csv(database, view_rows_query(), init), "stg_").items()}
     for table in TABLES:
         objects, distinct, rows = bronze[table]
         copies = stored_copies.get(table, "0")
@@ -7488,7 +7513,14 @@ def main() -> int:
     )
     parser.add_argument("--workers", type=int, default=4, help="fixture cases built at once; 1 is serial; capped by memory and cores [687] [688]")
     parser.add_argument("--test-registry", help="a test registry folder (for tests of this runner only)")
+    parser.add_argument("--check-queries", action="store_true", help="only the host checks of the reader queries' table coverage; no container, no build")
     args = parser.parse_args()
+    if args.check_queries:
+        outcome = query_coverage_checks()
+        for name, ok in outcome.items():
+            sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}\n")
+        sys.stdout.write(f"staging e2e query coverage: {sum(outcome.values())} of {len(outcome)} passed\n")
+        return 0 if all(outcome.values()) else 1
     global TEST_REGISTRY
     TEST_REGISTRY = catalog.TEST_REGISTRY = args.test_registry
     refusal = preflight_launcher()
