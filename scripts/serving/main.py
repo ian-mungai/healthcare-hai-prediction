@@ -3,6 +3,10 @@ serving image.
 
 Every setting arrives through the environment. A missing or malformed one stops the start and names the variable, never a value. The key hashes come
 from the secret store through the task definition. Redis calls, the manifest read and the prediction append each have a deadline.
+
+The web server starts before any model is loaded: a thread waits until the server listens (uvicorn sets ``started``), then loads the stable and the canary
+model of every served type (about 80 s each) while /v1/live answers 200 and /v1/health answers 503, and it retries until every stable model is loaded
+(service.py).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ SETTINGS_FILE = FEATURE_REPO / "feature_store_aws.yaml"
 COLUMNS = json.loads((ROOT / "data_contracts/serving/predictions.json").read_text())["columns"]
 LOG = logging.getLogger(__name__)
 SINK_CLOSE_SECONDS = 5.0
+SERVER_START_SECONDS = 120.0
 
 
 class SettingsInvalid(SystemExit):
@@ -123,6 +128,7 @@ def build(environ: Mapping[str, str], settings: Settings) -> tuple[service.Model
         hai_types=settings.hai_types,
         refresh_seconds=settings.refresh_seconds,
         failure_limit=3,
+        defer_first_load=True,
     )
     return api, sink
 
@@ -139,11 +145,12 @@ def main() -> int:
 
     thread = threading.Thread(target=flusher, name="prediction_flush", daemon=True)
     thread.start()
+
     from scripts.serving.api import create_app
 
     uvicorn = importlib.import_module("uvicorn")
-    try:
-        uvicorn.run(
+    server = uvicorn.Server(
+        uvicorn.Config(
             create_app(api),
             host=settings.bind_host,
             port=settings.port,
@@ -152,9 +159,28 @@ def main() -> int:
             limit_concurrency=32,
             timeout_graceful_shutdown=10,
         )
+    )
+
+    def load_models() -> None:
+        """Wait until the server listens, then load every served model and, until every stable model is loaded, retry each refresh interval."""
+        end = time.monotonic() + SERVER_START_SECONDS
+        while not server.started and time.monotonic() < end and not stop.wait(0.05):
+            pass
+        if not server.started:
+            LOG.error("the web server did not start within %g s, so no model is loaded", SERVER_START_SECONDS)
+            return
+        api.refresh()
+        while not api.ready() and not stop.wait(settings.refresh_seconds):
+            api.refresh()
+
+    loader_thread = threading.Thread(target=load_models, name="model_load", daemon=True)
+    loader_thread.start()
+    try:
+        server.run()
     finally:
         stop.set()
         thread.join(timeout=5)
+        loader_thread.join(timeout=5)
         api.buffer.flush()
         if not sink.close(SINK_CLOSE_SECONDS):
             LOG.warning("the prediction append worker did not end within %g s, and it may still commit", SINK_CLOSE_SECONDS)

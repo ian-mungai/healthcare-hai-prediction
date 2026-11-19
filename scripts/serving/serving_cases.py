@@ -59,13 +59,17 @@ class NotFound(Exception):
 class Registry:
     """A stand-in for the MLflow registry client with the two read calls deploy may make. ``alias_writes`` must stay zero."""
 
-    def __init__(self, production: str | None = PRODUCTION, versions: Sequence[str] = (PRODUCTION, CANDIDATE, "5")) -> None:
+    def __init__(self, production: str | None = PRODUCTION, versions: Sequence[str] = (PRODUCTION, CANDIDATE, "5"), hai_type: str = HAI) -> None:
+        self.hai_type = hai_type
         self.aliases = {} if production is None else {"production": production}
         self.versions = {version: {"bundle_sha256": "f" * 64} for version in versions}
         self.alias_writes = 0
 
     def search_model_versions(self, filter_string: str = "") -> list[Any]:
-        return [SimpleNamespace(name=f"hai_model_{HAI}", version=version, run_id=f"run{version}", tags=dict(tags)) for version, tags in self.versions.items()]
+        return [
+            SimpleNamespace(name=f"hai_model_{self.hai_type}", version=version, run_id=f"run{version}", tags=dict(tags))
+            for version, tags in self.versions.items()
+        ]
 
     def get_model_version_by_alias(self, name: str, alias: str) -> Any:
         if alias not in self.aliases:
@@ -2700,6 +2704,657 @@ def case_liveness_without_a_deployment(c: Checker) -> None:
         c.check("a service with a stable model answers both 200", w.api.live().status == 200 and w.api.health().status == 200)
 
 
+SIX_TYPES = ("HAI_1", "HAI_2", "HAI_3", "HAI_4", "HAI_5", "HAI_6")
+GATE_SECONDS = 20.0
+START_DEADLINE = 30.0
+
+
+class BlockingLoader(Loader):
+    """A stand-in loader whose loads wait for a gate, so a case can hold the initial load open. A gate that stays shut fails the load after a deadline."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.started = threading.Event()
+        self.expired = False
+        self.hold: set[str] | None = None  # the HAI types whose loads wait for the gate; None holds every type
+
+    def load(self, hai_type: str, version: str) -> service.LoadedModel:
+        if self.hold is not None and hai_type not in self.hold:
+            return super().load(hai_type, version)
+        self.started.set()
+        if self.expired or not self.gate.wait(GATE_SECONDS):
+            self.expired = True
+            raise TimeoutError("synthetic load gate stayed shut")
+        return super().load(hai_type, version)
+
+
+@contextlib.contextmanager
+def startup_world(
+    types: Sequence[str],
+    loader: Loader,
+    *,
+    canary: bool = True,
+    deployed: bool = True,
+    read_marker: Callable[[], Mapping[str, str]] | None = None,
+    read_features: Callable[[list[str], str], Mapping[str, Sequence[Any]]] | None = None,
+    **options: Any,
+) -> Iterator[SimpleNamespace]:
+    """A service built over deployments of every type in ``types`` (with a canary each when asked) and a loader of the case. It reads no feature unless the
+    case gives the readers of a feature store."""
+
+    def no_marker() -> Mapping[str, str]:
+        raise AssertionError("a startup case reads no marker")
+
+    def no_features(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+        raise AssertionError("a startup case reads no feature")
+
+    with tempfile.TemporaryDirectory(prefix="serving_start_") as folder:
+        store = manifests.FileManifestStore(Path(folder))
+        clock, sink = Clock(), Sink()
+        for hai_type in types if deployed else ():
+            deploy.run(
+                registry=Registry(hai_type=hai_type),
+                manifests=store,
+                hai_type=hai_type,
+                candidate_version=CANDIDATE if canary else None,
+                percent=20 if canary else 0,
+                mode="canary" if canary else "stable",
+                canary_ttl_hours=TTL_HOURS if canary else None,
+                research_run=RESEARCH if canary else None,
+                now=NOW if canary else None,
+                deployment_id=RUN_1,
+            )
+        wall = Clock()
+        wall.now = float(NOW)
+        api = service.ModelService(
+            keys=keys.KeyRing.from_hashes({"ops": keys.hash_key(KEY_A)}),
+            limiter=limiter.RateLimiter(rate_per_minute=600, burst=1000, clock=clock),
+            read_marker=read_marker or no_marker,
+            read_features=read_features or no_features,
+            manifests=store,
+            loader=loader,
+            buffer=predictions.PredictionBuffer(sink, columns=CONTRACT["columns"], capacity=1000, batch=50, deadline_seconds=5.0, clock=clock),
+            clock=clock,
+            wall=wall,
+            new_id=iter(f"req{number:04d}" for number in range(10_000)).__next__,
+            hai_types=tuple(types),
+            refresh_seconds=30.0,
+            failure_limit=3,
+            **options,
+        )
+        yield SimpleNamespace(api=api, loader=loader, clock=clock, store=store, sink=sink)
+
+
+def predict_to(api: service.ModelService, hai_type: str = HAI) -> service.Reply:
+    return api.predict(KEY_A, None, {"hai_type": hai_type, "ccn": "AAA001", "window_year": 2022})
+
+
+def publish(s: SimpleNamespace, hai_type: str, *, canary: bool = False, stable: str = PRODUCTION, deployment_id: str = RUN_1) -> None:
+    """Write the active deployment of one HAI type into the manifests of the startup world."""
+    deploy.run(
+        registry=Registry(production=stable, hai_type=hai_type),
+        manifests=s.store,
+        hai_type=hai_type,
+        candidate_version=CANDIDATE if canary else None,
+        percent=20 if canary else 0,
+        mode="canary" if canary else "stable",
+        canary_ttl_hours=TTL_HOURS if canary else None,
+        research_run=RESEARCH if canary else None,
+        now=NOW if canary else None,
+        deployment_id=deployment_id,
+    )
+
+
+def in_thread(call: Callable[[], object], name: str) -> threading.Thread:
+    worker = threading.Thread(target=call, name=name, daemon=True)
+    worker.start()
+    return worker
+
+
+def wait_until(check: Callable[[], bool], seconds: float = START_DEADLINE) -> bool:
+    """Poll ``check`` until it holds or the deadline passes."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if check():
+            return True
+        time.sleep(0.02)
+    return check()
+
+
+def case_startup_binds_before_the_load(c: Checker) -> None:
+    """The service starts with no model loaded: /v1/live answers 200 at once, /v1/health answers 503 until the first full load ends, and a prediction is
+    refused without waiting for the load. The first load covers the stable and the canary model of every served type (12 loads for six types)."""
+    loader = BlockingLoader()
+    with startup_world(SIX_TYPES, loader, defer_first_load=True) as s:
+        c.check("the constructor loads no model", loader.attempts == [])
+        c.check("the service is alive before any load", s.api.live().status == 200 and s.api.live().body == {"status": "alive"})
+        c.check("the service is not ready before any load", s.api.health().status == 503 and s.api.health().body["HAI_1"]["stable"] == "loading")
+        worker = threading.Thread(target=s.api.refresh, name="startup_case_load", daemon=True)
+        worker.start()
+        c.check("the first load starts", loader.started.wait(START_DEADLINE))
+        c.check("live answers 200 while the load runs", s.api.live().status == 200)
+        during = s.api.health()
+        c.check(
+            "health answers 503 while the load runs and names every type as loading",
+            during.status == 503 and all(during.body[t]["stable"] == "loading" for t in SIX_TYPES),
+        )
+        began = time.monotonic()
+        refused = predict_to(s.api)
+        c.check(
+            "a prediction during the load is refused at once with 503 starting",
+            refused.status == 503 and refused.body.get("error") == "starting" and time.monotonic() - began < 5,
+        )
+        loader.gate.set()
+        worker.join(START_DEADLINE)
+        c.check("the first load ends", not worker.is_alive())
+        c.check(
+            "the first load held the stable and the canary model of six types",
+            len(loader.loaded) == 12 and sorted(loader.loaded) == sorted([PRODUCTION, CANDIDATE] * 6),
+        )
+        after = s.api.health()
+        c.check(
+            "health answers 200 after the load, with both models of each type",
+            after.status == 200 and all(after.body[t]["candidate"] == CANDIDATE for t in SIX_TYPES),
+        )
+        c.check("live still answers 200", s.api.live().status == 200)
+    with startup_world((HAI,), BlockingLoader(), deployed=False, defer_first_load=True) as s:
+        s.api.refresh()
+        c.check("with no deployment the service stays alive and not ready, as before", s.api.live().status == 200 and s.api.health().status == 503)
+
+
+def case_startup_failed_load(c: Checker) -> None:
+    """A first load that fails leaves the service unready with the reason, and /v1/live fails so ECS replaces the task. A retry that succeeds makes it live and
+    ready again. A load that outlives its deadline fails /v1/live too. A service that never loaded nothing because no deployment exists stays live."""
+    loader = Loader()
+    loader.unloadable.add(PRODUCTION)
+    with startup_world((HAI,), loader, canary=False, defer_first_load=True) as s:
+        s.api.refresh()
+        health = s.api.health()
+        c.check("a failed first load is unready", health.status == 503)
+        c.check("the failed stable model is reported with its reason", health.body[HAI]["stable"] == "failed" and health.body[HAI]["reason"] == "RuntimeError")
+        live = s.api.live()
+        c.check("a failed first load fails the liveness route", live.status == 503 and live.body == {"status": "load_failed"})
+        c.check("a prediction after the failed load answers 503", predict_to(s.api).status == 503)
+        loader.unloadable.clear()
+        s.api.refresh()
+        c.check("the retry loads the model and the service is ready", s.api.health().status == 200 and s.api.health().body[HAI]["stable"] == PRODUCTION)
+        c.check("the service is live again", s.api.live().status == 200)
+        loader.unloadable.add(PRODUCTION)
+        s.api.refresh()
+        c.check("a later failure never fails the liveness route of a service that was ready", s.api.live().status == 200)
+    loader = BlockingLoader()
+    with startup_world((HAI,), loader, canary=False, defer_first_load=True, first_load_seconds=600.0) as s:
+        worker = threading.Thread(target=s.api.refresh, name="startup_case_deadline", daemon=True)
+        worker.start()
+        c.check("the load starts", loader.started.wait(START_DEADLINE))
+        s.clock.now += 599.0
+        c.check("a load inside its deadline is live", s.api.live().status == 200)
+        s.clock.now += 2.0
+        c.check("a load past its deadline fails the liveness route", s.api.live().status == 503 and s.api.live().body == {"status": "load_timeout"})
+        loader.gate.set()
+        worker.join(START_DEADLINE)
+        c.check("the late load makes the service live and ready", not worker.is_alive() and s.api.live().status == 200 and s.api.health().status == 200)
+
+
+def case_startup_lifecycle(c: Checker) -> None:
+    """The starting state lasts until the first full load succeeded, not until the first manifest pass ended. A deployment that appears after an empty pass is
+    loaded under the same deadline, and a prediction during any load before the first readiness is refused at once, for the type that is loaded as well."""
+    loader = BlockingLoader()
+    with startup_world((HAI,), loader, deployed=False, defer_first_load=True, first_load_seconds=600.0) as s:
+        s.api.refresh()
+        c.check("an empty first pass leaves the service live and not ready", s.api.live().status == 200 and s.api.health().status == 503)
+        publish(s, HAI)
+        worker = in_thread(s.api.refresh, "lifecycle_late_deployment")
+        c.check("the load of the deployment that came after the empty pass starts", loader.started.wait(START_DEADLINE))
+        s.clock.now += 599.0
+        c.check("a load inside its deadline is live", s.api.live().status == 200)
+        s.clock.now += 2.0
+        c.check("the load of that deployment is bound by the deadline too", s.api.live().status == 503 and s.api.live().body == {"status": "load_timeout"})
+        began = time.monotonic()
+        refused = predict_to(s.api)
+        c.check(
+            "a prediction past the refresh interval is refused with starting at once, with no refresh of its own",
+            refused.status == 503 and refused.body.get("error") == "starting" and time.monotonic() - began < 5,
+        )
+        loader.gate.set()
+        worker.join(START_DEADLINE)
+        c.check("the late load ends and the service is live and ready", not worker.is_alive() and s.api.live().status == 200 and s.api.health().status == 200)
+    loader = BlockingLoader()
+    with startup_world(("HAI_1", "HAI_2"), loader, deployed=False, defer_first_load=True) as s:
+        publish(s, "HAI_1")
+        loader.hold = {"HAI_2"}
+        s.api.refresh()
+        c.check(
+            "one type loaded and the other without a deployment is not ready",
+            s.api.health().status == 503 and s.api.health().body["HAI_1"]["stable"] == PRODUCTION,
+        )
+        publish(s, "HAI_2")
+        worker = in_thread(s.api.refresh, "lifecycle_partial")
+        c.check("the retry of the second type starts", loader.started.wait(START_DEADLINE))
+        s.clock.now += 31.0
+        began = time.monotonic()
+        refused = predict_to(s.api, "HAI_1")
+        c.check(
+            "a prediction for the loaded type waits for no lock during the retry",
+            refused.status == 503 and refused.body.get("error") == "starting" and time.monotonic() - began < 5,
+        )
+        loader.gate.set()
+        worker.join(START_DEADLINE)
+        c.check("the service is ready when the second type is loaded", s.api.health().status == 200)
+
+
+def case_startup_manifest_errors(c: Checker) -> None:
+    """A manifest that cannot be read is not a model that failed to load. The service stays live and not ready, names the error type and retries, and fails
+    liveness only when the error lasts past its bound (a missing credential never recovers). A read that recovers makes the service ready."""
+    with startup_world(SIX_TYPES, Loader(), canary=False, defer_first_load=True) as s:
+        reads = {"failures": 1}
+        real = s.store.read_active
+
+        def flaky(hai_type: str) -> Any:
+            if reads["failures"] > 0:
+                raise TimeoutError("synthetic read timeout")
+            return real(hai_type)
+
+        with mock.patch.object(s.store, "read_active", flaky):
+            s.api.refresh()
+            health = s.api.health()
+            c.check("a manifest read that failed once leaves the service live", s.api.live().status == 200)
+            c.check(
+                "it is not ready and names the type of the error for every type",
+                health.status == 503 and all(health.body[t]["stable"] == "retrying" and health.body[t]["reason"] == "TimeoutError" for t in SIX_TYPES),
+            )
+            reads["failures"] = 0
+            s.clock.now += 30.0
+            s.api.refresh()
+            c.check(
+                "the next read recovers and the service is ready and live",
+                s.api.health().status == 200 and s.api.live().status == 200 and s.loader.attempts != [],
+            )
+    with startup_world(SIX_TYPES, Loader(), canary=False, defer_first_load=True) as s:
+        reads = {"failing": True}
+        real = s.store.read_active
+
+        def broken(hai_type: str) -> Any:
+            if reads["failing"]:
+                raise PermissionError("synthetic missing credential")
+            return real(hai_type)
+
+        with mock.patch.object(s.store, "read_active", broken):
+            s.api.refresh()
+            s.clock.now += 299.0
+            s.api.refresh()
+            c.check("an error inside its bound keeps the service live", s.api.live().status == 200 and s.api.health().status == 503)
+            s.clock.now += 2.0
+            s.api.refresh()
+            c.check("an error past its bound fails the liveness route", s.api.live().status == 503 and s.api.live().body == {"status": "dependency_failed"})
+            reads["failing"] = False
+            s.clock.now += 30.0
+            s.api.refresh()
+            c.check("a read that recovers late still makes the service live and ready", s.api.live().status == 200 and s.api.health().status == 200)
+
+
+def case_startup_admitted_prediction_never_waits(c: Checker) -> None:
+    """Before the first readiness a prediction is refused with starting at once, also between two passes of the background load. So a request that came while
+    no refresh ran never holds a feature read that then waits for the refresh lock, and a refresh that starts while a request is under way blocks no request."""
+    loader = BlockingLoader()
+    loader.hold = {"HAI_2"}
+    entered, resume, replies = threading.Event(), threading.Event(), []
+    with world() as w, startup_world(("HAI_1", "HAI_2"), loader, canary=False, deployed=False, defer_first_load=True) as s:
+        feature_marker = online_cases.markers(w.server)
+
+        def read_marker() -> Mapping[str, str]:
+            entered.set()
+            if not resume.wait(START_DEADLINE):
+                raise TimeoutError("synthetic feature read stayed shut")
+            return feature_marker()
+
+        s.api._read_marker, s.api._read_features = read_marker, online_cases.reader(w.server)
+        publish(s, "HAI_1")
+        s.api.refresh()
+        c.check("a pass between two passes leaves one type loaded and the service not ready", s.api.health().status == 503 and not s.api.ready())
+        request = in_thread(lambda: replies.append(predict_to(s.api, "HAI_1")), "admitted_prediction")
+        wait_until(lambda: entered.is_set() or bool(replies))
+        publish(s, "HAI_2")
+        refresh = in_thread(s.api.refresh, "admitted_partial_refresh")
+        c.check("the refresh of the second type starts its slow load", loader.started.wait(START_DEADLINE))
+        resume.set()
+        request.join(5)
+        c.check("the request that came between the passes ends while the refresh still runs", not request.is_alive() and refresh.is_alive())
+        c.check("it is refused with starting, with no feature read and no wait for the refresh", len(replies) == 1 and replies[0].status == 503)
+        c.check("the refusal names the starting state", bool(replies) and replies[0].body.get("error") == "starting")
+        c.check("the service was never ready during the wait", not s.api._ever_ready and s.api.live().status == 200)
+        loader.gate.set()
+        resume.set()
+        refresh.join(START_DEADLINE)
+        request.join(START_DEADLINE)
+        c.check("the refresh ends and the service is ready", not refresh.is_alive() and s.api.health().status == 200)
+        c.check("a prediction is answered once the service was ready", predict_to(s.api, "HAI_1").status == 200)
+
+
+def case_startup_record_deadline_during_load(c: Checker) -> None:
+    """A deployment record that cannot be read fails liveness after its bound while another type's first model load is still running, as it does between
+    passes. A service that was ready once stays live in the same state."""
+    loader = BlockingLoader()
+    loader.hold = {"HAI_2"}
+    with startup_world(("HAI_1", "HAI_2"), loader, canary=False, defer_first_load=True) as s:
+        real = s.store.read_active
+        failing = {"HAI_1": True}
+
+        def read(hai_type: str) -> Any:
+            if failing.get(hai_type):
+                raise TimeoutError("synthetic record read timeout")
+            return real(hai_type)
+
+        with mock.patch.object(s.store, "read_active", read):
+            worker = in_thread(s.api.refresh, "record_deadline_pass")
+            c.check("the load of the second type starts after the first record failed", loader.started.wait(START_DEADLINE))
+            s.clock.now += 299.0
+            c.check("299 seconds into the error the service is live", s.api.live().status == 200)
+            health = s.api.health().body["HAI_1"]
+            c.check("the failed record is reported as retrying with its error type", health["stable"] == "retrying" and health["reason"] == "TimeoutError")
+            s.clock.now += 2.0
+            expired = s.api.live()
+            c.check(
+                "301 seconds into the error, while the other load runs, liveness fails",
+                expired.status == 503 and expired.body == {"status": "dependency_failed"},
+            )
+            c.check("the other type is still loading", worker.is_alive() and s.api.health().body["HAI_2"]["stable"] == "loading")
+            loader.gate.set()
+            worker.join(START_DEADLINE)
+            c.check("the pass ends and liveness still fails", not worker.is_alive() and s.api.live().body == {"status": "dependency_failed"})
+            failing["HAI_1"] = False
+            s.clock.now += 30.0
+            s.api.refresh()
+            c.check("a record that is readable again makes the service live and ready", s.api.live().status == 200 and s.api.health().status == 200)
+    loader = BlockingLoader()
+    loader.hold = {"HAI_2"}
+    with startup_world(("HAI_1", "HAI_2"), loader, canary=False, deployed=False, defer_first_load=True) as s:
+        publish(s, "HAI_1")
+        publish(s, "HAI_2")
+        loader.gate.set()
+        s.api.refresh()
+        c.check("a service whose stable models loaded is ready", s.api.health().status == 200)
+        loader.gate.clear()
+        loader.expired = False
+        publish(s, "HAI_2", stable="5", deployment_id=RUN_2)
+        real = s.store.read_active
+
+        def read_again(hai_type: str) -> Any:
+            if hai_type == "HAI_1":
+                raise TimeoutError("synthetic record read timeout")
+            return real(hai_type)
+
+        with mock.patch.object(s.store, "read_active", read_again):
+            s.clock.now += 31.0
+            worker = in_thread(s.api.refresh, "record_deadline_ready_pass")
+            c.check("a later load of a new version starts", loader.started.wait(START_DEADLINE))
+            s.clock.now += 301.0
+            c.check("a service that was ready stays live past the bound while it loads", s.api.live().status == 200)
+            loader.gate.set()
+            worker.join(START_DEADLINE)
+            c.check("and after the pass", not worker.is_alive() and s.api.live().status == 200)
+
+
+def case_startup_build_and_readiness(c: Checker) -> None:
+    """The real build() of main gives a service that loads nothing in its constructor, and a service that was ready stays live when a later version fails."""
+    from scripts.serving import main as model_main
+
+    loader = Loader()
+    environment = {
+        "MODEL_API_KEY_HASHES": json.dumps({"ops": keys.hash_key(KEY_A)}),
+        "MODEL_API_HAI_TYPES": HAI,
+        "MODEL_API_MANIFEST_URI": "file:///unused",
+        "MODEL_API_BIND": "127.0.0.1",
+    }
+    with tempfile.TemporaryDirectory(prefix="serving_build_") as folder:
+        store = manifests.FileManifestStore(Path(folder))
+        publish(SimpleNamespace(store=store), HAI)
+        sink = SimpleNamespace(append=lambda rows, timeout: None, close=lambda seconds: True)
+        with (
+            mock.patch.object(model_main, "feature_store", lambda: object()),
+            mock.patch.object(model_main, "IcebergSink", lambda environ: sink),
+            mock.patch.object(model_main, "manifest_store", lambda uri: store),
+            mock.patch.object(model_main, "MlflowLoader", lambda: loader),
+            mock.patch.object(model_main.contract, "marker_reader", lambda environ: lambda: {}),
+            mock.patch.object(model_main.contract, "feast_reader", lambda feature_store, environ: lambda references, key: {}),
+            mock.patch.object(model_main.contract, "store_readers", lambda factory, environ: lambda feature_set: ((lambda: {}), (lambda references, key: {}))),
+        ):
+            api, _ = model_main.build(environment, model_main.settings_from(environment))
+        c.check("the service of build() loads no model in its constructor", loader.attempts == [] and api.live().status == 200 and api.health().status == 503)
+    with startup_world((HAI,), Loader(), canary=False, defer_first_load=True) as s:
+        publish(s, HAI)
+        s.api.refresh()
+        c.check("the service is ready after its first load", s.api.health().status == 200)
+        s.loader.unloadable.add("5")
+        publish(s, HAI, stable="5", deployment_id=RUN_2)
+        s.clock.now += 31.0
+        s.api.refresh()
+        c.check("a later stable version that fails to load makes it not ready", s.api.health().status == 503 and s.api.health().body[HAI]["stable"] == "failed")
+        c.check("and never fails the liveness route of a service that was ready", s.api.live().status == 200)
+
+
+class TypeLoader(BlockingLoader):
+    """A stand-in loader that fails every load of the types in ``failing`` and holds the load of ``held`` until the gate opens."""
+
+    def __init__(self, failing: Sequence[str] = (), held: str | None = None) -> None:
+        super().__init__()
+        self.failing, self.held = set(failing), held
+        self.held_at = threading.Event()
+
+    def load(self, hai_type: str, version: str) -> service.LoadedModel:
+        if hai_type in self.failing:
+            self.attempts.append(version)
+            raise RuntimeError(f"synthetic load failure for {hai_type}")
+        if hai_type != self.held:
+            return Loader.load(self, hai_type, version)
+        self.held_at.set()
+        return super().load(hai_type, version)
+
+
+def case_startup_readiness_by_type(c: Checker) -> None:
+    """Six served types: the service is not ready until the load of every type has ended, one type that fails is named in /v1/health and leaves the others
+    loaded, and a failed load of one type after the first readiness never takes /v1/live down."""
+    loader = TypeLoader(held="HAI_6")
+    with startup_world(SIX_TYPES, loader, canary=False, defer_first_load=True) as s:
+        worker = in_thread(s.api.refresh, "startup_case_type_load")
+        c.check("the load of the sixth type starts", loader.held_at.wait(START_DEADLINE))
+        c.check("five types are loaded while the sixth waits", wait_until(lambda: len(loader.loaded) == 5))
+        during = s.api.health()
+        c.check("the service is not ready until every type is loaded", not s.api.ready() and during.status == 503)
+        c.check("health lists the five loaded types by version", all(during.body[t]["stable"] == PRODUCTION for t in SIX_TYPES[:5]))
+        c.check("health lists the sixth type as loading", during.body["HAI_6"]["stable"] == "loading")
+        c.check("live answers 200 while the sixth type loads", s.api.live().status == 200)
+        loader.gate.set()
+        worker.join(START_DEADLINE)
+        c.check("the service is ready when the sixth type is loaded", not worker.is_alive() and s.api.ready() and s.api.health().status == 200)
+        loader.failing.add("HAI_4")
+        publish(s, "HAI_4", stable="5", deployment_id=RUN_2)
+        s.clock.now += 31.0
+        s.api.refresh()
+        after = s.api.health()
+        c.check("a type that fails after the first readiness makes the service not ready", after.status == 503 and not s.api.ready())
+        c.check(
+            "health names the failed type and its error type, and the five others stay loaded",
+            after.body["HAI_4"]["stable"] == "failed"
+            and after.body["HAI_4"]["reason"] == "RuntimeError"
+            and all(after.body[t]["stable"] == PRODUCTION for t in SIX_TYPES if t != "HAI_4"),
+        )
+        c.check("a failed load of one type never takes the liveness route down", s.api.live().status == 200)
+    failing = TypeLoader(failing=("HAI_4",))
+    with startup_world(SIX_TYPES, failing, canary=False, defer_first_load=True) as s:
+        s.api.refresh()
+        first = s.api.health()
+        c.check("one type of six that fails its first load leaves the service not ready", first.status == 503 and not s.api.ready())
+        c.check(
+            "health names that type and no other",
+            first.body["HAI_4"]["stable"] == "failed" and [t for t in SIX_TYPES if first.body[t]["stable"] == "failed"] == ["HAI_4"],
+        )
+        c.check("the first pass that ended with that failure fails the liveness route, so the container is replaced", s.api.live().status == 503)
+        failing.failing.clear()
+        s.clock.now += 31.0
+        s.api.refresh()
+        c.check("the retry loads the type and the service is ready and live", s.api.ready() and s.api.health().status == 200 and s.api.live().status == 200)
+
+
+def case_startup_ready_log_line(c: Checker) -> None:
+    """One log line says that every served type is loaded, because the container health check sees only /v1/live. It comes once, when the service is first
+    ready, and not while one type is still failing, and not again after a later refresh or a later failure."""
+
+    def ready_lines(stream: io.StringIO) -> list[str]:
+        return [line for line in stream.getvalue().splitlines() if "model API ready" in line]
+
+    failing = TypeLoader(failing=("HAI_4",))
+    with startup_world(SIX_TYPES, failing, canary=False, defer_first_load=True) as s, captured_logs() as stream:
+        s.api.refresh()
+        c.check("no ready line while a type failed to load", ready_lines(stream) == [])
+        failing.failing.clear()
+        s.clock.now += 31.0
+        s.api.refresh()
+        lines = ready_lines(stream)
+        c.check("one ready line when the last type is loaded", len(lines) == 1)
+        c.check("the line names every served type and its stable version", all(f"{t}={PRODUCTION}" in lines[0] for t in SIX_TYPES))
+        s.clock.now += 31.0
+        s.api.refresh()
+        failing.failing.add("HAI_2")
+        publish(s, "HAI_2", stable="5", deployment_id=RUN_2)
+        s.clock.now += 31.0
+        s.api.refresh()
+        failing.failing.clear()
+        s.clock.now += 31.0
+        s.api.refresh()
+        c.check("no second ready line after later refreshes, a later failure and its recovery", len(ready_lines(stream)) == 1)
+    with startup_world((HAI,), Loader(), canary=False, deployed=False, defer_first_load=True) as s, captured_logs() as stream:
+        s.api.refresh()
+        c.check("no ready line for a service that waits for its first deployment", ready_lines(stream) == [])
+
+
+class FakeUvicorn:
+    """A stand-in for the uvicorn module whose Server binds a real socket and answers /v1/live from the service, like the real server after its start.
+
+    ``Server.run`` binds, then waits 0.3 s, asks /v1/live over HTTP and notes whether a model load had entered, sets ``started`` as uvicorn does when it is
+    listening, and calls the hook of the case.
+    """
+
+    def __init__(self, hook: Callable[[SimpleNamespace], None], entered: Callable[[], bool]) -> None:
+        self.hook, self.entered, self.seen = hook, entered, {}
+        outer = self
+
+        class Config:
+            def __init__(self, app: Any, **settings: Any) -> None:
+                self.app, self.settings = app, settings
+
+        class Server:
+            def __init__(self, config: Any) -> None:
+                self.config, self.started = config, False
+
+            def run(self) -> None:
+                api = self.config.app
+
+                class Handler(BaseHTTPRequestHandler):
+                    def do_GET(self) -> None:
+                        reply = api.live()
+                        data = json.dumps(reply.body).encode()
+                        self.send_response(reply.status)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.end_headers()
+                        self.wfile.write(data)
+
+                    def log_message(self, format: str, *args: Any) -> None:
+                        return
+
+                httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                worker = in_thread(httpd.serve_forever, "fake_uvicorn_http")
+                try:
+                    time.sleep(0.3)
+                    with importlib.import_module("urllib.request").urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/v1/live", timeout=5) as answer:
+                        outer.seen["live_status"] = answer.status
+                    outer.seen["entered_before_started"] = outer.entered()
+                    outer.seen["port"] = self.config.settings.get("port")
+                    self.started = True
+                    outer.hook(SimpleNamespace(server=self))
+                finally:
+                    httpd.shutdown()
+                    worker.join(5)
+                    httpd.server_close()
+
+        self.Config, self.Server = Config, Server
+
+
+def case_main_binds_before_the_load(c: Checker) -> None:
+    """main() starts no model load until the web server listens (an HTTP answer of /v1/live comes first), and the load then runs in the background. A failed
+    first load is retried in the background until it succeeds."""
+    from scripts.serving import main as model_main
+
+    environment = {
+        "MODEL_API_KEY_HASHES": json.dumps({"ops": keys.hash_key(KEY_A)}),
+        "MODEL_API_HAI_TYPES": ",".join(SIX_TYPES),
+        "MODEL_API_MANIFEST_URI": "file:///unused",
+        "MODEL_API_BIND": "127.0.0.1",
+        "MODEL_API_REFRESH_SECONDS": "5",
+    }
+    seen: dict[str, Any] = {}
+
+    def run_main(s: SimpleNamespace, fake: FakeUvicorn) -> None:
+        sink = SimpleNamespace(close=lambda seconds: True)
+        fake_api = SimpleNamespace(create_app=lambda api: api)
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(model_main, "build", return_value=(s.api, sink)),
+            mock.patch.dict(sys.modules, {"scripts.serving.api": fake_api, "uvicorn": SimpleNamespace(Config=fake.Config, Server=fake.Server)}),
+        ):
+            seen["exit"] = model_main.main()
+
+    loader = BlockingLoader()
+    with startup_world(SIX_TYPES, loader, defer_first_load=True) as s:
+
+        def serve_while_loading(hook: SimpleNamespace) -> None:
+            seen["live_at_start"] = s.api.live().status
+            seen["health_at_start"] = s.api.health().status
+            seen["entered_at_start"] = loader.started.wait(START_DEADLINE)
+            loader.gate.set()
+            seen["ready_later"] = wait_until(lambda: s.api.health().status == 200)
+
+        fake = FakeUvicorn(serve_while_loading, loader.started.is_set)
+        run_main(s, fake)
+        c.check(
+            "main answered /v1/live over HTTP before any model load entered",
+            fake.seen.get("live_status") == 200 and fake.seen.get("entered_before_started") is False,
+        )
+        c.check("the server got the configured port", fake.seen.get("port") == 8000)
+        c.check(
+            "the load starts once the server listens, with the service live and not ready",
+            seen.get("entered_at_start") is True and seen.get("live_at_start") == 200 and seen.get("health_at_start") == 503,
+        )
+        c.check("the background load makes it ready, and main returns", seen.get("ready_later") is True and seen.get("exit") == 0)
+        c.check("no load thread outlives main", not any(thread.name == "model_load" for thread in threading.enumerate()))
+    failing = Loader()
+    failing.unloadable.add(PRODUCTION)
+    seen.clear()
+    with startup_world((HAI,), failing, canary=False, defer_first_load=True) as s:
+
+        def serve_with_a_failed_load(hook: SimpleNamespace) -> None:
+            seen["failed"] = wait_until(lambda: s.api.live().status == 503)
+            failing.unloadable.clear()
+            seen["recovered"] = wait_until(lambda: s.api.live().status == 200 and s.api.health().status == 200)
+
+        environment["MODEL_API_HAI_TYPES"] = HAI
+        run_main(s, FakeUvicorn(serve_with_a_failed_load, lambda: bool(failing.attempts)))
+        c.check("a failed first load fails the liveness route", seen.get("failed") is True)
+        c.check("the background retry loads the model once it can and the service recovers", seen.get("recovered") is True)
+    with startup_world((HAI,), BlockingLoader(), defer_first_load=True) as s:
+        sink = SimpleNamespace(close=lambda seconds: True)
+        never = SimpleNamespace(Config=lambda app, **settings: SimpleNamespace(app=app), Server=lambda config: SimpleNamespace(started=False, run=lambda: None))
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(model_main, "build", return_value=(s.api, sink)),
+            mock.patch.object(model_main, "SERVER_START_SECONDS", 0.5),
+            mock.patch.dict(sys.modules, {"scripts.serving.api": SimpleNamespace(create_app=lambda api: api), "uvicorn": never}),
+        ):
+            model_main.main()
+        c.check("a server that never starts loads no model", s.loader.attempts == [] and not s.loader.started.is_set())
+
+
 PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
 
 
@@ -3009,6 +3664,16 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "replay_http_drip": (case_replay_http_drip, "timeout network"),
     "previous_record_format": (case_previous_record_format, "deploy compatibility"),
     "liveness_without_a_deployment": (case_liveness_without_a_deployment, "api monitoring"),
+    "startup_binds_before_the_load": (case_startup_binds_before_the_load, "api startup"),
+    "startup_failed_load": (case_startup_failed_load, "api startup"),
+    "main_binds_before_the_load": (case_main_binds_before_the_load, "api startup"),
+    "startup_lifecycle": (case_startup_lifecycle, "api startup"),
+    "startup_manifest_errors": (case_startup_manifest_errors, "api startup"),
+    "startup_admitted_prediction_never_waits": (case_startup_admitted_prediction_never_waits, "api startup"),
+    "startup_record_deadline_during_load": (case_startup_record_deadline_during_load, "api startup"),
+    "startup_readiness_by_type": (case_startup_readiness_by_type, "api startup"),
+    "startup_ready_log_line": (case_startup_ready_log_line, "api startup"),
+    "startup_build_and_readiness": (case_startup_build_and_readiness, "api startup"),
     "loader_reads_artifacts_through_the_tracking_server": (case_loader_reads_artifacts_through_the_tracking_server, "api mlflow"),
     "loader_reads_the_feature_set": (case_loader_reads_the_feature_set, "api mlflow feast"),
     "set_model_served": (case_set_model_served, "feast api"),

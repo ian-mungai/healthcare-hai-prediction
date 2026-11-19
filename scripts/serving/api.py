@@ -113,7 +113,9 @@ def create_app(service: ModelService) -> FastAPI:
     def health() -> JSONResponse:
         return send(service.health())
 
-    @app.get("/v1/live", response_model=None, summary="Report that the process serves, whether or not a model is loaded")
+    @app.get(
+        "/v1/live", response_model=None, summary="Report that the process serves, whether or not a model is loaded, and fail when the first model load failed"
+    )
     def live() -> JSONResponse:
         return send(service.live())
 

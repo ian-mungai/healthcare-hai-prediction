@@ -4,6 +4,17 @@ It knows no web framework. The FastAPI adapter (``api.py``) passes the key heade
 back. One process holds, for each HAI type, the stable model and at most one canary model. Each version has its own state, so a version that fails to
 load or keeps failing affects only itself. A canary that fails three requests in a row is ejected until the next deployment. Its requests fall back to
 the stable model, and the row records both versions.
+
+The first load of every version (the stable and the canary model of every served type) can run after the web server started: ``defer_first_load``
+leaves the constructor without a load, and the caller runs ``refresh`` and runs it again until ``ready`` (every stable model is loaded). That caller is
+then the only one that refreshes before the first readiness. Until the service was ready once, /v1/live answers 200, /v1/health answers 503, and every
+prediction is refused at once with ``starting``, without the refresh lock, for every type and between the passes as well, so that no request is under way
+when a pass starts and none waits for its model loads. /v1/live fails (503) in three cases only, all before the first readiness, so that the container is
+replaced: a refresh pass that outlives ``first_load_seconds``; a stable model that did not load, when a pass ended; and a deployment record that cannot be
+read or parsed for longer than ``dependency_seconds``, also while a pass loads the model of another type (one failed read is retried, and the error type
+is in /v1/health). A service with no deployment record stays live and not ready, as it waits for the first deployment, and a service that was ready once
+never fails liveness. The first readiness logs one "model API ready" line with the stable version of every type, because the container health check sees only
+/v1/live.
 """
 
 from __future__ import annotations
@@ -68,6 +79,7 @@ class Slot:
     model: LoadedModel | None
     state: Literal["loaded", "failed", "ejected"]
     failures: int = 0
+    reason: str = ""  # the type of the error that made a load fail, never its text
 
 
 @dataclass(frozen=True)
@@ -106,6 +118,9 @@ class ModelService:
         metrics: Metrics | None = None,
         wall: Callable[[], float] = time.time,
         set_readers: contract.SetReaders | None = None,
+        defer_first_load: bool = False,
+        first_load_seconds: float = 1800.0,
+        dependency_seconds: float = 300.0,
     ) -> None:
         self.keys, self.limiter, self.buffer = keys, limiter, buffer
         self.metrics = metrics if metrics is not None else Metrics()
@@ -116,20 +131,46 @@ class ModelService:
         self._active: dict[str, Active] = {}
         self._lock = threading.Lock()
         self._next_refresh = 0.0
-        self.refresh()
+        self._first_load_seconds, self._dependency_seconds, self._created = first_load_seconds, dependency_seconds, clock()
+        self._deferred = defer_first_load
+        self._first_pass_done, self._ever_ready, self._refreshing, self._pass_started = False, False, False, clock()
+        self._record_errors: dict[str, tuple[str, float]] = {}  # the error type of a deployment record that cannot be read, and when the errors began
+        if not defer_first_load:
+            self.refresh()
 
     def deployment(self, hai_type: str) -> canary.Deployment:
         return self._active[hai_type].deployment
 
     def refresh(self) -> None:
-        """Read each active deployment and load or release models to match. A record that cannot be read or parsed leaves the last good deployment serving."""
+        """Read each active deployment and load or release models to match. A record that cannot be read or parsed leaves the last good deployment serving.
+
+        A pass is not the first readiness: ``ready`` and the liveness route tell the result."""
         with self._lock:
+            self._pass_started = self._clock()
+            self._refreshing = True
             self._next_refresh = self._clock() + self._refresh_seconds
-            for hai_type in self._hai_types:
-                try:
-                    self._refresh_one(hai_type)
-                except Exception as error:
-                    LOG.warning("deployment refresh failed for %s (%s); the last good deployment keeps serving", hai_type, type(error).__name__)
+            try:
+                for hai_type in self._hai_types:
+                    try:
+                        self._refresh_one(hai_type)
+                        self._record_errors.pop(hai_type, None)
+                    except Exception as error:
+                        self._record_errors[hai_type] = (type(error).__name__, self._record_errors.get(hai_type, ("", self._clock()))[1])
+                        LOG.warning("deployment refresh failed for %s (%s); the last good deployment keeps serving", hai_type, type(error).__name__)
+            finally:
+                self._refreshing = False
+                self._first_pass_done = True
+                if not self._ever_ready and self._stables_loaded():
+                    self._ever_ready = True
+                    LOG.info("model API ready: %s", ", ".join(f"{hai_type}={self._active[hai_type].stable.version}" for hai_type in self._hai_types))
+                self._next_refresh = self._clock() + self._refresh_seconds
+
+    def ready(self) -> bool:
+        """True once the first pass ended and every served type has its stable model loaded."""
+        return self._first_pass_done and self._stables_loaded()
+
+    def _stables_loaded(self) -> bool:
+        return all(self._active.get(hai_type) is not None and self._active[hai_type].stable.state == "loaded" for hai_type in self._hai_types)
 
     def _refresh_one(self, hai_type: str) -> None:
         stored = self._manifests.read_active(hai_type)
@@ -151,7 +192,7 @@ class ModelService:
                 return Slot(version, self._loader.load(hai_type, version), "loaded")
             except Exception as error:
                 LOG.warning("model version %s of %s did not load (%s)", version, hai_type, type(error).__name__)
-                return Slot(version, None, "failed")
+                return Slot(version, None, "failed", reason=type(error).__name__)
 
         stable = slot_for(deployment.stable_version)
         candidate = None if deployment.candidate_version is None else slot_for(deployment.candidate_version)
@@ -169,18 +210,39 @@ class ModelService:
             try:
                 slot.model = self._loader.load(hai_type, slot.version)
             except Exception as error:
+                slot.reason = type(error).__name__
                 LOG.warning("model version %s of %s still did not load (%s)", slot.version, hai_type, type(error).__name__)
                 continue
             slot.failures = 0
+            slot.reason = ""
             slot.state = "loaded"
             LOG.info("model version %s of %s loaded on retry", slot.version, hai_type)
 
     def live(self) -> Reply:
-        """Answer 200 while the process serves, whatever the models. The container health check asks this route; /v1/health stays the readiness signal."""
+        """Answer 200 while the process serves, whatever the models. The container health check asks this route; /v1/health stays the readiness signal.
+
+        It answers 503 in three cases only, all before the service was ever ready: a pass that outlived its deadline, a pass that ended with a stable model that
+        did not load (the process would serve nothing, and the container is better replaced: a release whose models cannot load then rolls back), and a
+        deployment record that stayed unreadable for longer than its bound. A service with no deployment record, or one that was ready once, stays live."""
         started = self._clock()
-        reply = Reply(200, {"status": "alive"})
+        failure = self._live_failure()
+        reply = Reply(200, {"status": "alive"}) if failure is None else Reply(503, {"status": failure})
         self.metrics.observe("/v1/live", "GET", str(reply.status), self._clock() - started)
         return reply
+
+    def _live_failure(self) -> str | None:
+        if self._ever_ready:
+            return None
+        now = self._clock()
+        began = self._pass_started if self._refreshing else (None if self._first_pass_done else self._created)
+        if began is not None and now - began > self._first_load_seconds:
+            return "load_timeout"
+        expired = any(now - since > self._dependency_seconds for _, since in list(self._record_errors.values()))
+        if self._refreshing or not self._first_pass_done:
+            return "dependency_failed" if expired else None
+        if any(active is not None and active.stable.state == "failed" for active in map(self._active.get, self._hai_types)):
+            return "load_failed"
+        return "dependency_failed" if expired else None
 
     def health(self) -> Reply:
         started = self._clock()
@@ -193,15 +255,17 @@ class ModelService:
         for hai_type in self._hai_types:
             active = self._active.get(hai_type)
             if active is None:
-                body[hai_type] = {"deployment_id": None, "stable": None, "candidate": None}
+                error = self._record_errors.get(hai_type, ("", 0.0))[0]
+                loading = not self._first_pass_done or (self._refreshing and not self._ever_ready)
+                stable = "retrying" if error else ("loading" if loading else None)
+                body[hai_type] = {"deployment_id": None, "stable": stable, "candidate": None} | ({"reason": error} if error else {})
                 continue
             body[hai_type] = {
                 "deployment_id": active.deployment.deployment_id,
                 "stable": active.stable.version if active.stable.state == "loaded" else active.stable.state,
                 "candidate": None if active.candidate is None else (active.candidate.version if active.candidate.state == "loaded" else active.candidate.state),
-            }
-        ready = all(self._active.get(h) is not None and self._active[h].stable.state == "loaded" for h in self._hai_types)
-        return Reply(200 if ready else 503, body)
+            } | ({"reason": active.stable.reason} if active.stable.state != "loaded" and active.stable.reason else {})
+        return Reply(200 if self.ready() else 503, body)
 
     def admit(self, api_key: str | None) -> Admitted | Reply:
         """Check the key and take one token of its rate limit, before the body is read. A refusal is counted and returned as the reply."""
@@ -263,7 +327,10 @@ class ModelService:
     def _serve(self, key_id: str, request_id: str | None, hai_type: str, ccn: str, window_year: int) -> tuple[Reply, dict[str, Any] | None]:
         """Route, read the features and predict. The row is returned with a 200 reply and is None for every other reply."""
         rid = request_id if request_id is not None and SAFE_REQUEST_ID.fullmatch(request_id) else self._new_id()
-        if self._clock() >= self._next_refresh:
+        before_readiness = self._deferred and not self._ever_ready
+        if before_readiness:
+            return refusal(503, "starting", request_id=rid), None
+        if self._clock() >= self._next_refresh and not before_readiness:
             self.refresh()
         active = self._active.get(hai_type)
         if active is None:
