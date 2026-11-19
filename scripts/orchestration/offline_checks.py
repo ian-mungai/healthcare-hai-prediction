@@ -59,6 +59,7 @@ DAG_MODULES = {
     "orchestration.interface",
     "orchestration.dag_runtime",
     "orchestration.ingestion_schedule",
+    "orchestration.ingestion_timetables",
     "orchestration.training_contract",
 }
 NEVER_IN_DAGS = {"subprocess", "docker", "scripts"}
@@ -167,7 +168,7 @@ def imported(source: str) -> set[str]:
 
 
 def dag_import_problems(name: str, source: str) -> list[str]:
-    """A DAG file may import Airflow, the standard library and the two interface modules only."""
+    """A DAG file may import Airflow, the standard library and the modules of ``DAG_MODULES`` only (each is mounted read-only into every Airflow service)."""
     problems = []
     for module in sorted(imported(source)):
         root = module.split(".")[0]
