@@ -19,8 +19,9 @@ PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/
 PLAN_SHA256 = "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
 ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
 ADDITIONS_PLAN_SHA256 = "afc4a6f2a71d1a451dfeb2e05c16738fc31600e4153445fe60a9055a6f6e0af5"
-# The two plans before the registry rewrite are retired. Captures made under them record these hashes and stay as history: no collector, check or table reads
-# the plan of a stored capture, and the plan bytes are not kept in the repository. The upload gate refuses them by name.
+# The two plans before the registry rewrite are retired and their bytes are not kept in the repository. A capture made under one stays in storage as history:
+# bucket-root bronze reads its stored files without checking a plan. Every reader that validates a capture against its plan refuses it by name, among them the
+# upload gate, the receipt validation of the collector CLI, the reuse of a finished branch and the completion inventory of a resumed queue run.
 RETIRED_PLAN_SHA256S = frozenset(
     {"97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4", "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"}
 )
@@ -63,9 +64,14 @@ def reviewed_code_versions() -> list[dict[str, str]]:
     return versions
 
 
+def require_current_plan(plan_sha256: object) -> None:
+    """Refuse a plan retired with the registry rewrite by name, before a reader loads the registry or the plan it bound."""
+    require(plan_sha256 not in RETIRED_PLAN_SHA256S, RETIRED_MESSAGE)
+
+
 def load_plan(plan_sha256: str = PLAN_SHA256) -> dict:
     """Verify one narrowly authorized plan and all retained publisher references."""
-    require(plan_sha256 not in RETIRED_PLAN_SHA256S, RETIRED_MESSAGE)
+    require_current_plan(plan_sha256)
     require(plan_sha256 in PLANS, "MMD authorization binding differs")
     raw = PLANS[plan_sha256].read_bytes()
     require(digest(raw) == plan_sha256, "MMD collection plan changed")
@@ -258,7 +264,7 @@ def code_binding_complete(code_sha256: dict) -> bool:
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
     """Recompute MMD scope, completeness and derivation before the existing uploader."""
     require(source["source_id"] == "MMD" and not evidence_only, "Only complete approved MMD captures use this route")
-    require(lineage.get("plan_sha256") not in RETIRED_PLAN_SHA256S, RETIRED_MESSAGE)
+    require_current_plan(lineage.get("plan_sha256"))
     require(lineage.get("plan_sha256") in PLANS and lineage.get("mode") == "mmd_api", "MMD authorization binding differs")
     plan = load_plan(lineage["plan_sha256"])
     require(lineage.get("model_eligible") is False and lineage.get("review_decision", "").startswith("hold_"), "MMD review hold differs")

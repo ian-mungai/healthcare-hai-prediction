@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scripts.acquisition.capture import receipt_validator, validate_receipt
 from scripts.acquisition.collect_mmd_api import execute
-from scripts.acquisition.mmd_api_contract import PLAN_PATH, PLANS, load_plan, verify_capture
+from scripts.acquisition.mmd_api_contract import PLAN_PATH, PLANS, load_plan, require_current_plan, verify_capture
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import load_registry, read_json, require
 
@@ -71,6 +71,7 @@ def verify_completion(path: Path, api: bool) -> dict:
     require(completion.get("year", year) == year, "Completion year differs")
     lineage = json.loads(receipt["lineage"]["extraction_or_query"])
     if api:
+        require_current_plan(lineage.get("plan_sha256"))
         source = next(s for s in load_registry(expected_sha256=lineage["registry_sha256"])["sources"] if s["source_id"] == "MMD")
         verify_capture(receipt, source, lineage, root, False)
         require(lineage["measure_id"] == measure_id and lineage["year"] == year, "API completion lineage differs")

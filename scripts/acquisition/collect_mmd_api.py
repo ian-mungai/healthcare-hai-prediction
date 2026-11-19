@@ -23,6 +23,7 @@ from scripts.acquisition.mmd_api_contract import (
     plan_for,
     reconstruct,
     request_parameters,
+    require_current_plan,
     reviewed_code_versions,
     selections_for,
     url_for,
@@ -112,6 +113,7 @@ def reuse_capture(branch: Path) -> Path:
     receipt = read_json(receipt_path)
     validate_receipt(receipt, receipt_validator(), receipt_path.parent)
     lineage = json.loads(receipt["lineage"]["extraction_or_query"])
+    require_current_plan(lineage.get("plan_sha256"))
     source = next(s for s in load_registry(expected_sha256=lineage["registry_sha256"])["sources"] if s["source_id"] == "MMD")
     verify_capture(receipt, source, json.loads(receipt["lineage"]["extraction_or_query"]), receipt_path.parent, False)
     return receipt_path

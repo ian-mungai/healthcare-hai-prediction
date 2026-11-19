@@ -1,4 +1,10 @@
-"""Exercise the MMD collector's real offline CLI against disposable pilot copies."""
+"""Exercise the MMD collector's real offline CLI against disposable pilot copies.
+
+The retained captures of the pilot years were made under the two plans that the registry rewrite retired, and the collector refuses them by name. The runner
+therefore keeps them for two jobs only: the refusal of a retired plan, and the stored responses from which it rebuilds a disposable capture under the current
+plan. Every success, replay and mutation case runs on that disposable capture. What the runner still needs from the local data folder: the plan inputs as the
+publisher stages them (``host_inputs.prepare``) and the retained capture of C258.07 2023 with its raw page and evidence.
+"""
 
 import argparse
 import hashlib
@@ -6,26 +12,82 @@ import json
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.acquisition import mmd_api_contract as contract
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.data_paths import current
-from scripts.acquisition.mmd_api_contract import PLAN_PATH, PRIOR_CODE_FILES, condition_for, current_code_hashes, load_plan, reconstruct, reviewed_code_versions
+from scripts.acquisition.mmd_api_contract import (
+    PLAN_PATH,
+    PRIOR_CODE_FILES,
+    RETIRED_MESSAGE,
+    RETIRED_PLAN_SHA256S,
+    condition_for,
+    current_code_hashes,
+    load_plan,
+    reconstruct,
+    reviewed_code_versions,
+)
 from scripts.acquisition.run_mmd_api_collection import ATTEMPTS, with_retries
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import RegistryError, read_json, require
 
+RETIRED_PLAN = "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
+RETIRED_ADDITIONS_PLAN = "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
+# A capture under a current plan is expected valid; one under a retired plan is expected refused by name; any other plan is refused as unbound.
+OUTCOME_BY_PLAN_STATUS = {"current": "valid", "retired": RETIRED_MESSAGE, "unknown": "MMD authorization binding differs"}
+RETIRED_EXPECTED = {"retired_plan": RETIRED_MESSAGE, "retired_additions_plan": RETIRED_MESSAGE}
+NEGATIVE_EXPECTED = {
+    "fips_three_digit": "Native FIPS width/value changed",
+    "fips_padding_collision": "Duplicate native FIPS",
+    "unreviewed_code_hashes": "MMD capture implementation changed; review before reuse",
+    "wrong_filter": "MMD transport differs",
+    "model_promotion": "MMD review hold differs",
+    "wrong_plan": "MMD authorization binding differs",
+    "derived_bytes": "Derived CSV differs",
+    "raw_checksum": "Artifact hash or byte count differs",
+    "missing_code_hashes": "MMD code binding is incomplete",
+    "empty_code_hashes": "MMD code binding is incomplete",
+    # A capture made under the closure binding holds the core files, so a file added to it is an unreviewed version, not an incomplete binding.
+    "extra_code_file": "MMD capture implementation changed; review before reuse",
+    "core_file_missing": "MMD code binding is incomplete",
+    "current_file_set_unreviewed": "MMD capture implementation changed; review before reuse",
+}
+# These cases edit county codes past the probe window, so they need the real rows of a retained year.
+NEEDS_STORED_ROWS = frozenset({"fips_three_digit", "fips_padding_collision", "fips_four_digit"})
+# The disposable capture is checked with the current collector code approved in memory only, because the list that names it follows the E2E.
+APPROVED_CLI = """
+import sys
+from unittest.mock import patch
 
-def command(arguments: list[str]) -> tuple[int, str]:
-    """Run the actual local CLI without network or cloud flags."""
-    result = run_argv(
-        [sys.executable, "-m", "scripts.acquisition.collect_mmd_api", *arguments],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from scripts.acquisition import collect_mmd_api, mmd_api_contract
+
+approved = [*mmd_api_contract.reviewed_code_versions(), mmd_api_contract.current_code_hashes()]
+sys.argv = ["collect_mmd_api", *sys.argv[1:]]
+with (
+    patch.object(collect_mmd_api, "reviewed_code_versions", lambda: approved),
+    patch.object(mmd_api_contract, "reviewed_code_versions", lambda: approved),
+):
+    collect_mmd_api.main()
+"""
+
+
+def plan_status(lineage: dict) -> str:
+    """Whether the plan a capture names is current, retired or unknown, which decides what the runner expects of it."""
+    plan = lineage.get("plan_sha256")
+    return "retired" if plan in RETIRED_PLAN_SHA256S else "current" if plan in contract.PLANS else "unknown"
+
+
+def command(arguments: list[str], approve_current: bool = False) -> tuple[int, str]:
+    """Run the actual local CLI without network or cloud flags; ``approve_current`` approves the current collector code in the child process only."""
+    if approve_current:
+        result = run_argv([sys.executable, "-c", APPROVED_CLI, *arguments], capture_output=True, text=True, check=False)
+    else:
+        result = run_argv([sys.executable, "-m", "scripts.acquisition.collect_mmd_api", *arguments], capture_output=True, text=True, check=False)
     return result.returncode, (result.stdout + result.stderr).strip()
 
 
@@ -53,19 +115,27 @@ def rewrite_fips(target: Path, receipt: dict, lineage: dict, kind: str) -> None:
     lineage["expected_sha256"] = lineage["derivation"]["input_sha256"] = hashlib.sha256(raw).hexdigest()
 
 
-def unknown_county_case(name: str, replacement: str | None) -> dict:
-    """Rebuild the CSV from the real cached C258.19 2023 rows, whose extra 49990 row stopped version 2."""
+def retained_rows(source: Path) -> list[dict]:
+    """The rows of the raw API page that the retained capture stored."""
+    page = next(a for a in read_json(source)["artifacts"] if a["role"] == "api_page")
+    return json.loads((source.parent / page["storage_path"]).read_bytes())
+
+
+def unknown_county_case(name: str, replacement: str | None, rows: list[dict]) -> dict:
+    """Rebuild the CSV from real rows with one row at a state's unknown-county code (990), or at another code that no lookup knows.
+
+    CMS uses state code + 990 for beneficiaries whose county is unknown, and the contract accepts that code only. The rule does not depend on the measure,
+    so the rows are the retained pilot year's.
+    """
     plan = load_plan()
-    rows = json.loads((PLAN_PATH.parent / "c258_19/2023/transport/main.json").read_bytes())
-    require(sum(r["fips"] == "49990" for r in rows) == 1, "Cached C258.19 2023 evidence changed")
-    if replacement:
-        rows = [dict(r, fips=replacement) if r["fips"] == "49990" else r for r in rows]
+    require(not any(r["fips"] == "49990" for r in rows), "Retained C258.07 2023 evidence changed")
+    rows = [dict(r, fips=replacement or "49990") if index == 4 else r for index, r in enumerate(rows)]
     try:
-        derived, _ = reconstruct(plan, condition_for(plan, "C258.19", 2023), 2023, rows)
+        derived, _ = reconstruct(plan, condition_for(plan, "C258.07", 2023), 2023, rows)
     except (ValueError, OSError, KeyError, TypeError, StopIteration) as error:
         return {"name": name, "observed": f"{type(error).__name__}: {error}", "derived_sha256": None}
-    utah_unknown = next(line for line in derived.decode().split("\r\n") if ",49990," in line)
-    return {"name": name, "observed": "reconstructed", "derived_sha256": hashlib.sha256(derived).hexdigest(), "row_49990": utah_unknown}
+    unknown = next(line for line in derived.decode().split("\r\n") if ",49990," in line)
+    return {"name": name, "observed": "reconstructed", "derived_sha256": hashlib.sha256(derived).hexdigest(), "row_49990": unknown}
 
 
 def retry_case(name: str, failures: list[Exception], expect_success: bool, expect_attempts: int) -> dict:
@@ -87,9 +157,9 @@ def retry_case(name: str, failures: list[Exception], expect_success: bool, expec
     return {"name": name, "attempts": len(attempts), "recorded_retries": len(retries), "succeeded": succeeded, "passed": passed}
 
 
-def branch_files(measure: str, year: int) -> dict[str, tuple[str, int]]:
+def branch_files(base: Path, measure: str, year: int) -> dict[str, tuple[str, int]]:
     """Fingerprint every local file for one condition-year to prove a rerun writes nothing."""
-    root = PLAN_PATH.parent / measure / str(year)
+    root = base / measure / str(year)
     return {str(p): fingerprint(p) for p in sorted(root.rglob("*")) if p.is_file()}
 
 
@@ -109,10 +179,16 @@ def negative_copy(source: Path, kind: str, directory: Path) -> Path:
         lineage["model_eligible"] = True
     elif kind == "wrong_plan":
         lineage["plan_sha256"] = "0" * 64
+    elif kind == "retired_plan":
+        lineage["plan_sha256"] = RETIRED_PLAN
+    elif kind == "retired_additions_plan":
+        lineage["plan_sha256"] = RETIRED_ADDITIONS_PLAN
     elif kind == "missing_code_hashes":
         lineage.pop("code_sha256")
     elif kind == "empty_code_hashes":
         lineage["code_sha256"] = {}
+    elif kind == "core_file_missing":
+        lineage["code_sha256"] = {name: digest for name, digest in lineage["code_sha256"].items() if name != "scripts/acquisition/code_versions.py"}
     elif kind == "extra_code_file":
         lineage["code_sha256"] = dict(lineage["code_sha256"], **{"scripts/acquisition/unlisted.py": "0" * 64})
     elif kind == "current_file_set_unreviewed":
@@ -133,19 +209,22 @@ def negative_copy(source: Path, kind: str, directory: Path) -> Path:
     return target / "receipt.json"
 
 
-def fresh_capture_case(source: Path, directory: Path) -> dict:
-    """Rebuild a new capture offline from the stored responses, so current code fingerprints reach verify_capture."""
+def pilot_case(source: Path, directory: Path) -> tuple[dict, Path | None]:
+    """Rebuild a disposable capture under the current plan, offline, from the responses the retained capture stored, and return its receipt path.
+
+    The stored page and the probes sit in the retained capture itself, so no separate transport folder is read. The capture gets the current code fingerprints.
+    """
     from scripts.acquisition.collect_mmd_api import capture
 
     receipt = read_json(source)
     lineage = json.loads(receipt["lineage"]["extraction_or_query"])
-    root = directory / "fresh_root"
+    page = next(a for a in receipt["artifacts"] if a["role"] == "api_page")
+    root = directory / "pilot_root"
     transport = root / "c258_07" / "2023" / "transport"
     transport.mkdir(parents=True)
-    stored_transport = source.parents[2] / "transport"
-    for name in ("main.json", "main_metadata.json"):
-        shutil.copy2(stored_transport / name, transport / name)
     evidence = read_json(source.parent / "evidence" / "export_evidence.json")
+    (transport / "main.json").write_bytes((source.parent / page["storage_path"]).read_bytes())
+    (transport / "main_metadata.json").write_bytes(encoded_json(evidence["main"]))
     for probe in evidence["probes"]:
         offset = probe["url"].rsplit("_offset=", 1)[1]
         (transport / f"probe_{offset}.json").write_bytes(probe["body_utf8"].encode())
@@ -160,6 +239,7 @@ def fresh_capture_case(source: Path, directory: Path) -> dict:
         calls.append(json.loads(receipt["lineage"]["extraction_or_query"])["code_sha256"])
         mmd_api_contract.verify_capture(receipt, source, lineage, folder, evidence_only)
 
+    path: Path | None = None
     try:
         with (
             patch.object(collect_mmd_api, "reviewed_code_versions", lambda: approved),
@@ -174,10 +254,67 @@ def fresh_capture_case(source: Path, directory: Path) -> dict:
             and all(set(call) == set(current_code_hashes()) for call in calls)
             and set(fresh["code_sha256"]) == set(current_code_hashes())
             and fresh["expected_sha256"] == lineage["expected_sha256"]
+            and plan_status(fresh) == "current"
         )
     except (RegistryError, StorageError, OSError, KeyError, ValueError) as error:
         observed, passed = f"{type(error).__name__}: {error}", False
-    return {"name": "fresh_capture_current_code_offline", "observed": observed.replace(str(directory), "<disposable copy>"), "passed": passed}
+    scenario = {"name": "fresh_capture_current_code_offline", "observed": observed.replace(str(directory), "<disposable copy>"), "passed": passed}
+    return scenario, (path if passed else None)
+
+
+@contextmanager
+def current_code_approved() -> Iterator[None]:
+    """Approve the current collector code in memory only, so a disposable capture reaches the checks; the real catalog is never written."""
+    from scripts.acquisition import collect_mmd_api
+
+    approved = [*reviewed_code_versions(), current_code_hashes()]
+    with patch.object(collect_mmd_api, "reviewed_code_versions", lambda: approved), patch.object(contract, "reviewed_code_versions", lambda: approved):
+        yield
+
+
+def rerun_scenarios(root: Path, pilot: Path) -> list[dict]:
+    """A finished year of the disposable root is re-verified and returned: the rerun adds no file, requests no data and stores nothing."""
+    from scripts.acquisition.collect_mmd_api import execute
+
+    scenarios = []
+    before = branch_files(root, "c258_07", 2023)
+    with current_code_approved():
+        result = execute("C258.07", 2023, False, False, root=root)
+    scenarios.append(
+        {
+            "name": "finished_year_rerun_offline",
+            "observed_status": result["status"],
+            "files_unchanged": branch_files(root, "c258_07", 2023) == before,
+            "passed": result["status"] == "capture_ready" and branch_files(root, "c258_07", 2023) == before,
+        }
+    )
+    # A stored year carries a completion record; the replay returns it without a request or an upload.
+    done = {"measure_id": "C258.07", "year": 2023, "receipt_path": str(pilot), "status": "stored", "model_eligible": False}
+    write_once(pilot.parents[2] / "completed.json", encoded_json(done))
+    before = branch_files(root, "c258_07", 2023)
+    with current_code_approved():
+        result = execute("C258.07", 2023, False, True, root=root)
+    scenarios.append(
+        {
+            "name": "finished_year_replay_returns_the_completion_record",
+            "observed_status": result["status"],
+            "files_unchanged": branch_files(root, "c258_07", 2023) == before,
+            "passed": result["status"] == "stored" and branch_files(root, "c258_07", 2023) == before,
+        }
+    )
+    return scenarios
+
+
+def refusal(name: str, path: Path, expected: str, temporary: str, baseline: list[str], approve_current: bool = False) -> dict:
+    code, output = command([*baseline, "--validate-receipt", str(path)], approve_current)
+    return {
+        "name": name,
+        "expected_exit": "nonzero",
+        "observed_exit": code,
+        "expected_error": expected,
+        "passed": code != 0 and expected in output,
+        "output": output.replace(temporary, "<disposable copy>") if temporary else output,
+    }
 
 
 def main() -> None:
@@ -188,73 +325,59 @@ def main() -> None:
     ready = read_json(PLAN_PATH.parent / "c258_07/2023/capture_ready.json")
     # The record keeps the path it was written with; the path map gives where it lives now.
     source = Path(current(ready["receipt_path"]))
+    retained = json.loads(read_json(source)["lineage"]["extraction_or_query"])
     before = {str(p): fingerprint(p) for p in source.parent.rglob("*") if p.is_file()}
     scenarios = []
     baseline = ["--measure-id", "C258.07", "--year", "2023"]
-    # A finished year is revalidated, not recaptured: new code would create a second snapshot for it.
-    for name in ("finished_capture_valid_one", "finished_capture_valid_two"):
-        code, output = command([*baseline, "--validate-receipt", str(source)])
-        scenarios.append({"name": name, "expected_exit": 0, "observed_exit": code, "passed": code == 0, "output": output})
-    expected = {
-        "fips_three_digit": "Native FIPS width/value changed",
-        "fips_padding_collision": "Duplicate native FIPS",
-        "unreviewed_code_hashes": "MMD capture implementation changed; review before reuse",
-        "wrong_filter": "MMD transport differs",
-        "model_promotion": "MMD review hold differs",
-        "wrong_plan": "MMD authorization binding differs",
-        "derived_bytes": "Derived CSV differs",
-        "raw_checksum": "Artifact hash or byte count differs",
-        "missing_code_hashes": "MMD code binding is incomplete",
-        "empty_code_hashes": "MMD code binding is incomplete",
-        "extra_code_file": "MMD code binding is incomplete",
-        "current_file_set_unreviewed": "MMD capture implementation changed; review before reuse",
-    }
-    with tempfile.TemporaryDirectory(prefix="mmd_cli_negative_") as temporary:
-        for name, error in expected.items():
-            path = negative_copy(source, name, Path(temporary))
-            code, output = command([*baseline, "--validate-receipt", str(path)])
+    # The retained capture was made under a retired plan: the collector refuses it by name, validated or reused, and any retired plan is refused the same way.
+    expected_retained = OUTCOME_BY_PLAN_STATUS[plan_status(retained)]
+    scenarios.append(refusal("retained_capture_refused_by_name", source, expected_retained, "", baseline))
+    code, output = command(baseline)
+    scenarios.append(
+        {
+            "name": "retained_branch_not_reused",
+            "expected_exit": "nonzero",
+            "observed_exit": code,
+            "expected_error": expected_retained,
+            "passed": code != 0 and expected_retained in output,
+            "output": output,
+        }
+    )
+    with tempfile.TemporaryDirectory(prefix="mmd_cli_retired_") as temporary:
+        path = negative_copy(source, "retired_additions_plan", Path(temporary))
+        scenarios.append(refusal("retired_additions_plan_refused_by_name", path, RETIRED_EXPECTED["retired_additions_plan"], temporary, baseline))
+    with tempfile.TemporaryDirectory(prefix="mmd_cli_pilot_") as temporary:
+        workspace = Path(temporary)
+        scenario, pilot = pilot_case(source, workspace)
+        scenarios.append(scenario)
+        if pilot is not None:
+            # Every success, replay and mutation case runs on the disposable capture under the current plan.
+            for name in ("current_capture_valid_one", "current_capture_valid_two"):
+                code, output = command([*baseline, "--validate-receipt", str(pilot)], True)
+                scenarios.append(
+                    {"name": name, "expected_exit": 0, "observed_exit": code, "passed": code == 0 and '"status": "valid"' in output, "output": output}
+                )
+            for name, error in NEGATIVE_EXPECTED.items():
+                path = negative_copy(pilot, name, workspace / "negative")
+                scenarios.append(refusal(name, path, error, temporary, baseline, True))
+            path = negative_copy(pilot, "fips_four_digit", workspace / "negative")
+            code, output = command([*baseline, "--validate-receipt", str(path)], True)
             scenarios.append(
                 {
-                    "name": name,
-                    "expected_exit": "nonzero",
+                    "name": "fips_four_digit_accepted",
+                    "expected_exit": 0,
                     "observed_exit": code,
-                    "expected_error": error,
-                    "passed": code != 0 and error in output,
+                    "passed": code == 0 and '"status": "valid"' in output,
                     "output": output.replace(temporary, "<disposable copy>"),
                 }
             )
-        path = negative_copy(source, "fips_four_digit", Path(temporary))
-        code, output = command([*baseline, "--validate-receipt", str(path)])
-        scenarios.append(
-            {
-                "name": "fips_four_digit_accepted",
-                "expected_exit": 0,
-                "observed_exit": code,
-                "passed": code == 0 and '"status": "valid"' in output,
-                "output": output.replace(temporary, "<disposable copy>"),
-            }
-        )
-    with tempfile.TemporaryDirectory(prefix="mmd_fresh_capture_") as temporary:
-        scenarios.append(fresh_capture_case(source, Path(temporary)))
-    accepted = unknown_county_case("unknown_county_990_accepted", None)
-    accepted["passed"] = accepted["observed"] == "reconstructed" and ",49990,," in accepted["row_49990"]
-    rejected = unknown_county_case("unknown_non_990_rejected", "49991")
+            scenarios += rerun_scenarios(workspace / "pilot_root", pilot)
+    pilot_rows = retained_rows(source)
+    accepted = unknown_county_case("unknown_county_990_accepted", None, pilot_rows)
+    accepted["passed"] = accepted["observed"] == "reconstructed" and ",49990," in accepted["row_49990"]
+    rejected = unknown_county_case("unknown_non_990_rejected", "49991", pilot_rows)
     rejected["passed"] = "New missing geographic lookup requires review" in rejected["observed"]
     scenarios += [accepted, rejected]
-    # A finished year is re-verified and returned; neither rerun may add files, request data or upload.
-    for name, flags, status in (("finished_year_rerun_offline", [], "stored"), ("finished_year_rerun_execute", ["--execute"], "stored")):
-        before_files = branch_files("c258_07", 2023)
-        code, output = command([*baseline, *flags])
-        unchanged = branch_files("c258_07", 2023) == before_files
-        scenarios.append(
-            {
-                "name": name,
-                "observed_exit": code,
-                "files_unchanged": unchanged,
-                "passed": code == 0 and unchanged and f'"status": "{status}"' in output,
-                "output": output,
-            }
-        )
     transient_error = StorageError("head-object", "request_failed")
     scenarios += [
         retry_case("retry_recovers_after_two_transient_failures", [transient_error, OSError("connection reset")], True, 3),
@@ -280,6 +403,7 @@ def main() -> None:
         "scenarios": scenarios,
         "input_receipt": str(source),
         "input_receipt_sha256": fingerprint(source)[0],
+        "input_receipt_plan_status": plan_status(retained),
         "python_version": sys.version,
         "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "collector_code_sha256": current_code_hashes(),
@@ -291,6 +415,7 @@ def main() -> None:
             "Live 2012-2018 county-code capture is verified by the resumed queue run",
             "No suppressed/non-numeric input accepted; those stop for review",
             "No other-source API route change",
+            "The --execute replay of a stored current-plan year needs S3 evidence; the replay case reads a disposable completion record",
         ],
     }
     write_once(args.output, encoded_json(result))

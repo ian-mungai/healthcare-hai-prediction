@@ -23,6 +23,7 @@ ENTRIES = {
     "hud_api": ("hud_api", "scripts.acquisition.collect_hud_api"),
     "hud_api_workbook": ("hud_api", "scripts.acquisition.store_hud_xlsx"),
     "mmd_api": ("mmd_api", "scripts.acquisition.collect_mmd_api"),
+    "nber_hc": ("nber_hc", "scripts.acquisition.store_nber_hc"),
     "reference_download": ("reference_download", "scripts.acquisition.store_reference_download"),
     "wonder_export": ("wonder_export", "scripts.acquisition.store_wonder_export"),
 }
@@ -44,6 +45,14 @@ def test_other_collector_closure_is_listed_in_its_committed_versions(name: str) 
     stem, entry = ENTRIES[name]
     listed = [version["code_sha256"] for version in read_code_versions(VERSIONS / f"{stem}_code_versions.json")["versions"]]
     check(closure_hashes(entry) in listed, f"{name}: no committed version holds the closure of {entry}")
+
+
+def test_every_committed_version_list_has_its_closure_checked() -> None:
+    """A list that no case checks cannot go stale unseen: each ``*_code_versions.json`` belongs to an entry above or to one of the three contract cases."""
+    contract_lists = {"cms_owners", "hcai_util", "onc_mu"}
+    checked = {stem for stem, _ in ENTRIES.values()} | contract_lists
+    present = {path.name.removesuffix("_code_versions.json") for path in VERSIONS.glob("*_code_versions.json")}
+    check(present <= checked, f"version lists with no closure check: {sorted(present - checked)}")
 
 
 def head_lists() -> dict[str, str]:
