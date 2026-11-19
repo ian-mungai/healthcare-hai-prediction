@@ -1296,6 +1296,19 @@ class S3Storage:
             keys.extend((entry["Key"], entry["VersionId"]) for entry in page.get("Versions", []) if entry["IsLatest"])
         return sorted(keys)
 
+    def list_history(self, bucket: str, prefix: str) -> list[tuple[str, str, bool]]:
+        """Return every version of every key under the prefix, noncurrent ones and delete markers included, as (key, version ID, is a delete marker).
+
+        The loader never calls this: it reads current versions only (``list_keys`` and ``list_current``). The catalog registrations call it to ask whether a
+        table ever had a source, because a delete marker hides a manifest from the current listing and leaves every earlier version readable by its exact ID.
+        A key's versions come newest first, as S3 returns them.
+        """
+        found: list[tuple[str, str, bool]] = []
+        for page in self.client.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+            found.extend((entry["Key"], entry["VersionId"], False) for entry in page.get("Versions", []))
+            found.extend((entry["Key"], entry["VersionId"], True) for entry in page.get("DeleteMarkers", []))
+        return found
+
     def get(self, bucket: str, key: str, version_id: str) -> bytes:
         return bytes(self.client.get_object(Bucket=bucket, Key=key, VersionId=version_id)["Body"].read())
 

@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 from scripts.lakehouse import bronze, bronze_unsourced
 from scripts.lakehouse import register_aws_catalog as reg
-from scripts.lakehouse.run_glue_mirror_e2e import FakeSources, store_role_correction, store_source
+from scripts.lakehouse.run_glue_mirror_e2e import FakeS3, FakeSources, VersionedClient, delete_sources, store_payload_only, store_role_correction, store_source
 
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = frozenset({("bronze", "source_table"), ("silver", "silver_table"), ("silver", "publish_runs"), ("gold", "gold_table"), ("gold", "publish_runs")})
@@ -366,10 +366,40 @@ def source_presence_cases() -> None:
         accepted(entry, routed(clean, FakeSources()), clean)
 
 
+def version_history_cases() -> None:
+    """Review round 5: the route's own version listing (the real ``S3Storage`` adapter over a versioned client) counts a manifest whose current version is a
+    delete marker, a payload with a delete marker, both, and an orphan payload with a delete marker, under both read roots. A source that never existed is the
+    control, and a failed version listing refuses for its own cause."""
+    fixture = Fixture()
+    for root in ("", "raw/"):
+        scenarios: dict[str, FakeSources] = {}
+        for name, manifests, payloads in (
+            ("a deleted manifest", True, False),
+            ("a deleted payload", False, True),
+            ("a deleted manifest and payload", True, True),
+        ):
+            sources = FakeSources()
+            store_source(sources, root + "org/ghost", "ghost.csv")
+            delete_sources(sources, root + "org/ghost", manifests=manifests, payloads=payloads)
+            scenarios[name] = sources
+        orphan = FakeSources()
+        store_payload_only(orphan, root + "org/ghost", "ghost.csv")
+        scenarios["an orphan payload with a delete marker"] = orphan
+        for name, sources in scenarios.items():
+            reader = bronze.S3Storage.from_client(VersionedClient(sources, FakeS3()))
+            refused(fixture, routed(fixture, reader), f"{name} ({root or 'root'})", EVIDENCE)
+        failing = bronze.S3Storage.from_client(VersionedClient(scenarios["a deleted manifest"], FakeS3(), fail_listing=True))
+        refused(fixture, routed(fixture, failing), f"a failed version listing ({root or 'root'})", "could not be listed")
+    for entry in ENTRIES:
+        clean = Fixture()
+        accepted(entry, routed(clean, bronze.S3Storage.from_client(VersionedClient(FakeSources(), FakeS3()))), clean)
+
+
 def an_omission_needs_the_routes_own_source_listing_and_finds_no_object_or_history() -> None:
     """Review rounds 3 and 4: a record alone never authorizes an omission. Source presence refuses for the evidence itself;
     the empty collection is the control."""
     source_presence_cases()
+    version_history_cases()
     fixture = Fixture()
     refused(fixture, routed(fixture, None), "no source listing", "needs the caller's own source reader")
     require(not fixture.reservations.entries, "a refused omission reserved something")
@@ -387,7 +417,7 @@ def a_malformed_table_map_and_a_failed_read_are_refused_for_their_own_cause() ->
     refused(fixture, routed(fixture, sourced, {"namespace": "bronze", "tables": []}), "a map without the table", "table map is malformed")
 
     class Failing(FakeSources):
-        def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+        def list_history(self, bucket: str, prefix: str) -> list[tuple[str, str, bool]]:
             raise reg.RegistrationError("transport", "Synthetic listing failure")
 
     refused(fixture, routed(fixture, Failing()), "a listing that fails", "could not be listed")
@@ -405,6 +435,7 @@ def the_source_cases_fail_when_the_evidence_is_discarded() -> None:
     with patch.object(bronze_unsourced, "source_evidence", discarding):
         try:
             source_presence_cases()
+            version_history_cases()
         except AssertionError:
             return
     raise AssertionError("the source-presence cases pass although the evidence is discarded")

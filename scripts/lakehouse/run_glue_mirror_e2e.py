@@ -1167,27 +1167,77 @@ def bronze_run_record(run: str, loaded: Sequence[str], skipped: Sequence[str]) -
 
 
 class FakeSources:
-    """The versioned source bucket the route lists with its own credentials (the ``Storage`` the loader reads): objects by key and version."""
+    """The versioned source bucket the route reads with its own credentials: objects by key and version. ``delete`` puts a delete marker on a key, so the
+    current view (``list_keys`` and ``list_current``, what the loader sees) drops it while every version stays readable and ``list_history`` still lists it."""
 
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
+        self.deleted: set[str] = set()
 
     def put(self, key: str, data: bytes) -> str:
         version = f"v-{hashlib.sha256(key.encode() + data).hexdigest()[:12]}"
         self.objects[(key, version)] = data
         return version
 
+    def delete(self, key: str) -> None:
+        self.deleted.add(key)
+
     def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
-        return sorted(identity for identity in self.objects if identity[0].startswith(prefix) and identity[0].endswith("/manifest.json"))
+        return sorted(
+            identity
+            for identity in self.objects
+            if identity[0].startswith(prefix) and identity[0].endswith("/manifest.json") and identity[0] not in self.deleted
+        )
 
     def list_current(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
-        return sorted(identity for identity in self.objects if identity[0].startswith(prefix))
+        return sorted(identity for identity in self.objects if identity[0].startswith(prefix) and identity[0] not in self.deleted)
+
+    def list_history(self, bucket: str, prefix: str) -> list[tuple[str, str, bool]]:
+        found = [(key, version, False) for key, version in sorted(self.objects) if key.startswith(prefix)]
+        return found + [(key, "delete-marker", True) for key in sorted(self.deleted) if key.startswith(prefix)]
 
     def get(self, bucket: str, key: str, version_id: str) -> bytes:
         return self.objects[(key, version_id)]
 
     def download(self, bucket: str, key: str, version_id: str, path: Path) -> None:
         path.write_bytes(self.objects[(key, version_id)])
+
+
+class VersionedClient:
+    """A boto-compatible S3 client over a versioned bucket: ``metadata`` answers the current-object listing and reads of the registration route, ``sources``
+    answers ``list_object_versions`` (versions, newest first, and delete markers) and reads by version ID. It is the client the real ``S3Storage`` adapter
+    wraps, so a case that uses it runs the route's own listing code."""
+
+    def __init__(self, sources: FakeSources, metadata: FakeS3, fail_listing: bool = False) -> None:
+        self.sources, self.metadata, self.fail_listing = sources, metadata, fail_listing
+        self.lists: list[str] = []
+
+    def get_paginator(self, operation: str) -> Any:
+        if operation == "list_objects_v2":
+            return self.metadata.get_paginator(operation)
+        if operation != "list_object_versions":
+            raise AssertionError(operation)
+        outer = self
+
+        class Pages:
+            def paginate(self, Bucket: str, Prefix: str) -> list[dict[str, Any]]:
+                outer.lists.append(Prefix)
+                if outer.fail_listing:
+                    raise ClientError({"Error": {"Code": "AccessDenied", "Message": "stand-in"}}, "ListObjectVersions")
+                versions = [
+                    {"Key": key, "VersionId": version, "IsLatest": key not in outer.sources.deleted}
+                    for key, version in sorted(outer.sources.objects)
+                    if key.startswith(Prefix)
+                ]
+                markers = [{"Key": key, "VersionId": "delete-marker", "IsLatest": True} for key in sorted(outer.sources.deleted) if key.startswith(Prefix)]
+                return [{"Versions": versions, "DeleteMarkers": markers}]
+
+        return Pages()
+
+    def get_object(self, Bucket: str, Key: str, VersionId: str | None = None) -> dict[str, Any]:
+        if VersionId is None:
+            return self.metadata.get_object(Bucket, Key)
+        return {"Body": io.BytesIO(self.sources.objects[(Key, VersionId)])}
 
 
 def store_source(sources: FakeSources, collection: str, file_name: str, *, status: str | None = None) -> None:
@@ -1207,6 +1257,20 @@ def store_source(sources: FakeSources, collection: str, file_name: str, *, statu
     sources.put(f"{collection}/manifests/release_date=2026-01-01/synthetic_capture/synthetic/manifest.json", json.dumps(manifest).encode())
 
 
+def delete_sources(sources: FakeSources, collection: str, *, manifests: bool, payloads: bool) -> None:
+    """Put a delete marker on the manifest keys, the payload keys or both of one collection."""
+    for key, _ in list(sources.objects):
+        if key.startswith(collection + "/") and (key.endswith("/manifest.json") and manifests or not key.endswith("/manifest.json") and payloads):
+            sources.delete(key)
+
+
+def store_payload_only(sources: FakeSources, collection: str, file_name: str) -> None:
+    """A payload object that matches the selector and has no manifest at all (an orphan), then a delete marker on it."""
+    key = f"{collection}/datasets/synthetic/release_date=2026-01-01/orphan/{file_name}"
+    sources.put(key, b"synthetic orphan bytes")
+    sources.delete(key)
+
+
 def store_role_correction(sources: FakeSources, collection: str) -> None:
     """Add a valid correction manifest that supersedes the manifest of ``store_source`` and changes its object's role from data to reference (the reviewer's
     reproduction). Both manifests stay stored; ordinary discovery then drops the superseded matching entry because no earlier generation published it."""
@@ -1223,11 +1287,12 @@ def store_role_correction(sources: FakeSources, collection: str) -> None:
     sources.put(collection + "/manifests/correction/manifest.json", json.dumps(corrected).encode())
 
 
-def register_bronze_command(s3: FakeS3, glue: FakeGlue, sources: FakeSources | None = None) -> tuple[int, str]:
+def register_bronze_command(s3: Any, glue: FakeGlue, sources: FakeSources | None = None, *, own_reader: bool = False) -> tuple[int, str]:
+    """The real command. With ``own_reader`` no source reader is injected: the route builds its own from ``s3`` (a ``VersionedClient``), as it does live."""
     out = io.StringIO()
     arguments = ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-        code = glue_mirror.main(arguments, glue=glue, s3=s3, config=enabled(), sources=sources or FakeSources())
+        code = glue_mirror.main(arguments, glue=glue, s3=s3, config=enabled(), sources=None if own_reader else sources or FakeSources())
     return code, out.getvalue()
 
 
@@ -1357,6 +1422,39 @@ def case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its
     return checks
 
 
+def case_bronze_register_keeps_a_table_required_when_its_source_has_only_version_history() -> Check:
+    """Review round 5. The route's own version listing (the real ``S3Storage`` adapter over a versioned client) must count a manifest whose current version is a
+    delete marker and a payload with a delete marker, under both read roots. The genuinely never-existing source is the control and a failed version listing
+    fails the layer."""
+    names = glue_mirror.layer_tables("bronze")
+    collection = bronze_table_entry()["collection"]
+    checks: Check = {}
+    for label, root in (("root", ""), ("raw", "raw/")):
+        scenarios: dict[str, FakeSources] = {}
+        for name, manifests, payloads in (("manifest_deleted", True, False), ("payload_deleted", False, True), ("both_deleted", True, True)):
+            sources = FakeSources()
+            store_source(sources, root + collection, "hcai_util_2026.xlsx")
+            delete_sources(sources, root + collection, manifests=manifests, payloads=payloads)
+            scenarios[name] = sources
+        orphan = FakeSources()
+        store_payload_only(orphan, root + collection, "hcai_util_2026.xlsx")
+        scenarios["orphan_payload_deleted"] = orphan
+        for name, sources in scenarios.items():
+            glue = FakeGlue()
+            code, text = register_bronze_command(VersionedClient(sources, bronze_bucket("bronze_00000001")), glue, own_reader=True)
+            checks[f"{label}_{name}_keeps_the_table_required"] = code == 1 and f"bronze.{ABSENT}: required" in text and "left out" not in text
+            checks[f"{label}_{name}_fails_clearly_and_every_other_table_registers"] = f"bronze.{ABSENT}: failed" in text and len(glue.tables) == len(names) - 1
+        control = FakeGlue()
+        control_code, control_text = register_bronze_command(VersionedClient(FakeSources(), bronze_bucket("bronze_00000001")), control, own_reader=True)
+        checks[f"{label}_a_source_that_never_existed_leaves_the_table_out"] = control_code == 0 and f"bronze.{ABSENT}: left out" in control_text
+        broken = FakeGlue()
+        broken_code, broken_text = register_bronze_command(
+            VersionedClient(scenarios["manifest_deleted"], bronze_bucket("bronze_00000001"), fail_listing=True), broken, own_reader=True
+        )
+        checks[f"{label}_a_failed_version_listing_fails_the_layer"] = broken_code == 1 and not broken.tables and "cannot be listed" in broken_text
+    return checks
+
+
 def case_the_glue_source_cases_fail_when_the_evidence_is_discarded() -> Check:
     """Review round 4, L1 for the Glue route: real discovery runs and its answer is thrown away. The source-presence cases must notice."""
     from scripts.lakehouse import bronze_unsourced
@@ -1371,6 +1469,7 @@ def case_the_glue_source_cases_fail_when_the_evidence_is_discarded() -> Check:
         held = {
             "the_source_collection_case": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection(),
             "the_role_correction_case": case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest(),
+            "the_version_history_case": case_bronze_register_keeps_a_table_required_when_its_source_has_only_version_history(),
         }
     return {f"{name}_fails_when_the_evidence_is_discarded": not all(checks.values()) for name, checks in held.items()}
 
@@ -1672,6 +1771,9 @@ CASES: dict[str, Callable[[], Check]] = {
     "bronze_register_never_trusts_a_complete_record_over_the_source_collection": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection,
     "bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest": (
         case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest
+    ),
+    "bronze_register_keeps_a_table_required_when_its_source_has_only_version_history": (
+        case_bronze_register_keeps_a_table_required_when_its_source_has_only_version_history
     ),
     "the_glue_source_cases_fail_when_the_evidence_is_discarded": case_the_glue_source_cases_fail_when_the_evidence_is_discarded,
     "bronze_register_keeps_an_existing_glue_entry_required_even_without_s3_metadata": (

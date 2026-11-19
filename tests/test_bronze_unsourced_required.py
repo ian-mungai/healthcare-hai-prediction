@@ -200,9 +200,16 @@ def test_a_file_under_another_key_is_not_evidence_and_a_wrong_record_under_a_run
         bronze_unsourced.read_unsourced(Bucket({key_of(RUN_A): FORGED}), BUCKET)
 
 
+class NoHistory:
+    """A source reader whose bucket holds nothing: no manifest, no object and no version history."""
+
+    def list_history(self, bucket: str, prefix: str) -> list[tuple[str, str, bool]]:
+        return []
+
+
 def normalized(name: str) -> dict[str, Any]:
     """A table entry as ``bronze.load_table_map`` returns it, with the roles and encodings that discovery reads."""
-    return {"table": name, "roles": ["data"], "encodings": ["utf-8"]}
+    return {"table": name, "collection": f"org/{name}", "dataset_ids": [name], "roles": ["data"], "encodings": ["utf-8"]}
 
 
 class Glue:
@@ -254,7 +261,7 @@ CONFIG = SimpleNamespace(layers={"bronze": SimpleNamespace(database="bronze")})
 
 def run_register(s3: Bucket, capsys: pytest.CaptureFixture[str], glue: Glue | None = None) -> tuple[int, str, str]:
     code = glue_mirror.main(
-        ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue or Glue(), s3=s3, config=CONFIG, sources=object()
+        ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue or Glue(), s3=s3, config=CONFIG, sources=NoHistory()
     )
     out = capsys.readouterr()
     return code, out.out, out.err
@@ -362,11 +369,13 @@ def test_the_source_evidence_is_real_discovery_over_both_read_roots_and_counts_h
 
     monkeypatch.setattr(bronze_unsourced.bronze, "discover", discover)
     check(
-        bronze_unsourced.source_evidence(object(), BUCKET, {"tables": [normalized(name) for name in "abc"]}, ["a", "b", "c"]) == {"a", "b"},
+        bronze_unsourced.source_evidence(NoHistory(), BUCKET, {"tables": [normalized(name) for name in "abc"]}, ["a", "b", "c"]) == {"a", "b"},
         "the evidence is the loadable and the history tables",
     )
     check(seen == [(["a", "b", "c"], ("", "raw/"))], f"{seen}")
-    check(bronze_unsourced.source_evidence(object(), BUCKET, {"tables": []}, []) == frozenset() and len(seen) == 1, "an empty candidate list listed the bucket")
+    check(
+        bronze_unsourced.source_evidence(NoHistory(), BUCKET, {"tables": []}, []) == frozenset() and len(seen) == 1, "an empty candidate list listed the bucket"
+    )
 
 
 def sourced_collection(root: str, correct: bool) -> tuple[Any, dict[str, Any]]:
@@ -408,7 +417,7 @@ def test_a_failed_read_propagates_and_is_never_counted_as_evidence_or_absence() 
     from scripts.lakehouse import run_glue_mirror_e2e as stand_in
 
     class Failing(stand_in.FakeSources):
-        def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+        def list_history(self, bucket: str, prefix: str) -> list[tuple[str, str, bool]]:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "stand-in"}}, "ListObjectVersions")
 
     _, config = sourced_collection("", False)
@@ -443,3 +452,90 @@ def test_a_rejected_capture_that_a_correction_also_supersedes_counts_and_a_file_
     broken.put(key, json.dumps(document).encode())
     with pytest.raises(bronze.BronzeError):
         bronze_unsourced.source_evidence(broken, BUCKET, config, [TABLE])
+
+
+def versioned(root: str, *, manifests: bool, payloads: bool) -> tuple[Any, Any, dict[str, Any]]:
+    """The real ``S3Storage`` adapter over a boto-compatible versioned client that holds a stored workbook object and its manifest, with a delete marker on the
+    manifest keys and or the payload keys. Returns the adapter, the stand-in bucket and a one-table map as the loader reads it."""
+    from scripts.lakehouse import bronze
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    sources, config = sourced_collection(root, False)
+    stand_in.delete_sources(sources, root + config["tables"][0]["collection"], manifests=manifests, payloads=payloads)
+    return bronze.S3Storage.from_client(stand_in.VersionedClient(sources, stand_in.FakeS3())), sources, config
+
+
+@pytest.mark.parametrize("root", ["", "raw/"])
+@pytest.mark.parametrize(("manifests", "payloads"), [(True, False), (False, True), (True, True)], ids=["manifest deleted", "payload deleted", "both deleted"])
+def test_a_delete_marker_on_the_manifest_or_the_payload_leaves_source_history_that_the_omission_evidence_counts(
+    root: str, manifests: bool, payloads: bool
+) -> None:
+    """Review round 5: the loader's listing keeps current versions only, so a delete marker hid the manifest (and its table) from the omission evidence."""
+    reader, _, config = versioned(root, manifests=manifests, payloads=payloads)
+    check(bronze_unsourced.source_evidence(reader, BUCKET, config, [TABLE]) == {TABLE}, f"{root!r} manifests {manifests} payloads {payloads}: no evidence")
+
+
+@pytest.mark.parametrize("root", ["", "raw/"])
+def test_the_loader_listing_is_unchanged_and_still_drops_the_deleted_manifest_while_the_history_listing_keeps_it(root: str) -> None:
+    from scripts.lakehouse import bronze
+
+    reader, sources, config = versioned(root, manifests=True, payloads=False)
+    prefix = root + config["tables"][0]["collection"] + "/"
+    check(reader.list_keys(BUCKET, prefix) == [], "the loader's manifest listing returned a deleted manifest")
+    found, excluded = bronze.discover(reader, BUCKET, config, [TABLE], bronze.RetiredObjects(), roots=("", "raw/"), count_superseded=True)
+    check(found == [] and excluded == [], f"ordinary discovery through the loader's adapter changed: {found} {excluded}")
+    history = reader.list_history(BUCKET, prefix)
+    check(any(key.endswith("/manifest.json") and not marker for key, _, marker in history), f"the history listing lost the manifest version: {history}")
+    check(any(key.endswith("/manifest.json") and marker for key, _, marker in history), f"the history listing lost the delete marker: {history}")
+    check(len(sources.objects) == len([entry for entry in history if not entry[2]]), "the history listing lost or added a version")
+
+
+@pytest.mark.parametrize("root", ["", "raw/"])
+def test_a_payload_with_no_manifest_and_a_delete_marker_still_counts_and_a_source_that_never_existed_does_not(root: str) -> None:
+    from scripts.lakehouse import bronze
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    _, config = sourced_collection(root, False)
+    collection = root + config["tables"][0]["collection"]
+    orphan = stand_in.FakeSources()
+    stand_in.store_payload_only(orphan, collection, "hcai_util_2026.xlsx")
+    reader = bronze.S3Storage.from_client(stand_in.VersionedClient(orphan, stand_in.FakeS3()))
+    check(bronze_unsourced.source_evidence(reader, BUCKET, config, [TABLE]) == {TABLE}, "an orphan payload with a delete marker was not counted")
+    other = stand_in.FakeSources()
+    stand_in.store_payload_only(other, collection, "unrelated_file.xlsx")
+    reader = bronze.S3Storage.from_client(stand_in.VersionedClient(other, stand_in.FakeS3()))
+    check(bronze_unsourced.source_evidence(reader, BUCKET, config, [TABLE]) == frozenset(), "a deleted file that the selector does not match counted")
+    empty = bronze.S3Storage.from_client(stand_in.VersionedClient(stand_in.FakeSources(), stand_in.FakeS3()))
+    check(bronze_unsourced.source_evidence(empty, BUCKET, config, [TABLE]) == frozenset(), "a source that never existed counted")
+
+
+def test_a_dataset_id_table_counts_a_deleted_payload_under_its_dataset_folder_and_a_failed_version_listing_raises() -> None:
+    from scripts.lakehouse import bronze
+    from scripts.lakehouse import run_glue_mirror_e2e as stand_in
+
+    config = {
+        "namespace": "bronze",
+        "tables": [{"table": "ghost", "collection": "org/ghost", "dataset_ids": ["synthetic"], "roles": ["data"], "encodings": ["utf-8"]}],
+    }
+    sources = stand_in.FakeSources()
+    stand_in.store_payload_only(sources, "org/ghost", "anything.csv")
+    reader = bronze.S3Storage.from_client(stand_in.VersionedClient(sources, stand_in.FakeS3()))
+    check(bronze_unsourced.source_evidence(reader, BUCKET, config, ["ghost"]) == {"ghost"}, "a payload under the dataset folder was not counted")
+    failing = bronze.S3Storage.from_client(stand_in.VersionedClient(sources, stand_in.FakeS3(), fail_listing=True))
+    with pytest.raises(ClientError):
+        bronze_unsourced.source_evidence(failing, BUCKET, config, ["ghost"])
+
+
+def test_a_source_reader_that_lists_current_objects_only_cannot_prove_absence() -> None:
+    """Review round 5: a reader without ``list_history`` could not see a delete marker, so the evidence refuses it instead of reporting an empty collection."""
+
+    class CurrentOnly:
+        def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+            return []
+
+        def list_current(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+            return []
+
+    _, config = sourced_collection("", False)
+    with pytest.raises(TypeError, match="version history"):
+        bronze_unsourced.source_evidence(CurrentOnly(), BUCKET, config, [TABLE])
