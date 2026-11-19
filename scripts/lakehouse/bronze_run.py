@@ -604,33 +604,67 @@ def show_mirror(report: dict[str, Any]) -> None:
         )
 
 
-def store_mirror_attempt(client: Any, bucket: str, attempt: dict[str, Any]) -> str:
-    """Create the attempt record once: ``written``, or ``kept`` when the record of the same loader report exists (the bucket refuses the replacement)."""
-    created = put_once(client, bucket, bronze_mirror.attempt_key(str(attempt["bronze_run"]), str(attempt["report_sha256"])), json_bytes(attempt))
-    return "written" if created else "kept"
+class AttemptWriteError(StepError):
+    """The mirror attempt record of a loader report could not be written. The message names the exact key, the report and the metadata generation."""
 
 
-def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes) -> None:
-    """Keep this attempt's mirror outcome as its own create-once record beside the run record, which stays the immutable receipt of the load.
+def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, Any], report_sha256: str) -> tuple[str, str]:
+    """Create the attempt record of this loader report under the first free number and return ``(written or kept, key)``.
 
-    A retry of the load phase runs the hook again, so each loader report gets its own record and the latest one is the state of the mirror
-    (``python -m scripts.lakehouse.bronze_mirror show``). A record that the role may not write yet (the code refresh can come before the IAM apply that
-    grants the key) fails no phase: the committed run goes on and the missing record is named.
+    The number is the order of the chain: the attempt reads the numbers from 001 upward and takes the first free one with a conditional create, so no two
+    attempts share a number. A record of the same report that is already there is kept, so a repeat of the same check phase writes nothing new. A lost race
+    (another attempt created the number between the read and the write) reads that number again. The role cannot list its folder, so a number that does not
+    exist reads as 403 and as missing.
     """
     from botocore.exceptions import ClientError
 
+    sequence, key, refused = 1, bronze_mirror.attempt_key(run, 1), ""
+    for _ in range(2 * bronze_mirror.MAX_ATTEMPTS):
+        key = bronze_mirror.attempt_key(run, sequence)
+        try:
+            existing = read_own_record(client, bucket, key)
+            if existing is None and refused == key:
+                raise AttemptWriteError(
+                    f"the mirror attempt record {key} exists and cannot be read, so the next number cannot be found (report {report_sha256[:12]})"
+                )
+            if existing is not None:
+                if existing.get("report_sha256") == report_sha256:
+                    return "kept", key
+                sequence += 1
+                if sequence > bronze_mirror.MAX_ATTEMPTS:
+                    break
+                continue
+            if put_once(client, bucket, key, json_bytes(bronze_mirror.attempt_record(run, report, report_sha256, sequence))):
+                return "written", key
+            refused = key
+        except ClientError as error:
+            generation = report.get("metadata_index", {}).get("generation", "unknown") if isinstance(report.get("metadata_index"), dict) else "unknown"
+            raise AttemptWriteError(
+                f"the mirror attempt record {key} was not written (report {report_sha256[:12]}, generation {generation}): {error}"
+            ) from None
+        except bronze_mirror.AttemptError as error:
+            raise StepError(str(error)) from None
+    raise AttemptWriteError(f"the run has more than {bronze_mirror.MAX_ATTEMPTS} mirror attempt records: {key} cannot be numbered")
+
+
+def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes, retry: bool) -> None:
+    """Keep this attempt's mirror outcome as its own numbered create-once record beside the run record, which stays the immutable receipt of the load.
+
+    A first check whose record cannot be written (the code refresh can come before the IAM apply that grants the key) fails no phase: the committed run goes
+    on, the missing record is named with its exact key, and the acceptance of the mirror (``python -m scripts.lakehouse.bronze_mirror show``) says
+    ``unavailable``. A retry (the receipt of the run already exists) whose record cannot be written fails its check phase: the durable history would
+    otherwise end on an older attempt, and an acceptance would read a pass that this attempt did not earn. The load and its receipt stay as they are.
+    """
     if "mirror" not in report:
         return
     try:
-        attempt = bronze_mirror.attempt_record(job.run, report, hashlib.sha256(report_bytes).hexdigest())
-    except bronze_mirror.AttemptError as error:
-        raise StepError(str(error)) from None
-    try:
-        outcome = store_mirror_attempt(storage().client, job.bucket, attempt)
-    except ClientError as error:
-        sys.stderr.write(f"bronze_run: the mirror attempt record was not written: {error}\n")
+        outcome, key = store_mirror_attempt(storage().client, job.bucket, job.run, report, hashlib.sha256(report_bytes).hexdigest())
+    except AttemptWriteError as error:
+        if retry:
+            raise StepError(f"{error}; the run already has a recorded load, so the history of its mirror cannot end on an older attempt") from None
+        sys.stderr.write(f"bronze_run: {error}\n")
         return
-    sys.stdout.write(f"mirror attempt record {outcome}: {bronze_mirror.attempt_key(job.run, attempt['report_sha256'])}\n")
+    sys.stdout.write(f"mirror attempt record {outcome}: {key}\n")
 
 
 def check(job: Job) -> None:
@@ -642,7 +676,6 @@ def check(job: Job) -> None:
         accepted_unsourced(report, skipped)
         stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job), skipped))
         sys.stdout.write(f"run record {stored}; skipped_tables {len(skipped)}\n")
-        record_mirror_attempt(job, report, body)
         topic = os.environ.get("ALERTS_TOPIC_ARN", "")
         notify = None
         if topic:
@@ -652,6 +685,7 @@ def check(job: Job) -> None:
         done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=topic, notify=notify, skipped=skipped)
         files = done["carried_over"]
         sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
+        record_mirror_attempt(job, report, body, retry=stored == "kept")
     if job.target == "real":
         conf = json.dumps({"run_id": job.run, "mode": "real"})
         sys.stdout.write(

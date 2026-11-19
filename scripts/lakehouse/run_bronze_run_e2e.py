@@ -343,6 +343,7 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     )
     require(latest["bronze_run"] == RUN and latest["metadata_generation"] == "1", f"the attempt is not bound to the run and the generation: {latest}")
     require("glue mirror ok" in case.out, "the check phase does not show the mirror outcome")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "ok", "the receipt and the attempt chain are not accepted")
 
 
 def attempts() -> list[dict[str, Any]]:
@@ -402,8 +403,8 @@ def case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record(case
     require(len(attempts()) == 1, f"a repeated check wrote {len(attempts())} attempt records")
 
 
-def case_an_attempt_record_that_cannot_be_written_fails_no_phase_and_is_named(case: Case) -> None:
-    """A code refresh can come before the IAM apply that grants the new key: the run stays committed and the missing record is shown."""
+def refusing_attempts(case: Case) -> Any:
+    """The bucket before the IAM apply or after a revocation: the role may not write a mirror attempt record. An absent key reads as 403."""
     client = STORAGE[0].client
     original = client.put_object
 
@@ -412,10 +413,66 @@ def case_an_attempt_record_that_cannot_be_written_fails_no_phase_and_is_named(ca
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no grant"}}, "PutObject")
         return original(**arguments)
 
-    with mock.patch.object(client, "put_object", refuse):
+    return mock.patch.object(client, "put_object", refuse)
+
+
+def case_a_first_run_before_the_iam_apply_is_unavailable(case: Case) -> None:
+    """A code refresh can come before the IAM apply that grants the new key: the run stays committed, the missing record is named with its exact key, and the
+    acceptance of the mirror is ``unavailable``, never a pass."""
+    with refusing_attempts(case):
         require(case.chain() == [0, 0, 0], case.err)
+    client = STORAGE[0].client
     require(f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts and "bronze_chain_dag" in case.out, "the run was held back")
-    require("mirror attempt record was not written" in case.err and "AccessDenied" in case.err, f"the missing record is not named: {case.err}")
+    key = bronze_mirror.attempt_key(RUN, 1)
+    require(
+        "mirror attempt record" in case.err and key in case.err and "AccessDenied" in case.err and "generation 1" in case.err,
+        f"the missing record is not named: {case.err}",
+    )
+    verdict = bronze_mirror.acceptance(client, BUCKET, RUN)
+    require(verdict["state"] == "unavailable" and key in verdict["reason"], f"{verdict}")
+
+
+def case_a_retry_without_its_record_fails_its_check(case: Case) -> None:
+    """The run has a recorded success. Its retry fails in Glue and the role may not write the retry's record (a revocation): the history would end on the older
+    pass, so the retry's check phase fails, names the exact key, the report and the generation, and leaves the committed load and its receipt as they are."""
+    require(case.chain() == [0, 0, 0], case.err)
+    receipt = STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"]
+    DEFECTS.clear()
+    DEFECTS.add("mirror_failed")
+    case.shas = None
+    case.err = ""
+    with refusing_attempts(case):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"the retry's check passed without its record: {codes} {case.err}")
+    key = bronze_mirror.attempt_key(RUN, 2)
+    require(
+        key in case.err and "generation 1" in case.err and "AccessDenied" in case.err and "report" in case.err, f"the missing record is not named: {case.err}"
+    )
+    require("glue mirror FAILED" in case.err, "the failed mirror of the retry is not shown")
+    require(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"] == receipt, "the retry replaced the load receipt")
+    require([item["sequence"] for item in attempts()] == [1], "a record appeared for an attempt that could not write it")
+
+
+def case_a_first_load_never_recorded_is_not_accepted(case: Case) -> None:
+    with refusing_attempts(case):
+        require(case.chain() == [0, 0, 0], case.err)
+    require(retry(case, None) == [0, 0, 0], case.err)
+    found = attempts()
+    require([item["sequence"] for item in found] == [1], f"{[item['sequence'] for item in found]}")
+    verdict = bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)
+    require(verdict["state"] == "unavailable" and "first" in verdict["reason"], f"a later report's record passed for the first load: {verdict}")
+
+
+def case_the_latest_attempt_is_the_last_number_on_a_reversed_clock(case: Case) -> None:
+    require(case.chain() == [0, 0, 0], case.err)
+    CLOCK[0] = 0  # the next load stamps its report with an earlier time than the first one
+    require(retry(case, "mirror_failed") == [0, 0, 0], case.err)
+    found = attempts()
+    require([item["sequence"] for item in found] == [1, 2], f"{[item['sequence'] for item in found]}")
+    require(found[1]["report_run_at_utc"] < found[0]["report_run_at_utc"], f"the clock did not go back: {[item['report_run_at_utc'] for item in found]}")
+    latest = bronze_mirror.latest_attempt(STORAGE[0].client, BUCKET, RUN)
+    require(latest is not None and latest["sequence"] == 2 and latest["mirror"]["status"] == "failed", f"{latest}")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "failed", "an older report time lent its pass to the failed retry")
 
 
 def case_a_loader_report_with_a_malformed_mirror_outcome_is_refused(case: Case) -> None:
@@ -953,7 +1010,10 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a retry that fails the mirror after a success shows the failure and keeps the receipt": case_a_retry_failing_the_mirror_after_a_success_keeps_the_receipt,
     "a retry that repairs a failed mirror shows the repair and keeps the receipt": case_a_retry_repairing_the_mirror_keeps_the_receipt,
     "a repeated check of the same report makes no second attempt record": case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record,
-    "an attempt record that cannot be written fails no phase and is named": case_an_attempt_record_that_cannot_be_written_fails_no_phase_and_is_named,
+    "a first run before the IAM apply fails no phase and is unavailable to the acceptance": case_a_first_run_before_the_iam_apply_is_unavailable,
+    "a retry whose record cannot be written fails its check after a recorded success": case_a_retry_without_its_record_fails_its_check,
+    "a first load never recorded is not accepted on a later retry's record": case_a_first_load_never_recorded_is_not_accepted,
+    "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,

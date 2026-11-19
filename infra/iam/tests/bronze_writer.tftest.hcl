@@ -330,11 +330,12 @@ run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_o
       toset(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1].Resource) == toset([
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/mirror_*.json",
       ]) &&
       !contains(keys(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1]), "Condition") &&
       length(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement) == 2
     )
-    error_message = "Every write of a run record or staged input must carry the condition s3:if-none-match equal to *, so the role can create a record once and never replace it, and the only read is the two carried-over records."
+    error_message = "Every write of a run record or staged input must carry the condition s3:if-none-match equal to *, so the role can create a record once and never replace it, and the only reads are the two carried-over records and the mirror attempt records the check phase numbers its next attempt from."
   }
 
   assert {
@@ -343,6 +344,37 @@ run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_o
       jsondecode(aws_iam_policy.bronze_writer["owner_notice"].policy).Statement[0].Resource == "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
     )
     error_message = "The bronze role must publish to the one alerts topic and nowhere else."
+  }
+}
+
+# The description of an IAM managed policy is ForceNew in the AWS provider (6.66.0): a changed description replaces the policy (destroy, then create, with its role
+# attachment following the new ARN), so the bronze writer would lose its grants for a while. The descriptions below are the ones applied live. A permission
+# detail belongs in the policy document, which updates in place, and a new description needs its own reviewed replacement plan, never a side effect of a grant.
+run "bronze_managed_policy_descriptions_are_the_applied_ones_so_a_grant_change_updates_in_place" {
+  command = plan
+
+  variables {
+    source_raw_root_enabled         = true
+    bronze_writer_prepared          = true
+    alerts_topic_arn                = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-data-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-data-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition = (
+      aws_iam_policy.bronze_writer["run_record_writes"].description == "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key." &&
+      aws_iam_policy.bronze_writer["run_records_read"].description == "Read the run records of the ingestion runs under the capture root, by exact version, and list their versions." &&
+      aws_iam_policy.bronze_writer["owner_notice"].description == "Publish the owner notice of the carried-over files to the one alerts topic." &&
+      aws_iam_policy.bronze_writer["pseudonym_key"].description == "Read the one pseudonym key parameter of the reviewed key version, at load. No other parameter and no write." &&
+      aws_iam_policy.bronze_writer["source_lists"].description == "List source versions of each mapped collection at every enabled source root." &&
+      aws_iam_policy.bronze_writer["source_objects_root"].description == "Read source object versions of each mapped collection and the content-addressed payloads, at the bucket root." &&
+      aws_iam_policy.bronze_writer["source_objects_raw"].description == "Read source object versions of each mapped collection and the content-addressed payloads, under raw."
+    )
+    error_message = "A managed bronze policy description differs from the applied one. The description forces a replacement of the policy: keep it and change the policy document."
   }
 }
 

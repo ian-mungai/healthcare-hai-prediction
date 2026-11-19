@@ -54,7 +54,7 @@ def enabled(**changes: Any) -> glue_mirror.MirrorConfig:
 def hook(
     namespace: str = "bronze", config: glue_mirror.MirrorConfig | None = None, glue: Any = None, source: Any = None, run_id: str = RUN, **keywords: Any
 ) -> dict[str, Any]:
-    keywords.setdefault("read_loader", lambda *_: {})
+    keywords.setdefault("read_loader", lambda *_: ({}, []))
     return bronze_mirror.mirror_after_load(
         None,
         namespace,
@@ -143,7 +143,9 @@ def test_a_failure_never_raises_and_is_reported_with_its_cause(label: str, glue:
 
 def test_a_missing_glue_client_setting_is_a_reported_failure_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AWS_REGION", raising=False)
-    report = bronze_mirror.mirror_after_load(None, "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=None, config=enabled(), read_loader=lambda *_: {})
+    report = bronze_mirror.mirror_after_load(
+        None, "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=None, config=enabled(), read_loader=lambda *_: ({}, [])
+    )
     check(report["status"] == "failed" and "AWS_REGION" in report["reason"], f"{report}")
 
 
@@ -259,18 +261,18 @@ SIDE_SNAPSHOTS = {"column_map": 71, "file_metadata": 72, "file_preambles": 73, "
 
 
 class Reader:
-    """The read of the loader tables' committed snapshots: only the side tables that exist in the catalog come back."""
+    """The read of the loader tables' committed snapshots: those with a snapshot and those that exist without one. An absent table is in neither."""
 
-    def __init__(self, present: dict[str, int]) -> None:
-        self.present, self.asked = present, []
+    def __init__(self, present: dict[str, int], empty: tuple[str, ...] = ()) -> None:
+        self.present, self.empty, self.asked = present, empty, []
 
-    def __call__(self, _spark: Any, _namespace: str, tables: Any) -> dict[str, int]:
+    def __call__(self, _spark: Any, _namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
         self.asked.append(list(tables))
-        return {name: self.present[name] for name in tables if name in self.present}
+        return {name: self.present[name] for name in tables if name in self.present}, [name for name in tables if name in self.empty]
 
 
-def reader(present: dict[str, int]) -> Reader:
-    return Reader(present)
+def reader(present: dict[str, int], empty: tuple[str, ...] = ()) -> Reader:
+    return Reader(present, empty)
 
 
 def test_the_hook_and_the_by_hand_register_name_the_same_bronze_tables() -> None:
@@ -336,15 +338,81 @@ def test_the_side_tables_are_not_read_while_the_mirror_is_off_or_in_a_test_names
         check(report["status"] == "skipped" and read.asked == [], f"{namespace}: {report} {read.asked}")
 
 
+class Catalog:
+    """A catalog for the default side read: which tables exist and the snapshot rows of each (newest first). The real ``bronze.latest_snapshot`` runs on it."""
+
+    def __init__(self, snapshots: dict[str, list[int]]) -> None:
+        self.snapshots = snapshots
+        self.catalog = SimpleNamespace(tableExists=lambda name: name.rsplit(".", 1)[-1] in snapshots)
+
+    def table(self, name: str) -> Any:
+        table = name.removesuffix(".snapshots").rsplit(".", 1)[-1]
+        rows = [{"snapshot_id": snapshot} for snapshot in self.snapshots[table]]
+        frame = SimpleNamespace(orderBy=lambda _column: frame, limit=lambda count: SimpleNamespace(collect=lambda: rows[:count]))
+        return frame
+
+
+@contextlib.contextmanager
+def pyspark_functions() -> Any:
+    """The one Spark function the snapshot read names, so the real read runs where Spark is not installed."""
+    import sys
+    import types
+
+    module, sql = types.ModuleType("pyspark"), types.ModuleType("pyspark.sql")
+    sql.__dict__["functions"] = SimpleNamespace(desc=lambda column: column)
+    with mock.patch.dict(sys.modules, {"pyspark": module, "pyspark.sql": sql}):
+        yield
+
+
 def test_the_default_read_takes_the_exact_snapshots_of_the_side_tables_that_exist() -> None:
-    spark = SimpleNamespace(catalog=SimpleNamespace(tableExists=lambda name: name != "bronze.file_preambles"))
-    asked: list[tuple[str, list[str]]] = []
+    spark = Catalog({"column_map": [71], "file_metadata": [72, 60], "stored_copies": [74]})
+    with pyspark_functions():
+        found, waiting = bronze_mirror.loader_snapshots(spark, "bronze", SIDE)
+    check(found == {"column_map": 71, "file_metadata": 72, "stored_copies": 74} and waiting == [], f"{found} {waiting}")
 
-    def snapshots(_spark: Any, namespace: str, names: list[str]) -> dict[str, int]:
-        asked.append((namespace, list(names)))
-        return {name: SIDE_SNAPSHOTS[name] for name in names}
 
-    with mock.patch.object(bronze, "table_snapshots", snapshots):
-        found = bronze_mirror.loader_snapshots(spark, "bronze", SIDE)
-    check(asked == [("bronze", ["column_map", "file_metadata", "stored_copies"])], f"{asked}")
-    check(found == {"column_map": 71, "file_metadata": 72, "stored_copies": 74}, f"{found}")
+@pytest.mark.parametrize("empty_table", SIDE)
+def test_a_side_table_that_exists_without_a_snapshot_is_waiting_and_blocks_nothing(empty_table: str) -> None:
+    """A first load of headerless formats creates ``column_map`` but writes no row to it, so the table exists with no snapshot. Any side table can be in that
+    state, so the rule is the same for all four: it is reported as not mirrored yet, and the committed tables are registered."""
+    snapshots = {name: [SIDE_SNAPSHOTS[name]] for name in SIDE}
+    snapshots[empty_table] = []
+    glue = FakeGlue()
+    with pyspark_functions():
+        report = bronze_mirror.mirror_after_load(Catalog(snapshots), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled())
+    check(report["status"] == "ok", f"an empty {empty_table} failed the mirror: {report}")
+    check(set(report["tables"]) == {*TABLES, *SIDE}, f"{report}")
+    check(report["tables"][empty_table].startswith("not mirrored: no committed snapshot"), f"{report['tables'][empty_table]}")
+    check(set(glue.tables) == {("bronze", name) for name in [*TABLES, *SIDE] if name != empty_table}, f"registered: {sorted(glue.tables)}")
+
+
+def test_when_every_side_table_is_empty_the_loaded_tables_are_still_registered() -> None:
+    glue = FakeGlue()
+    with pyspark_functions():
+        report = bronze_mirror.mirror_after_load(
+            Catalog(dict.fromkeys(SIDE, [])), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled()
+        )
+    check(report["status"] == "ok" and {name for _, name in glue.tables} == set(TABLES), f"{report}")
+
+
+def test_an_empty_side_table_is_registered_once_its_first_snapshot_commits() -> None:
+    glue = FakeGlue()
+    with pyspark_functions():
+        first = bronze_mirror.mirror_after_load(
+            Catalog({"column_map": [], "file_metadata": [72]}), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled()
+        )
+        later = bronze_mirror.mirror_after_load(
+            Catalog({"column_map": [75], "file_metadata": [72]}), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled()
+        )
+    check(first["tables"]["column_map"].startswith("not mirrored") and later["tables"]["column_map"] == "created", f"{first} {later}")
+
+
+def test_an_unexpected_failure_of_the_snapshot_read_is_still_a_failed_mirror() -> None:
+    class Broken(Catalog):
+        def table(self, name: str) -> Any:
+            raise RuntimeError("catalog unreachable")
+
+    glue = FakeGlue()
+    with pyspark_functions():
+        report = bronze_mirror.mirror_after_load(Broken({"column_map": [71]}), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled())
+    check(report["status"] == "failed" and "catalog unreachable" in report["reason"] and glue.writes() == [], f"{report}")

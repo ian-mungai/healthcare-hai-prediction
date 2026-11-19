@@ -27,6 +27,8 @@ locals {
   # files, once the stack is told the alerts topic. Every write is create-only (s3:if-none-match "*"): a record or staged input that exists is never replaced.
   # The stage job of a pipeline run (scripts.lakehouse.bronze_run stage) writes the run's request and source
   # inventory and the report of the tables it left out under lakehouse/run_stage/<bronze run>/inputs/, create-only by the task, and nothing else of that folder.
+  # The description of a managed policy is ForceNew in the AWS provider: changing it replaces the policy. The descriptions below are the applied ones, so a change of
+  # a grant goes into the document (updated in place). The tests pin them (bronze_writer.tftest.hcl) and run_iam_upgrade_plan_e2e plans the stack against the applied state.
   bronze_run_record_policies = merge(
     var.source_raw_root_enabled ? {
       run_records_read = {
@@ -40,7 +42,7 @@ locals {
     } : {},
     {
       run_record_writes = {
-        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome, the Glue mirror attempt records of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key."
+        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key."
         document = templatefile("${path.module}/owner_policies/bronze_writer_run_record_writes.json", {
           BRONZE_RUN_RECORD_ARNS = jsonencode([
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json",
@@ -54,6 +56,7 @@ locals {
           BRONZE_RUN_RECORD_READ_ARNS = jsonencode([
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json",
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over_notice.json",
+            "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/mirror_*.json",
           ])
         })
       }

@@ -87,7 +87,11 @@ def render(
                 ]
             ),
             "BRONZE_RUN_RECORD_READ_ARNS": json.dumps(
-                [f"{bucket}/lakehouse/bronze_runs/*/carried_over.json", f"{bucket}/lakehouse/bronze_runs/*/carried_over_notice.json"]
+                [
+                    f"{bucket}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{bucket}/lakehouse/bronze_runs/*/carried_over_notice.json",
+                    f"{bucket}/lakehouse/bronze_runs/*/mirror_*.json",
+                ]
             ),
         },
         defect,
@@ -175,7 +179,7 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     # refused, so the role cannot replace what a run wrote. Each denial of another key carries the right header, so the key and not the header refuses it.
     runs = f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34"
     stage = f"{BUCKET}/lakehouse/run_stage"
-    attempt = "mirror_" + "ab" * 32 + ".json"
+    attempt = "mirror_001.json"
     written = [f"{runs}/{record}" for record in ("check.json", "carried_over.json", "carried_over_notice.json", attempt)]
     written += [
         f"{stage}/{run}/inputs/{staged}"
@@ -191,15 +195,15 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
             check(action, key, False)
             check(action, key, False, once="*")
     for key in written[:4]:
-        check("s3:GetObject", key, key.endswith(("carried_over.json", "carried_over_notice.json")))
+        check("s3:GetObject", key, key.endswith(("carried_over.json", "carried_over_notice.json")) or "/mirror_" in key)
     for key in written[4:]:
         check("s3:GetObject", key, False)  # the stage read of every job role grants this read; the bronze role's own policies add none
     for other in (
         "lakehouse/bronze_runs/bronze_ab12cd34/other.json",
         "lakehouse/bronze_runs/bronze_ab12cd34/mirror.json",
-        "lakehouse/bronze_runs/bronze_ab12cd34/mirror/" + "ab" * 32 + ".json",
-        "lakehouse/bronze_runs/mirror_" + "ab" * 32 + ".json",
-        "lakehouse/run_stage/bronze_ab12cd34/inputs/mirror_" + "ab" * 32 + ".json",
+        "lakehouse/bronze_runs/bronze_ab12cd34/mirror/001.json",
+        "lakehouse/bronze_runs/mirror_001.json",
+        "lakehouse/run_stage/bronze_ab12cd34/inputs/mirror_001.json",
         "lakehouse/bronze_runs/check.json",
         "lakehouse/bronze_run/bronze_ab12cd34/check.json",
         "bronze_runs/bronze_ab12cd34/check.json",
@@ -352,6 +356,29 @@ def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
                         f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
                         f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
                         f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
+                    ]
+                ),
+            ),
+        ),
+        (
+            "mirror_attempt_not_readable",
+            (
+                "bronze_writer_run_record_writes",
+                "${BRONZE_RUN_RECORD_READ_ARNS}",
+                json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json"]),
+            ),
+        ),
+        (
+            "mirror_attempt_read_widened",
+            (
+                "bronze_writer_run_record_writes",
+                "${BRONZE_RUN_RECORD_READ_ARNS}",
+                json.dumps(
+                    [
+                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
+                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
+                        f"{BUCKET}/lakehouse/bronze_runs/*/mirror_*.json",
+                        f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
                     ]
                 ),
             ),

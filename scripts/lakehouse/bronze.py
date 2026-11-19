@@ -1125,16 +1125,22 @@ def load_objects(
     return summary
 
 
-def table_snapshots(spark: Any, namespace: str, names: list[str]) -> dict[str, int]:
-    """The current snapshot of each loaded table: the newest by the commit time the catalog recorded. The run record names these snapshots."""
+def latest_snapshot(spark: Any, namespace: str, name: str) -> int | None:
+    """The newest snapshot of a table by the commit time the catalog recorded, or None for a table that exists and has no commit yet."""
     from pyspark.sql import functions
 
+    rows = spark.table(f"{namespace}.{name}.snapshots").orderBy(functions.desc("committed_at")).limit(1).collect()
+    return int(rows[0]["snapshot_id"]) if rows else None
+
+
+def table_snapshots(spark: Any, namespace: str, names: list[str]) -> dict[str, int]:
+    """The current snapshot of each loaded table: the newest by the commit time the catalog recorded. The run record names these snapshots."""
     found: dict[str, int] = {}
     for name in names:
-        rows = spark.table(f"{namespace}.{name}.snapshots").orderBy(functions.desc("committed_at")).limit(1).collect()
-        if not rows:
+        snapshot = latest_snapshot(spark, namespace, name)
+        if snapshot is None:
             raise BronzeError(f"{namespace}.{name} has no snapshot after the load")
-        found[name] = int(rows[0]["snapshot_id"])
+        found[name] = snapshot
     return found
 
 

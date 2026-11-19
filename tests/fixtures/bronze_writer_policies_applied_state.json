@@ -1,0 +1,262 @@
+{
+ "lineage": "00000000-0000-0000-0000-000000000000",
+ "outputs": {},
+ "resources": [
+  {
+   "each": "map",
+   "instances": [
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_owner_notice_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Publish the owner notice of the carried-over files to the one alerts topic.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_owner_notice_dev",
+      "name": "example_project_job_write_bronze_owner_notice_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":\"sns:Publish\",\"Effect\":\"Allow\",\"Resource\":\"arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev\",\"Sid\":\"PublishOwnerNotices\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLETICEXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "owner_notice",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_pseudonym_key_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Read the one pseudonym key parameter of the reviewed key version, at load. No other parameter and no write.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_pseudonym_key_dev",
+      "name": "example_project_job_write_bronze_pseudonym_key_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"ssm:GetParameters\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1\"],\"Sid\":\"ReadPseudonymKeyAtLoad\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEXKEYXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "pseudonym_key",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_run_record_writes_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_run_record_writes_dev",
+      "name": "example_project_job_write_bronze_run_record_writes_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"s3:PutObject\"],\"Condition\":{\"StringEquals\":{\"s3:if-none-match\":\"*\"}},\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/check.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_request.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json\"],\"Sid\":\"CreateTheBronzeRunRecordsAndStagedInputsOnce\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json\",\"arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json\"],\"Sid\":\"ReadTheCarriedOverRecordsItCreated\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEITESXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "run_record_writes",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_run_records_read_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Read the run records of the ingestion runs under the capture root, by exact version, and list their versions.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_run_records_read_dev",
+      "name": "example_project_job_write_bronze_run_records_read_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"s3:GetObjectVersion\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/raw/ingestion_runs/*/run.json\"],\"Sid\":\"IngestionRunRecordVersionsOnly\"},{\"Action\":[\"s3:ListBucketVersions\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"raw/ingestion_runs/*\"]}},\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::example-data-bucket\",\"Sid\":\"ListIngestionRunRecordVersions\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEREADXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "run_records_read",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_lists_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "List source versions of each mapped collection at every enabled source root.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_lists_dev",
+      "name": "example_project_job_write_bronze_source_lists_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"s3:ListBucketVersions\"],\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"ahrq/patient_safety_indicators/*\",\"bls/local_area_unemployment/*\",\"california_cdph/infection_prevention/*\",\"california_hcai/hospital_finance/*\",\"california_hcai/hospital_utilization/*\",\"cdc/places/*\",\"cdc/social_vulnerability/*\",\"cdc/wonder_mortality/*\",\"census/acs/*\",\"census/county_adjacency/*\",\"census/sahie/*\",\"census/saipe/*\",\"cms/chronic_conditions/*\",\"cms/geographic_variation/*\",\"cms/hospital_cost_reports/*\",\"cms/hospital_ownership/*\",\"cms/hospital_service_area/*\",\"cms/hospitals/*\",\"cms/ipps/*\",\"cms/mapping_medicare_disparities/*\",\"cms/medicare_inpatient/*\",\"cms/occupational_mix/*\",\"cms/provider_of_services/*\",\"hhs/hospital_capacity/*\",\"hrsa/nursing_workforce/*\",\"hrsa/shortage_areas/*\",\"hud/usps_crosswalk/*\",\"illinois/hospital_report_card/*\",\"iroquois_healthcare/workforce/*\",\"maryland/nurse_support/*\",\"massachusetts_chia/healthcare_workforce/*\",\"mississippi_hospitals/workforce/*\",\"new_york_health/hospital_infections/*\",\"nsi/retention_and_staffing/*\",\"onc/promoting_interoperability/*\",\"patientcarelink/nursing_workforce/*\",\"texas_dshs/hospital_nurse_staffing/*\",\"usda/rural_urban_commuting/*\",\"usda/rural_urban_continuum/*\",\"vermont_health/hospital_reports/*\",\"raw/ahrq/patient_safety_indicators/*\",\"raw/bls/local_area_unemployment/*\",\"raw/california_cdph/infection_prevention/*\",\"raw/california_hcai/hospital_finance/*\",\"raw/california_hcai/hospital_utilization/*\",\"raw/cdc/places/*\",\"raw/cdc/social_vulnerability/*\",\"raw/cdc/wonder_mortality/*\",\"raw/census/acs/*\",\"raw/census/county_adjacency/*\",\"raw/census/sahie/*\",\"raw/census/saipe/*\",\"raw/cms/chronic_conditions/*\",\"raw/cms/geographic_variation/*\",\"raw/cms/hospital_cost_reports/*\",\"raw/cms/hospital_ownership/*\",\"raw/cms/hospital_service_area/*\",\"raw/cms/hospitals/*\",\"raw/cms/ipps/*\",\"raw/cms/mapping_medicare_disparities/*\",\"raw/cms/medicare_inpatient/*\",\"raw/cms/occupational_mix/*\",\"raw/cms/provider_of_services/*\",\"raw/hhs/hospital_capacity/*\",\"raw/hrsa/nursing_workforce/*\",\"raw/hrsa/shortage_areas/*\",\"raw/hud/usps_crosswalk/*\",\"raw/illinois/hospital_report_card/*\",\"raw/iroquois_healthcare/workforce/*\",\"raw/maryland/nurse_support/*\",\"raw/massachusetts_chia/healthcare_workforce/*\",\"raw/mississippi_hospitals/workforce/*\",\"raw/new_york_health/hospital_infections/*\",\"raw/nsi/retention_and_staffing/*\",\"raw/onc/promoting_interoperability/*\",\"raw/patientcarelink/nursing_workforce/*\",\"raw/texas_dshs/hospital_nurse_staffing/*\",\"raw/usda/rural_urban_commuting/*\",\"raw/usda/rural_urban_continuum/*\",\"raw/vermont_health/hospital_reports/*\",\"raw/ingestion_units/*\",\"raw/ingestion_stale/*\"]}},\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::example-data-bucket\",\"Sid\":\"ListSourceVersionsOnly\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEISTSXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "source_lists",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_objects_raw_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Read source object versions of each mapped collection and the content-addressed payloads, under raw.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_objects_raw_dev",
+      "name": "example_project_job_write_bronze_source_objects_raw_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"s3:GetObjectVersion\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/raw/ahrq/patient_safety_indicators/*\",\"arn:aws:s3:::example-data-bucket/raw/bls/local_area_unemployment/*\",\"arn:aws:s3:::example-data-bucket/raw/california_cdph/infection_prevention/*\",\"arn:aws:s3:::example-data-bucket/raw/california_hcai/hospital_finance/*\",\"arn:aws:s3:::example-data-bucket/raw/california_hcai/hospital_utilization/*\",\"arn:aws:s3:::example-data-bucket/raw/cdc/places/*\",\"arn:aws:s3:::example-data-bucket/raw/cdc/social_vulnerability/*\",\"arn:aws:s3:::example-data-bucket/raw/cdc/wonder_mortality/*\",\"arn:aws:s3:::example-data-bucket/raw/census/acs/*\",\"arn:aws:s3:::example-data-bucket/raw/census/county_adjacency/*\",\"arn:aws:s3:::example-data-bucket/raw/census/sahie/*\",\"arn:aws:s3:::example-data-bucket/raw/census/saipe/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/chronic_conditions/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/geographic_variation/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/hospital_cost_reports/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/hospital_ownership/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/hospital_service_area/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/hospitals/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/ipps/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/mapping_medicare_disparities/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/medicare_inpatient/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/occupational_mix/*\",\"arn:aws:s3:::example-data-bucket/raw/cms/provider_of_services/*\",\"arn:aws:s3:::example-data-bucket/raw/hhs/hospital_capacity/*\",\"arn:aws:s3:::example-data-bucket/raw/hrsa/nursing_workforce/*\",\"arn:aws:s3:::example-data-bucket/raw/hrsa/shortage_areas/*\",\"arn:aws:s3:::example-data-bucket/raw/hud/usps_crosswalk/*\",\"arn:aws:s3:::example-data-bucket/raw/illinois/hospital_report_card/*\",\"arn:aws:s3:::example-data-bucket/raw/iroquois_healthcare/workforce/*\",\"arn:aws:s3:::example-data-bucket/raw/maryland/nurse_support/*\",\"arn:aws:s3:::example-data-bucket/raw/massachusetts_chia/healthcare_workforce/*\",\"arn:aws:s3:::example-data-bucket/raw/mississippi_hospitals/workforce/*\",\"arn:aws:s3:::example-data-bucket/raw/new_york_health/hospital_infections/*\",\"arn:aws:s3:::example-data-bucket/raw/nsi/retention_and_staffing/*\",\"arn:aws:s3:::example-data-bucket/raw/onc/promoting_interoperability/*\",\"arn:aws:s3:::example-data-bucket/raw/patientcarelink/nursing_workforce/*\",\"arn:aws:s3:::example-data-bucket/raw/texas_dshs/hospital_nurse_staffing/*\",\"arn:aws:s3:::example-data-bucket/raw/usda/rural_urban_commuting/*\",\"arn:aws:s3:::example-data-bucket/raw/usda/rural_urban_continuum/*\",\"arn:aws:s3:::example-data-bucket/raw/vermont_health/hospital_reports/*\",\"arn:aws:s3:::example-data-bucket/raw/bronze_objects/sha256/*\",\"arn:aws:s3:::example-data-bucket/raw/ingestion_units/*\",\"arn:aws:s3:::example-data-bucket/raw/ingestion_stale/*\"],\"Sid\":\"SourceObjectVersionsOnly\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEXRAWXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "source_objects_raw",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "arn": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_objects_root_dev",
+      "attachment_count": 1,
+      "delay_after_policy_creation_in_ms": null,
+      "description": "Read source object versions of each mapped collection and the content-addressed payloads, at the bucket root.",
+      "id": "arn:aws:iam::111111111111:policy/example_project_job_write_bronze_source_objects_root_dev",
+      "name": "example_project_job_write_bronze_source_objects_root_dev",
+      "name_prefix": null,
+      "path": "/",
+      "policy": "{\"Statement\":[{\"Action\":[\"s3:GetObjectVersion\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/ahrq/patient_safety_indicators/*\",\"arn:aws:s3:::example-data-bucket/bls/local_area_unemployment/*\",\"arn:aws:s3:::example-data-bucket/california_cdph/infection_prevention/*\",\"arn:aws:s3:::example-data-bucket/california_hcai/hospital_finance/*\",\"arn:aws:s3:::example-data-bucket/california_hcai/hospital_utilization/*\",\"arn:aws:s3:::example-data-bucket/cdc/places/*\",\"arn:aws:s3:::example-data-bucket/cdc/social_vulnerability/*\",\"arn:aws:s3:::example-data-bucket/cdc/wonder_mortality/*\",\"arn:aws:s3:::example-data-bucket/census/acs/*\",\"arn:aws:s3:::example-data-bucket/census/county_adjacency/*\",\"arn:aws:s3:::example-data-bucket/census/sahie/*\",\"arn:aws:s3:::example-data-bucket/census/saipe/*\",\"arn:aws:s3:::example-data-bucket/cms/chronic_conditions/*\",\"arn:aws:s3:::example-data-bucket/cms/geographic_variation/*\",\"arn:aws:s3:::example-data-bucket/cms/hospital_cost_reports/*\",\"arn:aws:s3:::example-data-bucket/cms/hospital_ownership/*\",\"arn:aws:s3:::example-data-bucket/cms/hospital_service_area/*\",\"arn:aws:s3:::example-data-bucket/cms/hospitals/*\",\"arn:aws:s3:::example-data-bucket/cms/ipps/*\",\"arn:aws:s3:::example-data-bucket/cms/mapping_medicare_disparities/*\",\"arn:aws:s3:::example-data-bucket/cms/medicare_inpatient/*\",\"arn:aws:s3:::example-data-bucket/cms/occupational_mix/*\",\"arn:aws:s3:::example-data-bucket/cms/provider_of_services/*\",\"arn:aws:s3:::example-data-bucket/hhs/hospital_capacity/*\",\"arn:aws:s3:::example-data-bucket/hrsa/nursing_workforce/*\",\"arn:aws:s3:::example-data-bucket/hrsa/shortage_areas/*\",\"arn:aws:s3:::example-data-bucket/hud/usps_crosswalk/*\",\"arn:aws:s3:::example-data-bucket/illinois/hospital_report_card/*\",\"arn:aws:s3:::example-data-bucket/iroquois_healthcare/workforce/*\",\"arn:aws:s3:::example-data-bucket/maryland/nurse_support/*\",\"arn:aws:s3:::example-data-bucket/massachusetts_chia/healthcare_workforce/*\",\"arn:aws:s3:::example-data-bucket/mississippi_hospitals/workforce/*\",\"arn:aws:s3:::example-data-bucket/new_york_health/hospital_infections/*\",\"arn:aws:s3:::example-data-bucket/nsi/retention_and_staffing/*\",\"arn:aws:s3:::example-data-bucket/onc/promoting_interoperability/*\",\"arn:aws:s3:::example-data-bucket/patientcarelink/nursing_workforce/*\",\"arn:aws:s3:::example-data-bucket/texas_dshs/hospital_nurse_staffing/*\",\"arn:aws:s3:::example-data-bucket/usda/rural_urban_commuting/*\",\"arn:aws:s3:::example-data-bucket/usda/rural_urban_continuum/*\",\"arn:aws:s3:::example-data-bucket/vermont_health/hospital_reports/*\",\"arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*\"],\"Sid\":\"SourceObjectVersionsOnly\"}],\"Version\":\"2012-10-17\"}",
+      "policy_id": "ANPAEXAMPLEROOTXDEV",
+      "tags": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      },
+      "tags_all": {
+       "Environment": "dev",
+       "ManagedBy": "Terraform",
+       "Project": "example_project"
+      }
+     },
+     "index_key": "source_objects_root",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    }
+   ],
+   "mode": "managed",
+   "name": "bronze_writer",
+   "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+   "type": "aws_iam_policy"
+  },
+  {
+   "each": "map",
+   "instances": [
+    {
+     "attributes": {
+      "id": "example_project_job_write_features_task_dev:glue_mirror_registrations",
+      "name": "glue_mirror_registrations",
+      "name_prefix": null,
+      "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"glue:GetDatabase\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/features\"],\"Sid\":\"ReadMirrorDatabase\"},{\"Action\":[\"glue:GetTable\",\"glue:CreateTable\",\"glue:UpdateTable\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/features\",\"arn:aws:glue:us-west-2:111111111111:table/features/*\"],\"Sid\":\"RegisterListedTables\"}]}",
+      "role": "example_project_job_write_features_task_dev"
+     },
+     "index_key": "features",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "id": "example_project_job_write_gold_task_dev:glue_mirror_registrations",
+      "name": "glue_mirror_registrations",
+      "name_prefix": null,
+      "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"glue:GetDatabase\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/gold\"],\"Sid\":\"ReadMirrorDatabase\"},{\"Action\":[\"glue:GetTable\",\"glue:CreateTable\",\"glue:UpdateTable\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/gold\",\"arn:aws:glue:us-west-2:111111111111:table/gold/*\"],\"Sid\":\"RegisterListedTables\"}]}",
+      "role": "example_project_job_write_gold_task_dev"
+     },
+     "index_key": "gold",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    },
+    {
+     "attributes": {
+      "id": "example_project_job_write_silver_task_dev:glue_mirror_registrations",
+      "name": "glue_mirror_registrations",
+      "name_prefix": null,
+      "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"glue:GetDatabase\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/silver\"],\"Sid\":\"ReadMirrorDatabase\"},{\"Action\":[\"glue:GetTable\",\"glue:CreateTable\",\"glue:UpdateTable\"],\"Effect\":\"Allow\",\"Resource\":[\"arn:aws:glue:us-west-2:111111111111:catalog\",\"arn:aws:glue:us-west-2:111111111111:database/silver\",\"arn:aws:glue:us-west-2:111111111111:table/silver/*\"],\"Sid\":\"RegisterListedTables\"}]}",
+      "role": "example_project_job_write_silver_task_dev"
+     },
+     "index_key": "silver",
+     "private": "",
+     "schema_version": 0,
+     "sensitive_attributes": []
+    }
+   ],
+   "mode": "managed",
+   "name": "athena_mirror_writer",
+   "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+   "type": "aws_iam_role_policy"
+  }
+ ],
+ "serial": 1,
+ "terraform_version": "1.16.4",
+ "version": 4
+}
