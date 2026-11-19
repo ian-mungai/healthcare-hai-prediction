@@ -22,6 +22,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition import rate_limit
 from scripts.acquisition.raw_root import RAW_ROOT, is_test_root
 from scripts.acquisition.source_registry import reject_constant, unique_object
 
@@ -65,6 +66,12 @@ class Limits:
             raise CaptureError("Invalid retry or timeout bounds.")
         if not 0 < self.max_bytes <= 4 * 1024**3 or not 0 <= self.max_retry_delay <= 300 or not 1 <= self.max_pages <= 1000:
             raise CaptureError("Invalid size, delay or pagination bounds.")
+
+
+@dataclass(frozen=True)
+class StopAtRateLimit(Limits):
+    """The bounds of a capture run's download: when the final answer is HTTP 429 the download raises ``RateLimited`` with the publisher's Retry-After header,
+    so the run stores the publisher's delay instead of a default. Every other bound and every other caller's behavior is that of ``Limits``."""
 
 
 @dataclass(frozen=True)
@@ -648,4 +655,6 @@ def download(url: str, dest: Path, file_name: str, expected_format: str, role: s
         time.sleep(delay)
     if last is None:
         raise CaptureError("No capture attempt was made.")
+    if isinstance(limits, StopAtRateLimit) and last.http_status == 429:
+        raise rate_limit.from_header(retry_after)
     return last

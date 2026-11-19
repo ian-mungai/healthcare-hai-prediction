@@ -55,7 +55,7 @@ from scripts.acquisition.collection_layout import capture_root, load_routes
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.s3_store import StorageError, encoded_json, upload_snapshot
 from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require
-from scripts.acquisition.transport import CaptureError, Limits, canonical_url
+from scripts.acquisition.transport import CaptureError, StopAtRateLimit, canonical_url
 
 BYTE_CAP = 128 * 2**30
 STALE_RETRY = timedelta(hours=20)
@@ -432,14 +432,14 @@ def adapt_cms_owners(unit: dict, spec: dict, folder: Path, run: CaptureRun, open
     from scripts.acquisition import store_cms_owners as collector
 
     plan, release = planned_item(run, "cms_owners_org", spec)
-    return Path(collector.execute(plan, release, folder, True, False, None, {}, opener, Limits(attempts=MAX_ATTEMPTS))["receipt_path"])
+    return Path(collector.execute(plan, release, folder, True, False, None, {}, opener, StopAtRateLimit(attempts=MAX_ATTEMPTS))["receipt_path"])
 
 
 def adapt_hcai_util(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
     from scripts.acquisition import store_hcai_util as collector
 
     plan, entry = planned_item(run, "hcai_util_workbook", spec)
-    return Path(collector.execute(plan, entry, folder, True, False, None, {}, opener, Limits(attempts=MAX_ATTEMPTS))["receipt_path"])
+    return Path(collector.execute(plan, entry, folder, True, False, None, {}, opener, StopAtRateLimit(attempts=MAX_ATTEMPTS))["receipt_path"])
 
 
 def adapt_onc_mu(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
@@ -447,7 +447,7 @@ def adapt_onc_mu(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
 
     plan, _ = planned_item(run, "onc_mu_hospital", spec)
     # The plan raises the time and size bounds for this one large file; only the attempt count is lowered.
-    limits = Limits(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
+    limits = StopAtRateLimit(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
     return Path(collector.execute(plan, folder, True, False, None, {}, opener, limits)["receipt_path"])
 
 
@@ -1010,7 +1010,7 @@ def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
         from scripts.acquisition.history_redirects import install_redirect
 
         install_redirect(unit["url"], spec["reviewed_unsigned_redirect"])
-    limits = Limits(attempts=MAX_ATTEMPTS, max_bytes=min(4 * 2**30, max(2 * unit["bytes"], 2**20)))
+    limits = StopAtRateLimit(attempts=MAX_ATTEMPTS, max_bytes=min(4 * 2**30, max(2 * unit["bytes"], 2**20)))
     return capture(plan, folder, registry, validator_of(run), limits, opener)
 
 
@@ -1103,7 +1103,10 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, stat
         adapter = {**ADAPTERS, **run.adapters}.get(handler)
         if adapter is None:
             require(handler == "file", "The unit has no reviewed handler")
-        receipt_path = adapter(unit, spec, folder, run, opener) if adapter else capture_file(unit, spec, folder, run, opener)
+        try:
+            receipt_path = adapter(unit, spec, folder, run, opener) if adapter else capture_file(unit, spec, folder, run, opener)
+        except rate_limit.RateLimited as limited:
+            raise rate_limit_of(run, limited) from None
         receipt = read_json(receipt_path)
         if receipt["snapshot_status"] != "acquired_unvalidated":
             raise ContractFailure((receipt["quality_profile"]["checks_failed"] or ["capture_failed"])[0])

@@ -14,6 +14,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
 
@@ -659,7 +660,7 @@ def test_a_429_of_the_generic_download_path_stores_the_default_cooldown_and_the_
     resume = now + datetime.timedelta(seconds=3600)
     first = world.run(clock=lambda: now)
     check([item["reason"] for item in first["units"]["failed"]] == ["http_429"], str(first["units"]))
-    check(first["source_cooldowns"] == {SOURCE: resume.isoformat()}, f"the default delay, since this path carries no header: {first.get('source_cooldowns')}")
+    check(first["source_cooldowns"] == {SOURCE: resume.isoformat()}, f"the default delay, since the publisher named none: {first.get('source_cooldowns')}")
     asked = len(world.site.asked)
     second = world.run(clock=lambda: now)
     check(len(world.site.asked) == asked and second["counters"]["http_requests"] == 0, f"no request before the cooldown ends: {world.site.asked}")
@@ -667,6 +668,100 @@ def test_a_429_of_the_generic_download_path_stores_the_default_cooldown_and_the_
     world.site.override.clear()
     third = world.run(clock=lambda: resume)
     check(len(third["units"]["completed"]) == 2 and "source_cooldowns" not in third, f"{third['units']}")
+
+
+def retry_after_header(name: str, now: datetime.datetime) -> tuple[str | None, int]:
+    """The header text a case sends and the whole seconds the cooldown must last: the publisher's own delay, or the stated default when it named none."""
+    dated = format_datetime(now + datetime.timedelta(seconds=7200), usegmt=True)
+    return {
+        "seconds": ("7200", 7200),
+        "short": ("5", 5),
+        "date": (dated, 7200),
+        "none": (None, 3600),
+        "malformed": ("soon", 3600),
+        "negative": ("-1", 3600),
+    }[name]
+
+
+@pytest.mark.parametrize("case", ["seconds", "short", "date", "none", "malformed", "negative"])
+def test_the_generic_download_path_waits_the_publishers_retry_after_and_never_sends_before_it_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    monkeypatch.setattr(transport.time, "sleep", lambda _seconds: None)
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    url = world.units[0]["url"]
+    now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    header, seconds = retry_after_header(case, now)
+    world.site.override[url] = Response(b"", url, 429, {} if header is None else {"Retry-After": header})
+    resume = now + datetime.timedelta(seconds=seconds)
+    first = world.run(clock=lambda: now)
+    check([item["reason"] for item in first["units"]["failed"]] == ["http_429"], str(first["units"]))
+    check(first["source_cooldowns"] == {SOURCE: resume.isoformat()}, f"{case}: the publisher's delay, not the default: {first.get('source_cooldowns')}")
+    (name,) = world.bucket.names(f"{ROOT}ingestion_cooldowns/")
+    stored = json.loads(world.bucket.objects[name][1])
+    check(stored["retry_after_seconds"] == seconds, f"{case}: {stored}")
+    asked = len(world.site.asked)
+    world.site.override.clear()
+    before = world.run(clock=lambda: resume - datetime.timedelta(seconds=1))
+    check(len(world.site.asked) == asked and before["counters"]["http_requests"] == 0, f"{case}: no request one second before the end: {world.site.asked}")
+    check(before["units"]["paused_sources"] == [SOURCE] and len(before["units"]["paused_not_attempted"]) == 2, str(before["units"]))
+    after = world.run(clock=lambda: resume)
+    check(len(after["units"]["completed"]) == 2 and "source_cooldowns" not in after, f"{case}: the source resumes at the end: {after['units']}")
+
+
+def owners_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[World, str]:
+    plan, plan_path, bodies = owners_plan(tmp_path)
+    versions = tmp_path / "owners_versions.json"
+    s3_store.write_once(versions, encoded_json({"versions": [{"code_sha256": owners_contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(owners_contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(owners_contract, "VERSIONS_PATH", versions)
+    release = plan["releases"][0]
+    (tmp_path / "world").mkdir()
+    world = World(tmp_path / "world", ["x.csv"])
+    unit = world.units[0] | {"url": release["url"], "source_id": "CMS_OWNERS", "mode": "cms_owners_org", "bytes": len(bodies[release["url"]])}
+    world.units[0] = unit
+    world.bodies.clear()
+    world.bodies.update(bodies)
+    world.write_inputs({unit["snapshot_id"]: {"mode": "cms_owners_org", "plan_item": release["id"], "stored_data_files": []}})
+    return world, release["url"]
+
+
+def onc_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[World, str]:
+    data = onc_body()
+    plan, plan_path = onc_locked(tmp_path, data)
+    versions = tmp_path / "onc_versions.json"
+    s3_store.write_once(versions, encoded_json({"versions": [{"code_sha256": onc_contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(onc_contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(onc_contract, "VERSIONS_PATH", versions)
+    (tmp_path / "world").mkdir()
+    world = World(tmp_path / "world", ["x.csv"])
+    unit = world.units[0] | {"url": plan["url"], "source_id": onc_contract.SOURCE_ID, "mode": "onc_mu_hospital", "bytes": len(data)}
+    world.units[0] = unit
+    world.bodies.clear()
+    world.bodies[plan["url"]] = data
+    world.write_inputs({unit["snapshot_id"]: {"mode": "onc_mu_hospital", "plan_item": plan["id"], "stored_data_files": []}})
+    return world, plan["url"]
+
+
+@pytest.mark.parametrize("build", [owners_world, onc_world])
+def test_a_download_store_route_waits_the_publishers_retry_after_after_a_429(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build: Callable[..., Any]
+) -> None:
+    monkeypatch.setattr(transport.time, "sleep", lambda _seconds: None)
+    world, url = build(tmp_path, monkeypatch)
+    now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    resume = now + datetime.timedelta(seconds=7200)
+    world.site.override[url] = Response(b"", url, 429, {"Retry-After": "7200"})
+    first = world.run(clock=lambda: now)
+    source = world.units[0]["source_id"]
+    check([item["reason"] for item in first["units"]["failed"]] == ["http_429"], f"the 429 is the pausing reason, not a generic failure: {first['units']}")
+    check(first["source_cooldowns"] == {source: resume.isoformat()}, f"the publisher's delay: {first.get('source_cooldowns')}")
+    asked = len(world.site.asked)
+    world.site.override.clear()
+    held = world.run(clock=lambda: resume - datetime.timedelta(seconds=1))
+    check(len(world.site.asked) == asked and held["units"]["paused_sources"] == [source], f"no request before the end: {held['units']}")
+    done = world.run(clock=lambda: resume)
+    check(len(done["units"]["completed"]) == 1, f"the unit completes at the end: {done['units']}")
 
 
 MEMBERS = [

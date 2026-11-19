@@ -107,7 +107,7 @@
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
         "scripts/acquisition/stored_mirror.py": "sha256:c45a6af50dec64510c600b8ad3698dd4a0555a74a9a569ab5b986abe70c6782f",
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
-        "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
+        "scripts/acquisition/transport.py": "sha256:6cdb343aa1a506d2a745cc11ed9a8a13f844c96f6e0324d1973c4a02cb2d760f",
         "scripts/acquisition/wonder_export_contract.py": "sha256:60759b00fd5ea0687486e76ed60bff625e6e8b1388a828f9c6809fcf14aa6005",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
       },
@@ -145,7 +145,7 @@
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
         "scripts/acquisition/stored_mirror.py": "sha256:c45a6af50dec64510c600b8ad3698dd4a0555a74a9a569ab5b986abe70c6782f",
         "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
-        "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
+        "scripts/acquisition/transport.py": "sha256:6cdb343aa1a506d2a745cc11ed9a8a13f844c96f6e0324d1973c4a02cb2d760f",
         "scripts/acquisition/wonder_export_contract.py": "sha256:60759b00fd5ea0687486e76ed60bff625e6e8b1388a828f9c6809fcf14aa6005",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
       },
@@ -266,7 +266,7 @@
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
         "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
-        "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
+        "scripts/acquisition/transport.py": "sha256:6cdb343aa1a506d2a745cc11ed9a8a13f844c96f6e0324d1973c4a02cb2d760f",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },

@@ -18,9 +18,13 @@ class RateLimited(Exception):
         self.retry_after = retry_after
 
 
-def from_response(response: Any) -> RateLimited:
-    """The typed outcome of a 429 response: its Retry-After header when it is short printable ASCII, else none. The header is never logged here."""
-    value = response.getheader("Retry-After", "") if hasattr(response, "getheader") else response.headers.get("Retry-After", "")
+def from_header(value: object) -> RateLimited:
+    """The typed outcome of a 429 whose Retry-After header is VALUE: kept when it is short printable ASCII text, else none. The header is never logged here."""
     text = value if isinstance(value, str) else ""
     keep = 0 < len(text) <= HEADER_LIMIT and text.isascii() and text.isprintable()
     return RateLimited(text if keep else None)
+
+
+def from_response(response: Any) -> RateLimited:
+    """The typed outcome of a 429 response, from its Retry-After header."""
+    return from_header(response.getheader("Retry-After", "") if hasattr(response, "getheader") else response.headers.get("Retry-After", ""))
