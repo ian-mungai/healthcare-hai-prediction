@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import code_digest, ecs_adapter, training_contract
+from scripts import model_data_matrix as data_rule_matrix
 from scripts.features import publication_reads, training_extract
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
 from scripts.orchestration.ecs_fake import client_error
@@ -1216,7 +1217,7 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
     refuses("a_self_check_cell_that_is_a_boolean", "self_check_cells", self_check_with(rows=[[True, "private", 1.2], row]))
     refuses("a_self_check_cell_that_is_a_list", "self_check_cells", self_check_with(rows=[[[1], "private", 1.2], row]))
     refuses("a_self_check_cell_of_over_256_characters", "self_check_cells", self_check_with(rows=[[120, "x" * 257, 1.2], row]))
-    refuses("a_self_check_cell_that_is_not_a_number", "self_check_cells", self_check_with(rows=[[nan, "private", 1.2], row]))
+    refuses("a_self_check_cell_that_is_not_a_number", "self_check_not_json", self_check_with(rows=[[nan, "private", 1.2], row]))
     refuses("a_self_check_cell_that_is_an_integer_beyond_the_float_range", "self_check_cells", self_check_with(rows=[[10**400, "private", 1.2], row]))
     refuses(
         "a_self_check_cell_that_overflows",
@@ -1224,12 +1225,31 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
         serving_documents(**{"self_check.json": json.dumps(serving_bundle()["self_check.json"]).replace("120", "1e999").encode()}),
     )
     refuses("a_self_check_with_one_prediction_too_few", "self_check_predictions", self_check_with(predictions=[0.9]))
-    refuses("a_self_check_prediction_that_is_not_a_number", "self_check_predictions", self_check_with(predictions=[0.9, nan]))
-    refuses("a_self_check_prediction_that_is_infinite", "self_check_predictions", self_check_with(predictions=[infinity, 1.1]))
+    refuses("a_self_check_prediction_that_is_not_a_number", "self_check_not_json", self_check_with(predictions=[0.9, nan]))
+    refuses("a_self_check_prediction_that_is_infinite", "self_check_not_json", self_check_with(predictions=[infinity, 1.1]))
     refuses("a_self_check_prediction_that_is_an_integer_beyond_the_float_range", "self_check_predictions", self_check_with(predictions=[10**400, 1.1]))
     refuses("a_self_check_prediction_that_is_text", "self_check_predictions", self_check_with(predictions=["0.9", 1.1]))
     refuses("a_self_check_prediction_that_is_a_boolean", "self_check_predictions", self_check_with(predictions=[True, 1.1]))
     refuses("a_self_check_whose_predictions_are_not_a_list", "self_check_predictions", self_check_with(predictions=0.9))
+
+    def accepts(name: str, documents: dict[str, Any]) -> None:
+        def case() -> None:
+            fixture, bucket = registry_fixture(folder / name), receipt_bucket()
+            serving_data(fixture, documents=documents)
+            code, _, error = promote_in(fixture, folder / f"{name}_work", bucket)
+            require(code == 0 and alias(fixture) == "2", f"{name} was refused although the model API accepts it: {code} {error}")
+
+        cases.check(f"promote_data_accepts_{name}", case)
+
+    # The matrix every reader runs (``scripts/quality/data_rule_matrix.py``): the promotion refuses each document the loader refuses, by the reason the matrix
+    # names, and accepts each document the loader accepts.
+    for entry in data_rule_matrix.entries():
+        built = data_rule_matrix.build(entry, serving_bundle()[f"{entry.file}.json"])
+        documents = serving_documents(**{f"{entry.file}.json": built})
+        if entry.rule:
+            refuses(f"matrix_{entry.name}", data_rule_matrix.reason_of(entry), documents)
+        else:
+            accepts(f"matrix_{entry.name}", documents)
 
     def mode_refused(name: str, build: Callable[[Path], tuple[Fixture, ListingBucket, str | None]], parameters: dict[str, str], reason: str) -> None:
         def case() -> None:

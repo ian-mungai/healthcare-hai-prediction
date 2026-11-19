@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from scripts import model_code
+from scripts import model_data_matrix as data_rule_matrix
 from scripts.process import run_command
-from scripts.quality import ci_groups, data_rule_matrix, model_code_behavior
+from scripts.quality import ci_groups, model_code_behavior
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = "data_contracts/training/model_contract.json"

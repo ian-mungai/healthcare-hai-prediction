@@ -28,8 +28,8 @@ from typing import Any
 from unittest import mock
 
 from scripts import model_code
+from scripts import model_data_matrix as data_rule_matrix
 from scripts.features.feast_harness import Checker
-from scripts.quality import data_rule_matrix
 from scripts.serving import mlflow_loader
 
 ROOT = Path(__file__).resolve().parents[2]

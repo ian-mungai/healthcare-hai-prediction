@@ -24,15 +24,15 @@ version's feature set and schema hash, the model, the version, the run, its leas
 features job reads it to decide whether an online set loads or holds, without MLflow access. A retry keeps the record the run wrote first.
 
 Every mode first checks, as data only, that the model API can load the version (``check_model_data``): its ``bundle/provenance.json`` names the closure of the
-model code (``model_code_closure_sha256``) that this job's own code root also has, and its ``bundle/self_check.json`` has the shape the loader requires. The
-check loads no model and predicts nothing. A version that fails it is refused by name before the lease, the intent, the alias and the Production record.
-The self-check rules repeat the loader's (``scripts/serving/mlflow_loader.py``, slice S1): change both together.
+model code (``model_code_closure_sha256``) that this job's own code root also has, and its three bundle files pass the data rules that the loader applies
+(``scripts/model_code.py`` holds them for both: one UTF-8 JSON document with no repeated key and no NaN or Infinity, the allowed keys and bounds of the feature
+list and the provenance, and the shape of the self-check). The check loads no model and predicts nothing. A version that fails it is refused by name before
+the lease, the intent, the alias and the Production record.
 """
 
 from __future__ import annotations
 
 import json
-import math
 import os
 import tempfile
 from collections.abc import Mapping
@@ -49,11 +49,8 @@ PROMOTED_TAG = "promoted_run"
 VERDICT_TAG = "promotion_verdict"
 RECORD = "promote.json"
 CANARY_TAGS = ("canary_verdict", "canary_version", "canary_run")
-CLOSURE_KEY = "model_code_closure_sha256"
-SELF_CHECK_KEYS = frozenset({"schema", "slot", "references", "rows", "predictions"})
-BUNDLE_FILE_BYTES = 1 << 20
-SELF_CHECK_MAX_ROWS = 8
-SELF_CHECK_MAX_TEXT = 256
+# The reason of a broken data rule, for a rule that is not its own reason (the rules of the self-check parts are: ``self_check_keys`` and the rest).
+RULE_REASONS = {"feature_list": "self_check_feature_list", "provenance": "model_provenance_unreadable", "self_check_not_object": "self_check_not_json"}
 
 
 def parameters_of(path: Any) -> dict[str, Any]:
@@ -105,88 +102,60 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
 
 
 def bundle_document(store: Any, run_id: str, name: str, scratch: Path, unreadable: str, oversize: str = "", not_json: str = "") -> Any:
-    """Download ``bundle/<name>`` of a run and parse it as JSON, or refuse with ``unreadable`` (``oversize`` for a file over 1 MiB, ``not_json`` for text that
-    is not JSON; each defaults to ``unreadable``).
+    """Download ``bundle/<name>`` of a run and parse it with the data rules of ``scripts/model_code.py`` (one UTF-8 JSON document of at most 1 MiB, no repeated
+    key, no NaN or Infinity), or refuse with ``unreadable`` (``oversize`` for a file over 1 MiB, ``not_json`` for text that is not such a document; each
+    defaults to ``unreadable``).
 
     The download, a missing or unreadable file and text that is not JSON each refuse. No detail holds a value of the file, only the class of the error.
     """
     try:
-        path = Path(store.download_artifacts(run_id, f"bundle/{name}", str(scratch)))
-        size = path.stat().st_size
-        text = path.read_bytes() if size <= BUNDLE_FILE_BYTES else b""
+        return model_code.read_json_file(str(store.download_artifacts(run_id, f"bundle/{name}", str(scratch))), f"bundle/{name}")
     except JobFailure:
         raise
+    except model_code.DataRuleError as error:
+        raise JobFailure({"too_large": oversize or unreadable, "not_json": not_json or unreadable}.get(error.rule, unreadable), str(error)) from None
     except Exception as error:
         raise JobFailure(unreadable, f"bundle/{name} could not be downloaded or read: {type(error).__name__}") from None
-    if size > BUNDLE_FILE_BYTES:
-        raise JobFailure(oversize or unreadable, f"bundle/{name} is {size} bytes, over the {BUNDLE_FILE_BYTES} the model API accepts")
-    try:
-        return json.loads(text)
-    except (ValueError, RecursionError) as error:
-        raise JobFailure(not_json or unreadable, f"bundle/{name} is not JSON: {type(error).__name__}") from None
 
 
 def check_closure(provenance: Any, root: Path) -> None:
-    """Refuse a version whose provenance has no closure value, or one that differs from the closure of this job's own code root, or when that root cannot give
-    its own value. The model API refuses the same versions at load (``ModelCodeMissing`` and ``ModelCodeMismatch``)."""
-    if not isinstance(provenance, dict):
-        raise JobFailure("model_provenance_unreadable", "bundle/provenance.json is not an object")
-    if CLOSURE_KEY not in provenance:
+    """Refuse a provenance that breaks the shape rules of the model API, one that has no closure value, one that differs from the closure of this job's own
+    code root, or a root that cannot give its own value. The model API refuses the same versions at load (``ModelCodeMissing`` and ``ModelCodeMismatch``)."""
+    try:
+        model_code.check_provenance(provenance)
+    except model_code.DataRuleError as error:
+        raise JobFailure("model_provenance_unreadable", str(error)) from None
+    if model_code.CLOSURE_KEY not in provenance:
         raise JobFailure(
-            "model_code_closure_missing", f"bundle/provenance.json has no {CLOSURE_KEY}: the version was trained before the model code closure was recorded"
+            "model_code_closure_missing",
+            f"bundle/provenance.json has no {model_code.CLOSURE_KEY}: the version was trained before the model code closure was recorded",
         )
     try:
         own = model_code.closure_digest(root)
     except (model_code.RecordError, OSError) as error:
         raise JobFailure("model_code_closure_unreadable", f"this job's model code closure cannot be computed: {type(error).__name__}: {error}") from None
-    found = provenance[CLOSURE_KEY]
+    found = provenance[model_code.CLOSURE_KEY]
     if found != own:
         shown = found if isinstance(found, str) and model_code.DIGEST.fullmatch(found) else "not a digest"
         raise JobFailure("model_code_closure_mismatch", f"the version was trained with model code {shown}, and this job's model code is {own}")
 
 
 def feature_references(document: Any) -> list[str]:
-    """The ``references`` of a feature list, or refuse a list that is not a non-empty list of non-empty text."""
-    references = document.get("references") if isinstance(document, dict) else None
-    if not isinstance(references, list) or not references or not all(isinstance(item, str) and item for item in references):
-        raise JobFailure("self_check_feature_list", "bundle/feature_list.json has no references list of non-empty text")
-    return references
-
-
-def is_number(value: Any) -> bool:
-    """A JSON number that is not a boolean and is finite as a float: an integer beyond the float range is not one, as in the loader."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return False
+    """The ``references`` of a feature list that passes the model API's rules for it (the six keys, ``references`` and ``columns`` as equal lists of text of
+    at most 256 characters and at most 2000 each), or refuse with ``self_check_feature_list``."""
     try:
-        return math.isfinite(float(value))
-    except OverflowError:
-        return False
+        return list(model_code.check_feature_list(document)[0])
+    except model_code.DataRuleError as error:
+        raise JobFailure("self_check_feature_list", str(error)) from None
 
 
 def check_self_check(document: Any, references: list[str]) -> None:
-    """Refuse a self-check that breaks the loader's shape rules: the closed keys, the references of the feature list, one to eight rows as wide as the list,
-    cells that are null, finite numbers or text of at most 256 characters, and as many finite predictions as rows. The file is data only: no model runs.
-
-    The loader (``scripts/serving/mlflow_loader.py``) holds the same rules. A detail names the place, never a value."""
-    if not isinstance(document, dict):
-        raise JobFailure("self_check_not_json", "bundle/self_check.json is not an object")
-    slot = document.get("slot")
-    if set(document) != SELF_CHECK_KEYS or type(document["schema"]) is not int or document["schema"] != 1 or not isinstance(slot, str) or not slot:
-        raise JobFailure("self_check_keys", f"bundle/self_check.json must have exactly the keys {sorted(SELF_CHECK_KEYS)}, schema 1 and a text slot")
-    if document["references"] != references:
-        raise JobFailure("self_check_references", "the references of bundle/self_check.json differ from bundle/feature_list.json")
-    rows = document["rows"]
-    if not isinstance(rows, list) or not 1 <= len(rows) <= SELF_CHECK_MAX_ROWS:
-        raise JobFailure("self_check_row_count", f"bundle/self_check.json must have a list of 1 to {SELF_CHECK_MAX_ROWS} rows")
-    for index, row in enumerate(rows):
-        if not isinstance(row, list) or len(row) != len(references):
-            raise JobFailure("self_check_row_width", f"row {index} of bundle/self_check.json is not a list of {len(references)} values")
-        for column, cell in enumerate(row):
-            if not (cell is None or is_number(cell) or (isinstance(cell, str) and len(cell) <= SELF_CHECK_MAX_TEXT)):
-                raise JobFailure("self_check_cells", f"cell {column} of row {index} is not null, a finite number or text of at most {SELF_CHECK_MAX_TEXT}")
-    predictions = document["predictions"]
-    if not isinstance(predictions, list) or len(predictions) != len(rows) or not all(is_number(item) for item in predictions):
-        raise JobFailure("self_check_predictions", f"predictions of bundle/self_check.json must be {len(rows)} finite numbers, one per row")
+    """Refuse a self-check that breaks the model API's shape rules (``model_code.check_self_check``), by the reason of the rule. The file is data only: no
+    model runs. A detail names the place, never a value."""
+    try:
+        model_code.check_self_check(document, references)
+    except model_code.DataRuleError as error:
+        raise JobFailure(RULE_REASONS.get(error.rule, error.rule), str(error)) from None
 
 
 def check_model_data(store: Any, version: Any, root: Path) -> None:
