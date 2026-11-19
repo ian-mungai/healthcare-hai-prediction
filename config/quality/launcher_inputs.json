@@ -103,6 +103,11 @@
       "why": "reviewed: copy_tree lists the dbt project with rglob at orchestration/launcher.py:9979 (source = checkout / \"dbt\", :9957); held_secrets scans every mount source at any depth with os.scandir (:1609, called at :1878) and refuses a folder named secrets in any letter case (the repository tracks no link, so the scan decides only on folder names); its other listing sites (:1858 data/worktrees, :9991 :10002 :10052 copy folders, :10086 runs_root snapshots) list run-time folders"
     },
     {
+      "module": "orchestration/raw_lineage.py",
+      "pattern": null,
+      "why": "reviewed: replay_acquisition lists only a run-time folder that the caller names, never a repository folder: glob at orchestration/raw_lineage.py:226 lists the jobs/<job>/state.json files under the --state-root argument (a saved acquisition batch folder) to replay their events; it reads no file of the checkout"
+    },
+    {
       "module": "orchestration/training_render.py",
       "pattern": null,
       "why": "reviewed: build lists the copied code of one run with iterdir at orchestration/training_render.py:52 on (folder / \"code\"), where folder is inp.run_folder (:31), the launcher's run folder; no repository folder is listed"
