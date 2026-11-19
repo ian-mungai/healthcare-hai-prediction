@@ -1,0 +1,46 @@
+{
+ "version": 1,
+ "basis": "Lines under dbt/models and dbt/macros that branch on the dbt target or read env_var, each reviewed: the line does not change which bronze columns a model reads. The declaration check compiles only the lint target, so every other such line must be listed here with its exact text or its reader's inputs must be registered (DYNAMIC_READERS in scripts/lakehouse/bronze_consumer_declare.py).",
+ "reviewed": [
+  {
+   "file": "dbt/macros/build_marker_hooks.sql",
+   "line": "{%- do run_query('drop table if exists ' ~ adapter.quote(target.schema) ~ '.' ~ adapter.quote('int_silver_build_marker')) -%}",
+   "reason": "target.schema only names the schema of the build marker table that is dropped; it selects no bronze column"
+  },
+  {
+   "file": "dbt/macros/build_marker_hooks.sql",
+   "line": "'create or replace table ' ~ adapter.quote(target.schema) ~ '.' ~ adapter.quote('int_silver_build_marker') ~ ' as select '",
+   "reason": "target.schema only names the schema of the build marker table that is written; it selects no bronze column"
+  },
+  {
+   "file": "dbt/macros/build_provenance.sql",
+   "line": "{{ return(target.name == 'lakehouse' or env_var('HAI_PROVENANCE_REQUIRED', '') == '1') }}",
+   "reason": "only decides whether missing provenance values stop the build; it emits no query"
+  },
+  {
+   "file": "dbt/macros/build_provenance.sql",
+   "line": "{%- set value = env_var(name, '') -%}",
+   "reason": "reads a provenance value that becomes a literal in the build marker row; it reads no bronze column"
+  },
+  {
+   "file": "dbt/macros/bronze_shape.sql",
+   "line": "{%- if not execute or target.name == 'lint' -%}",
+   "reason": "skips the catalog shape check when the project is only parsed or compiled; the SQL of the models is the same"
+  },
+  {
+   "file": "dbt/macros/file_metadata.sql",
+   "line": "{%- set pins = fromjson(env_var('HAI_BUILD_PINS_JSON', '{}')) -%}",
+   "reason": "reads the snapshot pin of bronze.file_metadata; the same table and columns are read"
+  },
+  {
+   "file": "dbt/macros/file_metadata.sql",
+   "line": "{%- if (target.name == 'lakehouse' or env_var('HAI_PROVENANCE_REQUIRED', '0') == '1') and snapshot is none -%}",
+   "reason": "stops the build when the pin is missing; it emits no query"
+  },
+  {
+   "file": "dbt/macros/file_metadata.sql",
+   "line": "{%- if target.name == 'lakehouse' and snapshot is not none %} at (version => {{ snapshot | int }}){% endif -%}",
+   "reason": "adds a snapshot version to the read of bronze.file_metadata; the columns read do not change"
+  }
+ ]
+}

@@ -6,11 +6,14 @@ literals are read the way the engine reads them: a quoted identifier is a column
 - a named column is a read of the relation it belongs to (a qualified name by its alias; an unqualified name by the only relation that can hold it);
 - ``select *`` (or ``alias.*``) passes every column of a relation on to the query's own output, so the relation needs whatever the readers of that output
   need (through common table expressions, derived tables and whole models);
-- a flag or any other expression reads its input columns like any other column, and an output alias is never a read.
+- a flag or any other expression reads its input columns like any other column; a struct access reads the struct's top-level column; a column that a star
+  excludes must exist, so it is a read; an output alias is never a read unless an input column could share its name.
 
 Anything the analysis cannot place exactly is never guessed: the relation is marked as read through ``any`` column, with the reason and the model, and the
-declaration says so by table name. A model that the parser refuses does the same for every relation it names. The result for one bronze table is either the
-columns read, each with the models that read it, or the reason the table is read through any column.
+declaration says so by table name. That covers a reference that cannot be placed, an output alias that could also be an input column, a positional column
+alias list and a model that the parser refuses or whose query the analysis cannot walk (it marks every bronze table that the compiled dbt manifest lists among
+its inputs, ``Inputs``, found by the caller). The result for one bronze table is either the columns read, each with the models that read it, or the reason the
+table is read through any column.
 """
 
 from __future__ import annotations
@@ -43,6 +46,14 @@ class Model:
     is_test: bool
     external: bool
     sql: str
+
+
+@dataclass(frozen=True)
+class Inputs:
+    """What the dbt manifest says one model or test reads: the bronze tables (directly or through staging models) and the models it depends on."""
+
+    bronze: frozenset[str]
+    models: frozenset[str]
 
 
 @dataclass
@@ -180,7 +191,11 @@ class Analyzer:
         kind = table["type"]
         if kind == "BASE_TABLE":
             relation = self.table_relation(table, env)
-            return [Source(lower(table["alias"] or table["table_name"]), relation, self.reads.known.get(relation))]
+            known = self.reads.known.get(relation)
+            if table.get("column_name_alias"):
+                self.whole(relation, "a table alias renames its columns by position")
+                known = None
+            return [Source(lower(table["alias"] or table["table_name"]), relation, known)]
         if kind == "JOIN":
             left = self.sources(table["left"], env, outer, deferred)
             right = self.sources(table["right"], env, outer, deferred)
@@ -194,6 +209,11 @@ class Analyzer:
         if kind == "SUBQUERY":
             result = self.query(table["subquery"]["node"], env, outer)
             known = None if result.stars else result.names
+            listed = frozenset(lower(name) for name in table.get("column_name_alias") or [])
+            if listed and result.stars:
+                self.whole(result.relation, "a derived table renames its columns by position and passes columns through")
+            elif listed:
+                known = result.names | listed
             self.reads.known[result.relation] = known
             return [Source(lower(table["alias"] or ""), result.relation, known)]
         for entry in self.base_tables(table):
@@ -227,7 +247,9 @@ class Analyzer:
         computed = {
             lower(item["alias"])
             for item in listed
-            if item["alias"] and (item["class"] != "COLUMN_REF" or lower(item["alias"]) != lower(item["column_names"][-1]))
+            if item["alias"]
+            and (item["class"] != "COLUMN_REF" or lower(item["alias"]) != lower(item["column_names"][-1]))
+            and lower(item["alias"]) not in {lower(name) for name in names_in(item)}
         }
         stars = False
         for item in listed:
@@ -235,12 +257,14 @@ class Analyzer:
                 stars = True
                 self.star(item, sources, relation, names, env, scope)
             else:
-                self.expression(item, scope, env, frozenset(), frozenset())
+                self.expression(item, scope, env, frozenset(computed), frozenset())
         for entry in deferred:
             self.expression(entry, scope, env, frozenset(), frozenset())
-        for key in ("where_clause", "group_expressions", "having", "qualify", "modifiers", "sample", "group_sets"):
+        for key in ("where_clause", "group_expressions", "having", "qualify", "sample", "group_sets"):
             if node.get(key):
                 self.expression(node[key], scope, env, frozenset(computed), frozenset())
+        if node.get("modifiers"):
+            self.expression(node["modifiers"], scope, env, frozenset(), frozenset(computed))
         known = None if stars else frozenset(names)
         self.reads.known[relation] = known
         return QueryResult(relation, frozenset(names), stars)
@@ -254,6 +278,8 @@ class Analyzer:
             for source in chosen:
                 self.whole(source.relation, "it uses a COLUMNS expression or renames star columns")
             return
+        for name in item.get("exclude_list") or []:
+            self.place(chosen, lower(name), f"the excluded column {lower(name)}")
         excluded = frozenset(lower(name) for name in item.get("exclude_list") or []) | frozenset(names)
         for source in chosen:
             self.reads.flows[source.relation].append((relation, excluded))
@@ -283,31 +309,64 @@ class Analyzer:
                 if isinstance(value, dict | list):
                     self.expression(value, scope, env, aliases, bound)
 
-    def column(self, parts: list[str], scope: list[list[Source]], aliases: frozenset[str], bound: frozenset[str]) -> None:
-        """Place one column reference on a relation of the nearest scope that can hold it."""
-        name = lower(parts[-1])
-        qualifier = lower(parts[-2]) if len(parts) >= 2 else None
-        if qualifier is None and (name in bound or name in aliases):
+    def place(self, sources: list[Source], name: str, what: str) -> None:
+        """Read a name from the one relation that can hold it; when several can, or none can, read each of them through any column."""
+        holders = [s for s in sources if s.known is None or name in s.known]
+        if len(holders) == 1:
+            self.read(holders[0].relation, name)
             return
+        for source in holders or sources:
+            self.whole(source.relation, f"{what} could belong to any of {len(holders) or len(sources)} relations of one query")
+
+    def column(self, parts: list[str], scope: list[list[Source]], aliases: frozenset[str], bound: frozenset[str]) -> None:
+        """Place one column reference on a relation of the nearest scope that can hold it.
+
+        ``a.b`` is the column b of the relation aliased a, ``a.b.c`` the struct field c of that column and ``schema.a.b`` its schema form; when no relation has
+        that alias the first part is a column (a struct access). A name that is both an output alias and a possible input column is read through any column,
+        and a reference that no relation can hold is read through any column for the relations of its own query.
+        """
+        names = [lower(part) for part in parts]
         for sources in scope:
-            if qualifier is not None:
-                for source in sources:
-                    if source.alias == qualifier:
-                        self.read(source.relation, name)
-                        return
-                continue
+            for source in sources:
+                if len(names) >= 2 and source.alias == names[0]:
+                    self.read(source.relation, names[1])
+                    return
+                if len(names) >= 3 and source.alias == names[1]:
+                    self.read(source.relation, names[2])
+                    return
+        name = names[0]
+        if name in bound:
+            return
+        for index, sources in enumerate(scope):
             candidates = [s for s in sources if s.known is None or name in s.known]
-            if len(candidates) == 1:
-                self.read(candidates[0].relation, name)
-                return
-            if len(candidates) > 1:
+            if index == 0 and name in aliases:
+                named = [s for s in candidates if s.known is not None]
+                if named:
+                    self.place(named, name, f"the unqualified column {name}")
+                    return
                 for source in candidates:
-                    self.whole(source.relation, f"the unqualified column {name} could belong to any of {len(candidates)} relations of one query")
+                    self.whole(source.relation, f"the name {name} is an output alias and could also be an input column")
                 return
+            if candidates:
+                self.place(candidates, name, f"the unqualified column {name}")
+                return
+        for source in scope[0] if scope else []:
+            self.whole(source.relation, f"the reference {'.'.join(parts)} cannot be placed on a relation")
 
 
-def analyze(models: Iterable[Model], parser: Parser = parse) -> tuple[Reads, dict[str, str]]:
-    """Analyze every model. Returns the reads and the models that could not be analyzed (name to reason)."""
+def refuse(reads: Reads, model: Model, reason: str, inputs: Mapping[str, Inputs]) -> None:
+    """A model that cannot be analyzed reads every bronze table and every model its manifest entry lists through any column."""
+    found = inputs.get(model.name)
+    if found is None:
+        return
+    for table in found.bronze:
+        reads.whole.setdefault(("bronze", table), f"{model.name}: {reason}")
+    for name in found.models:
+        reads.whole.setdefault(("table", name), f"{model.name}: {reason}")
+
+
+def analyze(models: Iterable[Model], parser: Parser = parse, inputs: Mapping[str, Inputs] | None = None) -> tuple[Reads, dict[str, str]]:
+    """Analyze every model. Returns the reads and the models that could not be analyzed (name to reason); those take their inputs from ``inputs``."""
     reads = Reads()
     unparsed: dict[str, str] = {}
     texts: dict[str, str] = {}
@@ -316,12 +375,14 @@ def analyze(models: Iterable[Model], parser: Parser = parse) -> tuple[Reads, dic
         if tree is None:
             unparsed[model.name] = "the SQL parser refuses it"
             texts[model.name] = model.sql
+            refuse(reads, model, unparsed[model.name], inputs or {})
             continue
         try:
             result = Analyzer(reads, model).query(tree, {}, [])
         except (LineageError, KeyError, IndexError, TypeError) as error:
             unparsed[model.name] = f"the analysis cannot place it ({error.__class__.__name__}: {error})"
             texts[model.name] = model.sql
+            refuse(reads, model, unparsed[model.name], inputs or {})
             continue
         if model.is_test:
             continue
@@ -376,9 +437,11 @@ def read_models(compiled: Path) -> list[Model]:
     return models
 
 
-def bronze_needs(models: list[Model], parser: Parser = parse) -> tuple[dict[str, dict[str, set[str]] | str], dict[str, str]]:
+def bronze_needs(
+    models: list[Model], parser: Parser = parse, inputs: Mapping[str, Inputs] | None = None
+) -> tuple[dict[str, dict[str, set[str]] | str], dict[str, str]]:
     """The columns read from each bronze table (table to columns with their models, or the reason it is read through any column) and the unanalyzed models."""
-    reads, unparsed = analyze(models, parser)
+    reads, unparsed = analyze(models, parser, inputs)
     memo: dict[Relation, dict[str, set[str]] | str] = {}
     tables = sorted({relation[1] for relation in [*reads.named, *reads.flows, *reads.whole, *reads.used] if relation[0] == "bronze"})
     return {table: need(reads, ("bronze", table), memo) for table in tables}, unparsed

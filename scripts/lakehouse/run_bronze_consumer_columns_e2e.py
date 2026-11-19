@@ -17,6 +17,8 @@ The report in ``data/e2e/bronze_consumer_columns/`` holds outcomes only.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -136,8 +138,10 @@ def engine_cases() -> dict[str, bool]:
     out["engine_a_qualified_name_in_a_join_is_read_from_its_own_table"] = names_of(found, "t1") >= {"a"} and "b" not in names_of(found, "t1")
     found = needs({**base, "int_a": sql("select list_filter(values_list, item -> item = bound_value) as kept from @t1")})
     out["engine_a_lambda_parameter_is_not_a_column"] = "item" not in names_of(found, "t1") and names_of(found, "t1") >= {"values_list", "bound_value"}
-    found = needs({**base, "int_a": sql("select a as shown from @t1 where shown is not null order by shown")})
-    out["engine_an_output_alias_is_never_a_read"] = "shown" not in names_of(found, "t1") and "a" in names_of(found, "t1")
+    found = needs({**base, "int_a": sql("with s as (select a from @t1) select a as shown from s where shown is not null order by shown")})
+    out["engine_an_output_alias_no_input_column_can_share_is_never_a_read"] = "shown" not in names_of(found, "t1") and "a" in names_of(found, "t1")
+    found = needs({**base, "int_a": sql("select a as shown from @t1 order by shown")})
+    out["engine_an_output_alias_in_order_by_is_never_a_read"] = "shown" not in names_of(found, "t1") and "a" in names_of(found, "t1")
     found = needs({**base, "int_a": sql("select a from @t1 union all select b from @t1")})
     out["engine_a_set_operation_with_named_columns_reads_each_name"] = names_of(found, "t1") >= {"a", "b"}
     found = needs({**base, "int_a": sql("select * from @t1 union all select * from @t1")})
@@ -152,6 +156,74 @@ def engine_cases() -> dict[str, bool]:
     out["engine_a_model_the_parser_refuses_makes_the_relations_it_names_any"] = isinstance(found["t1"], str) and "int_broken" in found["t1"]
     found = needs({**base, "int_a": sql("select a from @t1"), "int_broken": 'from "memory"."main"."other_table" select b'})
     out["engine_a_model_the_parser_refuses_that_names_no_bronze_relation_changes_nothing"] = names_of(found, "t1") >= {"a"}
+    found = needs({**base, "int_a": sql("select t.payload.field as x from @t1 as t")})
+    out["engine_a_qualified_struct_access_reads_the_top_level_column"] = "payload" in names_of(found, "t1") and "t" not in names_of(found, "t1")
+    found = needs({**base, "int_a": sql("select payload.field as x from @t1")})
+    out["engine_an_unqualified_struct_access_reads_the_top_level_column"] = "payload" in names_of(found, "t1") and "field" not in names_of(found, "t1")
+    found = needs({**base, "int_a": sql("select a as b from @t1 where b = 1")})
+    out["engine_an_alias_that_could_also_be_an_input_column_makes_the_table_any"] = isinstance(found["t1"], str) and "int_a" in found["t1"]
+    found = needs({**base, "int_a": sql("with q as (select * exclude(hidden) from @t1) select a from q")})
+    out["engine_a_star_exclusion_reads_the_excluded_column"] = names_of(found, "t1") >= {"a", "hidden"}
+    found = needs({**base, "int_a": sql("select q.renamed from (select * from @t1) q(renamed)")})
+    out["engine_a_positional_column_alias_never_invents_a_bronze_column"] = "renamed" not in names_of(found, "t1") and isinstance(found["t1"], str)
+    found = needs({**base, "int_a": sql("select a as x, x + 1 as y from @t1")})
+    out["engine_an_alias_used_later_in_the_select_list_could_be_an_input_column_so_the_table_is_any"] = isinstance(found["t1"], str)
+    out.update(unwalkable_cases())
+    return out
+
+
+RECURSIVE_MODEL = (
+    'with recursive r as (select _row_number from "lakehouse"."bronze"."@table" union all select _row_number + 1 from r where _row_number < 0) '
+    "select _row_number from r"
+)
+
+
+def recursive_model(table: str) -> str:
+    """A model whose query the analysis cannot walk: a recursive common table expression over a bronze table."""
+    return RECURSIVE_MODEL.replace("@table", table)
+
+
+def manifest_for(model: str, depends_on: list[str], sources: list[str]) -> dict[str, Any]:
+    """A minimal dbt manifest: one silver model with its dependencies and the bronze sources."""
+    nodes = {f"model.hai.{model}": {"resource_type": "model", "name": model, "path": f"silver/intermediate/{model}.sql", "depends_on": {"nodes": depends_on}}}
+    nodes.update(
+        {
+            f"model.hai.stg_{table}": {
+                "resource_type": "model",
+                "name": f"stg_{table}",
+                "path": f"x/stg_{table}.sql",
+                "depends_on": {"nodes": [f"source.hai.bronze.{table}"]},
+            }
+            for table in sources
+        }
+    )
+    return {"nodes": nodes, "sources": {f"source.hai.bronze.{table}": {"source_name": "bronze", "name": table} for table in sources}}
+
+
+def unwalkable_cases() -> dict[str, bool]:
+    """A model the analysis cannot walk takes its inputs from the manifest; when they cannot be established the declaration fails."""
+    out: dict[str, bool] = {}
+    with tempfile.TemporaryDirectory(prefix="bronze_unwalkable_") as folder:
+        target = Path(folder) / "target"
+        compiled_folder(target / "compiled", {"int_rec": recursive_model("acs_api_profile")})
+        manifest = target / "manifest.json"
+        manifest.write_text(json.dumps(manifest_for("int_rec", ["source.hai.bronze.acs_api_profile"], ["acs_api_profile"])))
+        entries, unparsed = declare.derive(target / "compiled", ROOT)
+        out["engine_a_model_the_analysis_cannot_walk_makes_its_manifest_source_any_with_the_model"] = "int_rec" in unparsed and "int_rec" in str(
+            entries.get("acs_api_profile", {}).get("any")
+        )
+        manifest.write_text(json.dumps(manifest_for("int_rec", ["model.hai.stg_cms_hai_hospital"], ["cms_hai_hospital"])))
+        entries, _ = declare.derive(target / "compiled", ROOT)
+        out["engine_a_model_the_analysis_cannot_walk_makes_the_bronze_table_of_its_staging_dependency_any"] = "int_rec" in str(
+            entries.get("cms_hai_hospital", {}).get("any")
+        )
+        manifest.write_text(json.dumps({"nodes": {}, "sources": {}}))
+        try:
+            declare.derive(target / "compiled", ROOT)
+            refused = False
+        except columns.ConsumerColumnsError as error:
+            refused = "int_rec" in str(error)
+        out["engine_a_model_the_analysis_cannot_walk_with_no_manifest_entry_fails_the_declaration_naming_it"] = refused
     return out
 
 
@@ -184,6 +256,79 @@ def scratch_plants(root: Path) -> None:
         handle.write("B99999_002E,acs_b16005,2099,review_held_column,Estimate!!Review,held,a plant\n")
 
 
+TARGET_MACRO = (
+    "{% macro review_target() %}{% if target.name == 'lint' %}select 1 as v{% else %}"
+    "select review_target_only as v from {{ ref('stg_cms_hai_hospital') }}{% endif %}{% endmacro %}\n"
+)
+
+
+def cli_plants(root: Path) -> None:
+    """A scratch copy for the real command: a recursive reader of a new bronze source, a struct read and a macro that branches on the target."""
+    shutil.copytree(ROOT / "dbt", root / "dbt", ignore=shutil.ignore_patterns("target", "logs", "dbt_packages"))
+    (root / columns.CONTRACT).parent.mkdir(parents=True)
+    shutil.copyfile(ROOT / columns.CONTRACT, root / columns.CONTRACT)
+    shutil.copyfile(ROOT / declare.TARGET_BRANCHES, root / declare.TARGET_BRANCHES)
+    sources = root / SOURCES
+    sources.write_text(
+        sources.read_text().replace(
+            "      - name: stored_copies\n", "      - name: acs_api_profile\n        meta:\n          classification: Public\n      - name: stored_copies\n", 1
+        )
+    )
+    models = root / "dbt/models/silver/intermediate"
+    (models / "int_review_recursive.sql").write_text(
+        "with recursive r as (select _row_number from {{ source('bronze', 'acs_api_profile') }} "
+        "union all select _row_number + 1 from r where _row_number < 0) select _row_number from r\n"
+    )
+    (models / "int_review_struct.sql").write_text("select t.review_payload.field as v from {{ ref('stg_cms_hai_hospital') }} as t\n")
+    (root / "dbt/macros/review_target.sql").write_text(TARGET_MACRO)
+    (models / "int_review_target.sql").write_text("{{ review_target() }}\n")
+
+
+def cli_cases() -> dict[str, bool]:
+    """The real command on the scratch copy: it must never exit 0 with a planted read undeclared."""
+    out: dict[str, bool] = {}
+    with tempfile.TemporaryDirectory(prefix="bronze_columns_cli_") as folder:
+        scratch = Path(folder)
+        cli_plants(scratch)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = declare.run(scratch)
+    text = stdout.getvalue() + stderr.getvalue()
+    out["cli_a_recursive_reader_of_a_new_bronze_table_fails_the_command_naming_the_table_as_any"] = code == 1 and any(
+        "acs_api_profile" in line and "any column" in line for line in text.splitlines()
+    )
+    out["cli_a_struct_read_through_a_staging_view_fails_the_command_naming_the_column"] = any(
+        "cms_hai_hospital" in line and "review_payload" in line for line in text.splitlines()
+    )
+    out["cli_a_macro_that_branches_on_the_target_fails_the_command_naming_file_and_line"] = code == 1 and "dbt/macros/review_target.sql:1" in text
+    return out
+
+
+def guard_cases() -> dict[str, bool]:
+    """The target and env_var guard on a small tree: an unreviewed line fails by file and line, a reviewed one passes, a stale entry fails."""
+    out: dict[str, bool] = {}
+    line = "{% if target.name == 'lakehouse' %}select 1{% else %}select 2{% endif %}"
+    with tempfile.TemporaryDirectory(prefix="bronze_guard_") as folder:
+        root = Path(folder)
+        (root / "dbt/macros").mkdir(parents=True)
+        (root / "dbt/models/silver").mkdir(parents=True)
+        (root / "config/lakehouse").mkdir(parents=True)
+        (root / "dbt/macros/m.sql").write_text(f"{{% macro m() %}}\n    {line}\n{{% endmacro %}}\n")
+        (root / "dbt/models/silver/x.sql").write_text("select {{ env_var('X', '1') }} as v\n")
+        found = declare.target_branches_in(root, {})
+        out["guard_an_unreviewed_target_or_env_var_line_fails_by_file_and_line"] = (
+            len(found) == 2
+            and found[0].startswith("dbt/models/silver/x.sql:1:")
+            and found[1].startswith("dbt/macros/m.sql:2:")
+            and "DYNAMIC_READERS" in found[0]
+        )
+        reviewed = {("dbt/macros/m.sql", line): "a reason", ("dbt/models/silver/x.sql", "select {{ env_var('X', '1') }} as v"): "a reason"}
+        out["guard_a_reviewed_line_passes"] = declare.target_branches_in(root, reviewed) == []
+        stale = {**reviewed, ("dbt/macros/gone.sql", "{{ target.name }}"): "a reason"}
+        out["guard_a_reviewed_entry_that_matches_no_line_fails_as_stale"] = len(declare.target_branches_in(root, stale)) == 1
+    return out
+
+
 def real_cases(base: dict[str, dict[str, Any]], contract: dict[str, columns.Declaration], project: dict[str, Any]) -> dict[str, bool]:
     """The committed declaration against the models of the real project."""
     out: dict[str, bool] = {}
@@ -191,6 +336,7 @@ def real_cases(base: dict[str, dict[str, Any]], contract: dict[str, columns.Decl
     out["real_every_staged_and_every_deferred_table_is_declared"] = declare.completeness(contract, project) == []
     copies = set(project["vars"]["copy_tables"])
     out["real_every_copied_table_is_declared"] = copies <= set(contract)
+    out["real_every_target_and_env_var_line_of_the_models_and_macros_is_reviewed"] = declare.target_branches(ROOT) == []
     out["real_the_deferred_finance_table_is_declared_as_deferred_by_name"] = "hcai_finance_csv" in contract and bool(contract["hcai_finance_csv"].deferred)
     anys = {table for table, declaration in contract.items() if declaration.columns is None}
     out["real_the_tables_read_through_any_column_are_named_with_a_reason"] = anys == {"cms_geographic_variation_csv", "svi"} and all(
@@ -332,6 +478,8 @@ def cases() -> dict[str, bool]:
         compiled = declare.compile_project(scratch / "dbt", scratch / "target", packages=ROOT / "data/analytics/dbt/dbt_packages")
         planted, failures = declare.derive(compiled, scratch)
     results.update(plant_cases(planted, sorted(failures), contract, project))
+    results.update(guard_cases())
+    results.update(cli_cases())
     results.update(load_cases(contract))
     return results
 

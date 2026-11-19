@@ -218,6 +218,11 @@
       "why": "reviewed: the unit model lists the drop-in files and unit files of the units folder it is given with glob and iterdir at scripts/infrastructure/systemd_model.py:76, :104 and :105 (self.units, set at :113 from the caller's argument), a stand-in folder that the infrastructure E2E builds in its workspace; no repository folder is listed"
     },
     {
+      "module": "scripts/lakehouse/bronze_consumer_declare.py",
+      "pattern": "^dbt/(models|macros)/",
+      "why": "reviewed: target_branches_in lists the files under dbt/models and dbt/macros of the project at the root the caller names (rglob at scripts/lakehouse/bronze_consumer_declare.py:target_branches_in, folders BRANCH_FOLDERS) and reads each line, so the pattern is those two folders; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
+    },
+    {
       "module": "scripts/lakehouse/bronze_consumer_lineage.py",
       "pattern": null,
       "why": "reviewed: read_models lists the compiled models under the compile target folder that the caller names (rglob at scripts/lakehouse/bronze_consumer_lineage.py:read_models), never a folder of the repository checkout that the launcher suite runs from; the bronze load never imports this module, it imports only the functions of bronze_consumer_columns that read the one contract file"
@@ -467,6 +472,7 @@
     "scripts/infrastructure/sts_stand_in.py": 1,
     "scripts/infrastructure/synthetic_workspace.py": 1,
     "scripts/infrastructure/systemd_model.py": 3,
+    "scripts/lakehouse/bronze_consumer_declare.py": 1,
     "scripts/lakehouse/bronze_consumer_lineage.py": 1,
     "scripts/lakehouse/catalog_journal.py": 2,
     "scripts/lakehouse/dbt_package_archive.py": 3,
@@ -528,7 +534,9 @@
     "data_contracts/orchestration",
     "data_contracts/training",
     "dbt",
+    "dbt/macros",
     "dbt/macros/features",
+    "dbt/models",
     "dbt/models/features",
     "dbt/models/features/matrix",
     "dbt/models/gold",

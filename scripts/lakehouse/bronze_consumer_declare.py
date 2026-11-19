@@ -5,6 +5,11 @@ compiled model and test (``bronze_consumer_lineage``) and returns one declaratio
 resolves only when it runs; the one such reader is ``int_acs_county_values``, which reads the columns that ``dbt/seeds/acs_variable_map.csv`` maps for each ACS
 table, so ``DYNAMIC_READERS`` adds those reads from the seed.
 
+A model whose query the analysis cannot walk takes its inputs from the compiled manifest (its sources and staging models) and its bronze tables are
+declared ``any`` with its name; if the manifest cannot give them the derivation fails. Because only the lint target compiles, ``check`` also fails on every line
+of the models and macros that branches on the target or reads ``env_var`` and is not a reviewed entry of
+``config/lakehouse/bronze_consumer_target_branches.json``.
+
 ``check`` fails on every difference between the committed file and the models, and on a completeness gap: every staged table (a ``vars.copy_tables`` entry whose
 ``stg_`` model is not deferred) and every deferred one must be declared, and a deferred table carries its note.
 """
@@ -14,6 +19,7 @@ from __future__ import annotations
 import csv
 import importlib
 import json
+import re
 import sys
 import tempfile
 from collections.abc import Mapping
@@ -29,6 +35,10 @@ ROOT = Path(__file__).resolve().parents[2]
 DBT = ROOT / ".tools" / "sqlfluff" / "bin" / "dbt"
 PROJECT = "dbt/dbt_project.yml"
 COMPILE_SECONDS = 300
+TARGET_BRANCHES = "config/lakehouse/bronze_consumer_target_branches.json"
+BRANCH_FOLDERS = ("dbt/models", "dbt/macros")
+BRANCH_SUFFIXES = (".sql", ".yml", ".yaml")
+TARGET_BRANCH = re.compile(r"\btarget\s*[.\[]|\benv_var\s*\(")
 BASIS = (
     "The bronze columns that compiled silver models and tests read, found by parsing the compiled SQL: each column lists the models that read it, and "
     "a table that "
@@ -115,10 +125,50 @@ def dynamic_reads(root: Path) -> dict[str, dict[str, set[str]]]:
     return found
 
 
+def source_tables(manifest: Mapping[str, Any], unique_id: str, seen: set[str] | None = None) -> set[str]:
+    """The bronze tables that a manifest node reads directly or through staging models (the ``stg_`` models, followed down to their sources)."""
+    seen = seen if seen is not None else set()
+    found: set[str] = set()
+    for dependency in manifest["nodes"][unique_id]["depends_on"]["nodes"]:
+        source = manifest["sources"].get(dependency)
+        node = manifest["nodes"].get(dependency)
+        if source is not None and source["source_name"] == lineage.BRONZE_SCHEMA:
+            found.add(source["name"])
+        elif node is not None and node["name"].startswith(deferred_models.STAGING_PREFIX) and dependency not in seen:
+            seen.add(dependency)
+            found |= source_tables(manifest, dependency, seen)
+    return found
+
+
+def manifest_inputs(path: Path) -> dict[str, lineage.Inputs]:
+    """For each compiled model and test (by file name), the bronze tables and the models its manifest entry names as inputs."""
+    manifest = json.loads(path.read_text())
+    found: dict[str, lineage.Inputs] = {}
+    for unique_id, node in manifest["nodes"].items():
+        if node["resource_type"] not in ("model", "test"):
+            continue
+        names = {manifest["nodes"][dependency]["name"] for dependency in node["depends_on"]["nodes"] if dependency in manifest["nodes"]}
+        old = found.get(Path(node["path"]).stem)
+        tables = source_tables(manifest, unique_id)
+        found[Path(node["path"]).stem] = lineage.Inputs(frozenset(tables | (old.bronze if old else set())), frozenset(names | (old.models if old else set())))
+    return found
+
+
 def derive(compiled: Path, root: Path = ROOT, parser: lineage.Parser = lineage.parse) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """One entry per bronze table that a model reads, and the models that could not be analyzed (name to reason)."""
+    """One entry per bronze table that a model reads, and the models that could not be analyzed (name to reason).
+
+    A model that cannot be analyzed takes its inputs from the compiled manifest (``target/manifest.json`` beside the compiled folder) and its bronze tables are
+    declared ``any`` with its name. When the manifest has no entry for such a model, the inputs cannot be established and the derivation fails.
+    """
     models = lineage.read_models(compiled)
-    needs, unparsed = lineage.bronze_needs(models, parser)
+    manifest = compiled.parent / "manifest.json"
+    inputs = manifest_inputs(manifest) if manifest.exists() else {}
+    needs, unparsed = lineage.bronze_needs(models, parser, inputs)
+    unknown = sorted(set(unparsed) - set(inputs))
+    if unknown:
+        raise columns.ConsumerColumnsError(
+            f"the bronze inputs of {', '.join(unknown)} cannot be established: the analysis cannot place the model and {manifest} has no entry for it"
+        )
     entries: dict[str, dict[str, Any]] = {}
     for table, value in needs.items():
         entries[table] = {"any": value} if isinstance(value, str) else {"columns": {name: sorted(readers) for name, readers in sorted(value.items())}}
@@ -155,7 +205,8 @@ def differences(derived: Mapping[str, Mapping[str, Any]], contract: Mapping[str,
     lines: list[str] = []
     for table in sorted(set(derived) | set(contract)):
         if table not in contract:
-            lines.append(f"{table}: a model reads it but the contract does not declare it")
+            kind = f"through any column ({derived[table]['any']})" if "any" in derived[table] else "by column name"
+            lines.append(f"{table}: a model reads it {kind} but the contract does not declare it")
             continue
         if table not in derived:
             lines.append(f"{table}: the contract declares it but no model reads it")
@@ -214,6 +265,49 @@ def layering(models: list[lineage.Model]) -> list[str]:
     return found
 
 
+def reviewed_branches(root: Path) -> dict[tuple[str, str], str]:
+    """The reviewed target and env_var lines: (file, exact line text) to the reason the line does not change which columns are read."""
+    path = root / TARGET_BRANCHES
+    if not path.exists():
+        raise columns.ConsumerColumnsError(
+            f"{TARGET_BRANCHES} is missing: it lists the reviewed lines of the models and macros that branch on the target or env_var"
+        )
+    document = json.loads(path.read_text())
+    return {(entry["file"], entry["line"]): entry["reason"] for entry in document["reviewed"]}
+
+
+def target_branches(root: Path) -> list[str]:
+    """The unreviewed and stale lines of the project at the root (see ``target_branches_in``)."""
+    return target_branches_in(root, reviewed_branches(root))
+
+
+def target_branches_in(root: Path, reviewed: Mapping[tuple[str, str], str]) -> list[str]:
+    """Each line under dbt/models and dbt/macros that branches on the dbt target or reads env_var and is not a reviewed entry, and each stale reviewed entry.
+
+    The declaration compiles only the lint target, so SQL that a macro emits for another target is invisible to it. Such a line must register the reader's
+    inputs (as DYNAMIC_READERS does for int_acs_county_values) or carry a reviewed entry that says it does not change the columns read.
+    """
+    seen: set[tuple[str, str]] = set()
+    lines: list[str] = []
+    for folder in BRANCH_FOLDERS:
+        for path in sorted((root / folder).rglob("*")):
+            if not path.is_file() or path.suffix not in BRANCH_SUFFIXES:
+                continue
+            name = path.relative_to(root).as_posix()
+            for number, text in enumerate(path.read_text().splitlines(), start=1):
+                if not TARGET_BRANCH.search(text):
+                    continue
+                if (name, text.strip()) in reviewed:
+                    seen.add((name, text.strip()))
+                    continue
+                lines.append(
+                    f"{name}:{number}: it branches on the dbt target or reads env_var ({text.strip()[:100]}), which the lint-only compile cannot follow; "
+                    f"register the reader's inputs (as DYNAMIC_READERS does for int_acs_county_values) or add a reviewed entry to {TARGET_BRANCHES}"
+                )
+    lines += [f"{TARGET_BRANCHES}: the reviewed entry for {name} no longer matches a line ({text[:60]})" for name, text in sorted(set(reviewed) - seen)]
+    return lines
+
+
 def run(root: Path | None = None, write: bool = False) -> int:
     """Check or write the contract file against a compile of the real dbt project."""
     base = root or ROOT
@@ -227,7 +321,7 @@ def run(root: Path | None = None, write: bool = False) -> int:
         sys.stdout.write(f"wrote {len(derived)} tables to {columns.CONTRACT}\n")
         return 0
     loaded = columns.load(path)
-    lines = [*differences(derived, loaded), *completeness(loaded, read_project(base)), *placed]
+    lines = [*differences(derived, loaded), *completeness(loaded, read_project(base)), *placed, *target_branches(base)]
     for line in lines:
         sys.stderr.write(f"{columns.CONTRACT}: {line}\n")
     if lines:
@@ -237,5 +331,5 @@ def run(root: Path | None = None, write: bool = False) -> int:
     sys.stdout.write(f"bronze consumer columns ok: {len(derived)} tables declared, {len(anys)} read through any column ({', '.join(anys)})\n")
     if unparsed:
         names = ", ".join(sorted(unparsed))
-        sys.stdout.write(f"{len(unparsed)} models could not be parsed (a bronze or staging relation they name is read through any column): {names}\n")
+        sys.stdout.write(f"{len(unparsed)} models could not be analyzed (the bronze tables of their dbt inputs are read through any column): {names}\n")
     return 0

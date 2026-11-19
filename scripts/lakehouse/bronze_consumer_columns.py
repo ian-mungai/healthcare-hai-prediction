@@ -9,7 +9,8 @@
 A table that a deferred staging view would read (``vars.deferred_models``) keeps a ``deferred`` note: it has no consumer now beyond the lineage readers.
 
 The lists are not written by hand. ``scripts.lakehouse.bronze_consumer_declare`` parses the compiled models (``bronze_consumer_lineage``) and writes the file
-with ``--write``; ``--check`` fails when the file and the models disagree, or when a staged table has no declaration, and names each table and column.
+with ``--write``; the default (no flag; ``--root`` names another project folder) checks and fails when the file and the models disagree, or when a staged table
+has no declaration, and names each table and column.
 
 At the bronze load, ``check_loaded`` compares a loaded table with its declaration and stops by table and column name before silver runs:
 
