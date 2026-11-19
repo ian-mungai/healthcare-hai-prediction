@@ -632,16 +632,20 @@ def case_closure_digest_of_the_repository_root_is_the_record_value() -> list[str
 
 
 def case_closure_digest_changes_with_one_byte_of_any_closure_file() -> list[str]:
-    """One added byte in any one recorded file, in a scratch copy, gives another digest than the record's."""
+    """One added byte, and one byte replaced at the same length, in any one recorded file of a scratch copy gives another digest than the record's."""
     problems = []
     expected = read_record()["closure_sha256"]
     for item in read_record()["files"]:
-        with tempfile.TemporaryDirectory() as folder:
-            root = image_tree(Path(folder))
-            target = root / item["path"]
-            target.write_bytes(target.read_bytes() + b" ")
-            if model_code.closure_digest(root) == expected:
-                problems.append(f"one added byte in {item['path']} left closure_digest unchanged")
+        original = (ROOT / item["path"]).read_bytes()
+        changes = {"one added byte": original + b" "}
+        if original:
+            changes["one replaced byte at the same length"] = bytes([original[0] ^ 1]) + original[1:]
+        for name, content in changes.items():
+            with tempfile.TemporaryDirectory() as folder:
+                root = image_tree(Path(folder))
+                (root / item["path"]).write_bytes(content)
+                if model_code.closure_digest(root) == expected:
+                    problems.append(f"{name} in {item['path']} left closure_digest unchanged")
     return problems
 
 
