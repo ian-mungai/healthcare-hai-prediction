@@ -185,11 +185,13 @@ templates:
       {{ define "hai.sns.message" -}}
       {{ $firing := len .Alerts.Firing -}}
       {{ $resolved := len .Alerts.Resolved -}}
+      {{ $shown := .Alerts -}}
+      {{ if gt (len .Alerts) 10 }}{{ $shown = slice .Alerts 0 10 }}{{ end -}}
       {{ if gt (len .Alerts) 1 -}}
       {{ len .Alerts }} alerts: {{ if $firing }}{{ $firing }} firing{{ end }}{{ if and $firing $resolved }} and {{ end }}{{ if $resolved }}{{ $resolved }} resolved{{ end }}.
 
       {{ end -}}
-      {{ range $index, $alert := .Alerts -}}
+      {{ range $index, $alert := $shown -}}
       {{ if $index }}
 
       ----------
@@ -197,4 +199,7 @@ templates:
       {{ end -}}
       {{ template "hai.alert" $alert -}}
       {{ end -}}
+      {{ if gt (len .Alerts) 10 }}
+
+      {{ len (slice .Alerts 10) }} more alerts are not shown. Open Alerting in Grafana to see them all.{{ end -}}
       {{- end }}

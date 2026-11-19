@@ -240,3 +240,25 @@ def test_every_python_subject_follows_the_subject_rule(outcome: str) -> None:
     check(not subject_problems(promotion_notice(outcome)["Subject"]), promotion_notice(outcome)["Subject"])
     long = [f"source_{index}__20261101T000000Z__abc" for index in range(5)]
     check(not subject_problems(bronze_notice(long, [{"table": "t", "reason": "r"}])["Subject"]), "the bronze subject")
+
+
+def test_a_long_promotion_detail_is_cut_before_it_is_rendered_and_the_body_stays_under_the_cap() -> None:
+    bucket = Bucket()
+    auto_promotion.notify(bucket, TOPIC, "HAI_1", "held", "x" * 262_144, run=RESEARCH)
+    body = bucket.published[0]["Message"]
+    check(len(body.encode()) <= BODY_LIMIT, f"the body has {len(body.encode())} bytes")
+    check(len(body.encode()) < 5_000, "the detail kept more than its 1000 characters")
+    check("What to do next:" in body and "Details:" in body, "a cut detail removed a block")
+
+
+def test_a_huge_bronze_list_is_cut_on_a_line_with_a_truncated_line_and_stays_under_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = [f"source_{index}__20261101T000000Z__" + "a" * 60 for index in range(2_000)]
+    tables = [{"table": f"table_{index}", "reason": "no source object"} for index in range(2_000)]
+    body = bronze_notice(files, tables)["Message"]
+    monkeypatch.setattr(owner_notice, "cap_body", lambda text, limit=0: text)
+    whole = bronze_notice(files, tables)["Message"].split("\n")
+    lines = body.split("\n")
+    check(len(whole) > len(lines) and len(body.encode()) <= BODY_LIMIT, f"the body has {len(body.encode())} bytes and {len(lines)} of {len(whole)} lines")
+    check(lines[-1] == owner_notice.TRUNCATED and "run record" in lines[-1], f"the last line is {lines[-1]!r}")
+    check(lines[:-2] == whole[: len(lines) - 2] and lines[-2] == "", "the cut is not on a line boundary of the full notice")
+    check(len(body.encode()) > BODY_LIMIT - 400, "the cut dropped more lines than it had to")

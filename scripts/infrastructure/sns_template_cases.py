@@ -538,4 +538,5 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "alert_email_annotations_follow_the_writing_preferences": annotations_follow_the_writing_preferences,
     "alert_email_subject_is_valid_for_every_rule_state_and_text": subject_is_valid_for_every_rule_state_and_text,
     "alert_email_body_is_clean_for_every_rule_and_text": body_is_clean_for_every_rule_and_text,
+    "alert_email_many_alerts_show_a_bounded_number_of_blocks": many_alerts_show_a_bounded_number_of_blocks,
 }

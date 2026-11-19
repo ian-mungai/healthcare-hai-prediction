@@ -22,6 +22,11 @@ OWNER_ZONE = "America/Los_Angeles"
 # SNS allows 100 characters and Grafana cuts a subject at 100 bytes. Ten characters of room keep both from ever acting on a subject.
 SUBJECT_LIMIT = 90
 ELLIPSIS = "..."
+# SNS refuses a message over 256 KiB (262144 bytes) and email of that size is not read. A notice body stays under 100000 bytes (about 40 percent of the
+# limit, room for the longest lists the run records hold) and is cut on a line boundary with a last line that says so.
+BODY_LIMIT = 100_000
+DETAIL_LIMIT = 1_000
+TRUNCATED = "Truncated: this notice was cut because it was too long. The run record holds the full text."
 
 
 def utc_now() -> datetime:
@@ -77,6 +82,26 @@ def shorten(text: str, limit: int = SUBJECT_LIMIT) -> str:
     return line[: limit - len(ELLIPSIS)].rsplit(" ", 1)[0].rstrip(" ,:") + ELLIPSIS
 
 
+def cut_text(text: str, limit: int) -> str:
+    """The text cut at a word end with ``...`` when it is longer than the limit (in characters)."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - len(ELLIPSIS)].rsplit(" ", 1)[0].rstrip(" ,:") + ELLIPSIS
+
+
+def cap_body(body: str, limit: int = BODY_LIMIT) -> str:
+    """The body within the byte limit: whole lines, then the line TRUNCATED, when the body is longer."""
+    if len(body.encode()) <= limit:
+        return body
+    room = limit - len(TRUNCATED.encode()) - 2
+    kept: list[str] = []
+    for line in body.split("\n"):
+        if len("\n".join([*kept, line]).encode()) > room:
+            break
+        kept.append(line)
+    return "\n".join(kept).rstrip("\n") + "\n\n" + TRUNCATED
+
+
 @dataclass(frozen=True)
 class Notice:
     """The content of one owner notice. ``where`` and ``details`` are lines, and an empty one leaves its block out."""
@@ -106,4 +131,4 @@ def render(notice: Notice, now: datetime | None = None) -> tuple[str, str]:
         blocks.append(block("Where to look", notice.where))
     if any(line.strip() for line in notice.details):
         blocks.append(block("Details", notice.details))
-    return shorten(notice.subject), "\n\n".join(blocks)
+    return shorten(notice.subject), cap_body("\n\n".join(blocks))
