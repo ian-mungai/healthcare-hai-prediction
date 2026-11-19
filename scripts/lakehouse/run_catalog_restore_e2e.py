@@ -735,8 +735,40 @@ def case_a_failed_restore_step_prints_its_refusal_line() -> dict[str, bool]:
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
-    name.removeprefix("case_"): function for name, function in sorted(globals().items()) if name.startswith("case_")
+    function.__name__.removeprefix("case_"): function
+    for function in (
+        case_a_failed_restore_step_prints_its_refusal_line,
+        case_a_failed_rollback_is_loud,
+        case_a_failed_store_request_is_not_retried_and_is_a_named_refusal,
+        case_a_listing_that_never_returns_ends_at_the_deadline,
+        case_a_missing_namespace_stops_before_any_write,
+        case_a_newer_catalog_entry_is_left_alone,
+        case_a_paginated_listing_starts_no_page_after_the_deadline,
+        case_a_partial_body_is_interrupted_at_the_deadline,
+        case_a_reader_sees_the_committed_set_after_the_restore,
+        case_a_refused_drop_leaves_the_table,
+        case_a_refused_registration_puts_the_older_entry_back,
+        case_a_rerun_changes_nothing,
+        case_a_table_whose_main_differs_from_the_set_is_not_left_visible,
+        case_a_table_with_no_metadata_file_is_skipped,
+        case_an_empty_restore_checks_the_deadline_after_reading_the_folders,
+        case_an_empty_restore_whose_listings_use_the_whole_budget_is_refused,
+        case_an_older_table_is_advanced,
+        case_dry_run_writes_nothing,
+        case_malformed_snapshots_are_refused,
+        case_no_backup_means_nothing_to_do,
+        case_only_the_newest_backup_of_a_folder_counts,
+        case_pre_commit_backups_are_never_used,
+        case_registers_every_absent_table,
+        case_the_deadline_stops_the_run,
+        case_the_restore_step_dry_run_writes_nothing,
+        case_the_restore_step_refuses_a_caller_that_is_not_the_task_role,
+        case_the_restore_step_reports_counts_and_exits,
+        case_the_same_sequence_with_another_file_is_a_conflict,
+    )
 }
+if len(CASES) != sum(name.startswith("case_") for name in globals()):
+    raise SystemExit("a case_ function is missing from CASES")
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError, RestoreError)
 
 

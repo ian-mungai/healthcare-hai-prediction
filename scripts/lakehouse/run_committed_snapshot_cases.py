@@ -420,8 +420,30 @@ def case_catalog_restore_reads_the_snapshot_and_a_reader_sees_the_committed_set(
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
-    name.removeprefix("case_"): function for name, function in sorted(globals().items()) if name.startswith("case_")
+    function.__name__.removeprefix("case_"): function
+    for function in (
+        case_a_different_snapshot_of_the_run_is_refused_and_kept,
+        case_a_rerun_after_a_later_commit_writes_nothing,
+        case_a_rerun_after_an_interruption_writes_the_missing_snapshot,
+        case_a_rerun_of_a_run_after_a_sibling_commit_leaves_its_snapshot_unchanged,
+        case_a_sibling_commit_does_not_excuse_a_different_table_state,
+        case_a_stored_ledger_with_this_run_and_other_runs_is_accepted,
+        case_a_stored_ledger_without_this_runs_commit_is_refused,
+        case_a_stored_snapshot_of_another_shape_is_refused_even_when_only_the_ledger_differs,
+        case_an_identical_rerun_leaves_the_snapshot_alone,
+        case_catalog_restore_reads_the_snapshot_and_a_reader_sees_the_committed_set,
+        case_equal_content_after_parsing_passes_and_a_field_change_fails,
+        case_it_refuses_a_table_whose_main_is_not_the_committed_snapshot,
+        case_it_refuses_a_table_without_a_metadata_file,
+        case_it_refuses_when_the_run_row_is_missing_or_names_another_set,
+        case_the_commit_step_gets_a_backup_store_in_all_three_publish_modules,
+        case_the_snapshot_records_the_committed_runs_of_the_ledger,
+        case_the_stores_create_an_object_only_once,
+        case_writes_the_snapshot_once_from_the_committed_state,
+    )
 }
+if len(CASES) != sum(name.startswith("case_") for name in globals()):
+    raise SystemExit("a case_ function is missing from CASES")
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError, PublishError, catalog_restore.RestoreError)
 
 

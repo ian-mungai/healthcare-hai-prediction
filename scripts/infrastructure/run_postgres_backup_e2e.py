@@ -660,6 +660,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "upload_stops_at_its_deadline": case_upload_stops_at_its_deadline,
     "upload_takes_the_oldest_set_first_and_leaves_partial_sets": case_upload_takes_the_oldest_set_first_and_leaves_partial_sets,
     "upload_writes_every_dump_then_the_marker": case_upload_writes_every_dump_then_the_marker,
+    "fetch_reads_each_dump_in_bounded_chunks": case_fetch_reads_each_dump_in_bounded_chunks,
+    "fetch_skips_a_newest_marker_with_an_empty_manifest": case_fetch_skips_a_newest_marker_with_an_empty_manifest,
+    "fetch_skips_malformed_markers_and_falls_back": case_fetch_skips_malformed_markers_and_falls_back,
+    "fetch_stops_a_dump_longer_than_its_marker_says": case_fetch_stops_a_dump_longer_than_its_marker_says,
+    "upload_treats_a_client_library_error_as_a_failed_try": case_upload_treats_a_client_library_error_as_a_failed_try,
 }
 if len(CASES) != sum(name.startswith("case_") for name in globals()):
     raise SystemExit("a case_ function is missing from CASES")
