@@ -124,7 +124,7 @@ def test_a_committed_silver_set_of_a_stamp_run_is_read_and_a_malformed_one_is_re
     from scripts.lakehouse import silver_publish
 
     spark = SimpleNamespace(sql=lambda query: SimpleNamespace(collect=lambda: [(5,)]))
-    ctx = SimpleNamespace(mode="real", plan=SimpleNamespace(tables=("t1",)), spark=spark, fq=lambda name: name)
+    ctx: Any = SimpleNamespace(mode="real", plan=SimpleNamespace(tables=("t1",)), spark=spark, fq=lambda name: name)
     for run in (STAMP, NEW):
         done = silver_publish.checked_set(ctx, {"mode": "real", "run_id": run, "snapshot_set": {"t1": 5}})
         check(done == {"t1": 5}, f"the committed set of {run} is not read: {done}")
@@ -155,7 +155,7 @@ def test_the_input_lineage_of_a_pin_reads_a_stamp_source_run(source: str) -> Non
 
     pin_key = f"{ecs_lineage.EVIDENCE_PREFIX}/gold/gold_abcdef02/silver_pins.json"
     pin = {"schema": 1, "run_id": "gold_abcdef02", "mode": "real", "namespace": "silver", "source_run_id": source, "snapshot_set": {"s1": 21}}
-    evidence = SimpleNamespace(read=lambda key: pin if key == pin_key else None)
+    evidence: Any = SimpleNamespace(read=lambda key: pin if key == pin_key else None)
     facts = ecs_lineage.LaunchFacts("gold_abcdef02", "gold", 1, "2026-11-18T00:00:00+00:00", "2026-11-18T01:00:00+00:00", "succeeded", "latest")
     checks = ecs_lineage.Checks(frozen=False)
     try:
@@ -502,7 +502,7 @@ def test_a_gold_report_reads_the_stamp_run_its_pin_names(tmp_path: Path) -> None
     from orchestration import layer_report
 
     pin = {"source_run_id": STAMP}
-    access = SimpleNamespace(directory=tmp_path)
+    access: Any = SimpleNamespace(directory=tmp_path)
     try:
         layer_report.silver_input(access, pin, tmp_path)
     except layer_report.ReportError as error:

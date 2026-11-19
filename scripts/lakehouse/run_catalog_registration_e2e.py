@@ -299,17 +299,21 @@ GHOST_MAP = normalized_map(GHOST_ENTRY)
 EVIDENCE = "holds a source object or observation history"
 
 
-def routed(fixture: Fixture, sources: FakeSources | None, table_map: dict[str, Any] | None = None) -> reg.RegistrationIO:
+def routed(fixture: Fixture, sources: FakeSources | bronze.S3Storage | None, table_map: dict[str, Any] | None = None) -> reg.RegistrationIO:
     """The registration services plus the route's own source listing and the table map it reconciles an omission against."""
     return replace(fixture.io, sources=sources, table_map=GHOST_MAP if table_map is None else table_map)
 
 
 def omit(fixture: Fixture, io: reg.RegistrationIO, entry: str) -> reg.Inventory | reg.RegistrationResult:
     """One of the two API entry points, asked to leave ``GHOST`` out of the required set."""
-    arguments = {"bucket": "synthetic-bucket", "reservation_prefix": "synthetic_aws_reader", "deadline": 100, "unsourced": frozenset({GHOST})}
+    bucket, reservation_prefix, deadline, unsourced = "synthetic-bucket", "synthetic_aws_reader", 100, frozenset({GHOST})
     if entry == "prepare":
-        return reg.prepare_read_inventory(io, REQUIRED, fixture.receipts, **arguments)
-    return reg.register_read_catalog(io, REQUIRED, fixture.receipts, **arguments)
+        return reg.prepare_read_inventory(
+            io, REQUIRED, fixture.receipts, bucket=bucket, reservation_prefix=reservation_prefix, deadline=deadline, unsourced=unsourced
+        )
+    return reg.register_read_catalog(
+        io, REQUIRED, fixture.receipts, bucket=bucket, reservation_prefix=reservation_prefix, deadline=deadline, unsourced=unsourced
+    )
 
 
 ENTRIES = ("prepare", "register")

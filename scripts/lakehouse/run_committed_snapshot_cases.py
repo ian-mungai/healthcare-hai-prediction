@@ -17,6 +17,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -113,6 +114,14 @@ def refused(action: Callable[[], Any]) -> str | None:
     return None
 
 
+def write_snapshot(spark: StandInSpark, store: Any) -> Any:
+    return publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+
+
+def ensure_snapshot(spark: StandInSpark, store: Any) -> Any:
+    return publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET)
+
+
 def listing(store: FolderStore) -> list[str]:
     return sorted(path.name for path in store.root.iterdir() if path.is_file() and not path.name.endswith(".tmp")) if store.root.exists() else []
 
@@ -157,7 +166,7 @@ def case_it_refuses_when_the_run_row_is_missing_or_names_another_set() -> dict[s
     other.runs = [(*other.runs[0][:7], json.dumps({"fct_visit": 1, "dim_site": 2}), None)]
     for name, spark in (("no row", missing), ("a row with another set", other)):
         store = new_store()
-        message = refused(lambda spark=spark, store=store: publish.write_committed_snapshot(context(spark, store), SNAPSHOT_SET))
+        message = refused(partial(write_snapshot, spark, store))
         checks[f"{name}: refused, nothing written"] = message is not None and "publish_runs row" in message and listing(store) == []
     return checks
 
@@ -282,7 +291,7 @@ def case_a_stored_ledger_without_this_runs_commit_is_refused() -> dict[str, bool
         path.write_bytes(publish.canonical(stored))
         kept = path.read_bytes()
         spark.tables["hai_lakehouse.gold.publish_runs"] = {"refs": {"main": RUNS_MAIN + 1}, "file": metadata_file("gold", "publish_runs", 12)}
-        message = refused(lambda spark=spark, store=store: publish.ensure_committed_snapshot(context(spark, store), SNAPSHOT_SET))
+        message = refused(partial(ensure_snapshot, spark, store))
         checks[f"{name}: refused and kept"] = message is not None and "never replaced" in message and path.read_bytes() == kept
     return checks
 

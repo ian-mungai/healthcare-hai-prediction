@@ -74,7 +74,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             add(f"{layer} lookalike {namespace}", layer, "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}_other/file", False)
         for owner, folder in BACKUP_FOLDERS.items():
             own = owner == layer
-            create = {"s3:if-none-match": ("*",)}
+            create: dict[str, tuple[str, ...]] = {"s3:if-none-match": ("*",)}
             add(f"{layer} creates a recovery snapshot in {owner}'s backup folder", layer, "s3:PutObject", f"{BUCKET}/{folder}{COMMITTED_KEY}", own, create)
             # A layer reads the whole prefix of the layer below it (``INPUTS``), and the silver backup folder is under that prefix.
             reads = own or (INPUTS.get(layer) == owner and folder.startswith(f"lakehouse/{owner}/"))

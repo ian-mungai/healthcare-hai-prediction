@@ -530,9 +530,9 @@ def recovery_snapshot(h: Harness) -> Check:
     path = store.root / name if isinstance(store, FolderStore) else None
     document = json.loads(store.get(name)) if store is not None and path is not None and path.is_file() else {}
     view = reader_view(ctx)
-    checks["the commit leaves one snapshot named for the run"] = bool(document) and sorted(p.name for p in path.parent.glob("catalog_committed_*.json")) == [
-        name
-    ]
+    checks["the commit leaves one snapshot named for the run"] = (
+        path is not None and bool(document) and sorted(p.name for p in path.parent.glob("catalog_committed_*.json")) == [name]
+    )
     checks["it is a committed schema 2 snapshot of this run and namespace"] = (
         document.get("schema"),
         document.get("kind"),

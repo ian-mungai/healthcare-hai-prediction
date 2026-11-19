@@ -840,7 +840,7 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
         size = len(json.dumps(arguments["overrides"], separators=(",", ":")))
         require(size < 4096, f"the overrides of {arguments['taskDefinition']} hold {size} characters, with a service limit of 8192")
     values = rig.environment(1)
-    require(set(values) == {"fetch", "pin", "load", "check"}, sorted(values))
+    require(set(values) == {"fetch", "pin", "load", "check"}, f"{sorted(values)}")
     require(all(not value or "," not in value for variables in values.values() for value in variables.values()), "a table list is in the container overrides")
     require(values["pin"]["BRONZE_TABLES"] == values["load"]["BRONZE_TABLES"] == values["check"]["BRONZE_TABLES"] == "", f"{values}")
     require(len(values["load"]["BRONZE_REQUEST_SHA256"]) == 64 and values["pin"]["BRONZE_INVENTORY_SHA256"] == INVENTORY, f"{values['pin']}")

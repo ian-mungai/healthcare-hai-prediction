@@ -3273,7 +3273,8 @@ class FakeUvicorn:
     """
 
     def __init__(self, hook: Callable[[SimpleNamespace], None], entered: Callable[[], bool]) -> None:
-        self.hook, self.entered, self.seen = hook, entered, {}
+        self.hook, self.entered = hook, entered
+        self.seen: dict[str, Any] = {}
         outer = self
 
         class Config:

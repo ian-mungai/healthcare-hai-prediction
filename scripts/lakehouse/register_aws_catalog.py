@@ -667,7 +667,7 @@ def check_unsourced_absent(io: RegistrationIO, unsourced: Collection[TableId], b
         return
     for identifier in sorted(unsourced):
         plain_identifier(identifier)
-        if bounded(lambda identifier=identifier: io.source.load(identifier, deadline=deadline), deadline, io.clock) is not None:
+        if bounded(partial(io.source.load, identifier, deadline=deadline), deadline, io.clock) is not None:
             raise RegistrationError("coverage", "a table that a bronze run record leaves out exists in the source catalog")
     if io.sources is None or io.table_map is None:
         raise RegistrationError("coverage", "an omission needs the caller's own source reader and the bronze table map to check the collection")

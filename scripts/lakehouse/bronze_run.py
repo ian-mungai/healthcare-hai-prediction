@@ -440,7 +440,7 @@ def staged_skipped(job: Job) -> list[dict[str, str]]:
         raise StepError("the stage report names a table twice, a table of the request, or the wrong number of tables")
     if report["requested_tables"] != list(job.tables):
         raise StepError("the stage report describes another request than the one this run loads")
-    if sorted(listed) != sorted(names):
+    if sorted(name for name in listed if name is not None) != sorted(names):
         raise StepError("the stage report names other skipped tables than the staged request")
     if any(item["reason"] != SKIPPED_REASON for item in skipped):
         raise StepError(f"the stage report gives a reason other than {SKIPPED_REASON!r} for a skipped table")

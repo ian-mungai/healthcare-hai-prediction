@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -22,6 +22,9 @@ from tests.support import check
 RUN = "bronze_3f9a1c07"
 BUCKET = "example-bucket"
 DECLARED = ["first", "second", "third"]
+
+
+STORAGE = cast(bronze.Storage, object())
 
 
 def item(name: str) -> dict[str, Any]:
@@ -142,9 +145,9 @@ def stub_discover(monkeypatch: pytest.MonkeyPatch, found: list[dict[str, Any]], 
 
 def test_the_loader_accepts_a_left_out_table_with_no_published_observation_and_no_pinned_source(monkeypatch: pytest.MonkeyPatch) -> None:
     asked = stub_discover(monkeypatch, [])
-    bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
+    bronze.check_unsourced(STORAGE, BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
     check(asked == [["third"]], f"the pinned sources were not read for the left-out table: {asked}")
-    bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second", "third"], [], earlier())
+    bronze.check_unsourced(STORAGE, BUCKET, CONFIG, ["first", "second", "third"], [], earlier())
     check(asked == [["third"]], "nothing left out still read the sources")
 
 
@@ -163,7 +166,7 @@ def test_the_loader_refuses_a_left_out_table_that_is_unknown_requested_published
 ) -> None:
     stub_discover(monkeypatch, found)
     with pytest.raises(bronze.BronzeError, match=message):
-        bronze.check_unsourced(object(), BUCKET, CONFIG, names, unsourced, earlier())
+        bronze.check_unsourced(STORAGE, BUCKET, CONFIG, names, unsourced, earlier())
 
 
 class Recorded:
@@ -197,12 +200,12 @@ def test_the_load_phase_names_no_left_out_table_when_the_stage_left_none_out_and
 def test_the_check_phase_refuses_a_loader_report_whose_left_out_tables_differ_from_the_stage_report() -> None:
     report = {"mode": "load", "passed": True, "tables": ["first", "second"], "snapshots": {"first": 1, "second": 2}, "unsourced_tables": ["third"]}
     report["metadata_index"] = {"generation": "7"}
-    check(bronze_run.accepted_unsourced(report, [{"table": "third", "reason": bronze_run.SKIPPED_REASON}]) is None, "the matching report was refused")
+    bronze_run.accepted_unsourced(report, [{"table": "third", "reason": bronze_run.SKIPPED_REASON}])
     with pytest.raises(bronze_run.StepError, match="left out"):
         bronze_run.accepted_unsourced(report, [])
     with pytest.raises(bronze_run.StepError, match="left out"):
         bronze_run.accepted_unsourced({k: v for k, v in report.items() if k != "unsourced_tables"}, [{"table": "third", "reason": bronze_run.SKIPPED_REASON}])
-    check(bronze_run.accepted_unsourced({k: v for k, v in report.items() if k != "unsourced_tables"}, []) is None, "a run that left nothing out was refused")
+    bronze_run.accepted_unsourced({k: v for k, v in report.items() if k != "unsourced_tables"}, [])
 
 
 def failed_copy(name: str) -> dict[str, Any]:
@@ -224,9 +227,9 @@ def test_the_loader_guard_refuses_a_table_whose_stored_objects_have_only_rejecte
     for entry in (failed_copy("third"), {"copy": {**item("third"), "retired": True}}, {"copy": item("third"), "superseded": True}):
         stub_discover(monkeypatch, [], [entry])
         with pytest.raises(bronze.BronzeError, match="rejected, retired or superseded observations"):
-            bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
+            bronze.check_unsourced(STORAGE, BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
     stub_discover(monkeypatch, [], [{"collection": "c_third", "dataset_id": "x", "file_name": "x.csv"}])
-    bronze.check_unsourced(object(), BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
+    bronze.check_unsourced(STORAGE, BUCKET, CONFIG, ["first", "second"], ["third"], earlier())
 
 
 def test_a_partial_reload_after_a_generation_that_skipped_a_table_needs_the_absence_named_and_keeps_every_other_table() -> None:

@@ -20,7 +20,7 @@ from datetime import date
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from orchestration import training_contract
@@ -170,6 +170,10 @@ def table_entry(folder: Path, name: str, rows: list[dict[str, Any]], columns: di
 def single_window(rows: list[dict[str, Any]]) -> None:
     """Keep each hospital in one training window, so no hospital repeats, and every hospital in the newest window."""
     rows[:] = [row for row in rows if row["window_year"] == 2023 or row["window_year"] == 2019 + int(row["ccn"]) % 4]
+
+
+def set_population(manifest: dict[str, Any], population: str) -> None:
+    manifest.update(population=population)
 
 
 class Fixture:
@@ -829,7 +833,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
                 slots={"m2_elastic_net": result},
                 request=SimpleNamespace(data=SimpleNamespace(split=lambda holdout=holdout: (None, holdout))),
             )
-            document = bundle.self_check_document(standin, features)
+            document = bundle.self_check_document(cast(Any, standin), features)
             require(document["rows"] == [[None if index == 0 else float(index), str(index)] for index in range(count)], f"{count} rows: {document['rows']}")
             require(document["predictions"] == [0.5 + index for index in range(count)], f"{count} rows: predictions {document['predictions']}")
 
@@ -1090,7 +1094,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         for model in training_contract.MODELS:
             for population in ("primary", "sensitivity"):
                 fixture = Fixture(folder / f"kept_{model}_{population}", model=model)
-                fixture.rewrite_manifest(lambda manifest, population=population: manifest.update(population=population))
+                fixture.rewrite_manifest(partial(set_population, population=population))
                 with mock.patch.object(suite, "moran_test", return_value=significant):
                     code, _, error = run_action(fixture, "fit")
                 label = f"{model} {population}"
@@ -2054,10 +2058,16 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             return champion_run_file(fixture, "bundle/feature_list.json")
 
         def document(value: Any) -> Plant:
-            return lambda fixture, stack: listed(fixture).write_text(json.dumps(value) + "\n")
+            def plant(fixture: Fixture, stack: contextlib.ExitStack) -> None:
+                listed(fixture).write_text(json.dumps(value) + "\n")
+
+            return plant
 
         def raw(value: bytes) -> Plant:
-            return lambda fixture, stack: listed(fixture).write_bytes(value)
+            def plant(fixture: Fixture, stack: contextlib.ExitStack) -> None:
+                listed(fixture).write_bytes(value)
+
+            return plant
 
         marker = "secret-marker"
         shapes: dict[str, tuple[Plant, str]] = {

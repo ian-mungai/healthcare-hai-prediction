@@ -26,7 +26,7 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
@@ -90,7 +90,7 @@ FORGED = json.dumps({"schema_version": 1, "target": "real", "tables": [], "skipp
         record(RUN_B, ["a"], []),
         record(RUN_A, ["a"], [], objects=[]),
         record(RUN_A, ["a"], [], snapshots={}),
-        record(RUN_A, "a", []),
+        record(RUN_A, cast(Any, "a"), []),
     ],
     ids=[
         "not json",
@@ -118,7 +118,7 @@ def test_a_body_that_is_not_a_complete_record_of_its_own_run_is_refused(body: by
 
 def test_a_table_is_unsourced_when_a_record_skips_it_and_no_record_loaded_it_in_any_order() -> None:
     skip = (frozenset({"a"}), frozenset({"c"}))
-    load = (frozenset({"a", "c"}), frozenset())
+    load: tuple[frozenset[str], frozenset[str]] = (frozenset({"a", "c"}), frozenset())
     other = (frozenset({"a", "b"}), frozenset({"d"}))
     check(bronze_unsourced.unsourced_in([skip]) == {"c"}, "a skipped table is not unsourced")
     check(bronze_unsourced.unsourced_in([skip, other]) == {"c", "d"}, "two skipped tables")
@@ -216,7 +216,8 @@ class Glue:
     """The one Glue call the omission check may use. ``tables`` holds existing entries; ``error`` is raised as a service error for every table."""
 
     def __init__(self, tables: set[str] | None = None, error: str | None = None) -> None:
-        self.tables, self.error, self.calls = tables or set(), error, []
+        self.tables, self.error = tables or set(), error
+        self.calls: list[tuple[str, str]] = []
 
     def get_table(self, DatabaseName: str, Name: str) -> dict[str, Any]:
         self.calls.append((DatabaseName, Name))
@@ -261,7 +262,7 @@ CONFIG = SimpleNamespace(layers={"bronze": SimpleNamespace(database="bronze")})
 
 def run_register(s3: Bucket, capsys: pytest.CaptureFixture[str], glue: Glue | None = None) -> tuple[int, str, str]:
     code = glue_mirror.main(
-        ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue or Glue(), s3=s3, config=CONFIG, sources=NoHistory()
+        ["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue or Glue(), s3=s3, config=cast(Any, CONFIG), sources=NoHistory()
     )
     out = capsys.readouterr()
     return code, out.out, out.err
@@ -408,7 +409,8 @@ def test_the_evidence_refuses_a_table_map_the_loader_did_not_normalize_and_a_tab
     """Review round 4, L1: a map without the loader's defaults used to fail inside discovery with a bare ``KeyError`` that the callers reported as a refusal."""
     sources, config = sourced_collection("", False)
     entry = {key: value for key, value in config["tables"][0].items() if key not in {"roles", "encodings"}}
-    for bad in ({"tables": [entry]}, {"tables": []}, {"tables": [{**entry, "roles": ["data"]}]}):
+    bad_maps: list[dict[str, Any]] = [{"tables": [entry]}, {"tables": []}, {"tables": [{**entry, "roles": ["data"]}]}]
+    for bad in bad_maps:
         with pytest.raises(bronze_unsourced.UnsourcedError, match="table map is malformed"):
             bronze_unsourced.source_evidence(sources, BUCKET, bad, [TABLE])
 

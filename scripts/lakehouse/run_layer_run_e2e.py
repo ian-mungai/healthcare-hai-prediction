@@ -1270,7 +1270,7 @@ def case_the_dry_run_plan_declares_the_recovery_snapshot(case: Case) -> None:
     require(case.chain("gold", extra=["--dry-run"]) == [0] * 7, case.err)
     plan = json.loads(case.out.split("DRY_RUN_PLAN ", 1)[1].splitlines()[0])
     kinds_planned = [item["kind"] for item in plan["other_writes"]]
-    declared = next((item for item in plan["other_writes"] if item["kind"] == "catalog_committed_snapshot"), {})
+    declared: dict[str, Any] = next((item for item in plan["other_writes"] if item["kind"] == "catalog_committed_snapshot"), {})
     require("catalog_backup" in kinds_planned and "catalog_committed_snapshot" in kinds_planned, kinds_planned)
     require("catalog_committed_" in declared.get("where", "") and "never" in declared.get("overwrites", ""), declared)
 

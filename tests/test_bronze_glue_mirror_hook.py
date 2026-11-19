@@ -35,7 +35,8 @@ class Source:
     """The Polaris side: the metadata file of each committed snapshot."""
 
     def __init__(self, error: Exception | None = None) -> None:
-        self.error, self.asked = error, []
+        self.error = error
+        self.asked: list[tuple[str, int]] = []
 
     def pointer(self, table: str, snapshot_id: int) -> str | None:
         self.asked.append((table, snapshot_id))
@@ -287,7 +288,8 @@ class Reader:
     """The read of the loader tables' committed snapshots: those with a snapshot and those that exist without one. An absent table is in neither."""
 
     def __init__(self, present: dict[str, int], empty: tuple[str, ...] = ()) -> None:
-        self.present, self.empty, self.asked = present, empty, []
+        self.present, self.empty = present, empty
+        self.asked: list[list[str]] = []
 
     def __call__(self, _spark: Any, _namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
         self.asked.append(list(tables))
@@ -371,7 +373,15 @@ class Catalog:
     def table(self, name: str) -> Any:
         table = name.removesuffix(".snapshots").rsplit(".", 1)[-1]
         rows = [{"snapshot_id": snapshot} for snapshot in self.snapshots[table]]
-        frame = SimpleNamespace(orderBy=lambda _column: frame, limit=lambda count: SimpleNamespace(collect=lambda: rows[:count]))
+        frame = SimpleNamespace()
+
+        def order_by(_column: str) -> SimpleNamespace:
+            return frame
+
+        def limit(count: int) -> SimpleNamespace:
+            return SimpleNamespace(collect=lambda: rows[:count])
+
+        frame.orderBy, frame.limit = order_by, limit
         return frame
 
 
