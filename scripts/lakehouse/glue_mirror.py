@@ -35,7 +35,7 @@ import re
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,6 +49,9 @@ PUBLISHED_LAYERS = ("silver", "gold", "features")
 MIRRORED_LAYERS = ("bronze", *PUBLISHED_LAYERS)
 BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 SILVER_BRONZE_SOURCES = REPO_ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
+# The bronze tables that silver reads, derived on the host from the dbt sources above and staged with the bronze job (the Spark image has no dbt or yaml).
+SILVER_READERS = REPO_ROOT / "config/lakehouse/bronze_silver_readers.json"
+SILVER_REASON = "a silver model reads it"
 # The publish contract of each mirrored layer: the features publish is the gold engine with its own contract (scripts/features/features_publish.py).
 LAYER_CONTRACTS = {
     "silver": REPO_ROOT / "data_contracts/lakehouse/silver_publish.json",
@@ -588,6 +591,67 @@ def silver_bronze_sources(path: Path = SILVER_BRONZE_SOURCES) -> set[str]:
     return tables
 
 
+def silver_readers_file(path: Path = SILVER_READERS) -> set[str]:
+    """The bronze tables that a silver model reads, from the small file derived from the dbt sources (``silver_bronze_sources``) that the Spark image can read.
+    The bronze run E2E and ``tests/test_bronze_glue_hook_unsourced.py`` fail when the file and the dbt sources differ."""
+    return {str(name) for name in json.loads(path.read_text())["tables"]}
+
+
+def omission_decision(
+    candidates: Sequence[str],
+    *,
+    s3: Any,
+    bucket: str,
+    glue: Any,
+    database: str,
+    readers: Collection[str],
+    storage: Any,
+    table_map: Mapping[str, Any],
+    budget: Budget | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    """The one rule for leaving a bronze table out of a registration, shared by ``register`` and the bronze load's hook: ``(left out, kept with its reason)``.
+
+    A table may be left out only when no silver model reads it, it has no metadata file in S3, no Glue entry (only a real table-not-found answer counts) and no
+    source object or observation history in its own source collection (``bronze_source_history.source_evidence``, delete-marked manifests included). A table
+    that fails any condition is kept (required). An S3 listing, a Glue call or a history read that fails raises ``MirrorError``: nothing is guessed. With a
+    ``budget`` every read runs under its absolute deadline.
+    """
+    from scripts.lakehouse import bronze_source_history
+
+    def run(label: str, function: Callable[..., Any], *arguments: Any) -> Any:
+        return budget.run(label, function, *arguments) if budget is not None else function(*arguments)
+
+    kept: dict[str, str] = {name: SILVER_REASON for name in candidates if name in readers}
+    rest = [name for name in candidates if name not in kept]
+
+    def in_s3() -> None:
+        for name in rest:
+            if has_metadata(s3, bucket, name):
+                kept[name] = "its table metadata exists in S3"
+
+    def in_glue() -> None:
+        for name in rest:
+            if name not in kept and current(glue, database, name) is not None:
+                kept[name] = "a Glue table of that name exists"
+
+    def in_sources() -> None:
+        left = [name for name in rest if name not in kept]
+        if left:
+            for name in sorted(bronze_source_history.source_evidence(storage, bucket, dict(table_map), left)):
+                kept[name] = bronze_source_history.HISTORY_REASON
+
+    for label, step, text in (
+        ("listing the table metadata in S3", in_s3, "the bronze table metadata in S3 cannot be listed"),
+        ("reading the Glue registrations", in_glue, "Glue could not say whether a bronze table exists"),
+        ("listing the source collections", in_sources, "the source collection of a bronze table cannot be listed"),
+    ):
+        try:
+            run(label, step)
+        except Exception as error:
+            raise MirrorError(f"{text}: {explain(error)}") from error
+    return [name for name in candidates if name not in kept], kept
+
+
 def bronze_loader_tables(path: Path = BRONZE_TABLES) -> list[str]:
     """The side tables that every bronze load commits beside the mapped tables: ``classification.loader_tables`` of the bronze table map."""
     return sorted(json.loads(path.read_text())["classification"]["loader_tables"])
@@ -627,42 +691,26 @@ def bronze_table_map() -> dict[str, Any]:
 def bronze_register_tables(s3: Any, bucket: str, glue: Any, database: str, sources: Any = None) -> tuple[list[str], list[str], dict[str, str]]:
     """The bronze tables ``register`` registers, the declared tables it leaves out and, for each candidate it keeps, why.
 
-    A bronze run record only proposes an omission: some complete record skips the table, no record loaded it and no silver model reads it. The route then
-    checks for itself, with its own credentials, that the table has no metadata file in S3, no Glue entry (only a real table-not-found answer counts) and no
-    source object or observation history in its own source collection (``bronze_unsourced.source_evidence``). A table that fails any check stays required and
-    flows to normal metadata resolution, which fails clearly when its metadata is missing. A run record, a Glue call or a listing that fails raises
-    ``MirrorError``: nothing is guessed.
+    A bronze run record only proposes an omission: some complete record skips the table and no record loaded it. ``omission_decision`` (the rule the bronze
+    load's hook shares) then decides: a table that a silver model reads, that has a metadata file in S3, a Glue entry or a source object or observation history
+    stays required and flows to normal metadata resolution, which fails clearly when its metadata is missing. A run record, a Glue call or a listing that
+    fails raises ``MirrorError``: nothing is guessed.
     """
     from scripts.lakehouse import bronze, bronze_unsourced
 
     listed = layer_tables("bronze")
     try:
         unsourced = bronze_unsourced.read_unsourced(s3, bucket)
-        candidates = sorted(bronze_unsourced.left_out(listed, unsourced, silver_bronze_sources()))
+        candidates = sorted(set(unsourced) & set(listed))
+        readers = silver_bronze_sources()
     except Exception as error:
         raise MirrorError(f"the bronze run records cannot be read as evidence: {explain(error)}") from error
-    kept: dict[str, str] = {}
-    try:
-        for name in candidates:
-            if has_metadata(s3, bucket, name):
-                kept[name] = "its table metadata exists in S3"
-    except Exception as error:
-        raise MirrorError(f"the bronze table metadata in S3 cannot be listed: {explain(error)}") from error
-    try:
-        for name in candidates:
-            if name not in kept and current(glue, database, name) is not None:
-                kept[name] = "a Glue table of that name exists"
-    except Exception as error:
-        raise MirrorError(f"Glue could not say whether a bronze table exists: {explain(error)}") from error
-    rest = [name for name in candidates if name not in kept]
-    if rest:
-        try:
-            storage = sources if sources is not None else bronze.S3Storage.from_client(s3)
-            for name in sorted(bronze_unsourced.source_evidence(storage, bucket, bronze_table_map(), rest)):
-                kept[name] = bronze_unsourced.HISTORY_REASON
-        except Exception as error:
-            raise MirrorError(f"the source collection of a bronze table cannot be listed: {explain(error)}") from error
-    left_out = [name for name in candidates if name not in kept]
+    if not candidates:
+        return listed, [], {}
+    storage = sources if sources is not None else bronze.S3Storage.from_client(s3)
+    left_out, kept = omission_decision(
+        candidates, s3=s3, bucket=bucket, glue=glue, database=database, readers=readers, storage=storage, table_map=bronze_table_map()
+    )
     return [name for name in listed if name not in left_out], left_out, kept
 
 

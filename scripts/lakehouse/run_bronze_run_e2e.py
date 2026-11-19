@@ -26,6 +26,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -163,6 +164,14 @@ def archive(folder: Path) -> tuple[Path, str]:
     return path, sha_of(path)
 
 
+class NoMetadata:
+    """The bucket as the hook lists it for table metadata: no bronze table has a metadata file yet."""
+
+    def get_paginator(self, operation: str) -> Any:
+        require(operation == "list_objects_v2", operation)
+        return SimpleNamespace(paginate=lambda **_: [{}])
+
+
 class MirrorSource:
     """The Polaris side of the hook: the metadata file of each committed snapshot and the columns of every table."""
 
@@ -198,6 +207,8 @@ def stand_in_mirror(namespace: str, names: list[str], snapshots: dict[str, int],
         history=history,
         bucket=BUCKET,
         table_map=config,
+        s3=NoMetadata(),
+        readers=glue_mirror.silver_readers_file(),
     )
 
 
@@ -431,14 +442,15 @@ def case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record(case
     require(len(attempts()) == 1, f"a repeated check wrote {len(attempts())} attempt records")
 
 
-def refusing_attempts(case: Case) -> Any:
-    """The bucket before the IAM apply or after a revocation: the role may not write a mirror attempt record. An absent key reads as 403."""
+def refusing_attempts(case: Case, code: str = "AccessDenied") -> Any:
+    """The bucket before the IAM apply or after a revocation: the role may not write a mirror attempt record. An absent key reads as 403. Another ``code`` is
+    a failure that is not a missing grant."""
     client = STORAGE[0].client
     original = client.put_object
 
     def refuse(**arguments: Any) -> dict[str, Any]:
         if "/mirror_" in arguments["Key"]:
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no grant"}}, "PutObject")
+            raise ClientError({"Error": {"Code": code, "Message": "no grant"}}, "PutObject")
         return original(**arguments)
 
     return mock.patch.object(client, "put_object", refuse)
@@ -460,26 +472,57 @@ def case_a_first_run_before_the_iam_apply_is_unavailable(case: Case) -> None:
     require(verdict["state"] == "unavailable" and key in verdict["reason"], f"{verdict}")
 
 
-def case_before_the_iam_apply_the_hook_fails_and_the_run_commits(case: Case) -> None:
-    """The combined code before the owner's IAM apply: Glue answers AccessDeniedException to the real hook, and the role may not write the attempt record.
-    The hook never raises, the mirror is ``failed`` in the loader report, every phase exits 0, the run record, the carried-over record and the chain hint are
-    written and the acceptance of the mirror is ``unavailable`` (never a pass)."""
+def case_before_the_iam_apply_every_attempt_is_unavailable_and_exits_0(case: Case) -> None:
+    """The combined code before the owner's IAM apply, first run and retries alike. Glue answers AccessDeniedException to the real hook and the role may not
+    write the attempt record. The hook never raises and reports the mirror ``unavailable`` (the refusal named). Every phase exits 0 on every attempt, nothing is
+    recorded as ok, the run record, the carried-over record and the chain hint are written and the acceptance is ``unavailable``. After the grant a rerun
+    registers the tables. The acceptance of this run stays ``unavailable``: the first report's attempt could not be recorded, so a later report's record does
+    not stand in for it (a new run, or a recheck of the retained first report, gives ``ok``)."""
     DEFECTS.add("iam_not_applied")
     with refusing_attempts(case):
-        codes = case.chain()
-    require(codes == [0, 0, 0], f"{codes} {case.err}")
+        require(case.chain() == [0, 0, 0], f"the first attempt: {case.err}")
+        receipt = STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"]
+        case.shas = None
+        case.err = ""
+        require(case.chain(label="retry") == [0, 0, 0], f"a retry before the grant failed its check phase: {case.err}")
     puts = STORAGE[0].client.puts
-    require(
-        f"lakehouse/bronze_runs/{RUN}/check.json" in puts and f"lakehouse/bronze_runs/{RUN}/carried_over.json" in puts, "the run's records were not written"
-    )
-    require("bronze_chain_dag" in case.out, "the run was held back")
-    require("glue mirror failed" in case.out and "AccessDeniedException" in case.out, f"the failed mirror is not named: {case.out}")
-    require("glue mirror FAILED" in case.err and "the run stays committed" in case.err, f"the failure is not on standard error: {case.err}")
-    key = bronze_mirror.attempt_key(RUN, 1)
-    require(key in case.err and "AccessDenied" in case.err, f"the missing attempt record is not named: {case.err}")
+    require(puts[f"lakehouse/bronze_runs/{RUN}/check.json"] == receipt, "a retry changed the receipt")
+    require(f"lakehouse/bronze_runs/{RUN}/carried_over.json" in puts and "bronze_chain_dag" in case.out, "the run's records or the chain hint are missing")
+    require("glue mirror unavailable" in case.out and "AccessDeniedException" in case.out, f"the unavailable mirror is not named: {case.out}")
+    require("glue mirror UNAVAILABLE" in case.err and "glue mirror ok" not in case.out and "FAILED" not in case.err, f"the stderr text: {case.err}")
+    require(bronze_mirror.attempt_key(RUN, 1) in case.err and "AccessDenied" in case.err, f"the missing attempt record is not named: {case.err}")
     require(not any("/mirror_" in written for written in puts), f"an attempt record was written without its grant: {sorted(puts)}")
-    verdict = bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)
-    require(verdict["state"] == "unavailable", f"{verdict}")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "unavailable", "the acceptance passed with nothing recorded")
+    DEFECTS.discard("iam_not_applied")
+    case.shas = None
+    case.err = ""
+    require(case.chain(label="grant") == [0, 0, 0], f"a rerun after the grant failed: {case.err}")
+    require("glue mirror ok" in case.out, f"the rerun after the grant did not register the tables: {case.out}")
+    latest = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)[-1]
+    require(latest["sequence"] == 1 and latest["mirror"]["status"] == "ok", f"{latest}")
+    require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "unavailable", "a later report's record stood in for the first attempt")
+
+
+def case_the_silver_readers_file_the_hook_reads_equals_the_dbt_sources(case: Case) -> None:
+    """The Spark image has no dbt or yaml, so the hook reads the tables silver reads from config/lakehouse/bronze_silver_readers.json, which the host derives
+    from the dbt sources. A dbt change that this file does not follow stops here. To regenerate it, dump {"tables": sorted(silver_bronze_sources())} as JSON
+    with a two-space indent and a trailing newline."""
+    derived = sorted(glue_mirror.silver_bronze_sources())
+    require(sorted(glue_mirror.silver_readers_file()) == derived, "config/lakehouse/bronze_silver_readers.json differs from the dbt bronze sources")
+    templates = json.loads((ROOT / "config/lakehouse/aws_bronze_templates.json").read_text())
+    require("config/lakehouse/bronze_silver_readers.json" in templates["stage_files"], "the silver readers file is not staged with the bronze job")
+
+
+def case_a_retry_with_another_record_error_fails_its_check(case: Case) -> None:
+    """Only a missing grant is tolerated: an unavailable mirror whose attempt record fails with another error still fails the retry's check phase."""
+    require(case.chain() == [0, 0, 0], case.err)
+    DEFECTS.add("iam_not_applied")
+    case.shas = None
+    case.err = ""
+    with refusing_attempts(case, code="InternalError"):
+        codes = case.chain(label="retry")
+    require(codes == [0, 0, 1], f"the retry's check passed without its record: {codes} {case.err}")
+    require("InternalError" in case.err and bronze_mirror.attempt_key(RUN, 2) in case.err, f"{case.err}")
 
 
 def case_a_retry_without_its_record_fails_its_check(case: Case) -> None:
@@ -1096,7 +1139,9 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a retry that repairs a failed mirror shows the repair and keeps the receipt": case_a_retry_repairing_the_mirror_keeps_the_receipt,
     "a repeated check of the same report makes no second attempt record": case_a_repeated_check_of_the_same_report_makes_no_second_attempt_record,
     "a first run before the IAM apply fails no phase and is unavailable to the acceptance": case_a_first_run_before_the_iam_apply_is_unavailable,
-    "before the IAM apply the hook fails, every phase exits 0 and the run commits": case_before_the_iam_apply_the_hook_fails_and_the_run_commits,
+    "before the IAM apply every attempt, first run or retry, is unavailable and exits 0": case_before_the_iam_apply_every_attempt_is_unavailable_and_exits_0,
+    "the silver readers file the hook reads equals the dbt sources and is staged": case_the_silver_readers_file_the_hook_reads_equals_the_dbt_sources,
+    "a retry whose record fails for another reason than a missing grant fails its check": case_a_retry_with_another_record_error_fails_its_check,
     "a retry whose record cannot be written fails its check after a recorded success": case_a_retry_without_its_record_fails_its_check,
     "a first load never recorded is not accepted on a later retry's record": case_a_first_load_never_recorded_is_not_accepted,
     "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,

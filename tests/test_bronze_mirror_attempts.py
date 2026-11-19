@@ -315,3 +315,21 @@ def test_a_number_that_exists_but_cannot_be_read_is_named_and_not_retried_foreve
     text = str(caught.value)
     check(bronze_mirror.attempt_key(RUN, 1) in text and "cannot be read" in text and digest[:12] in text, text)
     check(len(client.puts) == 1, f"the create was retried {len(client.puts)} times")
+
+
+def test_an_unavailable_outcome_names_its_cause_and_never_passes_the_acceptance() -> None:
+    unavailable = {
+        "status": "unavailable",
+        "reason": "alpha_data failed: AccessDeniedException from Glue",
+        "tables": {"alpha_data": "failed: AccessDeniedException from Glue"},
+    }
+    check(
+        bronze_mirror.outcome_shaped(unavailable) and not bronze_mirror.outcome_shaped({**unavailable, "reason": None}), "the shape of an unavailable outcome"
+    )
+    check(not bronze_mirror.outcome_shaped({"status": "unavailable", "tables": {}}), "an unavailable outcome without a cause was accepted")
+    client = Client()
+    document, digest = report(unavailable)
+    receipt(client, document, digest)
+    record(client, unavailable)
+    verdict = bronze_mirror.acceptance(client, BUCKET, RUN)
+    check(verdict["state"] == "unavailable" and "AccessDeniedException" in verdict["reason"], f"{verdict}")

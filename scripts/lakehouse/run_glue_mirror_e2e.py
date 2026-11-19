@@ -1457,15 +1457,15 @@ def case_bronze_register_keeps_a_table_required_when_its_source_has_only_version
 
 def case_the_glue_source_cases_fail_when_the_evidence_is_discarded() -> Check:
     """Review round 4, L1 for the Glue route: real discovery runs and its answer is thrown away. The source-presence cases must notice."""
-    from scripts.lakehouse import bronze_unsourced
+    from scripts.lakehouse import bronze_source_history
 
-    real = bronze_unsourced.source_evidence
+    real = bronze_source_history.source_evidence
 
     def discarding(*arguments: Any, **keywords: Any) -> frozenset[str]:
         real(*arguments, **keywords)
         return frozenset()
 
-    with mock.patch.object(bronze_unsourced, "source_evidence", discarding):
+    with mock.patch.object(bronze_source_history, "source_evidence", discarding):
         held = {
             "the_source_collection_case": case_bronze_register_never_trusts_a_complete_record_over_the_source_collection(),
             "the_role_correction_case": case_bronze_register_keeps_a_table_required_when_a_correction_superseded_its_source_manifest(),

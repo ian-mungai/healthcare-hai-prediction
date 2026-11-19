@@ -602,10 +602,20 @@ def show_mirror(report: dict[str, Any]) -> None:
         sys.stderr.write(
             f"bronze_run: glue mirror FAILED, the run stays committed{detail}. Rerun the load phase to register the tables, or run glue_mirror register.\n"
         )
+    elif outcome["status"] == "unavailable":
+        sys.stderr.write(
+            f"bronze_run: glue mirror UNAVAILABLE (the IAM grant is not applied yet), the run stays committed and nothing is recorded as ok{detail}. "
+            "Rerun the load phase after the IAM apply, or run glue_mirror register.\n"
+        )
 
 
 class AttemptWriteError(StepError):
-    """The mirror attempt record of a loader report could not be written. The message names the exact key, the report and the metadata generation."""
+    """The mirror attempt record of a loader report could not be written. The message names the exact key, the report and the metadata generation.
+    ``denied`` is true when the cause is a missing grant (AccessDenied), the one cause that an unavailable mirror tolerates."""
+
+    def __init__(self, message: str, denied: bool = False) -> None:
+        super().__init__(message)
+        self.denied = denied
 
 
 def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, Any], report_sha256: str) -> tuple[str, str]:
@@ -640,7 +650,8 @@ def store_mirror_attempt(client: Any, bucket: str, run: str, report: dict[str, A
         except ClientError as error:
             generation = report.get("metadata_index", {}).get("generation", "unknown") if isinstance(report.get("metadata_index"), dict) else "unknown"
             raise AttemptWriteError(
-                f"the mirror attempt record {key} was not written (report {report_sha256[:12]}, generation {generation}): {error}"
+                f"the mirror attempt record {key} was not written (report {report_sha256[:12]}, generation {generation}): {error}",
+                denied=str(error.response.get("Error", {}).get("Code")) in ("AccessDenied", "403"),
             ) from None
         except bronze_mirror.AttemptError as error:
             raise StepError(str(error)) from None
@@ -654,13 +665,17 @@ def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes,
     on, the missing record is named with its exact key, and the acceptance of the mirror (``python -m scripts.lakehouse.bronze_mirror show``) says
     ``unavailable``. A retry (the receipt of the run already exists) whose record cannot be written fails its check phase: the durable history would
     otherwise end on an older attempt, and an acceptance would read a pass that this attempt did not earn. The load and its receipt stay as they are.
+
+    The one exception is a mirror that is ``unavailable`` (Glue refused every call: the IAM grant is not applied yet) whose record is refused with AccessDenied
+    too: the grant is missing on every attempt, first run or retry, so no attempt fails its check phase for it and nothing is recorded. Any other write error
+    still fails a retry.
     """
     if "mirror" not in report:
         return
     try:
         outcome, key = store_mirror_attempt(storage().client, job.bucket, job.run, report, hashlib.sha256(report_bytes).hexdigest())
     except AttemptWriteError as error:
-        if retry:
+        if retry and not (error.denied and report["mirror"]["status"] == "unavailable"):
             raise StepError(f"{error}; the run already has a recorded load, so the history of its mirror cannot end on an older attempt") from None
         sys.stderr.write(f"bronze_run: {error}\n")
         return
