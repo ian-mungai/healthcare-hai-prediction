@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from scripts import phase_failure
 from scripts.lakehouse import bronze, bronze_writer, checksums, dictionary, smoke, task_capacity
 
 WORKERS = {
@@ -46,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         return execute(plan)
     except (bronze_writer.BindingError, task_capacity.CapacityError, OSError, json.JSONDecodeError) as error:
         sys.stderr.write(f"AWS bronze command refused: {error}\n")
+        phase_failure.emit_error("run", error)
         return 1
 
 

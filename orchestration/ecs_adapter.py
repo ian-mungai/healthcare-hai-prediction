@@ -17,6 +17,7 @@ import contextvars
 import hashlib
 import json
 import re
+from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 TRANSIENT_CODES = frozenset({"ThrottlingException", "ServerException", "ServiceUnavailableException", "RequestLimitExceeded", "InternalFailure"})
+GIB = 1024**3
 STOPPED_PAGES = 10
 DESCRIBE_BATCH = 100
 PENDING_STATUSES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING"})
@@ -37,16 +39,153 @@ GUARD = "guard"  # the container of a layer task that ends the task when a phase
 REASON_LIMIT = 200
 ARN = re.compile(r"arn:[^\s,;]+")
 ACCOUNT = re.compile(r"\b[0-9]{12}\b")
-# The failure line of a job phase (the writer is scripts/phase_failure.py, which the job images hold and this module cannot import: the Airflow image mounts a
-# fixed module list). A test keeps the two sides equal. The reader cleans the text again, because a task log is not a trusted source.
+# The closed failure record that a job phase writes as one log line (the writer is scripts/phase_failure.py, which the job images hold and this module cannot
+# import: the Airflow image mounts a fixed module list). The lists below are the writer's, and tests/test_phase_failure.py keeps them equal. Only a line that
+# fits the record exactly is read: a checked phase name, codes of the fixed list and numeric facts, so no text of a job can reach the launch record.
 FAILURE_MARKER = "phase_failure: "
-FAILURE_LIMIT = 300
-ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b")
-CREDENTIAL = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|credential)s?\b\s*[=:]\s*\S+")
-URL_USER = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@")
-LONG_TOKEN = re.compile(r"\b[A-Za-z0-9+/_=-]{32,}\b")
-PHASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,39}")
-WHITESPACE = re.compile(r"\s+")
+FAILURE_VERSION = 1
+FAILURE_MAX_CODES = 8
+FAILURE_MAX_FACT = 1 << 62
+FAILURE_MAX_LINE = 2000
+FAILURE_PHASES = (
+    "init",
+    "fetch",
+    "pin",
+    "build",
+    "validate",
+    "verify",
+    "export",
+    "publish",
+    "upload",
+    "maintain",
+    "feast",
+    "load",
+    "check",
+    "inventory",
+    "stage",
+    "prepare",
+    "extract",
+    "train",
+    "promote",
+    "research",
+    "canary",
+    "notify",
+    "baseline",
+    "current",
+    "serve",
+    "ingest",
+    "run",
+    "guard",
+    "unknown",
+)
+FAILURE_STARTUP_CODES = (
+    "credentials",
+    "dbt_extension_directory_missing",
+    "dbt_extension_missing",
+    "dbt_profile_unreadable",
+    "dbt_target_downloads_extensions",
+    "dbt_target_not_executed",
+    "dbt_target_refused",
+    "dbt_target_unknown",
+    "ecr_address_unusable",
+    "ecr_unreachable",
+    "input_file_missing",
+    "input_file_unreadable",
+    "mlflow_address_unusable",
+    "mlflow_unreachable",
+    "mode_files_unenumerated",
+    "openmetadata_address_unusable",
+    "openmetadata_unreachable",
+    "plan_inputs_empty",
+    "plan_inputs_missing",
+    "polaris_address_unusable",
+    "polaris_unreachable",
+    "redis_address_unusable",
+    "redis_unreachable",
+    "region_invalid",
+    "region_unset",
+    "s3_address_unusable",
+    "s3_unreachable",
+    "startup_check_internal_error",
+    "task_environment_unrecognised",
+)
+FAILURE_CAPACITY_CODES = (
+    "capacity_cpu_unreadable",
+    "capacity_engine_floor",
+    "capacity_file_garbled",
+    "capacity_memory_unreadable",
+    "capacity_override_invalid",
+    "capacity_profile_unknown",
+    "capacity_spill_floor",
+)
+FAILURE_ERROR_CODES = (
+    "archive_error",
+    "binding_error",
+    "bronze_error",
+    "check_error",
+    "config_error",
+    "deploy_refused",
+    "dispatch_error",
+    "guard_timeout",
+    "key_error",
+    "os_error",
+    "phase_failed",
+    "phase_stopped",
+    "pipeline_error",
+    "provenance_error",
+    "publish_error",
+    "run_refused",
+    "step_error",
+    "step_failed",
+    "type_error",
+    "unexpected_error",
+    "value_error",
+)
+FAILURE_CONTAINER_CODES = (
+    "container_create_error",
+    "container_initialization_error",
+    "container_inspect_error",
+    "container_out_of_memory",
+    "container_pull_error",
+    "container_reason_other",
+    "container_runtime_error",
+    "container_start_error",
+    "container_timeout",
+)
+FAILURE_CODES = (*FAILURE_STARTUP_CODES, *FAILURE_CAPACITY_CODES, *FAILURE_ERROR_CODES, *FAILURE_CONTAINER_CODES)
+FAILURE_FACTS = ("available", "engine_floor", "exit_code", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
+FAILURE_BYTE_FACTS = ("available", "engine_floor", "headroom", "memory", "sibling_reserve", "spill_floor", "spill_free")
+# Where a stored record came from: the phase's own line (``job``), the state of the task alone (``task``) or the guard that reported its own time limit
+# (``guard``).
+FAILURE_SOURCES = ("job", "task", "guard")
+FAILURE_TEMPLATES = {
+    **{code: code.replace("_", " ") for code in FAILURE_CODES},
+    "capacity_engine_floor": (
+        "only {available_gib} GiB is left for the engines, below the floor of {engine_floor_gib} GiB (memory {memory_gib} GiB, headroom {headroom_gib} GiB, "
+        "{siblings} other containers)"
+    ),
+    "capacity_spill_floor": "only {spill_free_gib} GiB is free for the spill, below the floor of {spill_floor_gib} GiB",
+    "capacity_memory_unreadable": "the memory of the container cannot be read",
+    "capacity_cpu_unreadable": "the CPU count of the container cannot be read",
+    "capacity_file_garbled": "a capacity file of the container cannot be read as a number",
+    "capacity_override_invalid": "an explicit capacity override is not understood",
+    "capacity_profile_unknown": "the capacity profile is unknown",
+    "guard_timeout": "the guard stopped the task at its time limit",
+    "phase_failed": "the phase failed (exit code {exit_code})",
+    "phase_stopped": "the container was stopped by ECS (exit code {exit_code})",
+    "dbt_target_not_executed": "the dbt target check was not executed because the task capacity could not be derived",
+}
+CONTAINER_REASONS = {
+    "CannotStartContainerError": "container_start_error",
+    "CannotPullContainerError": "container_pull_error",
+    "CannotCreateContainerError": "container_create_error",
+    "CannotInspectContainerError": "container_inspect_error",
+    "DockerTimeoutError": "container_timeout",
+    "ContainerRuntimeTimeoutError": "container_timeout",
+    "ContainerRuntimeError": "container_runtime_error",
+    "ResourceInitializationError": "container_initialization_error",
+    "OutOfMemoryError": "container_out_of_memory",
+}
 
 
 class TaskRefused(Exception):
@@ -125,12 +264,14 @@ class TaskFound:
 
 @dataclass(frozen=True)
 class TaskReport:
-    """One task's state. ``exit_code`` is set once the task ended. ``containers`` pairs each container with its exit code, or None when it never ran."""
+    """One task's state. ``exit_code`` is set once the task ended. ``containers`` pairs each container with its exit code, or None when it never ran.
+    ``reasons`` pairs a container with the code (``container_reason_code``) of the reason ECS gives for it, for the containers that have one."""
 
     state: str
     exit_code: int | None
     reason: str
     containers: tuple[tuple[str, int | None], ...] = ()
+    reasons: tuple[tuple[str, str], ...] = ()
 
 
 def client_config() -> Config:
@@ -157,39 +298,80 @@ def scrub(text: str) -> str:
     return ACCOUNT.sub("[account]", ARN.sub("[arn]", text))[:REASON_LIMIT]
 
 
-def clean_failure(text: object) -> str:
-    """One line of at most ``FAILURE_LIMIT`` characters. An ARN, account number, access key, credential assignment, URL credential or long token is replaced."""
-    found = ARN.sub("[arn]", str(text))
-    found = ACCOUNT.sub("[account]", found)
-    found = ACCESS_KEY.sub("[key]", found)
-    found = CREDENTIAL.sub(lambda match: f"{match.group(1)}=[redacted]", found)
-    found = URL_USER.sub(lambda match: f"{match.group(1)}[redacted]@", found)
-    found = LONG_TOKEN.sub("[token]", found)
-    return WHITESPACE.sub(" ", found).strip()[:FAILURE_LIMIT]
+def fact_ok(value: object) -> bool:
+    return type(value) is int and abs(value) <= FAILURE_MAX_FACT
 
 
-def failure_marker(line: str) -> str | None:
-    """The summary of one failure line of a phase, or None when the line is not a well formed one."""
-    if not line.startswith(FAILURE_MARKER):
+def closed_failure(record: object, *, stored: bool) -> dict[str, Any] | None:
+    """The record when it fits the closed form exactly, else None. A line of a job has the keys v, phase, codes and facts. A stored record adds the container
+    (a name of the phase list) and its source. Every value is a number or a name of a fixed list, so no text can pass."""
+    keys = {"v", "phase", "codes", "facts", "container", "source"} if stored else {"v", "phase", "codes", "facts"}
+    if not isinstance(record, dict) or set(record) != keys or type(record["v"]) is not int or record["v"] != FAILURE_VERSION:
+        return None
+    codes, facts = record["codes"], record["facts"]
+    valid = (
+        record["phase"] in FAILURE_PHASES
+        and isinstance(codes, list)
+        and 1 <= len(codes) <= FAILURE_MAX_CODES
+        and len(set(map(str, codes))) == len(codes)
+        and all(isinstance(code, str) and code in FAILURE_CODES for code in codes)
+        and isinstance(facts, dict)
+        and all(isinstance(name, str) and name in FAILURE_FACTS and fact_ok(value) for name, value in facts.items())
+        and (not stored or (record["container"] in FAILURE_PHASES and record["source"] in FAILURE_SOURCES))
+    )
+    if not valid or not isinstance(record["phase"], str):
+        return None
+    return {key: (list(record[key]) if key == "codes" else dict(record[key]) if key == "facts" else record[key]) for key in sorted(keys)}
+
+
+def reject_constant(_name: str) -> None:
+    raise ValueError("a constant that is not JSON")
+
+
+def parse_failure_line(line: str) -> dict[str, Any] | None:
+    """The closed record that one log line holds, or None for any other line (free text, a record with another key, an unlisted name, a text value)."""
+    if not line.startswith(FAILURE_MARKER) or len(line) > FAILURE_MAX_LINE:
         return None
     try:
-        record = json.loads(line[len(FAILURE_MARKER) :])
+        found = json.loads(line[len(FAILURE_MARKER) :], parse_constant=reject_constant)
     except ValueError:
         return None
-    if not isinstance(record, dict) or not isinstance(record.get("phase"), str) or not isinstance(record.get("reason"), str):
-        return None
-    name = record["phase"] if PHASE_NAME.fullmatch(record["phase"]) else "unknown"
-    return f"phase {name}: {clean_failure(record['reason'])}"
+    return closed_failure(found, stored=False)
 
 
-def failure_summary(tail: str) -> str:
-    """The phase failure that a log tail holds, cleaned and bounded: the last failure line, else the last non-empty line, else an empty string."""
-    lines = [item.strip() for item in tail.splitlines() if item.strip()]
-    for item in reversed(lines):
-        found = failure_marker(item)
+def failure_from_tail(tail: str) -> dict[str, Any] | None:
+    """The last closed record in a log tail. A line that is not one is skipped and never repaired, and no other line is read."""
+    for item in reversed(tail.splitlines()):
+        found = parse_failure_line(item)
         if found is not None:
             return found
-    return f"last log line: {clean_failure(lines[-1])}" if lines else ""
+    return None
+
+
+def stored_failure(record: object) -> dict[str, Any]:
+    """The record of an end record, checked against the closed form again. Anything else raises ``ValueError``."""
+    found = closed_failure(record, stored=True)
+    if found is None:
+        raise ValueError("the failure record is not in the closed form")
+    return found
+
+
+def container_reason_code(text: object) -> str:
+    """The code for the reason ECS gives for a container, from its leading error name alone. An empty reason has no code, and a name that is not listed is
+    ``container_reason_other``. The rest of the text is never read."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    match = re.match(r"[A-Za-z]+", text.strip())
+    return CONTAINER_REASONS.get(match.group(0), "container_reason_other") if match else "container_reason_other"
+
+
+def render_failure(record: Mapping[str, Any]) -> str:
+    """The message of a stored record, from the fixed templates and its own numbers."""
+    facts = record["facts"]
+    values: dict[str, str] = {name: str(value) for name, value in facts.items()}
+    values.update({f"{name}_gib": f"{facts[name] / GIB:.2f}" for name in FAILURE_BYTE_FACTS if name in facts})
+    shown = "; ".join(FAILURE_TEMPLATES[code].format_map(defaultdict(lambda: "?", values)) for code in record["codes"])
+    return f"phase {record['phase']} failed in container {record['container']}: {shown}"
 
 
 def classify(error: Exception) -> Exception:
@@ -441,13 +623,14 @@ class EcsAdapter:
         if status != STOPPED:
             return TaskReport("pending" if status in PENDING_STATUSES else "running", None, "")
         containers = tuple((str(item["name"]), item.get("exitCode")) for item in task.get("containers", []))
+        reasons = tuple((str(item["name"]), code) for item in task.get("containers", []) if (code := container_reason_code(item.get("reason"))))
         reason = scrub(str(task.get("stoppedReason", "")))
         codes = [code for name, code in containers if name != GUARD]
         if codes and all(code == 0 for code in codes):
-            return TaskReport("succeeded", 0, reason, containers)
+            return TaskReport("succeeded", 0, reason, containers, reasons)
         failing = next((code for code in codes if code not in (0, None)), None)
         fallback = USER_STOP_CODE if task.get("stopCode") == "UserInitiated" else NO_EXIT_CODE
-        return TaskReport("failed", failing if failing is not None else fallback, reason, containers)
+        return TaskReport("failed", failing if failing is not None else fallback, reason, containers, reasons)
 
     def stop(self, task_arn: str, reason: str) -> None:
         """Ask ECS to stop the task. A task that already ended is not an error."""

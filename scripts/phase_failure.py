@@ -1,94 +1,243 @@
-"""The one line that a host job writes when its phase fails.
+"""The closed failure record that a host job writes when its phase fails.
 
-A host job writes ``phase_failure: {"phase": ..., "reason": ...}`` as the last line of a failed phase (``emit``; ``resource_peaks.recorded`` writes it for a job
-that wrote none, from the job's last stderr line). The launcher reads the tail of the failing container's log and keeps its summary in the end record of the
-launch (``orchestration.ecs_adapter.failure_summary``, the reader, which the Airflow image holds and this module is not part of), so the evidence and gate tasks
-see why the phase failed without the task log. Both sides clean the text: no ARN, account number, access key, credential assignment, URL credential or long
-token, one line and at most ``LIMIT`` characters, and ``tests/test_phase_failure.py`` keeps the two sides equal."""
+A failed phase writes one line, ``phase_failure: {json}``, as its last line. The record has exactly four keys: ``v`` (1), ``phase`` (a name from ``PHASES``),
+``codes`` (one to eight names from ``CODES``) and ``facts`` (numbers under the names of ``FACTS``: the capacity figures of a refusal and an exit code). It holds
+no stderr, no exception text and no log line, so no job value, credential, bucket name or location can reach it. A failure of a class that has no code of its
+own is the one safe code ``unexpected_error``.
+
+The launcher reads the line from the log of the failing container (``orchestration.ecs_adapter.parse_failure_line``, the reader, which the Airflow image holds
+and this module is not part of), validates it against the same lists, adds the container identity and keeps it in the end record of the launch. A message for a
+person is rendered from fixed templates. ``tests/test_phase_failure.py`` keeps the lists of the two modules equal. ``resource_peaks.recorded``, which every ECS
+job entry point runs through, writes a generic record for a failed job that wrote none."""
 
 from __future__ import annotations
 
 import json
-import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
 MARKER = "phase_failure: "
-LIMIT = 300
-ARN = re.compile(r"arn:[^\s,;]+")
-ACCOUNT = re.compile(r"\b[0-9]{12}\b")
-ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b")
-CREDENTIAL = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|credential)s?\b\s*[=:]\s*\S+")
-URL_USER = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@")
-LONG_TOKEN = re.compile(r"\b[A-Za-z0-9+/_=-]{32,}\b")
-PHASE_NAME = re.compile(r"[a-z][a-z0-9_]{0,39}")
-CONTROL = re.compile(r"\s+")
+VERSION = 1
+MAX_CODES = 8
+MAX_FACT = 1 << 62
+PHASES = (
+    "init",
+    "fetch",
+    "pin",
+    "build",
+    "validate",
+    "verify",
+    "export",
+    "publish",
+    "upload",
+    "maintain",
+    "feast",
+    "load",
+    "check",
+    "inventory",
+    "stage",
+    "prepare",
+    "extract",
+    "train",
+    "promote",
+    "research",
+    "canary",
+    "notify",
+    "baseline",
+    "current",
+    "serve",
+    "ingest",
+    "run",
+    "guard",
+    "unknown",
+)
+# The findings of the host job startup check that can fail (scripts.infrastructure.startup_check).
+STARTUP_CODES = (
+    "credentials",
+    "dbt_extension_directory_missing",
+    "dbt_extension_missing",
+    "dbt_profile_unreadable",
+    "dbt_target_downloads_extensions",
+    "dbt_target_not_executed",
+    "dbt_target_refused",
+    "dbt_target_unknown",
+    "ecr_address_unusable",
+    "ecr_unreachable",
+    "input_file_missing",
+    "input_file_unreadable",
+    "mlflow_address_unusable",
+    "mlflow_unreachable",
+    "mode_files_unenumerated",
+    "openmetadata_address_unusable",
+    "openmetadata_unreachable",
+    "plan_inputs_empty",
+    "plan_inputs_missing",
+    "polaris_address_unusable",
+    "polaris_unreachable",
+    "redis_address_unusable",
+    "redis_unreachable",
+    "region_invalid",
+    "region_unset",
+    "s3_address_unusable",
+    "s3_unreachable",
+    "startup_check_internal_error",
+    "task_environment_unrecognised",
+)
+# The refusals of the task capacity (scripts.lakehouse.task_capacity).
+CAPACITY_CODES = (
+    "capacity_cpu_unreadable",
+    "capacity_engine_floor",
+    "capacity_file_garbled",
+    "capacity_memory_unreadable",
+    "capacity_override_invalid",
+    "capacity_profile_unknown",
+    "capacity_spill_floor",
+)
+# One safe category for each kind of error that a job entry point names, and the two states of a task: a phase that failed with no code of its own, and a
+# container that ECS stopped with SIGTERM when another one failed.
+ERROR_CODES = (
+    "archive_error",
+    "binding_error",
+    "bronze_error",
+    "check_error",
+    "config_error",
+    "deploy_refused",
+    "dispatch_error",
+    "guard_timeout",
+    "key_error",
+    "os_error",
+    "phase_failed",
+    "phase_stopped",
+    "pipeline_error",
+    "provenance_error",
+    "publish_error",
+    "run_refused",
+    "step_error",
+    "step_failed",
+    "type_error",
+    "unexpected_error",
+    "value_error",
+)
+# What ECS says of a container that never ran or never exited (the launcher derives these from the container status, never from the text of its reason).
+CONTAINER_CODES = (
+    "container_create_error",
+    "container_initialization_error",
+    "container_inspect_error",
+    "container_out_of_memory",
+    "container_pull_error",
+    "container_reason_other",
+    "container_runtime_error",
+    "container_start_error",
+    "container_timeout",
+)
+CODES = (*STARTUP_CODES, *CAPACITY_CODES, *ERROR_CODES, *CONTAINER_CODES)
+FACTS = ("available", "engine_floor", "exit_code", "headroom", "memory", "sibling_reserve", "siblings", "spill_floor", "spill_free")
+# The class of an error, by the name of any class in its bases, to its category. The text of an error is never read.
+ERROR_CLASSES = {
+    "BindingError": "binding_error",
+    "BronzeError": "bronze_error",
+    "CheckError": "check_error",
+    "ConfigError": "config_error",
+    "DeployRefused": "deploy_refused",
+    "DispatchError": "dispatch_error",
+    "KeyError": "key_error",
+    "OSError": "os_error",
+    "PipelineError": "pipeline_error",
+    "ProvenanceError": "provenance_error",
+    "PublishError": "publish_error",
+    "RunRefused": "run_refused",
+    "StepError": "step_error",
+    "StepFailed": "step_failed",
+    "TarError": "archive_error",
+    "TypeError": "type_error",
+    "ValueError": "value_error",
+}
 
 
-def clean(text: object) -> str:
-    """One line of at most ``LIMIT`` characters, with every ARN, account number, access key, credential assignment, URL credential and long token replaced."""
-    found = str(text)
-    found = ARN.sub("[arn]", found)
-    found = ACCOUNT.sub("[account]", found)
-    found = ACCESS_KEY.sub("[key]", found)
-    found = CREDENTIAL.sub(lambda match: f"{match.group(1)}=[redacted]", found)
-    found = URL_USER.sub(lambda match: f"{match.group(1)}[redacted]@", found)
-    found = LONG_TOKEN.sub("[token]", found)
-    return CONTROL.sub(" ", found).strip()[:LIMIT]
+def number(value: object) -> bool:
+    return type(value) is int and abs(value) <= MAX_FACT
 
 
-def line(phase: str, reason: object) -> str:
-    """The failure line of a phase, without its line end."""
-    name = phase if PHASE_NAME.fullmatch(phase) else "unknown"
-    return MARKER + json.dumps({"phase": name, "reason": clean(reason)}, sort_keys=True, separators=(",", ":"))
+def record(phase: str, codes: Sequence[str], facts: Mapping[str, object] | None = None) -> dict[str, Any]:
+    """The closed record of a failure. A phase or code that is not on its list becomes ``unknown`` or ``unexpected_error``, and an unlisted fact is dropped."""
+    chosen = list(dict.fromkeys(code for code in codes if isinstance(code, str) and code in CODES))[:MAX_CODES]
+    kept = {name: value for name, value in (facts or {}).items() if name in FACTS and number(value)}
+    return {"v": VERSION, "phase": phase if phase in PHASES else "unknown", "codes": chosen or ["unexpected_error"], "facts": kept}
 
 
-def emit(phase: str, reason: object, stream: TextIO | None = None) -> None:
-    """Write the failure line of a phase on standard error, as the last line of the phase."""
+def record_for(phase: str, error: BaseException | None, exit_code: int | None = None) -> dict[str, Any]:
+    """The record of an error: the codes and facts that the error carries (``failure_codes`` and ``failure_facts``), else the category of its class, else
+    ``unexpected_error``; no error is a phase that failed with no code of its own. The message of the error is never read."""
+    facts: dict[str, object] = {}
+    if error is None:
+        codes: Sequence[str] = ("phase_failed",)
+    else:
+        tagged = getattr(error, "failure_codes", None)
+        found = getattr(error, "failure_facts", None)
+        facts = dict(found) if isinstance(found, Mapping) else {}
+        codes = (
+            tuple(tagged)
+            if isinstance(tagged, tuple | list)
+            else (next((ERROR_CLASSES[kind.__name__] for kind in type(error).__mro__ if kind.__name__ in ERROR_CLASSES), "unexpected_error"),)
+        )
+    if exit_code is not None:
+        facts["exit_code"] = exit_code
+    return record(phase, codes, facts)
+
+
+def line(found: Mapping[str, Any]) -> str:
+    """The failure line of a record, without its line end."""
+    return MARKER + json.dumps(found, sort_keys=True, separators=(",", ":"))
+
+
+def emit(found: Mapping[str, Any], stream: TextIO | None = None) -> None:
+    """Write a record on standard error, as the last line of the phase."""
     target = sys.stderr if stream is None else stream
-    target.write(line(phase, reason) + "\n")
+    target.write(line(found) + "\n")
     target.flush()
 
 
+def emit_error(phase: str, error: BaseException | None, exit_code: int | None = None, stream: TextIO | None = None) -> None:
+    emit(record_for(phase, error, exit_code), stream)
+
+
 def phase_of(argv: Sequence[str]) -> str:
-    """The phase an entry point runs: its first argument when that is a phase name (``build``), else the name of its script."""
-    if len(argv) > 1 and PHASE_NAME.fullmatch(argv[1]):
+    """The phase an entry point runs: its first argument when that is a phase name, else the name of its script when that is one, else ``unknown``."""
+    if len(argv) > 1 and argv[1] in PHASES:
         return argv[1]
     stem = Path(argv[0]).stem if argv and argv[0] else ""
-    return stem if PHASE_NAME.fullmatch(stem) else "unknown"
+    return stem if stem in PHASES else "unknown"
 
 
 class StderrTail:
-    """Stands in for standard error while a job runs: every write goes through, and the last non-empty line and whether the job wrote its own failure line
-    are kept. The job entry points print their failure as their last line, so the recorder can write the failure line for the ones that print none."""
+    """Stands in for standard error while a job runs. Every write goes through, and one fact is kept: whether the job wrote a failure line itself. It keeps no
+    text of the job, so the recorder cannot copy any of it."""
 
     def __init__(self, stream: TextIO) -> None:
         self.stream = stream
-        self.last = ""
         self.marked = False
-        self.pending = ""
+        self.head = ""
 
     def write(self, text: str) -> int:
         written = self.stream.write(text)
-        *lines, self.pending = (self.pending + text).split("\n")
-        self.pending = self.pending[-2000:]
-        for item in lines:
-            self.note(item)
+        for index, part in enumerate(text.split("\n")):
+            if index:
+                self.settle()
+                self.head = ""
+            if len(self.head) < len(MARKER):
+                self.head = (self.head + part)[: len(MARKER)]
         return written
 
-    def note(self, item: str) -> None:
-        found = item.strip()
-        if found.startswith(MARKER):
+    def settle(self) -> None:
+        if self.head == MARKER:
             self.marked = True
-        elif found:
-            self.last = found
 
     def finish(self) -> None:
         """Count the text after the last line end as a line."""
-        self.note(self.pending)
-        self.pending = ""
+        self.settle()
+        self.head = ""
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.stream, name)

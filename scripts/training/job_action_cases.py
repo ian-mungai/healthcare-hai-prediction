@@ -2410,6 +2410,74 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
             raise AssertionError("the job's own interrupt was swallowed")
         require(_peak_line(stream.getvalue())["exit_code"] == 1, "an interrupted job logs exit code 1")
 
+    def failure_line_interrupt_kept() -> None:
+        """The failure line is part of the recorder: a fault while it is written, an interrupt included, never replaces the job's result."""
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import phase_failure, resource_peaks
+
+        class Odd(BaseException):
+            pass
+
+        def faulty(fault: type[BaseException]) -> type[io.StringIO]:
+            class Faulty(io.StringIO):
+                def write(self, text: str) -> int:
+                    if text.startswith(phase_failure.MARKER):
+                        raise fault
+                    return super().write(text)
+
+            return Faulty
+
+        for fault in (KeyboardInterrupt, Odd, OSError, ValueError):
+            Faulty = faulty(fault)
+
+            try:
+                with contextlib.redirect_stderr(Faulty()):
+                    resource_peaks.recorded(lambda: 7, scratch=(scratch,), interval=0.02)
+            except SystemExit as stop:
+                require(stop.code == 7, f"{fault.__name__}: a fault in the failure line changed the exit code to {stop.code}")
+            except BaseException as error:
+                raise AssertionError(f"{fault.__name__}: a fault in the failure line replaced the job's exit with {type(error).__name__}") from error
+            else:
+                raise AssertionError(f"{fault.__name__}: recorded returned without the job's exit")
+
+            def raises() -> int:
+                raise RuntimeError("job failed")
+
+            try:
+                with contextlib.redirect_stderr(Faulty()):
+                    resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
+            except RuntimeError as error:
+                require(str(error) == "job failed", f"{fault.__name__}: the job's exception changed: {error}")
+            except BaseException as error:
+                raise AssertionError(f"{fault.__name__}: a fault in the failure line replaced the job's exception with {type(error).__name__}") from error
+            else:
+                raise AssertionError(f"{fault.__name__}: the job's exception was swallowed")
+
+    def failure_line_silent_after_abandon() -> None:
+        """After the recorder abandoned its record (an interrupt at the sampler or the join), the failure line is not written either, for any job result."""
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import phase_failure, resource_peaks
+
+        def unbuildable(*_args: Any, **_kwargs: Any) -> Any:
+            raise KeyboardInterrupt
+
+        patches = (
+            ("join", mock.patch.object(resource_peaks._Sampler, "join", side_effect=KeyboardInterrupt)),
+            ("construction", mock.patch.object(resource_peaks, "_Sampler", side_effect=unbuildable)),
+            ("start", mock.patch.object(resource_peaks._Sampler, "start", side_effect=KeyboardInterrupt)),
+        )
+        for label, patch in patches:
+            written = io.StringIO()
+            try:
+                with patch, contextlib.redirect_stderr(written):
+                    resource_peaks.recorded(lambda: 3, scratch=(scratch,), interval=0.02)
+            except SystemExit as stop:
+                require(stop.code == 3, f"{label}: the exit code changed to {stop.code}")
+            require(
+                phase_failure.MARKER not in written.getvalue(),
+                f"{label}: a failure line was written after the recorder abandoned its record: {written.getvalue()!r}",
+            )
+
     def broken_stderr_kept() -> None:
         scratch.mkdir(parents=True, exist_ok=True)
         from scripts import resource_peaks
@@ -2475,6 +2543,8 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
     cases.check("resource_peaks_sampler_construction_failure_kept", sampler_construction_failure_kept)
     cases.check("resource_peaks_recorder_interrupt_kept", recorder_interrupt_kept)
     cases.check("resource_peaks_startup_interrupt_silent", startup_interrupt_silent)
+    cases.check("resource_peaks_failure_line_interrupt_kept", failure_line_interrupt_kept)
+    cases.check("resource_peaks_failure_line_silent_after_abandon", failure_line_silent_after_abandon)
     cases.check("resource_peaks_job_interrupt_propagates", job_interrupt_propagates)
     cases.check("resource_peaks_broken_stderr_kept", broken_stderr_kept)
     cases.check("resource_peaks_unreadable_subfolder_skipped", unreadable_subfolder)

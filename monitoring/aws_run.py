@@ -41,7 +41,7 @@ from typing import Any
 from monitoring import baseline, current_window, drift_check, drift_config, drift_gate, live_check
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
 from orchestration.training_contract import MODELS, RUN_ID
-from scripts import metrics_push, resource_peaks
+from scripts import metrics_push, phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
 from scripts.training import dvc_baseline, run_tracking
@@ -423,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
                     result = publish_phase(open_s3(), arguments.bucket, arguments.work, arguments.run)
     except (CheckError, drift_config.ConfigError, task_capacity.CapacityError, startup_check.StartupCheckError) as error:
         sys.stderr.write(f"drift task {arguments.phase} failed: {error}\n")
+        phase_failure.emit_error(arguments.phase, error)
         return error.code if isinstance(error, CheckError) else 2
     sys.stdout.write(json.dumps({"phase": arguments.phase, "run_id": arguments.run, "result": result}, sort_keys=True) + "\n")
     return 0

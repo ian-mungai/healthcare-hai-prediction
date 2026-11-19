@@ -160,3 +160,35 @@ def test_a_capacity_refusal_still_reports_a_refused_credential_source(
     check(drive(monkeypatch, tmp_path, memory_mib=1024) == 1, "the build stops")
     err = capsys.readouterr().err
     check("task_credential_source_refused" in err and "below the floor" in err, f"both causes show: {err}")
+
+
+def last_record(err: str) -> dict[str, object]:
+    from orchestration import ecs_adapter
+
+    found = ecs_adapter.parse_failure_line(err.splitlines()[-1])
+    check(found is not None, f"the log ends with a closed failure record: {err.splitlines()[-1]!r}")
+    return found or {}
+
+
+def test_a_refused_capacity_ends_the_log_with_its_closed_record_and_no_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    live_environment(monkeypatch, tmp_path)
+    drive(monkeypatch, tmp_path, memory_mib=1024)
+    found = last_record(capsys.readouterr().err)
+    facts = found["facts"]
+    check(found["phase"] == "build" and found["codes"] == ["dbt_target_not_executed", "capacity_engine_floor"], f"both causes as codes: {found}")
+    check(
+        isinstance(facts, dict) and facts["memory"] == 1 << 30 and facts["engine_floor"] == 2 << 30 and facts["available"] < 0,
+        f"with the typed capacity facts: {found}",
+    )
+
+
+def test_both_causes_of_a_refused_build_are_codes_in_one_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    live_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("HAI_DUCKDB_MAX_TEMP_BYTES", "1048576")
+    for path in (tmp_path / "extensions").rglob("aws.duckdb_extension"):
+        path.rename(path.with_suffix(".moved"))
+    drive(monkeypatch, tmp_path, memory_mib=1024)
+    found = last_record(capsys.readouterr().err)
+    check(found["codes"] == ["dbt_extension_missing", "capacity_engine_floor"], f"the independent finding and the capacity cause: {found}")

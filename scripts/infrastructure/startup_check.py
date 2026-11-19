@@ -322,7 +322,12 @@ CHILD_CODES = CODES - {"startup_check_internal_error"}
 
 
 class StartupCheckError(RuntimeError):
-    """One or more startup checks failed. The message names each cause with text from the fixed lists only."""
+    """One or more startup checks failed. The message names each cause with text from the fixed lists only. ``failure_codes`` are the codes of the failed
+    findings, which the failure record of a job keeps (``scripts.phase_failure``)."""
+
+    def __init__(self, message: str, codes: tuple[str, ...] = ("startup_check_internal_error",)) -> None:
+        super().__init__(message)
+        self.failure_codes = codes
 
 
 class InvalidRecords(ValueError):
@@ -632,6 +637,12 @@ def line_of(code: str, text: str) -> str:
     return f"{code} {text}".rstrip()
 
 
+class Failed(str):
+    """The message of a failed check, with the codes of the findings that failed."""
+
+    codes: tuple[str, ...] = ()
+
+
 def emit(request: Mapping[str, Any], reports: list[Report], elapsed: float) -> str | None:
     """Print the bound reports on stderr, failures first, then the summary from the parent's own counts. Return the failure message, or ``None``."""
     failed = [report for report in reports if not report[1]]
@@ -643,7 +654,11 @@ def emit(request: Mapping[str, Any], reports: list[Report], elapsed: float) -> s
     job = request["job"] if request["job"] in JOBS else "unlisted"
     sys.stderr.write(f"startup_check: {job} {CHECK_LABELS[request['kind']]}: {len(reports)} checks, {len(failed)} failed, {elapsed:.1f} s\n")
     sys.stderr.flush()
-    return "startup check failed: " + "; ".join(line_of(code, text) for code, _, text in failed) if failed else None
+    if not failed:
+        return None
+    message = Failed("startup check failed: " + "; ".join(line_of(code, text) for code, _, text in failed))
+    message.codes = tuple(dict.fromkeys(code for code, _, _ in failed if code in CHILD_CODES))
+    return message
 
 
 INTERNAL_ERROR = "startup check failed: startup_check_internal_error"
@@ -670,7 +685,7 @@ def guarded[**P](function: Callable[P, str | None]) -> Callable[P, None]:
         message = shielded(function, arguments, keywords)
         del arguments, keywords
         if message is not None:
-            raise StartupCheckError(message)
+            raise StartupCheckError(str(message), getattr(message, "codes", ()) or ("startup_check_internal_error",))
 
     return wrapper
 

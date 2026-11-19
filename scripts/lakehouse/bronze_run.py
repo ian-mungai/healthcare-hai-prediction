@@ -50,7 +50,7 @@ from typing import Any
 
 from orchestration import ingestion_schedule
 from orchestration.training_contract import run_id_pattern
-from scripts import metrics_push, resource_peaks
+from scripts import metrics_push, phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, SKIPPED_REASON, DispatchError, check_dispatch, check_skipped
@@ -687,6 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tarfile.TarError,
     ) as error:
         sys.stderr.write(f"bronze_run: step {args.phase} (run {args.run}) failed: {error}\n")
+        phase_failure.emit_error(args.phase, error)
         return 1
     return 0
 

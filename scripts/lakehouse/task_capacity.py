@@ -52,8 +52,27 @@ CGROUP = "sys/fs/cgroup"
 SPARK_HEAP = re.compile(r"[1-9][0-9]*g")
 
 
+# The refusals of this module by code. The code and the numeric facts of a refusal are what the failure record of a job keeps (``scripts.phase_failure``);
+# the text is for the log of the task and never travels.
+CAPACITY_CODES = (
+    "capacity_cpu_unreadable",
+    "capacity_engine_floor",
+    "capacity_file_garbled",
+    "capacity_memory_unreadable",
+    "capacity_override_invalid",
+    "capacity_profile_unknown",
+    "capacity_spill_floor",
+)
+
+
 class CapacityError(RuntimeError):
-    """The capacity cannot be read, is below the floor, or an explicit override is not understood."""
+    """The capacity cannot be read, is below the floor, or an explicit override is not understood. ``failure_codes`` and ``failure_facts`` are its closed
+    form."""
+
+    def __init__(self, message: str, code: str, facts: dict[str, int] | None = None) -> None:
+        super().__init__(message)
+        self.failure_codes = (code,)
+        self.failure_facts = dict(facts or {})
 
 
 @dataclass(frozen=True)
@@ -95,7 +114,7 @@ def read_text(path: Path) -> str | None:
 
 def whole(path: Path, text: str) -> int:
     if not re.fullmatch(r"-?[0-9]+", text):
-        raise CapacityError(f"{path} holds {text!r}, not a whole number")
+        raise CapacityError(f"{path} holds {text!r}, not a whole number", "capacity_file_garbled")
     return int(text)
 
 
@@ -127,7 +146,9 @@ def read_memory(root: Path, metadata: dict[str, Any] | None) -> tuple[int, str]:
     if match:
         found.append((int(match.group(1)) * 1024, "MemTotal"))
     if not found:
-        raise CapacityError("the memory of this container cannot be read: no finite cgroup limit, task metadata limit or MemTotal")
+        raise CapacityError(
+            "the memory of this container cannot be read: no finite cgroup limit, task metadata limit or MemTotal", "capacity_memory_unreadable"
+        )
     return min(found)
 
 
@@ -136,7 +157,7 @@ def cpu_list(path: Path, text: str) -> int:
     for part in text.split(","):
         low, _, high = part.strip().partition("-")
         if not low.isdecimal() or (high and not high.isdecimal()):
-            raise CapacityError(f"{path} holds {text!r}, not a list of CPUs")
+            raise CapacityError(f"{path} holds {text!r}, not a list of CPUs", "capacity_file_garbled")
         count += int(high or low) - int(low) + 1
     return count
 
@@ -163,7 +184,9 @@ def read_cpus(root: Path, affinity: int | None, metadata: dict[str, Any] | None)
     if task is not None:
         found.append((max(1, int(task)), "task metadata Limits.CPU"))
     if not found:
-        raise CapacityError("the CPU count of this container cannot be read: no cgroup quota or cpuset, affinity or task metadata limit")
+        raise CapacityError(
+            "the CPU count of this container cannot be read: no cgroup quota or cpuset, affinity or task metadata limit", "capacity_cpu_unreadable"
+        )
     return min(found)
 
 
@@ -199,21 +222,32 @@ def read_capacity(
 def derive(capacity: Capacity, profile: str = "default") -> Limits:
     """The DuckDB memory, Spark heap, threads and spill cap of a capacity. A capacity below the floor stops by name with every figure."""
     if profile not in THREAD_MEMORY:
-        raise CapacityError(f"unknown capacity profile {profile!r}")
+        raise CapacityError(f"unknown capacity profile {profile!r}", "capacity_profile_unknown")
     headroom = max(HEADROOM_FLOOR, capacity.memory * HEADROOM_PERCENT // 100)
     reserve = capacity.siblings * SIBLING_RESERVE
     available = capacity.memory - headroom - reserve
     if available < ENGINE_FLOOR:
         raise CapacityError(
             f"only {available / GIB:.2f} GiB is left for the engines, below the floor of {ENGINE_FLOOR / GIB:.0f} GiB: memory {capacity.memory / GIB:.2f} GiB "
-            f"({capacity.memory_source}), headroom {headroom / GIB:.2f} GiB, {capacity.siblings} other containers at {SIBLING_RESERVE // MIB} MiB"
+            f"({capacity.memory_source}), headroom {headroom / GIB:.2f} GiB, {capacity.siblings} other containers at {SIBLING_RESERVE // MIB} MiB",
+            "capacity_engine_floor",
+            {
+                "memory": capacity.memory,
+                "headroom": headroom,
+                "siblings": capacity.siblings,
+                "sibling_reserve": reserve,
+                "available": available,
+                "engine_floor": ENGINE_FLOOR,
+            },
         )
     spill = None
     if capacity.spill_free is not None:
         spill = capacity.spill_free * SPILL_SHARE_PERCENT // 100
         if spill < SPILL_FLOOR:
             raise CapacityError(
-                f"only {capacity.spill_free / GIB:.2f} GiB is free for the spill, and its cap would be below the floor of {SPILL_FLOOR / GIB:.0f} GiB"
+                f"only {capacity.spill_free / GIB:.2f} GiB is free for the spill, and its cap would be below the floor of {SPILL_FLOOR / GIB:.0f} GiB",
+                "capacity_spill_floor",
+                {"spill_free": capacity.spill_free, "spill_floor": SPILL_FLOOR},
             )
     threads = max(1, min(capacity.cpus, available // THREAD_MEMORY[profile]))
     evidence = {
@@ -242,26 +276,28 @@ def clip(environ: Mapping[str, str], limits: Limits) -> Limits:
         try:
             larger = parse_size(given) > parse_size(limits.duckdb_memory)
         except BudgetError as error:
-            raise CapacityError(f"DUCKDB_MEMORY_LIMIT is {given!r}, not a size such as 150MB or 12GiB") from error
+            raise CapacityError(f"DUCKDB_MEMORY_LIMIT is {given!r}, not a size such as 150MB or 12GiB", "capacity_override_invalid") from error
         memory = limits.duckdb_memory if larger else given
         if larger:
             clipped.append("DUCKDB_MEMORY_LIMIT")
     if environ.get("JOB_THREADS"):
         if not environ["JOB_THREADS"].isdecimal() or int(environ["JOB_THREADS"]) < 1:
-            raise CapacityError(f"JOB_THREADS is {environ['JOB_THREADS']!r}, not a positive whole number")
+            raise CapacityError(f"JOB_THREADS is {environ['JOB_THREADS']!r}, not a positive whole number", "capacity_override_invalid")
         threads = min(int(environ["JOB_THREADS"]), limits.threads)
         if int(environ["JOB_THREADS"]) > limits.threads:
             clipped.append("JOB_THREADS")
     if environ.get("SPARK_JOB_MEMORY"):
         if not SPARK_HEAP.fullmatch(environ["SPARK_JOB_MEMORY"]):
-            raise CapacityError(f"SPARK_JOB_MEMORY is {environ['SPARK_JOB_MEMORY']!r}, not a whole number of GiB such as 20g")
+            raise CapacityError(f"SPARK_JOB_MEMORY is {environ['SPARK_JOB_MEMORY']!r}, not a whole number of GiB such as 20g", "capacity_override_invalid")
         if int(environ["SPARK_JOB_MEMORY"][:-1]) > int(limits.spark_heap[:-1]):
             clipped.append("SPARK_JOB_MEMORY")
         else:
             heap = environ["SPARK_JOB_MEMORY"]
     if environ.get("HAI_DUCKDB_MAX_TEMP_BYTES"):
         if not environ["HAI_DUCKDB_MAX_TEMP_BYTES"].isdecimal() or int(environ["HAI_DUCKDB_MAX_TEMP_BYTES"]) < 1:
-            raise CapacityError(f"HAI_DUCKDB_MAX_TEMP_BYTES is {environ['HAI_DUCKDB_MAX_TEMP_BYTES']!r}, not a positive whole number of bytes")
+            raise CapacityError(
+                f"HAI_DUCKDB_MAX_TEMP_BYTES is {environ['HAI_DUCKDB_MAX_TEMP_BYTES']!r}, not a positive whole number of bytes", "capacity_override_invalid"
+            )
         given_bytes = int(environ["HAI_DUCKDB_MAX_TEMP_BYTES"])
         if limits.spill_bytes is not None and given_bytes > limits.spill_bytes:
             clipped.append("HAI_DUCKDB_MAX_TEMP_BYTES")

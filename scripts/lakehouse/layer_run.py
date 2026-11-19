@@ -147,6 +147,15 @@ class StepError(RuntimeError):
     """A phase cannot prove its input or a module it ran failed."""
 
 
+class RefusedTogether(StepError):
+    """The startup check and the capacity derivation of a build both refused. ``failure_codes`` and ``failure_facts`` hold both causes in closed form."""
+
+    def __init__(self, message: str, codes: tuple[str, ...], facts: dict[str, int]) -> None:
+        super().__init__(message)
+        self.failure_codes = codes
+        self.failure_facts = facts
+
+
 @dataclass(frozen=True)
 class Job:
     layer: str
@@ -1344,7 +1353,9 @@ def begin(job: Job, phase: str, profile: str) -> None:
         startup(job, phase, derived=refused is None)
     except startup_check.StartupCheckError as failed:
         if refused is not None:
-            raise StepError(f"{failed}; the task capacity was also refused: {refused}") from None
+            raise RefusedTogether(
+                f"{failed}; the task capacity was also refused: {refused}", (*failed.failure_codes, *refused.failure_codes), refused.failure_facts
+            ) from None
         raise
     if refused is not None:
         raise refused
@@ -1435,13 +1446,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as error:
         sys.stderr.write(f"layer_run: step {args.phase} ({args.layer}, run {args.run}) failed: {error}\n")
         send_lineage(job, args.phase, failed=True, dry=dry)
-        phase_failure.emit(args.phase, error)  # the last line of the phase: the launcher keeps it in the end record of the launch
+        phase_failure.emit_error(args.phase, error)  # the closed record, as the last line of the phase: the launcher keeps it in the end record of the launch
         return 1
     except (
         Exception
     ) as error:  # any other ordinary failure (an SDK error, a bug) still gets its FAIL, and then fails the job as it would have: the exception goes on
         send_lineage(job, args.phase, failed=True, dry=dry)
-        phase_failure.emit(args.phase, type(error).__name__)
+        phase_failure.emit_error(args.phase, error)
         raise
     send_lineage(job, args.phase, failed=False, dry=dry)
     return 0

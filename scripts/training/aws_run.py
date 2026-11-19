@@ -54,7 +54,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration import code_digest, mlflow_service, training_contract
-from scripts import resource_peaks
+from scripts import phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
 from scripts.training import job, promote_lease, promote_receipt, training_metrics
@@ -534,19 +534,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         startup_check.check_phase("promote" if values.phase == "promote" else "train", values.phase)
     except startup_check.StartupCheckError as refusal:
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "startup_check", "detail": str(refusal)}, sort_keys=True) + "\n")
+        phase_failure.emit_error(values.phase, refusal)
         return EXIT_FAILED
     try:
         task_capacity.apply()
     except task_capacity.CapacityError as refusal:
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": str(refusal)}, sort_keys=True) + "\n")
+        phase_failure.emit_error(values.phase, refusal)
         return EXIT_FAILED
     try:
         steps = handler(values.work, values.run, values.mode)
     except RunRefused as refusal:
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": str(refusal)}, sort_keys=True) + "\n")
+        phase_failure.emit_error(values.phase, refusal)
         return EXIT_FAILED
     except StepFailed as failure:
         sys.stderr.write(json.dumps({"phase": values.phase, "step": failure.step, "failure": failure.failure, "detail": failure.detail}, sort_keys=True) + "\n")
+        phase_failure.emit_error(values.phase, failure, failure.code)
         return failure.code
     if values.phase not in ("train", "promote", "research", "canary", "notify"):
         for step in steps:

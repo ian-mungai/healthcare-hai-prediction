@@ -68,6 +68,7 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration.ecs_adapter import (
+    FAILURE_PHASES,
     GUARD,
     CapacityUnavailable,
     EcsAdapter,
@@ -78,13 +79,18 @@ from orchestration.ecs_adapter import (
     TaskReport,
     TaskUnavailable,
     classify,
-    failure_summary,
+    failure_from_tail,
+    render_failure,
     scrub,
+    stored_failure,
 )
 from orchestration.training_contract import CODE_STAMP_RUN
 from orchestration.training_contract import RUN_ID as RUN_ID_PATTERN
 
 BOUND_FIELDS = ("code_digest", "request_hash", "input_run")
+SHUTDOWN_CODES = frozenset({143})  # SIGTERM: ECS stopped the container because another one failed
+KILLED_CODE = 137  # SIGKILL: a primary failure only when ECS gives a container reason for it, such as OutOfMemoryError
+GUARD_TIMEOUT_LINE = "guard: the task passed its time limit, so it stops"  # the fixed line of scripts/orchestration/task_guard.py
 RUN_ID = re.compile(RUN_ID_PATTERN)
 # The run ID of before the run ID redesign: a commit time and eight hex digits, the form ``CODE_STAMP_RUN`` names. Earlier launches of a family are indexed
 # and recorded under it. It is read as history only (the family index listing); a request (``validate``) and a family index write take ``RUN_ID`` alone.
@@ -240,8 +246,9 @@ class JobSpec:
 @dataclass(frozen=True)
 class Outcome:
     """How a job attempt ended. ``adopted`` is True when the result is an earlier attempt's recorded outcome, which this attempt reports without
-    launching. ``failure`` is the bounded, cleaned summary of the failed phase (``orchestration.phase_failure``) that the end record keeps, empty when the
-    task log held none. ``logs`` and ``cleanup_note`` come from the call that concluded the attempt and are not part of the recorded outcome."""
+    launching. ``failure`` is the message of the closed failure record (checked phase, fixed codes, numeric facts) that the end record keeps, rendered from
+    fixed templates, and empty when the record holds none. ``logs`` and ``cleanup_note`` come from the call that concluded the attempt and are not part of the
+    recorded outcome."""
 
     outcome: str
     exit_code: int
@@ -255,6 +262,14 @@ class Outcome:
     @property
     def ok(self) -> bool:
         return self.outcome == "succeeded"
+
+
+@dataclass(frozen=True)
+class Diagnosis:
+    """What the one causal container of a failed task says: the closed failure record for the end record (None when no container caused it) and its log tail."""
+
+    record: dict[str, Any] | None
+    logs: str
 
 
 @dataclass
@@ -340,11 +355,12 @@ def stamp(text: str) -> float:
 
 
 def outcome_of(record: Mapping[str, Any], adopted: bool = False) -> Outcome:
-    return Outcome(record["outcome"], record["exit_code"], record["reason"], record.get("task_arn", ""), adopted, str(record.get("failure", "")))
+    shown = render_failure(stored_failure(record["failure"])) if "failure" in record else ""
+    return Outcome(record["outcome"], record["exit_code"], record["reason"], record.get("task_arn", ""), adopted, shown)
 
 
 def copied(end: Mapping[str, Any]) -> dict[str, Any]:
-    """The fields of an end record that another attempt's end record repeats: the outcome and, when the record holds one, the failure summary."""
+    """The fields of an end record that another attempt's end record repeats: the outcome and, when the record holds one, the closed failure record."""
     found = {"outcome": end["outcome"], "exit_code": end["exit_code"], "reason": end["reason"], "task_arn": end.get("task_arn", "")}
     return {**found, "failure": end["failure"]} if end.get("failure") else found
 
@@ -389,6 +405,11 @@ def parse_record(raw: bytes, where: str) -> dict[str, Any]:
         needed |= {"task_arn": str, "job_started_at": str}
     elif event == "end":
         needed |= {"outcome": str, "exit_code": int, "reason": str}
+        if isinstance(record, dict) and "failure" in record:
+            try:
+                stored_failure(record["failure"])
+            except ValueError:
+                raise LaunchError(f"launch record {where} is invalid (failure)") from None
     problem = next((name for name, kind in needed.items() if not isinstance(record.get(name) if isinstance(record, dict) else None, kind)), None)
     closing = event == "end" or (event == "decision" and record.get("decision") == "close")
     if event not in EVENTS or problem is not None or (closing and record["outcome"] not in OUTCOMES) or record["schema_version"] != 1:
@@ -1044,17 +1065,19 @@ class Launcher:
         end = self.finalize(claim, owner, launch.spec.attempt, decision["outcome"], decision["exit_code"], decision["reason"], "")
         launch.outcome = outcome_of(end, adopted=owner != launch.spec.attempt)
 
-    def finalize(self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str, failure: str = "") -> dict[str, Any]:
+    def finalize(
+        self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str, failure: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Record how the launch ended. The end record of the attempt that holds the claim is written first and is the one outcome: an attempt that joined it
-        records and reports whatever is stored there, even when it judged the task differently. A ``failure`` summary is kept in the record, and copied."""
-        first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn, **({"failure": failure} if failure else {}))
+        records and reports whatever is stored there, even when it judged the task differently. A closed ``failure`` record is kept in it, and copied."""
+        first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn, **({"failure": dict(failure)} if failure else {}))
         if mine == owner:
             if base["job"] in self.adapter.settings.families:
                 count_outcome(base["job"], first["outcome"])
             return first
         return self.put("end", mine, base, **copied(first))
 
-    def close(self, launch: Launch, outcome: str, code: int, reason: str, failure: str = "") -> None:
+    def close(self, launch: Launch, outcome: str, code: int, reason: str, failure: Mapping[str, Any] | None = None) -> None:
         """Record how this attempt ended, through the end record of the attempt that holds the claim."""
         spec = launch.spec
         owner = launch.owner if launch.owner is not None else spec.attempt
@@ -1109,6 +1132,7 @@ class Launcher:
         if launch.outcome is not None:
             return launch.outcome
         spec = launch.spec
+        diagnosis: Diagnosis | None = None
         if launch.timed_out:
             self.close(launch, "timeout", TIMEOUT_EXIT, "deadline")
         elif launch.report is not None:
@@ -1116,14 +1140,16 @@ class Launcher:
                 self.close(launch, "cancelled", CANCEL_EXIT, "cancel")
             else:
                 verdict, code, reason = self.judge(launch.report, spec.acceptance)
-                self.close(launch, verdict, code, reason, self.failure_of(spec, launch.arn or "", launch.report) if verdict == "failed" else "")
+                diagnosis = self.diagnose(spec, launch.arn or "", launch.report) if verdict == "failed" else None
+                self.close(launch, verdict, code, reason, diagnosis.record if diagnosis else None)
         else:
             raise LaunchError("the attempt has not ended")
         outcome = launch.outcome
         if outcome is None:
             raise LaunchError("the end record is missing")
         if not outcome.ok:
-            return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, failure=outcome.failure, logs=self.tail(launch))
+            logs = diagnosis.logs if diagnosis is not None else self.tail(launch)
+            return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, failure=outcome.failure, logs=logs)
         note = ""
         if self.cleanup is not None:
             try:
@@ -1133,42 +1159,75 @@ class Launcher:
         return Outcome(outcome.outcome, outcome.exit_code, outcome.reason, outcome.task_arn, cleanup_note=note)
 
     def ended(self, spec: JobSpec, arn: str, report: TaskReport, outcome: str, code: int, reason: str) -> dict[str, Any]:
-        """The fields of the end record of a task shown STOPPED: its outcome, exit code, reason and ARN, and the summary of the failed phase for a failure."""
-        failure = self.failure_of(spec, arn, report) if outcome == "failed" else ""
-        return {"outcome": outcome, "exit_code": code, "reason": reason[:REPORT_LIMIT], "task_arn": arn, **({"failure": failure} if failure else {})}
+        """The fields of the end record of a task shown STOPPED: its outcome, exit code, reason and ARN, and the closed failure record of a failure."""
+        record = self.diagnose(spec, arn, report).record if outcome == "failed" else None
+        return {"outcome": outcome, "exit_code": code, "reason": reason[:REPORT_LIMIT], "task_arn": arn, **({"failure": record} if record else {})}
 
-    def failure_of(self, spec: JobSpec, arn: str, report: TaskReport) -> str:
-        """The cleaned summary of the failed phase, read from the log of each container that failed (a layer task logs a phase in its own container, and the
-        job's log container is the last one, which never runs after a failure), then from the job's log container. Empty when no log can be read."""
-        failing = [name for name, code in report.containers if name != GUARD and code not in (0, None)]
-        for container in dict.fromkeys([*failing, spec.log_container]):
-            if not (arn and container):
-                continue
-            try:
-                found = failure_summary(self.adapter.tail(arn, container, spec.log_prefix, spec.log_lines))
-            except (TaskUnavailable, TaskRefused):
-                continue
-            if found:
-                return found
-        return ""
+    def cause(self, spec: JobSpec, arn: str, report: TaskReport) -> tuple[str, str] | None:
+        """The one container that caused a failed task, and how it is known: ``job`` (it exited with an error of its own), ``task`` (ECS reports it with no exit
+        code, or stopped it) or ``guard`` (the guard reports its own time limit). A primary phase failure beats a container that ECS stopped with SIGTERM when
+        another one failed. A phase that never ran and has a reason code from ECS comes next. The guard is the cause only for its own time limit: it also exits
+        with an error to stop a task whose phase failed, and then that phase is the cause. Among containers of one kind the earlier one in the task definition
+        wins, so the order of ECS's reply never decides. No cause gives None."""
+        reasons = dict(report.reasons)
+        place = {name: index for index, name in enumerate(spec.environment)}
+
+        def first(names: list[str]) -> str:
+            return min(names, key=lambda name: (place.get(name, len(place)), name))
+
+        phases = [(name, code) for name, code in report.containers if name != GUARD]
+        primary = [n for n, c in phases if c not in (0, None) and c not in SHUTDOWN_CODES and (c != KILLED_CODE or reasons.get(n) == "container_out_of_memory")]
+        if primary:
+            return first(primary), "job"
+        unrun = [n for n, c in phases if c is None and reasons.get(n)]
+        if unrun:
+            return first(unrun), "task"
+        if dict(report.containers).get(GUARD) not in (0, None) and self.guard_timed_out(spec, arn):
+            return GUARD, "guard"
+        stopped = [n for n, c in phases if c in SHUTDOWN_CODES or c == KILLED_CODE]
+        return (first(stopped), "task") if stopped else None
+
+    def guard_timed_out(self, spec: JobSpec, arn: str) -> bool:
+        """Whether the guard's own log holds its fixed time limit line. Only that fixed line is compared, and nothing of the log is kept."""
+        return GUARD_TIMEOUT_LINE in self.read_log(arn, GUARD, spec).splitlines()
+
+    def read_log(self, arn: str, container: str, spec: JobSpec) -> str:
+        if not (arn and container):
+            return ""
+        try:
+            return self.adapter.tail(arn, container, spec.log_prefix, spec.log_lines)
+        except (TaskUnavailable, TaskRefused):
+            return ""
+
+    def diagnose(self, spec: JobSpec, arn: str, report: TaskReport) -> Diagnosis:
+        """The closed failure record of a failed task and the immediate log tail, both from the one container that caused it (``cause``). The record is the
+        container's own closed record when its log ends with one, else one made from the state of the task alone; no text of a log, an exception or a container
+        reason is kept. A task with no identifiable cause has no record, and its tail is the job's log container."""
+        found = self.cause(spec, arn, report)
+        if found is None:
+            return Diagnosis(None, scrub(self.read_log(arn, spec.log_container, spec)))
+        container, source = found
+        log = self.read_log(arn, container, spec)
+        exits, reasons = dict(report.containers), dict(report.reasons)
+        code = exits.get(container)
+        facts = {"exit_code": code} if isinstance(code, int) and not isinstance(code, bool) else {}
+        name = container if container in FAILURE_PHASES else "unknown"
+        marker = failure_from_tail(log) if source == "job" else None
+        if marker is not None:
+            record = {**marker, "container": name, "source": "job"}
+        else:
+            if source == "guard":
+                codes = ["guard_timeout"]
+            elif container in reasons:
+                codes = [reasons[container]]
+            else:
+                codes = ["phase_failed" if source == "job" else "phase_stopped"]
+            record = {"v": 1, "phase": name, "codes": codes, "facts": facts, "container": name, "source": "guard" if source == "guard" else "task"}
+        return Diagnosis(stored_failure(record), scrub(log))
 
     def tail(self, launch: Launch) -> str:
-        """The last log lines of the job's log container, else of a container that failed (the log container of a layer task is its last one, which never runs
-        after a failed phase)."""
-        spec = launch.spec
-        if not launch.arn:
-            return ""
-        failing = [name for name, code in (launch.report.containers if launch.report else ()) if name != GUARD and code not in (0, None)]
-        for container in dict.fromkeys([spec.log_container, *failing]):
-            if not container:
-                continue
-            try:
-                found = scrub(self.adapter.tail(launch.arn, container, spec.log_prefix, spec.log_lines))
-            except (TaskUnavailable, TaskRefused):
-                continue
-            if found:
-                return found
-        return ""
+        """The last log lines of the job's log container: the tail of a timeout or a cancel, which name no failed container. A failed task uses ``diagnose``."""
+        return scrub(self.read_log(launch.arn or "", launch.spec.log_container, launch.spec))
 
     def run(self, spec: JobSpec) -> Outcome:
         """Attach, start, wait and conclude one attempt. A repeat of an ended attempt returns its recorded outcome."""

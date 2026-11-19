@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-from scripts import resource_peaks
+from scripts import phase_failure, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.serving import deploy, manifests
 
@@ -52,6 +52,7 @@ def main() -> int:
         )
     except (deploy.DeployRefused, startup_check.StartupCheckError, ValueError, KeyError, OSError, TypeError) as error:
         sys.stderr.write(f"serve_deploy refused: {error}\n")
+        phase_failure.emit_error("serve", error)
         return 2
     result = {
         "status": outcome.status,

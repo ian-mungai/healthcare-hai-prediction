@@ -119,8 +119,9 @@ def _exit_code(value: object) -> int:
     return value if isinstance(value, int) else 1
 
 
-def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int, after: Callable[[dict[str, Any]], None] | None = None) -> None:
-    """Write the one record; any failure here, an interrupt included, ends the record and never the job's result."""
+def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int, after: Callable[[dict[str, Any]], None] | None = None) -> bool:
+    """Write the one record; any failure here, an interrupt included, ends the record and never the job's result. It returns False after such a failure: the
+    recorder is then quiet and writes nothing more."""
     try:
         if sampler is not None:
             sampler.stopped.set()
@@ -143,13 +144,15 @@ def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int, after: Cal
         sys.stderr.flush()
         if after is not None:
             after(record)
+        return True
     except BaseException as error:
         # The recorder's own failure, an interrupt during the join or a closed stderr, loses only the record; the job's result still passes on.
         # After an interrupt the record is abandoned with no further write: stderr may be a full pipe whose reader stopped, and a write would block.
         if isinstance(error, KeyboardInterrupt):
-            return
+            return False
         with contextlib.suppress(BaseException):
             sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
+        return False
 
 
 def _start(folders: tuple[Path, ...], interval: float) -> tuple[_Sampler | None, str, bool]:
@@ -233,15 +236,14 @@ def _release_stderr(tail: phase_failure.StderrTail | None) -> None:
         tail.finish()
 
 
-def _write_failure(tail: phase_failure.StderrTail | None, failure: str) -> None:
-    """The failure line of a failed job that wrote none: its last stderr line (or the type of its exception), for the launcher to keep in the end record."""
+def _write_failure(tail: phase_failure.StderrTail | None, error: BaseException | None, code: int) -> None:
+    """The closed failure record of a failed job that wrote none: its phase, the category of its exception (never the text) and its exit code, for the
+    launcher to keep in the end record. Like ``_emit`` it never changes the job's result: a fault in it, an interrupt included, ends it."""
     try:
-        if tail is None or tail.marked:
-            return
-        phase_failure.emit(phase_failure.phase_of(sys.argv), failure or tail.last or "the job ended with a failure and wrote no line")
-    except Exception as error:
-        with contextlib.suppress(BaseException):
-            sys.stderr.write(f"event=phase_failure_failed {type(error).__name__}\n")
+        if tail is not None and not tail.marked:
+            phase_failure.emit_error(phase_failure.phase_of(sys.argv), error, exit_code=code)
+    except BaseException:
+        return
 
 
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
@@ -259,7 +261,8 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
     started = time.monotonic()
     interrupted = False
     code = 1
-    failure = ""
+    failure: BaseException | None = None
+    quiet = abandoned
     tail = _watch_stderr()
     try:
         code = _exit_code(main())
@@ -270,7 +273,7 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
         code = _exit_code(stop.code)
         raise
     except Exception as error:
-        failure = type(error).__name__  # the type alone: the message of an unexpected error may carry anything
+        failure = error  # its class only: the message of an unexpected error may carry anything and is never read
         raise
     finally:
         _release_stderr(tail)
@@ -278,7 +281,7 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
             if sampler is not None:
                 sampler.stopped.set()
         else:
-            _emit(sampler, unavailable, code, _exit_push(pusher, heartbeat, started, interrupted))
-        if code != 0 and not interrupted:
-            _write_failure(tail, failure)
+            quiet = not _emit(sampler, unavailable, code, _exit_push(pusher, heartbeat, started, interrupted))
+        if code != 0 and not interrupted and not quiet:
+            _write_failure(tail, failure, code)
     raise SystemExit(code)

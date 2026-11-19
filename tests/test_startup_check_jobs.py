@@ -181,10 +181,16 @@ def test_a_failed_training_check_leaves_one_json_line_with_the_cause(
 ) -> None:
     runner, _ = prepare(monkeypatch, "train_extract", refuse=True)
     runner(monkeypatch, tmp_path)
-    last = json.loads(capsys.readouterr().err.splitlines()[-1])
+    lines = capsys.readouterr().err.splitlines()
+    last = json.loads(lines[-2])
     check(
         last["phase"] == "extract" and last["failure"] == "startup_check" and "polaris_unreachable" in last["detail"],
         f"the failure record names the cause: {last}",
+    )
+    closed = json.loads(lines[-1].removeprefix("phase_failure: "))
+    check(
+        lines[-1].startswith("phase_failure: ") and closed["phase"] == "extract" and closed["codes"] == ["polaris_unreachable"],
+        f"and the closed record ends the log: {lines[-1]}",
     )
 
 
