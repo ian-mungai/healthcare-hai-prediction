@@ -285,6 +285,7 @@ def unreadable_champion_list(kind: str, folder: Path) -> dict[str, Any]:
         "empty_file": {"raw": b""},
         "missing_file": {"download": lambda run_id, path, scratch: str(folder / "no_such_file.json")},
         "unreadable_file": {"download": lambda run_id, path, scratch: str(folder)},
+        "download_missing": {"download": refusing(FileNotFoundError("secret-marker"))},
         "download_oserror": {"download": refusing(OSError("secret-marker"))},
         "download_error": {"download": refusing(RuntimeError("secret-marker"))},
     }
@@ -337,7 +338,8 @@ KEY_OUTCOMES: dict[str, str] = {
     "promotion artifact truncated_json": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
     "promotion artifact invalid_encoding": CHAMPION_REFUSAL + "is not JSON: UnicodeDecodeError",
     "promotion artifact empty_file": CHAMPION_REFUSAL + "is not JSON: JSONDecodeError",
-    "promotion artifact missing_file": CHAMPION_REFUSAL + "file is missing",
+    "promotion artifact missing_file": CHAMPION_REFUSAL + "file is missing after the download: FileNotFoundError",
+    "promotion artifact download_missing": CHAMPION_REFUSAL + "could not be downloaded: FileNotFoundError",
     "promotion artifact unreadable_file": CHAMPION_REFUSAL + "file is unreadable: IsADirectoryError",
     "promotion artifact download_oserror": CHAMPION_REFUSAL + "could not be downloaded: OSError",
     "promotion artifact download_error": CHAMPION_REFUSAL + "could not be downloaded: RuntimeError",
@@ -2336,7 +2338,16 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 found[label] = promotion_outcome(value, document["columns"], fresh(label))
             label = "promotion columns repeat"
             found[label] = promotion_outcome(damaged_list(document, "columns", "repeat"), document["columns"], fresh(label))
-            for kind in ("truncated_json", "invalid_encoding", "empty_file", "missing_file", "unreadable_file", "download_oserror", "download_error"):
+            for kind in (
+                "truncated_json",
+                "invalid_encoding",
+                "empty_file",
+                "missing_file",
+                "unreadable_file",
+                "download_missing",
+                "download_oserror",
+                "download_error",
+            ):
                 label = f"promotion artifact {kind}"
                 found[label] = promotion_outcome(document, document["columns"], fresh(label), **unreadable_champion_list(kind, folder))
             for key, kinds in (("columns", shared), ("kept_columns", (*shared, "repeat", "unknown"))):

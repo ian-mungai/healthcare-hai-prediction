@@ -80,21 +80,19 @@ def champion_columns(document: Any) -> list[str]:
 
 def champion_document(store: Any, version: Any, scratch: Path) -> Any:
     """Download and parse the champion's ``bundle/feature_list.json``, or refuse with ``champion_feature_list_invalid`` and say which step failed: the
-    download, a file that is missing or unreadable, or text that is not JSON. The detail holds the class of the error, never its text. Nothing here tells a
-    transport fault from a damaged file, so both refuse; the check is not retried inside the job."""
+    download (including an artifact that is not found), a downloaded file that is missing or unreadable, or text that is not JSON. Every detail ends with the
+    class of the error and never holds its text. Nothing here tells a transport fault from a damaged file, so both refuse; the job does not retry."""
     refusal = "champion_feature_list_invalid"
     try:
         listing = Path(store.download_artifacts(version.run_id, "bundle/feature_list.json", str(scratch)))
     except JobFailure:
         raise
-    except FileNotFoundError:
-        raise JobFailure(refusal, "the champion's feature list file is missing") from None
     except Exception as error:
         raise JobFailure(refusal, f"the champion's feature list could not be downloaded: {type(error).__name__}") from None
     try:
         text = listing.read_bytes()
-    except FileNotFoundError:
-        raise JobFailure(refusal, "the champion's feature list file is missing") from None
+    except FileNotFoundError as error:
+        raise JobFailure(refusal, f"the champion's feature list file is missing after the download: {type(error).__name__}") from None
     except OSError as error:
         raise JobFailure(refusal, f"the champion's feature list file is unreadable: {type(error).__name__}") from None
     try:

@@ -1745,6 +1745,9 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 
             return plant
 
+        def gone_after_download(fixture: Fixture, stack: contextlib.ExitStack) -> None:
+            stack.enter_context(mock.patch.object(fixture.tracking, "download_artifacts", return_value=str(fixture.folder / "gone.json")))
+
         def listed(fixture: Fixture) -> Path:
             return next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
 
@@ -1769,7 +1772,9 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             "truncated_json": (raw(b'{"columns": ["process",'), "is not JSON: JSONDecodeError"),
             "invalid_encoding": (raw(b'{"columns": ["\xff\xfe"]}'), "is not JSON: UnicodeDecodeError"),
             "empty_file": (raw(b""), "is not JSON: JSONDecodeError"),
-            "missing_file": (lambda fixture, stack: listed(fixture).unlink(), "file is missing"),
+            "missing_after_download": (gone_after_download, "file is missing after the download: FileNotFoundError"),
+            "missing_artifact": (lambda fixture, stack: listed(fixture).unlink(), "could not be downloaded: FileNotFoundError"),
+            "download_not_found": (refusing_download(FileNotFoundError(marker)), "could not be downloaded: FileNotFoundError"),
             "download_oserror": (refusing_download(OSError(marker)), "could not be downloaded: OSError"),
             "download_error": (refusing_download(RuntimeError(marker)), "could not be downloaded: RuntimeError"),
         }
