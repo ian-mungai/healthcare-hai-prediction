@@ -313,12 +313,13 @@ run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_o
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/check.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/mirror_*.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
       ])
     )
-    error_message = "The bronze role must write exactly the run record, the carried-over record and its notice outcome of a run and the staged request, inventory and stage report of a bronze run, and no other key."
+    error_message = "The bronze role must write exactly the run record, the carried-over record and its notice outcome, the Glue mirror attempt records of a run and the staged request, inventory and stage report of a bronze run, and no other key."
   }
 
   assert {

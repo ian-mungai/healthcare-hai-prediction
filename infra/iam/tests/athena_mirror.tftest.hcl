@@ -214,6 +214,14 @@ run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
   }
 
   assert {
+    condition = alltrue([
+      for table in keys(local.bronze_table_map.classification.loader_tables) :
+      anytrue([for resource in flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy).Statement : s.Resource]) : startswith("arn:aws:glue:eu-west-1:111111111111:table/bronze/${table}", trimsuffix(resource, "*"))])
+    ]) && length(keys(local.bronze_table_map.classification.loader_tables)) == 4
+    error_message = "The bronze grant covers the names of the four side tables that a load commits beside the mapped tables (file_metadata, stored_copies, column_map and file_preambles)."
+  }
+
+  assert {
     condition = (
       length(aws_iam_role_policy.bronze_writer) == 1 &&
       length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) < 10240

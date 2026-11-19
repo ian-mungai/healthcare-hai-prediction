@@ -23,7 +23,7 @@ locals {
   # IAM caps all inline policies of one role together at 10,240 characters and each managed policy at 6,144 (whitespace excluded). The source reads grow with
   # the bucket name length and the raw root, so they live in managed policies, one object policy per root. Table statements stay inline.
   # What the check phase reads and writes for its run records: the ingestion run records of the capture root (by exact version, only while the raw root
-  # switch is on), the two records of its own run (create-only by the check phase, never any other key of bronze_runs) and the owner notice of the carried-over
+  # switch is on), the two records of its own run and one Glue mirror attempt record per loader report (create-only by the check phase, never any other key of bronze_runs) and the owner notice of the carried-over
   # files, once the stack is told the alerts topic. Every write is create-only (s3:if-none-match "*"): a record or staged input that exists is never replaced.
   # The stage job of a pipeline run (scripts.lakehouse.bronze_run stage) writes the run's request and source
   # inventory and the report of the tables it left out under lakehouse/run_stage/<bronze run>/inputs/, create-only by the task, and nothing else of that folder.
@@ -40,12 +40,13 @@ locals {
     } : {},
     {
       run_record_writes = {
-        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key."
+        description = "Create, once and only with if-none-match, the run record, the carried-over record and its notice outcome, the Glue mirror attempt records of a bronze run and the staged request, source inventory and stage report of a bronze run, and read the two carried-over records back. No other key."
         document = templatefile("${path.module}/owner_policies/bronze_writer_run_record_writes.json", {
           BRONZE_RUN_RECORD_ARNS = jsonencode([
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/check.json",
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over.json",
             "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/carried_over_notice.json",
+            "${local.bronze_bucket_arn}/lakehouse/bronze_runs/*/mirror_*.json",
             "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
             "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
             "${local.bronze_bucket_arn}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
