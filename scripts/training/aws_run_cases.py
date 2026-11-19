@@ -298,7 +298,8 @@ def train_cases(cases: Any, folder: Path) -> None:
         fixture = staged_train(folder / "nothing_fitted_two", "m6", hai_types=("HAI_1", "HAI_2"), hospitals=120, adjust=single_window)
         code, _, error = train(fixture)
         record = ecs_adapter.failure_from_tail(error)
-        require(code == EXIT_FAILED and record is not None, f"{code} {error}")
+        if code != EXIT_FAILED or record is None:
+            raise AssertionError(f"a run that fitted nothing left no closed failure record: exit {code}, {error}")
         require(record["codes"] == ["nothing_fitted", "hai_1_not_estimable", "hai_2_not_estimable"] and record["facts"] == {}, f"the record: {record}")
 
     def partly_fitted_passes_and_names_the_unfitted_type() -> None:
