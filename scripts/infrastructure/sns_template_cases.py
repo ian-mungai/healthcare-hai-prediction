@@ -111,8 +111,7 @@ Alert rule: JobFailed"""
 JOB_FAILED_RESOLVED = """What happened:
 This alert has cleared.
 A later success of this job phase is recorded or its failure record is gone.
-Earlier problem: A host job phase failed or was interrupted.
-No later run of it has succeeded.
+Earlier problem: A host job phase failed or was interrupted. No later run of it has succeeded.
 
 When:
 Cleared at 1:08 PM PST, Nov 19 2026 [21:08 UTC]
@@ -264,6 +263,11 @@ def resolved_alert_is_exact(root: Path) -> dict[str, bool]:
     named(checks, "the message is the reviewed text", message == JOB_FAILED_RESOLVED)
     named(
         checks,
+        "the earlier problem is one marked line",
+        "Earlier problem: A host job phase failed or was interrupted. No later run of it has succeeded." in message,
+    )
+    named(
+        checks,
         "the message says what cleared and what may still be behind, not that nothing is affected",
         "Layers after this job phase may still be behind" in message and not any(text in message for text in BLANKET),
     )
@@ -348,9 +352,8 @@ def every_rule_reads_well(root: Path) -> dict[str, bool]:
         if state == "firing":
             problems += [f"{key} is missing" for key in FIRING_FIELDS if as_lines(annotations[key]) not in message]
         else:
-            problems += [
-                f"{key} is missing" for key in ("recovered", "summary", "resolved_affects", "resolved_next") if as_lines(annotations[key]) not in message
-            ]
+            problems += [f"{key} is missing" for key in ("recovered", "resolved_affects", "resolved_next") if as_lines(annotations[key]) not in message]
+            problems += [] if f"Earlier problem: {annotations['summary']}" in message else ["the earlier problem is missing"]
         if annotations["headline"] not in subject or f"Dashboard: {annotations['dashboard']} in Grafana." not in message:
             problems.append("the headline or the dashboard is missing")
         named(checks, f"{uid} {state}: {'; '.join(problems) if problems else 'reads well'}", not problems)

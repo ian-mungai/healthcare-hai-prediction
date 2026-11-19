@@ -44,8 +44,7 @@ def carried_over_notice(
         subject_of = "The run" if files else f"Bronze run {bronze_run}"
         happened.append(f"{subject_of} left out {count(len(skipped), 'table')}.\n{'It has' if len(skipped) == 1 else 'They have'} no source file yet.")
         one = len(skipped) == 1
-        covered = "the skipped table" if one else "the skipped tables"
-        affects.append(f"No table of this run and no record of it covers {covered}, so {'it is' if one else 'they are'} not loaded in this run.")
+        affects.append(f"This run left the {'table' if one else 'tables'} out.\nIts published data does not include {'the table' if one else 'them'}.")
         next_steps.append("Check if the skipped table should have a source file.\nIf it should, find out why the ingestion run did not capture one.")
         details.append(f"Tables skipped: {len(skipped)}")
     if files:

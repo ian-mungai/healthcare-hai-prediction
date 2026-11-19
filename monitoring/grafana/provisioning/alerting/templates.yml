@@ -126,7 +126,7 @@ templates:
       {{ template "hai.sentences" . }}
       {{- end }}
       {{- if $summary }}
-      Earlier problem: {{ template "hai.sentences" $summary }}
+      Earlier problem: {{ $summary }}
       {{- end }}
       {{- else if $summary }}
       {{ template "hai.sentences" $summary }}

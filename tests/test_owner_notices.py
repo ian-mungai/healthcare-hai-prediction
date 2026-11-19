@@ -323,3 +323,11 @@ def test_a_held_notice_shows_each_failed_check_by_its_name_with_the_key_beside_i
 def test_a_held_notice_leaves_no_decision_to_the_owner() -> None:
     body = promotion_notice("held")["Message"]
     check("unless you want" not in body and "automatic" in body, body)
+
+
+def test_a_skipped_table_notice_says_what_the_published_data_lacks() -> None:
+    one = bronze_notice([], [{"table": TABLE, "reason": "no source object"}])["Message"]
+    check("This run left the table out." in one and "Its published data does not include the table." in one, one)
+    two = bronze_notice([], [{"table": TABLE, "reason": "r"}, {"table": "other_table", "reason": "r"}])["Message"]
+    check("This run left the tables out." in two and "Its published data does not include them." in two, two)
+    check("no record of it covers" not in one + two, "the old wording stayed")
