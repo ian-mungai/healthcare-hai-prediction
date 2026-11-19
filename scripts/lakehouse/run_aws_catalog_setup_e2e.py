@@ -1700,6 +1700,7 @@ def case_import_closure(_: Path) -> dict[str, bool]:
         "scripts.acquisition.raw_root",
         "scripts.sdk_logs",
         "scripts.resource_peaks",
+        "scripts.phase_failure",
         "scripts.metrics_push",
     }
     standard = sys.stdlib_module_names
