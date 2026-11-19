@@ -16,6 +16,10 @@ time and a ``__pycache__`` folder never change it. Regenerate the record on purp
 The module also holds the data rules of the model's bundle files (``bundle/feature_list.json``, ``bundle/provenance.json`` and ``bundle/self_check.json``), the
 one home of the rules that every reader applies: the model API loader, the promote action and the promotion check. They are pure functions of the bytes or of
 the parsed document. They raise ``DataRuleError``, which names the rule that is broken, and each reader maps that to its own refusal.
+
+It also holds the one bounded single-file fetch of a run's artifact (``mlflow_fetch``, standard library at import: MLflow loads when the fetch runs) and the
+data-only read of a model file (``load_data_only``), so that the serving loader and the promotion check read a model the same way and never through
+``mlflow.sklearn.load_model``.
 """
 
 from __future__ import annotations
@@ -23,12 +27,16 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib
 import json
 import math
+import os
+import posixpath
 import re
+import stat
 import sys
 import tomllib
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -632,9 +640,10 @@ MAX_NODES = 1024
 
 
 class DataRuleError(ValueError):
-    """A bundle file breaks a data rule. ``rule`` names it: ``unreadable``, ``too_large``, ``not_json``, ``feature_list``, ``provenance``,
-    ``self_check_not_object``, ``self_check_keys``, ``self_check_references``, ``self_check_row_count``, ``self_check_row_width``, ``self_check_cells`` or
-    ``self_check_predictions``. The message names the place and the rule, never a value of the file."""
+    """A bundle file or its fetch breaks a rule. ``rule`` names it: ``unreadable``, ``too_large`` (a file over its byte cap), ``not_a_file`` (a folder, a link
+    or another file where the fetch must leave one regular file), ``not_served`` (the run's artifacts are not on the tracking server), ``not_json``,
+    ``feature_list``, ``provenance``, ``self_check_not_object``, ``self_check_keys``, ``self_check_references``, ``self_check_row_count``,
+    ``self_check_row_width``, ``self_check_cells`` or ``self_check_predictions``. The message names the place and the rule, never a value of the file."""
 
     def __init__(self, rule: str, detail: str) -> None:
         super().__init__(detail)
@@ -793,6 +802,73 @@ def check_self_check(document: Any, references: Sequence[str]) -> tuple[list[lis
         if not finite_number(value):
             raise DataRuleError("self_check_predictions", f"{SELF_CHECK} prediction {index} must be a finite number")
     return rows, [float(value) for value in predictions]
+
+
+# The bounded single-file fetch and the data-only model read
+
+MODEL_FILE = "model/model.skops"
+STREAM_CHUNK = 1024 * 1024
+Fetch = Callable[[str, str, str, int], str]
+
+
+def write_limited(chunks: Iterable[bytes], local_path: str, limit: int, name: str) -> None:
+    """Write the chunks to a new file at ``local_path`` (never through a link). The running total is checked before each write, so a chunk that would pass
+    ``limit`` is not written and the transport is not read any further. Raises ``DataRuleError`` (``too_large``)."""
+    written = 0
+    with os.fdopen(os.open(local_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as stream:
+        for chunk in chunks:
+            if written + len(chunk) > limit:
+                raise DataRuleError("too_large", f"{name} is over {limit} bytes")
+            stream.write(chunk)
+            written += len(chunk)
+
+
+def mlflow_fetch(run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
+    """Stream one file of a run to ``local_path`` and return that path, never more than ``limit`` bytes.
+
+    It does not call ``download_artifacts``, which lists the path and downloads every file below a folder with no limit (MLflow 3.17.2
+    ``artifact_repo.py:346``, ``http_artifact_repo.py:145``). It lists the path once, refuses a folder, then sends the one streamed GET of
+    ``_download_file`` and counts each chunk. The caller chooses ``local_path`` and the cap: the artifact never does. Raises ``DataRuleError``
+    (``not_served``, ``not_a_file`` or ``too_large``); a missing file or a failed request raises the MLflow or requests error as it is.
+    """
+    mlflow = importlib.import_module("mlflow")
+    registry = importlib.import_module("mlflow.store.artifact.artifact_repository_registry")
+    http = importlib.import_module("mlflow.store.artifact.http_artifact_repo")
+    credentials = importlib.import_module("mlflow.utils.credentials")
+    rest = importlib.import_module("mlflow.utils.rest_utils")
+    repository = registry.get_artifact_repository(mlflow.MlflowClient().get_run(run_id).info.artifact_uri)
+    if not isinstance(repository, http.HttpArtifactRepository):
+        raise DataRuleError("not_served", "the run's artifacts are not served by the tracking server")
+    if repository.list_artifacts(artifact_path):
+        raise DataRuleError("not_a_file", f"{artifact_path} is a folder, not a file")
+    response = rest.http_request(credentials.get_default_host_creds(repository.artifact_uri), posixpath.join("/", artifact_path), "GET", stream=True)
+    try:
+        rest.augmented_raise_for_status(response)
+        write_limited(response.iter_content(chunk_size=STREAM_CHUNK), local_path, limit, artifact_path)
+    finally:
+        response.close()
+    return local_path
+
+
+def fetch_regular_file(fetch: Fetch, run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
+    """Call ``fetch(run_id, artifact_path, local_path, limit)`` and require the result to be ``local_path`` itself, one regular file (no link, folder or other
+    file) of at most ``limit`` bytes. Raises ``DataRuleError`` (``not_a_file`` or ``too_large``); an error of the fetch passes through unchanged."""
+    returned = fetch(run_id, artifact_path, local_path, limit)
+    try:
+        status = os.lstat(local_path)
+    except OSError as error:
+        raise DataRuleError("not_a_file", f"{artifact_path} was not written to its local file") from error
+    if os.fspath(returned) != local_path or not stat.S_ISREG(status.st_mode):
+        raise DataRuleError("not_a_file", f"{artifact_path} is not one regular file at the path chosen for it")
+    if status.st_size > limit:
+        raise DataRuleError("too_large", f"{artifact_path} is over {limit} bytes")
+    return local_path
+
+
+def load_data_only(path: str, trusted: Iterable[str]) -> Any:
+    """Read one ``model.skops`` file as data with skops, under the types the code root's own ``model_contract.json`` trusts (``serialization.trusted_types``),
+    never a list that the artifact brings. It reads no ``MLmodel``, imports no artifact code and loads no pickle."""
+    return importlib.import_module("skops.io").load(path, trusted=list(trusted))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

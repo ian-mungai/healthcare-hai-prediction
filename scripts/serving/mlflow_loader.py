@@ -25,13 +25,11 @@ import json
 import logging
 import math
 import os
-import posixpath
 import re
 import resource
-import stat
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +42,7 @@ CONTRACT = "data_contracts/training/model_contract.json"
 FEATURE_LIST = model_code.FEATURE_LIST
 PROVENANCE = model_code.PROVENANCE
 SELF_CHECK = model_code.SELF_CHECK
-MODEL = "model/model.skops"
+MODEL = model_code.MODEL_FILE
 PROXY_DOWNLOADS = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
 SET_NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
 # The byte caps and the text and count bounds of the data rules, which ``scripts/model_code.py`` holds for every reader of the bundle files.
@@ -56,13 +54,12 @@ MAX_TEXT = model_code.MAX_TEXT
 LIBRARIES = ("scikit-learn", "xgboost", "numpy", "scipy")
 # The local names of the four files: the loader chooses them, the artifact never does.
 LOCAL_NAMES = {FEATURE_LIST: "feature_list.json", PROVENANCE: "provenance.json", SELF_CHECK: "self_check.json", MODEL: "model.skops"}
-STREAM_CHUNK = 1024 * 1024
 # The prediction check: ``math.isclose(got, saved, rel_tol=REL_TOL, abs_tol=ABS_TOL)``. Equal closure and library versions leave only floating-point summation
 # order to differ (about 1e-15 relative), so 1e-9 leaves six orders of headroom and a wrong feature order or a changed model differs by far more.
 REL_TOL = 1e-9
 ABS_TOL = 1e-12
 
-Fetch = Callable[[str, str, str, int], str]
+Fetch = model_code.Fetch
 
 
 class ArtifactRefused(ValueError):
@@ -97,42 +94,9 @@ def installed_version(name: str) -> str:
     return importlib.metadata.version(name)
 
 
-def write_limited(chunks: Iterable[bytes], local_path: str, limit: int, name: str) -> None:
-    """Write the chunks to a new file at ``local_path`` (never through a link). The running total is checked before each write, so a chunk that would pass
-    ``limit`` is not written and the transport is not read any further."""
-    written = 0
-    with os.fdopen(os.open(local_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as stream:
-        for chunk in chunks:
-            if written + len(chunk) > limit:
-                raise ArtifactRefused(f"{name} is over {limit} bytes")
-            stream.write(chunk)
-            written += len(chunk)
-
-
-def mlflow_fetch(run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
-    """Stream one file of a run to ``local_path`` and return that path, never more than ``limit`` bytes.
-
-    It does not call ``download_artifacts``, which lists the path and downloads every file below a folder with no limit (MLflow 3.17.2
-    ``artifact_repo.py:346``, ``http_artifact_repo.py:145``). It lists the path once, refuses a folder, then sends the one streamed GET of
-    ``_download_file`` and counts each chunk.
-    """
-    mlflow = importlib.import_module("mlflow")
-    registry = importlib.import_module("mlflow.store.artifact.artifact_repository_registry")
-    http = importlib.import_module("mlflow.store.artifact.http_artifact_repo")
-    credentials = importlib.import_module("mlflow.utils.credentials")
-    rest = importlib.import_module("mlflow.utils.rest_utils")
-    repository = registry.get_artifact_repository(mlflow.MlflowClient().get_run(run_id).info.artifact_uri)
-    if not isinstance(repository, http.HttpArtifactRepository):
-        raise ArtifactRefused("the run's artifacts are not served by the tracking server")
-    if repository.list_artifacts(artifact_path):
-        raise ArtifactRefused(f"{artifact_path} is a folder, not a file")
-    response = rest.http_request(credentials.get_default_host_creds(repository.artifact_uri), posixpath.join("/", artifact_path), "GET", stream=True)
-    try:
-        rest.augmented_raise_for_status(response)
-        write_limited(response.iter_content(chunk_size=STREAM_CHUNK), local_path, limit, artifact_path)
-    finally:
-        response.close()
-    return local_path
+def default_fetch(run_id: str, artifact_path: str, local_path: str, limit: int) -> str:
+    """The bounded single-file fetch of ``scripts/model_code.py``, with a broken rule reported as ``ArtifactRefused``."""
+    return refused(model_code.mlflow_fetch, run_id, artifact_path, local_path, limit)
 
 
 def image_closure(root: Path) -> str:
@@ -219,7 +183,7 @@ class MlflowLoader:
         ``fetch(run_id, artifact_path, local_path, limit)`` writes the one file at ``local_path``, which the loader chose, never more than ``limit`` bytes, and
         returns ``local_path``; the default streams it from the tracking server.
         """
-        self._fetch: Fetch = fetch or mlflow_fetch
+        self._fetch: Fetch = fetch or default_fetch
         self.closure = image_closure(root)
         self._contract = json.loads((root / CONTRACT).read_text())
 
@@ -248,18 +212,9 @@ class MlflowLoader:
         sizes: dict[str, int] = {}
 
         def download(path: str, folder: str, limit: int) -> str:
-            """Fetch one file to its fixed local name and require that to be a regular file (no link, folder or other file) of at most ``limit`` bytes."""
-            local = os.path.join(folder, LOCAL_NAMES[path])
-            returned = self._fetch(info.run_id, path, local, limit)
-            try:
-                status = os.lstat(local)
-            except OSError as error:
-                raise ArtifactRefused(f"{path} was not written to its local file") from error
-            if os.fspath(returned) != local or not stat.S_ISREG(status.st_mode):
-                raise ArtifactRefused(f"{path} is not one regular file at the path the loader chose")
-            if status.st_size > limit:
-                raise ArtifactRefused(f"{path} is over {limit} bytes")
-            sizes[path] = status.st_size
+            """Fetch one file to its fixed local name and require that to be one regular file (no link, folder or other file) of at most ``limit`` bytes."""
+            local = refused(model_code.fetch_regular_file, self._fetch, info.run_id, path, os.path.join(folder, LOCAL_NAMES[path]), limit)
+            sizes[path] = os.lstat(local).st_size
             return local
 
         with tempfile.TemporaryDirectory(prefix="model_load_") as folder:
@@ -282,7 +237,7 @@ class MlflowLoader:
                 raise SelfCheckMissing(f"{SELF_CHECK} cannot be downloaded") from error
             rows, predictions = check_self_check(read_json(saved, SELF_CHECK), references)
             model_path = download(MODEL, folder, MODEL_CAP)
-            pipeline: Any = importlib.import_module("skops.io").load(model_path, trusted=list(self._contract["serialization"]["trusted_types"]))
+            pipeline: Any = model_code.load_data_only(model_path, self._contract["serialization"]["trusted_types"])
 
             def predict(values: Mapping[str, Any]) -> float:
                 row = {column: math.nan if values[reference] is None else values[reference] for reference, column in zip(references, columns, strict=True)}

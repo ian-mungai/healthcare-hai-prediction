@@ -254,6 +254,26 @@ def case_shared_data_rules_import_only_the_standard_library() -> list[str]:
     return problems
 
 
+def case_one_home_for_the_bounded_fetch_and_the_data_only_read() -> list[str]:
+    """The bounded single-file fetch (``write_limited``, ``mlflow_fetch``, ``fetch_regular_file``) and the data-only model read (``load_data_only``) are defined
+    in ``scripts/model_code.py`` and nowhere else, and the two readers of a model (the serving loader and the promotion check) call them there: a second copy
+    would be a second set of caps."""
+    names = ("write_limited", "mlflow_fetch", "fetch_regular_file", "load_data_only")
+    homes: dict[str, list[str]] = {name: [] for name in names}
+    for path in sorted(Path(model_code.__file__).resolve().parent.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in homes:
+                homes[node.name].append(str(path.relative_to(ROOT)))
+    problems = [f"{name} is defined in {found}, not once in scripts/model_code.py" for name, found in homes.items() if found != ["scripts/model_code.py"]]
+    for reader in ("scripts/serving/mlflow_loader.py",):
+        text = (ROOT / reader).read_text()
+        problems += [f"{reader} does not call model_code.{name}" for name in ("fetch_regular_file", "load_data_only") if f"model_code.{name}" not in text]
+        if 'import_module("mlflow.sklearn")' in text or "pickle" in text:
+            problems.append(f"{reader} loads a model through mlflow.sklearn or pickle")
+    return problems
+
+
 def case_planted_import_changes_the_closure() -> list[str]:
     """A closure file that starts importing an untrusted module changes the closure, and the verifier names the file the record misses."""
     with tempfile.TemporaryDirectory() as folder:
@@ -1181,6 +1201,7 @@ ORDER = [
     case_image_provided_module_needs_only_the_standard_library,
     case_shared_data_rules_name_the_rule_each_matrix_document_breaks,
     case_shared_data_rules_import_only_the_standard_library,
+    case_one_home_for_the_bounded_fetch_and_the_data_only_read,
     case_planted_import_changes_the_closure,
     case_imports_that_reach_a_file_join_the_closure,
     case_dynamic_imports_that_cannot_be_read_are_refused,
