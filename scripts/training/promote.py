@@ -24,10 +24,10 @@ version's feature set and schema hash, the model, the version, the run, its leas
 features job reads it to decide whether an online set loads or holds, without MLflow access. A retry keeps the record the run wrote first.
 
 Every mode first checks, as data only, that the model API can load the version (``check_model_data``): its ``bundle/provenance.json`` names the closure of the
-model code (``model_code_closure_sha256``) that this job's own code root also has, and its three bundle files pass the data rules that the loader applies
-(``scripts/model_code.py`` holds them for both: one UTF-8 JSON document with no repeated key and no NaN or Infinity, the allowed keys and bounds of the feature
-list and the provenance, and the shape of the self-check). The check loads no model and predicts nothing. A version that fails it is refused by name before
-the lease, the intent, the alias and the Production record.
+model code (``model_code_closure_sha256``) that this job's own code root also has, and its three bundle files pass the data rules that the loader applies.
+``scripts/model_code.py`` holds those rules for both and also fetches the three files, one deadline each. They are one UTF-8 JSON document with no repeated key
+and no NaN or Infinity, the allowed keys and bounds of the feature list and the provenance, and the shape of the self-check. The check loads no model and
+predicts nothing. A version that fails it is refused by name before the lease, the intent, the alias and the Production record.
 """
 
 from __future__ import annotations
@@ -101,19 +101,31 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
 
 
-def bundle_document(store: Any, run_id: str, name: str, scratch: Path, unreadable: str, oversize: str = "", not_json: str = "") -> Any:
-    """Download ``bundle/<name>`` of a run and parse it with the data rules of ``scripts/model_code.py`` (one UTF-8 JSON document of at most 1 MiB, no repeated
-    key, no NaN or Infinity), or refuse with ``unreadable`` (``oversize`` for a file over 1 MiB, ``not_json`` for text that is not such a document; each
-    defaults to ``unreadable``).
+# The bounded single-file fetch of a run's file (a name here so that a case can replace the transport).
+fetch_file = model_code.mlflow_fetch
 
-    The download, a missing or unreadable file and text that is not JSON each refuse. No detail holds a value of the file, only the class of the error.
+
+def bundle_document(run_id: str, name: str, scratch: Path, unreadable: str, oversize: str = "", not_json: str = "") -> Any:
+    """Fetch ``bundle/<name>`` of a run through the bounded fetch of ``scripts/model_code.py`` (one file, at most 1 MiB, one deadline, never a folder) and
+    parse it with the data rules of the model API (one UTF-8 JSON document, no repeated key, no NaN or Infinity), or refuse with ``unreadable``
+    (``oversize`` for a file over 1 MiB, ``not_json`` for text that is not such a document; each defaults to ``unreadable``). A fetch that reaches its
+    deadline, or that finds the one worker slot of the shared fetch taken by an earlier cancelled call, is ``bundle_fetch_deadline``.
+
+    The fetch, a missing or unreadable file and text that is not JSON each refuse. No detail holds a value of the file, only the class of the error.
     """
     try:
-        return model_code.read_json_file(str(store.download_artifacts(run_id, f"bundle/{name}", str(scratch))), f"bundle/{name}")
+        local = model_code.fetch_regular_file(fetch_file, run_id, f"bundle/{name}", str(scratch / name), model_code.JSON_CAP)
+        return model_code.read_json_file(local, f"bundle/{name}")
     except JobFailure:
         raise
     except model_code.DataRuleError as error:
-        raise JobFailure({"too_large": oversize or unreadable, "not_json": not_json or unreadable}.get(error.rule, unreadable), str(error)) from None
+        reasons = {
+            "too_large": oversize or unreadable,
+            "not_json": not_json or unreadable,
+            "deadline": "bundle_fetch_deadline",
+            "busy": "bundle_fetch_deadline",
+        }
+        raise JobFailure(reasons.get(error.rule, unreadable), str(error)) from None
     except Exception as error:
         raise JobFailure(unreadable, f"bundle/{name} could not be downloaded or read: {type(error).__name__}") from None
 
@@ -158,7 +170,7 @@ def check_self_check(document: Any, references: list[str]) -> None:
         raise JobFailure(RULE_REASONS.get(error.rule, error.rule), str(error)) from None
 
 
-def check_model_data(store: Any, version: Any, root: Path) -> None:
+def check_model_data(version: Any, root: Path) -> None:
     """Refuse, by name, a version the model API would refuse at load because of its closure value or its self-check file, reading the files as data only.
 
     ``root`` is the code root of this job. Nothing is loaded, unpickled or predicted, and nothing is written.
@@ -166,11 +178,9 @@ def check_model_data(store: Any, version: Any, root: Path) -> None:
     run_id = str(getattr(version, "run_id", ""))
     with tempfile.TemporaryDirectory(prefix="promote_data_") as folder:
         scratch = Path(folder)
-        check_closure(bundle_document(store, run_id, "provenance.json", scratch, "model_provenance_unreadable"), root)
-        references = feature_references(bundle_document(store, run_id, "feature_list.json", scratch, "self_check_feature_list"))
-        check_self_check(
-            bundle_document(store, run_id, "self_check.json", scratch, "self_check_missing", "self_check_too_large", "self_check_not_json"), references
-        )
+        check_closure(bundle_document(run_id, "provenance.json", scratch, "model_provenance_unreadable"), root)
+        references = feature_references(bundle_document(run_id, "feature_list.json", scratch, "self_check_feature_list"))
+        check_self_check(bundle_document(run_id, "self_check.json", scratch, "self_check_missing", "self_check_too_large", "self_check_not_json"), references)
 
 
 def storage() -> tuple[Any, str]:
@@ -311,7 +321,7 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
             try:
                 store: Any = run_tracking.open_store(uri)
                 inspect(store, request)
-                check_model_data(store, target_of(store, request), job_inputs.ROOT)
+                check_model_data(target_of(store, request), job_inputs.ROOT)
                 lease = hold(client, bucket, request)
                 observed = inspect(store, request)
                 receipt = reconcile(client, bucket, store, request, settle(client, bucket, request, observed), observed)

@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import code_digest, ecs_adapter, training_contract
+from scripts import model_code
 from scripts import model_data_matrix as data_rule_matrix
 from scripts.features import publication_reads, training_extract
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
@@ -1125,6 +1126,7 @@ SERVING_REASONS = (
     "self_check_row_width",
     "self_check_cells",
     "self_check_predictions",
+    "bundle_fetch_deadline",
 )
 SERVING_FILES = ("bundle/provenance.json", "bundle/feature_list.json", "bundle/self_check.json")
 
@@ -1300,21 +1302,33 @@ def serving_data_cases(cases: Any, folder: Path) -> None:
 
     def valid_candidate_reads_three_files_and_loads_nothing() -> None:
         fixture, bucket = registry_fixture(folder / "valid"), receipt_bucket()
-        downloads: list[str] = []
-        real = fixture.tracking.download_artifacts
-
-        def watch(run_id: str, path: str, dst_path: str | None = None) -> str:
-            downloads.append(f"{run_id}:{path}")
-            return real(run_id, path, dst_path)
-
         with (
-            mock.patch.object(fixture.tracking, "download_artifacts", side_effect=watch),
+            mock.patch.object(fixture.tracking, "download_artifacts", side_effect=AssertionError("download_artifacts was called")),
             mock.patch.object(promotion_check, "load_pipeline", side_effect=AssertionError("a model was loaded")),
         ):
             code, _, error = promote_in(fixture, folder / "valid_work", bucket)
         require(code == 0 and alias(fixture) == "2", f"a candidate with the closure value and a valid self-check was not promoted: {code} {error}")
-        require(sorted(downloads) == sorted(f"x:{name}" for name in SERVING_FILES), f"the check read other files than the three bundle files: {downloads}")
+        require(sorted(fixture.fetched) == sorted(SERVING_FILES), f"the check read other files than the three bundle files: {fixture.fetched}")
+        require(set(fixture.fetch_limits.values()) == {model_code.JSON_CAP}, f"the three files were not fetched under the 1 MiB cap: {fixture.fetch_limits}")
         require(f"{PRODUCTION_PREFIX}0000000001.json" in bucket.objects, f"no Production record: {sorted(bucket.objects)}")
+
+    def fetch_fails(name: str, rule: str, reason: str, path: str) -> None:
+        """The shared fetch refuses one of the three files by this rule (over its cap, or a drip or a taken slot cut off at its deadline): promotion is refused
+        by name before the lease, the intent, the alias and the Production record."""
+
+        def fault(run_id: str, found: str, local_path: str, limit: int) -> str:
+            raise model_code.DataRuleError(rule, f"the fetch of {found} stopped by the rule {rule}")
+
+        refuses(name, reason, None, lambda fixture: fixture.fetch_faults.__setitem__(path, fault))
+
+    for file, over, late in (
+        ("provenance", "model_provenance_unreadable", "bundle_fetch_deadline"),
+        ("feature_list", "self_check_feature_list", "bundle_fetch_deadline"),
+        ("self_check", "self_check_too_large", "bundle_fetch_deadline"),
+    ):
+        fetch_fails(f"a_{file}_over_its_cap_at_the_fetch", "too_large", over, f"bundle/{file}.json")
+        fetch_fails(f"a_{file}_that_drips_past_its_deadline", "deadline", late, f"bundle/{file}.json")
+        fetch_fails(f"a_{file}_fetch_refused_as_busy", "busy", late, f"bundle/{file}.json")
 
     def maximum_self_check_is_accepted() -> None:
         fixture, bucket = registry_fixture(folder / "maximum"), receipt_bucket()

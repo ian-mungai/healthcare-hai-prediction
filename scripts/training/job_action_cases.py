@@ -37,6 +37,7 @@ from scripts.training import (
     job_inputs,
     mediation,
     production_record,
+    promote,
     promotion,
     promotion_cases,
     promotion_check,
@@ -397,6 +398,8 @@ def tracking_fetch(fixture: Fixture, run_id: str, path: str, local_path: str, li
     source = fixture.tracking.root / run_id / path
     if not source.is_file():
         raise FileNotFoundError(path)
+    if source.stat().st_size > limit:
+        raise model_code.DataRuleError("too_large", f"{path} is over {limit} bytes")
     shutil.copyfile(source, local_path)
     return local_path
 
@@ -413,6 +416,7 @@ def standins(fixture: Fixture) -> Iterator[None]:
         mock.patch.object(bundle, "SAFE_MODULES", (*bundle.SAFE_MODULES, "scripts.training.model_test_support")),
         mock.patch.object(run_tracking, "open_store", side_effect=lambda uri: fixture.tracking),
         mock.patch.object(promotion_check, "fetch_file", create=True, side_effect=partial(tracking_fetch, fixture)),
+        mock.patch.object(promote, "fetch_file", create=True, side_effect=partial(tracking_fetch, fixture)),
         mock.patch.dict(
             os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100", "DVC_REMOTE_URL": str(fixture.folder / "dvc_remote"), "DVC_NO_ANALYTICS": "1"}
         ),
