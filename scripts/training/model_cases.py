@@ -98,6 +98,55 @@ def request(years: Sequence[int] = range(2020, 2024), hospitals: int = 48) -> An
     )
 
 
+def flagged_request(years: Sequence[int] = range(2018, 2024), hospitals: int = 60) -> Any:
+    """``request`` plus a rare 0/1 flag, a two-level category and a partly missing predictor, for the Elastic Net fold and winsorizing cases."""
+    from scripts.training.models.common import SLOTS, Dataset, Feature
+
+    base = request(years=years, hospitals=hospitals)
+    features = (
+        *base.data.features,
+        Feature("feature_matrix_hospital:flag", "number", "C002", "hospital"),
+        Feature("feature_matrix_hospital:kind", "category", "C003", "hospital"),
+    )
+    rows = tuple(
+        {
+            **row,
+            "flag": 1.0 if row["ccn"] == "990007" and row["window_year"] == 2019 else 0.0,
+            "kind": "ab"[int(row["ccn"]) % 2],
+            "extra": None if int(row["ccn"]) % 7 == 0 else row["extra"],
+        }
+        for row in base.data.rows
+    )
+    references = tuple(feature.reference for feature in features)
+    lists = {slot: references for slot in SLOTS} | {"m1_ols": references[:1], "rq4_reduced": references[:1]}
+    return replace(base, data=Dataset(rows, features, "HAI_1"), feature_lists=lists)
+
+
+def traced(call: Callable[[], Any]) -> tuple[Any, list[dict[str, Any]], list[tuple[frozenset[str], Any]]]:
+    """Run a model call and return its result, every preprocessing fit in call order (its rows and its design of those rows) and every plain-row transform."""
+    from scripts.training.models.preprocessing import FeatureBatch, FoldPreprocessor
+
+    fits: list[dict[str, Any]] = []
+    transforms: list[tuple[frozenset[str], Any]] = []
+    fit, transform = FoldPreprocessor.fit, FoldPreprocessor.transform
+
+    def tracked_fit(self: Any, values: Any, y: Any = None) -> Any:
+        keys = frozenset(row["spine_key"] for row in getattr(values, "rows", values))
+        fits.append({"keys": keys, "design": None})
+        return fit(self, values, y)
+
+    def tracked_transform(self: Any, values: Any) -> Any:
+        design = transform(self, values)
+        if isinstance(values, FeatureBatch):
+            fits[-1]["design"] = design
+        else:
+            transforms.append((frozenset(row["spine_key"] for row in values), design))
+        return design
+
+    with patch.object(FoldPreprocessor, "fit", tracked_fit), patch.object(FoldPreprocessor, "transform", tracked_transform):
+        return call(), fits, transforms
+
+
 def panel_standin(y: Any, x: Any, entities: Any, years: Any, names: Any) -> Any:
     """Provide independently computed within slopes at the native panel-library boundary."""
     from scripts.training.models.panel import PanelFits
@@ -475,6 +524,48 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require([(a.tolist(), b.tolist()) for a, b in folds] == [(a.tolist(), b.tolist()) for a, b in repeated], "folds changed for the same seed")
         for left, right in suite.time_folds(training):
             require(max(training.rows[i]["window_year"] for i in left) < min(training.rows[i]["window_year"] for i in right), "panel folds leak time")
+
+    def years_of(keys: Any) -> set[int]:
+        return {int(key.split(":")[1]) for key in keys}
+
+    def hospitals_of(keys: Any) -> set[str]:
+        return {key.split(":")[0] for key in keys}
+
+    def elastic_net_tunes_on_forward_in_time_folds() -> None:
+        wide = flagged_request()
+        with libraries():
+            result, fits, transforms = traced(lambda: suite.fit_slot(wide, "m2_elastic_net"))
+            _, again, _ = traced(lambda: suite.fit_slot(wide, "m2_elastic_net"))
+        require(result.status == "fitted", f"the Elastic Net did not fit: {result.status} {result.reason}")
+        folds = fits[:-1]
+        require(len(folds) == 4, f"training years 2018 to 2022 should give four forward folds, got {len(folds)}")
+        for position, (fold, (validation, _)) in enumerate(zip(folds, transforms, strict=False)):
+            fitting_years, validation_years = years_of(fold["keys"]), years_of(validation)
+            require(validation_years == {2019 + position}, f"fold {position} validates {sorted(validation_years)}, not the next year")
+            require(fitting_years == set(range(2018, 2019 + position)), f"fold {position} fits on {sorted(fitting_years)}, not every earlier year")
+            require(max(fitting_years) < min(validation_years), f"fold {position} validates a year at or before a fitting year")
+            require(hospitals_of(fold["keys"]) & hospitals_of(validation), f"fold {position} is grouped by hospital, not ordered in time")
+        require(years_of(fits[-1]["keys"]) == set(range(2018, 2023)), "the final fit did not use every training year")
+        require([sorted(fit["keys"]) for fit in again] == [sorted(fit["keys"]) for fit in fits], "the folds changed on a second run with the same seed")
+        with libraries():
+            _, boosted, boosted_transforms = traced(lambda: suite.fit_slot(wide, "m4_boosting"))
+        grouped = boosted[:3]
+        require(len(grouped) == 3, "gradient boosting no longer tunes on three hospital folds")
+        for fold, (validation, _) in zip(grouped, boosted_transforms, strict=False):
+            require(not hospitals_of(fold["keys"]) & hospitals_of(validation), "a gradient boosting fold shares a hospital between fitting and validation")
+        training, _ = wide.data.split()
+        require(
+            set().union(*(validation for validation, _ in boosted_transforms[:3])) == set(training.keys),
+            "gradient boosting folds no longer cover the training rows",
+        )
+
+    def elastic_net_without_a_validation_year_is_not_estimable() -> None:
+        with libraries():
+            one = suite.fit_slot(flagged_request(years=(2022, 2023)), "m2_elastic_net")
+            two = suite.fit_slot(flagged_request(years=(2021, 2022, 2023)), "m2_elastic_net")
+        require(one.status == "not_estimable" and "time-ordered validation fold" in one.reason, f"one training year was not refused: {one.status} {one.reason}")
+        require(two.status == "fitted", f"two training years should give one fold: {two.status} {two.reason}")
+        require([len(record["folds"]) for record in two.details["tuning"]] == [1] * 4, "two training years should tune on exactly one fold")
 
     def complete_suite() -> None:
         with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
@@ -1413,8 +1504,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         with libraries(), patch.object(FoldPreprocessor, "fit", tracked):
             result = suite.fit_slot(req, "m2_elastic_net")
         require(result.status == "fitted", "cached-fold tuning did not fit")
-        require(len(calls) == req.config["cross_validation"]["folds"] + 1, "tuning refitted preprocessing for each grid option")
         training, holdout = req.data.split()
+        folds = len({row["window_year"] for row in training.rows}) - 1
+        require(len(calls) == folds + 1, "tuning refitted preprocessing for each grid option")
         require(calls[-1] == frozenset(training.keys), "final preprocessing did not refit all training rows")
         require(all(not (keys & set(holdout.keys)) for keys in calls), "holdout entered cached preprocessing")
 
@@ -2435,6 +2527,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("unseen_category", unknown_category),
         ("extract_input_contract", input_contract),
         ("seeded_hospital_and_time_folds", folds),
+        ("elastic_net_tunes_on_forward_in_time_folds", elastic_net_tunes_on_forward_in_time_folds),
+        ("elastic_net_without_a_validation_year_is_not_estimable", elastic_net_without_a_validation_year_is_not_estimable),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
         ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),

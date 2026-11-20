@@ -1,7 +1,7 @@
 ---
 title: Analysis plan
 description: The outcome, predictors, six models, evaluation and promotion rules used by every training run.
-last_updated: 2026-11-17
+last_updated: 2026-11-20
 ---
 
 # Analysis plan
@@ -41,7 +41,7 @@ Every training run follows this plan. The plan changes during development, so ea
 ## Split and evaluation
 
 - The newest window year with published SIRs is the holdout. All earlier years are training data.
-- Tuning uses cross-validation inside the training years, grouped by hospital: all windows of one CCN fall in one fold. The panel model uses time-ordered folds, each with at least three fitting years.
+- Tuning uses cross-validation inside the training years. The Elastic Net and the panel model tune on forward-in-time folds: each fold trains on the earlier training years and validates on the next year. An Elastic Net fold needs at least one fitting year, so its first fold validates the second training year. A type with one training year has no fold. Its Elastic Net is then not estimable. A panel fold needs at least three fitting years. Gradient boosting tunes on folds grouped by hospital: all windows of one CCN fall in one fold.
 - All learned preprocessing (imputation, scaling, encoding and selection) is fitted inside the training folds only.
 - Holdout metrics are root mean square error (RMSE) as the primary metric, mean absolute error (MAE) and R². The likelihood models also report Akaike information criterion (AIC) and Bayesian information criterion (BIC).
 
@@ -50,7 +50,7 @@ Every training run follows this plan. The plan changes during development, so ea
 Each model has an internal key (m1 to m6) that names its DAGs, runs, feature sets and paths. People read a display name beside the key. The names live in `MODEL_LABELS` in `orchestration/training_contract.py`.
 
 1. **m1 OLS baseline:** the original capstone specification on the CMS-only predictors, as the baseline.
-2. **m2 Elastic Net:** all predictor families with CMI forced in. The grouped cross-validation tunes alpha and the L1 ratio.
+2. **m2 Elastic Net:** all predictor families with CMI forced in. The forward-in-time folds tune alpha over a log-spaced grid and the L1 ratio.
 3. **m3 Mixed effects (RQ2):** a random intercept per ownership group, taken from the ownership history as of the window start. The model reports the intraclass correlation (ICC) and a likelihood-ratio test against the fixed-only model (H2).
 4. **m4 Gradient boosting, a tree model with SHapley Additive exPlanations (SHAP):** XGBoost is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
 5. **m5 Spatial (RQ5):** Moran's I on the holdout-year residuals of the best non-spatial model. If it is significant at 0.05 (H5), a spatial lag or spatial error model follows, chosen by Lagrange multiplier tests.

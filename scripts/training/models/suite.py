@@ -41,6 +41,9 @@ from scripts.training.models.trees import TreeRegressor, shap_values
 
 # The likelihood models need a full-rank design, so their preprocessing drops the fitting-row columns that are exact combinations of others.
 LIKELIHOOD_SLOTS = frozenset(("m1_ols", "m3_mixed", "m5_spatial", "m6_fixed_effects"))
+# The slots that tune on time-ordered folds, with the fewest fitting years a fold may train on. The Elastic Net needs one year to fit a cross-section.
+# The panel needs three, by its own estimability rule.
+TIME_ORDERED_MINIMUM = {"m2_elastic_net": 1, "m6_fixed_effects": MINIMUM_FITTING_YEARS}
 
 
 def folds_for(data: Dataset, config: Mapping[str, Any], seed: int) -> list[tuple[Any, Any]]:
@@ -53,10 +56,10 @@ def folds_for(data: Dataset, config: Mapping[str, Any], seed: int) -> list[tuple
     return list(splitter.split(np.zeros(len(groups)), data.y, groups))
 
 
-def time_folds(data: Dataset) -> list[tuple[Any, Any]]:
-    """Reserve each later training year after at least three fitting years for panel fitting."""
+def time_folds(data: Dataset, minimum_years: int = MINIMUM_FITTING_YEARS) -> list[tuple[Any, Any]]:
+    """Validate each training year on every earlier year, once at least ``minimum_years`` earlier years exist."""
     years = np.asarray([row["window_year"] for row in data.rows])
-    return [(np.flatnonzero(years < year), np.flatnonzero(years == year)) for year in sorted(set(years))[MINIMUM_FITTING_YEARS:]]
+    return [(np.flatnonzero(years < year), np.flatnonzero(years == year)) for year in sorted(set(years))[minimum_years:]]
 
 
 def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], forest: bool, features: tuple[Feature, ...] | None = None) -> Any:
@@ -150,7 +153,9 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     if slot not in ("m2_elastic_net", "m4_boosting", "m6_fixed_effects"):
         return options[0], []
     fold_seed = seed_for(request.config["master_seed"], request.data.hai_type, "folds")
-    folds = time_folds(training) if slot == "m6_fixed_effects" else folds_for(training, request.config, fold_seed)
+    folds = time_folds(training, TIME_ORDERED_MINIMUM[slot]) if slot in TIME_ORDERED_MINIMUM else folds_for(training, request.config, fold_seed)
+    if not folds and slot == "m2_elastic_net":
+        raise NotEstimable("no time-ordered validation fold: the training years leave no year to validate after the first")
     if not folds:
         return options[0], [{"status": "not_estimable", "reason": "no time-ordered validation fold after three fitting years"}]
     cached: list[tuple[Prepared, Array, Prepared, Array, dict[str, Any]]] = []
