@@ -97,8 +97,13 @@ def intercept_cmi_predictions(request: ModelRequest) -> Array:
     return np.asarray(baseline.predict(transform.transform(holdout.rows)), dtype=np.float64).reshape(-1)
 
 
-def intercept_cmi_comparison(request: ModelRequest, elastic_predictions: tuple[float, ...]) -> dict[str, Any]:
-    """Score the Elastic Net against an intercept-plus-CMI model on the same holdout rows."""
+def intercept_cmi_comparison(
+    request: ModelRequest, elastic_predictions: tuple[float, ...], references: Sequence[str], parameters: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Score an Elastic Net over the process measures and CMI alone against an intercept-plus-CMI model on the same holdout rows.
+
+    ``elastic_predictions`` come from the fit on exactly ``references`` with the tuned ``parameters``. The record names them.
+    """
     holdout = request.data.split()[1]
     baseline_metric = metrics(holdout.y, intercept_cmi_predictions(request))["rmse"]
     expanded_metric = metrics(holdout.y, np.asarray(elastic_predictions))["rmse"]
@@ -108,6 +113,9 @@ def intercept_cmi_comparison(request: ModelRequest, elastic_predictions: tuple[f
         "elastic_net_rmse": expanded_metric,
         "rmse_improvement": float(baseline_metric) - float(expanded_metric),
         "holdout_rows": len(holdout.rows),
+        "elastic_net_references": list(references),
+        "elastic_net_alpha": float(parameters["alpha"]),
+        "elastic_net_l1_ratio": float(parameters["l1_ratio"]),
     }
 
 

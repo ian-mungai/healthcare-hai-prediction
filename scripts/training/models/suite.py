@@ -304,6 +304,22 @@ def fit_slot(request: ModelRequest, slot: str, *, forest: bool = False) -> SlotR
     return result
 
 
+def process_cmi_references(request: ModelRequest) -> tuple[str, ...]:
+    """The columns of the RQ1 Elastic Net comparison: the Care Compare process measures of the joint test of RQ1, then CMI. Nothing else."""
+    if not request.process_references:
+        raise ModelError("the RQ1 comparison needs at least one process measure")
+    return (*request.process_references, request.cmi_reference)
+
+
+def process_cmi_comparison(request: ModelRequest) -> dict[str, Any]:
+    """Fit the Elastic Net on the process measures and CMI alone, with the tuning and winsorizing of m2, and score it against the intercept-plus-CMI model."""
+    references = process_cmi_references(request)
+    fitted = fit_slot(replace(request, feature_lists={**request.feature_lists, "m2_elastic_net": references}), "m2_elastic_net")
+    if fitted.status != "fitted":
+        return {"status": "not_estimable", "reason": fitted.reason}
+    return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"])
+
+
 def validation_split(data: Dataset, last_year: int, years: Sequence[int]) -> tuple[Dataset, Dataset]:
     """Return the windows through last_year as training data and the named later windows as the rows to predict."""
     rows = data.rows
@@ -504,12 +520,7 @@ def fit_models(request: ModelRequest) -> ModelSuite:
         research["joint_process"] = _optional_analysis(lambda: research_tests.joint_significance(result["m1_ols"].pipeline, request.process_references))
     else:
         research["joint_process"] = {"status": "not_estimable", "reason": result["m1_ols"].reason}
-    if result["m2_elastic_net"].status == "fitted":
-        research["process_vs_intercept_cmi"] = _optional_analysis(
-            lambda: research_tests.intercept_cmi_comparison(request, result["m2_elastic_net"].predictions)
-        )
-    else:
-        research["process_vs_intercept_cmi"] = {"status": "not_estimable", "reason": result["m2_elastic_net"].reason}
+    research["process_vs_intercept_cmi"] = _optional_analysis(lambda: process_cmi_comparison(request))
     research["ownership"] = {"status": result["m3_mixed"].status, "reason": result["m3_mixed"].reason, **result["m3_mixed"].details}
     research["hospital_effects"] = result["m6_fixed_effects"].details.get(
         "mundlak", {"status": result["m6_fixed_effects"].status, "reason": result["m6_fixed_effects"].reason}
@@ -562,8 +573,9 @@ def _spatial(request: ModelRequest) -> tuple[SlotResult, dict[str, Any]]:
 def fit_model(request: ModelRequest, model: str) -> ModelSuite:
     """Fit one model of the per-model design and run only the tests it owns.
 
-    m1 runs the joint test of the process measures and fits the reduced side of RQ4. m2 compares itself with the intercept and CMI model and fits the full
-    side of RQ4. m3 reports its ownership test, m4 its SHAP values, m5 the RQ5 test and m6 the RQ6 test. Every other slot stays ``not_run``.
+    m1 runs the joint test of the process measures and fits the reduced side of RQ4. m2 compares an Elastic Net over the process measures and CMI with the
+    intercept and CMI model and fits the full side of RQ4. m3 reports its ownership test, m4 its SHAP values, m5 the RQ5 test and m6 the RQ6 test.
+    Every other slot stays ``not_run``.
     """
     if model not in MODEL_SLOT:
         raise ModelError("unknown model")
@@ -593,9 +605,7 @@ def fit_model(request: ModelRequest, model: str) -> ModelSuite:
         )
         sides["rq4_reduced"] = _optional_analysis(lambda: research_tests.rq4_side(request, "reduced"))
     elif model == "m2":
-        research["process_vs_intercept_cmi"] = (
-            _optional_analysis(lambda: research_tests.intercept_cmi_comparison(request, fitted.predictions)) if fitted.status == "fitted" else unfitted
-        )
+        research["process_vs_intercept_cmi"] = _optional_analysis(lambda: process_cmi_comparison(request))
         sides["rq4_full"] = _optional_analysis(lambda: research_tests.rq4_side(request, "full"))
     elif model == "m3":
         research["ownership"] = {"status": fitted.status, "reason": fitted.reason, **fitted.details}

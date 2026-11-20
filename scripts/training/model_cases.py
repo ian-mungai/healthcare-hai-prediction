@@ -658,6 +658,61 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             unclipped = raw.max() if slot == "m4_boosting" else (raw.max() - raw.mean()) / raw.std()
             require(np.isclose(after.matrix[:, after.names.index("process")].max(), unclipped), f"{slot}: the planted extreme was clipped")
 
+    def rq1_comparison_fits_process_measures_and_cmi_only() -> None:
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        process, cmi = wide.process_references[0], wide.cmi_reference
+        seen: list[frozenset[str]] = []
+        original = ElasticRegressor.fit
+
+        def tracked(self: Any, design: Any, y: Any) -> Any:
+            seen.append(frozenset(design.references))
+            return original(self, design, y)
+
+        with libraries(), patch.object(ElasticRegressor, "fit", tracked):
+            output = suite.fit_model(wide, "m2")
+        with libraries():
+            reference = suite.fit_slot(replace(wide, feature_lists={**wide.feature_lists, "m2_elastic_net": (process, cmi)}), "m2_elastic_net")
+        record = output.research["process_vs_intercept_cmi"]
+
+        def rmse_of(result: Any) -> float:
+            value = result.metrics["rmse"]
+            return math.nan if value is None else value
+
+        require(frozenset((process, cmi)) in seen, "no Elastic Net was fitted on the process measures and CMI alone")
+        require(np.isclose(record["elastic_net_rmse"], rmse_of(reference)), "the comparison is not the process-and-CMI Elastic Net")
+        require(record["status"] == "fitted" and list(record["elastic_net_references"]) == [process, cmi], f"the comparison names other columns: {record}")
+        require(not np.isclose(record["elastic_net_rmse"], rmse_of(output.slots["m2_elastic_net"])), "the comparison is still the full Elastic Net")
+        require(output.slots["m2_elastic_net"].status == "fitted", "the full Elastic Net of the run changed")
+
+    def rq1_comparison_columns_in_the_real_lists() -> None:
+        from scripts.training import job_inputs
+
+        root = Path(__file__).resolve().parents[2]
+        lists, known = job_inputs.feature_lists(root, "m2"), job_inputs.catalog(root)
+        names = sorted({reference.split(":", 1)[1] for items in lists.values() for reference in items})
+        values = {reference.split(":", 1)[1]: "a" if feature.kind == "category" else 1.0 for reference, feature in known.items()}
+        rows = [
+            {"spine_key": f"{990000 + hospital}:{year}", "ccn": str(990000 + hospital), "window_year": year, "hai_1__sir__number": 1.0}
+            | {name: values[name] for name in names}
+            for hospital in range(4)
+            for year in (2022, 2023)
+        ]
+        built = job_inputs.model_request("HAI_1", rows, (), job_inputs.config_of(root), 60.0, root, "m2")
+        references = suite.process_cmi_references(built)
+        earlier = set(json.loads((root / "config/training/earlier_outcomes.json").read_text())["controls"])
+        process = [
+            reference
+            for reference in json.loads((root / "config/training/feature_lists/m1_ols.json").read_text())["references"]
+            if known[reference].family == "care_compare"
+        ]
+        require(references == (*process, built.cmi_reference), "the comparison columns are not the Care Compare process measures plus CMI")
+        require(
+            not any(known[reference].control.split(".", 1)[0] in earlier or reference.startswith("feature_matrix_history") for reference in references),
+            "an earlier outcome is in the comparison",
+        )
+
     def complete_suite() -> None:
         with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
             output = suite.fit_models(req)
@@ -2624,6 +2679,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("elastic_net_final_fit_clips_holdout_rows", elastic_net_final_fit_clips_holdout_rows),
         ("elastic_net_winsorizing_leaves_flags_and_categories", elastic_net_winsorizing_leaves_flags_and_categories),
         ("other_models_are_not_winsorized", other_models_are_not_winsorized),
+        ("rq1_comparison_fits_process_measures_and_cmi_only", rq1_comparison_fits_process_measures_and_cmi_only),
+        ("rq1_comparison_columns_in_the_real_lists", rq1_comparison_columns_in_the_real_lists),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
         ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),

@@ -66,13 +66,13 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
 ## Model runs
 
 - A training run fits one model, m1 to m6 in the order of the list above. It reads the Feast feature service `model_<id>` of its feature set and runs only the tests that model owns. A run logs the tags `model` and `base_run`, the identity of the base publication that its feature set was built from.
-- m1 (OLS baseline) runs the joint F test of RQ1 and fits the reduced model of RQ4 (the CMS-only list). m2 (Elastic Net) runs the Elastic Net comparison with the intercept and CMI model (RQ1), fits the full model of RQ4 on its own list and runs the mediation (RQ3). m3 (Mixed effects) reports the ownership test (RQ2), m4 (Gradient boosting) the SHAP values, m5 (Spatial) the RQ5 test and m6 (Fixed effects) the RQ6 test. HAC validation refits each model's own specification.
+- m1 (OLS baseline) runs the joint F test of RQ1 and fits the reduced model of RQ4 (the CMS-only list). m2 (Elastic Net) fits a second Elastic Net on the process and structure measures and CMI only and compares it with the intercept and CMI model (RQ1), fits the full model of RQ4 on its own list and runs the mediation (RQ3). m3 (Mixed effects) reports the ownership test (RQ2), m4 (Gradient boosting) the SHAP values, m5 (Spatial) the RQ5 test and m6 (Fixed effects) the RQ6 test. HAC validation refits each model's own specification.
 - m5 (Spatial) has no other model's residuals, so its Moran's I test uses the residuals of an OLS fit on the m5 list.
 - The research job runs the tests that need two models, once the models have finished runs with the same `base_run`: RQ4 compares the reduced and the full fit on the same rows and holdout windows.
 
 ## Research question tests
 
-- **RQ1 (H1):** the joint significance of the process and structure measures in the OLS and Elastic Net models: an F test on OLS and the holdout RMSE against a model with only an intercept and CMI.
+- **RQ1 (H1):** the joint significance of the process and structure measures in the OLS and Elastic Net models: an F test on OLS and, for the Elastic Net, the holdout RMSE of an Elastic Net on the Care Compare process and structure measures plus CMI, with no other predictor family and no earlier outcome, against a model with only an intercept and CMI. That Elastic Net tunes and clips like m2.
 - **RQ2 (H2):** model 3.
 - **RQ3 (H3):** mediation of the process measures on SIR through PSI-90, by the product of coefficients with a bootstrap confidence interval for the indirect effect (5,000 resamples). The result is associational, not causal.
 - **RQ4 (H4):** a nested comparison of CMS-only against CMS plus HCRIS, CMI and county context on the same rows: likelihood-ratio and F tests in-sample and the holdout RMSE difference with a bootstrap interval.
