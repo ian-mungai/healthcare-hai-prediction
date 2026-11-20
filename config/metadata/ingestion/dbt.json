@@ -3,7 +3,6 @@
     "database": "hai_lakehouse",
     "schemas": {
       "bronze": "bronze",
-      "bronze_dictionary": "bronze_dictionary",
       "silver": "silver",
       "gold": "gold",
       "features": "features"

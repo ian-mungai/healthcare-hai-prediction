@@ -395,10 +395,40 @@ def edges_equal_the_declared_lineage() -> None:
         require(all("facets" not in item for item in failed["inputs"]), f"{job}: a failed job claims no pinned version")
 
 
+def dbt_layers(mirror: dict[str, Any]) -> set[str]:
+    """The mirror layers that dbt knows: those with a model folder of SQL files under ``dbt/models`` or a declared dbt source schema, from the dbt project."""
+    yaml = importlib.import_module("yaml")
+    models = ROOT / "dbt/models"
+    known = {folder.name for folder in models.iterdir() if folder.is_dir() and any(folder.rglob("*.sql"))}
+    for path in models.rglob("*.yml"):
+        known |= {str(source["schema"]) for source in (yaml.safe_load(path.read_text()) or {}).get("sources", []) if "schema" in source}
+    return {layer for layer, spec in mirror["layers"].items() if spec["namespace"] in known}
+
+
+def dbt_mapping_problem(mirror: dict[str, Any], layers_with_dbt: set[str], places: dict[str, str]) -> str:
+    """Why the dbt mapping is not the one of the mirror layers that have dbt models or sources (a layer without them needs no mapping), or ``""``."""
+    wanted = {layer: spec["database"] for layer, spec in mirror["layers"].items() if layer in layers_with_dbt}
+    return "" if places == wanted else f"the dbt mapping must name exactly the mirror layers that have dbt models or sources {sorted(wanted)}: {places}"
+
+
+def a_mirror_layer_without_dbt_models_needs_no_dbt_mapping() -> None:
+    mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
+    dbt = dbt_layers(mirror)
+    require({"silver", "gold", "features", "bronze"} <= dbt and "bronze_dictionary" not in dbt, f"the dbt layers are {sorted(dbt)}")
+    extra = {**mirror, "layers": {**mirror["layers"], "no_models": {"namespace": "no_models", "database": "no_models"}}}
+    require("no_models" not in dbt_layers(extra), "a layer without dbt models counts as a dbt layer")
+    places = {layer: mirror["layers"][layer]["database"] for layer in dbt}
+    require(dbt_mapping_problem(extra, dbt_layers(extra), places) == "", "a mirror layer without dbt models needs a dbt mapping")
+    require(
+        dbt_mapping_problem(mirror, dbt, {key: value for key, value in places.items() if key != "gold"}) != "", "a layer with dbt models may lack its mapping"
+    )
+    require(dbt_mapping_problem(mirror, dbt, {**places, "no_models": "no_models"}) != "", "a mapping may name a layer that has no dbt models")
+
+
 def names_equal_the_connector_names() -> None:
     """A dataset name is the table FQN the Glue connector creates for the mirror, without its service name; the dbt connector writes to the same service and
     the same Glue databases (the models and the bronze sources are moved to them at ingestion). Every layer of athena_mirror.json is in the connector's
-    schema filter and in the dbt mapping, so no dataset names a table the catalog does not read."""
+    schema filter, and every layer that has dbt models or sources is in the dbt mapping, so no dataset names a table the catalog does not read."""
     glue_source = json.loads((ROOT / "config/metadata/ingestion/glue.json").read_text())["source"]
     dbt_config = json.loads((ROOT / "config/metadata/ingestion/dbt.json").read_text())
     mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
@@ -410,8 +440,8 @@ def names_equal_the_connector_names() -> None:
     require(
         set(databases) == set(MIRROR_SCHEMA) and all(databases[layer] == MIRROR_SCHEMA[layer] for layer in databases), f"the mirror config names {databases}"
     )
-    places = dbt_config["hai_glue_mapping"]["schemas"]
-    require(places == databases, f"the dbt mapping must name every mirror layer, the models of silver, gold and features and the bronze sources: {places}")
+    problem = dbt_mapping_problem(mirror, dbt_layers(mirror), dbt_config["hai_glue_mapping"]["schemas"])
+    require(not problem, problem)
     includes = set(glue_source["sourceConfig"]["config"]["schemaFilterPattern"]["includes"])
     require({f"^{name}$" for name in databases.values()} <= includes, f"the Glue connector's schema filter lacks a mirror database: {sorted(includes)}")
     item = ecs_lineage.dataset("gold", "fact_hai_measure")
@@ -1293,6 +1323,7 @@ CASES: dict[str, Callable[[], None]] = {
     "every_job_with_declared_datasets": every_job_with_declared_datasets,
     "edges_equal_the_declared_lineage": edges_equal_the_declared_lineage,
     "names_equal_the_connector_names": names_equal_the_connector_names,
+    "a_mirror_layer_without_dbt_models_needs_no_dbt_mapping": a_mirror_layer_without_dbt_models_needs_no_dbt_mapping,
     "layer_table_events_carry_each_tables_own_edges": layer_table_events_carry_each_tables_own_edges,
     "real_gold_edges_are_not_a_cross_product": real_gold_edges_are_not_a_cross_product,
     "layer_task_event_names_no_dataset": layer_task_event_names_no_dataset,

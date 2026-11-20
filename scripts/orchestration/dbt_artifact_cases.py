@@ -305,7 +305,10 @@ def connector_config_places_the_models() -> None:
     mapping = config.pop(MAPPING_KEY)
     require(mapping == {"database": "hai_lakehouse", "schemas": PLACES}, f"the models and bronze sources are not placed in the Glue mirror: {mapping}")
     require(config["source"]["serviceName"] == "glue_mirror", f"the dbt models attach to {config['source']['serviceName']}")
-    require("catalogMapping" not in config["source"]["sourceConfig"]["config"], "bronze is not mirrored, so no catalog maps to a Glue database")
+    require(
+        "catalogMapping" not in config["source"]["sourceConfig"]["config"],
+        "the dbt connector places models by the hai_glue_mapping, so no catalog maps to a Glue database",
+    )
     require(not violations(config), f"dbt.json is refused: {violations(config)}")
 
 
