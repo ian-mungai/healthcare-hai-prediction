@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -1742,6 +1743,23 @@ def office_records(members: list[tuple[str, str | bytes]], method: int = zipfile
     return buffer.getvalue()
 
 
+def damaged_package(kind: str) -> bytes:
+    """A package of one member named with a user path that a ZIP reader cannot read: a damaged LZMA stream, a too new extract version or a bad UTF-8 name."""
+    name = "/" + f"Users/{DOCUMENT_USER}/Documents/named.xml"
+    data = bytearray(office_records([(name, "<a>" + "x" * 40 + "</a>")], zipfile.ZIP_LZMA if kind == "lzma" else zipfile.ZIP_STORED))
+    local, central = data.index(b"PK\x03\x04"), data.index(b"PK\x01\x02")
+    if kind == "lzma":
+        data[local + 30 + sum(struct.unpack_from("<HH", data, local + 26)) + 4] = 0xFF
+    elif kind == "version":
+        struct.pack_into("<H", data, local + 4, 70)
+        struct.pack_into("<H", data, central + 6, 70)
+    else:
+        struct.pack_into("<H", data, local + 6, 0x800)
+        struct.pack_into("<H", data, central + 8, 0x800)
+        data[central + 46] = 0xFF
+    return bytes(data)
+
+
 def pdf_document(content: str) -> bytes:
     """A small PDF whose one content stream holds ``content`` compressed, as a publisher's PDF does, so only a read of the decoded stream sees it."""
     body = zlib.compress(content.encode())
@@ -1778,6 +1796,27 @@ def document_path_cases() -> list[Case]:
             False,
             {"config/book.xlsx": bytes(damaged)},
             reason="config/book.xlsx: unreadable document: member 2 cannot be read",
+        ),
+        Case(
+            "workbook with a damaged LZMA member is blocked without a traceback",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": damaged_package("lzma")},
+            reason="config/book.xlsx: unreadable document: member 1 cannot be read",
+        ),
+        Case(
+            "workbook that needs a newer ZIP version is blocked without a traceback",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": damaged_package("version")},
+            reason="config/book.xlsx: unreadable document: an Office package cannot be read as a ZIP archive",
+        ),
+        Case(
+            "workbook with a malformed UTF-8 member name is blocked without a traceback",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": damaged_package("utf8")},
+            reason="config/book.xlsx: unreadable document: an Office package cannot be read as a ZIP archive",
         ),
         Case(
             "workbook with a path in the first of two members of one name is blocked",

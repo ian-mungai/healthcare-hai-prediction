@@ -31,6 +31,10 @@ HINT = re.compile(rb"users|home|~|file:", re.IGNORECASE)
 STREAM = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
 
 
+class UnreadableDocument(ValueError):
+    """A document that cannot be read as it is. Its text is fixed and holds nothing from the file: no member name, no decoder message."""
+
+
 def views(body: bytes) -> list[str]:
     """The readings of a member that a person's path can take: UTF-8 or Latin-1 text, and UTF-16 either way round."""
     texts = [body.decode("utf-8", errors="replace") if b"\0" not in body else body.decode("latin-1")]
@@ -57,26 +61,27 @@ def has_path(body: bytes, found: Callable[[str], bool]) -> bool:
 def office_members(data: bytes) -> list[tuple[str, bytes]]:
     """Every member record of an Office package, in archive order, as ``(name, body)``. The name is untrusted: it only picks a fixed kind label.
 
-    Two records with the same name (Office part names ignore case) are refused, so that no body hides behind another of one name. A record that cannot
-    be read is refused too. The diagnostics name a member by its position and never by its name.
+    Two records with the same name (Office part names ignore case) are refused, so that no body hides behind another of one name. Any failure to open
+    the archive or to read a record is refused with a fixed text, whatever the reader raised: the reader's own messages quote member names and bytes.
+    The diagnostics name a member by its position and never by its name.
     """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile:
-        raise ValueError("an Office package cannot be read as a ZIP archive") from None
+    except Exception:
+        raise UnreadableDocument("an Office package cannot be read as a ZIP archive") from None
     with archive:
         infos = archive.infolist()
         names = [info.filename.casefold() for info in infos]
         if len(set(names)) != len(names):
-            raise ValueError("an Office package holds two members with the same name")
+            raise UnreadableDocument("an Office package holds two members with the same name")
         members = []
         for position, info in enumerate(infos, 1):
             if info.file_size > MAX_MEMBER_BYTES:
-                raise ValueError(f"member {position} is too large to scan")
+                raise UnreadableDocument(f"member {position} is too large to scan")
             try:
                 members.append((info.filename, archive.read(info)))
-            except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError, OSError):
-                raise ValueError(f"member {position} cannot be read") from None
+            except Exception:
+                raise UnreadableDocument(f"member {position} cannot be read") from None
     return members
 
 
@@ -106,7 +111,7 @@ def pdf_streams(data: bytes) -> list[bytes]:
             continue
         total += len(body)
         if total > 4 * MAX_STREAM_BYTES:
-            raise ValueError("the PDF streams are too large to scan")
+            raise UnreadableDocument("the PDF streams are too large to scan")
         streams.append(body)
     return streams
 
@@ -114,8 +119,8 @@ def pdf_streams(data: bytes) -> list[bytes]:
 def members_with_user_path(data: bytes, suffix: str, found: Callable[[str], bool]) -> list[str]:
     """The members of an Office or PDF file that hold a user directory path: ``member <position> (<kind>)`` for a package, else ``(file)``, ``(stream)``.
 
-    Raises ValueError, with a text that holds nothing from the file, for a package or a stream set that cannot be read, so that an unreadable file is
-    never taken as clean.
+    Raises UnreadableDocument (a ValueError), with a text that holds nothing from the file, for a package or a stream set that cannot be read,
+    so that an unreadable file is never taken as clean.
     """
     suffix = suffix.lower()
     if suffix in OFFICE_SUFFIXES:

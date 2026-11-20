@@ -2645,6 +2645,9 @@ def line_privacy(line: str, values: list[str]) -> list[str]:
     return kinds
 
 
+UNREADABLE_FIX = "repair or replace the file, or review it by hand and ask the owner"
+
+
 def document_findings(path: str, data: bytes, allowed: list[tuple[str, str]]) -> list[Finding]:
     """The members of an Office or PDF file that hold a user directory path, one finding each; neither the value nor a member name is reported.
 
@@ -2654,8 +2657,11 @@ def document_findings(path: str, data: bytes, allowed: list[tuple[str, str]]) ->
     description = PRIVACY_PATTERNS["home-path"][0]
     try:
         members = document_paths.members_with_user_path(data, Path(path).suffix, home_path_found)
-    except ValueError as error:
-        return [Finding(path, f"unreadable document: {error}", PRIVACY_RULE, "repair or replace the file, or review it by hand and ask the owner")]
+    except document_paths.UnreadableDocument as error:
+        return [Finding(path, f"unreadable document: {error}", PRIVACY_RULE, UNREADABLE_FIX)]
+    except Exception:
+        # Whatever else a reader raises may quote the file, so only a fixed text is reported; the file still fails the scan.
+        return [Finding(path, "unreadable document: the file cannot be read", PRIVACY_RULE, UNREADABLE_FIX)]
     if any(entry_kind == "home-path" and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
         return []
     return [Finding(f"{path}!{member}", description, PRIVACY_RULE, PRIVACY_FIX) for member in members]

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import io
+import struct
 import warnings
 import zipfile
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -180,3 +182,75 @@ def test_a_member_too_large_to_scan_is_named_by_its_index_only(monkeypatch: pyte
     findings = repo_checks.document_findings("config/example.xlsx", named_archive([(name, b"x" * 50)]), [])
     check(findings[0].problem == "unreadable document: member 1 is too large to scan", f"{findings[0].problem}")
     check("synthetic_person" not in captured(findings), "the name is not printed")
+
+
+BAD_ARCHIVE = "unreadable document: an Office package cannot be read as a ZIP archive"
+NAMED_MEMBER = MAC.replace("book.xlsx", "named.xml")
+
+
+def with_named_member(method: int) -> tuple[bytearray, int, int, int]:
+    """An archive of one member named with a user path, and the offsets of its local header, its central header and its stored data."""
+    data = bytearray(named_archive([(NAMED_MEMBER, b"<info>" + WINDOWS.encode() + b"</info>")], method))
+    local, central = data.index(b"PK\x03\x04"), data.index(b"PK\x01\x02")
+    return data, local, central, local + 30 + sum(struct.unpack_from("<HH", data, local + 26))
+
+
+def lzma_damaged() -> bytes:
+    data, _, _, start = with_named_member(zipfile.ZIP_LZMA)
+    data[start + 4] = 0xFF
+    return bytes(data)
+
+
+def extract_version_too_new() -> bytes:
+    data, local, central, _ = with_named_member(zipfile.ZIP_DEFLATED)
+    struct.pack_into("<H", data, local + 4, 70)
+    struct.pack_into("<H", data, central + 6, 70)
+    return bytes(data)
+
+
+def bad_utf8_name(header: str) -> bytes:
+    """A member whose name header claims UTF-8 and holds an invalid byte, in the local header or in the central directory."""
+    data, local, central, _ = with_named_member(zipfile.ZIP_STORED)
+    struct.pack_into("<H", data, local + 6, 0x800)
+    struct.pack_into("<H", data, central + 8, 0x800)
+    data[(local + 30) if header == "local" else (central + 46)] = 0xFF
+    return bytes(data)
+
+
+@pytest.mark.parametrize(
+    ("label", "build", "problem"),
+    [
+        ("damaged_lzma_member", lzma_damaged, "unreadable document: member 1 cannot be read"),
+        ("extract_version_too_new", extract_version_too_new, BAD_ARCHIVE),
+        ("bad_utf8_name_in_the_local_header", lambda: bad_utf8_name("local"), "unreadable document: member 1 cannot be read"),
+        ("bad_utf8_name_in_the_central_directory", lambda: bad_utf8_name("central"), BAD_ARCHIVE),
+    ],
+)
+def test_every_other_unreadable_archive_ends_in_a_fixed_finding_without_text_from_the_archive(label: str, build: Callable[[], bytes], problem: str) -> None:
+    [finding] = repo_checks.document_findings("config/example.xlsx", build(), [])
+    check(finding.location == "config/example.xlsx" and finding.problem == problem, f"{label}: {finding}")
+    printed = captured([finding]).lower()
+    for part in ("synthetic_person", "users", "named.xml", "\\x", "0x", "utf-8", "codec", "position", "lzma"):
+        check(part not in printed, f"{label}: the output holds {part!r}")
+
+
+def test_a_failure_that_the_reader_does_not_name_is_still_a_fixed_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(info: object) -> bytes:
+        raise MemoryError("synthetic_person")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", lambda self, info: explode(info))
+    [finding] = repo_checks.document_findings("config/example.xlsx", named_archive([("xl/workbook.xml", b"<workbook/>")]), [])
+    check(finding.problem == "unreadable document: member 1 cannot be read" and "synthetic_person" not in captured([finding]), f"{finding}")
+
+
+@pytest.mark.parametrize(
+    "failure", [ValueError("synthetic_person named.xml"), KeyError("synthetic_person"), UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic_person")]
+)
+def test_the_scan_reports_only_a_fixed_text_for_a_failure_the_document_check_did_not_normalize(monkeypatch: pytest.MonkeyPatch, failure: Exception) -> None:
+    def fail(*_: object) -> list[str]:
+        raise failure
+
+    monkeypatch.setattr(document_paths, "members_with_user_path", fail)
+    [finding] = repo_checks.document_findings("config/example.xlsx", b"PK", [])
+    check(finding.problem == "unreadable document: the file cannot be read" and finding.location == "config/example.xlsx", f"{finding}")
+    check("synthetic_person" not in captured([finding]) and "named.xml" not in captured([finding]), "nothing from the failure is printed")
