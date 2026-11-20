@@ -54,7 +54,7 @@ from scripts.acquisition import completion_record as records
 from scripts.acquisition import ingestion_intent as intents
 from scripts.acquisition.capture import capture, receipt_validator
 from scripts.acquisition.collection_layout import capture_root, load_routes
-from scripts.acquisition.mapped_archives import expand_tree
+from scripts.acquisition.mapped_archives import expand_tree, stored_member_names
 from scripts.acquisition.s3_store import StorageError, encoded_json, upload_snapshot
 from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.transport import CaptureError, StopAtRateLimit, canonical_url
@@ -493,12 +493,6 @@ INTENT_REASONS = frozenset({"intent_forged", "intent_unreadable"})
 
 def base_text(digest_hex: str) -> str:
     return base64.b64encode(bytes.fromhex(digest_hex)).decode()
-
-
-def member_name(chain: Iterable[str]) -> str:
-    """The stored name of an archive member, as the mapped storage path names it."""
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(list(chain)[-1]).name)
-    return ("member_" + name if not name or not name[0].isalnum() else name)[:200]
 
 
 def load_inputs(run: CaptureRun) -> tuple[list[dict], dict[str, dict], str]:
@@ -973,7 +967,8 @@ def clear_scratch(scratch: Path) -> None:
 def local_payload(receipt: dict, mapping: dict | None) -> list[tuple[str, str]]:
     """The (stored name, SHA-256) pairs of the data-role files, known before anything is stored."""
     if mapping is not None:
-        return [(member_name(item["member_chain"]), item["sha256"]) for item in mapping["members"] if item["role"] == "data"]
+        names = stored_member_names(mapping["members"])
+        return [(names[tuple(item["member_chain"])], item["sha256"]) for item in mapping["members"] if item["role"] == "data"]
     return [(item["stored_file_name"], item["sha256"]) for item in receipt["artifacts"] if item["role"] == "data"]
 
 

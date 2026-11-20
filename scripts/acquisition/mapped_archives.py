@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import re
 import zipfile
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 from scripts.acquisition.archive_review import expand_archive, is_zip_container
 from scripts.acquisition.dataset_layout import dataset_id
@@ -40,6 +43,28 @@ def expand_tree(path: Path, output: Path, digest: str, *, max_bytes: int = 1024*
     return leaves
 
 
+def stored_member_names(members: Iterable[Mapping[str, Any]]) -> dict[tuple[str, ...], str]:
+    """The stored file name of every mapped member, by member chain. A member keeps its plain name: the last part of its chain, cleaned and cut to 200.
+
+    Data members of one dataset that have the same plain name and the same content would be stored under one key and counted once, so each of them gets a
+    name that adds a short digest of its own member chain before its extension. A member whose plain name is its own, or that differs in content, is unchanged.
+    """
+    plain = {}
+    for item in members:
+        chain = tuple(item["member_chain"])
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(chain[-1]).name)
+        plain[chain] = ("member_" + name if not name or not name[0].isalnum() else name)[:200]
+    groups = Counter((item["dataset_id"], plain[tuple(item["member_chain"])], item["sha256"]) for item in members if item["role"] == "data")
+    names = {}
+    for item in members:
+        chain, name = tuple(item["member_chain"]), plain[tuple(item["member_chain"])]
+        if item["role"] == "data" and groups[(item["dataset_id"], name, item["sha256"])] > 1:
+            ending = Path(name).suffix
+            name = f"{name[: 200 - len(ending) - 9]}_{canonical_hash(list(chain))[:8]}{ending}"
+        names[chain] = name
+    return names
+
+
 def mapped_storage_entries(receipt_path: Path, receipt: dict, registry: dict, mapping: dict, route: dict) -> tuple[list[dict], set[str]]:
     """Validate a complete reviewed archive map and return storage entries and container hashes."""
     from scripts.acquisition.s3_store import encoded_json, write_once
@@ -65,6 +90,7 @@ def mapped_storage_entries(receipt_path: Path, receipt: dict, registry: dict, ma
     if len(selected) != len(mapping["members"]) or set(selected) != set(leaves):
         raise CaptureError("Archive map must identify every leaf exactly once.")
     entries = []
+    names = stored_member_names(mapping["members"])
     for chain, item in selected.items():
         leaf = leaves[chain]
         if (leaf["sha256"], leaf["byte_count"]) != (item["sha256"], item["bytes"]) or item["role"] not in {"data", "reference"}:
@@ -75,13 +101,10 @@ def mapped_storage_entries(receipt_path: Path, receipt: dict, registry: dict, ma
             "reference_kind" in item and item["role"] == "data" and kind is not None
         ):
             raise CaptureError("Explicit reference classification is invalid or attached to data.")
-        name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(chain[-1]).name)
-        if not name or not name[0].isalnum():
-            name = "member_" + name
         entries.append(
             {
                 "storage_path": leaf["local_path"].relative_to(root).as_posix(),
-                "stored_file_name": name[:200],
+                "stored_file_name": names[chain],
                 "role": item["role"],
                 "archive_member": json.dumps(list(chain)),
                 "member_chain": list(chain),

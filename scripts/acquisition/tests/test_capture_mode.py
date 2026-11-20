@@ -785,6 +785,56 @@ def pdf(number: int) -> bytes:
     return b"%PDF-1.7\nexample documentation " + str(number).encode() + b"\n%%EOF"
 
 
+def nested_archive(first: bytes, second: bytes) -> bytes:
+    """A release zip with one top-level data file and two nested zips that each hold a data file called shared.csv."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as handle:
+        handle.writestr("plain.csv", b"id,value\n9,9\n")
+        for name, body in (("one.zip", first), ("two.zip", second)):
+            inner = io.BytesIO()
+            with zipfile.ZipFile(inner, "w") as nested:
+                nested.writestr("shared.csv", body)
+            handle.writestr(name, inner.getvalue())
+    return buffer.getvalue()
+
+
+NESTED_MEMBERS = [
+    {"member_chain": ["plain.csv"], "role": "data", "dataset_id": "synthetic_table"},
+    {"member_chain": ["one.zip", "shared.csv"], "role": "data", "dataset_id": "synthetic_table"},
+    {"member_chain": ["two.zip", "shared.csv"], "role": "data", "dataset_id": "synthetic_table"},
+]
+
+
+def test_nested_members_with_one_file_name_and_one_content_complete_under_distinct_stored_names(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.zip"], {"a.zip": NESTED_MEMBERS})
+    url = world.units[0]["url"]
+    world.bodies[url] = nested_archive(b"id,value\n1,2\n", b"id,value\n1,2\n")
+    first = world.run()
+    check([item["reason"] for item in first["units"]["failed"]] == [] and len(first["units"]["completed"]) == 1, str(first["units"]))
+    (only,) = world.records().values()
+    names = [item["stored_file_name"] for item in only["data_objects"]]
+    check(len(names) == 3 and len(set(names)) == 3 and "plain.csv" in names, f"one stored name per member, the plain member keeps its name: {names}")
+    check(
+        all(name.endswith(".csv") for name in names) and sum(name.startswith("shared") for name in names) == 2,
+        f"the two colliding members are renamed: {names}",
+    )
+    again = world.run(recheck=True)
+    check(
+        again["counters"]["unchanged"] == 1 and again["counters"]["objects_created"] == 0,
+        f"a monthly run of the same archive sees no change: {again['counters']}",
+    )
+
+
+def test_nested_members_with_one_file_name_and_different_content_keep_their_plain_stored_name(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.zip"], {"a.zip": NESTED_MEMBERS})
+    url = world.units[0]["url"]
+    world.bodies[url] = nested_archive(b"id,value\n1,2\n", b"id,value\n3,4\n")
+    first = world.run()
+    check(len(first["units"]["completed"]) == 1, str(first["units"]))
+    (only,) = world.records().values()
+    check(sorted(item["stored_file_name"] for item in only["data_objects"]) == ["plain.csv", "shared.csv", "shared.csv"], str(only["data_objects"]))
+
+
 def test_a_data_change_in_a_later_run_counts_as_changed_and_a_reference_change_as_unchanged(tmp_path: Path) -> None:
     world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
     url = world.units[0]["url"]
