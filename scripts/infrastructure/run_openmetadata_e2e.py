@@ -376,7 +376,7 @@ def ingest_dbt_still_stops_on_a_fetch_failure_or_stale_artifacts_before_sending_
     require(code == 1 and read == [], f"stale copy: code {code}, ingested {read}")
 
 
-def glue_config_reads_the_two_mirror_databases_with_the_task_role() -> None:
+def glue_config_reads_every_mirror_database_with_the_task_role() -> None:
     """OpenMetadata 2.0.7 has no Iceberg connector (open-metadata PR 26365), so the tables come from the Glue mirror (owner decision of Nov 7 2026)."""
     glue = load("glue")
     mirror = json.loads((REPO / "config/lakehouse/athena_mirror.json").read_text())
@@ -1642,7 +1642,7 @@ def project_policies_pass_the_catalog_role_and_only_the_catalog_forward_document
 
 
 CASES: list[Callable[[], None]] = [
-    glue_config_reads_the_two_mirror_databases_with_the_task_role,
+    glue_config_reads_every_mirror_database_with_the_task_role,
     ingest_dbt_points_gold_and_features_models_at_the_glue_tables,
     bounded_wrapper_exits_zero_when_stopped_after_the_deadline,
     bounded_wrapper_fails_when_stopped_before_the_deadline,

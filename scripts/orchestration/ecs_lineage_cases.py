@@ -1244,8 +1244,9 @@ def table_events_are_sent_for_the_project_transport_type() -> None:
 
 
 def catalogue_of_the_mirror() -> set[tuple[str, str]]:
-    """The ``(schema, table)`` of every table the Glue mirror catalogues, from the code that writes them (the bronze table map, the pin, the silver, gold and
-    features publish plans and each model set's plan), not from the files ``declared_lineage`` reads."""
+    """The ``(schema, table)`` of every table that a lineage dataset can name, from the code that writes them (the bronze table map, the pin, the silver,
+    gold and features publish plans and each model set's plan), not from the files ``declared_lineage`` reads. The dictionaries are catalogued too but
+    have no lineage dataset in this change, so they are not in this set."""
     from scripts.features import features_publish
 
     schema = json.loads((ROOT / ecs_lineage.FEATURE_SCHEMA_FILE).read_text())

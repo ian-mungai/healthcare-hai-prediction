@@ -11,6 +11,9 @@ policies as they were applied (their descriptions and documents, with synthetic 
 1. update ``run_record_writes`` in place (its document gained the mirror attempt keys) and leave the six other policies untouched;
 2. destroy, create or replace nothing, and name no ``replace_paths`` anywhere.
 
+A second plan targets the Glue mirror grants: the bronze writer's two inline policies (the bronze and the bronze_dictionary database) are created, the three
+applied layer grants are untouched and no other inline policy is planned.
+
 It then plants a changed description and the plan must show the replacement, which proves that the check can see it. Nothing is applied and no
 credential is read.
 Refresh the fixture only from a plan of the revision that was applied (``terraform show -json`` of a targeted plan of the policies, with synthetic ARNs).

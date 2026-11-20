@@ -658,7 +658,7 @@ def case_other_pointers_are_refused() -> Check:
     return checks
 
 
-def case_config_scope_is_silver_gold_and_features_only() -> Check:
+def case_config_scope_is_the_five_configured_layers() -> Check:
     config = glue_mirror.load_config()
     gold = config.layers["gold"]
     return {
@@ -1769,7 +1769,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "check_compares_the_run": case_check_compares_the_run,
     "glue_client_has_short_timeouts": case_glue_client_has_short_timeouts,
     "closed_diagnostic_pipe_does_not_escape": case_closed_diagnostic_pipe_does_not_escape,
-    "config_scope_is_silver_gold_and_features_only": case_config_scope_is_silver_gold_and_features_only,
+    "config_scope_is_the_five_configured_layers": case_config_scope_is_the_five_configured_layers,
     "reader_access_is_one_role_for_one_user": case_reader_access_is_one_role_for_one_user,
     "check_compares_the_two_pointers": case_check_compares_the_two_pointers,
     "s3_register_creates_each_table_at_its_main_snapshot": case_s3_register_creates_each_table_at_its_main_snapshot,
