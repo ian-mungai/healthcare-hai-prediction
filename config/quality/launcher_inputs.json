@@ -1770,6 +1770,7 @@
     "scripts/acquisition/tests/test_completion_record.py",
     "scripts/acquisition/tests/test_config_root.py",
     "scripts/acquisition/tests/test_county_changes_e2e.py",
+    "scripts/acquisition/tests/test_coverage_config.py",
     "scripts/acquisition/tests/test_dataset_layout.py",
     "scripts/acquisition/tests/test_dataset_verification.py",
     "scripts/acquisition/tests/test_default_deny.py",
