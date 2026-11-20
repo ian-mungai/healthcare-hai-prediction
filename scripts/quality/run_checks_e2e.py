@@ -2349,6 +2349,27 @@ def flag_cases() -> list[Case]:
             "a command that names the script by its module still passes it", f"python -m tools.digest {SIGN_OFF}\n", f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}"
         ),
         flag_case("the same text in another program's command", f"report_tool {SIGN_OFF} /work/a.json\n"),
+        flag_case(
+            "a command that names the script by a relative path still passes it", f"python ./tools/digest.py {SIGN_OFF}\n", f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}"
+        ),
+        flag_case(
+            "a command that names the script by an absolute path still passes it",
+            f"python /opt/work/tools/digest.py {SIGN_OFF}\n",
+            f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}",
+        ),
+        flag_case(
+            "a command that names the script by its file name with a dot slash still passes it",
+            f"cd tools && ./digest.py {SIGN_OFF}\n",
+            f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}",
+        ),
+        flag_case("a command that gives the flag a value still passes it", f"python tools/digest.py {SIGN_OFF}=1\n", f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}"),
+        flag_case("a script name followed by a suffix is another file", f"python tools/digest.py.extra {SIGN_OFF}\ncat tools/digest.pyc {SIGN_OFF}\n"),
+        flag_case("a script name followed by a folder is another path", f"python tools/digest.py/child {SIGN_OFF}\n"),
+        flag_case("a script name behind more name is another script", f"python tools/predigest.py {SIGN_OFF}\n"),
+        flag_case("a script of the same name in another folder is another script", f"python tools/sub/digest.py {SIGN_OFF}\n"),
+        flag_case("a module followed by more of a module is another module", f"python -m tools.digest.extra {SIGN_OFF}\n"),
+        flag_case("a flag behind a third dash is another flag", f"python tools/digest.py -{SIGN_OFF}\n"),
+        flag_case("a flag behind more text is another flag", f"python tools/digest.py --other=abc{SIGN_OFF}\n"),
         flag_case("a longer flag is another flag", f"python tools/digest.py {SIGN_OFF}-all\n"),
         flag_case("a script of a longer name is another script", f"python tools/old_digest.py {SIGN_OFF}\n"),
         flag_case("a command split over several lines is not seen", f"python tools/digest.py \\\n    {SIGN_OFF} /work/a.json\n"),
@@ -4406,7 +4427,7 @@ PLANTED_REGRESSIONS = [
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "(?=.*(?<![\\w./-])(?:{'|'.join(sorted(names))})(?![\\w-]))",
+        "(?=.*(?<![\\w./-]){script}(?![\\w/-]|\\.\\w))",
         "",
         1,
     ),
@@ -4415,8 +4436,17 @@ PLANTED_REGRESSIONS = [
         [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its file name still passes it",)],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "(Path(path).name, path, ",
-        "(path, path, ",
+        "|(?:\\./)?(?:{'|'.join(sorted(names))})",
+        "",
+        0,
+    ),
+    (
+        "a dot slash may precede a file name",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its file name with a dot slash still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "|(?:\\./)?(?:{'|'.join(sorted(names))})",
+        "|(?:{'|'.join(sorted(names))})",
         0,
     ),
     (
@@ -4424,8 +4454,26 @@ PLANTED_REGRESSIONS = [
         [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its path still passes it",)],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "(Path(path).name, path, ",
-        "(Path(path).name, Path(path).name, ",
+        "(?:(?:\\./|/(?:[\\w.~-]+/)*)?(?:{'|'.join(sorted(paths))})|",
+        "(?:",
+        0,
+    ),
+    (
+        "a dot slash may precede a path",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by a relative path still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?:\\./|/(?:[\\w.~-]+/)*)?(?:{'|'.join(sorted(paths))})",
+        "(?:/(?:[\\w.~-]+/)*)?(?:{'|'.join(sorted(paths))})",
+        0,
+    ),
+    (
+        "an absolute folder path may precede a path",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by an absolute path still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?:\\./|/(?:[\\w.~-]+/)*)?(?:{'|'.join(sorted(paths))})",
+        "(?:\\./)?(?:{'|'.join(sorted(paths))})",
         0,
     ),
     (
@@ -4433,9 +4481,70 @@ PLANTED_REGRESSIONS = [
         [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its module still passes it",)],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        'path.removesuffix(".py").replace("/", ".")',
-        "path",
+        "|{'|'.join(sorted(modules))})",
+        ")",
         0,
+    ),
+    (
+        "a name is whole at its end",
+        [
+            case
+            for case in FLAG_CASES
+            if case.name
+            in (
+                "flag removed, a script name followed by a suffix is another file",
+                "flag removed, a script name followed by a folder is another path",
+                "flag removed, a module followed by more of a module is another module",
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?![\\w/-]|\\.\\w))",
+        "(?![\\w-]))",
+        1,
+    ),
+    (
+        "a name is whole at its start",
+        [
+            case
+            for case in FLAG_CASES
+            if case.name
+            in (
+                "flag removed, a script name behind more name is another script",
+                "flag removed, a script of the same name in another folder is another script",
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?<![\\w./-]){script}",
+        "{script}",
+        1,
+    ),
+    (
+        "a flag is whole at its start",
+        [
+            case
+            for case in FLAG_CASES
+            if case.name
+            in (
+                "flag removed, a flag behind a third dash is another flag",
+                "flag removed, a flag behind more text is another flag",
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?<![\\w-]){re.escape(flag)}",
+        "{re.escape(flag)}",
+        1,
+    ),
+    (
+        "a flag is whole at its end",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a longer flag is another flag",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "{re.escape(flag)}(?![\\w-])",
+        "{re.escape(flag)}",
+        1,
     ),
     (
         "the owning script is not searched for its own flag",
@@ -4444,15 +4553,6 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         'if kind == "flag" and path in owners[name]:',
         "if False:",
-        1,
-    ),
-    (
-        "a flag is read as a whole word",
-        [case for case in FLAG_CASES if case.name in ("flag removed, a longer flag is another flag",)],
-        REMOVED_NAMES_COMMAND,
-        "scripts/quality/repo_checks.py",
-        "{re.escape(flag)}(?![\\w-]))(?=",
-        "{re.escape(flag)})(?=",
         1,
     ),
     (

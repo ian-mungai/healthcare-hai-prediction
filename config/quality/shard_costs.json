@@ -756,7 +756,6 @@
       "planted regressions of the path of a script marks its command: samples 1 to 1": 2.4,
       "planted regressions of the module of a script marks its command: samples 1 to 1": 2.4,
       "planted regressions of the owning script is not searched for its own flag: samples 1 to 1": 2.4,
-      "planted regressions of a flag is read as a whole word: samples 1 to 1": 2.4,
       "python -m command, missing module in Markdown": 2.0,
       "python -m command, missing module in a workflow": 2.0,
       "python -m command, missing module in a shell script": 2.0,
@@ -777,7 +776,25 @@
       "planted regressions of quoted strings are read outside Python files: samples 1 to 1": 2.4,
       "planted regressions of a Python string is read by its line only: samples 1 to 1": 2.4,
       "python -m command, module prefix written with an ellipsis": 2.0,
-      "planted regressions of a module prefix written with an ellipsis is no command: samples 1 to 1": 2.4
+      "planted regressions of a module prefix written with an ellipsis is no command: samples 1 to 1": 2.4,
+      "flag removed, a command that names the script by a relative path still passes it": 3.98,
+      "flag removed, a command that names the script by an absolute path still passes it": 3.98,
+      "flag removed, a command that names the script by its file name with a dot slash still passes it": 3.98,
+      "flag removed, a command that gives the flag a value still passes it": 3.98,
+      "flag removed, a script name followed by a suffix is another file": 3.98,
+      "flag removed, a script name followed by a folder is another path": 3.98,
+      "flag removed, a script name behind more name is another script": 3.98,
+      "flag removed, a script of the same name in another folder is another script": 3.98,
+      "flag removed, a module followed by more of a module is another module": 3.98,
+      "flag removed, a flag behind a third dash is another flag": 3.98,
+      "flag removed, a flag behind more text is another flag": 3.98,
+      "planted regressions of a dot slash may precede a file name: samples 1 to 1": 2.4,
+      "planted regressions of a dot slash may precede a path: samples 1 to 1": 2.4,
+      "planted regressions of an absolute folder path may precede a path: samples 1 to 1": 2.4,
+      "planted regressions of a name is whole at its end: samples 1 to 3": 7.2,
+      "planted regressions of a name is whole at its start: samples 1 to 2": 4.8,
+      "planted regressions of a flag is whole at its start: samples 1 to 2": 4.8,
+      "planted regressions of a flag is whole at its end: samples 1 to 1": 2.4
     }
   }
 }

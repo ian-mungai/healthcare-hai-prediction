@@ -1506,9 +1506,17 @@ def lost_flags(before: dict[str, list[str]], files: dict[str, list[str]]) -> dic
 
 
 def flag_pattern(flag: str, scripts: set[str]) -> re.Pattern[str]:
-    """Return the pattern of a line that holds ``flag`` and names one of ``scripts`` by file name, repository path or dotted module."""
-    names = {re.escape(name) for path in scripts for name in (Path(path).name, path, path.removesuffix(".py").replace("/", "."))}
-    return re.compile(rf"^(?=.*{re.escape(flag)}(?![\w-]))(?=.*(?<![\w./-])(?:{'|'.join(sorted(names))})(?![\w-]))")
+    """Return the pattern of a line that holds ``flag`` and names one of ``scripts``.
+
+    A name is whole: not preceded by a word character, ``.``, ``/`` or ``-``, and not followed by a word character, ``/``, ``-`` or a dot and a word character,
+    so ``run_x.py`` is not in ``prerun_x.py``, ``run_x.pyc``, ``run_x.py.bak`` or ``run_x.py/child``. A script is named by its file name (also behind ``./``),
+    its repository path (also behind ``./`` or an absolute folder path) or its dotted module. The flag is whole too: not preceded by a word character or ``-``
+    and not followed by a word character or ``-``, so ``--port`` is not in ``--portable`` or ``---port``. A command split over several lines is not seen.
+    """
+    paths, names = {re.escape(path) for path in scripts}, {re.escape(Path(path).name) for path in scripts}
+    modules = {re.escape(path.removesuffix(".py").replace("/", ".")) for path in scripts}
+    script = rf"(?:(?:\./|/(?:[\w.~-]+/)*)?(?:{'|'.join(sorted(paths))})|(?:\./)?(?:{'|'.join(sorted(names))})|{'|'.join(sorted(modules))})"
+    return re.compile(rf"^(?=.*(?<![\w-]){re.escape(flag)}(?![\w-]))(?=.*(?<![\w./-]){script}(?![\w/-]|\.\w))")
 
 
 def removed_definitions(
