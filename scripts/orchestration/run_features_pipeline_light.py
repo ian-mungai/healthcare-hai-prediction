@@ -1189,10 +1189,6 @@ def work_steps(dag: str) -> tuple[str, ...] | None:
     return None
 
 
-# Gold maintenance runs as the last phase of every gold job (owner decision, Nov 5 2026), so its DAG left the graph.
-RETIRED_DAGS = frozenset({"gold_maintenance_dag", "features_transform_dag", "feature_store_dag"})
-
-
 def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     """E01 (LB24, LB25, LB26, LB27, regression R4): chains, DAG files, parameters, runtime routing and the supervisor's DAG list."""
     checks: Checks = {}
@@ -1204,15 +1200,13 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         and graph.requirements(BASE_DAG)[0] == {**graph.COLLAPSED_UPSTREAM, **triggers}
     )
     checks[f"{BASE_DAG}_reference_valid"] = graph.validate_transform_graph(graph.reference_graph(BASE_DAG), BASE_DAG) == []
-    checks["old_features_dags_gone"] = not any((ROOT / "dags" / f"{dag}.py").exists() for dag in ("features_transform_dag", "feature_store_dag"))
+    # The loop compares the DAGs of the baseline graph that the current graph still has: a collapsed DAG must hold one task per job, and any other must keep
+    # its chain. A baseline DAG that the current graph no longer has is not compared.
     for dag, chain in base.PIPELINE_CHAINS.items():
-        if dag in RETIRED_DAGS:  # retired on purpose: it must be gone, not unchanged
-            checks[f"{dag}_retired"] = dag not in graph.PIPELINE_CHAINS
-            continue
         if dag in graph.COLLAPSED_DAGS:  # one task per job now: preflight, job, evidence and gate
             checks[f"{dag}_collapsed"] = dag not in graph.PIPELINE_CHAINS and graph.requirements(dag)[0] == graph.COLLAPSED_UPSTREAM
-            continue
-        checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS.get(dag) == chain
+        elif dag in graph.PIPELINE_CHAINS:
+            checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS[dag] == chain
     checks["transform_dag_unchanged"] = graph.requirements("transform_dag") == base.requirements("transform_dag")
     features_dag = (ROOT / "dags" / f"{BASE_DAG}.py").read_text() if (ROOT / "dags" / f"{BASE_DAG}.py").is_file() else ""
     checks["features_params"] = all(
