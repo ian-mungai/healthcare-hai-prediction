@@ -330,12 +330,6 @@ MODEL_LISTS = {
     "m6": ("m6_fixed_effects",),
 }
 MODELS = tuple(MODEL_LISTS)
-# The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
-# The internal keys m1 to m6 stay the identifiers of DAGs, runs, sets, keys, paths, tags and resources; MODEL_NAMES above holds the slug that run IDs carry.
-MODEL_LABELS = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
-HAI_LABELS = {"HAI_1": "CLABSI", "HAI_2": "CAUTI", "HAI_3": "SSI colon", "HAI_4": "SSI hysterectomy", "HAI_5": "MRSA", "HAI_6": "C. difficile"}
-if tuple(MODEL_LABELS) != MODELS or tuple(HAI_LABELS) != HAI_TYPES:
-    raise ValueError("MODEL_LABELS and HAI_LABELS must name exactly the models and HAI types of the contract")
 
 
 def check_model_names(names: Mapping[str, str], models: tuple[str, ...]) -> None:
@@ -347,7 +341,13 @@ def check_model_names(names: Mapping[str, str], models: tuple[str, ...]) -> None
         raise ValueError("the model display names must be non-blank, single-spaced and different from each other")
 
 
+# The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
+# The internal keys m1 to m6 stay the identifiers of DAGs, runs, sets, keys, paths, tags and resources; MODEL_NAMES above holds the slug that run IDs carry.
+MODEL_LABELS = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
+HAI_LABELS = {"HAI_1": "CLABSI", "HAI_2": "CAUTI", "HAI_3": "SSI colon", "HAI_4": "SSI hysterectomy", "HAI_5": "MRSA", "HAI_6": "C. difficile"}
 check_model_names(MODEL_LABELS, MODELS)
+if tuple(MODEL_LABELS) != MODELS or tuple(HAI_LABELS) != HAI_TYPES:
+    raise ValueError("MODEL_LABELS and HAI_LABELS must name exactly the models and HAI types of the contract")
 
 
 def model_title(model: str) -> str:
@@ -362,6 +362,16 @@ def model_label(model: str) -> str:
     if model not in MODEL_LABELS:
         raise ValueError(f"{model} is not one of {', '.join(MODELS)}")
     return f"{model} ({MODEL_LABELS[model]})"
+
+
+def model_text(model: object) -> str:
+    """The label of ``model`` when it is a known key, otherwise the value as it came: for a message that quotes a key that a stored record may hold."""
+    return model_label(model) if isinstance(model, str) and model in MODEL_LABELS else str(model)
+
+
+def trigger_display_name(model: str) -> str:
+    """The name the Airflow screens show for the task that starts the features DAG of ``model``: ``Trigger m2 Elastic Net``."""
+    return f"Trigger {model_title(model)}"
 
 
 def model_choices(models: tuple[str, ...] = MODELS) -> str:
@@ -509,7 +519,7 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] =
         if set(raw) != expected:
             raise ValueError("training parameters must name the publication, population, HAI types, trigger, MLflow lane and model")
         if not isinstance(raw["model"], str) or raw["model"] not in MODELS:
-            raise ValueError(f"model must be one of {', '.join(MODELS)}")
+            raise ValueError(f"model must be one of {model_choices()}")
         if raw["features_run"] != "latest" and not isinstance(raw["features_run"], str) or not re.fullmatch(f"latest|{SET_RUN}", str(raw["features_run"])):
             raise ValueError("features_run must be latest or the run ID of a model set's features run")
         _population_and_types(raw)

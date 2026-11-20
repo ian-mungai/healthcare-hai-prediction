@@ -13,12 +13,13 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import BASE_RUN, FEATURE_DAGS, model_features_run_id, run_id_pattern
+from orchestration.training_contract import BASE_RUN, FEATURE_DAGS, model_choices, model_features_run_id, model_label, run_id_pattern, trigger_display_name
 
 TRIGGER_TIMEOUT = timedelta(minutes=5)
 
 with DAG(
     dag_id="features_base_dag",
+    doc_md=f"{__doc__}\n\nModels: {model_choices()}.",
     schedule=None,
     catchup=False,
     tags=["orchestration", "features"],
@@ -36,6 +37,8 @@ with DAG(
         run = f"{{{{ model_features_run_id(params.run_id, '{model}') }}}}"
         gate >> TriggerDagRunOperator(
             task_id=f"trigger_{model}",
+            task_display_name=trigger_display_name(model),
+            doc_md=f"Start the features DAG of {model_label(model)} once the base is published.",
             trigger_dag_id=dag_id,
             trigger_run_id=run,
             conf={"run_id": run, "mode": "{{ params.mode }}", "base_snapshot_run": "{{ params.run_id }}"},

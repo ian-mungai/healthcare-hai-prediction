@@ -83,7 +83,7 @@ from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, Launc
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import PIPELINE_DAG, compose_run_id, record_key, research_run_id, run_id_parts
+from orchestration.training_contract import PIPELINE_DAG, compose_run_id, model_param_schema, record_key, research_run_id, run_id_parts
 from orchestration.training_contract import PIPELINE_RUN as PIPELINE_RUN_NAME
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
@@ -1846,8 +1846,22 @@ def form_parameter(dag_file: str, name: str) -> tuple[list[Any], dict[str, Any]]
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values, strict=True):
                 if isinstance(key, ast.Constant) and key.value == name and isinstance(value, ast.Call):
-                    return [static_value(item) for item in value.args], {item.arg: static_value(item.value) for item in value.keywords if item.arg}
+                    return [static_value(item) for item in value.args], keyword_settings(value)
     return None
+
+
+def keyword_settings(call: ast.Call) -> dict[str, Any]:
+    """The keyword arguments of a ``Param`` call: its literals, and the keys that ``**model_param_schema()`` spreads in. Any other spread is refused, so that
+    a key a case reads is never silently missing."""
+    settings: dict[str, Any] = {}
+    for item in call.keywords:
+        if item.arg:
+            settings[item.arg] = static_value(item.value)
+        elif isinstance(item.value, ast.Call) and isinstance(item.value.func, ast.Name) and item.value.func.id == "model_param_schema":
+            settings.update(model_param_schema())
+        else:
+            raise ValueError(f"a Param call spreads keys that the case cannot read: {ast.unparse(item.value)}")
+    return settings
 
 
 def base_dag_takes_its_gold_run() -> None:
@@ -2455,6 +2469,10 @@ def drift_dag_takes_its_model_and_features_run() -> None:
     published set, not of whatever is newest."""
     model = form_parameter("drift_monitoring_dag.py", "model")
     require(model is not None and not model[0], f"the drift form gives the model a default: {model}")
+    require(
+        (model or ([], {}))[1].get("enum") == list(importlib.import_module("orchestration.training_contract").MODELS),
+        f"the drift form's models differ: {model}",
+    )
     declared = form_parameter("drift_monitoring_dag.py", "features_run")
     require(declared is not None, "the drift DAG declares no features_run parameter")
     arguments, settings = declared or ([], {})

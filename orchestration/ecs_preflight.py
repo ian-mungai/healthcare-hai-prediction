@@ -45,6 +45,7 @@ from orchestration.training_contract import (
     chain_parameters_for,
     compose_run_id,
     drift_attempt_of,
+    model_choices,
     model_drift_run_id,
     model_features_run_id,
     model_training_run_id,
@@ -177,7 +178,7 @@ def drift_model(request: SubmissionRequest) -> str:
     name."""
     model = (request.training or {}).get("model")
     if model not in MODELS:
-        raise LaunchRefused(f"the drift check names {model!r}, which is not one of {', '.join(MODELS)}")
+        raise LaunchRefused(f"the drift check names {model!r}, which is not one of {model_choices()}")
     attempt = drift_attempt(request)
     named = attempt if "drift_attempt" in (request.training or {}) else None
     try:

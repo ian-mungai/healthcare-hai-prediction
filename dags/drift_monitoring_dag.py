@@ -36,6 +36,7 @@ from orchestration.training_contract import (
     model_choices,
     model_label,
     model_param_schema,
+    model_text,
     model_training_run_id,
     parameters_for,
     run_id_pattern,
@@ -122,9 +123,9 @@ def gate_types(marker: dict[str, Any], model: str, records: list[dict[str, Any]]
     record) or whose decision differs from the recomputed one in any field."""
     gate = marker.get("gate")
     if not isinstance(gate, dict) or gate.get("kind") != "drift_gate":
-        raise RuntimeError(f"the marker holds no gate decision of {model}: the drift task of this run did not gate a model")
+        raise RuntimeError(f"the marker holds no gate decision of {model_text(model)}: the drift task of this run did not gate a model")
     if marker.get("model") != model or gate.get("model") != model:
-        raise RuntimeError(f"the gate decision belongs to another model, {marker.get('model')}, not {model}")
+        raise RuntimeError(f"the gate decision belongs to another model, {model_text(marker.get('model'))}, not {model_text(model)}")
     monitored, unmonitored = marker.get("monitored"), marker.get("unmonitored")
     if (
         not isinstance(monitored, list)

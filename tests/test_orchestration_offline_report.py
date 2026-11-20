@@ -48,6 +48,19 @@ PIPELINE_DAGS = (
     "pipeline_dag",
     "bronze_dag",
 )
+DISPLAY_DAGS = (
+    "features_base_dag",
+    "features_m1_dag",
+    "features_m2_dag",
+    "features_m3_dag",
+    "features_m4_dag",
+    "features_m5_dag",
+    "features_m6_dag",
+    "training_dag",
+    "drift_monitoring_dag",
+    "research_dag",
+)
+DISPLAY_VIOLATION = {"rule": "display_name", "task": "drift_monitoring_dag", "detail": "the doc lacks m2 (Elastic Net)"}
 IMAGE_CHECK = "image labels, user and top layers"
 DAG_CHECK = "every DAG file imports in the image with no error or cycle"
 PINS_CHECK = "image packages equal the constraints file and the release pins"
@@ -63,6 +76,10 @@ CLEANUP_ERROR = "synthetic allocation cleanup refusal"
 DAG_FILE_TEXT = "# synthetic DAG file\n"
 IN_IMAGE_SOURCE = "scripts/orchestration/in_image_checks.py"
 RUN_TIME = "stamped when the synthetic image job runs"
+
+
+def _display_check(name: str) -> str:
+    return f"{name} shows the display name of each model (Airflow object)"
 
 
 def _platform() -> dict[str, Any]:
@@ -98,6 +115,7 @@ def _document(transform_present: bool = False) -> dict[str, Any]:
         "graph_cases": {name: {"expected": rule, "rules": [] if rule is None else [rule], "ok": True} for name, rule in GRAPH_CASES.items()},
         "transform_graph": {"present": transform_present, "violations": [], "tasks": ["synthetic_task"] if transform_present else []},
         "pipeline_graphs": {name: {"present": True, "violations": []} for name in PIPELINE_DAGS},
+        "display_names": {name: {"present": True, "violations": []} for name in DISPLAY_DAGS},
         "constraints": {
             "pinned": 1,
             "installed": 4,
@@ -235,6 +253,7 @@ def _failures(code: int, report: dict[str, Any]) -> dict[str, Any]:
 
 def _complete(code: int, report: dict[str, Any], transform_present: bool = False) -> None:
     required = {IMAGE_CHECK, DAG_CHECK, PINS_CHECK, REAL_COVERAGE, REAL_VERDICT, REAL_SCENARIO, *(f"graph (Airflow objects): {name}" for name in GRAPH_CASES)}
+    required |= {_display_check(name) for name in DISPLAY_DAGS}
     required |= {TRANSFORM_CHECK} if transform_present else {f"{name} passes the graph validator (Airflow object)" for name in PIPELINE_DAGS}
     check(code == 0 and report["status"] == "pass", "complete consistent image evidence passes the real outer CLI")
     check(required <= report["results"].keys(), "all independently pinned required checks survive result projection")
@@ -665,4 +684,38 @@ def test_a_malformed_real_image_section_is_a_recorded_refusal(boundary: ImageBou
     boundary.transport.attempt.stdout = _stdout(document)
     failures = _failures(*_run_cli(boundary))
     check(failures.get("in-image checks ran", {}).get("ok") is False, "an incomplete real-image section fails at its owning boundary")
+    _released(boundary)
+
+
+@pytest.mark.parametrize("transform_present", [False, True], ids=["split", "transform"])
+@pytest.mark.parametrize("damage", ["missing", "empty", "partial", "unexpected"])
+def test_exact_display_name_inventory_is_required(boundary: ImageBoundary, transform_present: bool, damage: str) -> None:
+    document = _document(transform_present)
+    if damage == "missing":
+        document.pop("display_names")
+    elif damage == "empty":
+        document["display_names"] = {}
+    elif damage == "partial":
+        document["display_names"].pop("drift_monitoring_dag")
+    else:
+        document["display_names"]["synthetic_unexpected_dag"] = {"present": True, "violations": []}
+    boundary.transport.attempt.stdout = _stdout(document)
+    detail = json.dumps(_failures(*_run_cli(boundary))).lower()
+    check("display_names" in detail, "the refusal identifies the display name inventory")
+    if damage == "partial":
+        check("drift_monitoring_dag" in detail, "the refusal identifies the DAG that the report left out")
+    _released(boundary)
+
+
+@pytest.mark.parametrize("transform_present", [False, True], ids=["split", "transform"])
+@pytest.mark.parametrize("defect", ["violation", "absent"])
+def test_a_drift_dag_without_its_model_names_fails_the_in_image_check(boundary: ImageBoundary, transform_present: bool, defect: str) -> None:
+    document = _document(transform_present)
+    row = document["display_names"]["drift_monitoring_dag"]
+    row.update(ok=True, violations=[DISPLAY_VIOLATION] if defect == "violation" else [], present=defect != "absent")
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    name = _display_check("drift_monitoring_dag")
+    check(set(failures) == {name}, f"the drift display check is not the intended and only failure: {sorted(failures)}")
+    check(failures[name]["present"] == row["present"] and failures[name]["violations"] == row["violations"], "the display evidence survives projection")
     _released(boundary)

@@ -6,6 +6,7 @@ read-only and runs ``python in_image_checks.py``. It prints one JSON object:
 - ``dags``: every file in the DAG folder imported by Airflow's DagBag; import errors and cycles are listed.
 - ``graph_cases``: synthetic DAGs built from real Airflow operators; the section 5 reference graph must pass the
   ``transform_dag`` validator and each mutation must fail with its rule.
+- ``display_names``: the display name rules (``orchestration.graph.display_name_violations``) on the real DAG objects of every DAG that shows model keys.
 - ``transform_graph``: the validator on the real ``transform_dag`` object that Airflow imported from the DAG folder.
 - ``constraints``: every installed distribution is either in the Airflow 3.4.0 constraints file at the pinned version, or one of the pip and uv build
   tools at the version the image records, or in the exact release set of ``config/orchestration/platform.json`` at its own pinned version. Nothing is
@@ -36,7 +37,7 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import DAG
 from airflow.sdk.bases.operator import BaseOperator
 
-from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, GRAPH_DAGS, display_name_violations, graph_from_dag, validate_transform_graph
+from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, GRAPH_DAGS, display_name_report, graph_from_dag, validate_transform_graph
 
 DAG_FOLDER = Path("/opt/hai/dags")
 CONSTRAINTS = Path("/opt/hai/constraints.txt")
@@ -71,9 +72,14 @@ def pipeline_graphs() -> dict[str, Any]:
     results = {}
     for name in GRAPH_DAGS:
         dag = bag.dags.get(name)
-        violations = [*validate_transform_graph(graph_from_dag(dag), name), *display_name_violations(dag)] if dag is not None else []
+        violations = validate_transform_graph(graph_from_dag(dag), name) if dag is not None else []
         results[name] = {"present": dag is not None, "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in violations]}
     return results
+
+
+def display_names() -> dict[str, Any]:
+    """The display name rules on every DAG that shows model keys, which is not the list of the graph rules: the drift DAG has no graph rule."""
+    return display_name_report(DagBag(dag_folder=str(DAG_FOLDER)).dags.get)
 
 
 def build(
@@ -258,6 +264,7 @@ def main() -> int:
         "graph_cases": graph_cases(),
         "transform_graph": transform_graph(),
         "pipeline_graphs": pipeline_graphs(),
+        "display_names": display_names(),
         "constraints": constraints(tools),
     }
     try:

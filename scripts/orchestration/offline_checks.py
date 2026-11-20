@@ -45,7 +45,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
-from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
+from orchestration.graph import ALL_SUCCESS, DOC_MODELS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
 from scripts.orchestration import real_image_dags, xcom_dump_cases
 from scripts.process import run_command
 from scripts.quality import lock_env
@@ -450,6 +450,12 @@ def image_report_problem(report: dict[str, Any]) -> str:
             return f"pipeline_graphs inventory differs; missing {missing or 'none'}"
         if any(not isinstance(row, dict) or type(row.get("present")) is not bool or not isinstance(row.get("violations"), list) for row in pipelines.values()):
             return "pipeline_graphs report is incomplete"
+    names = report.get("display_names")
+    if not isinstance(names, dict) or set(names) != set(DOC_MODELS):
+        missing = ", ".join(sorted(set(DOC_MODELS) - set(names or {}))) if isinstance(names, dict) else ", ".join(DOC_MODELS)
+        return f"display_names inventory differs; missing {missing or 'none'}"
+    if any(not isinstance(row, dict) or type(row.get("present")) is not bool or not isinstance(row.get("violations"), list) for row in names.values()):
+        return "display_names report is incomplete"
     dags, pins = report["dags"], report["constraints"]
     if not isinstance(dags.get("import_errors"), dict) or not isinstance(dags.get("dag_ids"), list):
         return "IN_IMAGE DAG report is incomplete"
@@ -568,6 +574,8 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
             else:
                 for name, graph in image["pipeline_graphs"].items():
                     results[f"{name} passes the graph validator (Airflow object)"] = {**graph, "ok": graph["present"] and not graph["violations"]}
+            for name, names in image["display_names"].items():
+                results[f"{name} shows the display name of each model (Airflow object)"] = {**names, "ok": names["present"] and not names["violations"]}
             results.update(real_dags_results(image))
             pins = image["constraints"]
             tools_ok = set(pins["build_tools"]) == set(BUILD_TOOLS) and all(tool["ok"] is True for tool in pins["build_tools"].values())

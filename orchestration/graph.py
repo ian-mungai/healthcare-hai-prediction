@@ -16,6 +16,7 @@ follows only the one before it, and every task runs under ``all_success`` but th
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +29,7 @@ from orchestration.training_contract import (
     model_label,
     model_param_schema,
     model_title,
+    trigger_display_name,
 )
 
 WORK_CHAIN = (
@@ -227,14 +229,20 @@ def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transfor
 # The DAGs with a ``model`` parameter, which show the name of each model beside its key in the trigger form.
 MODEL_PARAM_DAGS = ("training_dag", "drift_monitoring_dag")
 # The DAGs whose text names models: the models that the text of each must show with their names.
-DOC_MODELS = {**{dag_id: (model,) for dag_id, model in FEATURE_DAGS.items()}, **dict.fromkeys(MODEL_PARAM_DAGS, MODELS), "research_dag": PROMOTION_MODELS}
+DOC_MODELS = {
+    **{dag_id: (model,) for dag_id, model in FEATURE_DAGS.items()},
+    **dict.fromkeys(MODEL_PARAM_DAGS, MODELS),
+    "features_base_dag": MODELS,
+    "research_dag": PROMOTION_MODELS,
+}
 
 
 def display_name_violations(dag: Any) -> list[Violation]:
-    """Every place where an Airflow DAG shows a model without its display name; reads the DAG's ``dag_id``, names, docs, tags and ``params`` only.
+    """Every place where an Airflow DAG shows a model without its display name; reads the DAG's ``dag_id``, names, docs, tags, ``params`` and tasks only.
 
     A model DAG shows ``Features: m2 Elastic Net`` with the label in its description and doc and the title as a tag. A DAG with a ``model`` parameter shows
-    each name in the form. Every DAG that names models in its doc shows their labels."""
+    each name in the form. The base DAG shows ``Trigger m2 Elastic Net`` and the label in the doc of each trigger task. Every DAG that names models in its
+    doc shows their labels."""
     dag_id = str(dag.dag_id)
     problems: list[str] = []
     doc = str(getattr(dag, "doc_md", None) or "")
@@ -253,5 +261,26 @@ def display_name_violations(dag: Any) -> list[Violation]:
             problems.append("the model parameter does not show the display name of each model")
         if any(model_label(model) not in str(schema.get("description") or "") for model in MODELS):
             problems.append("the model parameter help lacks a model label")
+    if dag_id == "features_base_dag":
+        for model in MODELS:
+            task = dag.task_dict.get(f"trigger_{model}")
+            if task is None:
+                problems.append(f"there is no trigger_{model} task")
+                continue
+            if str(task.task_display_name) != trigger_display_name(model):
+                problems.append(f"trigger_{model} shows {task.task_display_name!r}, not {trigger_display_name(model)!r}")
+            if model_label(model) not in str(getattr(task, "doc_md", None) or ""):
+                problems.append(f"the doc of trigger_{model} lacks {model_label(model)}")
     problems += [f"the doc lacks {model_label(model)}" for model in DOC_MODELS.get(dag_id, ()) if model_label(model) not in doc]
     return [Violation("display_name", dag_id, problem) for problem in problems]
+
+
+def display_name_report(find: Callable[[str], Any]) -> dict[str, dict[str, Any]]:
+    """The display name rules on every DAG that shows model keys (``DOC_MODELS``), whether or not the graph rules cover it. ``find`` returns the Airflow DAG
+    of an ID, or None; a DAG that is missing is reported as absent."""
+    report: dict[str, dict[str, Any]] = {}
+    for dag_id in DOC_MODELS:
+        dag = find(dag_id)
+        found = display_name_violations(dag) if dag is not None else []
+        report[dag_id] = {"present": dag is not None, "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in found]}
+    return report
