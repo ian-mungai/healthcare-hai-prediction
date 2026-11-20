@@ -17,7 +17,12 @@ def count(number: int, noun: str) -> str:
 
 def listed(title: str, items: Sequence[str], shown: int) -> list[str]:
     """A titled list of the first ``shown`` items, one line each. A list that shows fewer items than it has ends with a line that gives, as exact numbers,
-    how many it shows and how many it does not."""
+    how many it shows and how many it does not.
+
+    Three limits are accepted. A list that would fit exactly in the byte limit without its count line can be shown with two fewer names (accepted limit,
+    owner, Nov 20 2026). A file name that contains the text of the shared truncation line makes the message count as cut, so fewer names are shown
+    (accepted limit, owner, Nov 20 2026). A name that cleaning reduces to nothing shows as an empty bullet and still counts as a shown name (accepted
+    limit, owner, Nov 20 2026)."""
     lines = [f"{title}:", *[f"- {owner_notice.clean_line(item)}" for item in items[:shown]]]
     if shown < len(items):
         lines.append(f"Showing {shown} of {len(items)}. Not shown: {len(items) - shown}.")
@@ -37,12 +42,12 @@ def carried_over_notice(
     """The subject and the message of the owner notice of a bronze run, sent for every run that follows a capture: the files the capture captured, failed
     and held (``counts``, None when no run record could be read, otherwise the counts of the records that were read), the files still not captured, the
     tables the stage left out with their reasons, the capture records it read (``read``) and one line for each run record that could not be read
-    (``unread``, the run and why). It links the bronze run to the ingestion run only by those records, and says a good month only when every record was
-    read.
+    (``unread``, the run and why), and says a good month only when every record was read.
 
-    The message claims only what it holds. Each list shows at most ``NOTICE_LIST_LIMIT`` names, and the whole message stays within the byte limit of the
-    notice form (``owner_notice.BODY_LIMIT``): the names that do not fit are left out, the largest number that fits is shown, and each cut list ends with
-    the exact number of names it shows and the number it does not. The numbers are those of the final text. The message points to no place outside itself."""
+    The message names the bronze run and the capture runs by ID (the two Airflow lines under "Where to look"). Every claim about the file list or the
+    message text refers to the email itself. Each list shows at most ``NOTICE_LIST_LIMIT`` names, and the whole message stays within the byte limit of the
+    notice form (``owner_notice.BODY_LIMIT``): a search chooses how many names to show so that the message fits. Each cut list ends with the number of
+    names it shows and the number it does not, counted from the names in the final text (see ``listed`` for the accepted limits)."""
     unread = unread or {}
     happened, affects, next_steps, details, pieces = [], [], [], [], []
     happened.append(f"Bronze run {bronze_run} completed.\nCapture records read: {', '.join(read) or 'none'}.")

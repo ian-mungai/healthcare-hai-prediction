@@ -509,5 +509,62 @@ def test_two_long_lists_share_the_byte_limit_and_each_counts_the_names_it_shows(
     tables = [{"table": f"table_{number}", "reason": "no source object"} for number in range(2000)]
     message = email_of(names, tables)
     files = check_shown(message, "Carried-over files", 2000)
-    check(files + len(shown(message, "Skipped tables")[0]) < 4000 and len(message.encode()) > owner_notice.BODY_LIMIT - 400, f"{files} files shown")
+    tables_shown = check_shown(message, "Skipped tables", 2000)
+    check(files + tables_shown < 4000 and len(message.encode()) > owner_notice.BODY_LIMIT - 400, f"{files} files and {tables_shown} tables shown")
     check(re.search(r"Showing \d+ of 2000\. Not shown: \d+\.", message) is not None, "the numbers are missing")
+
+
+READ_ALL = "Capture records read: ingestion_3f9a1c07, ingestion_retry_3f9a1c07_2, ingestion_retry_3f9a1c07_3."
+NOT_COUNTED = "The run record of {} {}, so its files are not counted."
+UNREAD = "Find out why a run record is missing or cannot be read.\nThe run may have stopped before it saved its record, after it captured files."
+LEFT_OUT = "This run left the table out.\nIts published data does not include the table."
+CHECK_TABLE = "Check if the skipped table should have a source file.\nIf it should, find out why the ingestion run did not capture one."
+WHERE = f"Bronze run in Airflow: {RUN}\nCapture runs in Airflow: {ORIGINAL}, ingestion_retry_{HEX}_2, ingestion_retry_{HEX}_3"
+COUNTS = "Captured files: {}\nFailed files: 0\nHeld files: 0"
+APPROVED = {
+    "good month": (
+        f"Bronze run {RUN} completed.\n{READ_ALL}\n{COUNTS.format(1)}\nEvery file was captured.",
+        "No file is missing and no table was left out.",
+        "No action is needed.",
+    ),
+    "files carried over": (
+        f"Bronze run {RUN} completed.\n{READ_ALL}\nCaptured files: 0\nFailed files: 1\nHeld files: 0\n1 source file is not captured after the retry days.",
+        "The tables built from these files may hold older data.",
+        "Read the file list below.\nThen decide if the earlier capture is good enough.\nIf it is, no action is needed.",
+    ),
+    "table left out": (
+        f"Bronze run {RUN} completed.\n{READ_ALL}\n{COUNTS.format(0)}\nThe run left out 1 table.\nIt has no source file yet.",
+        LEFT_OUT,
+        CHECK_TABLE,
+    ),
+    "missing original record": (
+        f"Bronze run {RUN} completed.\nCapture records read: none.\nThe notice does not count the captured, failed or held files.\n"
+        + "\n".join(NOT_COUNTED.format(name, "is missing") for name in (ORIGINAL, f"ingestion_retry_{HEX}_2", f"ingestion_retry_{HEX}_3")),
+        "The counts leave out the files of every run record that could not be read.",
+        UNREAD,
+    ),
+    "malformed record": (
+        f"Bronze run {RUN} completed.\nCapture records read: ingestion_retry_{HEX}_2, ingestion_retry_{HEX}_3.\n{COUNTS.format(0)}\n"
+        + NOT_COUNTED.format(ORIGINAL, "cannot be read"),
+        "The counts leave out the files of every run record that could not be read.",
+        UNREAD,
+    ),
+    "no capture root and a table left out": (
+        f"Bronze run {RUN} completed.\nCapture records read: none.\nThe notice does not count the captured, failed or held files.\n"
+        "The run left out 1 table.\nIt has no source file yet.",
+        LEFT_OUT,
+        CHECK_TABLE,
+    ),
+}
+
+
+@pytest.mark.parametrize("state", list(STATES))
+def test_every_paragraph_of_the_email_has_the_approved_wording_in_every_state(state: str) -> None:
+    store = STATES[state]()
+    carried(store, root="" if state.startswith("no capture root") else "raw/", skipped=EMPTY if "table" in state else None)
+    message = store.published[0]["Message"]
+    paragraphs = {
+        title: message.split(f"{title}:\n", 1)[1].split("\n\n", 1)[0] for title in ("What happened", "What it affects", "What to do next", "Where to look")
+    }
+    happened, affects, next_step = APPROVED[state]
+    check(paragraphs == {"What happened": happened, "What it affects": affects, "What to do next": next_step, "Where to look": WHERE}, f"{state}: {paragraphs}")
