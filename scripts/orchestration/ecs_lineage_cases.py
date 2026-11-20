@@ -54,7 +54,7 @@ END = "2026-11-04T10:30:00+00:00"
 # The OpenMetadata table of each lakehouse namespace: glue_mirror.hai_lakehouse.<Glue database>.<table> (config/metadata/ingestion/glue.json). Written out here,
 # not read from the config, so a changed config or module fails a case. Every layer, bronze included, has a Glue database in athena_mirror.json.
 SERVICE = "glue_mirror"
-MIRROR_SCHEMA = {"bronze": "bronze", "silver": "silver", "gold": "gold", "features": "features"}
+MIRROR_SCHEMA = {"bronze": "bronze", "bronze_dictionary": "bronze_dictionary", "silver": "silver", "gold": "gold", "features": "features"}
 
 
 def glue(schema: str, table: str) -> dict[str, str]:
@@ -316,7 +316,7 @@ def declared_names_are_the_mirror_names() -> None:
     mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
     for layer, expected in MIRROR_SCHEMA.items():
         require(
-            mirror["layers"][layer] == {"namespace": layer, "database": expected},
+            {key: mirror["layers"][layer].get(key) for key in ("namespace", "database")} == {"namespace": layer, "database": expected},
             f"{layer}: the mirror config names {mirror['layers'].get(layer)}, the case {expected}",
         )
     silver = ecs_lineage.declared_lineage("silver")

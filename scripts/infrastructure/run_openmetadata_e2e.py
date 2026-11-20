@@ -392,6 +392,7 @@ def glue_config_reads_the_two_mirror_databases_with_the_task_role() -> None:
         filters == {"includes": [f"^{spec['database']}$" for spec in mirror["layers"].values()]},
         f"the connector reads exactly the mirror databases of config/lakehouse/athena_mirror.json: {filters}",
     )
+    require("^bronze_dictionary$" in filters["includes"], "the connector must catalog the bronze data dictionaries (owner decision of Nov 20 2026)")
     require(load("dbt")["source"]["serviceName"] == glue["source"]["serviceName"] == "glue_mirror", "dbt must attach to the Glue service's tables")
 
 

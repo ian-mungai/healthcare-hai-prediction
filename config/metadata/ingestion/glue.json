@@ -19,6 +19,7 @@
         "schemaFilterPattern": {
           "includes": [
             "^bronze$",
+            "^bronze_dictionary$",
             "^silver$",
             "^gold$",
             "^features$"
