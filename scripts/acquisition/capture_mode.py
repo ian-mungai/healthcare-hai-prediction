@@ -62,6 +62,7 @@ from scripts.acquisition.transport import CaptureError, StopAtRateLimit, canonic
 BYTE_CAP = 128 * 2**30
 STALE_RETRY = timedelta(hours=20)
 MAX_ATTEMPTS = 2
+MIN_DOWNLOAD_RATE = 512 * 1024
 UNIT_FOLDER = re.compile(r"[a-f0-9]{64}")
 MANUAL_MODES = redownload.MANUAL_MODES
 COLLECTOR_MODES = frozenset(redownload.PLANNED) | {"mmd_api"}
@@ -1025,6 +1026,11 @@ def release_bindings(unit: Mapping[str, Any], spec: Mapping[str, Any], registry:
         raise SpecError("The release binding is unknown or the source is not held") from None
 
 
+def download_seconds(expected_bytes: int) -> float:
+    """The time one file download may take in all: the expected size at the slowest accepted rate, within 300 seconds and the 3,600 that ``Limits`` allows."""
+    return min(3600.0, max(300.0, expected_bytes / MIN_DOWNLOAD_RATE))
+
+
 def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
     """Download one file unit into the unit's working folder and return its local receipt. The plan comes from the specification, not a stored receipt."""
     registry = registry_of(run, unit)
@@ -1042,7 +1048,7 @@ def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
         from scripts.acquisition.history_redirects import install_redirect
 
         install_redirect(unit["url"], spec["reviewed_unsigned_redirect"])
-    limits = StopAtRateLimit(attempts=MAX_ATTEMPTS, max_bytes=min(4 * 2**30, max(2 * unit["bytes"], 2**20)))
+    limits = StopAtRateLimit(attempts=MAX_ATTEMPTS, max_seconds=download_seconds(unit["bytes"]), max_bytes=min(4 * 2**30, max(2 * unit["bytes"], 2**20)))
     return capture(plan, folder, registry, validator_of(run), limits, opener)
 
 

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import threading
+import time
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -783,6 +784,41 @@ def archive(reference: bytes, data: bytes) -> bytes:
 
 def pdf(number: int) -> bytes:
     return b"%PDF-1.7\nexample documentation " + str(number).encode() + b"\n%%EOF"
+
+
+class SlowClock:
+    """The transport's time module with a monotonic clock that jumps ``step`` seconds at every reading, so a download looks as slow as that."""
+
+    def __init__(self, step: float) -> None:
+        self.step, self.readings = step, 0
+
+    def monotonic(self) -> float:
+        self.readings += 1
+        return self.readings * self.step
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+
+def slow_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expected_bytes: int) -> World:
+    """A one-file unit whose frozen queue entry expects ``expected_bytes`` and whose download shows 250 seconds at each deadline reading."""
+    world = World(tmp_path, ["a.csv"])
+    world.units[0]["bytes"] = expected_bytes
+    world.write_inputs(read_json(world.folder / "capture_specs.json")["specs"])
+    monkeypatch.setattr(transport, "time", SlowClock(250))
+    return world
+
+
+def test_a_large_unit_gets_a_download_time_bound_that_follows_its_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = slow_world(tmp_path, monkeypatch, 481_497_539)
+    result = world.run()
+    check(len(result["units"]["completed"]) == 1 and result["units"]["failed"] == [], f"a 481 MB file is allowed more than 300 seconds: {result['units']}")
+
+
+def test_a_small_unit_keeps_the_default_download_time_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = slow_world(tmp_path, monkeypatch, 100)
+    result = world.run()
+    check([item["reason"] for item in result["units"]["failed"]] == ["TimeoutError"], f"a 100-byte file stops after 300 seconds: {result['units']}")
 
 
 def nested_archive(first: bytes, second: bytes) -> bytes:
