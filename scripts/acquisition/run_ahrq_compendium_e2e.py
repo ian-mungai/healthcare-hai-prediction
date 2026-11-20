@@ -1262,7 +1262,7 @@ def round3_scenarios(scenario: Any, plan: dict, data_entry: dict, root: Path, do
         def run() -> None:
             target, s3 = root / f"m_{first}_{second}", ReadingFake()
             code = command(["--downloads", str(downloads), *modes[first], *modes[second]], target, s3)
-            require(code != 0 and not s3.calls and not target.exists(), f"Two modes ran together: exit {code}")
+            require(code == 2 and not s3.calls and not target.exists(), f"The two modes were not refused as a mode conflict: exit {code}")
 
         return run
 
