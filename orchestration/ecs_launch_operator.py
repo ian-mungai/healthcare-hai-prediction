@@ -84,7 +84,8 @@ class LaunchGuarantees:
             self.log.info("last log lines of the failed job:\n%s", outcome.logs)
         if not outcome.ok:
             earlier = " in an earlier attempt, nothing was launched, start a new run to try again" if outcome.adopted else ""
-            why = f"; {outcome.failure}" if outcome.failure else ""
+            # The end record's reason is the rendered failure message of a closed failure record: say it once.
+            why = f"; {outcome.failure}" if outcome.failure and outcome.failure != outcome.reason else ""
             raise JobFailed(f"{self.job.job} attempt {self.job.attempt} ended {outcome.outcome} (exit {outcome.exit_code}){earlier}: {outcome.reason}{why}")
 
     def openlineage_result(self, found: Mapping[str, Any]) -> Any:

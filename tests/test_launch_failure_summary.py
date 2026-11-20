@@ -344,6 +344,7 @@ def test_the_operator_error_and_the_gate_input_check_name_the_rendered_record() 
     with pytest.raises(JobFailed) as caught:
         operator(rig, 2, log_container="publish").execute(context(2))
     check(f"phase build failed in container build: {FLOOR_TEXT}" in str(caught.value), f"the failed job's error names the record: {caught.value}")
+    check(str(caught.value).count(FLOOR_TEXT) == 1, f"and names it once, not as the reason and again as the failure: {caught.value}")
     gate = cast(Any, SimpleNamespace(store=rig.launcher().store))
     with pytest.raises(LaunchRefused) as refused:
         Preflight.require_passed(gate, "publish", "gold", RUN)
