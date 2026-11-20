@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import time
+import warnings
 import zipfile
 import zlib
 from collections.abc import Callable
@@ -90,7 +91,9 @@ WINDOWS_USERS = "C:" + "\\Us" + "ers\\"
 OLD_OPENMETADATA_LOGIN = "admin" + "@" + "open-metadata.org"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
-PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, *OTHER_ACCOUNTS.values(), ENV_VALUE, PROFILE_LABEL]
+# The user name of the synthetic document paths; a document finding names a member by its index, so the name of a member never reaches the output.
+DOCUMENT_USER = "sample" + "_person"
+PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, DOCUMENT_USER, PERSONAL_EMAIL, PHONE, ACCOUNT, *OTHER_ACCOUNTS.values(), ENV_VALUE, PROFILE_LABEL]
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
 EM_DASH = "\u2014"
@@ -1729,6 +1732,16 @@ def office_package(members: dict[str, str]) -> bytes:
     return buffer.getvalue()
 
 
+def office_records(members: list[tuple[str, str | bytes]], method: int = zipfile.ZIP_DEFLATED) -> bytes:
+    """An OOXML package written record by record, so a member name can repeat; a member name is whatever the publisher's archive says it is."""
+    buffer = io.BytesIO()
+    with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w", method) as archive:
+        warnings.simplefilter("ignore", UserWarning)
+        for name, body in members:
+            archive.writestr(name, body)
+    return buffer.getvalue()
+
+
 def pdf_document(content: str) -> bytes:
     """A small PDF whose one content stream holds ``content`` compressed, as a publisher's PDF does, so only a read of the decoded stream sees it."""
     body = zlib.compress(content.encode())
@@ -1737,9 +1750,12 @@ def pdf_document(content: str) -> bytes:
 
 def document_path_cases() -> list[Case]:
     """A user directory path inside a workbook, a legacy workbook or a PDF text stream is blocked; a clean file and a placeholder pass."""
-    path = "C:\\" + "Users\\sample_person\\Documents\\book.xlsx"
+    path = "C:\\" + f"Users\\{DOCUMENT_USER}\\Documents\\book.xlsx"
     block = f'<mc:AlternateContent><mc:Choice Requires="x15"><x15ac:absPath url="{path}"/></mc:Choice></mc:AlternateContent>'
-    reason = "config/book.xlsx!xl/workbook.xml: home-directory path with a user name"
+    reason = "config/book.xlsx!member 2 (xml): home-directory path with a user name"
+    named = "/" + f"Users/{DOCUMENT_USER}/Documents/named.xml"
+    damaged = bytearray(office_records([("[Content_Types].xml", "<Types/>"), (named, "<a>" + "x" * 40 + "</a>")], zipfile.ZIP_STORED))
+    damaged[damaged.index(b"x" * 40)] ^= 0xFF
     clean = {"[Content_Types].xml": "<Types/>", "xl/workbook.xml": "<workbook/>"}
     return [
         Case(
@@ -1748,6 +1764,34 @@ def document_path_cases() -> list[Case]:
             False,
             {"config/book.xlsx": office_package(clean | {"xl/workbook.xml": f"<workbook>{block}</workbook>"})},
             reason=reason,
+        ),
+        Case(
+            "workbook member named with a user directory path is blocked without printing the name",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": office_records([("[Content_Types].xml", "<Types/>"), (named, f"<a>{path}</a>")])},
+            reason="config/book.xlsx!member 2 (xml): home-directory path with a user name",
+        ),
+        Case(
+            "workbook with an unreadable member named with a user directory path is blocked without printing the name",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": bytes(damaged)},
+            reason="config/book.xlsx: unreadable document: member 2 cannot be read",
+        ),
+        Case(
+            "workbook with a path in the first of two members of one name is blocked",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": office_records([("xl/workbook.xml", f"<a>{path}</a>"), ("xl/workbook.xml", "<workbook/>")])},
+            reason="config/book.xlsx: unreadable document: an Office package holds two members with the same name",
+        ),
+        Case(
+            "workbook with two clean members of one name is blocked",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": office_records([("xl/workbook.xml", "<workbook/>"), ("xl/workbook.xml", "<other/>")])},
+            reason="config/book.xlsx: unreadable document: an Office package holds two members with the same name",
         ),
         Case(
             "legacy workbook holding a UTF-16 user directory path is blocked",

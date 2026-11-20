@@ -3,8 +3,9 @@
 The privacy scan reads text files line by line and skips a file with NUL bytes as unreviewed. A workbook or a PDF holds text inside a package or a compressed
 stream, where a workstation path can hide (an absolute path element of a workbook, a title in a PDF information dictionary). This module looks at the text
 members of an OOXML package, at the bytes of a legacy Office file in both common encodings, and at a PDF's bytes and its decompressed streams. A hit is
-reported by member name or by ``(file)`` and ``(stream)`` only. The caller passes the line test of the privacy scan, so the two scans agree on what a user
-directory path is: a Windows drive path under ``Users``, ``/Users/<name>`` and ``/home/<name>``, with placeholders and the macOS shared folder exempt.
+reported by the member's position and kind (never its name, which a publisher's archive controls) or by ``(file)`` and ``(stream)`` only.
+The caller passes the line test of the privacy scan, so the two scans agree on what a user directory path is: a Windows drive path under ``Users``,
+``/Users/<name>`` and ``/home/<name>``, with placeholders and the macOS shared folder exempt.
 
 Limits: a PDF text layer in a custom font encoding or an image of a path is not read, and an encrypted PDF stream is read as bytes only.
 """
@@ -16,12 +17,12 @@ import re
 import zipfile
 import zlib
 from collections.abc import Callable
+from pathlib import PurePosixPath
 
 OFFICE_SUFFIXES = frozenset({".xlsx", ".xlsm", ".docx", ".pptx"})
 LEGACY_SUFFIXES = frozenset({".xls", ".doc", ".ppt"})
+# The kinds the privacy scan reads: every Office, legacy Office and PDF file.
 DOCUMENT_SUFFIXES = OFFICE_SUFFIXES | LEGACY_SUFFIXES | {".pdf"}
-# The kinds the privacy scan enforces: every document kind, PDFs included (owner, Nov 20 2026: three AHRQ PDFs that held a user directory path were left out).
-ENFORCED_SUFFIXES = DOCUMENT_SUFFIXES
 MAX_MEMBER_BYTES = 256 * 1024**2
 MAX_STREAM_BYTES = 64 * 1024**2
 # The part of a line around a possible path that is handed to the line test, so a one-line XML member costs only its matches.
@@ -53,20 +54,36 @@ def has_path(body: bytes, found: Callable[[str], bool]) -> bool:
     return False
 
 
-def office_members(data: bytes) -> dict[str, bytes]:
+def office_members(data: bytes) -> list[tuple[str, bytes]]:
+    """Every member record of an Office package, in archive order, as ``(name, body)``. The name is untrusted: it only picks a fixed kind label.
+
+    Two records with the same name (Office part names ignore case) are refused, so that no body hides behind another of one name. A record that cannot
+    be read is refused too. The diagnostics name a member by its position and never by its name.
+    """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
         raise ValueError("an Office package cannot be read as a ZIP archive") from None
-    found: dict[str, bytes] = {}
     with archive:
-        for info in archive.infolist():
-            if info.is_dir():
-                continue
+        infos = archive.infolist()
+        names = [info.filename.casefold() for info in infos]
+        if len(set(names)) != len(names):
+            raise ValueError("an Office package holds two members with the same name")
+        members = []
+        for position, info in enumerate(infos, 1):
             if info.file_size > MAX_MEMBER_BYTES:
-                raise ValueError(f"member {info.filename} is too large to scan")
-            found[info.filename] = archive.read(info)
-    return found
+                raise ValueError(f"member {position} is too large to scan")
+            try:
+                members.append((info.filename, archive.read(info)))
+            except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError, OSError):
+                raise ValueError(f"member {position} cannot be read") from None
+    return members
+
+
+def member_location(position: int, name: str) -> str:
+    """A fixed location for a member: its 1-based position and a kind from a closed list. The name itself is never part of it."""
+    kind = {".xml": "xml", ".rels": "rels"}.get(PurePosixPath(name.casefold()).suffix, "other")
+    return f"member {position} ({kind})"
 
 
 def is_text(body: bytes) -> bool:
@@ -95,13 +112,14 @@ def pdf_streams(data: bytes) -> list[bytes]:
 
 
 def members_with_user_path(data: bytes, suffix: str, found: Callable[[str], bool]) -> list[str]:
-    """The members of an Office or PDF file that hold a user directory path: member names for a package, ``(file)`` and ``(stream)`` otherwise.
+    """The members of an Office or PDF file that hold a user directory path: ``member <position> (<kind>)`` for a package, else ``(file)``, ``(stream)``.
 
-    Raises ValueError for a package or a stream set that cannot be read, so that an unreadable file is never taken as clean.
+    Raises ValueError, with a text that holds nothing from the file, for a package or a stream set that cannot be read, so that an unreadable file is
+    never taken as clean.
     """
     suffix = suffix.lower()
     if suffix in OFFICE_SUFFIXES:
-        return [name for name, body in office_members(data).items() if has_path(body, found)]
+        return [member_location(position, name) for position, (name, body) in enumerate(office_members(data), 1) if has_path(body, found)]
     hits = []
     # The syntax of a PDF is read without its stream bodies: compressed bytes spell a named tilde path by chance, and the streams are read decoded below.
     if has_path(STREAM.sub(b"stream\nendstream", data) if suffix == ".pdf" else data, found):

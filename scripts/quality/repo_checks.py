@@ -2646,9 +2646,10 @@ def line_privacy(line: str, values: list[str]) -> list[str]:
 
 
 def document_findings(path: str, data: bytes, allowed: list[tuple[str, str]]) -> list[Finding]:
-    """The members of an Office or PDF file that hold a user directory path, one finding each; the value is never reported.
+    """The members of an Office or PDF file that hold a user directory path, one finding each; neither the value nor a member name is reported.
 
-    An unreadable package is a finding too, so that a file the scan cannot open is never taken as clean.
+    A member is named by its position and kind. An unreadable package, a package with two members of one name and an unreadable member are findings too,
+    with a fixed text, so that a file the scan cannot open is never taken as clean.
     """
     description = PRIVACY_PATTERNS["home-path"][0]
     try:
@@ -2670,7 +2671,7 @@ def privacy_scan() -> tuple[list[Finding], list[str]]:
         if path == ".env" or os.path.islink(path) or not os.path.isfile(path):
             continue
         data = Path(path).read_bytes()
-        if Path(path).suffix.lower() in document_paths.ENFORCED_SUFFIXES and not data.startswith(LFS_POINTER):
+        if Path(path).suffix.lower() in document_paths.DOCUMENT_SUFFIXES and not data.startswith(LFS_POINTER):
             findings += document_findings(path, data, allowed)
         try:
             if b"\0" in data[:8192]:

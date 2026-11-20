@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import warnings
 import zipfile
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -42,13 +44,13 @@ def found(data: bytes, suffix: str) -> list[str]:
 )
 def test_a_user_directory_path_in_an_office_member_is_found_by_member_and_never_reported(path: str) -> None:
     result = found(workbook_with(path), ".xlsx")
-    check(result == ["xl/workbook.xml"], f"found {result}")
+    check(result == ["member 2 (xml)"], f"found {result}")
     check(all("synthetic_person" not in item for item in result), "the value is never part of the result")
 
 
 @pytest.mark.parametrize("suffix", [".xlsx", ".xlsm", ".docx", ".pptx"])
 def test_every_office_package_kind_is_read_by_its_members(suffix: str) -> None:
-    check(found(workbook_with(WINDOWS), suffix) == ["xl/workbook.xml"], f"{suffix} package")
+    check(found(workbook_with(WINDOWS), suffix) == ["member 2 (xml)"], f"{suffix} package")
 
 
 def test_a_clean_office_file_and_a_placeholder_path_pass() -> None:
@@ -60,7 +62,7 @@ def test_a_clean_office_file_and_a_placeholder_path_pass() -> None:
 
 
 def test_a_path_in_a_utf_16_member_or_a_legacy_workbook_is_found() -> None:
-    check(found(office({"docProps/custom.xml": WINDOWS.encode("utf-16")}), ".xlsx") == ["docProps/custom.xml"], "a UTF-16 member")
+    check(found(office({"docProps/custom.xml": WINDOWS.encode("utf-16")}), ".xlsx") == ["member 1 (xml)"], "a UTF-16 member")
     legacy = b"\xd0\xcf\x11\xe0 header " + WINDOWS.encode("utf-16-le") + b" tail"
     check(found(legacy, ".xls") == ["(file)"], "a legacy workbook is read as bytes in both encodings")
     check(found(b"\xd0\xcf\x11\xe0 header only", ".xls") == [], "a clean legacy workbook passes")
@@ -94,7 +96,87 @@ def test_an_oversized_or_broken_member_is_not_trusted_as_clean() -> None:
 def test_the_privacy_scan_reports_a_document_by_member_without_the_value() -> None:
     data = workbook_with(WINDOWS)
     findings = repo_checks.document_findings("config/example.xlsx", data, [])
-    check(len(findings) == 1 and findings[0].location == "config/example.xlsx!xl/workbook.xml", f"{findings}")
+    check(len(findings) == 1 and findings[0].location == "config/example.xlsx!member 2 (xml)", f"{findings}")
     check("synthetic_person" not in repr(findings), "the value is not in the finding")
     allowed = [("home-path", "config/*.xlsx")]
     check(repo_checks.document_findings("config/example.xlsx", data, allowed) == [], "a reasoned allowlist entry still applies")
+
+
+DUPLICATE_REFUSAL = "unreadable document: an Office package holds two members with the same name"
+
+
+def named_archive(members: list[tuple[str, bytes]], method: int = zipfile.ZIP_DEFLATED) -> bytes:
+    """An archive written member by member, so a name can repeat (the writer warns about a duplicate name and writes both records)."""
+    buffer = io.BytesIO()
+    with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w", method) as archive:
+        warnings.simplefilter("ignore", UserWarning)
+        for name, body in members:
+            archive.writestr(name, body)
+    return buffer.getvalue()
+
+
+def test_a_path_in_the_first_of_two_members_with_the_same_name_is_refused_and_so_are_two_clean_ones() -> None:
+    xml = b'<workbook><x15ac:absPath url="' + WINDOWS.encode() + b'"/></workbook>'
+    first_holds = named_archive([("xl/workbook.xml", xml), ("xl/workbook.xml", b"<workbook/>")])
+    [finding] = repo_checks.document_findings("config/example.xlsx", first_holds, [])
+    check(finding.location == "config/example.xlsx" and finding.problem == DUPLICATE_REFUSAL, f"{finding}")
+    both_clean = named_archive([("xl/workbook.xml", b"<workbook/>"), ("xl/workbook.xml", b"<other/>")])
+    [finding] = repo_checks.document_findings("config/example.xlsx", both_clean, [])
+    check(finding.problem == DUPLICATE_REFUSAL, f"two clean members of one name are refused as a duplicate: {finding}")
+    case_variant = named_archive([("xl/workbook.xml", b"<workbook/>"), ("XL/Workbook.xml", b"<other/>")])
+    check(repo_checks.document_findings("config/example.xlsx", case_variant, [])[0].problem == DUPLICATE_REFUSAL, "Office part names ignore case")
+    with pytest.raises(ValueError, match="two members with the same name"):
+        found(first_holds, ".xlsx")
+
+
+def test_every_member_record_is_read_even_when_a_name_is_a_directory_or_repeats_a_path_like_name() -> None:
+    data = named_archive([("xl/", WINDOWS.encode()), ("xl/workbook.xml", b"<workbook/>")])
+    check(found(data, ".xlsx") == ["member 1 (other)"], "a record named like a directory is read too")
+
+
+def test_the_five_seeded_workbooks_and_the_legacy_workbook_pass_the_document_scan() -> None:
+    seed = sorted(Path("config/acquisition/bootstrap_seed/manual_units").glob("AHRQ_SYSTEM__*/*.xls*"))
+    check(len(seed) == 6, f"the seed holds 6 AHRQ workbooks: {len(seed)}")
+    for path in seed:
+        data = path.read_bytes()
+        if data.startswith(repo_checks.LFS_POINTER):
+            pytest.skip("the checkout holds a Git LFS pointer, not the file")
+        check(repo_checks.document_findings(str(path), data, []) == [], f"{path.name} holds no user path and no duplicate member")
+
+
+def captured(findings: list[repo_checks.Finding]) -> str:
+    """Everything the privacy scan would print for the findings: location, problem, rule and fix."""
+    return "\n".join(f"{item.location} {item.problem} {item.rule} {item.fix}" for item in findings)
+
+
+def test_a_member_name_that_holds_a_user_path_is_never_printed() -> None:
+    name = MAC.replace("book.xlsx", "named.xml")
+    data = named_archive([("[Content_Types].xml", b"<Types/>"), (name, WINDOWS.encode())])
+    findings = repo_checks.document_findings("config/example.xlsx", data, [])
+    check(len(findings) == 1 and findings[0].location == "config/example.xlsx!member 2 (xml)", f"{findings}")
+    printed = captured(findings)
+    check("synthetic_person" not in printed and "Users" not in printed and "named.xml" not in printed, "no part of the member name or body is printed")
+
+
+def test_an_unreadable_member_with_a_path_in_its_name_is_refused_without_printing_the_name() -> None:
+    name = MAC.replace("book.xlsx", "named.xml")
+    data = bytearray(named_archive([("[Content_Types].xml", b"<Types/>"), (name, b"<a>" + b"x" * 40 + b"</a>")], zipfile.ZIP_STORED))
+    at = data.index(b"x" * 40)
+    data[at] ^= 0xFF
+    findings = repo_checks.document_findings("config/example.xlsx", bytes(data), [])
+    check(len(findings) == 1 and findings[0].location == "config/example.xlsx", f"{findings}")
+    check(findings[0].problem == "unreadable document: member 2 cannot be read", f"{findings[0].problem}")
+    printed = captured(findings)
+    check("synthetic_person" not in printed and "Users" not in printed and "named.xml" not in printed, "no part of the member name is printed")
+    check(
+        captured(repo_checks.document_findings("config/example.xlsx", b"PK\x03\x04 not a zip", [])).count("synthetic") == 0,
+        "a broken archive prints a fixed text",
+    )
+
+
+def test_a_member_too_large_to_scan_is_named_by_its_index_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(document_paths, "MAX_MEMBER_BYTES", 10)
+    name = MAC.replace("book.xlsx", "named.xml")
+    findings = repo_checks.document_findings("config/example.xlsx", named_archive([(name, b"x" * 50)]), [])
+    check(findings[0].problem == "unreadable document: member 1 is too large to scan", f"{findings[0].problem}")
+    check("synthetic_person" not in captured(findings), "the name is not printed")
