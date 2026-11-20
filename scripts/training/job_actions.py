@@ -437,7 +437,12 @@ CLIPPING = "cmi_clipping"
 def child_spec(
     context: Any, manifest: Mapping[str, Any], step: str, result: Mapping[str, Any], artifacts: list[tuple[Path, str]] | None = None
 ) -> run_tracking.RunSpec:
-    """Describe one child run: a model slot, a research question or a validation, with its status and every finite number of its result."""
+    """Describe one child run: a model slot, a research question or a validation.
+
+    Its parameters are the status, the reason when the result has one and, for each test of the result that holds a ``cmi_clipping`` record, that record as one
+    JSON parameter named ``<step>.<test>.cmi_clipping``. Its metrics are every other finite number of the result, without the ``details`` entry and without the
+    bounds of the clipping record, which the JSON parameter holds.
+    """
     tags = {"run_id": context.run, "step_key": step, "hai_type": manifest["hai_type"], "population": manifest["population"]}
     params = {"status": str(result.get("status", "fitted"))} | ({"reason": str(result["reason"])} if result.get("reason") else {})
     # The CMI clipping record of an RQ1 result is kept whole, as a JSON parameter, so that the research action reads the flag, the source and the reason too.

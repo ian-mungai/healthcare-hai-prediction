@@ -120,9 +120,9 @@ def column_kind(name: str) -> str:
 class FoldPreprocessor(EstimatorParameters):
     """Fit every learned preprocessing choice on this pipeline's fitting rows only.
 
-    With ``winsorize`` each numeric predictor that takes more than two values among the fitting rows is clipped to its 1st and 99th percentiles before its
-    median, mean and spread are learned; the same cut points clip every later row. Indicator columns (at most two values), categories and the missing-value
-    flags are never clipped."""
+    With ``winsorize`` each numeric predictor with more than two distinct observed (not missing) values among the fitting rows is clipped to the 1st and 99th
+    percentiles of those values before its median, mean and spread are learned; the same cut points clip every later row. A numeric predictor with at most
+    two distinct observed values, categories and the missing-value flags are never clipped."""
 
     def __init__(
         self,
@@ -211,7 +211,7 @@ class FoldPreprocessor(EstimatorParameters):
         ]
 
     def transform(self, values: Any) -> Prepared:
-        """Apply frozen fitting-row choices and count unknown categorical values."""
+        """Apply frozen fitting-row choices, the cut points included, and count unknown categorical values."""
         batch = FeatureBatch.from_records(values, self.features)
         columns, names, references = [], [], []
         unknown = 0

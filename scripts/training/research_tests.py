@@ -88,7 +88,7 @@ def intercept_cmi_fit(request: ModelRequest, winsorize: bool = False) -> tuple[A
     """Fit the intercept-plus-CMI model on the training years and predict the newest-year holdout rows, in their extract order.
 
     With ``winsorize`` the CMI is clipped at the 1st and 99th percentiles of the training rows, as the Elastic Net does, and the same bounds clip the holdout
-    rows. Returns the predictions and the fitted preprocessor, which holds the bounds.
+    rows. Returns the predictions and the fitted preprocessor, which holds the bounds when CMI was clipped.
     """
     training, holdout = request.data.split()
     features = tuple(feature for feature in request.data.features if feature.reference == request.cmi_reference)
@@ -117,7 +117,8 @@ def intercept_cmi_comparison(
 
     ``elastic_predictions`` come from the fit on the declared ``references`` with the tuned ``parameters``. The record lists the declared inputs, and the fit's
     missing-value selection can still drop some. Both sides clip CMI at the same bounds, learned on the training rows: ``elastic_bounds`` are the cut points
-    of the Elastic Net's final fit, and the baseline learns its own from the same rows with the same code. The record states them.
+    of the Elastic Net's final fit, and the baseline learns its own from the same rows with the same code. The comparison refuses if the two differ. The record
+    states the bounds, or that there are none when CMI has two or fewer distinct observed values.
     """
     holdout = request.data.split()[1]
     baseline, transform = intercept_cmi_fit(request, winsorize=True)
