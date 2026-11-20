@@ -120,7 +120,7 @@ def test_a_skipped_table_notice_has_the_shape_and_names_the_table_and_the_run() 
     check(subject.startswith("Bronze run"), f"the subject does not say what happened to what: {subject}")
     check(TABLE in body and "no source object" in body and BRONZE in body, f"the table or the run is missing:\n{body}")
     check(INGESTION in body, f"the ingestion run is missing:\n{body}")
-    check(f"lakehouse/bronze_runs/{BRONZE}/carried_over.json" in body, f"the run record is not named:\n{body}")
+    check(f"Bronze run in Airflow: {BRONZE}" in body and "carried_over.json" not in body, f"the run is not named, or a record is:\n{body}")
     check(stamped_within_a_minute(body), f"the time is not the time of the send:\n{body}")
     check("Files carried over" not in body, f"the notice names an absent list:\n{body}")
 
@@ -252,19 +252,6 @@ def test_a_long_promotion_detail_is_cut_before_it_is_rendered_and_the_body_stays
     check(len(body.encode()) <= BODY_LIMIT, f"the body has {len(body.encode())} bytes")
     check(len(body.encode()) < 5_000, "the detail kept more than its 1000 characters")
     check("What to do next:" in body and "Details:" in body, "a cut detail removed a block")
-
-
-def test_a_huge_bronze_list_is_cut_on_a_line_with_a_truncated_line_and_stays_under_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    files = [f"source_{index}__20261101T000000Z__" + "a" * 60 for index in range(2_000)]
-    tables = [{"table": f"table_{index}", "reason": "no source object"} for index in range(2_000)]
-    body = bronze_notice(files, tables)["Message"]
-    monkeypatch.setattr(owner_notice, "cap_body", lambda text, limit=0: text)
-    whole = bronze_notice(files, tables)["Message"].split("\n")
-    lines = body.split("\n")
-    check(len(whole) > len(lines) and len(body.encode()) <= BODY_LIMIT, f"the body has {len(body.encode())} bytes and {len(lines)} of {len(whole)} lines")
-    check(lines[-1] == owner_notice.TRUNCATED and "run record" in lines[-1], f"the last line is {lines[-1]!r}")
-    check(lines[:-2] == whole[: len(lines) - 2] and lines[-2] == "", "the cut is not on a line boundary of the full notice")
-    check(len(body.encode()) > BODY_LIMIT - 400, "the cut dropped more lines than it had to")
 
 
 def test_a_separator_in_a_file_or_table_name_adds_no_line_and_no_block_header() -> None:

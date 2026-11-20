@@ -4,12 +4,14 @@ sent leaves no record, so the next check tries again."""
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
 
+from orchestration import owner_notice
 from scripts.lakehouse import bronze_run
 from tests.support import check
 
@@ -417,14 +419,95 @@ def test_any_existing_record_is_final_and_is_reported_without_a_send(earlier: di
     check(not store.published and not store.puts and done == earlier, f"{len(store.published)} sent, writes {store.puts}, reported {done}")
 
 
-def test_the_email_points_to_its_own_file_list_and_the_run_record_only_when_it_could_be_saved(capsys: pytest.CaptureFixture[str]) -> None:
-    many = [f"file-{number:04d}" for number in range(1001)]
-    store = bucket(many, broken={"put_object": DENIED})
-    carried(store)
-    lines = store.published[0]["Message"].split("\n")
-    check("Read the file list in this message." in lines and "Read the file list in the run record." not in lines, lines[:20])
+POINTERS = ("carried_over", "lists them", "full text", "could be saved", "Run record:", "in the run record", "project data bucket", "Truncated", "file list in")
+
+
+def email_of(files: list[str], skipped: list[dict[str, str]] | None = None) -> str:
+    """The message of the notice for a month that failed ``files``."""
+    store = bucket(files)
+    carried(store, skipped=skipped)
+    return store.published[0]["Message"]
+
+
+def shown(message: str, title: str) -> tuple[list[str], list[str]]:
+    """The names in the list of the message under ``title`` and the lines that follow them up to the blank line."""
+    lines = message.split("\n")
+    rest = lines[lines.index(f"{title}:") + 1 :]
+    rest = rest[: next((number for number, line in enumerate(rest) if line == "" or (line.endswith(":") and not line.startswith("- "))), len(rest))]
+    return [line[2:] for line in rest if line.startswith("- ")], [line for line in rest if not line.startswith("- ")]
+
+
+STATES = {
+    "good month": lambda: bucket([], run_record([], ["a__1__x"])),
+    "files carried over": lambda: bucket(["a__1__x"]),
+    "table left out": lambda: bucket([]),
+    "missing original record": lambda: Bucket({}),
+    "malformed record": lambda: bucket([], b"not json"),
+    "no capture root and a table left out": lambda: bucket([]),
+}
+
+
+@pytest.mark.parametrize("state", list(STATES))
+def test_no_state_of_the_email_points_to_a_record_or_to_any_place_outside_the_message(state: str) -> None:
+    store = STATES[state]()
+    no_root = state.startswith("no capture root")
+    carried(store, root="" if no_root else "raw/", skipped=EMPTY if "table" in state else None)
+    message = store.published[0]["Message"]
+    check(not [word for word in POINTERS if word in message], f"{state}: {[word for word in POINTERS if word in message]}\n{message}")
     check(
-        "and 1 more (the run record lists them all when it could be saved)" in lines and "- file-0999" in lines and "- file-1000" not in lines,
-        "the shortened list",
+        f"Bronze run in Airflow: {RUN}" in message and f"Capture runs in Airflow: {ORIGINAL}, ingestion_retry_{HEX}_2, ingestion_retry_{HEX}_3" in message,
+        message,
     )
-    check("the capture notice stopped" in capsys.readouterr().err and RECORD_KEY not in store.objects, "the refused write is not shown or a record exists")
+
+
+def check_shown(message: str, title: str, total: int) -> int:
+    """The list under ``title`` says exactly how many names it shows and how many it does not, and the text is within the limit."""
+    names, notes = shown(message, title)
+    check(len(message.encode()) <= owner_notice.BODY_LIMIT and owner_notice.TRUNCATED not in message, f"{len(message.encode())} bytes")
+    if len(names) == total:
+        check(notes == [], f"a complete list carries a note: {notes}")
+    else:
+        check(notes == [f"Showing {len(names)} of {total}. Not shown: {total - len(names)}."], f"{len(names)} names, notes {notes}")
+    return len(names)
+
+
+def test_a_list_cut_by_the_item_limit_says_how_many_it_shows_and_how_many_it_does_not() -> None:
+    message = email_of([f"file-{number:04d}" for number in range(1001)])
+    check(check_shown(message, "Carried-over files", 1001) == 1000 and "Showing 1000 of 1001. Not shown: 1." in message, message[-300:])
+
+
+@pytest.mark.parametrize("pad", [87, 99])
+def test_a_list_cut_by_the_byte_limit_counts_the_names_that_are_in_the_final_text(pad: int) -> None:
+    names = [f"file-{number:04d}-" + "x" * pad for number in range(1001)]
+    message = email_of(names)
+    count = check_shown(message, "Carried-over files", 1001)
+    check(0 < count < 1000 and len(message.encode()) > owner_notice.BODY_LIMIT - 300, f"{count} names, {len(message.encode())} bytes")
+    check(not [word for word in POINTERS if word in message], "a pointer reached the text")
+
+
+def test_the_largest_list_that_fits_is_complete_and_one_more_name_is_cut_with_exact_numbers() -> None:
+    def make(total: int) -> list[str]:
+        return [f"file-{number:04d}-" + "x" * 99 for number in range(total)]
+
+    low, high = 1, 1000
+    while low < high:
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if "Showing" not in email_of(make(middle)) else (low, middle - 1)
+    check(low < 1000, "the boundary is the item limit, not the byte limit")
+    fits, over = email_of(make(low)), email_of(make(low + 1))
+    check(check_shown(fits, "Carried-over files", low) == low, f"{low} names do not all fit")
+    check(check_shown(over, "Carried-over files", low + 1) < low + 1, "one more name was not cut")
+
+
+def test_a_very_long_name_that_alone_nears_the_byte_limit_is_not_shown_and_the_numbers_say_so() -> None:
+    message = email_of(["a" * 99_800, "short"])
+    check(check_shown(message, "Carried-over files", 2) == 0 and "Not shown: 2." in message, message[-200:])
+
+
+def test_two_long_lists_share_the_byte_limit_and_each_counts_the_names_it_shows() -> None:
+    names = [f"source_{number:04d}__20261101T000000Z__" + "a" * 60 for number in range(2000)]
+    tables = [{"table": f"table_{number}", "reason": "no source object"} for number in range(2000)]
+    message = email_of(names, tables)
+    files = check_shown(message, "Carried-over files", 2000)
+    check(files + len(shown(message, "Skipped tables")[0]) < 4000 and len(message.encode()) > owner_notice.BODY_LIMIT - 400, f"{files} files shown")
+    check(re.search(r"Showing \d+ of 2000\. Not shown: \d+\.", message) is not None, "the numbers are missing")
