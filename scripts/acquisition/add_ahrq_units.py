@@ -78,8 +78,8 @@ def add(queue_bytes: bytes, specs_bytes: bytes, plan: dict[str, Any], metadata: 
     copy, and the specification records the original and the change. A missing record and a recorded origin other than the planned URL are refused.
     """
     queue, specs = json.loads(queue_bytes), json.loads(specs_bytes)
-    old = [unit for unit in queue["queue"] if unit["mode"] == MODE]
-    queue["queue"] = [unit for unit in queue["queue"] if unit["mode"] != MODE]
+    old = [unit for unit in queue["queue"] if unit.get("mode") == MODE]
+    queue["queue"] = [unit for unit in queue["queue"] if unit.get("mode") != MODE]
     for unit in old:
         specs["specs"].pop(unit["snapshot_id"], None)
     queue["budgets"] = budgets_without(queue["budgets"], old)

@@ -315,6 +315,19 @@ def test_the_unit_builder_appends_one_seed_only_unit_and_spec_per_planned_file_a
     )
 
 
+def test_the_unit_builder_builds_its_bundle_when_a_regular_unit_has_no_mode() -> None:
+    """A regular queue unit without a mode is read as a regular unit, as the host list reads it; the builder neither raises nor drops the unit."""
+    queue_bytes, specs_bytes = small_bundle()
+    queue = json.loads(queue_bytes)
+    del queue["queue"][0]["mode"]
+    plan = plan_of(BODIES) | {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_of(BODIES)["files"]]}
+    new_queue, new_specs = add_units.add(add_units.encode(queue), specs_bytes, plan, metadata_for(plan))
+    built = json.loads(new_queue)
+    check(built["queue"][0]["snapshot_id"] == "D1" and "mode" not in built["queue"][0], "the regular unit stays first and unchanged")
+    check(len([unit for unit in built["queue"] if unit.get("mode") == MODE]) == 3 and built["entries"] == 4, "the three AHRQ units are appended")
+    check(add_units.add(new_queue, new_specs, plan, metadata_for(plan)) == (new_queue, new_specs), "a second run rebuilds the same bytes")
+
+
 def test_the_unit_builder_gives_the_same_files_on_a_second_run_and_refuses_a_record_that_differs_from_the_plan_or_lacks_a_file() -> None:
     queue_bytes, specs_bytes = small_bundle()
     plan = plan_of(BODIES) | {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_of(BODIES)["files"]]}
