@@ -185,16 +185,28 @@ def pipeline_after_retry(original_run: str, day: int, context: Mapping[str, Any]
 
 def captured_ids(record: Mapping[str, Any]) -> set[str]:
     """The snapshot IDs a run record lists as captured (completed, changed or unchanged)."""
-    return {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in record["units"].get(name, [])}
+    return {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in record["units"][name]}
+
+
+# The states the capture's own check counts (``capture_mode.outcome_problems``): a failed or refused unit did not complete, a held one was not attempted.
+FAILED_STATES = ("failed", "refused")
+HELD_STATES = ("paused_not_attempted", "keyed_not_attempted")
+
+
+def capture_counts(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> tuple[set[str], set[str], set[str]]:
+    """The snapshot IDs the retry period captured, failed and held. Failed and held are the units the original run failed, refused, held or did not attempt
+    for a key, less those a run captured. A record without its unit lists raises ``ValueError``."""
+    try:
+        captured = set().union(*(captured_ids(record) for record in (original, *retries)))
+        units = original["units"]
+        failed = {item["snapshot_id"] for name in FAILED_STATES for item in units[name]}
+        held = {snapshot_id for name in HELD_STATES for snapshot_id in units[name]}
+    except (KeyError, TypeError):
+        raise ValueError("a run record names its failed, held and captured units") from None
+    return captured, failed - captured, held - captured
 
 
 def carried_over(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The source files no run of the retry period captured: those the original run failed or did not attempt, less those a retry day captured. Bronze keeps
-    each one's earlier capture. A record without its units raises ``ValueError``."""
-    try:
-        outstanding = {item["snapshot_id"] for item in original["units"]["failed"]} | set(original["units"]["paused_not_attempted"])
-        for found in retries:
-            outstanding -= captured_ids(found)
-    except (KeyError, TypeError):
-        raise ValueError("a run record names its failed, paused and captured units") from None
-    return sorted(outstanding)
+    """The source files no run of the retry period captured, failed or held: bronze keeps each one's earlier capture."""
+    _, failed, held = capture_counts(original, retries)
+    return sorted(failed | held)

@@ -85,7 +85,9 @@ def test_the_ingestion_runs_of_a_bronze_run_are_its_original_and_each_retry_day(
 def record(failed: list[str], paused: list[str], completed: list[str] | None = None) -> dict[str, Any]:
     wrap = [{"snapshot_id": name} for name in failed]
     done = [{"snapshot_id": name} for name in completed or []]
-    return {"units": {"failed": wrap, "paused_not_attempted": paused, "completed": done, "changed": [], "unchanged": []}}
+    return {
+        "units": {"failed": wrap, "paused_not_attempted": paused, "completed": done, "changed": [], "unchanged": [], "refused": [], "keyed_not_attempted": []}
+    }
 
 
 def test_a_file_no_run_of_the_period_captured_is_carried_over() -> None:

@@ -20,9 +20,10 @@ NOTICE_KEY = f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"
 TOPIC = "arn:aws:sns:us-west-2:" + "1" * 12 + ":alerts"
 
 
-def run_record(failed: list[str], completed: list[str] | None = None) -> bytes:
-    units = {"failed": [{"snapshot_id": name} for name in failed], "paused_not_attempted": [], "completed": [{"snapshot_id": name} for name in completed or []]}
-    return json.dumps({"units": units | {"changed": [], "unchanged": []}}).encode()
+def run_record(failed: list[str], completed: list[str] | None = None, refused: list[str] = (), keyed: list[str] = ()) -> bytes:
+    units = {"failed": [{"snapshot_id": name} for name in failed], "refused": [{"snapshot_id": name} for name in refused], "keyed_not_attempted": list(keyed)}
+    units |= {"paused_not_attempted": [], "completed": [{"snapshot_id": name} for name in completed or []], "changed": [], "unchanged": []}
+    return json.dumps({"units": units}).encode()
 
 
 class Body:
@@ -68,8 +69,14 @@ class Bucket:
         return {"MessageId": f"m{len(self.published)}"}
 
 
-def bucket(failed: list[str], **options: Any) -> Bucket:
-    return Bucket({f"raw/ingestion_runs/{ORIGINAL}/run.json": run_record(failed)}, **options)
+def retry_key(day: int) -> str:
+    return f"raw/ingestion_runs/ingestion_retry_{HEX}_{day}/run.json"
+
+
+def bucket(failed: list[str], original: bytes | None = None, retries: dict[int, bytes] | None = None, **options: Any) -> Bucket:
+    """The original run record and, unless ``retries`` says otherwise, an empty record for each retry day."""
+    objects = {f"raw/ingestion_runs/{ORIGINAL}/run.json": run_record(failed) if original is None else original}
+    return Bucket(objects | {retry_key(day): body for day, body in (retries or {2: run_record([]), 3: run_record([])}).items()}, **options)
 
 
 EMPTY = [{"table": "empty_data", "reason": "no source object"}]
@@ -119,7 +126,7 @@ def test_an_interrupted_attempt_that_won_the_claim_but_recorded_no_outcome_is_re
 @pytest.mark.parametrize(
     ("failed", "topic", "root", "notice"),
     [
-        ([], TOPIC, "raw/", "not needed: no file carried over"),
+        ([], "", "raw/", "not sent: no alerts topic"),
         (["a__1__x"], "", "raw/", "not sent: no alerts topic"),
         (["a__1__x"], TOPIC, "", "not sent"),
     ],
@@ -137,6 +144,9 @@ def test_a_run_with_no_ingestion_run_record_says_so_and_names_no_file_and_a_repe
     first = carried(store)
     check(first["carried_over"] is None and "no run record" in first["note"], f"{first}")
     check(carried(store) == first, "a repeat reported another record")
+    message = store.published[0]["Message"]
+    check(len(store.published) == 1 and f"The run record of {ORIGINAL} is missing, so its files are not counted." in message, message)
+    check("Captured files" not in message and "not captured" not in message and "Every file" not in message, f"a missing record was counted:\n{message}")
 
 
 def test_the_notice_outcome_is_written_after_the_notice_and_only_once() -> None:
@@ -200,7 +210,53 @@ def test_a_failed_notice_for_a_skipped_table_is_recorded_once_and_not_tried_agai
     check(carried(store, skipped=EMPTY)["notice"] == "failed: OSError" and not store.published, "a retry sent a notice after a failed one was recorded")
 
 
-def test_no_file_and_no_skipped_table_still_needs_no_notice_and_records_an_empty_list() -> None:
-    store = bucket([])
+def test_a_good_month_is_noticed_once_with_its_three_counts_and_a_repeat_sends_nothing() -> None:
+    store = bucket([], run_record([], ["a__1__x", "b__1__x", "c__1__x"]))
     first = carried(store)
-    check(first["notice"] == "not needed: no file carried over" and first["skipped_tables"] == [] and not store.published, f"{first}")
+    again = carried(store)
+    sent = store.published[0]
+    check(first["notice"] == "sent" and first["carried_over"] == [] and again == first and len(store.published) == 1, f"{first} {again} {store.published}")
+    check(sent["Subject"] == f"Bronze run {RUN} captured 3 files", sent["Subject"])
+    lines = sent["Message"].split("\n")
+    check(all(line in lines for line in ("Captured files: 3", "Failed files: 0", "Held files: 0", "Every file was captured.")), sent["Message"])
+    check("not counted" not in sent["Message"] and "No action is needed." in lines, sent["Message"])
+
+
+def test_failed_refused_and_held_files_are_counted_as_the_capture_counts_them_and_a_retry_recovers_one() -> None:
+    original = run_record(["a__1__x"], ["d__1__x"], refused=["b__1__x"], keyed=["c__1__x"])
+    store = bucket([], original, {2: run_record([], ["a__1__x"]), 3: run_record([])})
+    first = carried(store)
+    lines = store.published[0]["Message"].split("\n")
+    check(first["carried_over"] == ["b__1__x", "c__1__x"], f"{first}")
+    check(all(line in lines for line in ("Captured files: 2", "Failed files: 1", "Held files: 1")), store.published[0]["Message"])
+    check("Every file was captured." not in lines and "- b__1__x" in lines and "- c__1__x" in lines, store.published[0]["Message"])
+
+
+def test_a_missing_retry_record_is_named_and_its_files_are_not_claimed_as_not_captured() -> None:
+    store = bucket(["a__1__x"], retries={2: run_record([])})
+    first = carried(store)
+    message, subject = store.published[0]["Message"], store.published[0]["Subject"]
+    check(first["notice"] == "sent" and first["unread_records"] == {f"ingestion_retry_{HEX}_3": "is missing"}, f"{first}")
+    check(f"The run record of ingestion_retry_{HEX}_3 is missing, so its files are not counted." in message, message)
+    check("Every file was captured." not in message and "In the run records that could be read" in message, message)
+    check("could not read 1 run record" in subject, subject)
+
+
+def test_a_month_with_no_failed_file_and_a_missing_retry_record_does_not_say_every_file_was_captured() -> None:
+    store = bucket([], run_record([], ["a__1__x"]), {2: run_record([])})
+    carried(store)
+    message = store.published[0]["Message"]
+    check("Captured files: 1" in message and "Every file was captured." not in message and "No action is needed." not in message, message)
+    check("could not read 1 run record" in store.published[0]["Subject"] and "captured" not in store.published[0]["Subject"], store.published[0]["Subject"])
+
+
+@pytest.mark.parametrize(
+    "body", [b"not json", b"[]", json.dumps({"units": {"completed": [], "changed": [], "unchanged": [], "paused_not_attempted": []}}).encode()]
+)
+def test_an_original_record_that_is_not_json_not_an_object_or_has_no_failed_list_is_named_and_never_raises(body: bytes) -> None:
+    store = bucket([], body)
+    first = carried(store)
+    message = store.published[0]["Message"]
+    check(first["notice"] == "sent" and first["carried_over"] is None and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
+    check(f"The run record of {ORIGINAL} cannot be read, so its files are not counted." in message, message)
+    check("Captured files" not in message and "Every file" not in message, message)

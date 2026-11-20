@@ -543,14 +543,26 @@ def recorded_carried_over(client: Any, bucket: str, run: str) -> dict[str, Any]:
     return document
 
 
-def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any, skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:
-    """Name the source files that no run of the ingestion run's retry period captured and the tables the stage left out (``skipped``, each with its reason),
-    in the bronze run record and in the owner notice.
+def read_counted_record(client: Any, bucket: str, key: str) -> tuple[dict[str, Any] | None, str]:
+    """A run record the notice counts, or None with the reason it is not counted. A record that is missing, not JSON, not an object or without its unit lists
+    never raises: the notice names it."""
+    try:
+        record = read_run_record(client, bucket, key)
+        if record is not None:
+            ingestion_schedule.capture_counts(record, [])
+        return record, "is missing"
+    except Exception:
+        return None, "cannot be read"
 
-    Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The files are the units that
-    the ingestion run failed or did not attempt, less those a retry day captured (``ingestion_schedule.carried_over``). A run with no ingestion run
-    record (a hand-staged bronze run) says that, and names no file. A skipped table needs the notice as much as a carried-over file does: the notice is sent
-    when either exists, and the record names the skipped tables whether or not it is sent.
+
+def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any, skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:
+    """Count the source files the ingestion run's capture captured, failed and held, name the files that no run of its retry period captured and the tables
+    the stage left out (``skipped``, each with its reason), in the bronze run record and in the owner notice.
+
+    Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The counts are those of the
+    capture's own check (``ingestion_schedule.capture_counts``). A run record that is missing or cannot be read is named in the notice and its files are not
+    counted. The notice is sent for every run that has a capture root, also when nothing is missing. A run with no capture root (a hand-staged bronze run)
+    sends it only for a skipped table, and the record names the skipped tables whether or not it is sent.
 
     The record ``lakehouse/bronze_runs/<run>/carried_over.json`` is created once and is the claim on the notice: the attempt that creates it sends the notice,
     and any later attempt reads the record, sends nothing and reports it. The outcome of the notice goes to ``carried_over_notice.json``, created once after the
@@ -559,25 +571,36 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder = f"{root}ingestion_runs/"
-    first = read_run_record(client, bucket, f"{folder}{original}/run.json") if root else None
     document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries), "skipped_tables": list(skipped)}
     files: list[str] | None = None
+    counts: dict[str, int] | None = None
+    unread: dict[str, str] = {}
     if not root:
         document |= {"carried_over": None, "note": "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"}
-    elif first is None:
-        document |= {"carried_over": None, "note": f"no run record of {original} under {folder}: the files carried over are not known"}
     else:
-        found = [item for item in (read_run_record(client, bucket, f"{folder}{name}/run.json") for name in retries) if item is not None]
-        files = ingestion_schedule.carried_over(first, found)
-        document |= {"carried_over": files, "retry_records_read": len(found)}
+        found: dict[str, dict[str, Any]] = {}
+        for name in (original, *retries):
+            record, why = read_counted_record(client, bucket, f"{folder}{name}/run.json")
+            if record is None:
+                unread[name] = why
+            else:
+                found[name] = record
+        if original not in found:
+            what = f"no run record of {original} under {folder}" if unread[original] == "is missing" else f"the run record of {original} cannot be read"
+            document |= {"carried_over": None, "note": f"{what}: the files carried over are not known"}
+        else:
+            captured, failed, held = ingestion_schedule.capture_counts(found[original], [found[name] for name in retries if name in found])
+            files, counts = sorted(failed | held), {"captured": len(captured), "failed": len(failed), "held": len(held)}
+            document |= {"carried_over": files, "counts": counts, "retry_records_read": len(found) - 1}
+        document["unread_records"] = unread
     message: tuple[str, str] | None = None
-    if not files and not skipped:
-        document["notice"] = "not needed: no file carried over" if files is not None else "not sent"
+    if not root and not skipped:
+        document["notice"] = "not sent"
     elif not topic:
         document["notice"] = "not sent: no alerts topic"
     else:
         document["notice"] = CLAIMED
-        message = bronze_notice.carried_over_notice(run, original, files or [], skipped)
+        message = bronze_notice.carried_over_notice(run, original, counts, files or [], skipped, unread)
     if not put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json", json_bytes(document)):
         return recorded_carried_over(client, bucket, run)
     if message is not None:
