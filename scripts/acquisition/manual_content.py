@@ -59,7 +59,7 @@ class Scopes:
 
 
 def locked_plan(path: Path) -> dict:
-    """A tracked plan whose lock digest matches. The terms and registry checks of the full loader belong to storage, not to this acceptance."""
+    """A tracked plan whose lock digest matches. The registry and release record checks belong to storage and the plan tests."""
     plan = read_json(path)
     if read_json(path.with_suffix(".lock.json"))["plan_sha256"] != canonical_hash(plan):
         raise ManualUnitError("A plan lock differs from its plan")

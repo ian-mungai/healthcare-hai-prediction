@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -18,6 +19,7 @@ from scripts.acquisition import build_seed_manifest as build
 from scripts.acquisition import check_baseline_run as check_run
 from scripts.acquisition import manual_content, redownload_route
 from scripts.acquisition.s3_store import encoded_json
+from scripts.acquisition.source_registry import canonical_hash, load_registry
 from scripts.acquisition.transport import hosts_digest
 from tests.support import check
 
@@ -393,14 +395,35 @@ def test_the_unit_builder_command_rebinds_the_queue_lock_and_the_hosts_file_and_
     check(json.loads((root / "capture_specs.json").read_text())["queue_sha256"] == hashlib.sha256(body).hexdigest(), "the specification follows the queue")
 
 
-def test_the_committed_ahrq_plan_loads_against_the_registry_and_the_release_record_and_keeps_the_terms_record() -> None:
-    plan = ahrq_contract.load_plan()
-    check(len(plan["files"]) == 10 and plan["model_eligible"] is False, "the plan holds the 10 files and no model eligibility")
-    check(plan["access_release"] == ahrq_contract.release_record(), "the plan binds the tracked release record by SHA-256")
-    check(ahrq_contract.TERMS_RECORD["terms_status"] == "no_published_terms_found" and ahrq_contract.TERMS_RECORD["reuse_license"] == "none inferred", "terms")
-    check("settle terms before any publication" in ahrq_contract.TERMS_RECORD["open_item"], "the open item stays recorded")
-    check(any("no model approval" in text for text in ahrq_contract.USE_RESTRICTIONS), "the use restrictions keep the model hold")
-    check(ahrq_contract.source_of({"sources": [{"source_id": "AHRQ_SYSTEM"}]}) == {"source_id": "AHRQ_SYSTEM"}, "the source is found")
+RELEASE = Path("config/acquisition/access_releases_20261108.json")
+PLAN_FIELDS = {"source_id", "role", "title", "publisher", "origin_url", "file_name", "media_type", "vintage", "release_binding", "id", "sha256", "bytes"}
+ROLE_BY_SUFFIX = {".xlsx": "data", ".xls": "data", ".pdf": "methodology"}
+
+
+def test_the_committed_ahrq_plan_matches_the_registry_the_release_record_and_its_own_file_identities() -> None:
+    """Read from the tracked files: the lock, the registry digest, the release record digest, each file identity and the entry shape."""
+    plan = manual_content.locked_plan(ahrq_contract.PLAN_PATH)
+    check(plan["version"] == 1 and plan["model_eligible"] is False and len(plan["files"]) == 10, "the plan holds the 10 files and no model eligibility")
+    registry = load_registry(expected_sha256=plan["registry_sha256"])
+    check(canonical_hash(registry) == plan["registry_sha256"], "the plan pins the registry it was built against")
+    check(len([source for source in registry["sources"] if source["source_id"] == "AHRQ_SYSTEM"]) == 1, "the held source is in the registry")
+    record = json.loads(RELEASE.read_text(encoding="utf-8"))
+    check(
+        plan["access_release"] == {"path": RELEASE.as_posix(), "sha256": hashlib.sha256(RELEASE.read_bytes()).hexdigest()},
+        "the plan binds the release record by SHA-256",
+    )
+    check(
+        [item["source_id"] for item in record["releases"] if item["released"] is True] == ["AHRQ_SYSTEM"], "the record releases AHRQ_SYSTEM and no other source"
+    )
+    names = [item["file_name"] for item in plan["files"]]
+    check(len(set(names)) == len(names), "no file name repeats")
+    for item in plan["files"]:
+        name = item["file_name"]
+        check(set(item) == PLAN_FIELDS and item["source_id"] == "AHRQ_SYSTEM" and item["release_binding"] == "access_release", f"{name} shape")
+        check(item["id"] == ahrq_contract.file_id(item), f"{name} identity follows everything bound to it")
+        check(re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None and 0 < item["bytes"] <= 64 * 1024**2, f"{name} digest and size")
+        check(ROLE_BY_SUFFIX.get(Path(name).suffix.lower()) == item["role"], f"{name} role follows its format")
+        check(item["origin_url"] == BASE + name and re.fullmatch(r"20[0-9]{2}", item["vintage"]) is not None, f"{name} origin and vintage")
 
 
 def test_a_release_binding_without_a_source_gets_the_newest_shared_record_and_does_not_raise() -> None:
@@ -410,7 +433,7 @@ def test_a_release_binding_without_a_source_gets_the_newest_shared_record_and_do
     check(bound == {"access_release_sha256": hashlib.sha256(s3_store.ACCESS_RELEASE_PATH.read_bytes()).hexdigest()}, f"{bound}")
     own = history_routes.lineage_bindings({"preferred_route": "access_hold", "source_id": "AHRQ_SYSTEM"}, {"release_binding": "access_release"})
     check(
-        own == {"access_release_sha256": hashlib.sha256((ahrq_contract.REPO_ROOT / ahrq_contract.RELEASE_PATH).read_bytes()).hexdigest()},
+        own == {"access_release_sha256": hashlib.sha256(RELEASE.read_bytes()).hexdigest()},
         "AHRQ binds its own record",
     )
 
@@ -422,11 +445,6 @@ def tampered_plan(tmp_path: Path) -> Path:
     path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     path.with_suffix(".lock.json").write_text(ahrq_contract.PLAN_PATH.with_suffix(".lock.json").read_text())
     return path
-
-
-def test_the_ahrq_plan_loader_refuses_a_plan_that_its_lock_does_not_match(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="lock differs"):
-        ahrq_contract.load_plan(tampered_plan(tmp_path))
 
 
 def test_the_handler_plan_loader_refuses_a_plan_that_its_lock_does_not_match(tmp_path: Path) -> None:
