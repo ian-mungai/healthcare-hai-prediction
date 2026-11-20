@@ -52,7 +52,7 @@ run "production_writers_and_fences_default_off" {
 
   assert {
     condition     = toset(keys(output.job_roles)) == toset(["execution", "try_writer"])
-    error_message = "Only the five existing roles may exist in the default plan."
+    error_message = "Only the execution role and the try writer role may exist in the default plan."
   }
 
   assert {

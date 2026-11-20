@@ -521,7 +521,7 @@ class Checkout:
             command = ["scripts/open_ui.sh", "airflow", "--emit-command", "--env-file", ".env"]
         elif kind == "internal_first":
             command = ["scripts/open_ui.sh", "--emit-command=1", "airflow", "--env-file", ".env"]
-        elif kind == "override":  # the removed output-file option: a caller must not be able to redirect anything
+        elif kind == "override":  # an output-file option the wrapper does not take: a caller must not be able to redirect anything
             command = ["scripts/open_ui.sh", "airflow", "--exec-args-file", "/nonexistent_hostile_dir/command", "--env-file", ".env"]
         elif kind == "help":
             command = ["scripts/open_ui.sh", "--help"]

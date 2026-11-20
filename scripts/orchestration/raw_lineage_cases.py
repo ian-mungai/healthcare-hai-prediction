@@ -385,8 +385,8 @@ def layer_evidence_step_sends_only_when_http_lineage_is_on_and_the_task_passed()
 
 
 def bronze_sends_no_table_events() -> None:
-    """Bronze table events had only raw files as inputs, which OpenMetadata cannot resolve, so the receiver would discard every one: the bronze job sends and
-    replays none. Its task event names no dataset, and a succeeded bronze run's evidence step sends nothing with HTTP lineage on."""
+    """A bronze run sends no table events: bronze is not a job with table events, its launch holds no table lines, its task events are a START and a COMPLETE
+    that name no dataset, and the evidence step of a succeeded bronze run sends nothing with HTTP lineage on."""
     require(ecs_lineage.BRONZE_JOB not in ecs_lineage.TABLE_EVENT_JOBS, "bronze must not be a job with table events")
     rig, _, found = bronze_launch(two_table_record())
     require(found.table_lines() == [], "a bronze run has no table lines")

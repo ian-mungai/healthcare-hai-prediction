@@ -41,11 +41,8 @@ RUN = "features_0a1b2c3d"
 GOLD_RUN = "gold_1a2b3c4d"
 FEATURES_DAG = "features_base_dag"
 BASE_DAG = FEATURES_DAG
-# The feature store DAG and the step DAG of the single features run are gone.
-STORE_DAG = "feature_store_dag"
 REGISTRY_ID = "0a1b2c3d-1111-4222-8333-444455556666"
 ONLINE_NETWORK = "hai-0a1b2c3d-online-store"
-FAMILIES = {FEATURES_DAG: "features", STORE_DAG: "feature_store"}
 SHA = {name: character * 64 for name, character in (("source", "a"), ("bronze", "b"), ("silver_pin", "c"), ("silver_input", "d"))}
 SHA.update({"gold_pin": "e" * 64, "gold_input": "f" * 64, "sealed": "1" * 64})
 FAKE_VALUES = {
