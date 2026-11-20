@@ -600,7 +600,7 @@ def test_every_fresh_capture_of_a_held_source_is_released_by_the_tracked_records
             held += 1
             if not s3_store.access_released(source, lineage):
                 refused.append(snapshot)
-    check(held == 41 and refused == [], f"{held} held units, storage refuses {len(refused)} on a Git-only tree: {refused[:2]}")
+    check(held == 38 and refused == [], f"{held} held units, storage refuses {len(refused)} on a Git-only tree: {refused[:2]}")
 
 
 def test_the_committed_capture_specification_passes_the_outgoing_secret_scan(tmp_path: Path) -> None:

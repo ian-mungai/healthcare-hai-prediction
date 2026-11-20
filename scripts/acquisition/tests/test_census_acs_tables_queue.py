@@ -56,7 +56,7 @@ def expected_unit(batch: dict) -> dict:
 def test_the_tracked_queue_swaps_the_16_manual_acs_units_for_173_api_units_after_the_acs_file_units() -> None:
     queue = tracked()
     units = [u for u in queue["queue"] if u["mode"] != "ahrq_compendium"]
-    check(len(queue["queue"]) == 2053 and queue["entries"] == 2053 and len(units) == 2040, f"{len(queue['queue'])} units")
+    check(len(queue["queue"]) == 2050 and queue["entries"] == 2050 and len(units) == 2040, f"{len(queue['queue'])} units")
     check(not [u for u in units if u["source_id"] == "ACS" and u["disposition"] == "approved_manual"], "a manual ACS unit is left")
     api = [i for i, u in enumerate(units) if u["mode"] == "census_acs_tables"]
     check(len(api) == 173 and api == list(range(api[0], api[0] + 173)), "the 173 units are not one block")
@@ -64,11 +64,11 @@ def test_the_tracked_queue_swaps_the_16_manual_acs_units_for_173_api_units_after
     check(api[0] == last_file + 1, "the API units do not follow the last ACS file unit")
     check([units[i] for i in api] == [expected_unit(b) for b in plan_units()], "the unit entries differ from the plan")
     manual = Counter(u["mode"] for u in queue["queue"] if u["disposition"] == "approved_manual")
-    check(manual == {"hud_xlsx": 44, "wonder_export": 6, "ahrq_compendium": 13}, f"the manual set is {dict(manual)}")
+    check(manual == {"hud_xlsx": 44, "wonder_export": 6, "ahrq_compendium": 10}, f"the manual set is {dict(manual)}")
     budgets = queue["budgets"]
-    check(budgets["acquisition_units"] == 2053 and budgets["max_primary_attempts"] == 4106 and budgets["pages_recorded"] == 2053, f"budgets: {budgets}")
-    check(budgets["units_by_route"] == {"manual_browser_download": 63, "publisher_api": 1297, "publisher_url": 693}, f"routes: {budgets['units_by_route']}")
-    check(queue["dispositions"] == {"api": 1297, "approved_manual": 63, "direct_download": 693}, f"dispositions: {queue['dispositions']}")
+    check(budgets["acquisition_units"] == 2050 and budgets["max_primary_attempts"] == 4100 and budgets["pages_recorded"] == 2050, f"budgets: {budgets}")
+    check(budgets["units_by_route"] == {"manual_browser_download": 60, "publisher_api": 1297, "publisher_url": 693}, f"routes: {budgets['units_by_route']}")
+    check(queue["dispositions"] == {"api": 1297, "approved_manual": 60, "direct_download": 693}, f"dispositions: {queue['dispositions']}")
     check(check_run.queue_problems(ROOT) == [], f"queue problems: {check_run.queue_problems(ROOT)}")
 
 
@@ -162,7 +162,7 @@ def test_the_queue_flag_has_no_date_and_does_not_look_like_a_secret_or_a_moved_m
 def test_the_tracked_specs_for_the_173_units_come_from_the_plan_and_hold_no_bucket_key_or_path() -> None:
     document = json.loads((ROOT / "capture_specs.json").read_text(encoding="utf-8"))
     batches = {contract.queue_snapshot_id(b): b for b in plan_units()}
-    check(document["units"] == 2053 and len(document["specs"]) == 2053, "spec count")
+    check(document["units"] == 2050 and len(document["specs"]) == 2050, "spec count")
     for snapshot, batch in batches.items():
         expected = {"mode": "census_acs_tables", "plan_item": batch["id"], "stored_data_files": [batch["file_name"]]}
         check(document["specs"][snapshot] == expected, f"spec of {snapshot}")

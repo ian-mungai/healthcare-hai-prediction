@@ -17,6 +17,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from scripts.acquisition.ahrq_seed_copy import COPIES
 from scripts.acquisition.api_keys import SHARED_KEYS
 from scripts.acquisition.history_routes import RELEASE_BINDINGS, lineage_bindings
 from scripts.acquisition.manual_content import MODES, REBUILT_MODES, SEED_ONLY_MODES, ContentRefusal, Scopes, accept, rebuild, recorded_derived
@@ -282,6 +283,33 @@ def seed_only_problems(root: Path, seed_root: Path, scopes: Scopes | None = None
     return found
 
 
+def copy_problems(root: Path, plan: dict) -> list[str]:
+    """Return why the seeded copies of the AHRQ files are not recorded exactly: a spec records the original and the change for a copy only.
+
+    The plan must bind the copy by its own digest, never the original, so the unit and the seeded file agree.
+    """
+    queue = json.loads((root / "queue.json").read_bytes())["queue"]
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    planned = {item["file_name"]: item for item in plan["files"]}
+    found = []
+    for unit in queue:
+        if unit["disposition"] != "approved_manual" or unit["mode"] not in SEED_ONLY_MODES:
+            continue
+        spec = specs[unit["snapshot_id"]]
+        name = spec["stored_data_files"][0]
+        recorded = COPIES.get(name)
+        if recorded is None:
+            if "seeded_copy" in spec:
+                found.append(f"unit {unit['snapshot_id']} records a seeded_copy for {name}, which is no seeded copy")
+            continue
+        if spec.get("seeded_copy") != recorded:
+            found.append(f"unit {unit['snapshot_id']} must record the original and the change of its seeded_copy exactly")
+        entry = planned.get(name)
+        if entry is None or (entry["sha256"], entry["bytes"]) == (recorded["original_sha256"], recorded["original_bytes"]):
+            found.append(f"the plan binds the original of {name}, not its seeded copy")
+    return found
+
+
 def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
     """Return the seed paths that Git does not store through LFS: the attribute lookup needs no file, so it runs before the files exist."""
     if not paths:
@@ -334,6 +362,7 @@ def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: b
         found += seed_problems(root, seed_root, manifest, require_files=require_files)
         found += derivation_problems(root, seed_root)
         found += seed_only_problems(root, seed_root)
+        found += copy_problems(root, Scopes().plan("ahrq_compendium"))
         found += secret_problems(root, secrets_read_by_code())
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:

@@ -10,6 +10,7 @@ personal data are assembled at run time, so this file does not trip the checks i
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -17,6 +18,8 @@ import shutil
 import sys
 import tempfile
 import time
+import zipfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
@@ -1715,6 +1718,63 @@ def email_domain_cases() -> list[Case]:
 
 
 HOME_AND_EMAIL_CASES = [*home_path_cases(), *email_domain_cases()]
+
+
+def office_package(members: dict[str, str]) -> bytes:
+    """A small OOXML package: member names with their text."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, text in members.items():
+            archive.writestr(name, text)
+    return buffer.getvalue()
+
+
+def pdf_document(content: str) -> bytes:
+    """A small PDF whose one content stream holds ``content`` compressed, as a publisher's PDF does, so only a read of the decoded stream sees it."""
+    body = zlib.compress(content.encode())
+    return b"%PDF-1.4\n1 0 obj\n<< /Length " + str(len(body)).encode() + b" >>\nstream\n" + body + b"\nendstream\nendobj\n%%EOF\n"
+
+
+def document_path_cases() -> list[Case]:
+    """A user directory path inside a workbook, a legacy workbook or a PDF text stream is blocked; a clean file and a placeholder pass."""
+    path = "C:\\" + "Users\\sample_person\\Documents\\book.xlsx"
+    block = f'<mc:AlternateContent><mc:Choice Requires="x15"><x15ac:absPath url="{path}"/></mc:Choice></mc:AlternateContent>'
+    reason = "config/book.xlsx!xl/workbook.xml: home-directory path with a user name"
+    clean = {"[Content_Types].xml": "<Types/>", "xl/workbook.xml": "<workbook/>"}
+    return [
+        Case(
+            "workbook holding a user directory path is blocked by member",
+            "privacy-scan",
+            False,
+            {"config/book.xlsx": office_package(clean | {"xl/workbook.xml": f"<workbook>{block}</workbook>"})},
+            reason=reason,
+        ),
+        Case(
+            "legacy workbook holding a UTF-16 user directory path is blocked",
+            "privacy-scan",
+            False,
+            {"config/book.xls": b"\xd0\xcf\x11\xe0 " + path.encode("utf-16-le")},
+            reason="config/book.xls!(file): home-directory path with a user name",
+        ),
+        Case(
+            "PDF holding a user directory path in a text stream is blocked",
+            "privacy-scan",
+            False,
+            {"config/doc.pdf": pdf_document(f"BT ({path.replace(chr(92), chr(92) * 2)}) Tj ET")},
+            reason="config/doc.pdf!(stream): home-directory path with a user name",
+        ),
+        Case("clean PDF passes", "privacy-scan", True, {"config/doc.pdf": pdf_document("BT (hospital linkage) Tj ET")}),
+        Case(
+            "PDF with a placeholder path passes", "privacy-scan", True, {"config/doc.pdf": pdf_document("BT (C:\\\\" + "Users\\\\<user>\\\\book.xlsx) Tj ET")}
+        ),
+        Case("clean workbook passes", "privacy-scan", True, {"config/book.xlsx": office_package(clean)}),
+        Case(
+            "workbook with a placeholder path passes",
+            "privacy-scan",
+            True,
+            {"config/book.xlsx": office_package(clean | {"xl/workbook.xml": "<a>C:\\" + "Users\\<user>\\book.xlsx</a>"})},
+        ),
+    ]
 
 
 def account_cases() -> list[Case]:
@@ -3652,6 +3712,7 @@ CASES = [
     Case("personal email", "privacy-scan", False, {"notes.md": f"Ask {PERSONAL_EMAIL}\n"}),
     Case("phone number", "privacy-scan", False, {"notes.md": f"Call {PHONE}\n"}),
     *HOME_AND_EMAIL_CASES,
+    *document_path_cases(),
     Case("former OpenMetadata admin address", "privacy-scan", False, {"notes.md": f"Ask {OLD_OPENMETADATA_LOGIN}\n"}),
     Case("AWS account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{AWS_ARN}"}}\n'}),
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
@@ -4026,7 +4087,7 @@ BLOCK_REASONS = {
     "uppercase keyword blocked by sqlfluff": "CP01",
     "leading comma blocked by sqlfluff": "LT04",
 }
-BLOCK_REASONS.update({case.name: case.reason for case in HOME_AND_EMAIL_CASES if case.reason})
+BLOCK_REASONS.update({case.name: case.reason for case in [*HOME_AND_EMAIL_CASES, *document_path_cases()] if case.reason})
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 WARNING_HEADERS = {
     LATIN1_NAMES["binary"]: (f"data/blob.bin{BINARY_NOTICE}",),

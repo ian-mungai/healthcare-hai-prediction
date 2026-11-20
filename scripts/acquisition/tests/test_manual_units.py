@@ -864,7 +864,7 @@ def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_lock
         check(manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is on a manual host")
     ahrq = [unit for unit in manual if unit["mode"] == MODE]
     planned = {item["file_name"] for item in scopes.plan(MODE)["files"]}
-    check(len(ahrq) == 13 and Counter(unit["source_id"] for unit in ahrq) == {"AHRQ_SYSTEM": 13}, "the AHRQ set is 13 seed-only units")
+    check(len(ahrq) == 10 and Counter(unit["source_id"] for unit in ahrq) == {"AHRQ_SYSTEM": 10}, "the AHRQ set is 10 seed-only units")
     for unit in ahrq:
         check(manual_content.plan_unit(unit, specs[unit["snapshot_id"]])[1] in planned, f"{unit['snapshot_id']} is a planned AHRQ file")
         check(not manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is not a host the run requests")
@@ -1572,3 +1572,54 @@ def test_a_run_without_a_seed_folder_never_downloads_an_ahrq_file(world: World) 
     report = world.run(list(units.values()))
     check({only_stale(world, unit)["reason"] for unit in units.values()} == {"seed_required"}, "every unit is stale: the run has no seed")
     check(world.site.seen == [] and report.http_requests == 0 and world.sink.captured == [], "no request was sent, robots.txt included")
+
+
+def test_a_symlink_in_any_component_of_the_seed_path_makes_the_unit_stale_and_the_others_run(world: World, tmp_path: Path) -> None:
+    units, seed = ahrq_world(world)
+    linked = units[XLSX_NAME]
+    folder = seed / "manual_units" / linked["snapshot_id"]
+    moved = tmp_path / "outside_seed"
+    folder.rename(moved)
+    folder.symlink_to(moved, target_is_directory=True)
+    report = world.run(list(units.values()), seed=seed)
+    check(only_stale(world, linked)["reason"] == "seed_missing", "a linked snapshot folder is not an original")
+    check(len(world.sink.captured) == 2 and world.site.seen == [] and report.http_requests == 0, "the other two were captured and no request was sent")
+
+
+def test_a_symlinked_manual_units_folder_makes_every_ahrq_unit_stale(world: World, tmp_path: Path) -> None:
+    units, seed = ahrq_world(world)
+    moved = tmp_path / "outside_manual_units"
+    (seed / "manual_units").rename(moved)
+    (seed / "manual_units").symlink_to(moved, target_is_directory=True)
+    world.run(list(units.values()), seed=seed)
+    check(
+        {only_stale(world, unit)["reason"] for unit in units.values()} == {"seed_missing"} and world.sink.captured == [], "no unit is captured through a link"
+    )
+
+
+def test_a_word_document_bound_by_the_plan_is_not_accepted_as_a_workbook(world: World) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<document/>")
+    units, seed = ahrq_world(world, {XLSX_NAME: buffer.getvalue()}, planned={XLSX_NAME: buffer.getvalue()})
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "a workbook needs its workbook part")
+
+
+def test_a_plan_entry_with_the_right_hash_and_another_size_makes_the_unit_stale(world: World) -> None:
+    units, seed = ahrq_world(world, {XLSX_NAME: BODIES[XLSX_NAME]})
+    plan = plan_of({XLSX_NAME: BODIES[XLSX_NAME]})
+    plan["files"][0]["bytes"] += 1
+    world.plans = dataclasses.replace(world.plans, ahrq=plan)
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "the size is compared as well as the hash")
+
+
+def test_a_plan_entry_under_another_name_with_the_same_bytes_does_not_bind_the_unit(world: World) -> None:
+    units, seed = ahrq_world(world, {XLSX_NAME: BODIES[XLSX_NAME]})
+    plan = plan_of({XLSX_NAME: BODIES[XLSX_NAME]})
+    plan["files"][0]["file_name"] = "another-name.xlsx"
+    world.plans = dataclasses.replace(world.plans, ahrq=plan)
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "the name must be the planned one")

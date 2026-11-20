@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.process import run_command
+from scripts.quality import document_paths
 from scripts.quality.markdown_links import check_links
 
 POLICY = "scripts/quality/repo_checks.py"
@@ -257,6 +258,7 @@ ENCODED_FOLDER = re.compile(r"[^/\\\s\"'`<>]+")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
 ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|([/\"'\\]))")
+LFS_POINTER = b"version https://git-lfs"
 PRIVACY_PATTERNS = {
     "home-path": ("home-directory path with a user name", HOME_ROOT),
     "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
@@ -2643,6 +2645,21 @@ def line_privacy(line: str, values: list[str]) -> list[str]:
     return kinds
 
 
+def document_findings(path: str, data: bytes, allowed: list[tuple[str, str]]) -> list[Finding]:
+    """The members of an Office or PDF file that hold a user directory path, one finding each; the value is never reported.
+
+    An unreadable package is a finding too, so that a file the scan cannot open is never taken as clean.
+    """
+    description = PRIVACY_PATTERNS["home-path"][0]
+    try:
+        members = document_paths.members_with_user_path(data, Path(path).suffix, home_path_found)
+    except ValueError as error:
+        return [Finding(path, f"unreadable document: {error}", PRIVACY_RULE, "repair or replace the file, or review it by hand and ask the owner")]
+    if any(entry_kind == "home-path" and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+        return []
+    return [Finding(f"{path}!{member}", description, PRIVACY_RULE, PRIVACY_FIX) for member in members]
+
+
 def privacy_scan() -> tuple[list[Finding], list[str]]:
     """Scan whole files, not the diff, for personal data and environment-specific values; never report the value."""
     allowed, findings = privacy_allowlist()
@@ -2653,6 +2670,8 @@ def privacy_scan() -> tuple[list[Finding], list[str]]:
         if path == ".env" or os.path.islink(path) or not os.path.isfile(path):
             continue
         data = Path(path).read_bytes()
+        if Path(path).suffix.lower() in document_paths.ENFORCED_SUFFIXES and not data.startswith(LFS_POINTER):
+            findings += document_findings(path, data, allowed)
         try:
             if b"\0" in data[:8192]:
                 raise UnicodeDecodeError("utf-8", data[:1], 0, 1, "binary")

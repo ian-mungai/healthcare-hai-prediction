@@ -6,9 +6,9 @@
    "unit": "AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b"
   },
   {
-   "path": "manual_units/AHRQ_SYSTEM__20261108T204505Z__38e56a1156f76e77c86bf985077de29c/chsp-hospital-linkage-2018.xlsx",
-   "sha256": "0c4a56df0c25168a23cef0e62af2eeec335176d808f4f235ff10733073c89880",
-   "unit": "AHRQ_SYSTEM__20261108T204505Z__38e56a1156f76e77c86bf985077de29c"
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204505Z__65219d6842ceeb28a0fd76cc60a88b9c/chsp-hospital-linkage-2018.xlsx",
+   "sha256": "ee07e226388aef19f1e1fc4f6a847532f2ae260b82744f2bcfa70654c244e98c",
+   "unit": "AHRQ_SYSTEM__20261108T204505Z__65219d6842ceeb28a0fd76cc60a88b9c"
   },
   {
    "path": "manual_units/AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd/chsp-hospital-linkage-2020-rev.xlsx",
@@ -36,19 +36,9 @@
    "unit": "AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f"
   },
   {
-   "path": "manual_units/AHRQ_SYSTEM__20261108T204949Z__243ee4b59e08407e82aa808481260e25/chsp_linkage_file_tech_doc.pdf",
-   "sha256": "6ad73489b3186a4737e1088dab3522677a0de13789a9bde1a1732f2d917c9274",
-   "unit": "AHRQ_SYSTEM__20261108T204949Z__243ee4b59e08407e82aa808481260e25"
-  },
-  {
    "path": "manual_units/AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11/2018-hospital-linkage-techdoc-cx.pdf",
    "sha256": "52b37832f4bbd0155c37054bc7cc1a21547119f34c7f42f588157959179810a4",
    "unit": "AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11"
-  },
-  {
-   "path": "manual_units/AHRQ_SYSTEM__20261108T205039Z__6f27f4f7147d804182b0d8cf373c7d9a/2020-hospital-linkage-techdoc.pdf",
-   "sha256": "b0c7d2b53488b91d7d51c0cdd7545c0a024209a4bc2b22b65f52b9995344532e",
-   "unit": "AHRQ_SYSTEM__20261108T205039Z__6f27f4f7147d804182b0d8cf373c7d9a"
   },
   {
    "path": "manual_units/AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3/2021-hospital-linkage-techdoc-rev.pdf",
@@ -59,11 +49,6 @@
    "path": "manual_units/AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9/2022-hospital-linkage-techdoc-021224.pdf",
    "sha256": "7efe618e4d651ceae2c96c19e358095172adf6ea92b1f2d6330ab74af4cc0f69",
    "unit": "AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9"
-  },
-  {
-   "path": "manual_units/AHRQ_SYSTEM__20261108T205107Z__f5b25b10d3549ddf48f6752d57e195ee/2023-hospital-linkage-techdoc.pdf",
-   "sha256": "e0b72c98b0cad5dcf6683ce11ed7e81bdf0446633f1fee85c07489d675459f88",
-   "unit": "AHRQ_SYSTEM__20261108T205107Z__f5b25b10d3549ddf48f6752d57e195ee"
   },
   {
    "path": "manual_units/HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429/ZIP-COUNTY_032010.xlsx",
@@ -397,5 +382,5 @@
   }
  ],
  "kind": "bootstrap_seed_manifest",
- "queue_sha256": "a24379ede8ce5ffb427bcd935a3197b665e8a4ed27b49c75f7168a7772177eea"
+ "queue_sha256": "7f6f60e22ede970cf9aab5a9180271b72a879cced287e07e17e8ab106a3d249b"
 }

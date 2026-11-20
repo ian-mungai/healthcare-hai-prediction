@@ -1,10 +1,11 @@
 """Frozen scope of the AHRQ Compendium of U.S. Health Systems hospital linkage files that the owner saved in a browser.
 
 AHRQ refuses scripted downloads (the registry holds AHRQ_SYSTEM for that reason), so the owner saved each file by hand. A locked plan binds
-every file to its exact origin URL, SHA-256 and size: the six linkage workbooks (2016, 2018, 2020, 2021, 2022 and 2023 vintages) and the seven technical
-documents. The files are seed-only manual units of the mode ahrq_compendium (``manual_content``): the bootstrap seed holds the originals and the run
-binds each one to this plan. The owner lifted the access hold for these files on 8 Nov 2026 by one append-only release record, and the base registry stays
-unchanged. AHRQ publishes no terms text for them: the evidence the owner's decision rests on is the closed terms record below, and no reuse license is inferred.
+every file to its exact origin URL, SHA-256 and size: the six linkage workbooks (2016, 2018, 2020, 2021, 2022 and 2023 vintages) and the four technical
+documents (three more that the owner saved are left out: each holds a user directory path). The files are seed-only manual units of the mode
+ahrq_compendium (``manual_content``): the bootstrap seed holds the originals and the run binds each one to this plan.
+The owner lifted the access hold for these files on 8 Nov 2026 by one append-only release record, and the base registry stays unchanged.
+AHRQ publishes no terms text for them: the evidence the owner's decision rests on is the closed terms record below, and no reuse license is inferred.
 """
 
 import hashlib
@@ -35,7 +36,7 @@ TERMS_RECORD = {
     "checked": [
         "Compendium 2023 page, https://www.ahrq.gov/chsp/data-resources/compendium-2023.html: Internet citation only",
         "https://www.ahrq.gov/policy/electronic/disclaimers/index.html: no reuse text",
-        "the seven technical documents and six data files of the plan: no copyright, public domain or permission text",
+        "the four technical documents and six data files of the plan: no copyright, public domain or permission text",
     ],
     "reuse_license": "none inferred",
     "open_item": "settle terms before any publication of AHRQ-derived data",

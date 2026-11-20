@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.robotparser import RobotFileParser
 
-from scripts.acquisition import completion_record, manual_content, raw_root, stale_record, transport
+from scripts.acquisition import completion_record, manual_content, raw_root, redownload_controls, stale_record, transport
 from scripts.acquisition.manual_content import ContentRefusal, ManualUnitError, Scopes
 from scripts.acquisition.s3_store import StorageError
 
@@ -547,7 +547,12 @@ def seed_only_unit(unit: dict, spec: dict, mode: str, name: str, context: Contex
     if context.seed is None:
         return None, "seed_required"
     original = seed_original(unit, name, context)
-    if not original.is_file() or original.is_symlink():
+    try:
+        # A link anywhere below the seed folder is refused, the folder of the unit and the file included: the file could be a copy of anything.
+        redownload_controls.validate_path(original, context.seed)
+    except ValueError:
+        return None, "seed_missing"
+    if not original.is_file():
         return None, "seed_missing"
     folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
     staged_original = folder / name

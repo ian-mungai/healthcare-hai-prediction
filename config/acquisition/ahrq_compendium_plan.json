@@ -19,15 +19,15 @@
       "vintage": "2016"
     },
     {
-      "bytes": 654428,
+      "bytes": 552334,
       "file_name": "chsp-hospital-linkage-2018.xlsx",
-      "id": "38e56a1156f76e77c86bf985077de29c72bcdc183bcee249b1ca96bc1f48d895",
+      "id": "65219d6842ceeb28a0fd76cc60a88b9cf3167487a5ae91df0e49a661c7ed9112",
       "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "origin_url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2018.xlsx",
       "publisher": "Agency for Healthcare Research and Quality",
       "release_binding": "access_release",
       "role": "data",
-      "sha256": "0c4a56df0c25168a23cef0e62af2eeec335176d808f4f235ff10733073c89880",
+      "sha256": "ee07e226388aef19f1e1fc4f6a847532f2ae260b82744f2bcfa70654c244e98c",
       "source_id": "AHRQ_SYSTEM",
       "title": "Compendium of U.S. Health Systems, hospital linkage file, 2018 vintage",
       "vintage": "2018"
@@ -89,20 +89,6 @@
       "vintage": "2023"
     },
     {
-      "bytes": 358194,
-      "file_name": "chsp_linkage_file_tech_doc.pdf",
-      "id": "243ee4b59e08407e82aa808481260e25b53b9c9e620f8531f808cdbd6c14a325",
-      "media_type": "application/pdf",
-      "origin_url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp_linkage_file_tech_doc.pdf",
-      "publisher": "Agency for Healthcare Research and Quality",
-      "release_binding": "access_release",
-      "role": "methodology",
-      "sha256": "6ad73489b3186a4737e1088dab3522677a0de13789a9bde1a1732f2d917c9274",
-      "source_id": "AHRQ_SYSTEM",
-      "title": "Compendium hospital linkage file technical document, 2016 vintage",
-      "vintage": "2016"
-    },
-    {
       "bytes": 199446,
       "file_name": "2018-hospital-linkage-techdoc-appa.pdf",
       "id": "a6744c5753af011505cddc251cfd717ff91183f5fb392d87acf1ab78b9218fd6",
@@ -131,20 +117,6 @@
       "vintage": "2018"
     },
     {
-      "bytes": 549758,
-      "file_name": "2020-hospital-linkage-techdoc.pdf",
-      "id": "6f27f4f7147d804182b0d8cf373c7d9ac326364b284f63fb39d1940893f07162",
-      "media_type": "application/pdf",
-      "origin_url": "https://www.ahrq.gov/sites/default/files/wysiwyg/2020-hospital-linkage-techdoc.pdf",
-      "publisher": "Agency for Healthcare Research and Quality",
-      "release_binding": "access_release",
-      "role": "methodology",
-      "sha256": "b0c7d2b53488b91d7d51c0cdd7545c0a024209a4bc2b22b65f52b9995344532e",
-      "source_id": "AHRQ_SYSTEM",
-      "title": "Compendium hospital linkage technical document, 2020 vintage",
-      "vintage": "2020"
-    },
-    {
       "bytes": 473959,
       "file_name": "2021-hospital-linkage-techdoc-rev.pdf",
       "id": "f157650a0de9258c669ae0481aaa96f38985d8a19731bd2aafe340b19f1ec47a",
@@ -171,20 +143,6 @@
       "source_id": "AHRQ_SYSTEM",
       "title": "Compendium hospital linkage technical document, 2022 vintage",
       "vintage": "2022"
-    },
-    {
-      "bytes": 599075,
-      "file_name": "2023-hospital-linkage-techdoc.pdf",
-      "id": "f5b25b10d3549ddf48f6752d57e195ee1986b17aa26eb00357611379b4268f18",
-      "media_type": "application/pdf",
-      "origin_url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2023-hospital-linkage-techdoc.pdf",
-      "publisher": "Agency for Healthcare Research and Quality",
-      "release_binding": "access_release",
-      "role": "methodology",
-      "sha256": "e0b72c98b0cad5dcf6683ce11ed7e81bdf0446633f1fee85c07489d675459f88",
-      "source_id": "AHRQ_SYSTEM",
-      "title": "Compendium hospital linkage technical document, 2023 vintage",
-      "vintage": "2023"
     }
   ],
   "model_eligible": false,

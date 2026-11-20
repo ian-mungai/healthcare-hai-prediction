@@ -18,8 +18,9 @@ from scripts.acquisition.source_registry import canonical_hash, read_json
 
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
 MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv"), "ahrq_compendium": (None, None)}
-# The format of an AHRQ file comes from its name: the six linkage workbooks are .xls or .xlsx and the seven technical documents are .pdf.
+# The format of an AHRQ file comes from its name: the six linkage workbooks are .xls or .xlsx and the four technical documents are .pdf.
 SUFFIX_FORMATS = {".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf"}
+WORKBOOK_PART = "xl/workbook.xml"
 # The modes whose derived file is rebuilt from the original: the bootstrap seed holds the original only (owner, Nov 13 2026).
 REBUILT_MODES = ("hud_xlsx", "wonder_export")
 # Units that take their original from the seed only, bind it to a locked plan and have no derived file (owner, Nov 19 2026: the AHRQ Compendium files).
@@ -156,6 +157,10 @@ def ahrq(original: Path, name: str, plan: dict) -> dict[str, bytes]:
     """An AHRQ original bound to the plan by its SHA-256 and size and checked for the format of its name. It has no derived file."""
     body = original.read_bytes()
     bound(body, next((item for item in plan["files"] if item["file_name"] == name), None))
-    if transport.inspect_payload(original, expected_format("ahrq_compendium", name), "data") is not None:
+    form = expected_format("ahrq_compendium", name)
+    if transport.inspect_payload(original, form, "data") is not None:
+        raise ContentRefusal("contract_failed")
+    # The generic check accepts any package with a content types part, so a Word or PowerPoint file bound by the plan would pass as a workbook.
+    if form == "xlsx" and WORKBOOK_PART not in zipfile.ZipFile(original).namelist():
         raise ContentRefusal("contract_failed")
     return {}

@@ -117,7 +117,7 @@ def queue_hosts(queue: dict) -> set[str]:
     unsigned route of its host. A route no active unit uses adds nothing. A unit of a seed-only mode adds nothing: its URL is never requested."""
     hosts: set[str] = set()
     for unit in queue["queue"]:
-        if unit["disposition"] in ACTIVE and unit["mode"] not in SEED_ONLY_MODES:
+        if unit["disposition"] in ACTIVE and unit.get("mode") not in SEED_ONLY_MODES:
             host = str(urllib.parse.urlsplit(unit["url"]).hostname)
             hosts.add(host)
             if unit["url"] in SIGNED_REDIRECT_ROUTES:

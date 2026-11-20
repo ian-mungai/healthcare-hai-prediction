@@ -6,12 +6,14 @@ import hashlib
 import io
 import json
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from scripts.acquisition import add_ahrq_units as add_units
 from scripts.acquisition import ahrq_compendium_contract as ahrq_contract
+from scripts.acquisition import ahrq_seed_copy as seed_copy
 from scripts.acquisition import build_seed_manifest as build
 from scripts.acquisition import check_baseline_run as check_run
 from scripts.acquisition import manual_content, redownload_route
@@ -24,6 +26,12 @@ BASE = "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/"
 XLSX_NAME, XLS_NAME, PDF_NAME = "chsp-hospital-linkage-2018.xlsx", "compendium_system_hospital_linkage_file.xls", "2018-hospital-linkage-techdoc-appa.pdf"
 BASELINE = Path("config/acquisition/baseline_run")
 SEED = Path("config/acquisition/bootstrap_seed")
+
+
+@pytest.fixture(autouse=True)
+def no_recorded_copies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The synthetic plans use the real file names; only the seeded-copy cases set a record of a copy."""
+    monkeypatch.setattr(seed_copy, "COPIES", {})
 
 
 def make_unit(source: str, mode: str, url: str, snapshot: str) -> dict:
@@ -154,11 +162,11 @@ def committed() -> tuple[dict, dict, dict, dict]:
     return queue, specs, manifest, plan
 
 
-def test_the_committed_queue_holds_the_thirteen_ahrq_files_as_seed_only_manual_units_bound_to_the_plan() -> None:
+def test_the_committed_queue_holds_the_ten_ahrq_files_as_seed_only_manual_units_bound_to_the_plan() -> None:
     queue, specs, manifest, plan = committed()
     units = [unit for unit in queue["queue"] if unit["mode"] == MODE]
     planned = {item["file_name"]: item for item in plan["files"]}
-    check(len(units) == 13 and len(planned) == 13, f"{len(units)} units for {len(planned)} planned files")
+    check(len(units) == 10 and len(planned) == 10, f"{len(units)} units for {len(planned)} planned files")
     for unit in units:
         name = specs["specs"][unit["snapshot_id"]]["stored_data_files"]
         check(
@@ -177,10 +185,29 @@ def test_the_committed_queue_holds_the_thirteen_ahrq_files_as_seed_only_manual_u
     check(check_run.queue_problems(BASELINE) == [], "the queue, its lock and its budgets agree")
 
 
+LEFT_OUT = ("chsp_linkage_file_tech_doc.pdf", "2020-hospital-linkage-techdoc.pdf", "2023-hospital-linkage-techdoc.pdf")
+
+
+def test_the_three_technical_documents_with_a_user_path_are_in_no_plan_unit_specification_manifest_or_seed_folder() -> None:
+    """The owner left these three PDFs out (Nov 20 2026): a user directory path sits in a text stream of each. The AHRQ set is 6 workbooks and 4 documents."""
+    queue, specs, manifest, plan = committed()
+    check(not [name for name in LEFT_OUT if name in {item["file_name"] for item in plan["files"]}], "the plan lists none of them")
+    check(Counter(Path(item["file_name"]).suffix for item in plan["files"]) == {".xlsx": 5, ".xls": 1, ".pdf": 4}, "the plan holds 6 workbooks and 4 PDFs")
+    for name in LEFT_OUT:
+        stem = name.rsplit(".", 1)[0]
+        check(
+            stem not in json.dumps(queue) and stem not in json.dumps(specs) and stem not in json.dumps(manifest),
+            f"{name} is not in the queue, specs or manifest",
+        )
+        check(not list(SEED.rglob(name)), f"{name} is not in the seed folder")
+    seeded = sorted(path.name for path in SEED.joinpath("manual_units").glob("AHRQ_SYSTEM__*/*"))
+    check(seeded == sorted(item["file_name"] for item in plan["files"]), f"the seed folder holds exactly the planned files: {len(seeded)}")
+
+
 def test_the_committed_ahrq_units_record_when_and_from_where_the_owner_saved_each_file() -> None:
     queue, specs, _, plan = committed()
     units = [u for u in queue["queue"] if u["mode"] == MODE]
-    check(len(units) == 13, f"{len(units)} AHRQ units")
+    check(len(units) == 10, f"{len(units)} AHRQ units")
     for unit in units:
         saved = specs["specs"][unit["snapshot_id"]]["saved"]
         check(saved["origin_url"] == unit["url"] and saved["saved_by"] == "owner, browser", f"{unit['snapshot_id']} origin and saver")
@@ -191,7 +218,7 @@ def test_the_committed_ahrq_units_record_when_and_from_where_the_owner_saved_eac
         check(
             unit["snapshot_id"].split("__")[1] == saved["birth_time_utc"][:19].replace("-", "").replace(":", "") + "Z", "the snapshot ID carries the saved time"
         )
-    check(len(plan["files"]) == 13, "plan size")
+    check(len(plan["files"]) == 10, "plan size")
 
 
 def test_www_ahrq_gov_stays_off_the_approved_host_list_while_the_hosts_file_binds_the_queue() -> None:
@@ -288,13 +315,12 @@ def test_the_unit_builder_appends_one_seed_only_unit_and_spec_per_planned_file_a
     )
 
 
-def test_the_unit_builder_refuses_a_second_run_a_metadata_record_that_differs_from_the_plan_and_a_file_it_lacks() -> None:
+def test_the_unit_builder_gives_the_same_files_on_a_second_run_and_refuses_a_record_that_differs_from_the_plan_or_lacks_a_file() -> None:
     queue_bytes, specs_bytes = small_bundle()
     plan = plan_of(BODIES) | {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_of(BODIES)["files"]]}
     metadata = metadata_for(plan)
     new_queue, new_specs = add_units.add(queue_bytes, specs_bytes, plan, metadata)
-    with pytest.raises(ValueError, match="already"):
-        add_units.add(new_queue, new_specs, plan, metadata)
+    check(add_units.add(new_queue, new_specs, plan, metadata) == (new_queue, new_specs), "a second run rebuilds the same bytes")
     other = json.loads(json.dumps(metadata))
     other["files"][0]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="differs from the plan"):
@@ -305,6 +331,30 @@ def test_the_unit_builder_refuses_a_second_run_a_metadata_record_that_differs_fr
     wrong_origin["files"][0]["attributes"]["com.apple.metadata:kMDItemWhereFroms"] = ["https://example.org/x.xlsx"]
     with pytest.raises(ValueError, match="origin"):
         add_units.add(queue_bytes, specs_bytes, plan, wrong_origin)
+
+
+def test_the_unit_builder_binds_a_seeded_copy_by_its_own_digest_and_records_the_original_and_the_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    queue_bytes, specs_bytes = small_bundle()
+    copied = {XLSX_NAME: BODIES[XLSX_NAME] + b"-copy"}
+    plan_files = plan_of({**BODIES, **copied})["files"]
+    plan = {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_files]}
+    original_sha, original_bytes = hashlib.sha256(BODIES[XLSX_NAME]).hexdigest(), len(BODIES[XLSX_NAME])
+    monkeypatch.setattr(seed_copy, "COPIES", {XLSX_NAME: {"original_sha256": original_sha, "original_bytes": original_bytes, "change": "path element removed"}})
+    metadata = metadata_for(plan_of(BODIES))
+    metadata["files"] = [item | ({"sha256": original_sha, "size": original_bytes} if item["file_name"] == XLSX_NAME else {}) for item in metadata["files"]]
+    new_queue, new_specs = add_units.add(queue_bytes, specs_bytes, plan, metadata)
+    queue, specs = json.loads(new_queue), json.loads(new_specs)
+    unit = next(u for u in queue["queue"] if u["url"] == BASE + XLSX_NAME)
+    check(unit["bytes"] == len(copied[XLSX_NAME]), "the unit binds the copy's size")
+    check(specs["specs"][unit["snapshot_id"]]["seeded_copy"] == seed_copy.COPIES[XLSX_NAME], "the spec records the original and the change")
+    others = [s for k, s in specs["specs"].items() if k != unit["snapshot_id"] and s.get("mode") == MODE]
+    check(len(others) == 2 and all("seeded_copy" not in s for s in others), "no other spec is a copy")
+    metadata["files"][0]["sha256"] = hashlib.sha256(copied[XLSX_NAME]).hexdigest()
+    with pytest.raises(ValueError, match="original"):
+        add_units.add(queue_bytes, specs_bytes, plan, metadata)
+    original_plan = {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_of(BODIES)["files"]]}
+    with pytest.raises(ValueError, match="still binds the original"):
+        add_units.add(queue_bytes, specs_bytes, original_plan, metadata_for(original_plan))
 
 
 def test_the_unit_builder_command_rebinds_the_queue_lock_and_the_hosts_file_and_keeps_the_host_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -332,9 +382,49 @@ def test_the_unit_builder_command_rebinds_the_queue_lock_and_the_hosts_file_and_
 
 def test_the_committed_ahrq_plan_loads_against_the_registry_and_the_release_record_and_keeps_the_terms_record() -> None:
     plan = ahrq_contract.load_plan()
-    check(len(plan["files"]) == 13 and plan["model_eligible"] is False, "the plan holds the 13 files and no model eligibility")
+    check(len(plan["files"]) == 10 and plan["model_eligible"] is False, "the plan holds the 10 files and no model eligibility")
     check(plan["access_release"] == ahrq_contract.release_record(), "the plan binds the tracked release record by SHA-256")
     check(ahrq_contract.TERMS_RECORD["terms_status"] == "no_published_terms_found" and ahrq_contract.TERMS_RECORD["reuse_license"] == "none inferred", "terms")
     check("settle terms before any publication" in ahrq_contract.TERMS_RECORD["open_item"], "the open item stays recorded")
     check(any("no model approval" in text for text in ahrq_contract.USE_RESTRICTIONS), "the use restrictions keep the model hold")
     check(ahrq_contract.source_of({"sources": [{"source_id": "AHRQ_SYSTEM"}]}) == {"source_id": "AHRQ_SYSTEM"}, "the source is found")
+
+
+def test_a_release_binding_without_a_source_gets_the_newest_shared_record_and_does_not_raise() -> None:
+    from scripts.acquisition import history_routes, s3_store
+
+    bound = history_routes.lineage_bindings({"preferred_route": "access_hold"}, {"release_binding": "access_release"})
+    check(bound == {"access_release_sha256": hashlib.sha256(s3_store.ACCESS_RELEASE_PATH.read_bytes()).hexdigest()}, f"{bound}")
+    own = history_routes.lineage_bindings({"preferred_route": "access_hold", "source_id": "AHRQ_SYSTEM"}, {"release_binding": "access_release"})
+    check(
+        own == {"access_release_sha256": hashlib.sha256((ahrq_contract.REPO_ROOT / ahrq_contract.RELEASE_PATH).read_bytes()).hexdigest()},
+        "AHRQ binds its own record",
+    )
+
+
+def tampered_plan(tmp_path: Path) -> Path:
+    plan = json.loads(ahrq_contract.PLAN_PATH.read_text(encoding="utf-8"))
+    plan["files"][0]["bytes"] += 1
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+    path.with_suffix(".lock.json").write_text(ahrq_contract.PLAN_PATH.with_suffix(".lock.json").read_text())
+    return path
+
+
+def test_the_ahrq_plan_loader_refuses_a_plan_that_its_lock_does_not_match(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="lock differs"):
+        ahrq_contract.load_plan(tampered_plan(tmp_path))
+
+
+def test_the_handler_plan_loader_refuses_a_plan_that_its_lock_does_not_match(tmp_path: Path) -> None:
+    with pytest.raises(manual_content.ManualUnitError, match="lock differs"):
+        manual_content.locked_plan(tampered_plan(tmp_path))
+
+
+def test_the_unit_builder_refuses_a_file_with_the_right_hash_and_another_size() -> None:
+    queue_bytes, specs_bytes = small_bundle()
+    plan = plan_of(BODIES) | {"files": [item | {"id": hashlib.sha256(item["file_name"].encode()).hexdigest()} for item in plan_of(BODIES)["files"]]}
+    metadata = metadata_for(plan)
+    metadata["files"][0]["size"] += 1
+    with pytest.raises(ValueError, match="differs from the plan"):
+        add_units.add(queue_bytes, specs_bytes, plan, metadata)

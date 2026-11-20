@@ -3,9 +3,10 @@
 Each file of the locked AHRQ plan becomes one ``approved_manual`` unit of the mode ``ahrq_compendium`` and one specification: its stored file, the tracked
 release binding of the held source and where and when the owner saved the file (the browser's birth time, download date and origin). The unit's original
 comes from the bootstrap seed only, so its URL is never requested and its host is not a host of the run. The step checks every file's SHA-256 and size
-against the plan and its recorded origin against the plan's URL, refuses a bundle that already holds AHRQ units, appends the units after the existing ones,
-updates the budgets and records the addition in ``derived_from``. It rewrites the queue lock and the hosts file's queue digest (the host list stays as approved:
-the seed-only units add no host). Run ``build_seed_manifest`` and ``check_baseline_run --write-lock`` after it::
+against the plan and its recorded origin against the plan's URL, rebuilds a bundle that already holds AHRQ units (a second run gives the same bytes),
+appends the units after the existing ones, updates the budgets and records the addition in ``derived_from``. It rewrites the queue lock and the hosts
+file's queue digest (the host list stays as approved: the seed-only units add no host). Run ``build_seed_manifest`` and
+``check_baseline_run --write-lock`` after it::
 
     python -m scripts.acquisition.add_ahrq_units --metadata <the metadata record of the owner's files>
 
@@ -22,7 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.build_bootstrap_queue import budgets_with, queue_lock, rewrite_hosts
+from scripts.acquisition import ahrq_seed_copy as seed_copy
+from scripts.acquisition.build_bootstrap_queue import budgets_with, budgets_without, queue_lock, rewrite_hosts
 from scripts.acquisition.source_registry import canonical_hash
 
 MODE = "ahrq_compendium"
@@ -69,25 +71,41 @@ def saved_record(entry: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]
 
 
 def add(queue_bytes: bytes, specs_bytes: bytes, plan: dict[str, Any], metadata: dict[str, Any]) -> tuple[bytes, bytes]:
-    """The queue and the capture specification with the AHRQ units added. Refuses a second run, a file that differs from the plan and a missing record."""
+    """The queue and the capture specification with exactly one AHRQ unit and spec per planned file.
+
+    A bundle that already holds AHRQ units is rebuilt: those units and specs are removed first, so a second run gives the same bytes. The owner's file must
+    equal the plan in SHA-256 and size; for a seeded copy (``ahrq_seed_copy.COPIES``) the owner's file must equal the recorded original, the plan must bind the
+    copy, and the specification records the original and the change. A missing record and a recorded origin other than the planned URL are refused.
+    """
     queue, specs = json.loads(queue_bytes), json.loads(specs_bytes)
-    if any(unit["mode"] == MODE for unit in queue["queue"]):
-        raise ValueError("The queue already holds AHRQ units")
+    old = [unit for unit in queue["queue"] if unit["mode"] == MODE]
+    queue["queue"] = [unit for unit in queue["queue"] if unit["mode"] != MODE]
+    for unit in old:
+        specs["specs"].pop(unit["snapshot_id"], None)
+    queue["budgets"] = budgets_without(queue["budgets"], old)
+    queue["derived_from"] = {key: value for key, value in queue["derived_from"].items() if key != "ahrq_units"}
     found = {item["file_name"]: item for item in metadata["files"]}
     units = []
     for entry in plan["files"]:
         item = found.get(entry["file_name"])
         if item is None:
             raise ValueError(f"There is no metadata for {entry['file_name']}")
-        if (item["sha256"], item["size"]) != (entry["sha256"], entry["bytes"]):
-            raise ValueError(f"The file {entry['file_name']} differs from the plan in SHA-256 or size")
+        recorded = seed_copy.COPIES.get(entry["file_name"])
+        if recorded is None:
+            if (item["sha256"], item["size"]) != (entry["sha256"], entry["bytes"]):
+                raise ValueError(f"The file {entry['file_name']} differs from the plan in SHA-256 or size")
+        else:
+            if (item["sha256"], item["size"]) != (recorded["original_sha256"], recorded["original_bytes"]):
+                raise ValueError(f"The file {entry['file_name']} is not the recorded original")
+            if (entry["sha256"], entry["bytes"]) == (recorded["original_sha256"], recorded["original_bytes"]):
+                raise ValueError(f"The plan still binds the original of {entry['file_name']}, not its seeded copy")
         spec = {
             "mode": MODE,
             "stored_data_files": [entry["file_name"]],
             "release_binding": "access_release",
             "source_id": SOURCE_ID,
             "saved": saved_record(entry, item),
-        }
+        } | ({"seeded_copy": recorded} if recorded is not None else {})
         unit = {
             "bytes": entry["bytes"],
             "disposition": "approved_manual",
