@@ -125,6 +125,20 @@ resource "aws_iam_role" "bronze_writer" {
   }
 }
 
+locals {
+  # The characters that count against the 10240 quota of the inline policies of the bronze role: the storage policy, the stage read and the two Glue mirror grants
+  # (the bronze and the bronze_dictionary database). The guard below checks this one number and the output shows it, so a test can compare it with the policies.
+  bronze_inline_policy_chars = (
+    length(jsonencode(jsondecode(local.bronze_storage_policy))) + length(jsonencode(jsondecode(local.job_policy_documents.job_stage_read))) +
+    length(jsonencode(jsondecode(local.athena_writer_policies["bronze"]))) + length(jsonencode(jsondecode(local.athena_writer_policies["bronze_dictionary"])))
+  )
+}
+
+output "bronze_inline_policy_chars" {
+  description = "The characters of the inline policies of the bronze role that count against the 10240 quota of one role."
+  value       = local.bronze_inline_policy_chars
+}
+
 resource "aws_iam_role_policy" "bronze_writer" {
   count = var.bronze_writer_prepared ? 1 : 0
 
@@ -137,10 +151,7 @@ resource "aws_iam_role_policy" "bronze_writer" {
 
   lifecycle {
     precondition {
-      condition = (
-        length(jsonencode(jsondecode(local.bronze_storage_policy))) + length(jsonencode(jsondecode(local.job_policy_documents.job_stage_read))) +
-        length(jsonencode(jsondecode(local.athena_writer_policies["bronze"]))) + length(jsonencode(jsondecode(local.athena_writer_policies["bronze_dictionary"]))) <= 10240
-      )
+      condition     = local.bronze_inline_policy_chars <= 10240
       error_message = "The inline policies of the bronze role together (storage, stage read and the two Glue mirror grants) are over the 10240 character quota of one role. Move statements into a managed policy."
     }
   }

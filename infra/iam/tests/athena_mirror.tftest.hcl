@@ -170,7 +170,8 @@ run "layer_writer_grants_cover_only_their_own_mirror_database" {
 }
 
 # Owner decision of Nov 18 2026 ("add the hook for bronze"): the bronze load registers its tables at the end of a committed load, so the bronze writer role gets
-# the same four mirror actions as the layer writers, on the bronze mirror database and its tables only, behind both switches.
+# the same four mirror actions as the layer writers, on the bronze mirror database and its tables only, behind both switches. Since Nov 20 2026 it registers the
+# dictionary of each table too, with a second inline policy of the same four actions on the bronze_dictionary database, so the writer reaches two databases.
 run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
   command = plan
   variables {
@@ -279,6 +280,18 @@ run "bronze_writer_dictionary_grant_covers_only_the_dictionary_mirror_database" 
       length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy))) < 10240
     )
     error_message = "No mirror grant names a qualification database, and the inline policies of the bronze role stay inside the 10240 character quota with both mirror grants."
+  }
+
+  assert {
+    condition = (
+      output.bronze_inline_policy_chars == (
+        length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) +
+        length(jsonencode(jsondecode(aws_iam_role_policy.job_writer_stage["silver"].policy))) +
+        length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) +
+        length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy)))
+      )
+    )
+    error_message = "The size that the quota guard of the bronze role checks counts the storage policy, the stage read and both Glue mirror grants, the dictionary grant included."
   }
 }
 
@@ -663,7 +676,7 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
   }
 }
 
-# Owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector, so its Glue connector catalogs the two mirror databases. The catalog task role
+# Owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector, so its Glue connector catalogs the mirror databases (five since the bronze_dictionary layer joined on Nov 20 2026). The catalog task role
 # reads the registrations and nothing else of Glue, through the endpoint, from the lakehouse job group or from the host (the metadata host task).
 run "catalog_reads_the_mirror_through_the_endpoint" {
   command = plan

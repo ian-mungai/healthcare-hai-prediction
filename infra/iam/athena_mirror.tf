@@ -120,7 +120,7 @@ resource "aws_iam_role" "athena_reader" {
   count = var.athena_mirror_prepared && var.athena_owner_user != "" ? 1 : 0
 
   name                 = format(local.platform_name, "athena_reader")
-  description          = "Athena review of the silver, gold, features and bronze mirror for the owner's user only."
+  description          = "Athena review of the configured mirror databases (bronze, bronze_dictionary, silver, gold and features) for the owner's user only."
   max_session_duration = 3600
   tags                 = local.project_tags
   assume_role_policy = jsonencode({
