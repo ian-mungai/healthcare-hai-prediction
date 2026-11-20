@@ -203,12 +203,11 @@ def snapshot_ids(record: Mapping[str, Any], states: Sequence[str], wrapped: bool
     return set(found)
 
 
-def capture_counts(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> tuple[set[str], set[str], set[str]]:
-    """The snapshot IDs the capture captured, failed and held, from the original run record and the retry records read. A failure or hold in any of them
-    counts unless a record of the period captured that unit, and a unit counts once by its snapshot ID (a held unit that a retry then failed is failed). A
-    record whose unit lists are missing or of the wrong type raises ``ValueError``."""
+def capture_counts(records: Sequence[Mapping[str, Any]]) -> tuple[set[str], set[str], set[str]]:
+    """The snapshot IDs the capture captured, failed and held, from the run records read (the original run and any retry day). A failure or hold in any
+    record counts unless a record of the period captured that unit, and a unit counts once by its snapshot ID (a held unit that a retry then failed is
+    failed). A record whose unit lists are missing or of the wrong type raises ``ValueError``."""
     try:
-        records = (original, *retries)
         captured, failed, held = (
             set().union(*(snapshot_ids(record, states, wrapped) for record in records))
             for states, wrapped in zip((CAPTURED_STATES, FAILED_STATES, HELD_STATES), (True, True, False), strict=True)
@@ -216,9 +215,3 @@ def capture_counts(original: Mapping[str, Any], retries: Sequence[Mapping[str, A
     except (KeyError, TypeError):
         raise ValueError("a run record names its failed, held and captured units") from None
     return captured, failed - captured, held - captured - failed
-
-
-def carried_over(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> list[str]:
-    """The source files no run of the retry period captured, failed or held: bronze keeps each one's earlier capture."""
-    _, failed, held = capture_counts(original, retries)
-    return sorted(failed | held)

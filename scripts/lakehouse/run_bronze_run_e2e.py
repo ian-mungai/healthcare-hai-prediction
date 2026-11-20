@@ -825,14 +825,14 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     require(LOADS[0][LOADS[0].index("--unsourced-tables") + 1] == "empty_data", f"the loader was not told which table the stage left out: {LOADS[0]}")
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
     require(record["skipped_tables"] == report["skipped_tables"], f"the check record does not name the skipped table: {record['skipped_tables']}")
-    claim = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over.json"])
-    require(claim["skipped_tables"] == report["skipped_tables"], f"the carried-over record does not name the skipped table: {claim}")
+    notice_record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over.json"])
+    require(notice_record["skipped_tables"] == report["skipped_tables"], f"the carried-over record does not name the skipped table: {notice_record}")
     require(len(notices.calls) == 1 and "empty_data" in notices.calls[0]["Message"], f"the owner notice: {notices.calls}")
     mirror = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)[-1]["mirror"]
     registered = {name: text for name, text in mirror["tables"].items() if text == "created"}
     require(mirror["status"] == "ok" and sorted(registered) == sorted(tables), f"the real hook did not register the loaded tables: {mirror}")
     require(mirror["tables"]["empty_data"] == bronze_mirror.LEFT_OUT, f"the hook did not leave the stage's skipped table out like the register: {mirror}")
-    require(claim["notice"] == "sent" and f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json" not in STORAGE[0].client.puts, f"{claim}")
+    require(notice_record["notice"] == "sent" and f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json" not in STORAGE[0].client.puts, f"{notice_record}")
 
 
 def case_a_dropped_table_with_sources_is_refused(case: Case) -> None:

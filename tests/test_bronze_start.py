@@ -91,22 +91,27 @@ def record(failed: list[str], paused: list[str], completed: list[str] | None = N
     }
 
 
-def test_a_file_no_run_of_the_period_captured_is_carried_over() -> None:
+def left(*records: dict[str, Any]) -> list[str]:
+    """The files that no record of the period captured and some record failed or held."""
+    _, failed, held = schedule.capture_counts(records)
+    return sorted(failed | held)
+
+
+def test_a_file_no_run_of_the_period_captured_is_failed_or_held() -> None:
     first = record(["a__1__x", "b__1__x"], ["c__1__x"])
-    check(schedule.carried_over(first, []) == ["a__1__x", "b__1__x", "c__1__x"], "a file the original run failed is not carried over")
+    check(left(first) == ["a__1__x", "b__1__x", "c__1__x"], "a file the original run failed is not counted")
     day1 = record([], [], ["b__1__x"])
-    check(schedule.carried_over(first, [day1]) == ["a__1__x", "c__1__x"], "a file a retry day captured is carried over")
-    check(schedule.carried_over(first, [day1, record([], [], ["a__1__x", "c__1__x"])]) == [], "nothing is carried over when every file was captured")
-    check(schedule.carried_over(record([], []), []) == [], "a run that failed nothing carries nothing")
-    again = record(["a__1__x", "a__1__x"], ["a__1__x"])
-    check(schedule.carried_over(again, []) == ["a__1__x"], "a file is named twice")
+    check(left(first, day1) == ["a__1__x", "c__1__x"], "a file a retry day captured is counted")
+    check(left(first, day1, record([], [], ["a__1__x", "c__1__x"])) == [], "nothing is left when every file was captured")
+    check(left(record([], [])) == [], "a run that failed nothing leaves nothing")
+    check(left(record(["a__1__x", "a__1__x"], ["a__1__x"])) == ["a__1__x"], "a file is named twice")
 
 
 def test_a_record_without_its_units_is_refused() -> None:
     bad: dict[str, Any]
     for bad in ({}, {"units": {}}, {"units": {"failed": [{"no_id": 1}], "paused_not_attempted": []}}):
         with pytest.raises(ValueError, match="run record"):
-            schedule.carried_over(bad, [])
+            schedule.capture_counts([bad])
 
 
 def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,7 +159,7 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
     check(result["carried_over"] == ["a__1__x"] and result["notice"] == "sent", f"{result}")
     stored = json.loads(client.puts[f"lakehouse/bronze_runs/bronze_{HEX}/carried_over.json"])
     check(stored["carried_over"] == ["a__1__x"] and stored["ingestion_run"] == ORIGINAL and stored["notice"] == "sent", f"{stored}")
-    check("carried_over_notice.json" not in " ".join(client.puts) and stored["notice"] == "sent", f"the notice outcome is not in the one record: {stored}")
+    check("carried_over_notice.json" not in " ".join(client.puts), f"the old outcome record was written: {sorted(client.puts)}")
     check(len(client.published) == 1 and "a__1__x" in client.published[0]["Message"], "the notice does not name the file")
     quiet = Client(objects)
     unset = bronze_run.record_carried_over(quiet, "bucket", f"bronze_{HEX}", "raw/", topic="", notify=quiet)

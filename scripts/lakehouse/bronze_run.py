@@ -36,15 +36,16 @@ does nothing. The first dry phase marks the run folder, so a later phase without
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import re
+import signal
 import sys
 import tarfile
 import tempfile
-import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -529,12 +530,35 @@ def json_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
 
 
-# The capture notice is optional and bounded. Its calls use their own client with short timeouts and one attempt, and no read or send starts after
-# NOTICE_SECONDS. The notice therefore adds at most NOTICE_SECONDS, the longest call in progress (NOTICE_CONNECT + NOTICE_READ) and the write of its record
-# (the same again): 20 seconds. A call after the deadline raises, and the notice is recorded as not sent.
+# The capture notice is optional. One alarm bounds the whole notice (its reads, its send and the write of its record) to NOTICE_SECONDS of real time, also
+# when a reply trickles in: a read timeout counts only the silence between two bytes. So the notice adds at most NOTICE_SECONDS (10 seconds) to the check.
+# Its calls also use short timeouts and one attempt. Where no alarm can be armed (not the main thread), only those call timeouts bound a call.
 NOTICE_SECONDS = 10
 NOTICE_CONNECT, NOTICE_READ = 2, 3
-notice_clock = time.monotonic
+
+
+class NoticeTimeout(BaseException):
+    """The notice used its time. It is not an ``Exception``, so no library swallows it as a failed call."""
+
+
+@contextlib.contextmanager
+def notice_deadline() -> Iterator[None]:
+    """Raise ``NoticeTimeout`` in the main thread once ``NOTICE_SECONDS`` have passed, whatever call is then running."""
+
+    def expire(*_: Any) -> None:
+        raise NoticeTimeout(f"the notice used its {NOTICE_SECONDS} seconds")
+
+    try:
+        before = signal.signal(signal.SIGALRM, expire)
+    except ValueError:
+        yield
+        return
+    signal.setitimer(signal.ITIMER_REAL, NOTICE_SECONDS)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before or signal.SIG_DFL)
 
 
 def notice_config() -> Any:
@@ -548,30 +572,13 @@ def notice_storage() -> Any:
     return bronze.S3Storage(task_role=True, config=notice_config())
 
 
-class Deadline:
-    """A client whose every call first checks the deadline: a call that would start after ``end`` raises ``TimeoutError``."""
-
-    def __init__(self, client: Any, end: float) -> None:
-        self.client, self.end = client, end
-
-    def __getattr__(self, name: str) -> Any:
-        call = getattr(self.client, name)
-
-        def bounded(*args: Any, **kwargs: Any) -> Any:
-            if notice_clock() > self.end:
-                raise TimeoutError(f"the {NOTICE_SECONDS} second deadline of the notice passed before {name}")
-            return call(*args, **kwargs)
-
-        return bounded
-
-
 def read_counted_record(client: Any, bucket: str, key: str) -> tuple[dict[str, Any] | None, str]:
     """A run record the notice counts, or None with the reason it is not counted. A record that is missing, not JSON, not an object or without its unit lists
     never raises: the notice names it."""
     try:
         record = read_run_record(client, bucket, key)
         if record is not None:
-            ingestion_schedule.capture_counts(record, [])
+            ingestion_schedule.capture_counts([record])
         return record, "is missing"
     except Exception:
         return None, "cannot be read"
@@ -584,64 +591,60 @@ def record_carried_over(
     the stage left out (``skipped``, each with its reason), in the bronze run record and in the owner notice.
 
     Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The counts are those of the
-    capture's own check over the original and the retry records read (``ingestion_schedule.capture_counts``). A run record that is missing or cannot be read
-    is named in the notice and its files are not counted. The notice is sent for every run that has a capture root, also when nothing is missing. A run with
-    no capture root (a hand-staged bronze run) sends it only for a skipped table, and the record names the skipped tables whether or not it is sent.
+    capture's own check over every run record read, the original and the retry days (``ingestion_schedule.capture_counts``). A run record that is missing
+    or cannot be read is named in the notice and its files are not counted. The notice is sent for every run that has a capture root, also when nothing
+    is missing. A run with no capture root (a hand-staged bronze run) sends it only for a skipped table, and the record names the skipped tables whether
+    or not it is sent.
 
     An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt: if it exists, the attempt sends nothing and
-    reports it. Otherwise it sends the notice and then writes that one record, with what was reported and the outcome of the send (``sent``,
-    ``failed: <error type>`` or why none was sent). A failed send is recorded and not tried again. An interruption between the send and the record, or two
-    attempts at once, sends twice: an email is never lost while the check runs again. Nothing in the notice fails the run: any error, including a refused
-    write of the record, is shown on standard error and returned in the report. Every read and the send start within ``NOTICE_SECONDS`` and use the short
-    timeouts of ``notice_config``, so the whole notice adds at most 20 seconds to the check.
+    reports it. Otherwise it sends the notice and then writes that one record, with what was reported and the outcome (``sent``, or why none will be sent).
+    The record is written only after a send or when no notice will ever be sent. A notice that ran out of time or whose send failed leaves no record, so the
+    next attempt of the check tries again. An interruption between the send and the record, or two attempts at once, sends twice: an email is never lost
+    while the check runs again.
+
+    Nothing in the notice fails the run: any error, including a refused write of the record, is shown on standard error and returned in the report. The
+    whole notice, reads, send and record write together, ends within ``NOTICE_SECONDS`` (``notice_deadline``).
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder, key = f"{root}ingestion_runs/", f"lakehouse/bronze_runs/{run}/carried_over.json"
     document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries), "skipped_tables": list(skipped)}
     document["carried_over"] = None
     try:
-        reads = Deadline(client, notice_clock() + NOTICE_SECONDS)
-        earlier = read_own_record(reads, bucket, key)
-        if earlier is not None:
-            return earlier
-        files: list[str] | None = None
-        counts: dict[str, int] | None = None
-        found: dict[str, dict[str, Any]] = {}
-        unread: dict[str, str] = {}
-        if not root:
-            document["note"] = "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"
-        else:
-            for name in (original, *retries):
-                record, why = read_counted_record(reads, bucket, f"{folder}{name}/run.json")
-                if record is None:
-                    unread[name] = why
-                else:
-                    found[name] = record
-            if original not in found:
-                what = f"no run record of {original} under {folder}" if unread[original] == "is missing" else f"the run record of {original} cannot be read"
-                document["note"] = f"{what}: the files carried over are not known"
+        with notice_deadline():
+            earlier = read_own_record(client, bucket, key)
+            if earlier is not None:
+                return earlier
+            counts, files, found, unread = None, [], {}, {}
+            if not root:
+                document["note"] = "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"
             else:
-                captured, failed, held = ingestion_schedule.capture_counts(found[original], [found[name] for name in retries if name in found])
-                files, counts = sorted(failed | held), {"captured": len(captured), "failed": len(failed), "held": len(held)}
-                document |= {"carried_over": files, "counts": counts, "retry_records_read": len(found) - 1}
-            document["unread_records"] = unread
-        if not root and not skipped:
-            document["notice"] = "not sent"
-        elif not topic:
-            document["notice"] = "not sent: no alerts topic"
-        else:
-            subject, message = bronze_notice.carried_over_notice(run, original, counts, files or [], skipped, unread, list(found))
-            try:
+                for name in (original, *retries):
+                    record, why = read_counted_record(client, bucket, f"{folder}{name}/run.json")
+                    if record is None:
+                        unread[name] = why
+                    else:
+                        found[name] = record
+                if found:
+                    captured, failed, held = ingestion_schedule.capture_counts(list(found.values()))
+                    files, counts = sorted(failed | held), {"captured": len(captured), "failed": len(failed), "held": len(held)}
+                    document |= {"carried_over": files, "counts": counts, "records_read": list(found)}
+                else:
+                    document["note"] = f"no run record under {folder} could be read: the files carried over are not known"
+                document["unread_records"] = unread
+            if not root and not skipped:
+                document["notice"] = "not sent"
+            elif not topic:
+                document["notice"] = "not sent: no alerts topic"
+            else:
+                subject, message = bronze_notice.carried_over_notice(run, original, counts, files, skipped, unread, list(found))
                 if notify is None:
                     import boto3
 
                     notify = boto3.client("sns", config=notice_config())
-                Deadline(notify, reads.end).publish(TopicArn=topic, Subject=subject, Message=message)
+                notify.publish(TopicArn=topic, Subject=subject, Message=message)
                 document["notice"] = "sent"
-            except Exception as error:
-                document["notice"] = f"failed: {type(error).__name__}"
-        put_once(client, bucket, key, json_bytes(document))
-    except Exception as error:
+            put_once(client, bucket, key, json_bytes(document))
+    except (Exception, NoticeTimeout) as error:
         sys.stderr.write(f"bronze_run: the capture notice stopped and the check goes on ({type(error).__name__}: {error})\n")
         stopped = f"stopped: {type(error).__name__}"
         document["notice"] = f"{document['notice']}; {stopped}" if "notice" in document else stopped

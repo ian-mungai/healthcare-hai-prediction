@@ -1,12 +1,18 @@
-"""The owner notice of the carried-over files is sent once per bronze run, however often the check phase runs again."""
+"""The owner notice of a bronze run is sent first and then recorded once. A repeat that finds the record sends nothing. A notice that did not get
+sent leaves no record, so the next check tries again."""
 
 from __future__ import annotations
 
 import json
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 from types import SimpleNamespace
 from typing import Any
 
+import boto3
 import pytest
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from scripts.lakehouse import bronze_run
@@ -18,16 +24,8 @@ ORIGINAL = f"ingestion_{HEX}"
 BUCKET = "example-bucket"
 RECORD_KEY = f"lakehouse/bronze_runs/{RUN}/carried_over.json"
 NOTICE_KEY = f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"
-SLOW = 11.0
-NOW = [0.0]
+SLOW, BOUND = 2.0, 0.3
 TOPIC = "arn:aws:sns:us-west-2:" + "1" * 12 + ":alerts"
-
-
-@pytest.fixture(autouse=True)
-def notice_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The notice reads one fake clock that the slow calls of the bucket advance."""
-    NOW[0] = 0.0
-    monkeypatch.setattr(bronze_run, "notice_clock", lambda: NOW[0], raising=False)
 
 
 def run_record(
@@ -55,8 +53,8 @@ class Body:
 
 
 class Bucket:
-    """A bucket that refuses a second write of a key that carries ``IfNoneMatch``, answers 403 for a missing key (the role cannot list the folder of its own
-    records) and keeps every call the notice service receives."""
+    """A bucket whose slow calls sleep. It refuses a second write of a key that carries ``IfNoneMatch``, answers 403 for a missing key (the role cannot
+    list the folder of its own records) and keeps every call the notice service receives."""
 
     def __init__(self, objects: dict[str, bytes], fail_publish: bool = False) -> None:
         self.objects, self.fail_publish = dict(objects), fail_publish
@@ -65,12 +63,11 @@ class Bucket:
 
     def list_object_versions(self, **arguments: str) -> dict[str, Any]:
         self.listed += 1
-        NOW[0] += self.read_delay
+        time.sleep(self.read_delay)
         return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}
 
     def get_object(self, **arguments: str) -> dict[str, Any]:
         key = arguments["Key"]
-        NOW[0] += self.read_delay
         if key not in self.objects:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "missing key, no list grant"}}, "GetObject")
         if "VersionId" in arguments and arguments["VersionId"] != f"v-{key}":
@@ -79,6 +76,7 @@ class Bucket:
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
         key = arguments["Key"]
+        time.sleep(self.put_delay)
         if self.deny_put:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no write grant"}}, "PutObject")
         if arguments.get("IfNoneMatch") == "*" and key in self.objects:
@@ -88,8 +86,8 @@ class Bucket:
         return {}
 
     def publish(self, **arguments: str) -> dict[str, str]:
-        self.puts_at_send = list(self.puts)
-        NOW[0] += self.send_delay
+        self.puts_at_send, self.send_calls = list(self.puts), self.send_calls + 1
+        time.sleep(self.send_delay)
         if self.fail_publish:
             raise OSError("the topic does not answer")
         self.published.append(arguments)
@@ -132,13 +130,14 @@ def test_a_repeated_call_reports_the_retained_record_even_when_the_sources_chang
     check(len(store.published) == 1, "a changed source made a second notice")
 
 
-def test_a_failed_notice_is_recorded_once_and_not_tried_again() -> None:
+def test_a_failing_send_is_tried_once_leaves_no_record_and_a_healthy_repeat_sends(capsys: pytest.CaptureFixture[str]) -> None:
     store = bucket(["a__1__x"], fail_publish=True)
     first = carried(store)
-    check(first["notice"] == "failed: OSError", f"{first}")
+    check(first["notice"] == "stopped: OSError" and store.send_calls == 1 and RECORD_KEY not in store.objects, f"{first} {store.send_calls} {store.puts}")
+    check("the capture notice stopped" in capsys.readouterr().err, "the failure is not shown on standard error")
     store.fail_publish = False
-    again = carried(store)
-    check(again["notice"] == "failed: OSError" and not store.published, f"a retry sent a notice after a failed one was recorded: {again} {store.published}")
+    check(carried(store)["notice"] == "sent" and len(store.published) == 1, "the healthy repeat did not send")
+    check(json.loads(store.objects[RECORD_KEY])["notice"] == "sent", "the sent notice is not recorded")
 
 
 @pytest.mark.parametrize(
@@ -223,14 +222,6 @@ def test_a_skipped_table_with_no_alerts_topic_is_recorded_and_says_no_notice_was
     check(json.loads(store.objects[RECORD_KEY])["skipped_tables"] == EMPTY, "the record does not name the skipped table")
 
 
-def test_a_failed_notice_for_a_skipped_table_is_recorded_once_and_not_tried_again() -> None:
-    store = bucket([], fail_publish=True)
-    first = carried(store, skipped=EMPTY)
-    check(first["notice"] == "failed: OSError", f"{first}")
-    store.fail_publish = False
-    check(carried(store, skipped=EMPTY)["notice"] == "failed: OSError" and not store.published, "a retry sent a notice after a failed one was recorded")
-
-
 def test_a_good_month_is_noticed_once_with_its_three_counts_and_a_repeat_sends_nothing() -> None:
     store = bucket([], run_record([], ["a__1__x", "b__1__x", "c__1__x"]))
     first = carried(store)
@@ -278,9 +269,9 @@ def test_an_original_record_that_is_not_json_not_an_object_or_has_no_failed_list
     store = bucket([], body)
     first = carried(store)
     message = store.published[0]["Message"]
-    check(first["notice"] == "sent" and first["carried_over"] is None and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
+    check(first["notice"] == "sent" and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
     check(f"The run record of {ORIGINAL} cannot be read, so its files are not counted." in message, message)
-    check("Captured files" not in message and "Every file" not in message, message)
+    check("Every file" not in message and "Captured files: 0" in message, message)
 
 
 @pytest.mark.parametrize(
@@ -300,7 +291,7 @@ def test_a_unit_list_or_id_of_the_wrong_type_makes_an_unreadable_record_and_neve
     first = carried(store)
     message = store.published[0]["Message"]
     check(first["notice"] == "sent" and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
-    check("Captured files" not in message and "Every file" not in message and f"The run record of {ORIGINAL} cannot be read" in message, message)
+    check("Every file" not in message and f"The run record of {ORIGINAL} cannot be read" in message, message)
 
 
 def test_a_failure_in_a_retry_record_counts_although_the_original_failed_nothing_and_no_success_is_claimed() -> None:
@@ -346,17 +337,69 @@ def test_the_message_says_the_bronze_run_completed_and_names_the_capture_records
     check("Capture records read: none." in none.published[0]["Message"] and "loaded the data" not in none.published[0]["Message"], none.published[0]["Message"])
 
 
-def test_slow_reads_end_at_the_bound_and_the_notice_is_recorded_as_not_sent() -> None:
-    store = bucket(["a__1__x"], read_delay=SLOW)
-    first = carried(store)
-    check(NOW[0] == SLOW and not store.published, f"{NOW[0]} seconds of reads, {len(store.published)} sent")
-    check(first["notice"] == "failed: TimeoutError" and json.loads(store.objects[RECORD_KEY])["notice"] == "failed: TimeoutError", f"{first}")
+def timed(store: Bucket) -> tuple[dict[str, Any], float]:
+    start = time.monotonic()
+    done = carried(store)
+    return done, time.monotonic() - start
 
 
-def test_a_slow_send_ends_at_the_bound_and_is_recorded() -> None:
-    store = bucket(["a__1__x"], send_delay=SLOW, fail_publish=True)
-    first = carried(store)
-    check(first["notice"] == "failed: OSError" and store.puts == [RECORD_KEY] and NOW[0] == SLOW, f"{first} {NOW[0]}")
+@pytest.mark.parametrize("slow", ["read_delay", "send_delay"])
+def test_a_slow_read_or_send_stops_the_notice_at_the_bound_with_no_record_and_a_healthy_repeat_sends_once(slow: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bronze_run, "NOTICE_SECONDS", BOUND)
+    store = bucket(["a__1__x"], **{slow: SLOW})
+    first, seconds = timed(store)
+    check(seconds < BOUND + 1 and not store.published and RECORD_KEY not in store.objects, f"{seconds} seconds, {len(store.published)} sent, {store.puts}")
+    check(first["notice"] == "stopped: NoticeTimeout", f"{first}")
+    setattr(store, slow, 0)
+    carried(store)
+    carried(store)
+    check(len(store.published) == 1 and json.loads(store.objects[RECORD_KEY])["notice"] == "sent", f"{len(store.published)} sent")
+
+
+def test_a_slow_write_of_the_record_stops_at_the_bound_after_the_send_and_the_repeat_sends_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bronze_run, "NOTICE_SECONDS", BOUND)
+    store = bucket(["a__1__x"], put_delay=SLOW)
+    first, seconds = timed(store)
+    check(seconds < BOUND + 1 and len(store.published) == 1 and RECORD_KEY not in store.objects, f"{seconds} seconds, {len(store.published)} sent")
+    check(first["notice"] == "sent; stopped: NoticeTimeout", f"{first}")
+
+
+def test_a_reply_that_trickles_in_slower_than_the_bound_ends_at_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bronze_run, "NOTICE_SECONDS", BOUND)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
+    reply = b"<PublishResponse><PublishResult><MessageId>x</MessageId></PublishResult></PublishResponse>"
+
+    class Trickle(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/xml")
+            self.send_header("Content-Length", str(len(reply) + 12))
+            self.end_headers()
+            try:
+                self.wfile.write(reply)
+                for _ in range(12):
+                    time.sleep(0.25)
+                    self.wfile.write(b" ")
+            except OSError:
+                return
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    with HTTPServer(("127.0.0.1", 0), Trickle) as server:
+        server.timeout = 10
+        thread = Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        session = boto3.Session(region_name="us-west-2")
+        client = session.client("sns", endpoint_url=f"http://127.0.0.1:{server.server_port}", config=bronze_run.notice_config().merge(Config(proxies={})))
+        store = bucket(["a__1__x"])
+        start = time.monotonic()
+        done = bronze_run.record_carried_over(store, BUCKET, RUN, "raw/", topic=TOPIC, notify=client)
+        seconds = time.monotonic() - start
+        thread.join(timeout=10)
+    check(seconds < BOUND + 1 and done["notice"] == "stopped: NoticeTimeout" and RECORD_KEY not in store.objects, f"{seconds} seconds, {done['notice']}")
 
 
 def test_the_notice_clients_have_short_timeouts_and_one_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,7 +411,6 @@ def test_the_notice_clients_have_short_timeouts_and_one_attempt(monkeypatch: pyt
         options.connect_timeout + options.read_timeout <= 5 and options.retries["total_max_attempts"] == 1,
         f"{options.connect_timeout} {options.read_timeout} {options.retries}",
     )
-    check(bronze_run.NOTICE_SECONDS + 5 + 5 <= 20, "the stated bound of 20 seconds does not hold")
 
 
 def test_the_sns_client_of_the_notice_is_made_with_the_short_timeouts_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -387,3 +429,13 @@ def test_a_notice_that_cannot_even_make_its_client_leaves_the_check_phase_going(
     monkeypatch.setattr(bronze_run, "notice_storage", refuse)
     bronze_run.run_notice(SimpleNamespace(bucket=BUCKET, run=RUN), [])
     check("the capture notice did not start" in capsys.readouterr().err, "the failure is not shown on standard error")
+
+
+def test_the_counts_of_every_record_read_are_given_when_the_original_record_is_missing() -> None:
+    store = Bucket({retry_key(2): run_record(["b__1__x"], changed=["a__1__x"], keyed=["c__1__x"])})
+    first = carried(store)
+    lines = store.published[0]["Message"].split("\n")
+    check(first["counts"] == {"captured": 1, "failed": 1, "held": 1} and first["carried_over"] == ["b__1__x", "c__1__x"], f"{first}")
+    check(all(line in lines for line in ("Captured files: 1", "Failed files: 1", "Held files: 1", f"Capture records read: ingestion_retry_{HEX}_2.")), lines)
+    check(f"The run record of {ORIGINAL} is missing, so its files are not counted." in lines and "Every file was captured." not in lines, lines)
+    check(f"Bronze run {RUN} completed." in lines and "loaded the data" not in store.published[0]["Message"], lines)
