@@ -38,7 +38,6 @@ config tests/test_no_marquez_leftovers.py -- the test names the removed marquez_
 python dags/drift_monitoring_dag.py -- dag_runtime is the live runtime module the DAG imports; the change removed only a test helper function of the same name -- expires 2026-11-30
 config scripts/orchestration/run_features_pipeline_light.py -- the check requires the retired gold_maintenance_dag to stay gone from the pipeline graph -- expires 2026-11-30
 config scripts/orchestration/run_publish_contracts.py -- the check requires the retired gold_maintenance_dag to stay undeclared -- expires 2026-11-30
-flag orchestration/training_render.py -- the promotion job's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
 config scripts/acquisition/cms_owners_contract.py -- the version 2 plan check refuses the removed version 1 plan keys dropped_columns and replacement by name, so a plan that still carries them stops -- expires-when path-absent:scripts/acquisition/cms_owners_contract.py
 config scripts/acquisition/onc_mu_contract.py -- the version 2 plan check refuses the removed version 1 plan keys dropped_columns and hospital_value by name, so a plan that still carries them stops -- expires-when path-absent:scripts/acquisition/onc_mu_contract.py
 config scripts/acquisition/hcai_util_contract.py -- the version 2 plan check refuses the removed version 1 plan keys by name, so a plan that still carries them stops -- expires-when path-absent:scripts/acquisition/hcai_util_contract.py
@@ -51,15 +50,6 @@ config scripts/lakehouse/run_gold_publish_e2e.py -- clientId and clientSecret ar
 config scripts/lakehouse/run_launcher_e2e.py -- clientId and clientSecret are fields of the Polaris principal credentials, which stay; only the OpenMetadata Polaris ingestion config that also named them was removed -- permanent
 script tests/test_no_fargate_leftovers.py -- the test requires the removed config/orchestration/ecs_jobs.json and ecs_jobs.schema.json to stay gone -- expires-when path-absent:tests/test_no_fargate_leftovers.py
 script services/streamlit/Dockerfile -- the COPY line names scripts/streamlit_app/client.py, the Streamlit app's own live module; the removed file was orchestration/client.py, the broker client -- expires-when path-absent:scripts/streamlit_app/client.py
-flag orchestration/ecs_lineage.py -- --dag-id, --task-id and --dag-run-id are the replay command's own argparse flags; they are unrelated to the same-named flags of the deleted broker command -- permanent
-flag scripts/orchestration/ecs_lineage_cases.py -- the cases call the replay command with its own flags --dag-id, --task-id and --dag-run-id; they are unrelated to the same-named flags of the deleted broker command -- permanent
-flag infra/services/airflow.tf -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag infra/services/mlflow.tf -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag infra/services/tests/services.tftest.hcl -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag orchestration/mlflow_service.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag scripts/infrastructure/owner_list_host_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag scripts/training/aws_run_cases.py -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
-flag services/mlflow/docker-compose.mlflow.yaml -- the file's own --port option of a live service or case; only the lineage outbox delivery option of the same name was removed -- permanent
 unused-code scripts/infrastructure/monitoring_panel_cases.py -- http.server dispatches do_GET and log_message of the loopback Prometheus stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/metrics_push_cases.py -- http.server dispatches do_PUT, do_DELETE and log_message of the loopback Pushgateway stand-in by method name, and reads daemon_threads -- permanent
 config scripts/infrastructure/monitoring_files.py -- the check must name the Prometheus rule_files and alerting keys that it forbids, because the alert rules moved to Grafana -- permanent
@@ -67,6 +57,3 @@ config scripts/infrastructure/monitoring_cases.py -- the planted defect puts the
 unused-code scripts/infrastructure/host_state_exporter_cases.py -- http.server dispatches do_GET and log_message of the loopback OpenMetadata stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/monitoring_gap_cases.py -- http.server dispatches do_PUT, do_DELETE and log_message of the loopback Pushgateway stand-in by method name, and reads daemon_threads -- permanent
 unused-code scripts/infrastructure/spark_progress_cases.py -- the fake status tracker answers the Spark StatusTracker methods by their public names (getJobIdsForGroup, getJobInfo, getStageInfo, getActiveStageIds, getActiveJobsIds) and its job and stage records carry the fields that Spark names stageIds, numTasks, numActiveTasks, numCompletedTasks and numFailedTasks -- permanent
-flag tests/test_open_ui.py -- the case that a caller cannot name the removed output-file option --exec-args-file; open_ui.py and open_ui.sh no longer have it -- permanent
-flag infra/services/evidently_ui.tf -- --port is the Evidently command's own option for the UI port, not the flag of the removed lineage module -- permanent
-flag infra/services/tests/evidently_ui.tftest.hcl -- the test asserts the Evidently command line, whose own --port option is not the flag of the removed lineage module -- permanent
