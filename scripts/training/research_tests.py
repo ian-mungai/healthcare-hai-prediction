@@ -102,7 +102,8 @@ def intercept_cmi_comparison(
 ) -> dict[str, Any]:
     """Score an Elastic Net over the process measures and CMI alone against an intercept-plus-CMI model on the same holdout rows.
 
-    ``elastic_predictions`` come from the fit on exactly ``references`` with the tuned ``parameters``. The record names them.
+    ``elastic_predictions`` come from the fit on the declared ``references`` with the tuned ``parameters``. The record lists the declared inputs, and the fit's
+    missing-value selection can still drop some.
     """
     holdout = request.data.split()[1]
     baseline_metric = metrics(holdout.y, intercept_cmi_predictions(request))["rmse"]

@@ -154,8 +154,11 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     options = _grid(config["check"]["grid"] if forest else config["grid"])
     if slot not in ("m2_elastic_net", "m4_boosting", "m6_fixed_effects"):
         return options[0], []
-    fold_seed = seed_for(request.config["master_seed"], request.data.hai_type, "folds")
-    folds = time_folds(training, TIME_ORDERED_MINIMUM[slot]) if slot in TIME_ORDERED_MINIMUM else folds_for(training, request.config, fold_seed)
+    folds = (
+        time_folds(training, TIME_ORDERED_MINIMUM[slot])
+        if slot in TIME_ORDERED_MINIMUM
+        else folds_for(training, request.config, seed_for(request.config["master_seed"], request.data.hai_type, "folds"))
+    )
     if not folds and slot == "m2_elastic_net":
         raise NotEstimable("no time-ordered validation fold: the training years leave no year to validate after the first")
     if not folds:
@@ -316,7 +319,7 @@ def process_cmi_comparison(request: ModelRequest) -> dict[str, Any]:
     references = process_cmi_references(request)
     fitted = fit_slot(replace(request, feature_lists={**request.feature_lists, "m2_elastic_net": references}), "m2_elastic_net")
     if fitted.status != "fitted":
-        return {"status": "not_estimable", "reason": fitted.reason}
+        return {"status": fitted.status, "reason": fitted.reason}
     return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"])
 
 

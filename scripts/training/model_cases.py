@@ -585,16 +585,21 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         fitting = [row for row in plain.data.rows if row["window_year"] < 2022]
         validation = [row for row in extreme.data.rows if row["window_year"] == 2022]
         last = fits[len(fits) - 2]["design"]
-        for name in ("process", "cmi"):
-            column = np.asarray([row[name] for row in fitting])
-            low, high = np.percentile(column, (1, 99))
-            clipped = np.clip(column, low, high)
-            center, scale = float(clipped.mean()), float(clipped.std())
+        for name in ("process", "cmi", "extra"):
+            observed = np.asarray([row[name] for row in fitting if row[name] is not None])
+            low, high = np.percentile(observed, (1, 99))
+            clipped = np.clip(observed, low, high)
+            absent = sum(row[name] is None for row in fitting)
+            filled = np.r_[clipped, np.full(absent, np.median(clipped))]
+            center, scale = float(filled.mean()), float(filled.std())
+            require((absent > 0) == (name == "extra"), f"{name}: the fixture has the wrong missing values")
             fitted = last.matrix[:, last.names.index(name)]
             require(
                 np.isclose(fitted.max(), (high - center) / scale) and np.isclose(fitted.min(), (low - center) / scale),
                 f"{name} is not clipped on the fitting rows",
             )
+            if name == "extra":
+                continue
             scored = transforms[len(fits) - 2][1]
             values = scored.matrix[:, scored.names.index(name)]
             extremes = [index for index, row in enumerate(validation) if row[name] == 1.0e6]
@@ -685,6 +690,90 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require(record["status"] == "fitted" and list(record["elastic_net_references"]) == [process, cmi], f"the comparison names other columns: {record}")
         require(not np.isclose(record["elastic_net_rmse"], rmse_of(output.slots["m2_elastic_net"])), "the comparison is still the full Elastic Net")
         require(output.slots["m2_elastic_net"].status == "fitted", "the full Elastic Net of the run changed")
+
+    def elastic_net_fits_each_fold_on_its_fitting_labels() -> None:
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        labels: list[Any] = []
+        original = ElasticRegressor.fit
+
+        def tracked(self: Any, design: Any, y: Any) -> Any:
+            labels.append(np.array(y))
+            return original(self, design, y)
+
+        with libraries(), patch.object(ElasticRegressor, "fit", tracked):
+            _, fits, _ = traced(lambda: suite.fit_slot(wide, "m2_elastic_net"))
+        training, _ = wide.data.split()
+        outcome = {row["spine_key"]: row[training.label] for row in training.rows}
+        expected = [np.asarray([outcome[row["spine_key"]] for row in training.rows if row["spine_key"] in fit["keys"]]) for fit in fits]
+        folds, options = len(fits) - 1, 4
+        require(len(labels) == options * folds + 1, f"expected {options * folds + 1} estimator fits, got {len(labels)}")
+        for call, seen in enumerate(labels):
+            wanted = expected[-1] if call == len(labels) - 1 else expected[call % folds]
+            require(seen.shape == wanted.shape and np.array_equal(seen, wanted), f"estimator fit {call} did not receive the labels of its fitting rows")
+
+    def elastic_net_selects_the_lowest_validation_error() -> None:
+        from scripts.training.models.common import seed_for
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        with libraries():
+            result, fits, transforms = traced(lambda: suite.fit_slot(wide, "m2_elastic_net"))
+            training, _ = wide.data.split()
+            outcome = {row["spine_key"]: row[training.label] for row in training.rows}
+            seed = seed_for(wide.config["master_seed"], "HAI_1", "m2_elastic_net")
+            options, scores = [], []
+            for alpha in wide.config["slots"]["m2_elastic_net"]["grid"]["alpha"]:
+                for ratio in wide.config["slots"]["m2_elastic_net"]["grid"]["l1_ratio"]:
+                    squared, count = 0.0, 0
+                    for fit, (validation, design) in zip(fits[:-1], transforms, strict=False):
+                        fitting_y = np.asarray([outcome[row["spine_key"]] for row in training.rows if row["spine_key"] in fit["keys"]])
+                        validation_y = np.asarray([outcome[row["spine_key"]] for row in training.rows if row["spine_key"] in validation])
+                        model = ElasticRegressor(alpha, ratio, (wide.cmi_reference,), seed).fit(fit["design"], fitting_y)
+                        squared += float(np.sum((validation_y - np.asarray(model.predict(design))) ** 2))
+                        count += len(validation_y)
+                    options.append({"alpha": alpha, "l1_ratio": ratio})
+                    scores.append(math.sqrt(squared / count))
+        require(max(scores) > min(scores) * 1.001, f"the grid options do not differ in validation error: {scores}")
+        require(result.details["selected_parameters"] == options[int(np.argmin(scores))], f"selected {result.details['selected_parameters']}, scores {scores}")
+
+    def rq1_comparison_keeps_the_restricted_fits_status() -> None:
+        from scripts.training.models.common import DeadlineExceeded, NotConverged, NotEstimable
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        restricted = frozenset((wide.process_references[0], wide.cmi_reference))
+        original = ElasticRegressor.fit
+        for error, status in (
+            (NotConverged("slow path"), "not_converged"),
+            (DeadlineExceeded("late"), "not_run"),
+            (NotEstimable("singular design"), "not_estimable"),
+        ):
+
+            def failing(self: Any, design: Any, y: Any, error: Exception = error) -> Any:
+                if frozenset(design.references) == restricted:
+                    raise error
+                return original(self, design, y)
+
+            with libraries(), patch.object(ElasticRegressor, "fit", failing):
+                output = suite.fit_model(wide, "m2")
+            record = output.research["process_vs_intercept_cmi"]
+            require(record["status"] == status and record.get("reason"), f"a {status} restricted fit was reported as {record}")
+            require(status == "not_run" or str(error) in record["reason"], f"the reason of the {status} restricted fit was lost: {record}")
+            require(output.slots["m2_elastic_net"].status == "fitted", "the full Elastic Net failed with the restricted one")
+
+    def rq1_comparison_runs_after_a_failed_full_fit() -> None:
+        wide = flagged_request()
+        full = tuple(reference for reference in wide.feature_lists["m2_elastic_net"] if reference != wide.cmi_reference)
+        broken = replace(wide, feature_lists={**wide.feature_lists, "m2_elastic_net": full})
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            single = suite.fit_model(broken, "m2")
+            every = suite.fit_models(replace(broken, deadline=Deadline.after(60)))
+        for name, output in (("the m2 run", single), ("the six-model run", every)):
+            require(output.slots["m2_elastic_net"].status == "not_estimable", f"{name}: the full Elastic Net should fail without forced CMI")
+            record = output.research["process_vs_intercept_cmi"]
+            require(record["status"] == "fitted" and "elastic_net_rmse" in record, f"{name}: RQ1 was skipped after the full fit failed: {record}")
 
     def rq1_comparison_columns_in_the_real_lists() -> None:
         from scripts.training import job_inputs
@@ -2681,6 +2770,10 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("other_models_are_not_winsorized", other_models_are_not_winsorized),
         ("rq1_comparison_fits_process_measures_and_cmi_only", rq1_comparison_fits_process_measures_and_cmi_only),
         ("rq1_comparison_columns_in_the_real_lists", rq1_comparison_columns_in_the_real_lists),
+        ("elastic_net_fits_each_fold_on_its_fitting_labels", elastic_net_fits_each_fold_on_its_fitting_labels),
+        ("elastic_net_selects_the_lowest_validation_error", elastic_net_selects_the_lowest_validation_error),
+        ("rq1_comparison_keeps_the_restricted_fits_status", rq1_comparison_keeps_the_restricted_fits_status),
+        ("rq1_comparison_runs_after_a_failed_full_fit", rq1_comparison_runs_after_a_failed_full_fit),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
         ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),
