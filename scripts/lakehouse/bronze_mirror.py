@@ -9,11 +9,11 @@ with ``bronze_dictionary_e2e``) and the other test namespaces mirror nothing, an
 The generated data dictionaries (``bronze_dictionary.<table>``, one Iceberg table per bronze table, rebuilt by every load that loads data) are registered
 right after the bronze tables, in the ``bronze_dictionary`` Glue database, by the same ``glue_mirror.mirror`` with the same marker, run ID, failure rule and
 deadline: the hook starts one deadline of ``mirror_seconds`` and the dictionaries use what the tables left of it, so they never extend the hold on the load
-and the tables are always registered first. Each dictionary of a loaded table is registered at its newest snapshot, read in the load's own Spark session just
-before its registration; a registration points at the metadata file of that snapshot, so a commit that lands later is not registered. Every load registers
-every dictionary that exists, also a load that rebuilt none (an unchanged rerun), so a rerun repairs a registration that failed. A dictionary that does not
-exist, has no snapshot, cannot be read or cannot be registered is named under ``bronze_dictionary.<table>`` and stops no other. Past the deadline the
-dictionaries not yet reached are reported failed with the deadline as the cause and nothing is written after it.
+and the tables are always registered first. Each dictionary of a loaded table is registered at its newest snapshot, read in the load's own Spark session
+before the dictionaries are registered; a registration points at the metadata file of that snapshot, so a commit that lands later is not registered. Every
+load registers every dictionary that exists, also a load that rebuilt none (an unchanged rerun), so a rerun repairs a registration that failed. A dictionary
+that does not exist, has no snapshot, cannot be read or cannot be registered is named under ``bronze_dictionary.<table>`` and stops no other. Past the
+deadline the dictionaries not yet reached are reported failed with the deadline as the cause and nothing is written after it.
 
 The mirrored set is what the load committed: the snapshot of each table the load names (a table that the load left out is simply not mirrored) and the
 snapshot of each loader side table that has one (``file_metadata``, ``stored_copies``, ``column_map`` and ``file_preambles``), read after the metadata
