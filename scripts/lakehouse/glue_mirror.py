@@ -106,7 +106,8 @@ class Budget:
     """One absolute deadline, started when the hook is entered. Every blocking step runs through ``run``, so none can hold the publish job past it.
 
     A step that is still running at the deadline is abandoned: its result is discarded and no later step starts. A step cannot be interrupted once it
-    is inside a Spark or Glue call, so ``run`` reports that and a write that was already issued is reported as possibly landed.
+    is inside a Spark or Glue call, so ``run`` reports that and a write that was already issued is reported as possibly landed. The worker checks the
+    deadline again as its first act, so a worker that the system starts after the deadline begins no read and no write.
     """
 
     def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic, started: float | None = None) -> None:
@@ -119,7 +120,7 @@ class Budget:
         return self.end - self.clock()
 
     def run(self, label: str, work: Callable[..., Any], *arguments: Any, write: bool = False, **keywords: Any) -> Any:
-        """Run ``work`` in a helper thread and wait for it until the deadline. A write checks the deadline again just before it is issued."""
+        """Run ``work`` in a helper thread and wait for it until the deadline. Every call, read or write, checks the deadline again as the worker starts."""
         left = self.remaining()
         if left <= 0 or self.stopped.is_set():
             raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed before {label}")
@@ -127,7 +128,7 @@ class Budget:
 
         def target() -> None:
             try:
-                if write and (self.stopped.is_set() or self.remaining() <= 0):
+                if self.stopped.is_set() or self.remaining() <= 0:
                     raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed before {label}")
                 box["value"] = work(*arguments, **keywords)
             except BaseException as error:
@@ -140,7 +141,8 @@ class Budget:
             self.stopped.set()
             if write:
                 raise MirrorDeadline(
-                    f"the mirror deadline of {self.seconds:g} seconds passed during {label}: the write may have landed, run check and rerun the step"
+                    f"the mirror deadline of {self.seconds:g} seconds passed during {label}: the write may have landed, "
+                    "so rerun the step to register again and, for a published layer, run check"
                 )
             raise MirrorDeadline(f"the mirror deadline of {self.seconds:g} seconds passed during {label}")
         if "error" in box:

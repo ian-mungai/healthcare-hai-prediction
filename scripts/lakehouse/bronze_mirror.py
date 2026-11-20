@@ -12,8 +12,10 @@ deadline: the hook starts one deadline of ``mirror_seconds`` and the dictionarie
 and the tables are always registered first. Each dictionary of a loaded table is registered at its newest snapshot, read in the load's own Spark session
 before the dictionaries are registered; a registration points at the metadata file of that snapshot, so a commit that lands later is not registered. Every
 load registers every dictionary that exists, also a load that rebuilt none (an unchanged rerun), so a rerun repairs a registration that failed. A dictionary
-that does not exist, has no snapshot, cannot be read or cannot be registered is named under ``bronze_dictionary.<table>`` and stops no other. Past the
-deadline the dictionaries not yet reached are reported failed with the deadline as the cause and nothing is written after it.
+that does not exist, has no snapshot, cannot be read or cannot be registered is named under ``bronze_dictionary.<table>`` and stops no other, whatever
+error it raised. Every dictionary of a loaded table has exactly one outcome in the result, also when the deadline or an error stops the hook before the
+dictionaries: those not reached are ``failed: not attempted`` with the cause. No read and no registration starts after the deadline: every call checks it as
+its worker starts. A dictionary registration that fails is repaired by a rerun of the load, which registers every dictionary again.
 
 The mirrored set is what the load committed: the snapshot of each table the load names (a table that the load left out is simply not mirrored) and the
 snapshot of each loader side table that has one (``file_metadata``, ``stored_copies``, ``column_map`` and ``file_preambles``), read after the metadata
@@ -28,17 +30,18 @@ no silver model reads it (``config/lakehouse/bronze_silver_readers.json``, deriv
 metadata file in S3, no Glue entry and no source history (``bronze_source_history.source_evidence``, a delete-marked manifest included). A table that stays
 out is reported ``left out``. A table that fails any condition is required: it is registered from its committed snapshot when the catalog has one, and
 otherwise the mirror is ``failed`` and names the table and the reason (the other tables are still registered). A check that cannot be read fails the
-mirror too. Nothing is read when the mirror is off, in a test namespace or when the load left nothing out. The hook and the register can differ only
-in the inputs they read.
+mirror too. Nothing is read when the mirror is off, in a test namespace or when the load left nothing out. For the bronze tables the hook and the
+register can differ only in the inputs they read. The register does not take the dictionaries: only the hook registers them.
 
-Before the IAM grant exists, Glue refuses every call with AccessDeniedException. The mirror is then ``unavailable`` (a status of its own: the refusal
-is named, nothing is registered and nothing is reported ok). When the attempt record is refused with AccessDenied too and the run has no recorded
-attempt (``bronze_run.read_attempt``: a record that exists, or a history that cannot be read other than as a 403 or 404, is history), no attempt fails
-its check phase, first run or retry. A run with any recorded attempt gets no exception: its retry fails by name. The task role cannot list the attempt
-folder and reads a key only through the read grant, so a full withdrawal of both mirror grants after a recorded ok answers 403 exactly as a grant
-never applied does: that retry exits 0 as unavailable while ``show`` still reads the old ok (the owner's profile lists the folder), so the sign-off
-needs the latest task's result and loader report as well (its digest must be the last stored attempt's). Any other failure is a failure. After the grant,
-a rerun registers the tables.
+Before the IAM grant exists, Glue refuses every call with AccessDeniedException. The mirror is then ``unavailable`` (a status of its own: the refusal is
+named, nothing that was refused is registered and nothing is reported ok). A grant can be applied for the bronze tables and not yet for the dictionaries:
+the tables are registered and the dictionaries are refused, so the mirror is ``unavailable`` while the tables are registered. When the attempt record is
+refused with AccessDenied too and the run has no recorded attempt (``bronze_run.read_attempt``: a record that exists, or a history that cannot be read other
+than as a 403 or 404, is history), no attempt fails its check phase, first run or retry. A run with any recorded attempt gets no exception: its retry fails
+by name. The task role cannot list the attempt folder and reads a key only through the read grant, so a full withdrawal of both mirror grants after a
+recorded ok answers 403 exactly as a grant never applied does: that retry exits 0 as unavailable while ``show`` still reads the old ok (the owner's profile
+lists the folder), so the sign-off needs the latest task's result and loader report as well (its digest must be the last stored attempt's). Any other
+failure is a failure. After the grant, a rerun registers the tables.
 
 The load is already committed, so the hook never raises and never undoes it. The report (status, reason, one outcome per table) goes into the loader
 report and standard error when it failed. ``check.json`` is the immutable receipt of the load and a retry runs the hook again, so the check phase
@@ -90,6 +93,7 @@ RUN_ID = re.compile(r"bronze_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}")
 WAITING = "not mirrored: no committed snapshot yet"
 DICTIONARY_PREFIX = f"{glue_mirror.DICTIONARY_LAYER}."
 DICTIONARY_MISSING = "failed: no dictionary exists for it in the catalog"
+NOT_ATTEMPTED = "failed: not attempted: {why}"
 LEFT_OUT = "left out: the load left it out for lack of a source object, and its source collection holds no source object or observation history"
 
 
@@ -209,7 +213,11 @@ def mirror_after_load(
             moved = any(text in ("created", "updated") for text in registered.values())
             report = {**report, "status": "ok" if moved else report["status"], "tables": tables}
     except Exception as error:
-        report = {"status": "failed", "reason": glue_mirror.explain(error), "tables": {}}
+        reason = glue_mirror.explain(error)
+        unreached = []
+        if namespace == REAL_NAMESPACE and dictionary_enabled(config, dictionary_namespace):
+            unreached = [name for name in names if name in snapshots]
+        report = {"status": "failed", "reason": reason, "tables": {f"{DICTIONARY_PREFIX}{name}": NOT_ATTEMPTED.format(why=reason) for name in unreached}}
     if report["status"] == "failed":
         with contextlib.suppress(OSError):
             sys.stderr.write(f"bronze load: the Glue mirror FAILED and the load stays committed: {report['reason']}. Rerun the load to retry the mirror.\n")
@@ -220,6 +228,11 @@ def mirror_after_load(
                 f"{report['reason']}. Rerun the load after the IAM apply to register the tables.\n"
             )
     return report
+
+
+def dictionary_enabled(config: glue_mirror.MirrorConfig | None, dictionary_namespace: str | None) -> bool:
+    """Whether the dictionaries are registered: the real dictionary namespace and a config that has the layer."""
+    return config is not None and dictionary_namespace == glue_mirror.DICTIONARY_LAYER and glue_mirror.DICTIONARY_LAYER in config.layers
 
 
 def register_dictionaries(
@@ -236,9 +249,10 @@ def register_dictionaries(
     """The outcome of the dictionary of each of ``names``, registered in the ``bronze_dictionary`` database under the hook's own deadline (``budget``).
 
     Nothing for another dictionary namespace than the real one or a config without the layer. A snapshot is read one dictionary at a time, so one that fails
-    to read fails alone. Never raises: whatever was not reached when an error or the deadline came is reported failed with its cause.
+    to read fails alone. Never raises, and every one of ``names`` has exactly one outcome: whatever was not reached when an error or the deadline came is
+    reported failed with its cause.
     """
-    if dictionary_namespace != glue_mirror.DICTIONARY_LAYER or glue_mirror.DICTIONARY_LAYER not in config.layers:
+    if not dictionary_enabled(config, dictionary_namespace):
         return {}
     outcomes: dict[str, str] = {}
 
@@ -265,7 +279,7 @@ def register_dictionaries(
             outcomes.update(glue_mirror.mirror(config, dictionary_namespace, "real", committed, source, glue, run_id, budget)["tables"])
     except Exception as error:
         outcomes.update({name: failed(error) for name in committed if name not in outcomes})
-    return outcomes
+    return {name: outcomes.get(name) or NOT_ATTEMPTED.format(why="the registration returned no outcome for it") for name in names}
 
 
 def outcome_shaped(outcome: object) -> bool:

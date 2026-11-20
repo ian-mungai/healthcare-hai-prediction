@@ -835,7 +835,225 @@ def test_the_dictionary_grant_allows_the_registration_actions_on_its_database_an
     check(wrong == [], f"{wrong}")
 
 
-# An error of any shape fails only the dictionary it came from.
+# Fix round: every dictionary of the load has exactly one outcome, no read and no registration starts after the deadline, and an error of any shape fails
+# only the dictionary it came from.
+
+DICTIONARY_KEYS = {f"{DICTIONARY}.{name}" for name in TABLES}
+
+
+class Clock:
+    """A hand-set clock for the hook's one deadline: a stand-in advances it past the deadline at the call under test."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@contextlib.contextmanager
+def deadline_on(clock: Any = None) -> Any:
+    """The hook's one ``Budget`` objects, on ``clock`` when given. The list names the deadline (``.end``) that every recorded call is compared with."""
+    real = glue_mirror.Budget
+    made: list[Any] = []
+
+    def make(seconds: float, *arguments: Any, **keywords: Any) -> Any:
+        keywords.pop("started", None)
+        budget = real(seconds, clock=clock, started=clock(), **keywords) if clock is not None else real(seconds, *arguments, **keywords)
+        made.append(budget)
+        return budget
+
+    with mock.patch.object(glue_mirror, "Budget", side_effect=make):
+        yield made
+
+
+class Calls:
+    """Where the stand-ins write the time each call starts and what to do at a call (advance the clock, stall)."""
+
+    def __init__(self, now: Any, actions: dict[str, Any] | None = None) -> None:
+        self.now, self.starts, self.actions = now, [], actions or {}
+
+    def note(self, label: str) -> None:
+        self.starts.append((label, self.now()))
+        if label in self.actions:
+            self.actions[label]()
+
+    def after(self, end: float) -> list[str]:
+        return [label for label, started in self.starts if started >= end]
+
+    def named(self, prefix: str) -> list[str]:
+        return [label for label, _ in self.starts if label.startswith(prefix)]
+
+
+def recording_stand_ins(calls: Calls) -> tuple[Any, Any, Any]:
+    """A Glue, a dictionary Polaris source and a snapshot reader that note every call before it runs."""
+
+    class RecordingGlue(FakeGlue):
+        def get_table(self, DatabaseName: str, Name: str) -> dict[str, Any]:
+            calls.note(f"get_table {DatabaseName}.{Name}")
+            return super().get_table(DatabaseName, Name)
+
+        def create_table(self, DatabaseName: str, TableInput: dict[str, Any]) -> dict[str, Any]:
+            calls.note(f"create_table {DatabaseName}.{TableInput['Name']}")
+            return super().create_table(DatabaseName, TableInput)
+
+    class RecordingSource(DictionarySource):
+        def pointer(self, table: str, snapshot_id: int) -> str | None:
+            calls.note(f"pointer {DICTIONARY}.{table}")
+            return super().pointer(table, snapshot_id)
+
+        def columns(self, table: str) -> list[tuple[str, str]]:
+            calls.note(f"columns {DICTIONARY}.{table}")
+            return super().columns(table)
+
+    inner = dictionary_reader()
+
+    def read(spark: Any, namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
+        calls.note(f"read {namespace}.{','.join(tables)}")
+        return inner(spark, namespace, tables)
+
+    return RecordingGlue(), RecordingSource(), read
+
+
+def every_dictionary_has_one_outcome(report: dict[str, Any]) -> None:
+    check(set(report["tables"]) >= DICTIONARY_KEYS, f"a dictionary has no outcome: {report}")
+    check(all(isinstance(report["tables"][key], str) and report["tables"][key] for key in DICTIONARY_KEYS), f"{report}")
+
+
+def test_a_deadline_that_passes_before_the_dictionaries_still_names_every_dictionary_and_starts_none() -> None:
+    import threading
+    import time
+
+    release = threading.Event()
+    calls = Calls(time.monotonic)
+    glue, source, inner = recording_stand_ins(calls)
+
+    def read(spark: Any, namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
+        if namespace == "bronze":
+            release.wait(5)
+        return inner(spark, namespace, tables)
+
+    try:
+        with deadline_on() as made:
+            report = load_hook(glue, config=enabled(mirror_seconds=0.2), read_loader=read, dictionary_source=source)
+        release.wait(0.4)
+    finally:
+        release.set()
+    every_dictionary_has_one_outcome(report)
+    check(report["status"] == "failed" and all(report["tables"][key].startswith("failed") for key in DICTIONARY_KEYS), f"{report}")
+    check(all("deadline" in report["tables"][key] for key in DICTIONARY_KEYS), f"the cause is not named: {report}")
+    check(calls.named("read bronze_dictionary") == [] and calls.after(made[0].end) == [], f"a call started: {calls.starts}")
+
+
+def test_a_deadline_that_passes_in_the_middle_of_the_dictionary_reads_names_every_dictionary_and_starts_no_later_read() -> None:
+    import threading
+    import time
+
+    release = threading.Event()
+    calls = Calls(time.monotonic)
+    glue, source, inner = recording_stand_ins(calls)
+
+    def read(spark: Any, namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
+        if namespace == DICTIONARY and tables == ["alpha_data"]:
+            calls.note("read bronze_dictionary.alpha_data")
+            release.wait(5)
+            return {}, []
+        return inner(spark, namespace, tables)
+
+    try:
+        with deadline_on() as made:
+            report = load_hook(glue, config=enabled(mirror_seconds=0.2), read_loader=read, dictionary_source=source)
+        release.set()
+        release.wait(0.4)
+        time.sleep(0.3)
+    finally:
+        release.set()
+    every_dictionary_has_one_outcome(report)
+    check(all(report["tables"][key].startswith("failed") and "deadline" in report["tables"][key] for key in DICTIONARY_KEYS), f"{report}")
+    check(calls.named("read bronze_dictionary.beta_data") == [], f"a read of the second dictionary started after the deadline: {calls.starts}")
+    check(calls.named("get_table bronze_dictionary") == [] and calls.after(made[0].end) == [], f"a call started after the deadline: {calls.starts}")
+
+
+def test_a_deadline_that_passes_between_the_reads_and_the_registrations_names_every_dictionary_and_starts_no_registration() -> None:
+    clock = Clock()
+    calls = Calls(clock)
+    calls.actions["read bronze_dictionary.beta_data"] = lambda: setattr(clock, "now", clock.now + 1000)
+    glue, source, read = recording_stand_ins(calls)
+    with deadline_on(clock) as made:
+        report = load_hook(glue, config=enabled(mirror_seconds=100), read_loader=read, dictionary_source=source)
+    every_dictionary_has_one_outcome(report)
+    check(report["tables"]["alpha_data"] == "created" and report["tables"]["beta_data"] == "created", f"the tables lost their window: {report}")
+    check(all(report["tables"][key].startswith("failed") and "deadline" in report["tables"][key] for key in DICTIONARY_KEYS), f"{report}")
+    check(calls.named("pointer") == [] and calls.named("get_table bronze_dictionary") == [] and calls.after(made[0].end) == [], f"{calls.starts}")
+    check(not [key for key in glue.tables if key[0] == DICTIONARY], "a dictionary was registered after the deadline")
+
+
+def test_a_deadline_that_passes_in_the_middle_of_the_registrations_names_every_dictionary_and_starts_no_later_registration() -> None:
+    clock = Clock()
+    calls = Calls(clock)
+    calls.actions[f"create_table {DICTIONARY}.alpha_data"] = lambda: setattr(clock, "now", clock.now + 1000)
+    glue, source, read = recording_stand_ins(calls)
+    with deadline_on(clock) as made:
+        report = load_hook(glue, config=enabled(mirror_seconds=100), read_loader=read, dictionary_source=source)
+    every_dictionary_has_one_outcome(report)
+    check(report["tables"][f"{DICTIONARY}.alpha_data"] == "created", f"the write that began before the deadline is reported: {report}")
+    check(report["tables"][f"{DICTIONARY}.beta_data"].startswith("failed") and "deadline" in report["tables"][f"{DICTIONARY}.beta_data"], f"{report}")
+    check(calls.named("pointer bronze_dictionary.beta_data") == [] and calls.named("get_table bronze_dictionary.beta_data") == [], f"{calls.starts}")
+    check(calls.after(made[0].end) == [] and (DICTIONARY, "beta_data") not in glue.tables, f"{calls.starts}")
+
+
+@pytest.mark.parametrize(
+    ("namespace", "dictionary_namespace"),
+    [("bronze_e2e", DICTIONARY), ("bronze_e2e", "bronze_dictionary_e2e"), ("bronze", "bronze_dictionary_e2e"), ("bronze", None)],
+)
+def test_an_early_failure_names_no_dictionary_unless_the_real_pair_is_loaded(namespace: str, dictionary_namespace: str | None) -> None:
+    with mock.patch.object(glue_mirror, "tables_to_mirror", side_effect=RuntimeError("stand-in failure before the tables")):
+        report = load_hook(FakeGlue(), namespace=namespace, dictionary_namespace=dictionary_namespace)
+    check(report["status"] == "failed" and "RuntimeError" in report["reason"] and report["tables"] == {}, f"{report}")
+
+
+def test_an_early_failure_of_the_real_pair_names_every_dictionary_with_the_cause() -> None:
+    with mock.patch.object(glue_mirror, "tables_to_mirror", side_effect=RuntimeError("stand-in failure before the tables")):
+        report = load_hook(FakeGlue())
+    every_dictionary_has_one_outcome(report)
+    check(all(report["tables"][key].startswith("failed: not attempted") and "RuntimeError" in report["tables"][key] for key in DICTIONARY_KEYS), f"{report}")
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_a_worker_that_is_dispatched_after_the_deadline_starts_neither_a_read_nor_a_write(write: bool) -> None:
+    import threading
+    import time
+
+    real_thread = threading.Thread
+    ready, release, done = threading.Event(), threading.Event(), threading.Event()
+    started: list[float] = []
+    workers: list[Any] = []
+
+    def make_thread(*, target: Any, daemon: bool) -> Any:
+        def held() -> None:
+            ready.set()
+            release.wait(3)
+            try:
+                target()
+            finally:
+                done.set()
+
+        workers.append(real_thread(target=held, daemon=daemon))
+        return workers[-1]
+
+    budget = glue_mirror.Budget(0.12)
+    with mock.patch.object(glue_mirror.threading, "Thread", side_effect=make_thread):
+        try:
+            budget.run("a probe", lambda: started.append(time.monotonic()), write=write)
+        except glue_mirror.MirrorDeadline:
+            pass
+        else:
+            raise AssertionError("the held worker did not time out")
+        finally:
+            release.set()
+            done.wait(3)
+            workers[0].join(3)
+    check(ready.is_set() and started == [], f"a worker that began after the deadline ran its {'write' if write else 'read'}: {started}")
 
 
 @pytest.mark.parametrize("phase", ["snapshot", "registration"])
