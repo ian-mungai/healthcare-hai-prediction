@@ -66,6 +66,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: task-ids
+        name: A task ID beside a shipped DAG names a task the DAG has
+        entry: .venv/bin/python -m scripts.quality.repo_checks task-ids
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: typecheck-importers
         name: MyPy on the changed Python files and the files that import them
         entry: .venv/bin/python -m scripts.quality.typecheck_importers

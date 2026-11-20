@@ -314,6 +314,7 @@
     ],
     "code": [
       "removed-names",
+      "task-ids",
       "temporary-code",
       "unused-code",
       "unused-dependencies",

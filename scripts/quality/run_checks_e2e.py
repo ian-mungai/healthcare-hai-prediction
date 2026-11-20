@@ -2249,6 +2249,71 @@ CODE_VERSION_CASES = [
 ]
 
 
+SHIPPED_DAG = "silver" + "_transform_dag"
+MADE_UP_DAG = "fixture" + "_dag"
+STALE_TASK = "silver" + "_build"
+REAL_TASK = "job"
+TRIGGER_DAG = "features" + "_base_dag"
+TRIGGER_TASK = "trigger" + "_m1"
+TASK_IDS_FILES = ("orchestration/__init__.py", "orchestration/graph.py", "orchestration/training_contract.py", "orchestration/interface.py")
+STALE_JSON = f'{{\n  "dag_id": "{SHIPPED_DAG}",\n  "task_id": "{STALE_TASK}"\n}}\n'
+
+NESTED_JSON = "\n".join(
+    ["{", '  "rows": [', '    {"run": 1},', "    {", f'      "dag_id": "{SHIPPED_DAG}",', f'      "task_id": "{STALE_TASK}"', "    }", "  ]", "}", ""]
+)
+
+
+def stale_reason(path: str, line: int, dag: str = SHIPPED_DAG, task: str = STALE_TASK) -> str:
+    """The start of the finding the task ID check prints for a pair of ``dag`` and ``task`` at ``path:line``."""
+    return f"{path}:{line}: task '{task}' is not a task of {dag}"
+
+
+def task_case(name: str, files: dict[str, str | bytes], reason: str = "") -> Case:
+    """A task-ids case: it passes when ``reason`` is empty and is blocked for that finding otherwise."""
+    return Case(f"task ID, {name}", "task-ids", not reason, files, reason=reason)
+
+
+TASK_ID_CASES = [
+    task_case("stale pair in JSON", {"config/jobs.json": STALE_JSON}, stale_reason("config/jobs.json", 3)),
+    task_case(
+        "stale pair in a nested JSON object",
+        {"data_contracts/ledger.json": NESTED_JSON},
+        stale_reason("data_contracts/ledger.json", 6),
+    ),
+    task_case(
+        "stale pair in a Python dict",
+        {"app/request.py": f'REQUEST = {{"dag_id": "{SHIPPED_DAG}", "task_id": "{STALE_TASK}"}}\n'},
+        stale_reason("app/request.py", 1),
+    ),
+    task_case(
+        "stale pair in keyword arguments", {"app/launch.py": f'launch(dag_id="{SHIPPED_DAG}", task_id="{STALE_TASK}")\n'}, stale_reason("app/launch.py", 1)
+    ),
+    task_case(
+        "stale pair in a positional SubmissionRequest",
+        {"app/submit.py": f'SubmissionRequest("t", "r", "fixture", 1, "{SHIPPED_DAG}", "{STALE_TASK}", "manual__r")\n'},
+        stale_reason("app/submit.py", 1),
+    ),
+    task_case("pair of a DAG that is not shipped", {"config/jobs.json": STALE_JSON.replace(SHIPPED_DAG, MADE_UP_DAG)}),
+    task_case("real task of a shipped DAG in JSON", {"config/jobs.json": STALE_JSON.replace(STALE_TASK, REAL_TASK)}),
+    task_case(
+        "real task of a shipped DAG in a positional SubmissionRequest",
+        {"app/submit.py": f'SubmissionRequest("t", "r", "fixture", 1, "{SHIPPED_DAG}", "{REAL_TASK}", "manual__r")\n'},
+    ),
+    task_case("trigger task of a DAG that has triggers", {"app/launch.py": f'launch(dag_id="{TRIGGER_DAG}", task_id="{TRIGGER_TASK}")\n'}),
+    task_case(
+        "a trigger task of another DAG is stale",
+        {"app/launch.py": f'launch(dag_id="{SHIPPED_DAG}", task_id="{TRIGGER_TASK}")\n'},
+        stale_reason("app/launch.py", 1, task=TRIGGER_TASK),
+    ),
+    task_case(
+        "values that are not literals",
+        {"app/launch.py": f'launch(dag_id="{SHIPPED_DAG}", task_id=name)\nREQUEST = {{"dag_id": dag, "task_id": "{STALE_TASK}"}}\n'},
+    ),
+    task_case("Python file that does not parse", {"app/broken.py": f'launch(dag_id="{SHIPPED_DAG}", task_id="{STALE_TASK}"\n'}),
+    task_case("JSON file that does not parse", {"config/broken.json": STALE_JSON.replace("\n}", ",\n")}),
+]
+
+
 CASES = [
     Case("clean file", "gitleaks", True, {"notes.md": "Nothing secret here.\n"}),
     Case("GitHub token", "gitleaks", False, {"config.py": f'GITHUB = "{FAKE_PAT}"\n'}),
@@ -3277,6 +3342,7 @@ CASES = [
             ".cleanup_allowlist": DOCS_ALLOWED,
         },
     ),
+    *TASK_ID_CASES,
     Case("permanent file with no temporary code", "temporary-code", True, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": "VALUE = 2\n"}),
     Case(
         "temporary file imports permanent code",
@@ -3790,6 +3856,8 @@ def scratch_repo(root: Path, case: Case) -> Path:
     ).stdout.splitlines()
     if case.hook == "env-example":
         listed = [path for path in listed if path.startswith("scripts/")]
+    if case.hook == "task-ids":
+        listed += TASK_IDS_FILES
     for relative in [*COPIED, *listed]:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -3856,6 +3924,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             "docs-references",
             "temporary-code",
             "removed-names",
+            "task-ids",
             "env-example",
             IMPORTERS_HOOK,
             *CLEANUP_HOOKS,
@@ -3869,6 +3938,7 @@ def run_case(case: Case) -> tuple[bool, str]:
 
 # The removed-names check and the importer check run as plain commands: planted regressions need the check's own source, not the hook wrapper.
 REMOVED_NAMES_COMMAND = ["-m", "scripts.quality.repo_checks", "removed-names"]
+TASK_IDS_COMMAND = ["-m", "scripts.quality.repo_checks", "task-ids"]
 IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
 # Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
 # Fields: rule, the cases that show it, the command, the source file, the marker text, its replacement and the exit code the damaged check must give.
@@ -4083,6 +4153,130 @@ PLANTED_REGRESSIONS = [
         '        view = "\\n".join(python_literals(lines, blanked, comments=True, drop_unread=True))',
         '        view = "\\n".join(python_literals(lines, blanked, comments=True))',
         0,
+    ),
+    (
+        "task ID pairs of JSON files are read",
+        [
+            case
+            for case in TASK_ID_CASES
+            if case.name
+            in (
+                "task ID, stale pair in JSON",
+                "task ID, stale pair in a nested JSON object",
+            )
+        ],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "pairs = json_task_ids(json.loads(text))",
+        "pairs = []",
+        0,
+    ),
+    (
+        "task ID pairs are read in nested JSON objects",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in a nested JSON object",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "return own + [pair for value in node.values() for pair in json_task_ids(value)]",
+        "return own",
+        0,
+    ),
+    (
+        "task ID pairs of a Python dict are read",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in a Python dict",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if isinstance(node, ast.Dict):",
+        "if False:",
+        0,
+    ),
+    (
+        "task ID pairs of keyword arguments are read",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in keyword arguments",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "named = {keyword.arg: text(keyword.value) for keyword in node.keywords}",
+        "named = {}",
+        0,
+    ),
+    (
+        "task ID pairs of a positional SubmissionRequest are read",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in a positional SubmissionRequest",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if callee == "SubmissionRequest" and len(node.args) > max(dag_at, task_at):',
+        "if False:",
+        0,
+    ),
+    (
+        "the positions of the IDs come from the request fields",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in a positional SubmissionRequest",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'dag_at, task_at = names.index("dag_id"), names.index("task_id")',
+        "dag_at, task_at = 3, 4",
+        0,
+    ),
+    (
+        "a DAG that is not shipped is not judged",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, pair of a DAG that is not shipped",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if dag in tasks and task not in tasks[dag]:",
+        "if task not in tasks.get(dag, []):",
+        1,
+    ),
+    (
+        "every task of a shipped DAG is accepted",
+        [
+            case
+            for case in TASK_ID_CASES
+            if case.name
+            in (
+                "task ID, real task of a shipped DAG in JSON",
+                "task ID, real task of a shipped DAG in a positional SubmissionRequest",
+                "task ID, trigger task of a DAG that has triggers",
+            )
+        ],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "task not in tasks[dag]:",
+        "task not in tasks[dag][:1]:",
+        1,
+    ),
+    (
+        "a trigger task belongs to its own DAG only",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, a trigger task of another DAG is stale",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "task not in tasks[dag]:",
+        "task not in sorted({name for names in tasks.values() for name in names}):",
+        0,
+    ),
+    (
+        "a value that is not a literal is not judged",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, values that are not literals",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "def text(node: ast.AST) -> str | None:\n        return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None",
+        "def text(node: ast.AST) -> str | None:\n        return node.value if isinstance(node, ast.Constant) else getattr(node, 'id', None)",
+        1,
+    ),
+    (
+        "a file that does not parse is skipped",
+        [
+            case
+            for case in TASK_ID_CASES
+            if case.name
+            in (
+                "task ID, Python file that does not parse",
+                "task ID, JSON file that does not parse",
+            )
+        ],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "except (OSError, SyntaxError, ValueError):",
+        "except OSError:",
+        1,
     ),
     (
         "declared import roots",

@@ -30,7 +30,7 @@ import unicodedata
 import urllib.parse
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +125,8 @@ ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
 TF_NESTED_BLOCK = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*\{")
 SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
+TASK_IDS_RULE = f"{POLICY}: a task ID beside a shipped DAG names a task the DAG has"
+TASK_KEY = re.compile(r'"task_id"\s*:\s*"')
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
 # Distribution names whose import name differs; any other package imports as its name with dashes as underscores.
@@ -1979,6 +1981,67 @@ def removed_names() -> list[Finding]:
     return findings
 
 
+def json_task_ids(node: Any) -> list[tuple[str | None, str]]:
+    """Every object at any depth with a string ``task_id``, in document order, as its ``dag_id`` (None when it has none or not a string) and task."""
+    if isinstance(node, dict):
+        own = [(node["dag_id"] if isinstance(node.get("dag_id"), str) else None, node["task_id"])] if isinstance(node.get("task_id"), str) else []
+        return own + [pair for value in node.values() for pair in json_task_ids(value)]
+    return [pair for value in node for pair in json_task_ids(value)] if isinstance(node, list) else []
+
+
+def python_task_ids(tree: ast.AST, dag_at: int, task_at: int) -> list[tuple[int, str | None, str]]:
+    """The line, DAG and task of every dict, keyword call and positional ``SubmissionRequest`` that holds both IDs as string literals."""
+
+    def text(node: ast.AST) -> str | None:
+        return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+    found: list[tuple[int, str | None, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            named = {text(key): text(value) for key, value in zip(node.keys, node.values, strict=True) if key is not None}
+        elif isinstance(node, ast.Call):
+            named = {keyword.arg: text(keyword.value) for keyword in node.keywords}
+            callee = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+            if callee == "SubmissionRequest" and len(node.args) > max(dag_at, task_at):
+                named = {"dag_id": text(node.args[dag_at]), "task_id": text(node.args[task_at])}
+        else:
+            continue
+        if named.get("dag_id") and named.get("task_id"):
+            found.append((node.lineno, str(named["dag_id"]), str(named["task_id"])))
+    return found
+
+
+def task_ids() -> list[Finding]:
+    """A task ID written beside the ID of a shipped DAG names a task that DAG has.
+
+    Reads the current tree: every tracked JSON object and every Python dict, call with keyword arguments or ``SubmissionRequest`` call (by its field order) that
+    holds a ``dag_id`` and a ``task_id`` as string literals. A DAG that ``orchestration.graph`` does not ship is a made-up fixture DAG and is not judged, nor is
+    a value that is not a literal. A file that does not parse is skipped: Ruff and the JSON check already block it, and a fixture may hold bad JSON on purpose.
+    """
+    from orchestration import graph, interface
+
+    names = [field.name for field in fields(interface.SubmissionRequest)]
+    dag_at, task_at = names.index("dag_id"), names.index("task_id")
+    tasks = {dag: sorted(graph.reference_graph(dag)) for dag in graph.GRAPH_DAGS}
+    findings = []
+    for path in sorted(git("ls-files", "*.json", "*.py").splitlines()):
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            if path.endswith(".json"):
+                pairs = json_task_ids(json.loads(text))
+                keyed = [number for number, line in enumerate(text.splitlines(), 1) if TASK_KEY.search(line)]
+                found = [(keyed[index] if len(keyed) == len(pairs) else 1, dag, task) for index, (dag, task) in enumerate(pairs)]
+            else:
+                found = python_task_ids(ast.parse(text), dag_at, task_at)
+        except (OSError, SyntaxError, ValueError):
+            continue
+        for line, dag, task in found:
+            if dag in tasks and task not in tasks[dag]:
+                fix = "name a task the DAG has, or use a DAG name that is not shipped if the fixture is not about a real DAG"
+                findings.append(Finding(f"{path}:{line}", f"task '{task}' is not a task of {dag}. Its tasks are {', '.join(tasks[dag])}", TASK_IDS_RULE, fix))
+    return findings
+
+
 def is_conventional(subject: str) -> bool:
     """Return whether a commit subject follows Conventional Commits.
 
@@ -2781,7 +2844,7 @@ def warn(findings: list[Finding]) -> int:
 
 def main() -> int:
     """Run the named check and report its findings, then count the permanent allowlist entries it read."""
-    checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names"]
+    checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names", "task-ids"]
     checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -2829,6 +2892,7 @@ def run(args: argparse.Namespace) -> int:
         "lint-settings": lint_settings,
         "env-example": env_example,
         "removed-names": removed_names,
+        "task-ids": task_ids,
         "unused-code": unused_code,
         "unused-dependencies": unused_dependencies,
         "orphan-files": orphan_files,

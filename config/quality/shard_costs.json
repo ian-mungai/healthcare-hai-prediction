@@ -715,7 +715,31 @@
       "dbt model deleted, named in the project file outside the deferral record": 3.98,
       "dbt model deleted, named in the project file before the deferral record": 3.98,
       "class named through an attribute of the vulture whitelist": 3.98,
-      "whitelisted dynamic class does not hide an unused function of its file": 3.98
+      "whitelisted dynamic class does not hide an unused function of its file": 3.98,
+      "task ID, stale pair in JSON": 14.1,
+      "task ID, stale pair in a nested JSON object": 14.1,
+      "task ID, stale pair in a Python dict": 14.1,
+      "task ID, stale pair in keyword arguments": 14.1,
+      "task ID, stale pair in a positional SubmissionRequest": 14.1,
+      "task ID, pair of a DAG that is not shipped": 14.1,
+      "task ID, real task of a shipped DAG in JSON": 14.1,
+      "task ID, real task of a shipped DAG in a positional SubmissionRequest": 14.1,
+      "task ID, trigger task of a DAG that has triggers": 14.1,
+      "task ID, a trigger task of another DAG is stale": 14.1,
+      "task ID, values that are not literals": 14.1,
+      "task ID, Python file that does not parse": 14.1,
+      "task ID, JSON file that does not parse": 14.1,
+      "planted regressions of task ID pairs of JSON files are read: samples 1 to 2": 14.6,
+      "planted regressions of task ID pairs are read in nested JSON objects: samples 1 to 1": 7.3,
+      "planted regressions of task ID pairs of a Python dict are read: samples 1 to 1": 7.3,
+      "planted regressions of task ID pairs of keyword arguments are read: samples 1 to 1": 7.3,
+      "planted regressions of task ID pairs of a positional SubmissionRequest are read: samples 1 to 1": 7.3,
+      "planted regressions of the positions of the IDs come from the request fields: samples 1 to 1": 7.3,
+      "planted regressions of a DAG that is not shipped is not judged: samples 1 to 1": 7.3,
+      "planted regressions of every task of a shipped DAG is accepted: samples 1 to 3": 21.9,
+      "planted regressions of a trigger task belongs to its own DAG only: samples 1 to 1": 7.3,
+      "planted regressions of a value that is not a literal is not judged: samples 1 to 1": 7.3,
+      "planted regressions of a file that does not parse is skipped: samples 1 to 2": 14.6
     }
   }
 }
