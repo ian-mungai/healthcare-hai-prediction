@@ -347,9 +347,10 @@ class World:
 
     def __init__(self, rig: Rig, runtime: ModuleType, dag_id: str, params: dict[str, Any]) -> None:
         self.rig, self.runtime, self.dag_id, self.params = rig, runtime, dag_id, params
+        # The tasks that the DAG ships. The live drift DAG is outside the graph inventory but builds the one-job chain. No other DAG outside it has any.
         self.tasks = (
-            set(graph.reference_graph(dag_id)) if dag_id in graph.GRAPH_DAGS else set()
-        )  # the tasks that the DAG ships; none for a DAG the graph does not list
+            set(graph.reference_graph(dag_id)) if dag_id in graph.GRAPH_DAGS else set(graph.COLLAPSED_UPSTREAM) if dag_id == "drift_live_check_dag" else set()
+        )
         self.context: dict[str, Any] = {}
         self.states: dict[str, str] = {}
         self.results: dict[str, Any] = {}

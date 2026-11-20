@@ -463,7 +463,10 @@ def real_label_sets(root: Path) -> dict[str, list[dict[str, str]]]:
 
     sets: dict[str, list[dict[str, str]]] = {
         "airflow_dag_run_failed": [{"dag_id": name} for name in sorted(dag_ids(root))],
-        "airflow_task_failed": [{"dag_id": name, "task_id": task} for name in graph.GRAPH_DAGS for task in sorted(graph.reference_graph(name))],
+        "airflow_task_failed": [
+            *({"dag_id": name, "task_id": task} for name in graph.GRAPH_DAGS for task in sorted(graph.reference_graph(name))),
+            *({"dag_id": name, "task_id": task} for name in chain_dag_ids(root) for task in sorted(graph.COLLAPSED_UPSTREAM)),
+        ],
         "promotion_rolled_back": [{"hai_type": key} for key in training_contract.HAI_TYPES],
         "online_reload_failed": [{"feature_set": key} for key in training_contract.MODELS],
         "drift_triggered": [
@@ -693,6 +696,14 @@ def labels_name_the_failed_source_and_task(root: Path) -> dict[str, bool]:
         not subject_problems(s3) and [line for line in m3.splitlines() if line in BLOCKS].count("What happened:") == 1,
     )
     return checks
+
+
+def chain_dag_ids(root: Path) -> list[str]:
+    """The DAGs outside the graph inventory whose own file builds the one-job chain (``build_job_chain``): preflight, job, evidence and gate."""
+    from orchestration import graph
+
+    files = {name: root / "dags" / f"{name}.py" for name in sorted(dag_ids(root)) if name not in graph.GRAPH_DAGS}
+    return [name for name, path in files.items() if path.is_file() and "build_job_chain(" in path.read_text(encoding="utf-8")]
 
 
 def dag_ids(root: Path) -> set[str]:
