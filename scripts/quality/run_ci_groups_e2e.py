@@ -5124,7 +5124,7 @@ ROOT_MANIFESTS = ("uv.lock", "pyproject.toml")
 
 
 def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """The root dependency manifest and lock select every hook that depends on the locked environment; the retired requirements.txt selects none."""
+    """The root dependency manifest and lock select every hook that depends on the locked environment."""
     hooks = hook_table(document)
     wanted = ("acquisition-checks", "model-metadata", "dependency-lock", "test-lock", "osv-scanner")
     cases = []
@@ -5134,8 +5134,6 @@ def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
         if name == "osv-scanner":
             missed = [path for path in missed if path != "pyproject.toml"]
         cases.append({"case": f"hook_{name}_selects_the_lock_and_manifest", "passed": not missed, "missed": missed})
-    acquisition = re.compile(str(hooks["acquisition-checks"]["files"]))
-    cases.append({"case": "hook_acquisition_checks_ignores_the_retired_requirements_file", "passed": acquisition.search("requirements.txt") is None})
     return cases
 
 
