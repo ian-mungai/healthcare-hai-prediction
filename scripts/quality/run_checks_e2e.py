@@ -2412,6 +2412,7 @@ def flag_cases() -> list[Case]:
         flag_case("a script name followed by a suffix is another file", f"python tools/digest.py.extra {SIGN_OFF}\ncat tools/digest.pyc {SIGN_OFF}\n"),
         flag_case("a script name followed by a folder is another path", f"python tools/digest.py/child {SIGN_OFF}\n"),
         flag_case("a script name behind more name is another script", f"python tools/predigest.py {SIGN_OFF}\n"),
+        flag_case("an absolute path with a space in a folder name is not seen (accepted limit)", f'python "/opt/My Projects/tools/digest.py" {SIGN_OFF}\n'),
         flag_case("a script of the same name in another folder is another script", f"python tools/sub/digest.py {SIGN_OFF}\n"),
         flag_case("a module followed by more of a module is another module", f"python -m tools.digest.extra {SIGN_OFF}\n"),
         flag_case("a flag behind a third dash is another flag", f"python tools/digest.py -{SIGN_OFF}\n"),
@@ -4700,6 +4701,15 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         "{re.escape(flag)}(?![\\w-])",
         "{re.escape(flag)}",
+        1,
+    ),
+    (
+        "an absolute folder path may hold a space",
+        [case for case in FLAG_CASES if case.name in ("flag removed, an absolute path with a space in a folder name is not seen (accepted limit)",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "/(?:[\\w.~-]+/)*",
+        "/(?:[\\w. ~-]+/)*",
         1,
     ),
     (

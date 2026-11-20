@@ -1513,7 +1513,8 @@ def flag_pattern(flag: str, scripts: set[str]) -> re.Pattern[str]:
     A name is whole: not preceded by a word character, ``.``, ``/`` or ``-``, and not followed by a word character, ``/``, ``-`` or a dot and a word character,
     so ``run_x.py`` is not in ``prerun_x.py``, ``run_x.pyc``, ``run_x.py.bak`` or ``run_x.py/child``. A script is named by its file name (also behind ``./``),
     its repository path (also behind ``./`` or an absolute folder path) or its dotted module. The flag is whole too: not preceded by a word character or ``-``
-    and not followed by a word character or ``-``, so ``--port`` is not in ``--portable`` or ``---port``. A command split over several lines is not seen.
+    and not followed by a word character or ``-``, so ``--port`` is not in ``--portable`` or ``---port``. A command split over several lines is not seen. An
+    absolute path with a space in a folder name, quoted or shell-escaped, is not seen (accepted limit, owner, Nov 20 2026).
     """
     paths, names = {re.escape(path) for path in scripts}, {re.escape(Path(path).name) for path in scripts}
     modules = {re.escape(path.removesuffix(".py").replace("/", ".")) for path in scripts}

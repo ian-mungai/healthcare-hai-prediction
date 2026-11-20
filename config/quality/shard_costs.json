@@ -826,7 +826,9 @@
       "python -m command, module prefix in double quotes inside a Markdown sentence": 2.0,
       "python -m command, missing module after a quoted prefix with an ellipsis": 2.0,
       "python -m command, missing module of the same name beside a quoted prefix with an ellipsis": 2.0,
-      "planted regressions of a quoted module prefix with an ellipsis is no command: samples 1 to 4": 9.6
+      "planted regressions of a quoted module prefix with an ellipsis is no command: samples 1 to 4": 9.6,
+      "flag removed, an absolute path with a space in a folder name is not seen (accepted limit)": 3.98,
+      "planted regressions of an absolute folder path may hold a space: samples 1 to 1": 2.4
     }
   }
 }
