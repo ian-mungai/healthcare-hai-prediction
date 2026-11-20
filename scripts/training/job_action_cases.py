@@ -24,6 +24,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+import numpy as np
+
 from orchestration import training_contract
 from scripts import model_code
 from scripts.features import feature_schema, feature_sets
@@ -1707,15 +1709,27 @@ class Mapped:
 
 
 def baseline_of(fixture: Fixture) -> tuple[dict[str, float], dict[str, float]]:
-    """The intercept + CMI baseline's holdout predictions and the observed SIRs, keyed by hospital-window, fitted the way the fit step fits it."""
-    config = job_inputs.config_of(fixture.root)
-    built = job_inputs.model_request(HAI_TYPE, fixture.rows, (), config, 60.0, fixture.root, "m2")
-    holdout = built.data.split()[1]
-    with libraries():
-        predictions = research_tests.intercept_cmi_predictions(built)
-    return dict(zip(holdout.keys, (float(value) for value in predictions), strict=True)), dict(
-        zip(holdout.keys, (float(value) for value in holdout.y), strict=True)
-    )
+    """The raw-CMI intercept model's holdout predictions and the observed SIRs, keyed by hospital-window.
+
+    This is the baseline of the first promotion. It is not the RQ1 baseline, which clips CMI at the training-row percentiles. It is fitted here by
+    ordinary least squares on the raw CMI of the training windows, independent of the helper that the promotion check calls.
+    """
+    newest = max(row["window_year"] for row in fixture.rows)
+    training = [row for row in fixture.rows if row["window_year"] < newest]
+    holdout = [row for row in fixture.rows if row["window_year"] == newest]
+    require(all(row["cmi"] is not None for row in fixture.rows), "the independent baseline needs a CMI value in every row")
+    slope, intercept = np.polyfit([row["cmi"] for row in training], [row[LABEL] for row in training], 1)
+    predictions = {row["spine_key"]: float(intercept + slope * row["cmi"]) for row in holdout}
+    return predictions, {row["spine_key"]: float(row[LABEL]) for row in holdout}
+
+
+def extreme_cmi_rows(rows: list[dict[str, Any]]) -> None:
+    """Give two hospitals an extreme CMI in the oldest window and six in the newest, so the raw and the clipped intercept-plus-CMI fits differ widely."""
+    oldest, newest = min(row["window_year"] for row in rows), max(row["window_year"] for row in rows)
+    for row in rows:
+        number = int(row["ccn"]) - 990000
+        if (row["window_year"] == oldest and number < 2) or (row["window_year"] == newest and number < 6):
+            row["cmi"] = 1.0e4
 
 
 def champion_lists(columns: Sequence[str]) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
@@ -1801,7 +1815,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(found == {HAI_TYPE: expected["feature_set_schema_sha256"]}, f"the features job does not count the champion: {found}")
 
     def first_version() -> None:
-        fixture = promoted(folder / "first")
+        fixture = promoted(folder / "first", adjust=extreme_cmi_rows)
         fixture.candidate = Predictor(LABEL, offset=0.0)
         code, out, error = run_promotion(fixture)
         require(code == 0, f"promotion_check failed: {error}")

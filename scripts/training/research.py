@@ -94,7 +94,7 @@ def parents_of(store: Any, experiment_id: str, hai_type: str, parameters: Mappin
 
 
 def child_result(store: Any, experiment_id: str, parent: Any, step: str, prefix: str) -> dict[str, Any]:
-    """Return the status and the numbers of one test a run logged as a child, or a missing result."""
+    """Return the status, the numbers and the JSON records (such as the CMI clipping record) of one test a run logged as a child, or a missing result."""
     run = parent.data.tags["run_id"]
     children = store.search_runs([experiment_id], f"tags.run_id = '{run}' and tags.step_key = '{step}'", max_results=2)
     if len(children) != 1:
@@ -103,7 +103,16 @@ def child_result(store: Any, experiment_id: str, parent: Any, step: str, prefix:
     return {
         "status": data.params.get("status", "unknown"),
         **{key.removeprefix(prefix): value for key, value in sorted(data.metrics.items()) if key.startswith(prefix)},
+        **{key.removeprefix(prefix): record_of(value) for key, value in sorted(data.params.items()) if key.startswith(prefix)},
     }
+
+
+def record_of(text: str) -> Any:
+    """Read a record that a child run logged as a JSON parameter; text that is not JSON stays as it is."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def holdout_of(store: Any, parent: Any, model: str) -> tuple[tuple[tuple[str, float], ...], dict[str, float]]:

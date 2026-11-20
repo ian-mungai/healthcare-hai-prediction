@@ -13,7 +13,7 @@ from unittest import mock
 
 from orchestration import training_contract
 from scripts.training import aws_run_cases, job, promote_receipt, run_tracking
-from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
+from scripts.training.job_action_cases import BASE_RUN, BUNDLE, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
 from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
 from scripts.training.presigned_probe import ProbingClient
 
@@ -95,6 +95,31 @@ def research_cases(cases: Any, folder: Path) -> None:
             len(logged) == 1 and logged[0]["tags"]["base_run"] == BASE_RUN and "rq4.f_statistic" in logged[0]["metrics"],
             "the research run is missing or incomplete",
         )
+
+    def keeps_the_whole_clipping_record() -> None:
+        tracking, fixtures = finished_models(folder / "clipping")
+        code, _, error, output = research(folder / "clipping_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        record = json.loads((output / f"research_{HAI_TYPE}.json").read_text())["rq1"]["process_vs_intercept_cmi"]
+        fit = json.loads((fixtures["m2"].folder / "in/fit" / BUNDLE / "result.json").read_text())["test_statistics"]["process_vs_intercept_cmi"]
+        clipping = record.get("cmi_clipping")
+        require(isinstance(clipping, dict) and clipping == fit["cmi_clipping"], f"the research record holds {clipping}, the fit wrote {fit['cmi_clipping']}")
+        require(clipping["both_sides"] is True and clipping["learned_on"] == "training_rows", f"the record lost its flag or its source: {clipping}")
+        require(isinstance(clipping["lower"], float) and isinstance(clipping["upper"], float), f"the record lost its bounds: {clipping}")
+
+    def keeps_the_clipping_record_of_a_refused_comparison() -> None:
+        from scripts.training.models import suite
+        from scripts.training.models.common import ModelError
+
+        with mock.patch.object(suite, "process_cmi_references", side_effect=ModelError("no process measure to compare")):
+            tracking, fixtures = finished_models(folder / "refused")
+        code, _, error, output = research(folder / "refused_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        record = json.loads((output / f"research_{HAI_TYPE}.json").read_text())["rq1"]["process_vs_intercept_cmi"]
+        clipping = record.get("cmi_clipping")
+        require(record["status"] == "not_estimable", f"the refused comparison reads {record}")
+        require(isinstance(clipping, dict) and clipping["both_sides"] is False and clipping["lower"] is None, f"the refusal lost its clipping record: {record}")
+        require("no process measure to compare" in clipping["reason"], f"the refusal does not say why: {clipping}")
 
     def never_moves_production() -> None:
         tracking, fixtures = finished_models(folder / "production")
@@ -269,6 +294,8 @@ def research_cases(cases: Any, folder: Path) -> None:
 
     cases.check("research_compares_two_models_and_chooses_one_challenger_per_type", compares_and_chooses)
     cases.check("research_reads_run_artifacts_through_the_tracking_server", reads_run_artifacts_through_the_tracking_server)
+    cases.check("research_keeps_the_whole_clipping_record", keeps_the_whole_clipping_record)
+    cases.check("research_keeps_the_clipping_record_of_a_refused_comparison", keeps_the_clipping_record_of_a_refused_comparison)
     cases.check("research_records_a_later_attempt_and_refuses_attempt_one_spelled_out", records_the_research_attempt)
     cases.check("research_phase_stores_each_record_once_and_refuses_another_record", phase_publishes_each_record_once)
     cases.check("research_never_moves_the_production_alias_and_records_its_version", never_moves_production)

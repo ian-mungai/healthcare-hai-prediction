@@ -314,16 +314,29 @@ def process_cmi_references(request: ModelRequest) -> tuple[str, ...]:
     return (*request.process_references, request.cmi_reference)
 
 
+def _without_bounds(status: str, reason: str) -> dict[str, Any]:
+    """An RQ1 result that has no CMI bounds: its status and reason, and a clipping record that claims no verified bounds and says why there are none."""
+    clipping = {"both_sides": False, "learned_on": None, "lower": None, "upper": None, "reason": f"no matching bounds were established: {reason}"}
+    return {"status": status, "reason": reason, "cmi_clipping": clipping}
+
+
 def process_cmi_comparison(request: ModelRequest) -> dict[str, Any]:
     """Fit the Elastic Net on the process measures and CMI alone, with the tuning and winsorizing of m2, and score it against the intercept-plus-CMI model.
 
-    Both sides clip CMI at the same training-row bounds."""
-    references = process_cmi_references(request)
-    fitted = fit_slot(replace(request, feature_lists={**request.feature_lists, "m2_elastic_net": references}), "m2_elastic_net")
-    if fitted.status != "fitted":
-        return {"status": fitted.status, "reason": fitted.reason}
-    bounds = fitted.pipeline.named_steps["prepare"].bounds_
-    return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"], bounds)
+    Both sides clip CMI at the same training-row bounds. Every result, fitted or not, carries the ``cmi_clipping`` record that states them or says why
+    there are none.
+    """
+    try:
+        references = process_cmi_references(request)
+        fitted = fit_slot(replace(request, feature_lists={**request.feature_lists, "m2_elastic_net": references}), "m2_elastic_net")
+        if fitted.status != "fitted":
+            return _without_bounds(fitted.status, fitted.reason)
+        bounds = fitted.pipeline.named_steps["prepare"].bounds_
+        return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"], bounds)
+    except DeadlineExceeded:
+        raise
+    except (ModelError, np.linalg.LinAlgError) as error:
+        return _without_bounds("not_estimable", str(error))
 
 
 def validation_split(data: Dataset, last_year: int, years: Sequence[int]) -> tuple[Dataset, Dataset]:

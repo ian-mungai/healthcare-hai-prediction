@@ -849,6 +849,54 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             predicted = research_tests.intercept_cmi_predictions(quiet)
         require(np.allclose(predicted, expected, atol=1e-6), "the shared intercept-plus-CMI helper no longer fits the raw CMI")
 
+    def rq1_result_always_states_the_cmi_clipping() -> None:
+        from scripts.training.models.common import DeadlineExceeded, NotConverged, NotEstimable
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        restricted = frozenset((wide.process_references[0], wide.cmi_reference))
+        original = ElasticRegressor.fit
+
+        def stated(record: Any, status: str, label: str) -> None:
+            clipping = record.get("cmi_clipping")
+            require(record["status"] == status and record.get("reason"), f"{label}: the refusal lost its status or reason: {record}")
+            require(isinstance(clipping, dict), f"{label}: the {status} RQ1 result has no cmi_clipping record: {record}")
+            require(clipping["both_sides"] is False and clipping["learned_on"] is None, f"{label}: a refusal claims verified bounds: {clipping}")
+            require(clipping["lower"] is None and clipping["upper"] is None, f"{label}: a refusal states bounds: {clipping}")
+            require(isinstance(clipping.get("reason"), str) and clipping["reason"], f"{label}: the record does not say why there are no bounds: {clipping}")
+
+        for error, status in (
+            (NotConverged("slow path"), "not_converged"),
+            (DeadlineExceeded("late"), "not_run"),
+            (NotEstimable("singular design"), "not_estimable"),
+        ):
+
+            def failing(self: Any, design: Any, y: Any, error: Exception = error) -> Any:
+                if frozenset(design.references) == restricted:
+                    raise error
+                return original(self, design, y)
+
+            with libraries(), patch.object(ElasticRegressor, "fit", failing):
+                stated(suite.fit_model(wide, "m2").research["process_vs_intercept_cmi"], status, f"restricted fit {status}")
+        with libraries():
+            stated(suite.fit_model(replace(wide, process_references=()), "m2").research["process_vs_intercept_cmi"], "not_estimable", "no process measure")
+            flat = Dataset(tuple(dict(row, cmi=1.0) for row in wide.data.rows), wide.data.features, "HAI_1")
+            stated(suite.fit_model(replace(wide, data=flat), "m2").research["process_vs_intercept_cmi"], "not_estimable", "constant CMI")
+        real = research_tests.intercept_cmi_fit
+
+        def shifted(request: Any, winsorize: bool = False) -> Any:
+            predictions, transform = real(request, winsorize)
+            transform.bounds_ = {name: (low + 1.0, high) for name, (low, high) in transform.bounds_.items()}
+            return predictions, transform
+
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin), patch.object(research_tests, "intercept_cmi_fit", shifted):
+            stated(suite.fit_model(wide, "m2").research["process_vs_intercept_cmi"], "not_estimable", "different bounds")
+            every = suite.fit_models(replace(wide, deadline=Deadline.after(60)))
+        stated(every.research["process_vs_intercept_cmi"], "not_estimable", "different bounds in the six-model run")
+        with libraries():
+            fitted = suite.fit_model(wide, "m2").research["process_vs_intercept_cmi"]
+        require(fitted["status"] == "fitted" and fitted["cmi_clipping"]["both_sides"] is True, f"the fitted record lost its clipping record: {fitted}")
+
     def rq1_comparison_columns_in_the_real_lists() -> None:
         from scripts.training import job_inputs
 
@@ -2844,6 +2892,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("other_models_are_not_winsorized", other_models_are_not_winsorized),
         ("rq1_comparison_fits_process_measures_and_cmi_only", rq1_comparison_fits_process_measures_and_cmi_only),
         ("rq1_comparison_columns_in_the_real_lists", rq1_comparison_columns_in_the_real_lists),
+        ("rq1_result_always_states_the_cmi_clipping", rq1_result_always_states_the_cmi_clipping),
         ("rq1_baseline_clips_cmi_at_the_same_bounds", rq1_baseline_clips_cmi_at_the_same_bounds),
         ("other_intercept_cmi_models_keep_raw_cmi", other_intercept_cmi_models_keep_raw_cmi),
         ("elastic_net_fits_each_fold_on_its_fitting_labels", elastic_net_fits_each_fold_on_its_fitting_labels),

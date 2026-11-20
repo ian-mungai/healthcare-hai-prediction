@@ -431,15 +431,20 @@ def run_tags(
     }
 
 
+CLIPPING = "cmi_clipping"
+
+
 def child_spec(
     context: Any, manifest: Mapping[str, Any], step: str, result: Mapping[str, Any], artifacts: list[tuple[Path, str]] | None = None
 ) -> run_tracking.RunSpec:
     """Describe one child run: a model slot, a research question or a validation, with its status and every finite number of its result."""
     tags = {"run_id": context.run, "step_key": step, "hai_type": manifest["hai_type"], "population": manifest["population"]}
     params = {"status": str(result.get("status", "fitted"))} | ({"reason": str(result["reason"])} if result.get("reason") else {})
-    return run_tracking.RunSpec(
-        step, tags, params, run_tracking.numbers(step, {key: value for key, value in result.items() if key != "details"}), artifacts or ()
-    )
+    # The CMI clipping record of an RQ1 result is kept whole, as a JSON parameter, so that the research action reads the flag, the source and the reason too.
+    kept = {name: item[CLIPPING] for name, item in result.items() if isinstance(item, Mapping) and CLIPPING in item}
+    params |= {f"{step}.{name}.{CLIPPING}": json.dumps(record, sort_keys=True) for name, record in kept.items()}
+    body = {key: ({k: v for k, v in value.items() if k != CLIPPING} if key in kept else value) for key, value in result.items() if key != "details"}
+    return run_tracking.RunSpec(step, tags, params, run_tracking.numbers(step, body), artifacts or ())
 
 
 RESEARCH = {
