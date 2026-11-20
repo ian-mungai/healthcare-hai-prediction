@@ -128,7 +128,8 @@ SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TASK_IDS_RULE = f"{POLICY}: a task ID beside a shipped DAG names a task the DAG has"
 TASK_KEY = re.compile(r'"task_id"\s*:\s*"')
 GROUPED_M = re.compile(r"-[A-Za-z]*m")
-ELLIPSIS_MODULE = re.compile(r"(-[A-Za-z]*m\s*)[\"'`]?[\w.]+\.\.\.[\"'`]?")
+# The module of an ellipsis prefix, quoted with one pair of quotes or not quoted: a quote that is not the pair of the module's own is another word's.
+ELLIPSIS_MODULE = re.compile(r"(-[A-Za-z]*m\s*)(?:([\"'`])[\w.]+\.\.\.\2|[\w.]+\.\.\.)")
 COMMAND_STRING = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 COMMAND_MODULES_RULE = f"{POLICY}: a python -m command names a module of this repository that exists"
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
@@ -2106,8 +2107,9 @@ def missing_command_modules() -> list[Finding]:
 
     Reads the current tree: the files that describe current behavior (``reference_files``) outside data/. A module is this repository's when its first name part
     is a top-level name of tracked Python code, below the project root or an import root that pyproject.toml declares. The module of another package is not
-    judged, and neither is a flag of the command. The module token that itself ends in an ellipsis, quoted with single, double or backtick quotes or not, is a
-    prefix in prose and is skipped. Another module on the same line is still judged. A command is read from the line and, outside Python files, from each
+    judged, and neither is a flag of the command. The module token that itself ends in an ellipsis, in one pair of single, double or backtick quotes or in
+    none, is a prefix in prose and is skipped. A quote of another word stays, so ``echo "python -m x..."; python -m "y"`` still judges ``y``. Another module
+    on the same line is still judged. A command is read from the line and, outside Python files, from each
     quoted string of it (a Terraform or JSON value).
     """
     from scripts.quality import typecheck_importers

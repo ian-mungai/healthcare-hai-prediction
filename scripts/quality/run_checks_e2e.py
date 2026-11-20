@@ -2532,6 +2532,21 @@ MODULE_CASES = [
         {"samplepkg/run.sh": f'python -m {ABSENT_MODULE}; echo "see -m {ABSENT_MODULE}..."\n'},
         missing_reason("samplepkg/run.sh", 1),
     ),
+    module_case(
+        "missing module after a double-quoted echo that holds a prefix with an ellipsis",
+        {"samplepkg/run.sh": f'echo "Example: python -m {ABSENT_MODULE}..."; python -m "{ABSENT_MODULE}_two"; echo done\n'},
+        missing_reason("samplepkg/run.sh", 1, f"{ABSENT_MODULE}_two"),
+    ),
+    module_case(
+        "missing module after a single-quoted echo that holds a prefix with an ellipsis",
+        {"samplepkg/run.sh": f"echo 'Example: python -m {ABSENT_MODULE}...'; python -m '{ABSENT_MODULE}_two'; echo done\n"},
+        missing_reason("samplepkg/run.sh", 1, f"{ABSENT_MODULE}_two"),
+    ),
+    module_case(
+        "missing module behind a quoted warning option after a double-quoted echo that holds a prefix with an ellipsis",
+        {"samplepkg/run.sh": f'echo "Example: python -m {ABSENT_MODULE}..."; python -W "ignore:example message" -m {ABSENT_MODULE}_two\n'},
+        missing_reason("samplepkg/run.sh", 1, f"{ABSENT_MODULE}_two"),
+    ),
     module_case("flag of a command", {"docs/run.md": f"Run `python -m {PRESENT_MODULE} --no-such-flag`.\n"}),
     module_case(
         "files that are history", {"CHANGELOG.md": f"Ran:\n\n```sh\npython -m {ABSENT_MODULE}\n```\n", "e2e/run.md": f"```sh\npython -m {ABSENT_MODULE}\n```\n"}
@@ -4852,9 +4867,27 @@ PLANTED_REGRESSIONS = [
         ],
         MODULES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "[\\\"'`]?[\\w.]+\\.\\.\\.[\\\"'`]?",
+        "(?:([\\\"'`])[\\w.]+\\.\\.\\.\\2|[\\w.]+\\.\\.\\.)",
         "[\\w.]+\\.\\.\\.",
         1,
+    ),
+    (
+        "a quote beside an ellipsis module is consumed only as the pair of the module's own",
+        [
+            case
+            for case in MODULE_CASES
+            if case.name
+            in (
+                "python -m command, missing module after a double-quoted echo that holds a prefix with an ellipsis",
+                "python -m command, missing module after a single-quoted echo that holds a prefix with an ellipsis",
+                "python -m command, missing module behind a quoted warning option after a double-quoted echo that holds a prefix with an ellipsis",
+            )
+        ],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?:([\\\"'`])[\\w.]+\\.\\.\\.\\2|[\\w.]+\\.\\.\\.)",
+        "[\\\"'`]?[\\w.]+\\.\\.\\.[\\\"'`]?",
+        0,
     ),
     (
         "declared import roots",
