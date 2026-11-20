@@ -1262,6 +1262,7 @@ DELETED_MODULE_ROUND_THREE = [
         ("with python", f"python -m {DEAD_PATH} --check", DEAD_PATH),
         ("with a path to python and a flag", f".venv/bin/python -u -m {DEAD_PATH} --check", DEAD_PATH),
         ("with uv run python", f"uv run python -m {DEAD_PATH}", DEAD_PATH),
+        ("with a grouped interpreter option", f"python -Bm {DEAD_PATH} --check", DEAD_PATH),
         ("with a versioned python at the end of a sentence", f"run /usr/bin/python3.12 -m {DEAD_PATH}.", DEAD_PATH),
     ]
 ]
@@ -2446,6 +2447,31 @@ MODULE_CASES = [
     ),
     module_case("command in a Python string", {"samplepkg/entry.py": f'ENTRY = "python -m {PRESENT_MODULE}\\n"\n'}),
     module_case("module prefix written with an ellipsis", {"docs/run.md": f"Use python -m {ABSENT_MODULE}... for any job.\n"}),
+    module_case(
+        "missing module behind a grouped interpreter option",
+        {"samplepkg/run.sh": f"cd /work\npython -Bm {ABSENT_MODULE}\n"},
+        missing_reason("samplepkg/run.sh", 2),
+    ),
+    module_case(
+        "missing module behind several grouped interpreter options",
+        {"samplepkg/run.sh": f"cd /work\npython -uBm {ABSENT_MODULE} --check\n"},
+        missing_reason("samplepkg/run.sh", 2),
+    ),
+    module_case(
+        "missing module beside the same name with an ellipsis",
+        {"samplepkg/run.sh": f"python -m {ABSENT_MODULE}; echo {ABSENT_MODULE}...\n"},
+        missing_reason("samplepkg/run.sh", 1),
+    ),
+    module_case(
+        "missing module in a command after an ellipsis command",
+        {"samplepkg/run.sh": f"python -m {ABSENT_MODULE}...; python -m {ABSENT_MODULE}_two\n"},
+        missing_reason("samplepkg/run.sh", 1, f"{ABSENT_MODULE}_two"),
+    ),
+    module_case(
+        "missing module in a second command of the same name after an ellipsis command",
+        {"samplepkg/run.sh": f"python -m {ABSENT_MODULE}...; python -m {ABSENT_MODULE}\n"},
+        missing_reason("samplepkg/run.sh", 1),
+    ),
     module_case("flag of a command", {"docs/run.md": f"Run `python -m {PRESENT_MODULE} --no-such-flag`.\n"}),
     module_case(
         "files that are history", {"CHANGELOG.md": f"Ran:\n\n```sh\npython -m {ABSENT_MODULE}\n```\n", "e2e/run.md": f"```sh\npython -m {ABSENT_MODULE}\n```\n"}
@@ -4623,9 +4649,52 @@ PLANTED_REGRESSIONS = [
         [case for case in MODULE_CASES if case.name in ("python -m command, module prefix written with an ellipsis",)],
         MODULES_COMMAND,
         "scripts/quality/repo_checks.py",
-        'and f"{module}..." not in line',
-        "",
+        'command_modules(ELLIPSIS_MODULE.sub(r"\\1-", text))',
+        "command_modules(text)",
         1,
+    ),
+    (
+        "the ellipsis belongs to its own module token",
+        [
+            case
+            for case in MODULE_CASES
+            if case.name
+            in (
+                "python -m command, missing module beside the same name with an ellipsis",
+                "python -m command, missing module in a second command of the same name after an ellipsis command",
+            )
+        ],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if module.split(".")[0] in first_party and not any(',
+        'if module.split(".")[0] in first_party and f"{module}..." not in line and not any(',
+        0,
+    ),
+    (
+        "a grouped interpreter option may carry the module option",
+        [
+            case
+            for case in MODULE_CASES
+            if case.name
+            in (
+                "python -m command, missing module behind a grouped interpreter option",
+                "python -m command, missing module behind several grouped interpreter options",
+            )
+        ],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if not GROUPED_M.search(text):",
+        'if "-m" not in text:',
+        0,
+    ),
+    (
+        "a grouped interpreter option carries the module option of a deleted module",
+        [case for case in CASES if case.name == "deleted module, command string with a grouped interpreter option remains"],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if not GROUPED_M.search(text):",
+        'if "-m" not in text:',
+        0,
     ),
     (
         "declared import roots",

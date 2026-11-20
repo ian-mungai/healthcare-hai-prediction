@@ -127,6 +127,8 @@ TF_NESTED_BLOCK = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*\{")
 SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TASK_IDS_RULE = f"{POLICY}: a task ID beside a shipped DAG names a task the DAG has"
 TASK_KEY = re.compile(r'"task_id"\s*:\s*"')
+GROUPED_M = re.compile(r"-[A-Za-z]*m")
+ELLIPSIS_MODULE = re.compile(r"(-[A-Za-z]*m\s*)[\w.]+\.\.\.")
 COMMAND_STRING = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 COMMAND_MODULES_RULE = f"{POLICY}: a python -m command names a module of this repository that exists"
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
@@ -1089,7 +1091,7 @@ def command_modules(text: str) -> list[str]:
     ``--`` and ``-c`` end the options, so a later ``-m`` belongs to the script or the program, not to Python. The string is split like a shell line,
     or at spaces when its quotes do not pair.
     """
-    if "-m" not in text:
+    if not GROUPED_M.search(text):
         return []
     try:
         words = shlex.split(text)
@@ -2084,8 +2086,8 @@ def missing_command_modules() -> list[Finding]:
 
     Reads the current tree: the files that describe current behavior (``reference_files``) outside data/. A module is this repository's when its first name part
     is a top-level name of tracked Python code, below the project root or an import root that pyproject.toml declares. The module of another package is not
-    judged, neither is a flag of the command nor a name that ends in an ellipsis (a prefix in prose). A command is read from the line and, outside Python
-    files, from each quoted string of it (a Terraform or JSON value).
+    judged, and neither is a flag of the command. The module token that itself ends in an ellipsis is a prefix in prose and is skipped. Another module on the
+    same line is still judged. A command is read from the line and, outside Python files, from each quoted string of it (a Terraform or JSON value).
     """
     from scripts.quality import typecheck_importers
 
@@ -2102,12 +2104,10 @@ def missing_command_modules() -> list[Finding]:
             continue
         for number, line in enumerate(lines, 1):
             quoted = [] if path.endswith(".py") else [first or second for first, second in COMMAND_STRING.findall(line)]
-            for module in dict.fromkeys(m for text in (line, *quoted) for m in command_modules(text)):
+            for module in dict.fromkeys(m for text in (line, *quoted) for m in command_modules(ELLIPSIS_MODULE.sub(r"\1-", text))):
                 base = module.replace(".", "/")
-                if (
-                    module.split(".")[0] in first_party
-                    and f"{module}..." not in line
-                    and not any(f"{folder}{base}{tail}" in tracked for folder in folders for tail in (".py", "/__main__.py"))
+                if module.split(".")[0] in first_party and not any(
+                    f"{folder}{base}{tail}" in tracked for folder in folders for tail in (".py", "/__main__.py")
                 ):
                     problem = f"python -m {module} names a module that does not exist: there is no {base}.py or {base}/__main__.py"
                     findings.append(Finding(f"{path}:{number}", problem, COMMAND_MODULES_RULE, "name a module that exists, or update the command"))

@@ -794,7 +794,16 @@
       "planted regressions of a name is whole at its end: samples 1 to 3": 7.2,
       "planted regressions of a name is whole at its start: samples 1 to 2": 4.8,
       "planted regressions of a flag is whole at its start: samples 1 to 2": 4.8,
-      "planted regressions of a flag is whole at its end: samples 1 to 1": 2.4
+      "planted regressions of a flag is whole at its end: samples 1 to 1": 2.4,
+      "deleted module, command string with a grouped interpreter option remains": 3.98,
+      "python -m command, missing module behind a grouped interpreter option": 2.0,
+      "python -m command, missing module behind several grouped interpreter options": 2.0,
+      "python -m command, missing module beside the same name with an ellipsis": 2.0,
+      "python -m command, missing module in a command after an ellipsis command": 2.0,
+      "python -m command, missing module in a second command of the same name after an ellipsis command": 2.0,
+      "planted regressions of the ellipsis belongs to its own module token: samples 1 to 2": 4.8,
+      "planted regressions of a grouped interpreter option may carry the module option: samples 1 to 2": 4.8,
+      "planted regressions of a grouped interpreter option carries the module option of a deleted module: samples 1 to 1": 2.4
     }
   }
 }
