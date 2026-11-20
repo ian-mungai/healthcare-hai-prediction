@@ -35,7 +35,7 @@ SAMPLE_VALUES = {
     "model_set": "m2",
     "job_type": "HAI_1",
     "dag_id": "silver_transform_dag",
-    "task_id": "dbt_build",
+    "task_id": "job",
     "feature_set": "m2",
     "hai_type": "HAI_1",
     "service": "airflow",
@@ -296,8 +296,8 @@ def grouped_firing_alerts_each_get_a_block(root: Path) -> dict[str, bool]:
 def mixed_group_counts_and_orders_its_alerts(root: Path) -> dict[str, bool]:
     task = rules_of(root)["airflow_task_failed"]
     alerts = [
-        alert("firing", task, {"dag_id": "gold_transform_dag", "task_id": "load"}),
-        alert("resolved", task, {"dag_id": "gold_transform_dag", "task_id": "check"}),
+        alert("firing", task, {"dag_id": "gold_transform_dag", "task_id": "job"}),
+        alert("resolved", task, {"dag_id": "gold_transform_dag", "task_id": "evidence"}),
     ]
     ((subject, message),) = render(root, [notification(alerts)])
     first, second = message.split("\n\n----------\n\n")
@@ -307,7 +307,7 @@ def mixed_group_counts_and_orders_its_alerts(root: Path) -> dict[str, bool]:
     named(
         checks,
         "the firing alert is first and the resolved alert second",
-        "Task: load" in first and "Started at" in first and "Task: check" in second and "Cleared at" in second,
+        "Task: job" in first and "Started at" in first and "Task: evidence" in second and "Cleared at" in second,
     )
     named(
         checks,

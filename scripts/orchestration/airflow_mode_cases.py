@@ -755,7 +755,7 @@ def unfinished_silver_launch(rig: Rig) -> str:
     """A silver launch whose scheduler died after the task started: the records stop at ``intent`` and ``started``. The owner then stopped the task
     (``aws_tasks stop``), so ECS shows it STOPPED. Returns the task ARN."""
     rig.ecs.hold = True
-    request = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 1, "silver_transform_dag", "pin_bronze", "manual__test", None)
+    request = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 1, "silver_transform_dag", "job", "manual__test", None)
     spec = rig.preflight.prepare(request)
     require(spec is not None, "the silver step names no job")
     launch = rig.launcher.attach(spec)
@@ -985,7 +985,7 @@ def serving_request_is_closed_and_derived() -> None:
     for extra in ({"candidate_version": "9"}, {"percent": 40}, {"candidate_version": "9", "percent": 40}, {"deploy_mode": "rollback"}):
         training = {"hai_type": "HAI_1", "deploy_mode": "canary", **extra}
         request = SubmissionRequest(
-            "serve_deploy", "serving_5e5e5e60", "real", 1, "serving_deploy_dag", "serve_deploy", "manual__test", SERVE_RESEARCH, training=training
+            "serve_deploy", "serving_5e5e5e60", "real", 1, "serving_deploy_dag", "job", "manual__test", SERVE_RESEARCH, training=training
         )
         rig.stage_runs(request.run_id)
         refuses(LaunchRefused, partial(rig.preflight.prepare, request))

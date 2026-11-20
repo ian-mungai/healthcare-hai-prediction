@@ -396,7 +396,7 @@ def bronze_sends_no_table_events() -> None:
         [item["eventType"] for item in task] == ["START", "COMPLETE"] and all(item["inputs"] == [] and item["outputs"] == [] for item in task),
         "task events only",
     )
-    bronze_request = SubmissionRequest("bronze_load", RUN, "real", 1, "bronze_dag", "evidence", f"manual__{RUN}")
+    bronze_request = SubmissionRequest("bronze_load", RUN, "real", 1, "bronze_dag", "bronze_load", f"manual__{RUN}")
     with receiving() as receiver, lineage_environment(http_on(receiver.url)):
         record = run_evidence(rig, bronze_request)
     require(record["job"] == "bronze" and not receiver.requests, f"the bronze evidence step sent {len(receiver.requests)} events")

@@ -15,7 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN = "ingestion_1234abcd"
-IDENTITY = {"dag_id": "silver_transform_dag", "task_id": "silver_build", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
+IDENTITY = {"dag_id": "silver_transform_dag", "task_id": "job", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
 ENVELOPE = {
     "version": 1,
     "inputs": [{"namespace": "file", "name": "fixture/bronze.duckdb"}],

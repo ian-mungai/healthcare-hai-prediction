@@ -31,7 +31,7 @@ class Identity(TypedDict):
     dag_run_id: str
 
 
-IDENTITY: Identity = {"dag_id": "silver_transform_dag", "task_id": "silver_build", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
+IDENTITY: Identity = {"dag_id": "silver_transform_dag", "task_id": "job", "dag_run_id": "manual__2026-10-17T01:00:00+00:00"}
 ENVELOPE = {
     "version": 1,
     "inputs": [{"namespace": "file", "name": "fixture/bronze.duckdb"}],

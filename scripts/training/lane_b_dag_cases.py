@@ -178,7 +178,7 @@ def run() -> list[dict[str, Any]]:
                     len(captured) == 1 and captured[0].training == launched and captured[0].mode == "real", "task adapter dropped a training parameter"
                 ),
             )
-            instance = SimpleNamespace(try_number=1, dag_id="model_promotion_dag", task_id="promote", run_id="manual")
+            instance = SimpleNamespace(try_number=1, dag_id="model_promotion_dag", task_id="job", run_id="manual")
             params = {"run_id": RUN, "mode": "rollback", "hai_type": "HAI_2", "model_version": "3", "mlflow": "aws"}
             with (
                 mock.patch.object(runtime, "get_current_context", return_value={"params": params, "ti": instance}),

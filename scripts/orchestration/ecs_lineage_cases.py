@@ -146,7 +146,7 @@ def invocation(job: str, template: str | None = None) -> dict[str, Any]:
         "mode": "real",
         "attempt": 1,
         "dag_id": dag,
-        "task_id": template,
+        "task_id": "bronze_load" if dag == "bronze_dag" else "job",
         "dag_run_id": f"manual__{RUN_OF.get(job, GOLD_RUN)}",
     }
     if dag == "training_dag":
@@ -616,7 +616,7 @@ def operator(rig: Rig, lineage: Callable[[bool], Any] | None) -> Any:
 
 
 def context() -> dict[str, Any]:
-    return {"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="gold_build", run_id=f"manual__{RUN}", map_index=-1, try_number=1)}
+    return {"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="job", run_id=f"manual__{RUN}", map_index=-1, try_number=1)}
 
 
 def source(rig: Rig, job: JobSpec, declared: dict[str, Any]) -> ecs_lineage.LineageSource:
@@ -818,7 +818,7 @@ def replay_rebuilds_the_same_events() -> None:
     operator(rig, None).execute(context())
     writes = rig.bucket.count("put_object")
     arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
-    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "job", "--dag-run-id", f"manual__{RUN}"]
     first, second = (ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"]) for _ in range(2))
     require(first == second and len(first) == 4, "two replays give the same bytes: the task's START and COMPLETE and the table's")
     expected = source(rig, spec(), DECLARED["gold"])
@@ -844,7 +844,7 @@ def adopted_retry_keeps_its_lineage() -> None:
     operator(rig, None).execute(context())
     retry = operator(rig, None)
     retry.job = spec(2)
-    retry.execute({"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="gold_build", run_id=f"manual__{RUN}", map_index=-1, try_number=2)})
+    retry.execute({"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="job", run_id=f"manual__{RUN}", map_index=-1, try_number=2)})
     second = {**invocation("gold"), "attempt": 2}
     found = ecs_lineage.LineageSource(
         "gold", RUN, 2, second, DECLARED["gold"], ecs_lineage.S3Evidence(rig.bucket, BUCKET), S3LaunchStore(rig.bucket, BUCKET, PREFIX)
@@ -860,7 +860,7 @@ def adopted_retry_keeps_its_lineage() -> None:
     require(first[1]["run"]["runId"] != complete["run"]["runId"], "the retry is its own run")
     require((first[0]["eventTime"], first[1]["eventTime"]) == (events[0]["eventTime"], events[1]["eventTime"]), "the times are those of the adopted launch")
     arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "2", "--template", "gold_build"]
-    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "job", "--dag-run-id", f"manual__{RUN}"]
     require(
         [json.loads(line) for line in ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"])] == events,
         "the replay of the retry equals its events",
@@ -906,7 +906,7 @@ def lineage_is_built_inside_the_guard() -> None:
     rig = Rig()
     evidence_bucket(rig)
     factory = airflow_steps.lineage_factory(ecs_lineage.S3Evidence(rig.bucket, BUCKET), S3LaunchStore(rig.bucket, BUCKET, PREFIX))
-    request = SubmissionRequest("gold_build", RUN, "real", 1, "gold_transform_dag", "gold_build", f"manual__{RUN}")
+    request = SubmissionRequest("gold_build", RUN, "real", 1, "gold_transform_dag", "job", f"manual__{RUN}")
     deferred = factory(request, replace(spec(), job="job_without_a_declaration"))
     built_operator = operator(rig, deferred)
     built_operator.execute(context())
@@ -1028,7 +1028,7 @@ def event_times_leave_in_the_z_form() -> None:
         require(all(Z_TIME.fullmatch(time_) for time_ in times), f"{label} carry eventTime {times}")
     require([event["eventTime"] for event in built("gold")] == ["2026-11-04T10:00:00Z", "2026-11-04T10:30:00Z"], "the instant is the launch's, in UTC")
     arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
-    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "job", "--dag-run-id", f"manual__{RUN}"]
     with receiving(catalogue=set()) as receiver:
         lines = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
         sent = found.send_table_events(
@@ -1136,7 +1136,7 @@ def fractional_launch_times_replay_in_three_digits() -> None:
     record = ecs_lineage.launch_facts(source(rig, spec(), DECLARED["gold"]).store, RUN, "gold", 1)
     require(re.search(r"\.\d{6}\+00:00$", record.started_at) is not None, f"the launch record gives {record.started_at}: the case needs microseconds")
     arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
-    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "job", "--dag-run-id", f"manual__{RUN}"]
     with receiving(catalogue=set()) as receiver:
         first = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
         second = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"])
