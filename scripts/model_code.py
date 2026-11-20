@@ -915,8 +915,8 @@ def run_within[Outcome](seconds: float, work: Callable[[Cancel], Outcome], what:
         finally:
             WORKER_SLOT.release()
 
-    worker = threading.Thread(target=target, name=f"model-fetch {what}", daemon=True)
     try:
+        worker = threading.Thread(target=target, name=f"model-fetch {what}", daemon=True)
         worker.start()
     except BaseException:
         WORKER_SLOT.release()

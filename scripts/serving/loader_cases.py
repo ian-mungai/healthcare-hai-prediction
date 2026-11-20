@@ -1098,6 +1098,14 @@ def case_loader_deadline_refusals_never_hold_more_than_one_worker(c: Checker) ->
         )
         c.check("it started no worker and wrote nothing", len(fetch_workers()) <= 1 and not os.path.exists(w.tmp / "waiting") and w.server.reads == [])
         gate.set()
+    with world() as w, test_clock(w):
+        try:
+            with mock.patch.object(model_code.threading, "Thread", side_effect=MemoryError("no memory for a thread")):
+                model_code.run_within(5.0, lambda cancel: None, "a call whose worker cannot be made")
+            unmade: BaseException | None = None
+        except MemoryError as caught:
+            unmade = caught
+        c.check(f"a worker that cannot be made raises its own error and frees the slot ({unmade!r})", unmade is not None and slot_free())
 
 
 def case_loader_refuses_a_fetch_that_returns_anything_but_the_expected_file(c: Checker) -> None:
