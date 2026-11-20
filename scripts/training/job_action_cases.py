@@ -1309,13 +1309,16 @@ def pairwise_auc(scores: dict[str, float], flags: dict[str, float]) -> float:
 
 
 def averaging_rows(rows: list[dict[str, Any]]) -> None:
-    """Make the label an exact linear function of one predictor, and make each flagged hospital score high in only one of the last two windows."""
+    """Make the label an exact linear function of one predictor, and make each flagged hospital score high in only one of the last two windows.
+
+    The high and low values stay inside the range of the training rows, because the Elastic Net clips every row at the 1st and 99th percentiles
+    of its fitting rows."""
     newest = max(row["window_year"] for row in rows)
     for row in rows:
         number = int(row["ccn"]) - 990000
         if row["window_year"] in (newest - 1, newest) and number % 3 == 0:
             earlier = row["window_year"] == newest - 1
-            row["process"] = (6.0 if (number % 6 == 0) == earlier else -2.0) + 0.01 * number
+            row["process"] = (2.0 if (number % 6 == 0) == earlier else -1.0) + 0.01 * number
         elif row["window_year"] in (newest - 1, newest):
             row["process"] = 0.01 * number
         row[LABEL] = 2 + 0.5 * row["process"]

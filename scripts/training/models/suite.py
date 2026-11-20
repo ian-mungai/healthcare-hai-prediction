@@ -69,7 +69,9 @@ def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], f
     forced = () if slot == "m1_ols" else (request.cmi_reference,)
     if forced and not set(forced).issubset(feature.reference for feature in features):
         raise NotEstimable("forced covariate CMI is absent from the model specification")
-    prepare = FoldPreprocessor(features, forced=forced, native_missing=slot == "m4_boosting", drop_dependent=slot in LIKELIHOOD_SLOTS)
+    prepare = FoldPreprocessor(
+        features, forced=forced, native_missing=slot == "m4_boosting", drop_dependent=slot in LIKELIHOOD_SLOTS, winsorize=slot == "m2_elastic_net"
+    )
     seed = seed_for(request.config["master_seed"], request.data.hai_type, "forest" if forest else slot)
     if slot == "m1_ols":
         estimator: Any = OLSRegressor()

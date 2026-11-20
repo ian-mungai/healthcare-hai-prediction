@@ -81,6 +81,7 @@ class FeatureBatch:
 
 
 MAX_MISSING_FRACTION = 0.5
+WINSOR_PERCENTILES = (1.0, 99.0)
 
 
 def missing_masks(batch: FeatureBatch, features: tuple[Feature, ...]) -> dict[str, Any]:
@@ -117,7 +118,11 @@ def column_kind(name: str) -> str:
 
 
 class FoldPreprocessor(EstimatorParameters):
-    """Fit every learned preprocessing choice on this pipeline's fitting rows only."""
+    """Fit every learned preprocessing choice on this pipeline's fitting rows only.
+
+    With ``winsorize`` each numeric predictor that takes more than two values among the fitting rows is clipped to its 1st and 99th percentiles before its
+    median, mean and spread are learned; the same cut points clip every later row. Indicator columns (at most two values), categories and the missing-value
+    flags are never clipped."""
 
     def __init__(
         self,
@@ -128,17 +133,19 @@ class FoldPreprocessor(EstimatorParameters):
         indicator_aliases: Mapping[str, str] | None = None,
         drop_dependent: bool = False,
         protected: tuple[str, ...] = (),
+        winsorize: bool = False,
     ) -> None:
         self.features, self.forced, self.native_missing = features, forced, native_missing
         self.category_levels, self.indicator_aliases = category_levels, indicator_aliases
-        self.drop_dependent, self.protected = drop_dependent, protected
+        self.drop_dependent, self.protected, self.winsorize = drop_dependent, protected, winsorize
 
     def fit(self, values: Any, y: Any = None) -> FoldPreprocessor:
-        """Learn selectors, numeric statistics, exact indicator aliases and categories from fitting rows."""
+        """Learn selectors, cut points, numeric statistics, exact indicator aliases and categories from fitting rows."""
         batch = FeatureBatch.from_records(values, self.features)
         masks = missing_masks(batch, self.features)
         self.kept_references_, self.missing_rates_ = select_by_missing(masks, self.features, self.forced)
         self.medians_: dict[str, float] = {}
+        self.bounds_: dict[str, tuple[float, float]] = {}
         self.scales_: dict[str, float] = {}
         self.centers_: dict[str, float] = {}
         self.categories_: dict[str, tuple[str | None, ...]] = {}
@@ -151,6 +158,10 @@ class FoldPreprocessor(EstimatorParameters):
             column = batch.columns[feature.reference]
             absent = masks[feature.reference]
             if feature.kind == "number":
+                if self.winsorize and len(np.unique(column[~absent])) > 2:
+                    low, high = np.percentile(column[~absent], WINSOR_PERCENTILES)
+                    self.bounds_[feature.reference] = float(low), float(high)
+                    column = np.clip(column, low, high)
                 median = float(np.nanmedian(column))
                 filled = np.where(absent, median, column)
                 self.medians_[feature.reference] = median
@@ -210,6 +221,8 @@ class FoldPreprocessor(EstimatorParameters):
             column = batch.columns[feature.reference]
             if feature.kind == "number":
                 absent = np.isnan(column)
+                if feature.reference in self.bounds_:
+                    column = np.clip(column, *self.bounds_[feature.reference])
                 numbers = (
                     column
                     if self.native_missing

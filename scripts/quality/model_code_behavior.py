@@ -74,7 +74,11 @@ frame = pandas.DataFrame(list(rows))
 # path's check fit: it is fitted and predicted but never saved, so it is not saved here either.
 families = (
     ("m1_ols", Pipeline([("prepare", FoldPreprocessor(features, drop_dependent=True)), ("model", OLSRegressor())]), True),
-    ("m2_elastic_net", Pipeline([("prepare", FoldPreprocessor(features, forced=forced)), ("model", ElasticRegressor(0.01, 0.5, forced, 1))]), True),
+    (
+        "m2_elastic_net",
+        Pipeline([("prepare", FoldPreprocessor(features, forced=forced, winsorize=True)), ("model", ElasticRegressor(0.01, 0.5, forced, 1))]),
+        True,
+    ),
     (
         "m4_boosting",
         Pipeline(

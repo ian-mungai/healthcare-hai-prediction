@@ -122,6 +122,15 @@ def flagged_request(years: Sequence[int] = range(2018, 2024), hospitals: int = 6
     return replace(base, data=Dataset(rows, features, "HAI_1"), feature_lists=lists)
 
 
+def planted(source: Any, years: Sequence[int], count: int = 6, value: float = 1.0e6) -> Any:
+    """The same request with the process measure and CMI of the first ``count`` hospitals set to an extreme value in the given window years."""
+    from scripts.training.models.common import Dataset
+
+    marked = {str(990000 + number) for number in range(count)}
+    rows = tuple(dict(row, process=value, cmi=value) if row["ccn"] in marked and row["window_year"] in years else row for row in source.data.rows)
+    return replace(source, data=Dataset(rows, source.data.features, "HAI_1"))
+
+
 def traced(call: Callable[[], Any]) -> tuple[Any, list[dict[str, Any]], list[tuple[frozenset[str], Any]]]:
     """Run a model call and return its result, every preprocessing fit in call order (its rows and its design of those rows) and every plain-row transform."""
     from scripts.training.models.preprocessing import FeatureBatch, FoldPreprocessor
@@ -566,6 +575,88 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require(one.status == "not_estimable" and "time-ordered validation fold" in one.reason, f"one training year was not refused: {one.status} {one.reason}")
         require(two.status == "fitted", f"two training years should give one fold: {two.status} {two.reason}")
         require([len(record["folds"]) for record in two.details["tuning"]] == [1] * 4, "two training years should tune on exactly one fold")
+
+    def elastic_net_clips_at_fold_fitted_percentiles() -> None:
+        plain = flagged_request()
+        extreme = planted(plain, (2022,))
+        with libraries():
+            result, fits, transforms = traced(lambda: suite.fit_slot(extreme, "m2_elastic_net"))
+        require(result.status == "fitted", f"the Elastic Net did not fit: {result.status} {result.reason}")
+        fitting = [row for row in plain.data.rows if row["window_year"] < 2022]
+        validation = [row for row in extreme.data.rows if row["window_year"] == 2022]
+        last = fits[len(fits) - 2]["design"]
+        for name in ("process", "cmi"):
+            column = np.asarray([row[name] for row in fitting])
+            low, high = np.percentile(column, (1, 99))
+            clipped = np.clip(column, low, high)
+            center, scale = float(clipped.mean()), float(clipped.std())
+            fitted = last.matrix[:, last.names.index(name)]
+            require(
+                np.isclose(fitted.max(), (high - center) / scale) and np.isclose(fitted.min(), (low - center) / scale),
+                f"{name} is not clipped on the fitting rows",
+            )
+            scored = transforms[len(fits) - 2][1]
+            values = scored.matrix[:, scored.names.index(name)]
+            extremes = [index for index, row in enumerate(validation) if row[name] == 1.0e6]
+            require(
+                len(extremes) == 6 and np.allclose(values[extremes], (high - center) / scale),
+                f"{name} is not clipped at the fold-fitted 99th percentile on validation rows",
+            )
+
+    def elastic_net_final_fit_clips_holdout_rows() -> None:
+        plain = flagged_request()
+        extreme = planted(plain, (2023,))
+        with libraries():
+            result, fits, _ = traced(lambda: suite.fit_slot(extreme, "m2_elastic_net"))
+        holdout = [row for row in extreme.data.rows if row["window_year"] == 2023]
+        require(all(not years_of(fit["keys"]) & {2023} for fit in fits), "the holdout year entered a preprocessing fit")
+        training = [row for row in plain.data.rows if row["window_year"] < 2023]
+        scored = result.pipeline.named_steps["prepare"].transform(holdout)
+        for name in ("process", "cmi"):
+            column = np.asarray([row[name] for row in training])
+            low, high = np.percentile(column, (1, 99))
+            clipped = np.clip(column, low, high)
+            expected = (high - float(clipped.mean())) / float(clipped.std())
+            values = scored.matrix[:, scored.names.index(name)]
+            extremes = [index for index, row in enumerate(holdout) if row[name] == 1.0e6]
+            require(len(extremes) == 6 and np.allclose(values[extremes], expected), f"{name} is not clipped at the training 99th percentile on holdout rows")
+
+    def elastic_net_winsorizing_leaves_flags_and_categories() -> None:
+        plain = flagged_request()
+        with libraries():
+            result, fits, _ = traced(lambda: suite.fit_slot(plain, "m2_elastic_net"))
+        design = fits[-1]["design"]
+        training = [row for row in plain.data.rows if row["window_year"] < 2023]
+        flag = np.asarray([row["flag"] for row in training])
+        require("flag" in design.names, "the rare flag was clipped to a constant and dropped")
+        require(np.allclose(design.matrix[:, design.names.index("flag")], (flag - flag.mean()) / flag.std()), "the rare 0/1 flag was changed")
+        kinds = [name for name in design.names if name.startswith("kind__")]
+        require(kinds and all(set(np.unique(design.matrix[:, design.names.index(name)])) <= {0.0, 1.0} for name in kinds), "a category column was changed")
+        absent = np.asarray([row["extra"] is None for row in training], dtype=np.float64)
+        require(np.array_equal(design.matrix[:, design.names.index("extra__missing")], absent), "the missing-value flag was changed")
+        require(result.status == "fitted", "the Elastic Net did not fit")
+
+    def other_models_are_not_winsorized() -> None:
+        extreme = planted(flagged_request(), (2022,))
+        training, _ = extreme.data.split()
+        old: dict[str, dict[str, Any]] = {
+            "m1_ols": {"drop_dependent": True},
+            "m3_mixed": {"forced": (extreme.cmi_reference,), "drop_dependent": True},
+            "m4_boosting": {"forced": (extreme.cmi_reference,), "native_missing": True},
+            "m5_spatial": {"forced": (extreme.cmi_reference,), "drop_dependent": True},
+            "m6_fixed_effects": {"forced": (extreme.cmi_reference,), "drop_dependent": True},
+        }
+        for slot, arguments in old.items():
+            features = extreme.features_for(slot)
+            if slot == "m3_mixed":
+                features = tuple(feature for feature in features if feature.name != "control_type_code")
+            with libraries():
+                before = FoldPreprocessor(features, **arguments).fit_transform(training.rows)
+                after = suite._pipeline(extreme, slot, {}, False, features).named_steps["prepare"].fit_transform(training.rows)
+            require(before.names == after.names and before.matrix.tobytes() == after.matrix.tobytes(), f"{slot}: the design matrix changed")
+            raw = np.asarray([row["process"] for row in training.rows])
+            unclipped = raw.max() if slot == "m4_boosting" else (raw.max() - raw.mean()) / raw.std()
+            require(np.isclose(after.matrix[:, after.names.index("process")].max(), unclipped), f"{slot}: the planted extreme was clipped")
 
     def complete_suite() -> None:
         with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
@@ -2529,6 +2620,10 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("seeded_hospital_and_time_folds", folds),
         ("elastic_net_tunes_on_forward_in_time_folds", elastic_net_tunes_on_forward_in_time_folds),
         ("elastic_net_without_a_validation_year_is_not_estimable", elastic_net_without_a_validation_year_is_not_estimable),
+        ("elastic_net_clips_at_fold_fitted_percentiles", elastic_net_clips_at_fold_fitted_percentiles),
+        ("elastic_net_final_fit_clips_holdout_rows", elastic_net_final_fit_clips_holdout_rows),
+        ("elastic_net_winsorizing_leaves_flags_and_categories", elastic_net_winsorizing_leaves_flags_and_categories),
+        ("other_models_are_not_winsorized", other_models_are_not_winsorized),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
         ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),
