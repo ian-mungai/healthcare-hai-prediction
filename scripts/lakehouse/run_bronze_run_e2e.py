@@ -175,19 +175,25 @@ class NoMetadata:
 
 
 class MirrorSource:
-    """The Polaris side of the hook: the metadata file of each committed snapshot and the columns of every table."""
+    """The Polaris side of the hook: the metadata file of each committed snapshot and the columns of every table of one namespace."""
+
+    def __init__(self, namespace: str = "bronze") -> None:
+        self.namespace = namespace
 
     def pointer(self, table: str, snapshot_id: int) -> str:
-        return f"s3://{BUCKET}/lakehouse/bronze/{table}/metadata/00001-aaaaaaaa-0000-0000-0000-{snapshot_id:012d}.metadata.json"
+        return f"s3://{BUCKET}/lakehouse/{self.namespace}/{table}/metadata/00001-aaaaaaaa-0000-0000-0000-{snapshot_id:012d}.metadata.json"
 
     def columns(self, table: str) -> list[tuple[str, str]]:
         return list(glue_stand_in.COLUMNS)
 
 
-def stand_in_mirror(namespace: str, names: list[str], snapshots: dict[str, int], unsourced: list[str], config: dict[str, Any]) -> dict[str, Any]:
+def stand_in_mirror(
+    namespace: str, names: list[str], snapshots: dict[str, int], unsourced: list[str], config: dict[str, Any], dictionary: str = "bronze_dictionary"
+) -> dict[str, Any]:
     """The ``mirror`` section of the loader report. The report is the REAL hook's (``bronze_mirror.mirror_after_load``) over a Glue stand-in and a source
     stand-in with no version history, so the run records exactly what the combined code reports: the registrations, the tables the stage left out and, before
-    the IAM apply (``iam_not_applied``: Glue answers AccessDeniedException), the failure. ``mirror_failed`` and ``mirror_malformed`` still force a report."""
+    the IAM apply (``iam_not_applied``: Glue answers AccessDeniedException), the failure. It also registers the dictionaries that the loader stand-in built, at
+    their own snapshots (the table's snapshot plus 100). ``mirror_failed`` and ``mirror_malformed`` still force a report."""
     if "mirror_malformed" in DEFECTS:
         return {"status": "great", "tables": names}
     if "mirror_failed" in DEFECTS:
@@ -204,7 +210,9 @@ def stand_in_mirror(namespace: str, names: list[str], snapshots: dict[str, int],
         source=MirrorSource(),
         glue=glue,
         config=replace(glue_mirror.load_config(), enabled=True),
-        read_loader=lambda *_: ({}, []),
+        read_loader=lambda _spark, space, tables: ({name: snapshots[name] + 100 for name in tables if name in snapshots} if space == dictionary else {}, []),
+        dictionary_namespace=dictionary,
+        dictionary_source=MirrorSource(dictionary),
         unsourced=unsourced,
         history=history,
         bucket=BUCKET,
@@ -250,7 +258,7 @@ def loader(job: bronze_run.Job, module: str, arguments: Sequence[str | Path], en
     report = {"run_at_utc": stamp, "mode": "load", "tables": shown, "inputs": len(inputs), "checks": checks, "passed": "report_failed" not in DEFECTS}
     report["unsourced_tables"] = sorted(unsourced)
     report |= {"snapshots": snapshots, "metadata_index": {"generation": "1", "path": "stand_in", "sha256": "0" * 64}}
-    report["mirror"] = stand_in_mirror(namespace, names, snapshots, unsourced, config)
+    report["mirror"] = stand_in_mirror(namespace, names, snapshots, unsourced, config, dictionary)
     folder = job.code / bronze_run.REPORT_FOLDER
     folder.mkdir(parents=True, exist_ok=True)
     if "no_report" not in DEFECTS:
@@ -383,9 +391,8 @@ def case_real_run_writes_only_bronze(case: Case) -> None:
     require("mirror" not in record, f"the load receipt carries the mirror outcome: {record}")
     raw_lineage.loaded_objects(record, "check.json", RUN)
     latest = attempts()[-1]
-    require(
-        latest["mirror"] == {"status": "ok", "tables": {"alpha_data": "created", "beta_data": "created"}}, f"the attempt record lacks the outcome: {latest}"
-    )
+    registered = {"alpha_data": "created", "beta_data": "created", "bronze_dictionary.alpha_data": "created", "bronze_dictionary.beta_data": "created"}
+    require(latest["mirror"] == {"status": "ok", "tables": registered}, f"the attempt record lacks the outcome: {latest}")
     require(latest["bronze_run"] == RUN and latest["metadata_generation"] == "1", f"the attempt is not bound to the run and the generation: {latest}")
     require("glue mirror ok" in case.out, "the check phase does not show the mirror outcome")
     require(bronze_mirror.acceptance(STORAGE[0].client, BUCKET, RUN)["state"] == "ok", "the receipt and the attempt chain are not accepted")
@@ -477,7 +484,9 @@ def case_a_retry_repairing_the_mirror_keeps_the_receipt(case: Case) -> None:
     found = attempts()
     require([item["mirror"]["status"] for item in found] == ["failed", "ok"], f"{[item['mirror']['status'] for item in found]}")
     latest = bronze_mirror.latest_attempt(STORAGE[0].client, BUCKET, RUN)
-    require(latest is not None and latest["mirror"]["tables"] == {"alpha_data": "created", "beta_data": "created"}, "the repair is not the latest")
+    require(
+        latest is not None and set(latest["mirror"]["tables"].values()) == {"created"} and len(latest["mirror"]["tables"]) == 4, "the repair is not the latest"
+    )
     require(found[0]["report_sha256"] != found[1]["report_sha256"], "two attempts share one record")
 
 
@@ -830,7 +839,8 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     require(len(notices.calls) == 1 and "empty_data" in notices.calls[0]["Message"], f"the owner notice: {notices.calls}")
     mirror = bronze_mirror.attempts(STORAGE[0].client, BUCKET, RUN)[-1]["mirror"]
     registered = {name: text for name, text in mirror["tables"].items() if text == "created"}
-    require(mirror["status"] == "ok" and sorted(registered) == sorted(tables), f"the real hook did not register the loaded tables: {mirror}")
+    wanted = sorted([*tables, *(f"bronze_dictionary.{name}" for name in tables)])
+    require(mirror["status"] == "ok" and sorted(registered) == wanted, f"the real hook did not register the loaded tables and their dictionaries: {mirror}")
     require(mirror["tables"]["empty_data"] == bronze_mirror.LEFT_OUT, f"the hook did not leave the stage's skipped table out like the register: {mirror}")
     require(notice_record["notice"] == "sent" and f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json" not in STORAGE[0].client.puts, f"{notice_record}")
 

@@ -2,8 +2,18 @@
 
 ``bronze.main`` calls ``mirror_after_load`` once, after the load and its metadata generation are committed. The switch, the time budget, the Glue
 registration and the failure report are those of ``glue_mirror`` (``tables_to_mirror``, ``Budget``, ``mirror``, ``explain``); this module only names
-what a bronze load mirrors. Only the real ``bronze`` namespace is mirrored: a qualification run (``bronze_e2e``), the dictionary namespaces and the
-other test namespaces mirror nothing, and nothing runs while ``enabled`` is false in ``config/lakehouse/athena_mirror.json``.
+what a bronze load mirrors. Only the real ``bronze`` namespace with its real ``bronze_dictionary`` namespace is mirrored: a qualification run (``bronze_e2e``
+with ``bronze_dictionary_e2e``) and the other test namespaces mirror nothing, and nothing runs while ``enabled`` is false in
+``config/lakehouse/athena_mirror.json``.
+
+The generated data dictionaries (``bronze_dictionary.<table>``, one Iceberg table per bronze table, rebuilt by every load that loads data) are registered
+right after the bronze tables, in the ``bronze_dictionary`` Glue database, by the same ``glue_mirror.mirror`` with the same marker, run ID, failure rule and
+deadline: the hook starts one deadline of ``mirror_seconds`` and the dictionaries use what the tables left of it, so they never extend the hold on the load
+and the tables are always registered first. Each dictionary of a loaded table is registered at its newest snapshot, read in the load's own Spark session just
+before its registration; a registration points at the metadata file of that snapshot, so a commit that lands later is not registered. Every load registers
+every dictionary that exists, also a load that rebuilt none (an unchanged rerun), so a rerun repairs a registration that failed. A dictionary that does not
+exist, has no snapshot, cannot be read or cannot be registered is named under ``bronze_dictionary.<table>`` and stops no other. Past the deadline the
+dictionaries not yet reached are reported failed with the deadline as the cause and nothing is written after it.
 
 The mirrored set is what the load committed: the snapshot of each table the load names (a table that the load left out is simply not mirrored) and the
 snapshot of each loader side table that has one (``file_metadata``, ``stored_copies``, ``column_map`` and ``file_preambles``), read after the metadata
@@ -78,6 +88,8 @@ ATTEMPT_KEYS = {"schema", "bronze_run", "sequence", "metadata_generation", "repo
 SHA256 = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"bronze_[a-f0-9]{8}(?:_[0-9]{1,2}){0,2}")
 WAITING = "not mirrored: no committed snapshot yet"
+DICTIONARY_PREFIX = f"{glue_mirror.DICTIONARY_LAYER}."
+DICTIONARY_MISSING = "failed: no dictionary exists for it in the catalog"
 LEFT_OUT = "left out: the load left it out for lack of a source object, and its source collection holds no source object or observation history"
 
 
@@ -123,8 +135,13 @@ def mirror_after_load(
     table_map: Mapping[str, Any] | None = None,
     s3: Any = None,
     readers: Collection[str] | None = None,
+    dictionary_namespace: str | None = None,
+    dictionary_source: Any = None,
 ) -> dict[str, Any]:
     """Register the committed snapshot of each loaded table of ``names``, and of each loader side table that exists, in the bronze Glue mirror database.
+
+    Then the dictionary of each loaded table, in the ``bronze_dictionary`` database, when ``namespace`` is ``bronze`` and ``dictionary_namespace`` is
+    ``bronze_dictionary`` (``dictionary_source`` is its Polaris side). ``read_loader`` reads their snapshots too.
 
     ``snapshots`` maps each loaded table to the snapshot that the load committed; a table of ``names`` without one is not mirrored. One absolute deadline
     starts here, before the first Spark read, and bounds every Spark and Glue call, so no step blocks the job past it and no write is issued after it.
@@ -176,7 +193,10 @@ def mirror_after_load(
                 text = str(error) if isinstance(error, glue_mirror.MirrorError) else glue_mirror.explain(error)
                 extra = {name: f"failed: whether it may be left out could not be decided: {text}" for name in unsourced}
         report = glue_mirror.mirror(config, namespace, mode, committed, source, glue, run_id or HAND_RUN, budget)
-        tables = {**report["tables"], **dict.fromkeys(waiting, WAITING), **extra}
+        registered = register_dictionaries(
+            spark, config, dictionary_namespace, sorted(loaded), run_id or HAND_RUN, glue, read_loader or loader_snapshots, budget, dictionary_source
+        )
+        tables = {**report["tables"], **dict.fromkeys(waiting, WAITING), **extra, **{f"{DICTIONARY_PREFIX}{name}": text for name, text in registered.items()}}
         failures = {name: text for name, text in tables.items() if text.startswith("failed")}
         if failures:
             denied = all(ACCESS_DENIED in text for text in failures.values())
@@ -186,7 +206,8 @@ def mirror_after_load(
                 "tables": tables,
             }
         else:
-            report = {**report, "tables": tables}
+            moved = any(text in ("created", "updated") for text in registered.values())
+            report = {**report, "status": "ok" if moved else report["status"], "tables": tables}
     except Exception as error:
         report = {"status": "failed", "reason": glue_mirror.explain(error), "tables": {}}
     if report["status"] == "failed":
@@ -199,6 +220,52 @@ def mirror_after_load(
                 f"{report['reason']}. Rerun the load after the IAM apply to register the tables.\n"
             )
     return report
+
+
+def register_dictionaries(
+    spark: Any,
+    config: glue_mirror.MirrorConfig,
+    dictionary_namespace: str | None,
+    names: Sequence[str],
+    run_id: str,
+    glue: Any,
+    read_snapshots: Callable[[Any, str, Sequence[str]], tuple[Mapping[str, int], Sequence[str]]],
+    budget: glue_mirror.Budget,
+    source: Any = None,
+) -> dict[str, str]:
+    """The outcome of the dictionary of each of ``names``, registered in the ``bronze_dictionary`` database under the hook's own deadline (``budget``).
+
+    Nothing for another dictionary namespace than the real one or a config without the layer. A snapshot is read one dictionary at a time, so one that fails
+    to read fails alone. Never raises: whatever was not reached when an error or the deadline came is reported failed with its cause.
+    """
+    if dictionary_namespace != glue_mirror.DICTIONARY_LAYER or glue_mirror.DICTIONARY_LAYER not in config.layers:
+        return {}
+    outcomes: dict[str, str] = {}
+
+    def failed(error: Exception) -> str:
+        return "failed: " + (str(error) if isinstance(error, glue_mirror.MirrorError) else glue_mirror.explain(error))
+
+    committed: dict[str, int] = {}
+    for name in names:
+        try:
+            found, waiting = budget.run(f"reading the snapshot of the dictionary of {name}", read_snapshots, spark, dictionary_namespace, [name])
+        except Exception as error:
+            outcomes[name] = failed(error)
+            continue
+        if name in found:
+            committed[name] = int(found[name])
+        else:
+            outcomes[name] = WAITING if name in waiting else DICTIONARY_MISSING
+    try:
+        if committed:
+            if source is None:
+                from scripts.lakehouse.session import CATALOG
+
+                source = glue_mirror.SparkSource(spark, CATALOG, dictionary_namespace)
+            outcomes.update(glue_mirror.mirror(config, dictionary_namespace, "real", committed, source, glue, run_id, budget)["tables"])
+    except Exception as error:
+        outcomes.update({name: failed(error) for name in committed if name not in outcomes})
+    return outcomes
 
 
 def outcome_shaped(outcome: object) -> bool:

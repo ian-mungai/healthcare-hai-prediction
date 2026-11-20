@@ -1,12 +1,17 @@
 {
   "schema": 1,
-  "note": "Athena reads every published silver, gold and features table and every listed bronze table, all Public research data, through read-only Glue registrations, because Athena is for the owner to review the data. The same registrations are the tables the OpenMetadata Glue connector catalogs (OpenMetadata 2.0.7 has no Iceberg connector). Polaris stays the catalog and the source of truth. Access stays private to the owner.",
+  "note": "Athena reads every published silver, gold and features table, every listed bronze table and the generated data dictionary of each bronze table (the bronze_dictionary layer), all Public research data, through read-only Glue registrations, because Athena is for the owner to review the data. The same registrations are the tables the OpenMetadata Glue connector catalogs (OpenMetadata 2.0.7 has no Iceberg connector), the dictionaries included (owner decision of Nov 20 2026). A layer with a writer key is registered by that layer's writer role (the bronze load registers the dictionaries). The qualification namespaces bronze_e2e and bronze_dictionary_e2e are never mirrored. Polaris stays the catalog and the source of truth. Access stays private to the owner.",
   "enabled": true,
   "mirror_marker": "hai_mirror",
   "layers": {
     "bronze": {
       "namespace": "bronze",
       "database": "bronze"
+    },
+    "bronze_dictionary": {
+      "namespace": "bronze_dictionary",
+      "database": "bronze_dictionary",
+      "writer": "bronze"
     },
     "silver": {
       "namespace": "silver",

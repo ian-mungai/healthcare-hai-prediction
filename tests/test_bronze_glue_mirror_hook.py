@@ -72,7 +72,8 @@ def hook(
 def test_the_tracked_config_mirrors_bronze_and_the_qualification_twin_stays_out() -> None:
     config = glue_mirror.load_config()
     check(config.enabled and config.layers["bronze"].database == "bronze", "the tracked config does not mirror bronze")
-    check("bronze_e2e" not in config.layers and "bronze_dictionary" not in config.layers, "a test or dictionary namespace is mirrored")
+    check("bronze_e2e" not in config.layers and "bronze_dictionary_e2e" not in config.layers, "a qualification namespace is mirrored")
+    check(config.layers["bronze_dictionary"].database == "bronze_dictionary", "the dictionary layer is not mirrored in its own database")
 
 
 def test_a_committed_load_registers_each_loaded_table_in_the_bronze_database_with_the_run() -> None:
@@ -114,7 +115,7 @@ def test_a_repeat_writes_nothing_and_a_new_snapshot_moves_the_registration() -> 
     [
         ("the mirror is off in the config", "bronze", replace(glue_mirror.load_config(), enabled=False)),
         ("the qualification namespace", "bronze_e2e", None),
-        ("the dictionary namespace", "bronze_dictionary", None),
+        ("the qualification dictionary namespace", "bronze_dictionary_e2e", None),
         ("another test namespace", "smoke_check_e2e", None),
     ],
 )
@@ -449,3 +450,386 @@ def test_an_unexpected_failure_of_the_snapshot_read_is_still_a_failed_mirror() -
     with pyspark_functions():
         report = bronze_mirror.mirror_after_load(Broken({"column_map": [71]}), "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled())
     check(report["status"] == "failed" and "catalog unreachable" in report["reason"] and glue.writes() == [], f"{report}")
+
+
+# The generated data dictionaries (owner decision of Nov 20 2026): the same hook registers them in the ``bronze_dictionary`` Glue database, at the snapshot the
+# load wrote, inside the hook's one deadline. A rerun of the load registers every dictionary again, so it repairs a registration that failed.
+
+DICTIONARY = "bronze_dictionary"
+DICTIONARY_SNAPSHOTS = {"alpha_data": 61, "beta_data": 62}
+
+
+def dictionary_file(table: str, snapshot: int) -> str:
+    return f"s3://example-bucket/lakehouse/{DICTIONARY}/{table}/metadata/00001-aaaaaaaa-0000-0000-0000-{snapshot:012d}.metadata.json"
+
+
+class DictionarySource(Source):
+    """The Polaris side of the dictionary namespace: the metadata file of each committed snapshot."""
+
+    def pointer(self, table: str, snapshot_id: int) -> str | None:
+        self.asked.append((table, snapshot_id))
+        if self.error is not None:
+            raise self.error
+        return dictionary_file(table, snapshot_id)
+
+
+def dictionary_reader(snapshots: dict[str, int] | None = None, empty: tuple[str, ...] = (), broken: tuple[str, ...] = ()) -> Reader:
+    """The snapshot read of the stand-in catalog: the dictionaries of ``snapshots`` (all of ``DICTIONARY_SNAPSHOTS`` by default) and no loader side table."""
+    held = DICTIONARY_SNAPSHOTS if snapshots is None else snapshots
+
+    class Dictionaries(Reader):
+        def __call__(self, _spark: Any, namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
+            self.asked.append((namespace, list(tables)))
+            if namespace != DICTIONARY:
+                return {}, []
+            if any(name in broken for name in tables):
+                raise RuntimeError("catalog unreachable for a dictionary")
+            return {name: held[name] for name in tables if name in held and name not in empty}, [name for name in tables if name in empty]
+
+    return Dictionaries({})
+
+
+def load_hook(glue: Any, **keywords: Any) -> dict[str, Any]:
+    keywords.setdefault("read_loader", dictionary_reader())
+    keywords.setdefault("dictionary_namespace", DICTIONARY)
+    keywords.setdefault("dictionary_source", DictionarySource())
+    return hook(glue=glue, **keywords)
+
+
+def test_the_tracked_config_mirrors_the_dictionary_layer_written_by_the_bronze_writer() -> None:
+    config = glue_mirror.load_config()
+    check(config.layers[DICTIONARY].namespace == DICTIONARY and config.layers[DICTIONARY].database == DICTIONARY, f"{config.layers}")
+    check(glue_mirror.violations(config) == [], f"{glue_mirror.violations(config)}")
+    check(
+        json.loads(glue_mirror.CONFIG.read_text())["layers"][DICTIONARY].get("writer") == "bronze", "the bronze writer role does not own the dictionary layer"
+    )
+    twin = replace(config, layers={"bronze_dictionary_e2e": replace(config.layers["gold"], namespace="bronze_dictionary_e2e")})
+    check(any("bronze_dictionary_e2e" in line for line in glue_mirror.violations(twin)), "the qualification dictionary namespace was not refused")
+
+
+def test_a_load_registers_its_tables_and_then_its_dictionaries_at_the_snapshots_it_wrote() -> None:
+    glue = FakeGlue()
+    report = load_hook(glue)
+    check(report["status"] == "ok", f"{report}")
+    check(report["tables"]["alpha_data"] == "created" and report["tables"][f"{DICTIONARY}.alpha_data"] == "created", f"{report}")
+    check(report["tables"][f"{DICTIONARY}.beta_data"] == "created", f"{report}")
+    for table, snapshot in DICTIONARY_SNAPSHOTS.items():
+        held = glue.tables[(DICTIONARY, table)]["Parameters"]
+        check(held["metadata_location"] == dictionary_file(table, snapshot) and held["hai_snapshot_id"] == str(snapshot), f"{table}: {held}")
+        check(held["hai_run_id"] == RUN and held["hai_mirror"] == "true", f"{table}: {held}")
+    writes = [database for name, database, _ in glue.calls if name == "create_table"]
+    check(writes == ["bronze", "bronze", DICTIONARY, DICTIONARY], f"the dictionaries were not registered after the bronze tables: {writes}")
+    check({database for database, _ in glue.tables} == {"bronze", DICTIONARY}, "a table was registered outside the two databases")
+
+
+def test_a_repeat_changes_nothing_and_a_new_run_moves_every_dictionary() -> None:
+    glue = FakeGlue()
+    load_hook(glue)
+    glue.calls.clear()
+    again = load_hook(glue)
+    check(again["status"] == "unchanged" and glue.writes() == [], f"a repeat wrote to Glue: {again} {glue.writes()}")
+    moved = load_hook(glue, run_id="bronze_0a1b2c3e", read_loader=dictionary_reader({"alpha_data": 71, "beta_data": 62}))
+    check(moved["tables"][f"{DICTIONARY}.alpha_data"] == "updated" and moved["tables"][f"{DICTIONARY}.beta_data"] == "updated", f"{moved}")
+    check(glue.tables[(DICTIONARY, "alpha_data")]["Parameters"]["metadata_location"] == dictionary_file("alpha_data", 71), "the dictionary did not follow")
+
+
+def test_a_dictionary_that_is_missing_or_has_no_snapshot_is_reported_and_the_others_register() -> None:
+    glue = FakeGlue()
+    missing = load_hook(glue, read_loader=dictionary_reader({"beta_data": 62}))
+    check(missing["tables"][f"{DICTIONARY}.alpha_data"].startswith("failed: no dictionary"), f"{missing}")
+    check(missing["status"] == "failed" and f"{DICTIONARY}.alpha_data" in missing["reason"], f"{missing}")
+    check(missing["tables"][f"{DICTIONARY}.beta_data"] == "created" and missing["tables"]["alpha_data"] == "created", f"{missing}")
+    check((DICTIONARY, "alpha_data") not in glue.tables and (DICTIONARY, "beta_data") in glue.tables, f"{sorted(glue.tables)}")
+    waiting = load_hook(FakeGlue(), read_loader=dictionary_reader(empty=("beta_data",)))
+    check(waiting["tables"][f"{DICTIONARY}.alpha_data"] == "created" and waiting["tables"][f"{DICTIONARY}.beta_data"] == bronze_mirror.WAITING, f"{waiting}")
+
+
+def test_one_dictionary_whose_snapshot_cannot_be_read_does_not_stop_the_others() -> None:
+    glue = FakeGlue()
+    report = load_hook(glue, read_loader=dictionary_reader(broken=("alpha_data",)))
+    check(
+        report["tables"][f"{DICTIONARY}.alpha_data"].startswith("failed") and "catalog unreachable" in report["tables"][f"{DICTIONARY}.alpha_data"], f"{report}"
+    )
+    check(report["tables"][f"{DICTIONARY}.beta_data"] == "created" and report["tables"]["alpha_data"] == "created", f"{report}")
+
+
+def test_one_failing_registration_is_reported_and_the_other_dictionaries_and_the_tables_register() -> None:
+    class Refusing(FakeGlue):
+        def create_table(self, DatabaseName: str, TableInput: dict[str, Any]) -> dict[str, Any]:
+            if DatabaseName == DICTIONARY and TableInput["Name"] == "alpha_data":
+                self._enter("create_table", DatabaseName, TableInput["Name"])
+                raise self._error("create_table", "InternalServiceException")
+            return super().create_table(DatabaseName, TableInput)
+
+    glue = Refusing()
+    report = load_hook(glue)
+    check(report["status"] == "failed" and f"{DICTIONARY}.alpha_data" in report["reason"], f"{report}")
+    check(report["tables"][f"{DICTIONARY}.alpha_data"].startswith("failed") and report["tables"][f"{DICTIONARY}.beta_data"] == "created", f"{report}")
+    check(report["tables"]["alpha_data"] == "created" and report["tables"]["beta_data"] == "created", f"{report}")
+
+
+def test_a_rerun_of_a_load_that_rebuilt_nothing_repairs_a_failed_registration() -> None:
+    class Refusing(FakeGlue):
+        refuse = True
+
+        def create_table(self, DatabaseName: str, TableInput: dict[str, Any]) -> dict[str, Any]:
+            if self.refuse and DatabaseName == DICTIONARY:
+                self._enter("create_table", DatabaseName, TableInput["Name"])
+                raise self._error("create_table", "InternalServiceException")
+            return super().create_table(DatabaseName, TableInput)
+
+    glue = Refusing()
+    first = load_hook(glue)
+    check(first["status"] == "failed" and not {key for key in glue.tables if key[0] == DICTIONARY}, f"{first}")
+    glue.refuse = False
+    second = load_hook(glue)
+    check(
+        second["status"] == "ok" and {key for key in glue.tables if key[0] == DICTIONARY} == {(DICTIONARY, name) for name in DICTIONARY_SNAPSHOTS}, f"{second}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "namespace", "dictionary_namespace"),
+    [
+        ("the qualification pair", "bronze_e2e", "bronze_dictionary_e2e"),
+        ("a qualification dictionary under the real bronze namespace", "bronze", "bronze_dictionary_e2e"),
+        ("the real dictionary under a qualification namespace", "bronze_e2e", DICTIONARY),
+        ("no dictionary namespace given", "bronze", None),
+    ],
+)
+def test_no_dictionary_is_registered_or_read_unless_the_real_pair_is_loaded(label: str, namespace: str, dictionary_namespace: str | None) -> None:
+    glue, source, read = FakeGlue(), DictionarySource(), dictionary_reader()
+    report = load_hook(glue, namespace=namespace, dictionary_namespace=dictionary_namespace, dictionary_source=source, read_loader=read)
+    check(not [call for call in glue.calls if call[1] == DICTIONARY] and source.asked == [], f"{label}: {glue.calls}")
+    check(
+        not any(name.startswith(DICTIONARY) for name in report["tables"]) and not any(name == DICTIONARY for name, _ in read.asked),
+        f"{label}: {report} {read.asked}",
+    )
+
+
+def test_a_mirror_that_is_off_or_a_config_without_the_layer_reads_and_registers_no_dictionary() -> None:
+    config = glue_mirror.load_config()
+    for label, changed in (
+        ("off", replace(config, enabled=False)),
+        ("no layer", replace(config, layers={k: v for k, v in config.layers.items() if k != DICTIONARY})),
+    ):
+        glue, read = FakeGlue(), dictionary_reader()
+        report = load_hook(glue, config=changed, read_loader=read)
+        check(not [call for call in glue.calls if call[1] == DICTIONARY] and not any(name == DICTIONARY for name, _ in read.asked), f"{label}: {report}")
+        check(report["status"] in ("skipped", "ok") and not any(name.startswith(DICTIONARY) for name in report["tables"]), f"{label}: {report}")
+
+
+def test_a_missing_dictionary_database_is_a_reported_failure_that_names_the_apply() -> None:
+    report = load_hook(FakeGlue(databases=("bronze",)))
+    check(report["status"] == "failed" and "apply the Athena mirror stack" in report["tables"][f"{DICTIONARY}.alpha_data"], f"{report}")
+    check(report["tables"]["alpha_data"] == "created", f"the bronze tables were not registered: {report}")
+
+
+def test_glue_refusing_only_the_dictionary_calls_before_the_grant_is_unavailable_and_the_tables_stay_registered(capsys: pytest.CaptureFixture[str]) -> None:
+    class Denying(FakeGlue):
+        def get_table(self, DatabaseName: str, Name: str) -> dict[str, Any]:
+            if DatabaseName == DICTIONARY:
+                self._enter("get_table", DatabaseName, Name)
+                raise self._error("get_table", "AccessDeniedException")
+            return super().get_table(DatabaseName, Name)
+
+    glue = Denying()
+    report = load_hook(glue)
+    check(report["status"] == "unavailable" and "AccessDeniedException" in report["reason"], f"{report}")
+    check(
+        report["tables"]["alpha_data"] == "created" and ("bronze", "alpha_data") in glue.tables and (DICTIONARY, "alpha_data") not in glue.tables, f"{report}"
+    )
+    check("UNAVAILABLE" in capsys.readouterr().err, "the refusal is not named on standard error")
+
+
+def test_the_dictionaries_share_the_hooks_one_deadline_and_a_stuck_read_leaves_them_unregistered_without_a_write_after_it() -> None:
+    import threading
+    import time
+
+    release = threading.Event()
+
+    class Stuck(DictionarySource):
+        def pointer(self, table: str, snapshot_id: int) -> str | None:
+            release.wait(5)
+            return super().pointer(table, snapshot_id)
+
+    built: list[float] = []
+    real_budget = glue_mirror.Budget
+
+    def count(seconds: float, *arguments: Any, **keywords: Any) -> Any:
+        built.append(seconds)
+        return real_budget(seconds, *arguments, **keywords)
+
+    glue = FakeGlue()
+    started = time.monotonic()
+    try:
+        with mock.patch.object(glue_mirror, "Budget", side_effect=count):
+            report = load_hook(glue, dictionary_source=Stuck(), config=enabled(mirror_seconds=0.4))
+    finally:
+        release.set()
+    elapsed = time.monotonic() - started
+    check(built == [0.4], f"the hook started {built} deadlines instead of one")
+    check(elapsed < 2.5, f"the hook held the load for {elapsed:.1f} s past a 0.4 s deadline")
+    check(report["status"] == "failed" and report["tables"]["alpha_data"] == "created" and report["tables"]["beta_data"] == "created", f"{report}")
+    for name in DICTIONARY_SNAPSHOTS:
+        text = report["tables"][f"{DICTIONARY}.{name}"]
+        check(text.startswith("failed") and "deadline" in text, f"{name}: {text}")
+    check([call for call in glue.calls if call[1] == DICTIONARY and call[0] in glue_mirror_writes()] == [], "a dictionary was written after the deadline")
+
+
+def glue_mirror_writes() -> tuple[str, ...]:
+    return ("create_table", "update_table")
+
+
+class Rows:
+    """The snapshot rows of one table, newest first, as the ordered and limited query returns them."""
+
+    def __init__(self, rows: list[dict[str, int]]) -> None:
+        self.rows = rows
+
+    def orderBy(self, _column: Any) -> Rows:
+        return self
+
+    def limit(self, count: int) -> Any:
+        return SimpleNamespace(collect=lambda: self.rows[:count])
+
+
+class Lake:
+    """A Spark stand-in over the dictionary namespace: the snapshots of each table, the committed-metadata-file query by snapshot and the columns. A later
+    commit lands while the first registration reads, as a load that follows would."""
+
+    def __init__(self, snapshots: dict[str, list[int]], later: dict[str, int] | None = None) -> None:
+        self.snapshots, self.later = snapshots, later or {}
+        self.queries: list[tuple[str, int]] = []
+        self.catalog = SimpleNamespace(tableExists=lambda name: name.rsplit(".", 1)[-1] in snapshots)
+
+    def table(self, name: str) -> Any:
+        if not name.endswith(".snapshots"):
+            return SimpleNamespace(dtypes=list(COLUMNS))
+        return Rows([{"snapshot_id": snapshot} for snapshot in self.snapshots[name.removesuffix(".snapshots").rsplit(".", 1)[-1]]])
+
+    def sql(self, text: str) -> Any:
+        import re
+
+        found = re.search(r"FROM (\S+)\.metadata_log_entries WHERE latest_snapshot_id = (\d+)", text)
+        if found is None:
+            raise AssertionError(f"unexpected query: {text}")
+        table, snapshot = found[1].rsplit(".", 1)[-1], int(found[2])
+        self.queries.append((table, snapshot))
+        if table in self.later:
+            self.snapshots[table].insert(0, self.later.pop(table))
+        return SimpleNamespace(collect=lambda: [(dictionary_file(table, snapshot),)])
+
+
+def test_a_commit_that_lands_after_the_snapshot_was_read_is_not_registered() -> None:
+    lake = Lake({"alpha_data": [61], "beta_data": [62]}, later={"alpha_data": 99})
+    glue = FakeGlue()
+    with pyspark_functions():
+        report = bronze_mirror.mirror_after_load(
+            lake, "bronze", TABLES, SNAPSHOTS, RUN, source=Source(), glue=glue, config=enabled(), dictionary_namespace=DICTIONARY
+        )
+    held = glue.tables[(DICTIONARY, "alpha_data")]["Parameters"]
+    check(report["status"] == "ok" and held["hai_snapshot_id"] == "61" and held["metadata_location"] == dictionary_file("alpha_data", 61), f"{report} {held}")
+    check(("alpha_data", 61) in lake.queries and ("alpha_data", 99) not in lake.queries and lake.snapshots["alpha_data"][0] == 99, f"{lake.queries}")
+
+
+def test_the_attempt_record_holds_the_dictionary_outcomes_without_a_schema_change() -> None:
+    report = load_hook(FakeGlue())
+    check(bronze_mirror.outcome_shaped(report), f"{report}")
+    loader_report = {"metadata_index": {"generation": "g1"}, "run_at_utc": "20261120T120000Z", "mirror": report}
+    record = bronze_mirror.attempt_record(RUN, loader_report, "a" * 64, 1)
+    check(record["schema"] == 2 and bronze_mirror.attempt_shaped(record, RUN, 1) is None, f"{record}")
+
+
+def test_the_loader_hands_the_hook_the_dictionary_namespace_of_the_load(tmp_path: Path) -> None:
+    run_main(tmp_path, extra=["--run-id", RUN])
+    check(HOOK_KEYWORDS[0]["dictionary_namespace"] == DICTIONARY, f"{HOOK_KEYWORDS[0]}")
+    run_main(tmp_path / "twin", namespace="bronze_e2e", extra=["--selected-metadata", "--dictionary-namespace", "bronze_dictionary_e2e"])
+    check(HOOK_KEYWORDS[0]["dictionary_namespace"] == "bronze_dictionary_e2e", f"{HOOK_KEYWORDS[0]}")
+
+
+def test_the_dictionary_registration_needs_no_yaml_no_jsonschema_and_no_dbt_package() -> None:
+    """The Spark image has no yaml or jsonschema and the load runs without dbt: the hook with dictionaries must run with those imports refused."""
+    import sys
+
+    glue = FakeGlue()
+    with mock.patch.dict(sys.modules, {"yaml": None, "jsonschema": None, "dbt": None}):
+        report = load_hook(glue)
+    check(report["status"] == "ok" and (DICTIONARY, "alpha_data") in glue.tables and (DICTIONARY, "beta_data") in glue.tables, f"{report}")
+
+
+# The registration against the real policy documents of the bronze writer role, evaluated by the project's IAM evaluator.
+
+GLUE_ACCOUNT = "arn:aws:glue:us-west-2:111111111111"
+GLUE_POLICY = Path(__file__).resolve().parents[1] / "infra/iam/owner_policies/job_writer_glue_mirror.json"
+
+
+def glue_grant(database: str) -> dict[str, Any]:
+    """The Glue mirror grant of one layer, rendered from the template that ``athena_mirror.tf`` renders for every layer."""
+    from string import Template
+
+    arns = [f"{GLUE_ACCOUNT}:catalog", f"{GLUE_ACCOUNT}:database/{database}", f"{GLUE_ACCOUNT}:table/{database}/*"]
+    values = {"CATALOG_ARN": arns[0], "DATABASE_ARN": arns[1], "REGISTRATION_ARNS": json.dumps(arns)}
+    return dict(json.loads(Template(GLUE_POLICY.read_text()).substitute(values)))
+
+
+class PolicyGlue(FakeGlue):
+    """A Glue stand-in that refuses with AccessDeniedException each call that the policy documents do not allow on the catalog, database and table."""
+
+    ACTIONS = {"get_table": "glue:GetTable", "create_table": "glue:CreateTable", "update_table": "glue:UpdateTable"}
+
+    def __init__(self, documents: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.documents = documents
+
+    def _enter(self, operation: str, database: str, name: str) -> None:
+        from scripts.infrastructure.policy_evaluator import Request, decide
+
+        resources = [f"{GLUE_ACCOUNT}:catalog", f"{GLUE_ACCOUNT}:database/{database}", f"{GLUE_ACCOUNT}:table/{database}/{name}"]
+        if not all(decide(self.documents, Request(self.ACTIONS[operation], resource)).allowed for resource in resources):
+            self.calls.append((operation, database, name))
+            raise self._error(operation, "AccessDeniedException")
+        super()._enter(operation, database, name)
+
+
+def test_the_hook_registers_the_tables_and_the_dictionaries_with_exactly_the_two_grants_of_the_bronze_writer() -> None:
+    glue = PolicyGlue([glue_grant("bronze"), glue_grant(DICTIONARY)])
+    report = load_hook(glue)
+    check(report["status"] == "ok" and set(report["tables"].values()) == {"created"}, f"{report}")
+    check({database for database, _ in glue.tables} == {"bronze", DICTIONARY} and len(glue.tables) == 4, f"{sorted(glue.tables)}")
+    again = load_hook(glue)
+    check(again["status"] == "unchanged", f"{again}")
+
+
+def test_before_the_dictionary_grant_is_applied_the_tables_register_and_the_dictionaries_are_unavailable() -> None:
+    glue = PolicyGlue([glue_grant("bronze")])
+    report = load_hook(glue)
+    check(report["status"] == "unavailable" and "AccessDeniedException" in report["reason"], f"{report}")
+    check(report["tables"]["alpha_data"] == "created" and {database for database, _ in glue.tables} == {"bronze"}, f"{report}")
+
+
+def test_the_dictionary_grant_allows_the_registration_actions_on_its_database_and_nothing_wider() -> None:
+    from scripts.infrastructure.policy_evaluator import Request, decide
+
+    grant = [glue_grant(DICTIONARY)]
+    table = f"{GLUE_ACCOUNT}:table/{DICTIONARY}/alpha_data"
+    allowed = [
+        ("glue:GetDatabase", f"{GLUE_ACCOUNT}:catalog"),
+        ("glue:GetDatabase", f"{GLUE_ACCOUNT}:database/{DICTIONARY}"),
+        *((action, table) for action in ("glue:GetTable", "glue:CreateTable", "glue:UpdateTable")),
+    ]
+    refused = [
+        *((action, table) for action in ("glue:DeleteTable", "glue:BatchDeleteTable", "glue:GetTables", "glue:TagResource")),
+        *((action, f"{GLUE_ACCOUNT}:database/{DICTIONARY}") for action in ("glue:CreateDatabase", "glue:UpdateDatabase", "glue:DeleteDatabase")),
+        *(
+            (action, f"{GLUE_ACCOUNT}:table/{database}/alpha_data")
+            for database in ("bronze", "silver", "bronze_dictionary_e2e", "bronze_dictionaryx")
+            for action in ("glue:GetTable", "glue:CreateTable", "glue:UpdateTable")
+        ),
+        ("glue:GetDatabase", f"{GLUE_ACCOUNT}:database/bronze"),
+        ("glue:GetDatabase", f"{GLUE_ACCOUNT}:database/bronze_dictionary_e2e"),
+        ("s3:GetObject", "arn:aws:s3:::example-bucket/lakehouse/bronze_dictionary/alpha_data/x"),
+    ]
+    wrong = [f"{action} {resource}" for action, resource in allowed if not decide(grant, Request(action, resource)).allowed]
+    wrong += [f"{action} {resource} must be refused" for action, resource in refused if decide(grant, Request(action, resource)).allowed]
+    check(wrong == [], f"{wrong}")

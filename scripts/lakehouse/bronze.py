@@ -1569,7 +1569,16 @@ def main(argv: list[str] | None = None) -> int:
             metadata_index = {"generation": generation, "path": str(index_path), "sha256": index_sha256}
             # The load and its metadata generation are committed. The mirror reports its own failure and never undoes them.
             mirror = bronze_mirror.mirror_after_load(
-                spark, config["namespace"], names, snapshots, args.run_id, unsourced=unsourced, history=history, bucket=bucket, table_map=config
+                spark,
+                config["namespace"],
+                names,
+                snapshots,
+                args.run_id,
+                unsourced=unsourced,
+                history=history,
+                bucket=bucket,
+                table_map=config,
+                dictionary_namespace=args.dictionary_namespace,
             )
     except (BronzeError, bronze_metadata.MetadataError) as error:
         sys.stderr.write(f"bronze: {error}\n")

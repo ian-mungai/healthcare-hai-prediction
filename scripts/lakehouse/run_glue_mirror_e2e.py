@@ -45,7 +45,7 @@ class FakeGlue:
 
     def __init__(
         self,
-        databases: Sequence[str] = ("gold", "features", "silver", "bronze"),
+        databases: Sequence[str] = ("gold", "features", "silver", "bronze", "bronze_dictionary"),
         fail: dict[str, str] | None = None,
     ) -> None:
         self.databases = set(databases)
@@ -485,15 +485,15 @@ def case_test_namespace_touches_nothing() -> Check:
     return {"no_call": glue.calls == [], "skipped": report.get("status") == "skipped" and hooked.get("status") == "skipped"}
 
 
-def case_bronze_dictionary_and_other_layers_touch_nothing() -> Check:
+def case_bronze_dictionary_qualification_namespace_and_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
-    direct = glue_mirror.mirror(enabled(), "bronze_dictionary", "real", ids(["any_table"]), FakeSource({"any_table": FIRST}), glue)
+    direct = glue_mirror.mirror(enabled(), "bronze_dictionary_e2e", "real", ids(["any_table"]), FakeSource({"any_table": FIRST}), glue)
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        hooked = hook(context(Path(directory), namespace="bronze_dictionary"), FakeSource({PILOT: FIRST}), glue)
+        hooked = hook(context(Path(directory), namespace="bronze_dictionary_e2e"), FakeSource({PILOT: FIRST}), glue)
         runs = hook(context(Path(directory)), FakeSource({"publish_runs": FIRST}), glue)
     return {
         "no_call": glue.calls == [],
-        "bronze_dictionary_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
+        "bronze_dictionary_e2e_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
         "runs_table_never_listed": "publish_runs" not in json.dumps(runs) and ("create_table", "gold", "publish_runs") not in glue.calls,
     }
 
@@ -513,12 +513,13 @@ def case_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
     reports = {
         layer: glue_mirror.mirror(enabled(), layer, "real", ids(["int_acs_county_values"]), FakeSource({"int_acs_county_values": FIRST}), glue)
-        for layer in ("bronze_dictionary", "bronze_e2e", "silver_e2e", "features_e2e", "gold_e2e")
+        for layer in ("bronze_dictionary_e2e", "bronze_e2e", "silver_e2e", "features_e2e", "gold_e2e")
     }
     return {
         "no_call": glue.calls == [],
         "every_layer_skipped": all(report.get("status") == "skipped" for report in reports.values()),
-        "no_bronze_dictionary_or_test_database_in_config": not any(layer.startswith("bronze_") for layer in glue_mirror.load_config().layers),
+        "no_qualification_or_test_database_in_config": not any(layer.endswith("_e2e") for layer in glue_mirror.load_config().layers),
+        "the_dictionary_layer_is_in_config": "bronze_dictionary" in glue_mirror.load_config().layers,
     }
 
 
@@ -661,9 +662,10 @@ def case_config_scope_is_silver_gold_and_features_only() -> Check:
     config = glue_mirror.load_config()
     gold = config.layers["gold"]
     return {
-        "only_the_four_layers_are_configured_bronze_first": list(config.layers) == ["bronze", "silver", "gold", "features"]
-        and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features", "bronze"))
-        and config.layers["bronze"].database == "bronze",
+        "only_the_five_layers_are_configured_bronze_first": list(config.layers) == ["bronze", "bronze_dictionary", "silver", "gold", "features"]
+        and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features", "bronze", "bronze_dictionary"))
+        and config.layers["bronze"].database == "bronze"
+        and config.layers["bronze_dictionary"].database == "bronze_dictionary",
         "real_config_has_no_violation": glue_mirror.violations(config) == [],
         "silver_is_allowed": glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver")})) == [],
         "silver_test_namespace_is_flagged": any(
@@ -674,9 +676,15 @@ def case_config_scope_is_silver_gold_and_features_only() -> Check:
         "bronze_test_namespace_is_flagged": any(
             "bronze_e2e" in line for line in glue_mirror.violations(replace(config, layers={"bronze": replace(gold, namespace="bronze_e2e")}))
         ),
-        "bronze_dictionary_is_flagged": any(
-            "bronze_dictionary" in line
-            for line in glue_mirror.violations(replace(config, layers={"bronze_dictionary": replace(gold, namespace="bronze_dictionary")}))
+        "bronze_dictionary_is_allowed": glue_mirror.violations(replace(config, layers={"bronze_dictionary": replace(gold, namespace="bronze_dictionary")}))
+        == [],
+        "bronze_dictionary_qualification_is_flagged": any(
+            "bronze_dictionary_e2e" in line
+            for line in glue_mirror.violations(replace(config, layers={"bronze_dictionary_e2e": replace(gold, namespace="bronze_dictionary_e2e")}))
+        ),
+        "bronze_dictionary_in_a_test_namespace_is_flagged": any(
+            "bronze_dictionary_e2e" in line
+            for line in glue_mirror.violations(replace(config, layers={"bronze_dictionary": replace(gold, namespace="bronze_dictionary_e2e")}))
         ),
         "features_test_namespace_is_flagged": any(
             "features_e2e" in line for line in glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features_e2e")}))
@@ -979,11 +987,11 @@ def case_s3_register_obeys_the_switch_and_the_layer_scope() -> Check:
     glue, s3 = FakeGlue(), s3_with([PILOT])
     off = register(s3, glue, [PILOT], config=replace(glue_mirror.load_config(), enabled=False))
     quiet = glue.calls == [] and s3.calls == []
-    bronze = register(s3, glue, [PILOT], layer="bronze_dictionary")
+    bronze = register(s3, glue, [PILOT], layer="bronze_dictionary_e2e")
     plans = {layer: glue_mirror.layer_plan(layer) for layer in glue_mirror.PUBLISHED_LAYERS}
     return {
         "off_touches_nothing": off["status"] == "skipped" and quiet,
-        "bronze_dictionary_touches_nothing": bronze["status"] == "skipped" and glue.calls == [] and s3.calls == [],
+        "bronze_dictionary_e2e_touches_nothing": bronze["status"] == "skipped" and glue.calls == [] and s3.calls == [],
         "runs_table_is_not_in_any_layer_contract": all("publish_runs" not in plan.tables for plan in plans.values()),
     }
 
@@ -1705,6 +1713,25 @@ def case_s3_register_refuses_a_parent_that_the_metadata_does_not_list() -> Check
     }
 
 
+def case_dictionary_layer_is_written_only_by_the_bronze_load() -> Check:
+    return {
+        "is_a_configured_layer": "bronze_dictionary" in glue_mirror.CONFIG_LAYERS,
+        "has_no_publish_contract": "bronze_dictionary" not in glue_mirror.LAYER_CONTRACTS and "bronze_dictionary" not in glue_mirror.PUBLISHED_LAYERS,
+        "is_not_in_the_register_choices": "bronze_dictionary" not in glue_mirror.MIRRORED_LAYERS,
+        "register_refuses_it_by_name": _refuses_the_layer("register"),
+        "check_refuses_it_by_name": _refuses_the_layer("check"),
+    }
+
+
+def _refuses_the_layer(command: str) -> bool:
+    arguments = ["register", "--source", "s3", "--bucket", BUCKET] if command == "register" else ["check"]
+    try:
+        glue_mirror.main([*arguments, "--layer", "bronze_dictionary"], glue=FakeGlue(), s3=FakeS3(), config=enabled())
+    except SystemExit as stop:
+        return stop.code == 2
+    return False
+
+
 CASES: dict[str, Callable[[], Check]] = {
     "first_publish_registers": case_first_publish_registers,
     "repeat_is_a_no_op": case_repeat_is_a_no_op,
@@ -1716,7 +1743,8 @@ CASES: dict[str, Callable[[], Check]] = {
     "disabled_touches_nothing": case_disabled_touches_nothing,
     "tracked_config_turns_the_mirror_on": case_tracked_config_turns_the_mirror_on,
     "test_namespace_touches_nothing": case_test_namespace_touches_nothing,
-    "bronze_dictionary_and_other_layers_touch_nothing": case_bronze_dictionary_and_other_layers_touch_nothing,
+    "bronze_dictionary_qualification_namespace_and_other_layers_touch_nothing": case_bronze_dictionary_qualification_namespace_and_other_layers_touch_nothing,
+    "dictionary_layer_is_written_only_by_the_bronze_load": case_dictionary_layer_is_written_only_by_the_bronze_load,
     "second_gold_table_is_mirrored": case_second_gold_table_is_mirrored,
     "other_layers_touch_nothing": case_other_layers_touch_nothing,
     "silver_layer_is_mirrored": case_silver_layer_is_mirrored,

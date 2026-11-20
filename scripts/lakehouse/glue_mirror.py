@@ -1,7 +1,8 @@
 """Mirror published Iceberg tables into read-only Glue registrations for Athena. Polaris stays the catalog and the source of truth.
 
 After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``; the silver and features publishes commit through the same engine
-(``gold_publish.commit_publish``), so they call it too. After a bronze load commits, ``bronze_mirror.mirror_after_load`` calls it for the loaded tables.
+(``gold_publish.commit_publish``), so they call it too. After a bronze load commits, ``bronze_mirror.mirror_after_load`` calls it for the loaded tables and
+for the dictionary of each (the ``bronze_dictionary`` layer, a Glue database of its own).
 For every table that the publish contract names, all Public research data, the mirror makes one Glue table. Its ``metadata_location`` is the metadata
 file of the table's committed snapshot, taken from the newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode
 ``real`` and the layers of ``config/lakehouse/athena_mirror.json`` are mirrored, so test namespaces and the runs
@@ -14,9 +15,10 @@ It writes nothing.
 ``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|bronze|all [--dry-run] [--bucket NAME]`` registers the tables
 that are already published, without Spark and without Polaris. The bronze layer has no publish step and no ``publish_runs`` table, so it has no
 ``check``. Its load registers its own tables when it commits (``bronze_mirror``), and ``register`` fills or repairs it, for the tables that
-``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt sources name (so every silver input resolves; not the
-``bronze_dictionary`` namespace). A bronze table that a complete bronze run record (``lakehouse/bronze_runs/<run>/check.json``) skipped for lack of a
-source object, that no record loaded and that has no metadata file in S3 has no table yet and is named as left out, unless silver reads it.
+``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt sources name (so every silver input resolves). It does not take the
+``bronze_dictionary`` layer: only the bronze load registers the dictionaries. A bronze table that a complete bronze run record
+(``lakehouse/bronze_runs/<run>/check.json``) skipped for lack of a source object, that no record loaded and that has no metadata file in S3 has no table
+yet and is named as left out, unless silver reads it.
 It reads each table's metadata files in S3 and registers the snapshot that the main branch of the newest metadata file points to, never a staged or audit
 branch snapshot. A table whose metadata cannot be resolved
 without doubt is refused and named: no file, two files with one version number, a file name that is not numbered, a location that is not the table folder,
@@ -47,6 +49,10 @@ PUBLISHED_LAYERS = ("silver", "gold", "features")
 # Bronze has no publish_runs table, so no check; its load registers the loaded tables itself (``bronze_mirror``). ``register`` covers the tables that
 # ``config/lakehouse/bronze_tables.json`` lists and the ones that silver's dbt sources read.
 MIRRORED_LAYERS = ("bronze", *PUBLISHED_LAYERS)
+# The generated bronze data dictionaries: a configured layer with a Glue database of its own, registered only by the bronze load (``bronze_mirror``), so the
+# by-hand ``register`` and ``check`` do not take it. A load registers every dictionary of its tables again, so a rerun repairs a failed registration.
+DICTIONARY_LAYER = "bronze_dictionary"
+CONFIG_LAYERS = (*MIRRORED_LAYERS, DICTIONARY_LAYER)
 BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 SILVER_BRONZE_SOURCES = REPO_ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
 # The bronze tables that silver reads, derived on the host from the dbt sources above and staged with the bronze job (the Spark image has no dbt or yaml).
@@ -343,11 +349,11 @@ def load_config(path: Path = CONFIG) -> MirrorConfig:
 
 
 def violations(config: MirrorConfig) -> list[str]:
-    """Why the config may not be used: a layer other than silver, gold, features or bronze, or a namespace other than the layer's own (a test one)."""
+    """Why the config may not be used: a layer other than ``CONFIG_LAYERS`` (a qualification namespace is none) or a namespace other than the layer's own."""
     found: list[str] = []
     for layer, spec in config.layers.items():
-        if layer not in MIRRORED_LAYERS:
-            found.append(f"layer {layer} may not be mirrored: only {', '.join(MIRRORED_LAYERS)}")
+        if layer not in CONFIG_LAYERS:
+            found.append(f"layer {layer} may not be mirrored: only {', '.join(CONFIG_LAYERS)}")
         elif spec.namespace != layer:
             found.append(f"layer {layer} names namespace {spec.namespace}, not {layer}")
     return found
