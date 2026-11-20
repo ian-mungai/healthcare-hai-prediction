@@ -123,6 +123,7 @@ SCHEMA_ID = "urn:hai:" + "ledger-row"
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
+DYNAMIC_CLASS = "Dyn" + "Plugin"
 OLD_NOTES = "old" + "_notes.md"
 WINNOW = "win" + "now"
 SETTLE = "set" + "tle"
@@ -3449,6 +3450,27 @@ CASES = [
             WHITELIST: f"from util import {STALE_HELPER}\n\n_ = {STALE_HELPER}\n",
             ".cleanup_allowlist": COPIED_ALLOWED,
         },
+    ),
+    Case(
+        "class named through an attribute of the vulture whitelist",
+        "unused-code",
+        True,
+        {
+            "app/plugin.py": f"class {DYNAMIC_CLASS}:\n    pass\n",
+            WHITELIST: f"def uses(module):\n    return (module.{DYNAMIC_CLASS},)\n",
+            ".cleanup_allowlist": COPIED_ALLOWED,
+        },
+    ),
+    Case(
+        "whitelisted dynamic class does not hide an unused function of its file",
+        "unused-code",
+        False,
+        {
+            "app/plugin.py": f"class {DYNAMIC_CLASS}:\n    pass\n\n\ndef {STALE_HELPER}():\n    return 1\n",
+            WHITELIST: f"def uses(module):\n    return (module.{DYNAMIC_CLASS},)\n",
+            ".cleanup_allowlist": COPIED_ALLOWED,
+        },
+        reason=f"app/plugin.py:5: unused function '{STALE_HELPER}'",
     ),
     Case(
         "function nothing calls",

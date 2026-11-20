@@ -30,7 +30,9 @@ from tests.test_pin_tables import fake_pyspark
 from tests.test_startup_check_cleanup_slow import pytestmark
 
 
-def uses(download: Download, member: tarfile.TarInfo, server: ThreadingHTTPServer, bridge_handler: Any) -> tuple[object, ...]:
+def uses(
+    download: Download, member: tarfile.TarInfo, server: ThreadingHTTPServer, bridge_handler: Any, timetables: Any, connection: Any, sender: Any
+) -> tuple[object, ...]:
     """Name each entry once; vulture counts these names as used."""
     return (
         StandInHandler.log_message,  # http.server calls it to log each request; the stand-in keeps its own call log.
@@ -63,6 +65,9 @@ def uses(download: Download, member: tarfile.TarInfo, server: ThreadingHTTPServe
         BaseHTTPRequestHandler.protocol_version,  # http.server reads it of the bridge's Handler to answer its clients with HTTP/1.1.
         bridge_handler.do_GET,  # http.server dispatches a GET request to the bridge's Handler by method name.
         bridge_handler.do_PUT,  # http.server dispatches a PUT request to the bridge's Handler by method name.
+        timetables.HaiTimetablesPlugin,  # Airflow's plugin manager loads each AirflowPlugin subclass of the plugins folder by scanning the module.
+        connection.auto_open,  # http.client reads it of the lineage delivery's connection, which sets it to 0 so that a closed connection never reconnects.
+        sender._credentials,  # botocore's request signer reads it of the send boundary case's sender, which the case sets to an expiring object.
         server.daemon_threads,  # socketserver reads it when the bridge starts a request thread, and on the server that ecs_lineage_cases sets it on.
     )
 

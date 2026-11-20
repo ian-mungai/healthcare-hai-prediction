@@ -864,7 +864,9 @@
       "listed test module is gone": 3.98,
       "dbt model deleted and named only in the deferral record of the project file": 3.98,
       "dbt model deleted, named in the project file outside the deferral record": 3.98,
-      "dbt model deleted, named in the project file before the deferral record": 3.98
+      "dbt model deleted, named in the project file before the deferral record": 3.98,
+      "class named through an attribute of the vulture whitelist": 3.98,
+      "whitelisted dynamic class does not hide an unused function of its file": 3.98
     }
   }
 }
