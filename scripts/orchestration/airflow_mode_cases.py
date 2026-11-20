@@ -77,7 +77,7 @@ from unittest import mock
 import jinja2
 from botocore.exceptions import ClientError
 
-from orchestration import training_contract
+from orchestration import graph, training_contract
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
@@ -347,6 +347,9 @@ class World:
 
     def __init__(self, rig: Rig, runtime: ModuleType, dag_id: str, params: dict[str, Any]) -> None:
         self.rig, self.runtime, self.dag_id, self.params = rig, runtime, dag_id, params
+        self.tasks = (
+            set(graph.reference_graph(dag_id)) if dag_id in graph.GRAPH_DAGS else set()
+        )  # the tasks that the DAG ships; none for a DAG the graph does not list
         self.context: dict[str, Any] = {}
         self.states: dict[str, str] = {}
         self.results: dict[str, Any] = {}
@@ -396,7 +399,8 @@ class World:
         self.context = {"params": self.params, "ti": instance}
 
     def step(self, template: str, attempt: int = 1) -> str:
-        self.enter(template, attempt)
+        """Run the work step of ``template``. A template that is no task of the DAG is the launch of its one-job chain, which runs in the task ``job``."""
+        self.enter("job" if "job" in self.tasks and template not in self.tasks else template, attempt)
         return str(self.runtime.run_step(template))
 
     def run_dag(self, dag_file: str) -> dict[str, str]:

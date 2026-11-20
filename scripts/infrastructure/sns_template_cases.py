@@ -275,9 +275,12 @@ def resolved_alert_is_exact(root: Path) -> dict[str, bool]:
     return checks
 
 
+SILVER_TASKS = ("preflight", "job", "evidence")
+
+
 def grouped_firing_alerts_each_get_a_block(root: Path) -> dict[str, bool]:
     task = rules_of(root)["airflow_task_failed"]
-    alerts = [alert("firing", task, {"dag_id": "silver_transform_dag", "task_id": name}) for name in ("dbt_build", "dbt_test", "publish")]
+    alerts = [alert("firing", task, {"dag_id": "silver_transform_dag", "task_id": name}) for name in SILVER_TASKS]
     ((subject, message),) = render(root, [notification(alerts)])
     checks: dict[str, bool] = {}
     named(checks, "the subject counts the firing alerts", subject == "FIRING: Airflow task failed (3 firing)")
@@ -287,7 +290,7 @@ def grouped_firing_alerts_each_get_a_block(root: Path) -> dict[str, bool]:
     named(
         checks,
         "the blocks keep the order of the alerts",
-        all(f"Task: {name}" in part for name, part in zip(("dbt_build", "dbt_test", "publish"), parts, strict=False)),
+        all(f"Task: {name}" in part for name, part in zip(SILVER_TASKS, parts, strict=False)),
     )
     named(checks, "every block has the shape", all(not shape_problems(subject, part.removeprefix("3 alerts: 3 firing.\n\n")) for part in parts))
     return checks
@@ -451,17 +454,16 @@ def subject_is_valid_for_every_rule_state_and_text(root: Path) -> dict[str, bool
 
 INSTANCE_OF_JOB = {"features": "model_set", "train": "model_set", "promote": "job_type", "serve": "job_type"}
 JOB_RULES = ("job_failed", "job_vanished", "job_peak_memory_near_cap", "dbt_tests_failed", "quality_checks_failed", "spark_tasks_failed")
-REAL_TASKS = ("job", "dbt_build", "publish", "check")
 
 
 def real_label_sets(root: Path) -> dict[str, list[dict[str, str]]]:
-    """The label sets that the real DAG ids, job names, phases, models and infection types give each rule."""
-    from orchestration import training_contract
+    """The label sets that the real DAG ids, the tasks of the shipped DAGs, job names, phases, models and infection types give each rule."""
+    from orchestration import graph, training_contract
     from scripts import metrics_push
 
     sets: dict[str, list[dict[str, str]]] = {
         "airflow_dag_run_failed": [{"dag_id": name} for name in sorted(dag_ids(root))],
-        "airflow_task_failed": [{"dag_id": name, "task_id": task} for name in sorted(dag_ids(root)) for task in REAL_TASKS],
+        "airflow_task_failed": [{"dag_id": name, "task_id": task} for name in graph.GRAPH_DAGS for task in sorted(graph.reference_graph(name))],
         "promotion_rolled_back": [{"hai_type": key} for key in training_contract.HAI_TYPES],
         "online_reload_failed": [{"feature_set": key} for key in training_contract.MODELS],
         "drift_triggered": [
