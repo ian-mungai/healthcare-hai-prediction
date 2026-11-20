@@ -1,11 +1,15 @@
 """Cases of the lineage that starts at acquisition and of the evidence step of the job DAGs.
 
-An acquisition run names each raw file it stored as the dataset ``s3://<bucket>`` and the object key, with the object version as the dataset version facet,
-and its START and COMPLETE events carry every stored file as an output. A bronze run sends no table events: its task events name no dataset, and its run
-record is what the catalog writer reads for each table's raw files. The evidence step of a gold job sends the per-table events, within the provider's timeout
-and the total deadline, and only when HTTP lineage is on. The saved acquisition states are stand-ins written by the case in a temporary folder, in the
-shapes ``scripts/acquisition/batch.py`` (``completed_collection_layout.json``) and ``scripts/acquisition/s3_store.py`` (the reconciliation record) write, with
-a receipt in the shape of ``config/acquisition/snapshot_contract.schema.json``. No acquisition runs and nothing reaches S3.
+An acquisition run names each raw file it stored as the dataset ``s3://<bucket>`` and the object key, with the object version as the dataset version facet.
+The COMPLETE event of the acquisition job carries every stored file as an output and its START event carries none. A state whose receipt and reconciliation
+disagree, or that names an unverified object, is refused by name, and the replay of a saved batch gives the same lines every time. A bronze run sends no table
+events: its task events are a START and a COMPLETE that name no dataset, and its run record, which the catalog writer reads for each table's raw files, is
+refused by its key and the rule when it is missing, unreadable or wrong. The evidence step of a gold job sends the per-table events byte for byte as the replay
+gives them, with the bearer credential and only when HTTP lineage is on and the task passed. It sends every one of them even when the sends outlast the
+provider's execution timeout, it cuts a stalled receiver at one total deadline, and no failure of the sends fails its record. A refused credential or an
+exception of the sender thread is a delivery failure that shows no text of the key. The saved acquisition states are stand-ins written by the case in a
+temporary folder, in the shapes ``scripts/acquisition/batch.py`` (``completed_collection_layout.json``) and ``scripts/acquisition/s3_store.py`` (the
+reconciliation record) write, with a receipt in the shape of ``config/acquisition/snapshot_contract.schema.json``. No acquisition runs and nothing reaches S3.
 """
 
 from __future__ import annotations

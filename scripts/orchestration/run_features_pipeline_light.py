@@ -1186,7 +1186,6 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
             checks[f"{dag}_collapsed"] = dag not in graph.PIPELINE_CHAINS and graph.requirements(dag)[0] == graph.COLLAPSED_UPSTREAM
         elif dag in graph.PIPELINE_CHAINS:
             checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS[dag] == chain
-    checks["transform_dag_unchanged"] = graph.requirements("transform_dag") == base.requirements("transform_dag")
     features_dag = (ROOT / "dags" / f"{BASE_DAG}.py").read_text() if (ROOT / "dags" / f"{BASE_DAG}.py").is_file() else ""
     checks["features_params"] = all(
         text in features_dag

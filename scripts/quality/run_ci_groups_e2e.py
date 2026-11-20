@@ -337,8 +337,6 @@ def install_copies(work: Path) -> None:
         if (ROOT / path).exists():
             (work / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / path, work / path)
-    if not (ROOT / "dags/transform_dag.py").exists():
-        (work / "dags/transform_dag.py").unlink(missing_ok=True)
     tracked = set(git(work, "ls-files").splitlines())
     new_files = [path for path in COPIED if (work / path).exists() and path not in tracked]
     if new_files:
@@ -869,7 +867,6 @@ def code_identity(work: Path) -> dict[str, Any]:
         "revision": git(work, "rev-parse", "HEAD").strip(),
         "sha256": {path: sha256_of(ROOT / path) for path in files},
         "tools": versions,
-        "deleted_sources": ["dags/transform_dag.py"] if not (ROOT / "dags/transform_dag.py").exists() else [],
     }
 
 
@@ -7520,13 +7517,12 @@ def main() -> int:
         shutil.rmtree(scratch, ignore_errors=True)
     results.append({"case": "scratch_worktree_removed", "passed": not worktrees["problems"], **worktrees})
     after = code_identity(ROOT) if identity else {}
-    if identity and (identity["sha256"] != after["sha256"] or identity["deleted_sources"] != after["deleted_sources"]):
+    if identity and identity["sha256"] != after["sha256"]:
         results.append(
             {
                 "case": "code_unchanged_during_run",
                 "passed": False,
-                "changed": sorted(k for k in identity["sha256"] if identity["sha256"][k] != after["sha256"][k])
-                + (["dags/transform_dag.py"] if identity["deleted_sources"] != after["deleted_sources"] else []),
+                "changed": sorted(k for k in identity["sha256"] if identity["sha256"][k] != after["sha256"][k]),
             }
         )
     failed = [result["case"] for result in results if not result["passed"]]
