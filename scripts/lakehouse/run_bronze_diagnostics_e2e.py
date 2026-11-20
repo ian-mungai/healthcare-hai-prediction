@@ -21,6 +21,7 @@ from scripts.quality.model_metadata import load_yaml
 
 TABLE = {"table": "files", "collection": "cms/synthetic", "roles": ["data"], "format": "csv", "encodings": ["utf-8"], "member_pattern": r"\.csv$"}
 CONTENT_SENTINEL = "SYNTHETIC_CONTENT_MUST_NOT_APPEAR"
+SNAPSHOT_BASE = 101
 
 
 def manifest(snapshot: str, key: str, version: str = "v1") -> dict[str, Any]:
@@ -671,6 +672,9 @@ def bootstrap_repair_case(
         events.append(("dictionary", list(chosen)))
         return dict.fromkeys(chosen, 1)
 
+    def snapshots(_spark: Any, _namespace: Any, chosen: Any) -> dict[str, int]:
+        return {name: SNAPSHOT_BASE + number for number, name in enumerate(chosen)}
+
     def publish(_spark: Any, _namespace: Any, rows: Any) -> str:
         bronze_metadata.validate(rows)
         events.append(("publish", sorted({row["table_name"] for row in rows})))
@@ -691,6 +695,7 @@ def bootstrap_repair_case(
         patch.setattr(bronze, "prune", prune)
         patch.setattr(bronze, "write_copies", copies)
         patch.setattr(bronze, "verify", verify)
+        patch.setattr(bronze, "table_snapshots", snapshots)
         patch.setattr(dictionary, "build", dictionaries)
         patch.setattr(bronze_metadata, "publish", publish)
         patch.setattr(bronze_metadata, "write_bootstrap", lambda *_args: "synthetic-hash")
@@ -719,6 +724,8 @@ def bootstrap_repair_cases(root: Path) -> dict[str, bool]:
         "bootstrap repair validates full map before only named loads": good["code"] == 0 and good["events"] == expected,
         "bootstrap repair report names exact repair scope": (good["report"] or {}).get("repair_tables") == ["repair_a", "repair_b"],
         "bootstrap repair stops Spark": good["stops"] == [True],
+        "bootstrap repair report carries the snapshot of every table": (good["report"] or {}).get("snapshots")
+        == {"repair_a": SNAPSHOT_BASE, "repair_b": SNAPSHOT_BASE + 1, "untouched": SNAPSHOT_BASE + 2},
     }
     for label, settings, expected_events in (
         ("invalid metadata", {"bad_metadata": True}, []),
