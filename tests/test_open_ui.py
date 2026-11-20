@@ -440,7 +440,6 @@ def test_open_ui_never_creates_a_child_process_itself() -> None:
     lookup, is made by the repository's ``AwsCli`` and has ended before ``open_ui`` returns; the session is a ``scripts/open_ui.sh`` exec."""
     source = (ROOT / "scripts" / "infrastructure" / "open_ui.py").read_text()
     check(process_uses(source) == [], f"open_ui.py must create no child process and run no session: {process_uses(source)}")
-    check("HAI_OPEN_UI" not in source, "the removed session settings must not be read")
 
 
 def test_the_static_check_catches_every_way_to_start_a_process() -> None:

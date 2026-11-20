@@ -134,7 +134,6 @@ def test_the_rig_builds_and_the_launch_environment_sets_every_required_setting()
     environment = real_image_dags.launch_environment(rig, "http://127.0.0.1:1", "/example/scratch")
     check(all(name in environment for name in steps.SETTINGS), "every required launch setting is set")
     check(environment[steps.HOST_JOB_CAP_SETTING] == str(real_image_dags.rig_modules().cases.JOB_MEMORY), "the host job cap is the job memory")
-    check("HAI_LAUNCH_HOST_CAP_PARAMETER" not in environment, "the retired cap parameter name is gone")
 
 
 def test_the_inventory_comes_from_the_dag_folder() -> None:

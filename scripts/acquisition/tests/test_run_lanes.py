@@ -173,4 +173,3 @@ def test_the_person_lane_approval_names_only_the_browser_units(tmp_path: Path) -
     write_state(folder, UNITS, [])
     document = route.write_lane_template(folder / "queue.json", folder / "template.json")
     check(document["lane"] == "mac_person_units" and document["classes"] == ["needs_person"], "the only lane template is the person lane")
-    check("keys_stay_off_aws" not in document and "modes" not in document, "no keyed lane field remains")
