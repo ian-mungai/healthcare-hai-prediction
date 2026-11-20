@@ -56,7 +56,6 @@
       "removed function named in a typed file, left to MyPy": 5.582,
       "removed class named in Markdown, left to MyPy": 7.694,
       "allowlisted reference": 1.589,
-      "flag removed, continued shell command still passes it": 1.465,
       "config key removed, a docstring example sits beside the reader": 4.857,
       "function removed, a YAML key of the same spelling remains": 0.889,
       "step input removed, the same word is still a program in a script": 1.034,
@@ -739,7 +738,25 @@
       "planted regressions of every task of a shipped DAG is accepted: samples 1 to 3": 21.9,
       "planted regressions of a trigger task belongs to its own DAG only: samples 1 to 1": 7.3,
       "planted regressions of a value that is not a literal is not judged: samples 1 to 1": 7.3,
-      "planted regressions of a file that does not parse is skipped: samples 1 to 2": 14.6
+      "planted regressions of a file that does not parse is skipped: samples 1 to 2": 14.6,
+      "flag removed, a command that names the script by its path still passes it": 3.98,
+      "flag removed, a command that names the script by its file name still passes it": 3.98,
+      "flag removed, a command that names the script by its module still passes it": 3.98,
+      "flag removed, the same text in another program's command": 3.98,
+      "flag removed, a longer flag is another flag": 3.98,
+      "flag removed, a script of a longer name is another script": 3.98,
+      "flag removed, a command split over several lines is not seen": 3.98,
+      "flag removed, the owning script still mentions it": 3.98,
+      "flag removed, the old script's command after the flag moved to another script": 3.98,
+      "flag removed, the new script's command after the flag moved to it": 3.98,
+      "flag removed, another program's command after the script was deleted": 3.98,
+      "flag removed, the command of a deleted script is reported by the script name": 3.98,
+      "planted regressions of a flag counts only on a line that names its script: samples 1 to 3": 7.2,
+      "planted regressions of the file name of a script marks its command: samples 1 to 1": 2.4,
+      "planted regressions of the path of a script marks its command: samples 1 to 1": 2.4,
+      "planted regressions of the module of a script marks its command: samples 1 to 1": 2.4,
+      "planted regressions of the owning script is not searched for its own flag: samples 1 to 1": 2.4,
+      "planted regressions of a flag is read as a whole word: samples 1 to 1": 2.4
     }
   }
 }

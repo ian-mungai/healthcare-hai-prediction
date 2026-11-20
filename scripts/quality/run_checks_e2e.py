@@ -888,7 +888,7 @@ UMLAUT_HELP = 'help="Unterschrift f\u00fcr den Bericht"'
 UTF8_HEAD = LATIN1_HEAD.replace("latin-1", "utf-8")
 SIGN_OFF_LINE = f'P.{ADD_ARGUMENT}("{SIGN_OFF}", {UMLAUT_HELP})\n'
 ARCHIVE_LINE = f'P.{ADD_ARGUMENT}("{ARCHIVE_FLAG}", {UMLAUT_HELP})\n'
-SIGN_OFF_CALLER = f"python tools/digest.py \\\n    {SIGN_OFF} /work/signoff.json\n"
+SIGN_OFF_CALLER = f"cd /work\npython tools/digest.py {SIGN_OFF} /work/signoff.json\n"
 PAD_LINES = "PAD = 1\n" * 1200  # Git reads only the first 8000 bytes to decide whether a file is binary.
 BINARY_NOTICE = ": skipped: binary data (NUL bytes), not checked for removed names"
 CAFE_FLAG = "--caf\u00c3\u00aa"  # The two bytes of UTF-8 \u00ea, read as Latin-1 text.
@@ -2314,6 +2314,78 @@ TASK_ID_CASES = [
 ]
 
 
+DIGEST_SOURCE = f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{SIGN_OFF}")\n'
+DIGEST_EDITED = "import argparse\n\nP = argparse.ArgumentParser()\n"
+REPORT = "tools/run_report.sh"
+RETIRED = "retired" + "_digest.py"
+
+
+def flag_case(name: str, caller: str, reason: str = "", files: dict[str, str | bytes] | None = None, committed: dict[str, str | bytes] | None = None) -> Case:
+    """A removed-names case: ``tools/digest.py`` loses its flag and ``tools/run_report.sh`` holds ``caller``; ``reason`` blocks it."""
+    return Case(
+        f"flag removed, {name}",
+        "removed-names",
+        not reason,
+        committed={"tools/digest.py": DIGEST_SOURCE, REPORT: caller, **(committed or {})},
+        files={"tools/digest.py": DIGEST_EDITED} if files is None else files,
+        reason=reason,
+    )
+
+
+def flag_cases() -> list[Case]:
+    """The flag rule: a flag that an edited script lost counts only on a line that also names that script, and a deleted script gives no flag."""
+    other: dict[str, str | bytes] = {"tools/other.py": DIGEST_EDITED}
+    moved: dict[str, str | bytes] = {"tools/digest.py": DIGEST_EDITED, "tools/other.py": DIGEST_SOURCE}
+    return [
+        flag_case(
+            "a command that names the script by its path still passes it",
+            f"python tools/digest.py {SIGN_OFF} /work/a.json\n",
+            f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}",
+        ),
+        flag_case(
+            "a command that names the script by its file name still passes it", f"cd tools && digest.py {SIGN_OFF}\n", f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}"
+        ),
+        flag_case(
+            "a command that names the script by its module still passes it", f"python -m tools.digest {SIGN_OFF}\n", f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}"
+        ),
+        flag_case("the same text in another program's command", f"report_tool {SIGN_OFF} /work/a.json\n"),
+        flag_case("a longer flag is another flag", f"python tools/digest.py {SIGN_OFF}-all\n"),
+        flag_case("a script of a longer name is another script", f"python tools/old_digest.py {SIGN_OFF}\n"),
+        flag_case("a command split over several lines is not seen", f"python tools/digest.py \\\n    {SIGN_OFF} /work/a.json\n"),
+        flag_case(
+            "the owning script still mentions it",
+            "echo done\n",
+            files={"tools/digest.py": DIGEST_EDITED + f"# python tools/digest.py {SIGN_OFF} was a flag\n"},
+        ),
+        flag_case(
+            "the old script's command after the flag moved to another script",
+            f"python tools/digest.py {SIGN_OFF}\n",
+            f"{REPORT}:1: {SIGN_OFF} {LEFTOVER}",
+            files=moved,
+            committed=other,
+        ),
+        flag_case("the new script's command after the flag moved to it", f"python tools/other.py {SIGN_OFF}\n", files=moved, committed=other),
+        Case(
+            "flag removed, another program's command after the script was deleted",
+            "removed-names",
+            True,
+            committed={f"tools/{RETIRED}": DIGEST_SOURCE, REPORT: f"report_tool {SIGN_OFF}\n"},
+            delete=[f"tools/{RETIRED}"],
+        ),
+        Case(
+            "flag removed, the command of a deleted script is reported by the script name",
+            "removed-names",
+            False,
+            committed={f"tools/{RETIRED}": DIGEST_SOURCE, REPORT: f"python tools/{RETIRED} {SIGN_OFF}\n"},
+            delete=[f"tools/{RETIRED}"],
+            reason=f"{REPORT}:1: {RETIRED} {LEFTOVER}",
+        ),
+    ]
+
+
+FLAG_CASES = flag_cases()
+
+
 CASES = [
     Case("clean file", "gitleaks", True, {"notes.md": "Nothing secret here.\n"}),
     Case("GitHub token", "gitleaks", False, {"config.py": f'GITHUB = "{FAKE_PAT}"\n'}),
@@ -2916,7 +2988,7 @@ CASES = [
         False,
         committed={
             "scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\nP." + ADD_ARGUMENT + f'("{OLD_FLAG}")\n',
-            "README.md": f"Use `{OLD_FLAG}`.\n",
+            "README.md": f"Run `python scripts/tool.py {OLD_FLAG}`.\n",
         },
         files={"scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\n"},
     ),
@@ -2972,20 +3044,10 @@ CASES = [
         "allowlisted reference",
         "removed-names",
         True,
-        committed={"app/tool.py": f'P.{ADD_ARGUMENT}("{OLD_FLAG}")\n', "docs/history.md": f"The `{OLD_FLAG}` era.\n"},
+        committed={"app/tool.py": f'P.{ADD_ARGUMENT}("{OLD_FLAG}")\n', "docs/history.md": f"The `app/tool.py {OLD_FLAG}` era.\n"},
         files={"app/tool.py": "X = 1\n", ".cleanup_allowlist": "flag docs/history.md -- migration notes keep the old flag -- permanent\n"},
     ),
-    Case(
-        "flag removed, continued shell command still passes it",
-        "removed-names",
-        False,
-        committed={
-            "tools/digest.py": f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{SIGN_OFF}")\n',
-            "tools/run_report.sh": f"python tools/digest.py \\\n    {SIGN_OFF} /work/signoff.json\n",
-        },
-        files={"tools/digest.py": "import argparse\n\nP = argparse.ArgumentParser()\n"},
-        reason=f"tools/run_report.sh:2: {SIGN_OFF} {LEFTOVER}",
-    ),
+    *FLAG_CASES,
     Case(
         "config key removed, a docstring example sits beside the reader",
         "removed-names",
@@ -4276,6 +4338,69 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         "except (OSError, SyntaxError, ValueError):",
         "except OSError:",
+        1,
+    ),
+    (
+        "a flag counts only on a line that names its script",
+        [
+            case
+            for case in FLAG_CASES
+            if case.name
+            in (
+                "flag removed, the same text in another program's command",
+                "flag removed, a script of a longer name is another script",
+                "flag removed, the new script's command after the flag moved to it",
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?=.*(?<![\\w./-])(?:{'|'.join(sorted(names))})(?![\\w-]))",
+        "",
+        1,
+    ),
+    (
+        "the file name of a script marks its command",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its file name still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(Path(path).name, path, ",
+        "(path, path, ",
+        0,
+    ),
+    (
+        "the path of a script marks its command",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its path still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(Path(path).name, path, ",
+        "(Path(path).name, Path(path).name, ",
+        0,
+    ),
+    (
+        "the module of a script marks its command",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a command that names the script by its module still passes it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'path.removesuffix(".py").replace("/", ".")',
+        "path",
+        0,
+    ),
+    (
+        "the owning script is not searched for its own flag",
+        [case for case in FLAG_CASES if case.name in ("flag removed, the owning script still mentions it",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if kind == "flag" and path in owners[name]:',
+        "if False:",
+        1,
+    ),
+    (
+        "a flag is read as a whole word",
+        [case for case in FLAG_CASES if case.name in ("flag removed, a longer flag is another flag",)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "{re.escape(flag)}(?![\\w-]))(?=",
+        "{re.escape(flag)})(?=",
         1,
     ),
     (

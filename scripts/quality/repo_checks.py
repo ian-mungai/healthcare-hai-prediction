@@ -1489,6 +1489,26 @@ def file_name_pattern(name: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)")
 
 
+def lost_flags(before: dict[str, list[str]], files: dict[str, list[str]]) -> dict[str, set[str]]:
+    """Return each flag that an edited script lost, with the scripts that lost it: defined in the file before and in no definition of the same file now.
+
+    A deleted script loses none: its file name and its module already mark every command that runs it (``deleted_module_findings``).
+    """
+    lost: dict[str, set[str]] = {}
+    for path, lines in before.items():
+        kept = files.get(path, [])
+        if path.endswith(".py") and path in files:
+            for flag in set(FLAG.findall("\n".join(lines))) - set(FLAG.findall("\n".join(kept))):
+                lost.setdefault(flag, set()).add(path)
+    return lost
+
+
+def flag_pattern(flag: str, scripts: set[str]) -> re.Pattern[str]:
+    """Return the pattern of a line that holds ``flag`` and names one of ``scripts`` by file name, repository path or dotted module."""
+    names = {re.escape(name) for path in scripts for name in (Path(path).name, path, path.removesuffix(".py").replace("/", "."))}
+    return re.compile(rf"^(?=.*{re.escape(flag)}(?![\w-]))(?=.*(?<![\w./-])(?:{'|'.join(sorted(names))})(?![\w-]))")
+
+
 def removed_definitions(
     removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]], before: dict[str, list[str]]
 ) -> dict[str, dict[str, re.Pattern[str]]]:
@@ -1499,6 +1519,9 @@ def removed_definitions(
     assignment or field). The top-level names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local
     variable, a YAML column) is no leftover. The module is checked by ``deleted_module_findings``. A deleted schema is checked by its file name, and every
     ``$id`` that a deleted or changed JSON file no longer declares is a name too, not the property names.
+
+    A flag counts as removed only for an edited script that defined it before and no longer does (``lost_flags``), and only on a line that holds the flag and
+    names that script (``flag_pattern``). A command split over several lines is not seen: the flag and the script name must share one line.
     """
 
     def gone(found: set[str], still: set[str]) -> set[str]:
@@ -1517,8 +1540,8 @@ def removed_definitions(
             stem = re.escape(Path(path).stem)
             kinds["dbt"][Path(path).stem] = re.compile(rf"""ref\(\s*["']{stem}["']\s*\)|name:\s*{stem}\b|(?<![\w.]){stem}(?![\w.])""")
     code_now, code_removed = joined(files, {".py"}), joined(removed, {".py"})
-    for flag in gone(set(FLAG.findall(code_removed)), set(FLAG.findall(code_now))):
-        kinds["flag"][flag] = re.compile(re.escape(flag) + r"(?![\w-])")
+    for flag, scripts in lost_flags(before, files).items():
+        kinds["flag"][flag] = flag_pattern(flag, scripts)
     env_now = set(ENV_READ.findall(code_now)) | {a or b for a, b in ENV_USE.findall(joined(files, {".sh", ".yml", ".yaml", ".json", ".tf", ".tpl", ".j2", ""}))}
     for name in gone(set(ENV_READ.findall(code_removed)), env_now):
         kinds["env"][name] = re.compile(rf"\b{name}\b")
@@ -1951,7 +1974,9 @@ def removed_names() -> list[Finding]:
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
     files = reference_files(record_skips=True)
-    kinds = removed_definitions(removed, deleted, files, before_texts(changed_paths()))
+    before = before_texts(changed_paths())
+    kinds = removed_definitions(removed, deleted, files, before)
+    owners = lost_flags(before, files)
     unchecked = mypy_uncovered_files() if kinds["python"] else set()
     findings += deleted_modules_left(removed, deleted, files, allowed)
     for kind, names in kinds.items():
@@ -1960,6 +1985,8 @@ def removed_names() -> list[Finding]:
         blobs: dict[str, str] = {}
         for name, pattern in sorted(names.items()):
             for path, lines in files.items():
+                if kind == "flag" and path in owners[name]:
+                    continue
                 if path not in views:
                     view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
                     if view is not None and kind == "config":
