@@ -128,7 +128,6 @@ SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TASK_IDS_RULE = f"{POLICY}: a task ID beside a shipped DAG names a task the DAG has"
 TASK_KEY = re.compile(r'"task_id"\s*:\s*"')
 GROUPED_M = re.compile(r"-[A-Za-z]*m")
-# The module of an ellipsis prefix, quoted with one pair of quotes or not quoted: a quote that is not the pair of the module's own is another word's.
 ELLIPSIS_MODULE = re.compile(r"(-[A-Za-z]*m\s*)(?:([\"'`])[\w.]+\.\.\.\2|[\w.]+\.\.\.)")
 COMMAND_STRING = re.compile(r'"([^"]*)"|\'([^\']*)\'')
 COMMAND_MODULES_RULE = f"{POLICY}: a python -m command names a module of this repository that exists"
