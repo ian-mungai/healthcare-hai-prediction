@@ -84,29 +84,47 @@ def joint_significance(pipeline: Any, process_references: Sequence[str]) -> dict
     }
 
 
-def intercept_cmi_predictions(request: ModelRequest) -> Array:
-    """Fit the intercept-plus-CMI model on the training years and predict the newest-year holdout rows, in their extract order."""
+def intercept_cmi_fit(request: ModelRequest, winsorize: bool = False) -> tuple[Array, FoldPreprocessor]:
+    """Fit the intercept-plus-CMI model on the training years and predict the newest-year holdout rows, in their extract order.
+
+    With ``winsorize`` the CMI is clipped at the 1st and 99th percentiles of the training rows, as the Elastic Net does, and the same bounds clip the holdout
+    rows. Returns the predictions and the fitted preprocessor, which holds the bounds.
+    """
     training, holdout = request.data.split()
     features = tuple(feature for feature in request.data.features if feature.reference == request.cmi_reference)
     if len(features) != 1:
         raise ModelError("intercept comparison requires one registered CMI reference")
-    transform = FoldPreprocessor(features, forced=(request.cmi_reference,))
+    transform = FoldPreprocessor(features, forced=(request.cmi_reference,), winsorize=winsorize)
     design = transform.fit_transform(training.rows)
     baseline = OLSRegressor().fit(design, training.y)
     request.deadline.check()
-    return np.asarray(baseline.predict(transform.transform(holdout.rows)), dtype=np.float64).reshape(-1)
+    return np.asarray(baseline.predict(transform.transform(holdout.rows)), dtype=np.float64).reshape(-1), transform
+
+
+def intercept_cmi_predictions(request: ModelRequest) -> Array:
+    """The intercept-plus-CMI predictions on the raw CMI, as the promotion check scores them."""
+    return intercept_cmi_fit(request)[0]
 
 
 def intercept_cmi_comparison(
-    request: ModelRequest, elastic_predictions: tuple[float, ...], references: Sequence[str], parameters: Mapping[str, Any]
+    request: ModelRequest,
+    elastic_predictions: tuple[float, ...],
+    references: Sequence[str],
+    parameters: Mapping[str, Any],
+    elastic_bounds: Mapping[str, tuple[float, float]],
 ) -> dict[str, Any]:
     """Score an Elastic Net over the process measures and CMI alone against an intercept-plus-CMI model on the same holdout rows.
 
     ``elastic_predictions`` come from the fit on the declared ``references`` with the tuned ``parameters``. The record lists the declared inputs, and the fit's
-    missing-value selection can still drop some.
+    missing-value selection can still drop some. Both sides clip CMI at the same bounds, learned on the training rows: ``elastic_bounds`` are the cut points
+    of the Elastic Net's final fit, and the baseline learns its own from the same rows with the same code. The record states them.
     """
     holdout = request.data.split()[1]
-    baseline_metric = metrics(holdout.y, intercept_cmi_predictions(request))["rmse"]
+    baseline, transform = intercept_cmi_fit(request, winsorize=True)
+    bounds = transform.bounds_.get(request.cmi_reference)
+    if bounds != elastic_bounds.get(request.cmi_reference):
+        raise ModelError("the two sides of the RQ1 comparison clip CMI at different bounds")
+    baseline_metric = metrics(holdout.y, baseline)["rmse"]
     expanded_metric = metrics(holdout.y, np.asarray(elastic_predictions))["rmse"]
     return {
         "status": "fitted",
@@ -117,6 +135,12 @@ def intercept_cmi_comparison(
         "elastic_net_references": list(references),
         "elastic_net_alpha": float(parameters["alpha"]),
         "elastic_net_l1_ratio": float(parameters["l1_ratio"]),
+        "cmi_clipping": {
+            "both_sides": True,
+            "learned_on": "training_rows",
+            "lower": None if bounds is None else bounds[0],
+            "upper": None if bounds is None else bounds[1],
+        },
     }
 
 

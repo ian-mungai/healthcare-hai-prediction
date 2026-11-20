@@ -131,6 +131,31 @@ def planted(source: Any, years: Sequence[int], count: int = 6, value: float = 1.
     return replace(source, data=Dataset(rows, source.data.features, "HAI_1"))
 
 
+def noise_process_request() -> Any:
+    """``flagged_request`` whose outcome depends on CMI alone, whose process measure is independent noise and whose CMI has extreme values.
+
+    Two hospitals have one in a training year, which is fewer than the 1 percent that the 99th percentile passes over, and six have one in the holdout year."""
+    from scripts.training.models.common import Dataset
+
+    base = flagged_request()
+    rng = np.random.default_rng(17)
+    marked = {str(990000 + number) for number in range(6)}
+    rows = tuple(
+        {
+            **row,
+            "process": float(rng.normal()),
+            "cmi": 1.0e4
+            if (row["ccn"] in marked and row["window_year"] == 2023) or (row["ccn"] in {"990000", "990001"} and row["window_year"] == 2020)
+            else row["cmi"],
+            "hai_1__sir__number": float(2 + 0.5 * row["cmi"] + 0.05 * rng.normal()),
+        }
+        for row in base.data.rows
+    )
+    grid = {"alpha": [1.0e9], "l1_ratio": [0.5]}
+    slots = {**base.config["slots"], "m2_elastic_net": {**base.config["slots"]["m2_elastic_net"], "grid": grid}}
+    return replace(base, data=Dataset(rows, base.data.features, "HAI_1"), config={**base.config, "slots": slots})
+
+
 def traced(call: Callable[[], Any]) -> tuple[Any, list[dict[str, Any]], list[tuple[frozenset[str], Any]]]:
     """Run a model call and return its result, every preprocessing fit in call order (its rows and its design of those rows) and every plain-row transform."""
     from scripts.training.models.preprocessing import FeatureBatch, FoldPreprocessor
@@ -774,6 +799,55 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             require(output.slots["m2_elastic_net"].status == "not_estimable", f"{name}: the full Elastic Net should fail without forced CMI")
             record = output.research["process_vs_intercept_cmi"]
             require(record["status"] == "fitted" and "elastic_net_rmse" in record, f"{name}: RQ1 was skipped after the full fit failed: {record}")
+
+    def rq1_baseline_clips_cmi_at_the_same_bounds() -> None:
+        quiet = noise_process_request()
+        with libraries():
+            record, fits, transforms = traced(lambda: suite.process_cmi_comparison(quiet))
+        require(record["status"] == "fitted", f"the comparison did not fit: {record}")
+        training, holdout = quiet.data.split()
+        observed = np.asarray([row["cmi"] for row in training.rows])
+        low, high = np.percentile(observed, (1, 99))
+        clipped = np.clip(observed, low, high)
+        center, scale = float(clipped.mean()), float(clipped.std())
+        require(observed.max() == 1.0e4 and high < 100, "the fixture has no extreme CMI to clip")
+        elastic_train, baseline_train = fits[-2]["design"], fits[-1]["design"]
+        elastic_holdout, baseline_holdout = transforms[-2][1], transforms[-1][1]
+        require(set(fits[-2]["keys"]) == set(training.keys) == set(fits[-1]["keys"]), "the two sides did not fit CMI on the same training rows")
+        expected_train = (clipped - center) / scale
+        expected_holdout = (np.clip([row["cmi"] for row in holdout.rows], low, high) - center) / scale
+        for name, design, expected in (
+            ("elastic net training", elastic_train, expected_train),
+            ("baseline training", baseline_train, expected_train),
+            ("elastic net holdout", elastic_holdout, expected_holdout),
+            ("baseline holdout", baseline_holdout, expected_holdout),
+        ):
+            require(
+                np.allclose(design.matrix[:, design.names.index("cmi")], expected), f"the {name} CMI column is not the training-bounds clip of the CMI values"
+            )
+        require(
+            np.array_equal(elastic_train.matrix[:, elastic_train.names.index("cmi")], baseline_train.matrix[:, baseline_train.names.index("cmi")]),
+            "the training CMI columns differ",
+        )
+        require(abs(record["rmse_improvement"]) < 1e-6, f"with no process signal and equal CMI the two sides should score alike: {record['rmse_improvement']}")
+        clipping = record["cmi_clipping"]
+        require(
+            clipping["both_sides"] is True
+            and clipping["learned_on"] == "training_rows"
+            and np.isclose(clipping["lower"], low)
+            and np.isclose(clipping["upper"], high),
+            f"the record does not state the bounds: {clipping}",
+        )
+
+    def other_intercept_cmi_models_keep_raw_cmi() -> None:
+        quiet = noise_process_request()
+        training, holdout = quiet.data.split()
+        raw = np.asarray([row["cmi"] for row in training.rows])
+        slope, intercept = np.polyfit(raw, training.y, 1)
+        expected = intercept + slope * np.asarray([row["cmi"] for row in holdout.rows])
+        with libraries():
+            predicted = research_tests.intercept_cmi_predictions(quiet)
+        require(np.allclose(predicted, expected, atol=1e-6), "the shared intercept-plus-CMI helper no longer fits the raw CMI")
 
     def rq1_comparison_columns_in_the_real_lists() -> None:
         from scripts.training import job_inputs
@@ -2770,6 +2844,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("other_models_are_not_winsorized", other_models_are_not_winsorized),
         ("rq1_comparison_fits_process_measures_and_cmi_only", rq1_comparison_fits_process_measures_and_cmi_only),
         ("rq1_comparison_columns_in_the_real_lists", rq1_comparison_columns_in_the_real_lists),
+        ("rq1_baseline_clips_cmi_at_the_same_bounds", rq1_baseline_clips_cmi_at_the_same_bounds),
+        ("other_intercept_cmi_models_keep_raw_cmi", other_intercept_cmi_models_keep_raw_cmi),
         ("elastic_net_fits_each_fold_on_its_fitting_labels", elastic_net_fits_each_fold_on_its_fitting_labels),
         ("elastic_net_selects_the_lowest_validation_error", elastic_net_selects_the_lowest_validation_error),
         ("rq1_comparison_keeps_the_restricted_fits_status", rq1_comparison_keeps_the_restricted_fits_status),

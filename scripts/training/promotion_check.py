@@ -1,11 +1,11 @@
 """The promotion_check action: register the run's candidate, score it against the champion on the same holdout and record the verdict.
 
-With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the same training years as the fit step's RQ1 test; a pass
-is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias and sets no alias: the research action
-chooses the one challenger of a type among the versions of m1, m2 and m4 that passed. A champion whose columns this run's extract lacks cannot be scored, and
-the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns``, or whose list file cannot be downloaded, read or
-parsed, is never loaded or scored: the check fails with ``champion_feature_list_invalid``. The comparison files are written and checked before any version
-tag. The check reads the written Parquet file back and repeats the rule on it.
+With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the raw CMI of the same training years that the fit step's
+RQ1 test uses (that test clips CMI); a pass is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias
+and sets no alias: the research action chooses the one challenger of a type among the versions of m1, m2 and m4 that passed. A champion whose columns this
+run's extract lacks cannot be scored, and the version gets the verdict ``not_comparable``. A champion whose feature list has no usable ``columns``, or whose
+list file cannot be downloaded, read or parsed, is never loaded or scored: the check fails with ``champion_feature_list_invalid``. The comparison files are
+written and checked before any version tag. The check reads the written Parquet file back and repeats the rule on it.
 
 A model is read as data only, never through ``mlflow.sklearn.load_model`` (which reads ``MLmodel``, imports the artifact's code folder and takes trusted types
 from the artifact): the challenger from its own ``model.skops`` and the champion from the four fixed files of its run, fetched one by one through the bounded
@@ -172,7 +172,7 @@ def champion_predictions(
 def baseline_predictions(
     hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str, cmi: Mapping[str, float | None] | None = None
 ) -> tuple[dict[str, float] | None, dict[str, Any]]:
-    """With no champion, fit the intercept + CMI baseline the fit step's RQ1 test fits, on the same training years, and predict the holdout.
+    """With no champion, fit the intercept + CMI baseline on the raw CMI of the training years that the fit step's RQ1 test uses, and predict the holdout.
 
     A model whose own list leaves CMI out (m1) gets CMI from ``cmi``, the extract's separate table, for this fit only; its own specification is unchanged.
 

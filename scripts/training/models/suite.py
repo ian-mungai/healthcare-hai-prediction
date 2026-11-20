@@ -315,12 +315,15 @@ def process_cmi_references(request: ModelRequest) -> tuple[str, ...]:
 
 
 def process_cmi_comparison(request: ModelRequest) -> dict[str, Any]:
-    """Fit the Elastic Net on the process measures and CMI alone, with the tuning and winsorizing of m2, and score it against the intercept-plus-CMI model."""
+    """Fit the Elastic Net on the process measures and CMI alone, with the tuning and winsorizing of m2, and score it against the intercept-plus-CMI model.
+
+    Both sides clip CMI at the same training-row bounds."""
     references = process_cmi_references(request)
     fitted = fit_slot(replace(request, feature_lists={**request.feature_lists, "m2_elastic_net": references}), "m2_elastic_net")
     if fitted.status != "fitted":
         return {"status": fitted.status, "reason": fitted.reason}
-    return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"])
+    bounds = fitted.pipeline.named_steps["prepare"].bounds_
+    return research_tests.intercept_cmi_comparison(request, fitted.predictions, references, fitted.details["selected_parameters"], bounds)
 
 
 def validation_split(data: Dataset, last_year: int, years: Sequence[int]) -> tuple[Dataset, Dataset]:

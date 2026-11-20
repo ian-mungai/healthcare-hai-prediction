@@ -10,6 +10,7 @@ import importlib
 import io
 import itertools
 import json
+import math
 import os
 import re
 import shutil
@@ -1839,17 +1840,16 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             "the comparison hash tag differs",
         )
         table = read_parquet(fixture.out / f"comparison_{HAI_TYPE}.parquet")
-        expected, _ = baseline_of(fixture)
+        expected, observed = baseline_of(fixture)
         require(set(table[0]) == set(promotion.COLUMNS), f"comparison rows: {sorted(table[0])}")
         require(
             all(abs(row["champion_prediction"] - expected[row["spine_key"]]) < 1e-9 for row in table),
             "the reference column does not hold the intercept + CMI baseline of the fit's training years",
         )
-        logged = json.dumps(json.loads((fixture.folder / "in/fit" / BUNDLE / "result.json").read_text()))
-        research = re.search(r'"intercept_cmi_rmse": ([0-9.eE+-]+)', logged)
+        raw_rmse = math.sqrt(sum((observed[key] - expected[key]) ** 2 for key in expected) / len(expected))
         require(
-            research is None or abs(float(research[1]) - document["verdict"]["baseline_rmse"]) < 1e-9,
-            f"the baseline RMSE differs from the fit's RQ1 intercept + CMI RMSE: {research and research[1]} {document['verdict'].get('baseline_rmse')}",
+            abs(raw_rmse - document["verdict"]["baseline_rmse"]) < 1e-9,
+            f"the baseline RMSE is not that of the raw-CMI intercept + CMI baseline: {raw_rmse} {document['verdict'].get('baseline_rmse')}",
         )
         promotion_run = [run for run in store.active().values() if run["tags"].get("step_key") == "promotion"]
         require(
