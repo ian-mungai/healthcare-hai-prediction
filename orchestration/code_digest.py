@@ -170,7 +170,7 @@ def snapshot_training(checkout: Path, folder: Path, run_id: str, *, git_reader: 
     if code.exists():
         _regular(pending)
         record = json.loads(pending.read_bytes())
-        if record.get("run_id") != run_id or file_entries(code, deadline=stop) != record.get("files"):
+        if record.get("run_id") != run_id or file_entries(code, (".",), deadline=stop) != record.get("files"):
             raise SnapshotError("interrupted snapshot does not match its pending record")
         os.replace(pending, folder / RECORD)
         return verify_snapshot(folder, run_id, deadline=stop)

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -105,6 +106,65 @@ def snapshot_cases(cases: Cases, folder: Path) -> None:
         require(first == second and not (run / code_digest.PENDING).exists(), "snapshot retry changed its identity or left the pending record")
 
     cases.check("snapshot_pending_without_code_retries", retry)
+
+    def interrupt_record(before: Any, after: Any) -> None:
+        if Path(after).name == code_digest.RECORD:
+            raise OSError("synthetic interruption before the record")
+        replace_file(before, after)
+
+    def interrupted(name: str, saved: Callable[[Path, Path], None] | None = None) -> Path:
+        """Interrupt the real snapshot after it published its code and before it published its record, then let ``saved`` change the saved tree."""
+        target = folder / name
+        with mock.patch.object(code_digest.os, "replace", side_effect=interrupt_record):
+            try:
+                code_digest.snapshot_training(source, target, RUN, git_reader=fixture_git)
+            except OSError as error:
+                require("before the record" in str(error), "the snapshot stopped for another cause")
+        require((target / "code").is_dir() and (target / code_digest.PENDING).is_file() and not (target / code_digest.RECORD).exists(), "not the crash point")
+        if saved is not None:
+            saved(target / "code", target / code_digest.PENDING)
+        return target
+
+    def as_old_writer(code: Path, pending: Path) -> None:
+        """Save a file outside the current training roots and list it in the pending record, as an older writer did."""
+        (code / "legacy").mkdir()
+        (code / "legacy/saved_input.md").write_text("saved input\n")
+        (code / "legacy/saved_input.md").chmod(0o444)
+        entries = code_digest.file_entries(code, (".",))
+        record = json.loads(pending.read_bytes())
+        code_digest._write(pending, {**record, "code_digest": code_digest.entries_digest(entries), "files": entries})
+
+    def resumes(target: Path, outside_roots: bool) -> None:
+        pending = json.loads((target / code_digest.PENDING).read_bytes())
+        record = code_digest.snapshot_training(source, target, RUN, git_reader=fixture_git)
+        require(record == pending and (target / code_digest.RECORD).is_file() and not (target / code_digest.PENDING).exists(), "the retry changed the record")
+        require(
+            any(entry["path"] == "legacy/saved_input.md" for entry in record["files"]) is outside_roots,
+            "the saved tree and the record disagree on the saved file",
+        )
+        require(code_digest.verify_snapshot(target, RUN)["code_digest"] == pending["code_digest"], "the resumed snapshot has another digest")
+
+    cases.check("snapshot_interrupted_after_code_resumes", lambda: resumes(interrupted("after_code"), False))
+    cases.check("snapshot_interrupted_with_a_saved_file_outside_the_roots_resumes", lambda: resumes(interrupted("old_outside_roots", as_old_writer), True))
+
+    def changed_file(code: Path, pending: Path) -> None:
+        as_old_writer(code, pending)
+        (code / "legacy/saved_input.md").chmod(0o644)
+        (code / "legacy/saved_input.md").write_text("changed input\n")
+
+    def added_file(code: Path, pending: Path) -> None:
+        (code / "scripts/extra.py").write_text("unexpected staged code\n")
+
+    def removed_file(code: Path, pending: Path) -> None:
+        (code / "scripts/sample.py").unlink()
+
+    for name, saved in (("changed_saved_file", changed_file), ("added_saved_file", added_file), ("removed_saved_file", removed_file)):
+        target = interrupted(name, saved)
+        cases.refuses(
+            f"snapshot_interrupted_with_{name}_refused",
+            partial(code_digest.snapshot_training, source, target, RUN, git_reader=fixture_git),
+            "interrupted snapshot does not match its pending record",
+        )
 
 
 def rendered_cases(cases: Cases, folder: Path) -> None:
