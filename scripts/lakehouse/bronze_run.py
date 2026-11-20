@@ -563,23 +563,28 @@ def record_carried_over(
 
     Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The counts are those of the
     capture's own check over every run record read, the original and the retry days (``ingestion_schedule.capture_counts``). A run record that is missing
-    or cannot be read is named in the notice and its files are not counted. The notice is sent for every run that has a capture root, also when nothing
-    is missing. A run with no capture root (a hand-staged bronze run) sends it only for a skipped table, and the record names the skipped tables whether
-    or not it is sent.
+    or cannot be read is named in the notice and its files are not counted, so the counts of the records that were read still appear, and the notice says
+    every file was captured only when all records were read. A failed read of a capture record does not stop the notice: the email names that record. The
+    notice is sent for every run that has a capture root, also when nothing is missing. A run with no capture root (a hand-staged bronze run) sends it only
+    for a skipped table, and the record names the skipped tables whether or not it is sent.
 
-    An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt: if it exists, the attempt sends nothing and
-    reports it. Otherwise it sends the notice and then writes that one record, with what was reported and the outcome (``sent``, or why none will be sent).
-    The record is written only after a send or when no notice will ever be sent. A notice whose read or send failed leaves no record, so the next attempt of
-    the check tries again. An interruption between the send and the record, or two attempts at once, sends twice: an email is never lost while the check
-    runs again.
+    An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt. If its outcome is final, the attempt sends
+    nothing and reports it. Final outcomes are ``sent`` and the outcomes of a notice that is not needed or cannot be sent (``not needed ...``,
+    ``not sent ...``). A record of the earlier notice code that says ``claimed`` (the outcome was never known) or ``failed ...`` is not final: the attempt
+    sends, the create-only grant refuses a new record, the old one stays, and each later attempt of that run sends again. Otherwise the attempt sends the
+    notice and then writes that one record, with what was reported and the outcome. A failed read of the earlier record or a failed send leaves no record,
+    so the next attempt of the check tries again. Duplicate emails are accepted (owner, Nov 20 2026) in these cases: an interruption between the send and
+    the record, two attempts at once, a write of the record that failed, a refused read of an existing record (read as "no record") and a record of the
+    earlier code that is not final. An email is never lost while the check runs again.
 
     Nothing in the notice fails the run: any error, including a refused write of the record, is shown on standard error and returned in the report.
 
-    Accepted limit (owner, Nov 20 2026). Each call of the notice has a 2 second connect timeout, a 3 second read timeout and one attempt. A stalled or
-    refused connection therefore ends within those timeouts. The notice makes at most 9 calls (the earlier record, a listing and a read for each of the 3 run
-    records, the send and the record write), so a stall on every call delays the check by at most 9 x (2 + 3) = 45 seconds. A reply that keeps arriving a
-    byte at a time is not bounded: it delays the check for as long as it lasts. The owner accepted this because the notice talks only to the cloud
-    provider's storage and notification services.
+    Accepted limit (owner, Nov 20 2026): the notice has no overall deadline. Each call of its own clients has a 2 second connect timeout, a 3 second read
+    timeout and one attempt, so a stalled or refused connection ends within those timeouts. The notice makes at most 9 calls (the earlier record, a listing
+    and a read for each of the 3 run records, the send and the record write). As an estimate, a stall on every one of those calls delays the check by at most
+    9 x (2 + 3) = 45 seconds. Two cases can add to that estimate, and no code limits them: a storage redirect to another region repeats the request, and
+    a fresh credential lookup retries on its own. A reply that keeps arriving a byte at a time is not bounded: it delays the check for as long as it
+    lasts. The owner accepted this because the notice talks only to the cloud provider's storage and notification services.
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder, key = f"{root}ingestion_runs/", f"lakehouse/bronze_runs/{run}/carried_over.json"
@@ -587,7 +592,7 @@ def record_carried_over(
     document["carried_over"] = None
     try:
         earlier = read_own_record(client, bucket, key)
-        if earlier is not None:
+        if earlier is not None and not str(earlier.get("notice")).startswith(("claimed", "failed")):
             return earlier
         counts, files, found, unread = None, [], {}, {}
         if not root:

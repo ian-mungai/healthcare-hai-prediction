@@ -34,9 +34,10 @@ def carried_over_notice(
     now: datetime | None = None,
 ) -> tuple[str, str]:
     """The subject and the message of the owner notice of a bronze run, sent for every run that follows a capture: the files the capture captured, failed
-    and held (``counts``, None when the original run record could not be read), every file still not captured by name, every table the stage left out with
-    its reason, the capture records it read (``read``) and one line for each run record that could not be read (``unread``, the run and why). It links the
-    bronze run to the ingestion run only by those records, and says a good month only when every record was read."""
+    and held (``counts``, None when no run record could be read, otherwise the counts of the records that were read), every file still not captured by
+    name, every table the stage left out with its reason, the capture records it read (``read``) and one line for each run record that could not be read
+    (``unread``, the run and why). It links the bronze run to the ingestion run only by those records, and says a good month only when every record was
+    read."""
     unread = unread or {}
     happened, affects, next_steps, details, pieces = [], [], [], [], []
     record = f"lakehouse/bronze_runs/{bronze_run}/carried_over.json"

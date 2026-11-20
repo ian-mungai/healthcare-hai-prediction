@@ -260,7 +260,7 @@ def test_an_original_record_that_is_not_json_not_an_object_or_has_no_failed_list
         {"paused_not_attempted": {"a": 1}},
     ],
 )
-def test_a_unit_list_or_id_of_the_wrong_type_makes_an_unreadable_record_and_never_a_count_or_an_error(units: dict[str, Any]) -> None:
+def test_a_unit_list_or_id_of_the_wrong_type_makes_an_unreadable_record_left_out_of_the_counts_and_never_an_error(units: dict[str, Any]) -> None:
     store = bucket([], run_record([], ["a__1__x"], raw=units))
     first = carried(store)
     message = store.published[0]["Message"]
@@ -317,7 +317,7 @@ def test_the_notice_clients_have_short_timeouts_and_one_attempt(monkeypatch: pyt
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
     options = bronze_run.notice_storage().client.meta.config
     check(
-        options.connect_timeout + options.read_timeout <= 5 and options.retries["total_max_attempts"] == 1,
+        (options.connect_timeout, options.read_timeout, options.retries["total_max_attempts"]) == (2, 3, 1),
         f"{options.connect_timeout} {options.read_timeout} {options.retries}",
     )
 
@@ -327,7 +327,7 @@ def test_the_sns_client_of_the_notice_is_made_with_the_short_timeouts_when_none_
     monkeypatch.setattr("boto3.client", lambda *args, **kwargs: made.append((args, kwargs)) or store)
     bronze_run.record_carried_over(store, BUCKET, RUN, "raw/", topic=TOPIC)
     options = made[0][1]["config"]
-    check(made[0][0] == ("sns",) and options.connect_timeout + options.read_timeout <= 5 and options.retries["total_max_attempts"] == 1, f"{made}")
+    check(made[0][0] == ("sns",) and (options.connect_timeout, options.read_timeout, options.retries["total_max_attempts"]) == (2, 3, 1), f"{made}")
     check(len(store.published) == 1, "the notice was not sent through the client")
 
 
@@ -390,3 +390,32 @@ def test_a_fault_on_the_record_write_stops_nothing_and_the_next_attempt_sends_ag
     store.broken.clear()
     carried(store)
     check(len(store.published) == 2 and store.puts == [RECORD_KEY], f"{len(store.published)} sent, writes {store.puts}")
+
+
+def test_the_counts_of_both_retry_days_are_given_when_the_original_record_is_missing() -> None:
+    day2, day3 = run_record(["b__1__x"], changed=["a__1__x"]), run_record([], changed=["c__1__x"], keyed=["d__1__x"])
+    store = Bucket({retry_key(2): day2, retry_key(3): day3})
+    first = carried(store)
+    check(first["counts"] == {"captured": 2, "failed": 1, "held": 1} and first["carried_over"] == ["b__1__x", "d__1__x"], f"{first}")
+    check(
+        f"Capture records read: ingestion_retry_{HEX}_2, ingestion_retry_{HEX}_3." in store.published[0]["Message"].split("\n"), store.published[0]["Message"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("earlier", "sends"),
+    [
+        ("claimed", True),
+        ("failed: OSError", True),
+        ("sent", False),
+        ("not needed: no file carried over", False),
+        ("not sent", False),
+        ("not sent: no alerts topic", False),
+    ],
+)
+def test_a_record_of_the_earlier_notice_code_stops_the_notice_only_when_its_outcome_is_final(earlier: str, sends: bool) -> None:
+    store = bucket(["a__1__x"])
+    store.objects[RECORD_KEY] = json.dumps({"schema": 1, "bronze_run": RUN, "carried_over": None, "notice": earlier}).encode()
+    done = carried(store)
+    check(len(store.published) == int(sends), f"{earlier}: {len(store.published)} sent")
+    check(done["notice"] == ("sent" if sends else earlier), f"{earlier}: {done['notice']}")
