@@ -432,6 +432,34 @@ def test_a_route_the_registry_denies_stays_denied_and_stores_nothing(monkeypatch
     check(not bucket.objects, "nothing was stored")
 
 
+def naming_registry(unit: dict, *routes: dict) -> dict:
+    registry = copy.deepcopy(load_registry())
+    source = next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])
+    source["file_routes"] = [{"url": unit["url"], **route} for route in routes]
+    return registry
+
+
+@pytest.mark.parametrize("denied_first", [True, False], ids=["denied route listed first", "allowed route listed first"])
+def test_an_address_that_an_allowed_route_names_is_approved_by_that_route_although_a_denied_route_names_it_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, denied_first: bool
+) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    routes = [{"route_id": "index_route", "route_type": "file_index"}, {"route_id": "named_route"}]
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: naming_registry(unit, *(routes if denied_first else routes[::-1])))
+    check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "the allowed route approves the address")
+    receipt = json.loads(bucket.objects[(harness.outcome(run, unit["snapshot_id"]) or {})["stored"]["receipt"]["key"]][1])
+    check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"] == "named_route", "the capture names the allowed route, not the index")
+
+
+def test_an_address_that_only_denied_routes_name_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    routes = [{"route_id": "index_route", "route_type": "file_index"}, {"route_id": "failed_route", "status": "access_failed"}]
+    monkeypatch.setattr(harness, "load_registry", lambda **_options: naming_registry(unit, *routes))
+    check(harness.execute(run)["outcomes"] == {"blocked": 1} and not bucket.objects, "every naming route is denied, so nothing is stored")
+
+
 def test_a_denied_route_under_another_spelling_of_the_address_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bucket = TaskS3()
     run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)

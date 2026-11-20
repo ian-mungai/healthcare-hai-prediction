@@ -740,11 +740,23 @@ def file_unit(unit: dict, run: Run) -> dict:
 
 def queue_approved_registry(unit: dict, registry: dict) -> dict:
     """The registry the storage check reads for a queue unit. A route the registry names keeps its own identity and restrictions, in any source and under any
-    spelling. Only a route the registry does not name takes the frozen queue's approval: most stored captures came from routes the current registry no longer
-    names and their old registries are not catalogued, the owner reviewed the queue, its digest binds the run and the hosts file limits its hosts."""
+    spelling. A denied route of another source denies the address. In the unit's own source an address is refused only when every route that names it is
+    denied, so an allowed route approves it. Only an address no route names takes the frozen queue's approval: most stored captures came from routes the
+    current registry no longer names and their old registries are not catalogued, the owner reviewed the queue, its digest binds the run and the hosts file
+    limits its hosts."""
     wanted = canonical_url(unit["url"])
-    named = [route for source in registry["sources"] for route in source.get("file_routes", []) if canonical_url(route.get("url") or "") == wanted]
-    if any(route_denied(route) for route in named):
+
+    def naming(own: bool) -> list[dict]:
+        return [
+            route
+            for source in registry["sources"]
+            if (source["source_id"] == unit["source_id"]) == own
+            for route in source.get("file_routes", [])
+            if canonical_url(route.get("url") or "") == wanted
+        ]
+
+    own = naming(True)
+    if any(route_denied(route) for route in naming(False)) or (own and all(route_denied(route) for route in own)):
         raise CaptureError("The registry denies this route, so the frozen queue cannot approve it.")
     view = copy.deepcopy(registry)
     sources = [item for item in view["sources"] if item["source_id"] == unit["source_id"]]
@@ -757,9 +769,11 @@ def queue_approved_registry(unit: dict, registry: dict) -> dict:
 
 
 def route_id_of(unit: dict, registry: dict) -> str:
+    """The ID of the unit's route in its source: the first route that names the address and is not denied, else the first that names it."""
     wanted = canonical_url(unit["url"])
     source = next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])
-    return str(next(route["route_id"] for route in source["file_routes"] if canonical_url(route.get("url") or "") == wanted))
+    named = [route for route in source["file_routes"] if canonical_url(route.get("url") or "") == wanted]
+    return str(next((route for route in named if not route_denied(route)), named[0])["route_id"])
 
 
 def link_download(result: Any, target: Path) -> None:
