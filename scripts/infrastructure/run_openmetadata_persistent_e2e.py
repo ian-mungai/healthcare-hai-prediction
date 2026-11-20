@@ -580,6 +580,11 @@ def retirements(state: FakeServer, since: int = 0) -> list[tuple[str, str]]:
 
 
 def retired_bot_is_removed_on_upgrade() -> None:
+    require(RETIRED_BOT.removesuffix("-bot") not in bootstrap.CALLER_ROLES, "the bootstrap still creates a bot for the retired caller")
+    require(
+        (RETIRED_BOT.removesuffix("-bot"),) == bootstrap.RETIRED_CALLERS,
+        f"the bootstrap retires more or fewer callers than the one: {bootstrap.RETIRED_CALLERS}",
+    )
     with open_metadata() as (state, base):
         store = FakeParameterStore()
         code, _out, err = run(environment(base), store)
