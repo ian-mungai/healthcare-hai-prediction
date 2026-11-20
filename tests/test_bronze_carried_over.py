@@ -402,20 +402,29 @@ def test_the_counts_of_both_retry_days_are_given_when_the_original_record_is_mis
     )
 
 
+LIVE_CLAIMED = {"schema": 1, "bronze_run": RUN, "carried_over": None, "notice": "claimed", "note": "no capture root is configured (HAI_CAPTURE_ROOT): x"}
+
+
 @pytest.mark.parametrize(
-    ("earlier", "sends"),
-    [
-        ("claimed", True),
-        ("failed: OSError", True),
-        ("sent", False),
-        ("not needed: no file carried over", False),
-        ("not sent", False),
-        ("not sent: no alerts topic", False),
-    ],
+    "earlier",
+    [LIVE_CLAIMED, {"notice": "sent"}, {"notice": "failed: OSError"}, {"notice": "not needed: no file carried over"}, {"notice": "not sent: no alerts topic"}],
+    ids=["claimed", "sent", "failed", "not needed", "not sent"],
 )
-def test_a_record_of_the_earlier_notice_code_stops_the_notice_only_when_its_outcome_is_final(earlier: str, sends: bool) -> None:
+def test_any_existing_record_is_final_and_is_reported_without_a_send(earlier: dict[str, Any]) -> None:
     store = bucket(["a__1__x"])
-    store.objects[RECORD_KEY] = json.dumps({"schema": 1, "bronze_run": RUN, "carried_over": None, "notice": earlier}).encode()
+    store.objects[RECORD_KEY] = json.dumps(earlier).encode()
     done = carried(store)
-    check(len(store.published) == int(sends), f"{earlier}: {len(store.published)} sent")
-    check(done["notice"] == ("sent" if sends else earlier), f"{earlier}: {done['notice']}")
+    check(not store.published and not store.puts and done == earlier, f"{len(store.published)} sent, writes {store.puts}, reported {done}")
+
+
+def test_the_email_points_to_its_own_file_list_and_the_run_record_only_when_it_could_be_saved(capsys: pytest.CaptureFixture[str]) -> None:
+    many = [f"file-{number:04d}" for number in range(1001)]
+    store = bucket(many, broken={"put_object": DENIED})
+    carried(store)
+    lines = store.published[0]["Message"].split("\n")
+    check("Read the file list in this message." in lines and "Read the file list in the run record." not in lines, lines[:20])
+    check(
+        "and 1 more (the run record lists them all when it could be saved)" in lines and "- file-0999" in lines and "- file-1000" not in lines,
+        "the shortened list",
+    )
+    check("the capture notice stopped" in capsys.readouterr().err and RECORD_KEY not in store.objects, "the refused write is not shown or a record exists")

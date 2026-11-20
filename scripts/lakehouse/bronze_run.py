@@ -568,16 +568,15 @@ def record_carried_over(
     notice is sent for every run that has a capture root, also when nothing is missing. A run with no capture root (a hand-staged bronze run) sends it only
     for a skipped table, and the record names the skipped tables whether or not it is sent.
 
-    An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt. If its outcome is final, the attempt sends
-    nothing and reports it. Final outcomes are ``sent`` and the outcomes of a notice that is not needed or cannot be sent (``not needed ...``,
-    ``not sent ...``). A record of the earlier notice code that says ``claimed`` (the outcome was never known) or ``failed ...`` is not final: the attempt
-    sends, the create-only grant refuses a new record, the old one stays, and each later attempt of that run sends again. Otherwise the attempt sends the
-    notice and then writes that one record, with what was reported and the outcome. A failed read of the earlier record or a failed send leaves no record,
-    so the next attempt of the check tries again. Duplicate emails are accepted (owner, Nov 20 2026) in these cases: an interruption between the send and
-    the record, two attempts at once, a write of the record that failed, a refused read of an existing record (read as "no record") and a record of the
-    earlier code that is not final. An email is never lost while the check runs again.
+    An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt. Any existing record is final, whatever its
+    notice text: the attempt sends nothing and reports that record. The earlier notice code left its first record in the ``claimed`` state after a
+    successful send, so a ``claimed`` record does not mean an interruption. Otherwise the attempt sends the notice and then writes that one record, with what
+    was reported and the outcome. A failed read of the earlier record or a failed send leaves no record, so the next attempt of the check tries again.
+    Duplicate emails are accepted (owner, Nov 20 2026) in these cases: an interruption between the send and the record, two attempts at once, a write of the
+    record that failed and a refused read of an existing record (read as "no record"). An email is never lost while the check runs again.
 
-    Nothing in the notice fails the run: any error, including a refused write of the record, is shown on standard error and returned in the report.
+    Nothing in the notice fails the run: any unexpected error, including a refused write of the record, is shown on standard error and returned in the
+    report. A conditional write that finds the record already there (two attempts at once) is an expected outcome and is quiet.
 
     Accepted limit (owner, Nov 20 2026): the notice has no overall deadline. Each call of its own clients has a 2 second connect timeout, a 3 second read
     timeout and one attempt, so a stalled or refused connection ends within those timeouts. The notice makes at most 9 calls (the earlier record, a listing
@@ -592,7 +591,7 @@ def record_carried_over(
     document["carried_over"] = None
     try:
         earlier = read_own_record(client, bucket, key)
-        if earlier is not None and not str(earlier.get("notice")).startswith(("claimed", "failed")):
+        if earlier is not None:
             return earlier
         counts, files, found, unread = None, [], {}, {}
         if not root:

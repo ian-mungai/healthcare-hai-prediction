@@ -19,7 +19,7 @@ def listed(title: str, items: Sequence[str]) -> list[str]:
     """A titled list of at most ``NOTICE_LIST_LIMIT`` lines, with a last line that says how many more the run record holds."""
     lines = [f"{title}:", *[f"- {owner_notice.clean_line(item)}" for item in items[:NOTICE_LIST_LIMIT]]]
     if len(items) > NOTICE_LIST_LIMIT:
-        lines.append(f"and {len(items) - NOTICE_LIST_LIMIT} more (the run record lists them all)")
+        lines.append(f"and {len(items) - NOTICE_LIST_LIMIT} more (the run record lists them all when it could be saved)")
     return lines
 
 
@@ -60,7 +60,7 @@ def carried_over_notice(
         some = f"{'In the run records that could be read, ' if unread else ''}{count(len(files), 'source file')}"
         happened.append(f"{some} {'is' if len(files) == 1 else 'are'} not captured after the retry days.")
         affects.append("The tables built from these files may hold older data.")
-        next_steps.append("Read the file list in the run record.\nThen decide if the earlier capture is good enough.\nIf it is, no action is needed.")
+        next_steps.append("Read the file list in this message.\nThen decide if the earlier capture is good enough.\nIf it is, no action is needed.")
         details.append(f"Files carried over: {len(files)}")
     if skipped:
         pieces.insert(1 if files else 0, f"left out {count(len(skipped), 'table')}")
