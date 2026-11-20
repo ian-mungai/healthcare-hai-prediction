@@ -1309,15 +1309,22 @@ def round3_scenarios(scenario: Any, plan: dict, data_entry: dict, root: Path, do
 
     def expiry_in_hash() -> None:
         target, s3 = stored_all(root, "d_hash", downloads, plan)
-        clock, original = SetClock(), store.verify_version
+        clock, original, seen = SetClock(), store.verify_version, []
+        last = count * store.OBJECTS_PER_FILE
 
         def slow(client: Any, key: str, version: Any, digest: str, size: int) -> None:
             original(client, key, version, digest, size)
-            clock.now = store.VERIFY_TOTAL_SECONDS + 1
+            seen.append(key)
+            if len(seen) == last:
+                clock.now = store.VERIFY_TOTAL_SECONDS + 1
 
         with patch.object(store, "verify_version", slow):
             results, failed = store.verify_remote(plan, target, s3, clock=clock)
-        require(not results and bool(failed) and all("deadline" in f["reason"] for f in failed), f"Expiry during the hash passed: {len(results)} proven")
+        require(len(seen) == last, f"The expiry was not placed in the last hash: {len(seen)} of {last} objects read")
+        require(
+            len(results) == count - 1 and len(failed) == 1 and "deadline" in failed[0]["reason"],
+            f"Expiry during the last hash passed: {len(results)} proven, {failed}",
+        )
         require(not store.all_proven(plan, results, failed), "An expired run read as proven")
 
     scenario("deadline_that_passes_while_hashing_stops_the_file_from_counting", expiry_in_hash)
