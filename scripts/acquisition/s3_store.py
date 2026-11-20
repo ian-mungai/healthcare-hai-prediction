@@ -338,8 +338,6 @@ RELEASE_COVERS = {
 }
 # A source with its own record is bound and released by that record only, so no other source reaches it and the shared binding never moves.
 SOURCE_RELEASE_PATHS = {"AHRQ_SYSTEM": REPO_ROOT / "config/acquisition/access_releases_20261108.json"}
-# What a source's own record authorizes, by file name; these records are not in RELEASE_COVERS, which describes the shared records only.
-SOURCE_RELEASE_COVERS = {"access_releases_20261108.json": frozenset({"reference_documents", "whole_workbooks"})}
 
 
 def release_paths(source_id: str) -> tuple[Path, ...]:

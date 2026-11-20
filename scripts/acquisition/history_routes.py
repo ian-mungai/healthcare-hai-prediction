@@ -56,7 +56,7 @@ def lineage_bindings(source: dict, candidate: dict) -> dict:
     if binding not in RELEASE_BINDINGS or not held:
         raise CaptureError("A release binding must be terms or access_release and applies only to a held source.")
     key, path = RELEASE_BINDINGS[binding]
-    path = release_paths(source["source_id"])[-1] if binding == "access_release" else path
+    path = release_paths(source.get("source_id", ""))[-1] if binding == "access_release" else path
     return {key: hashlib.sha256(path.read_bytes()).hexdigest()}
 
 

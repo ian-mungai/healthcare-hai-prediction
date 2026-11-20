@@ -13,13 +13,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.acquisition import hud_xlsx_contract, transport, wonder_export_contract
+from scripts.acquisition import ahrq_compendium_contract, hud_xlsx_contract, redownload_route, transport, wonder_export_contract
 from scripts.acquisition.source_registry import canonical_hash, read_json
 
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
-MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv")}
+MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv"), "ahrq_compendium": (None, None)}
+# The format of an AHRQ file comes from its name: the six linkage workbooks are .xls or .xlsx and the seven technical documents are .pdf.
+SUFFIX_FORMATS = {".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf"}
 # The modes whose derived file is rebuilt from the original: the bootstrap seed holds the original only (owner, Nov 13 2026).
 REBUILT_MODES = ("hud_xlsx", "wonder_export")
+# Units that take their original from the seed only, bind it to a locked plan and have no derived file (owner, Nov 19 2026: the AHRQ Compendium files).
+SEED_ONLY_MODES = redownload_route.SEED_ONLY_MODES
 CONTRACT_ERRORS = (ValueError, KeyError, TypeError, zipfile.BadZipFile)
 
 
@@ -41,10 +45,16 @@ class Scopes:
 
     hud: dict | None = None
     wonder: dict | None = None
+    ahrq: dict | None = None
 
     def plan(self, mode: str) -> dict:
-        given = self.hud if mode == "hud_xlsx" else self.wonder
-        return given if given is not None else locked_plan(hud_xlsx_contract.PLAN_PATH if mode == "hud_xlsx" else wonder_export_contract.PLAN_PATH)
+        given = {"hud_xlsx": self.hud, "wonder_export": self.wonder, "ahrq_compendium": self.ahrq}[mode]
+        paths = {
+            "hud_xlsx": hud_xlsx_contract.PLAN_PATH,
+            "wonder_export": wonder_export_contract.PLAN_PATH,
+            "ahrq_compendium": ahrq_compendium_contract.PLAN_PATH,
+        }
+        return given if given is not None else locked_plan(paths[mode])
 
 
 def locked_plan(path: Path) -> dict:
@@ -69,22 +79,31 @@ def plan_unit(unit: dict, spec: dict | None) -> tuple[str, str]:
         raise ManualUnitError("A manual unit needs its stored file names")
     derived = MODES[mode][1]
     originals = [name for name in names if name != derived]
-    if len(originals) != 1 or derived not in names:
+    if derived is None:
+        if len(names) != 1 or Path(names[0]).suffix.lower() not in SUFFIX_FORMATS:
+            raise ManualUnitError("A seed-only unit needs exactly one stored file of a supported format")
+    elif len(originals) != 1 or derived not in names:
         raise ManualUnitError("A manual unit needs exactly one original and its derived file")
     try:
-        transport.validate_request(str(unit.get("url", "")), originals[0], expected_format(mode), "data")
+        transport.validate_request(str(unit.get("url", "")), originals[0], expected_format(mode, originals[0]), "data")
     except transport.CaptureError as refusal:
         raise ManualUnitError(str(refusal)) from refusal
     return mode, originals[0]
 
 
-def expected_format(mode: str) -> str:
-    return MODES[mode][0]
+def expected_format(mode: str, name: str | None = None) -> str:
+    """The format a unit's original must have: the mode's, or for a mode with none the format of the stored file's suffix."""
+    fixed = MODES[mode][0]
+    if fixed is not None:
+        return fixed
+    return SUFFIX_FORMATS[Path(name or "").suffix.lower()]
 
 
 def accept(mode: str, original: Path, name: str, scopes: Scopes) -> dict[str, bytes]:
     """Check the downloaded original and return the derived file its contract writes. Raises ContentRefusal."""
     try:
+        if mode == "ahrq_compendium":
+            return ahrq(original, name, scopes.plan(mode))
         return hud(original, name, scopes.plan(mode)) if mode == "hud_xlsx" else wonder(original, name, scopes.plan(mode))
     except CONTRACT_ERRORS:
         raise ContentRefusal("contract_failed") from None
@@ -123,11 +142,20 @@ def hud(original: Path, name: str, plan: dict) -> dict[str, bytes]:
     body = original.read_bytes()
     batch = bound(body, next((item for item in plan["batches"] if item["file_name"] == name), None))
     derived, _statistics = hud_xlsx_contract.validate_workbook(body, batch, plan)
-    return {MODES["hud_xlsx"][1]: derived}
+    return {"crosswalk.csv": derived}
 
 
 def wonder(original: Path, name: str, plan: dict) -> dict[str, bytes]:
     body = original.read_bytes()
     batch = bound(body, next((item for item in plan["batches"] if wonder_export_contract.stored_name(item) == name), None))
     derived, _statistics = wonder_export_contract.validate_export(body, batch, plan)
-    return {MODES["wonder_export"][1]: derived}
+    return {"county_year.csv": derived}
+
+
+def ahrq(original: Path, name: str, plan: dict) -> dict[str, bytes]:
+    """An AHRQ original bound to the plan by its SHA-256 and size and checked for the format of its name. It has no derived file."""
+    body = original.read_bytes()
+    bound(body, next((item for item in plan["files"] if item["file_name"] == name), None))
+    if transport.inspect_payload(original, expected_format("ahrq_compendium", name), "data") is not None:
+        raise ContentRefusal("contract_failed")
+    return {}

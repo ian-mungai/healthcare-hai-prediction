@@ -758,7 +758,7 @@ def reusable_operation() -> None:
 def required_contracts() -> None:
     actual = reg.required_tables(ROOT)
     counts = {namespace: sum(layer == namespace for layer, _ in actual) for namespace in ("bronze", "silver", "gold")}
-    require(counts == {"bronze": 333, "silver": 144, "gold": 72}, "contracts: required namespace counts differ")
+    require(counts == {"bronze": 332, "silver": 144, "gold": 72}, "contracts: required namespace counts differ")
 
 
 def shortened_contract() -> None:

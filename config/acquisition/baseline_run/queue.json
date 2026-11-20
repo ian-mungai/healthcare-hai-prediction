@@ -1,15 +1,15 @@
 {
  "budgets": {
-  "acquisition_units": 2040,
+  "acquisition_units": 2053,
   "bls_calls": 260,
   "bls_minimum_windows": 1,
   "bls_rolling_24h_limit": 450,
   "byte_cap": 137438953472,
-  "max_primary_attempts": 4080,
-  "pages_recorded": 2040,
-  "recorded_bytes": 25102495052,
+  "max_primary_attempts": 4106,
+  "pages_recorded": 2053,
+  "recorded_bytes": 25112459363,
   "units_by_route": {
-   "manual_browser_download": 50,
+   "manual_browser_download": 63,
    "publisher_api": 1297,
    "publisher_url": 693
   }
@@ -23,6 +23,12 @@
    "kept_units_sha256": "c1c87002edaf489203fc847dacf8318f99f29cd5227d97bbc7f1a41a0858f487",
    "plan_sha256": "845ed760aee05f28143a963e301e64180b92bd4ffe4696c1d453fbc92275b191",
    "rule": "drop the manual ACS export units and add one API unit per table and stored vintage of the Census table plan, after the last ACS file unit"
+  },
+  "ahrq_units": {
+   "added": 13,
+   "added_snapshot_ids_sha256": "eb70f20c8a3c4e8eb4c9f099b0f877723a753d187c30678b8cffa8f981a2f23c",
+   "plan_sha256": "bd634a8b95a29bd6dbdc31541e581f897fb6248e0b718b5659f7a7931a00da76",
+   "rule": "add one seed-only manual unit per file of the locked AHRQ Compendium plan, after the last unit (owner, Nov 19 2026)"
   },
   "dropped_by_disposition": {
    "derived_replay_only": 1,
@@ -58,10 +64,10 @@
  },
  "dispositions": {
   "api": 1297,
-  "approved_manual": 50,
+  "approved_manual": 63,
   "direct_download": 693
  },
- "entries": 2040,
+ "entries": 2053,
  "execution_status": "frozen_offline_no_requests_made",
  "kind": "bootstrap_capture_queue",
  "loaded_files_no_unit_covers": [
@@ -27050,6 +27056,149 @@
    "snapshot_id": "SVI__20261002T211509Z__ef98e4e676f645f4a7c42af56863bfe7",
    "source_id": "SVI",
    "url": "https://www.atsdr.cdc.gov/place-health/media/pdfs/2024/10/SVI2022Documentation.pdf"
+  },
+  {
+   "bytes": 1798656,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/compendium_system_hospital_linkage_file.xls"
+  },
+  {
+   "bytes": 654428,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204505Z__38e56a1156f76e77c86bf985077de29c",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2018.xlsx"
+  },
+  {
+   "bytes": 966049,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2020-rev.xlsx"
+  },
+  {
+   "bytes": 970270,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204532Z__629e9c5ed2d8150a833c834cdf6ac70e",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2021-rev.xlsx"
+  },
+  {
+   "bytes": 972775,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204551Z__493d7b8eb1e89c6953acb196e5a7918e",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2022-rev.xlsx"
+  },
+  {
+   "bytes": 1086704,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204559Z__7ea5f61f665de7c432abf6132c7e4e9d",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp-hospital-linkage-2023.xlsx"
+  },
+  {
+   "bytes": 358194,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204949Z__243ee4b59e08407e82aa808481260e25",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/chsp_linkage_file_tech_doc.pdf"
+  },
+  {
+   "bytes": 199446,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2018-hospital-linkage-techdoc-appa.pdf"
+  },
+  {
+   "bytes": 839143,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2018-hospital-linkage-techdoc-cx.pdf"
+  },
+  {
+   "bytes": 549758,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T205039Z__6f27f4f7147d804182b0d8cf373c7d9a",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/2020-hospital-linkage-techdoc.pdf"
+  },
+  {
+   "bytes": 473959,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2021-hospital-linkage-techdoc-rev.pdf"
+  },
+  {
+   "bytes": 495854,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2022-hospital-linkage-techdoc-021224.pdf"
+  },
+  {
+   "bytes": 599075,
+   "disposition": "approved_manual",
+   "flags": [],
+   "mode": "ahrq_compendium",
+   "pages": 1,
+   "route": "manual_browser_download",
+   "snapshot_id": "AHRQ_SYSTEM__20261108T205107Z__f5b25b10d3549ddf48f6752d57e195ee",
+   "source_id": "AHRQ_SYSTEM",
+   "url": "https://www.ahrq.gov/sites/default/files/wysiwyg/chsp/compendium/2023-hospital-linkage-techdoc.pdf"
   }
  ]
 }

@@ -16,7 +16,18 @@ from typing import Any
 KIND = "ingestion_unit_stale"
 SCHEMA_VERSION = 1
 STALE_FOLDER = "ingestion_stale/"
-REASONS = ("http_status", "not_expected_format", "contract_failed", "robots_disallowed", "robots_unreadable", "rate_limited", "host_refused", "network")
+REASONS = (
+    "http_status",
+    "not_expected_format",
+    "contract_failed",
+    "robots_disallowed",
+    "robots_unreadable",
+    "rate_limited",
+    "host_refused",
+    "network",
+    "seed_missing",
+    "seed_required",
+)
 READ_ROOTS = ("", "raw/")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")

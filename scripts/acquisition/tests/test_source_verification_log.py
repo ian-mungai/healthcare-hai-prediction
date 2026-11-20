@@ -59,16 +59,6 @@ def test_rows_cover_bronze_sources_validation_only_and_rejected(built: dict[str,
     check({row["status"] for row in built["rows"]} <= set(log_module.STATUSES), "{row['status'] for row in built['rows']} <= set(log_module.STATUSES)")
 
 
-def test_ahrq_compendium_is_dated_by_its_own_release_record(built: dict[str, Any]) -> None:
-    row = rows_by_id(built)["AHRQ_SYSTEM"]
-    check(
-        row["verification"] == {"date": "2026-11-08", "basis": "access release record access_releases_20261108.json"},
-        "AHRQ_SYSTEM carries its own record's date, not the newest shared record's",
-    )
-    check(row["collection"] == "ahrq/health_system_compendium" and row["data_class"] == "Public", "AHRQ_SYSTEM row names its collection and class")
-    check(row["status"] == "not recorded" and row["evidence"]["receipt_sha256"] == "not recorded", "AHRQ_SYSTEM records no capture before one is stored")
-
-
 def test_hcai_utilization_is_dated_by_the_newest_release_record(built: dict[str, Any], inputs: dict[str, Any]) -> None:
     row = rows_by_id(built)["HCAI_UTIL"]
     check(len(inputs["releases"]) == 4, "four access release records are read")

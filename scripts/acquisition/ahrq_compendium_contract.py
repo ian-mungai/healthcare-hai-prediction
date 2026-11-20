@@ -1,35 +1,22 @@
-"""Frozen scope and checks for the AHRQ Compendium of U.S. Health Systems hospital linkage files that the owner saved in a browser.
+"""Frozen scope of the AHRQ Compendium of U.S. Health Systems hospital linkage files that the owner saved in a browser.
 
 AHRQ refuses scripted downloads (the registry holds AHRQ_SYSTEM for that reason), so the owner saved each file by hand. A locked plan binds
-every file to its exact origin URL, SHA-256 and size. The six linkage workbooks (2016, 2018, 2020, 2021, 2022 and 2023 vintages) are stored
-as data and the technical documents as methodology references. The owner lifted the access hold for this capture on 8 Nov 2026; the lift is
-one append-only release record that every receipt binds by SHA-256, and the base registry stays unchanged.
-Classification: Public (hospital and system names, no persons). AHRQ publishes no terms text for these files; the evidence the owner's
-decision rests on is one closed terms record that every receipt carries, and no reuse license is inferred.
+every file to its exact origin URL, SHA-256 and size: the six linkage workbooks (2016, 2018, 2020, 2021, 2022 and 2023 vintages) and the seven technical
+documents. The files are seed-only manual units of the mode ahrq_compendium (``manual_content``): the bootstrap seed holds the originals and the run
+binds each one to this plan. The owner lifted the access hold for these files on 8 Nov 2026 by one append-only release record, and the base registry stays
+unchanged. AHRQ publishes no terms text for them: the evidence the owner's decision rests on is the closed terms record below, and no reuse license is inferred.
 """
 
 import hashlib
 import re
-from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from scripts.acquisition import hud_xlsx_contract as download_metadata
-from scripts.acquisition.code_closure import closure_hashes
-from scripts.acquisition.code_versions import read_code_versions
-from scripts.acquisition.legacy_versions import plan_matches
-from scripts.acquisition.s3_store import SOURCE_RELEASE_COVERS
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require, require_collection_scope
-from scripts.acquisition.transport import inspect_payload
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/ahrq_compendium_plan.json"
-REQUESTS_PATH = REPO_ROOT / "config/acquisition/ahrq_compendium_requests.json"
-VERSIONS_PATH = REPO_ROOT / "config/acquisition/ahrq_compendium_code_versions.json"
 RELEASE_PATH = "config/acquisition/access_releases_20261108.json"
-CODE_ENTRY = "scripts.acquisition.store_ahrq_compendium"
 SOURCE_ID = "AHRQ_SYSTEM"
-MODE = "ahrq_compendium"
-PUBLISHER_PREFIX = "ahrq/health_system_compendium/"
 ORIGIN_PREFIX = "https://www.ahrq.gov/sites/default/files/wysiwyg/"
 ROLES = {"data", "methodology"}
 # Suffix to (payload format, media type, role the suffix may carry).
@@ -61,40 +48,9 @@ USE_RESTRICTIONS = [
 ]
 
 
-# The owner saved the 13 files at about 12:45 PM PST on Nov 8 2026 (20:45 UTC). The release record that lifts the AHRQ hold was written at 23:59 UTC the
-# same day. Unlike reference_download_contract.require_release, this contract does not refuse a capture that precedes its release record: the record
-# names these exact files (origin URL, SHA-256 and size in the locked plan) and authorizes storing them after the fact. The receipt states that basis
-# with both times (release_basis), replay checks it, and the record is never backdated.
-BASIS_BEFORE = (
-    "The release record names these exact files, each bound by origin URL, SHA-256 and size in the locked plan, and authorizes their storage after the fact: "
-    "the owner saved them before the record was written."
-)
-BASIS_AFTER = "The release record was written before this capture and names the exact files bound in the locked plan."
-BASIS_WARNING = "The download precedes the release record; the record authorizes storing these exact files after the fact (see release_basis in the lineage)."
-
-
-def release_basis(captured_at_utc: str) -> dict:
-    """The stated basis on which this capture is stored against the release record: which came first, both times and what the record authorizes."""
-    recorded = read_json(REPO_ROOT / RELEASE_PATH)["recorded_at_utc"]
-    before = datetime.fromisoformat(captured_at_utc) < datetime.fromisoformat(recorded)
-    return {
-        "relation": "capture_precedes_release_record" if before else "capture_follows_release_record",
-        "capture_time_utc": captured_at_utc,
-        "release_record_time_utc": recorded,
-        "authorization": BASIS_BEFORE if before else BASIS_AFTER,
-    }
-
-
 def digest(body: bytes) -> str:
     """Return a complete byte SHA-256."""
     return hashlib.sha256(body).hexdigest()
-
-
-def require_code(hashes: dict | None = None) -> dict:
-    """Accept only an explicitly reviewed implementation version of the collector and every module it can run."""
-    actual = closure_hashes(CODE_ENTRY) if hashes is None else hashes
-    require(bool(actual) and actual in [v["code_sha256"] for v in read_code_versions(VERSIONS_PATH)["versions"]], "Unreviewed AHRQ capture code version")
-    return actual
 
 
 def file_id(entry: dict) -> str:
@@ -132,42 +88,6 @@ def check_request(entry: dict) -> None:
     require(re.fullmatch(r"20[0-9]{2}", entry["vintage"]) is not None and entry["release_binding"] == "access_release", "AHRQ plan entry invalid")
 
 
-def read_download(entry: dict, downloads: Path) -> bytes:
-    """Read a saved file only when the browser-recorded origin includes the exact planned URL and the bytes are what the name claims."""
-    original = downloads / entry["file_name"]
-    require(original.is_file() and not original.is_symlink(), "AHRQ download missing or not a regular file")
-    try:
-        origins = download_metadata.read_origin(original)
-    except ValueError:
-        raise ValueError("AHRQ download origin missing") from None
-    require(entry["origin_url"] in origins, "AHRQ download origin differs from the plan")
-    form = FORMATS[original.suffix.lower()][0]
-    require(inspect_payload(original, form, entry["role"]) is None, f"AHRQ download is not a valid {form} file")
-    return original.read_bytes()
-
-
-def build_plan(requests: list[dict], downloads: Path) -> dict:
-    """Bind each requested file to the bytes and origin of its browser download, for review and locking."""
-    registry = load_registry()
-    source_of(registry)
-    files = []
-    for request in requests:
-        check_request(request)
-        body = read_download(request, downloads)
-        require(0 < len(body) <= MAX_BYTES, "AHRQ download size invalid")
-        entry = dict(request) | {"sha256": digest(body), "bytes": len(body)}
-        files.append(entry | {"id": file_id(entry)})
-    names = [f["file_name"] for f in files]
-    require(len(set(names)) == len(names) and len({f["origin_url"] for f in files}) == len(files), "AHRQ plan entry invalid")
-    return {
-        "version": 1,
-        "model_eligible": False,
-        "registry_sha256": canonical_hash(registry),
-        "access_release": release_record(),
-        "files": sorted(files, key=lambda f: (f["role"] != "data", f["vintage"], f["file_name"])),
-    }
-
-
 def load_plan(path: Path | None = None) -> dict:
     """Verify the locked scope, every file's binding, the release record and the base registry."""
     path = PLAN_PATH if path is None else path
@@ -187,43 +107,3 @@ def load_plan(path: Path | None = None) -> dict:
     names = [f["file_name"] for f in plan["files"]]
     require(len(set(names)) == len(names), "AHRQ plan entry invalid")
     return plan
-
-
-def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
-    """Check the stored file and its proof against the locked plan, the bound release record and the preserved holds."""
-    from scripts.acquisition.capture import receipt_validator
-
-    require(not evidence_only and source["source_id"] == SOURCE_ID and lineage.get("mode") == MODE, "AHRQ storage source differs")
-    plan = load_plan()
-    require(plan_matches(plan, lineage["plan_sha256"]), "AHRQ capture plan differs")
-    require(lineage["registry_sha256"] == plan["registry_sha256"], "AHRQ registry differs")
-    require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "AHRQ schema differs")
-    require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "AHRQ modeling hold differs")
-    require_code(lineage["code_sha256"])
-    matches = [f for f in plan["files"] if f["id"] == lineage["file_id"]]
-    require(len(matches) == 1, "AHRQ capture file not in its plan")
-    entry = matches[0]
-    require(lineage.get("access_release_sha256") == plan["access_release"]["sha256"], "AHRQ release binding differs")
-    needed = "whole_workbooks" if entry["role"] == "data" else "reference_documents"
-    require(needed in SOURCE_RELEASE_COVERS.get(Path(RELEASE_PATH).name, frozenset()), "AHRQ release binding differs: the record does not cover this file")
-    require(lineage.get("terms_record") == TERMS_RECORD, "AHRQ terms record differs")
-    acq = receipt["acquisition"]
-    require(lineage.get("release_basis") == release_basis(acq["retrieved_at_utc"]), "AHRQ release basis differs")
-    mode = "download" if entry["role"] == "data" else "reference_document"
-    require(
-        acq["requested_url"] == acq["resolved_url"] == entry["origin_url"]
-        and acq["request_method"] == "manual_download"
-        and acq["http_status"] is None
-        and acq["transport_mode"] == mode,
-        "AHRQ route differs",
-    )
-    require(receipt["governance"]["access_class"] == "public" and receipt["governance"]["contains_pii"] is False, "AHRQ governance differs")
-    require(receipt["governance"]["use_restrictions"] == USE_RESTRICTIONS, "AHRQ governance differs")
-    raw_path = f"raw/{entry['file_name']}"
-    roles = {a["storage_path"]: a["role"] for a in receipt["artifacts"]}
-    require(roles == {raw_path: entry["role"], "evidence/download_proof.json": "export_receipt"}, "AHRQ artifact set differs")
-    raw = (root / raw_path).read_bytes()
-    require(digest(raw) == lineage["expected_sha256"] == entry["sha256"] and len(raw) == entry["bytes"], "AHRQ stored bytes differ from the plan")
-    proof = read_json(root / "evidence/download_proof.json")
-    expected = {"file_name": entry["file_name"], "origin_url": entry["origin_url"], "sha256": entry["sha256"], "bytes": entry["bytes"]}
-    require(all(proof.get(k) == v for k, v in expected.items()) and proof["created_at_utc"] == acq["retrieved_at_utc"], "AHRQ download proof differs")

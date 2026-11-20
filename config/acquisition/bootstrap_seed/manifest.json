@@ -1,6 +1,71 @@
 {
  "files": [
   {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b/compendium_system_hospital_linkage_file.xls",
+   "sha256": "8e3e61b0d1e8200cf15ab1d077e9d2c75eb9b3c0f77fa38a0317359762735660",
+   "unit": "AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204505Z__38e56a1156f76e77c86bf985077de29c/chsp-hospital-linkage-2018.xlsx",
+   "sha256": "0c4a56df0c25168a23cef0e62af2eeec335176d808f4f235ff10733073c89880",
+   "unit": "AHRQ_SYSTEM__20261108T204505Z__38e56a1156f76e77c86bf985077de29c"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd/chsp-hospital-linkage-2020-rev.xlsx",
+   "sha256": "4a8a19e50edabdddb3b7948d9bbf0d1f997a3563e484ff5dd971f22ea56846fb",
+   "unit": "AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204532Z__629e9c5ed2d8150a833c834cdf6ac70e/chsp-hospital-linkage-2021-rev.xlsx",
+   "sha256": "e63cc5ce0783745761dcce75723f91e400e0160ade4829cab1df8297a2a61856",
+   "unit": "AHRQ_SYSTEM__20261108T204532Z__629e9c5ed2d8150a833c834cdf6ac70e"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204551Z__493d7b8eb1e89c6953acb196e5a7918e/chsp-hospital-linkage-2022-rev.xlsx",
+   "sha256": "ff270a157cbef0463039b34206dbd83415db46a8f2bce00706fe8ab255dad801",
+   "unit": "AHRQ_SYSTEM__20261108T204551Z__493d7b8eb1e89c6953acb196e5a7918e"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204559Z__7ea5f61f665de7c432abf6132c7e4e9d/chsp-hospital-linkage-2023.xlsx",
+   "sha256": "33346db251947e26d3ef842c546cd1a740e376d8aa6437725f2c1fd5d68be4d4",
+   "unit": "AHRQ_SYSTEM__20261108T204559Z__7ea5f61f665de7c432abf6132c7e4e9d"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f/2018-hospital-linkage-techdoc-appa.pdf",
+   "sha256": "6f8f61ed3344abdffb2361b1af13e4ede87d919467f650fc5c89e6c5fabe7cc7",
+   "unit": "AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T204949Z__243ee4b59e08407e82aa808481260e25/chsp_linkage_file_tech_doc.pdf",
+   "sha256": "6ad73489b3186a4737e1088dab3522677a0de13789a9bde1a1732f2d917c9274",
+   "unit": "AHRQ_SYSTEM__20261108T204949Z__243ee4b59e08407e82aa808481260e25"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11/2018-hospital-linkage-techdoc-cx.pdf",
+   "sha256": "52b37832f4bbd0155c37054bc7cc1a21547119f34c7f42f588157959179810a4",
+   "unit": "AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T205039Z__6f27f4f7147d804182b0d8cf373c7d9a/2020-hospital-linkage-techdoc.pdf",
+   "sha256": "b0c7d2b53488b91d7d51c0cdd7545c0a024209a4bc2b22b65f52b9995344532e",
+   "unit": "AHRQ_SYSTEM__20261108T205039Z__6f27f4f7147d804182b0d8cf373c7d9a"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3/2021-hospital-linkage-techdoc-rev.pdf",
+   "sha256": "2e0c4bdebefab0fc1aabe8471cb2df87c0980850eb0bad89e5a25d838f8fe02c",
+   "unit": "AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9/2022-hospital-linkage-techdoc-021224.pdf",
+   "sha256": "7efe618e4d651ceae2c96c19e358095172adf6ea92b1f2d6330ab74af4cc0f69",
+   "unit": "AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9"
+  },
+  {
+   "path": "manual_units/AHRQ_SYSTEM__20261108T205107Z__f5b25b10d3549ddf48f6752d57e195ee/2023-hospital-linkage-techdoc.pdf",
+   "sha256": "e0b72c98b0cad5dcf6683ce11ed7e81bdf0446633f1fee85c07489d675459f88",
+   "unit": "AHRQ_SYSTEM__20261108T205107Z__f5b25b10d3549ddf48f6752d57e195ee"
+  },
+  {
    "path": "manual_units/HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429/ZIP-COUNTY_032010.xlsx",
    "sha256": "8117464845e3c6621abaccf6f3b3706242a2282e173f962fc3b4f27889583945",
    "unit": "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429"
@@ -332,5 +397,5 @@
   }
  ],
  "kind": "bootstrap_seed_manifest",
- "queue_sha256": "cc3ddd212dd5f29eb91f713d0cc1f8a8b308de8eb4090996b7274f2bb4dbded3"
+ "queue_sha256": "a24379ede8ce5ffb427bcd935a3197b665e8a4ed27b49c75f7168a7772177eea"
 }

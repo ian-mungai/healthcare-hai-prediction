@@ -1,11 +1,12 @@
 """One-time development step: list the files of the bootstrap seed folder in its manifest.
 
 The seed folder holds what a run in an empty environment cannot fetch: the plan inputs that are data files (12 browser-history CSVs, 3 MMD references and the
-2010 county adjacency file) and the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API). A unit's derived
+2010 county adjacency file), the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API) and the 13 AHRQ Compendium
+files, which are seed-only units. A unit's derived
 file (a HUD crosswalk.csv or a WONDER county_year.csv) is rebuilt on the host from its original, so the seed holds the original only. The manifest lists
 each file with the folder it takes and, where a tracked source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references
-from the MMD plan, the county adjacency file from the geography file period seed, the HUD workbooks from the HUD plan and the WONDER originals from the
-WONDER plan. Every other file has no digest until the files are added; the check then refuses a present file without one.
+from the MMD plan, the county adjacency file from the geography file period seed, the HUD workbooks from the HUD plan, the WONDER originals from the
+WONDER plan and the AHRQ files from the AHRQ plan. Every other file has no digest until the files are added; the check then refuses a present file without one.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ REPORT = "plan_inputs/data/e2e/mmd_api_comparison/20260925/report.json"
 MMD_PLAN = "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json"
 HUD_PLAN = Path("config/acquisition/hud_xlsx_plan_2010q1_2020q4.json")
 WONDER_PLAN = Path("config/acquisition/wonder_export_plan.json")
+AHRQ_PLAN = Path("config/acquisition/ahrq_compendium_plan.json")
 PERIODS = Path("dbt/seeds/geography_file_periods.csv")
 CAPTURES_FOLDER, RAW_FOLDER = "captures", "raw"
 HISTORY = ("data", "datasets", "historical_acquisition")
@@ -109,6 +111,7 @@ def manifest_body(root: Path) -> bytes:
         digests |= period_digests(inputs, list(csv.DictReader(handle)))
     originals = {batch["file_name"]: batch["sha256"] for batch in json.loads(HUD_PLAN.read_text(encoding="utf-8"))["batches"]}
     originals |= {stored_name(batch): batch["sha256"] for batch in json.loads(WONDER_PLAN.read_text(encoding="utf-8"))["batches"]}
+    originals |= {item["file_name"]: item["sha256"] for item in json.loads(AHRQ_PLAN.read_text(encoding="utf-8"))["files"]}
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))
     return build((root / "queue.json").read_bytes(), specs, inputs, digests, originals)
 

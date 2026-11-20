@@ -593,13 +593,14 @@ def test_every_fresh_capture_of_a_held_source_is_released_by_the_tracked_records
     for snapshot, spec in sorted(specs.items()):
         template = spec.get("receipt_template", {})
         name = spec.get("release_binding")
-        bound = lineage_bindings({"preferred_route": "access_hold"}, {"release_binding": name}) if name else {}
+        source = {"source_id": template.get("source_id") or spec.get("source_id")}
+        bound = lineage_bindings({"preferred_route": "access_hold"} | source, {"release_binding": name}) if name else {}
         lineage = template.get("lineage_bindings", {}) | bound
         if lineage:
             held += 1
-            if not s3_store.access_released({"source_id": template["source_id"]}, lineage):
+            if not s3_store.access_released(source, lineage):
                 refused.append(snapshot)
-    check(held == 28 and refused == [], f"{held} held units, storage refuses {len(refused)} on a Git-only tree: {refused[:2]}")
+    check(held == 41 and refused == [], f"{held} held units, storage refuses {len(refused)} on a Git-only tree: {refused[:2]}")
 
 
 def test_the_committed_capture_specification_passes_the_outgoing_secret_scan(tmp_path: Path) -> None:

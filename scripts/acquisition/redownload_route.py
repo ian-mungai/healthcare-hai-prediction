@@ -108,12 +108,16 @@ def confirmation_problems(confirmation_path: Path, removal: dict) -> list[str]:
     return problems
 
 
+# The modes whose original comes from the bootstrap seed only. The run never requests their URL, so their host is not a host of the run (owner, Nov 19 2026).
+SEED_ONLY_MODES = frozenset({"ahrq_compendium"})
+
+
 def queue_hosts(queue: dict) -> set[str]:
     """Return the hosts of the active queue units, plus the target host of each reviewed redirect an active unit can take: its signed route, or the
-    unsigned route of its host. A route no active unit uses adds nothing."""
+    unsigned route of its host. A route no active unit uses adds nothing. A unit of a seed-only mode adds nothing: its URL is never requested."""
     hosts: set[str] = set()
     for unit in queue["queue"]:
-        if unit["disposition"] in ACTIVE:
+        if unit["disposition"] in ACTIVE and unit["mode"] not in SEED_ONLY_MODES:
             host = str(urllib.parse.urlsplit(unit["url"]).hostname)
             hosts.add(host)
             if unit["url"] in SIGNED_REDIRECT_ROUTES:

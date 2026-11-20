@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.acquisition import (
-    ahrq_compendium_contract,
     bls_api_contract,
     census_acs_api_contract,
     census_acs_detailed_contract,
@@ -91,7 +90,6 @@ def exercise() -> list[dict]:
 CONTRACTS = [bls_api_contract, census_acs_api_contract, census_acs_detailed_contract, hud_api_contract]
 # Collectors that admit only the exact closure of their entry module, with the files every one of them reaches.
 CLOSURE_ADMISSIONS = [
-    (ahrq_compendium_contract, "scripts.acquisition.store_ahrq_compendium"),
     (cms_owners_contract, "scripts.acquisition.store_cms_owners"),
     (hcai_util_contract, "scripts.acquisition.store_hcai_util"),
     (onc_mu_contract, "scripts.acquisition.store_onc_mu"),

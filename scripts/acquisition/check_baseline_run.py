@@ -19,7 +19,7 @@ from pathlib import Path
 
 from scripts.acquisition.api_keys import SHARED_KEYS
 from scripts.acquisition.history_routes import RELEASE_BINDINGS, lineage_bindings
-from scripts.acquisition.manual_content import MODES, REBUILT_MODES, ContentRefusal, Scopes, rebuild, recorded_derived
+from scripts.acquisition.manual_content import MODES, REBUILT_MODES, SEED_ONLY_MODES, ContentRefusal, Scopes, accept, rebuild, recorded_derived
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
 from scripts.acquisition.s3_store import access_released, encoded_json
 from scripts.process import run_command
@@ -32,7 +32,7 @@ SEED_MANIFEST = "manifest.json"
 SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md"})
 SEED_KIND = "bootstrap_seed_manifest"
 # The manual units whose stored files the seed holds. The ACS units are manual too, but they move to the Census API collector (owner, Nov 12 2026).
-SEED_MODES = ("hud_xlsx", "wonder_export")
+SEED_MODES = ("hud_xlsx", "wonder_export", "ahrq_compendium")
 SECRETS_NAME = "required_secrets.json"
 SECRETS_KIND = "bootstrap_required_secrets"
 CONFIG = Path("config/acquisition")
@@ -130,10 +130,12 @@ def release_problems(specs: dict[str, dict]) -> list[str]:
         name = spec.get("release_binding")
         if name is None:
             continue
+        # A unit without a receipt template (a seed-only unit) names its source in the specification. A source with its own record is bound by that record.
+        source = {"source_id": template.get("source_id") or spec.get("source_id")}
         if name not in RELEASE_BINDINGS:
             problems.append(f"unit {snapshot} names the release binding {name}, which is no tracked record")
-        elif not access_released({"source_id": template.get("source_id")}, lineage_bindings({"preferred_route": "access_hold"}, {"release_binding": name})):
-            problems.append(f"the tracked {name} record does not release {template.get('source_id')} of unit {snapshot}")
+        elif not access_released(source, lineage_bindings({"preferred_route": "access_hold"} | source, {"release_binding": name})):
+            problems.append(f"the tracked {name} record does not release {source['source_id']} of unit {snapshot}")
     return problems
 
 
@@ -258,6 +260,28 @@ def derivation_problems(root: Path, seed_root: Path, scopes: Scopes | None = Non
     return found
 
 
+def seed_only_problems(root: Path, seed_root: Path, scopes: Scopes | None = None) -> list[str]:
+    """Return the seeded originals of the seed-only units (the AHRQ files) that the locked plan does not bind. An absent original is pending."""
+    queue = json.loads((root / "queue.json").read_bytes())["queue"]
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    scopes = Scopes() if scopes is None else scopes
+    found = []
+    for unit in queue:
+        if unit["disposition"] != "approved_manual" or unit["mode"] not in SEED_ONLY_MODES:
+            continue
+        names = specs[unit["snapshot_id"]]["stored_data_files"]
+        if len(names) != 1:
+            found.append(f"unit {unit['snapshot_id']} needs exactly one stored file")
+            continue
+        path = seed_root / f"manual_units/{unit['snapshot_id']}/{names[0]}"
+        if path.is_file():
+            try:
+                accept(unit["mode"], path, names[0], scopes)
+            except ContentRefusal:
+                found.append(f"manual_units/{unit['snapshot_id']}/{names[0]} is not the file the locked plan binds for unit {unit['snapshot_id']}")
+    return found
+
+
 def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
     """Return the seed paths that Git does not store through LFS: the attribute lookup needs no file, so it runs before the files exist."""
     if not paths:
@@ -309,6 +333,7 @@ def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: b
         found += home_problems(root, manifest)
         found += seed_problems(root, seed_root, manifest, require_files=require_files)
         found += derivation_problems(root, seed_root)
+        found += seed_only_problems(root, seed_root)
         found += secret_problems(root, secrets_read_by_code())
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:

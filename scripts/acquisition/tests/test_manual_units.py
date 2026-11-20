@@ -6,6 +6,7 @@ Everything is synthetic: a stand-in publisher below the reviewed redirect policy
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ import urllib.request
 import warnings
 import zipfile
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import Message
@@ -31,6 +33,7 @@ from scripts.acquisition.run_hud_xlsx_e2e import workbook as hud_workbook
 from scripts.acquisition.run_wonder_export_e2e import FLOOR
 from scripts.acquisition.run_wonder_export_e2e import export_text as wonder_export_text
 from scripts.acquisition.s3_store import StorageError
+from scripts.acquisition.tests.test_ahrq_manual_units import BASE, BODIES, MODE, PDF_NAME, XLS_NAME, XLSX_NAME, plan_of
 from scripts.acquisition.tests.test_collector_hosts import hosts
 from tests.support import check
 
@@ -859,8 +862,14 @@ def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_lock
         check(mode != "hud_xlsx" or name in hud_files, f"{name} is a planned HUD workbook")
         check(mode != "wonder_export" or name in wonder_files, f"{name} is a planned WONDER export")
         check(manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is on a manual host")
+    ahrq = [unit for unit in manual if unit["mode"] == MODE]
+    planned = {item["file_name"] for item in scopes.plan(MODE)["files"]}
+    check(len(ahrq) == 13 and Counter(unit["source_id"] for unit in ahrq) == {"AHRQ_SYSTEM": 13}, "the AHRQ set is 13 seed-only units")
+    for unit in ahrq:
+        check(manual_content.plan_unit(unit, specs[unit["snapshot_id"]])[1] in planned, f"{unit['snapshot_id']} is a planned AHRQ file")
+        check(not manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is not a host the run requests")
     refused: Counter[tuple[str, str, bool]] = Counter()
-    for unit in (unit for unit in manual if unit not in units):
+    for unit in (unit for unit in manual if unit not in units and unit not in ahrq):
         with pytest.raises(manual_units.ManualUnitError, match="not a manual unit|no content contract") as error:
             manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
         refused[(unit["source_id"], unit["mode"], "not a manual unit" in str(error.value))] += 1
@@ -1477,3 +1486,89 @@ def test_an_other_object_whose_key_has_no_last_segment_stops_the_unit_by_name_an
     named = world.bucket.seed(key, b"folder marker") | {"role": "dictionary"}
     completion_for(world, unit, "a", NEWER, other_objects=[named])
     stopped_without_a_record(world, unit, "no stored file name")
+
+
+def ahrq_world(world: World, bodies: dict[str, bytes] | None = None, *, planned: dict[str, bytes] | None = None) -> tuple[dict[str, dict], Path]:
+    """One unit per file, a seed folder holding the given bodies and a plan that binds the planned bodies (the same ones by default)."""
+    held = BODIES if bodies is None else bodies
+    world.plans = dataclasses.replace(world.plans, ahrq=plan_of(BODIES if planned is None else planned))
+    units = {}
+    seed = world.scratch.parent / "seed"
+    for number, name in enumerate(held):
+        units[name] = world.add(make_unit("AHRQ_SYSTEM", MODE, BASE + name, f"AHRQ_SYSTEM__{number}"), {"mode": MODE, "stored_data_files": [name]})
+        folder = seed / "manual_units" / units[name]["snapshot_id"]
+        folder.mkdir(parents=True)
+        (folder / name).write_bytes(held[name])
+    return units, seed
+
+
+def test_a_seeded_ahrq_original_is_bound_to_the_plan_and_captured_alone_with_no_request(world: World) -> None:
+    units, seed = ahrq_world(world)
+    report = world.run(list(units.values()), seed=seed)
+    captured = {unit: files for unit, files in world.sink.captured}
+    check(sorted(captured) == sorted(u["snapshot_id"] for u in units.values()), f"every unit was captured: {sorted(captured)}")
+    check(
+        all(list(files) == [name] for (_, files), name in zip(world.sink.captured, BODIES, strict=True)),
+        "each capture holds the original only, no derived file",
+    )
+    check(all(files[name] == BODIES[name] for (_, files), name in zip(world.sink.captured, BODIES, strict=True)), "the captured bytes are the seeded bytes")
+    check(world.site.seen == [] and report.http_requests == 0 and world.counter == [], "no request, not even robots.txt")
+    check(read_all(world) == [] and report.counts["captured"] == 3, f"no stale record: {report.counts}")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda body: body[:-1] + b"X",
+        lambda body: body + b"X",
+        lambda body: body[:-2],
+    ],
+    ids=["same_size_other_hash", "longer", "shorter"],
+)
+def test_an_ahrq_original_with_another_hash_or_size_than_the_plan_is_stale_and_never_captured(world: World, change: Callable[[bytes], bytes]) -> None:
+    changed = {XLSX_NAME: change(BODIES[XLSX_NAME])}
+    units, seed = ahrq_world(world, changed, planned={XLSX_NAME: BODIES[XLSX_NAME]})
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed", "the mismatch makes the unit stale")
+    check(world.sink.captured == [] and world.site.seen == [], "nothing was captured and no request was sent")
+
+
+def test_an_ahrq_file_the_plan_does_not_list_is_stale_and_never_captured(world: World) -> None:
+    units, seed = ahrq_world(world, {XLSX_NAME: BODIES[XLSX_NAME]}, planned={XLS_NAME: BODIES[XLS_NAME]})
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "an unplanned original is stale")
+
+
+def test_a_pdf_that_is_not_a_pdf_is_stale_even_when_the_plan_binds_its_bytes(world: World) -> None:
+    html = b"<!doctype html><html><body>sign in</body></html>"
+    units, seed = ahrq_world(world, {PDF_NAME: html}, planned={PDF_NAME: html})
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[PDF_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "the format check refuses it")
+
+
+def test_an_absent_ahrq_original_is_stale_and_missing_without_stopping_the_other_units(world: World) -> None:
+    units, seed = ahrq_world(world)
+    gone = units[XLS_NAME]
+    (seed / "manual_units" / gone["snapshot_id"] / XLS_NAME).unlink()
+    report = world.run(list(units.values()), seed=seed)
+    check(only_stale(world, gone)["reason"] == "seed_missing", "the absent original makes only its unit stale")
+    check(len(world.sink.captured) == 2 and world.site.seen == [], "the other two were captured and no request was sent")
+    check([item["snapshot_id"] for item in report.missing_units] == [gone["snapshot_id"]], f"it is listed as missing: {report.missing_units}")
+
+
+def test_a_symlinked_ahrq_original_is_not_taken_from_the_seed(world: World, tmp_path: Path) -> None:
+    units, seed = ahrq_world(world, {XLSX_NAME: BODIES[XLSX_NAME]})
+    path = seed / "manual_units" / units[XLSX_NAME]["snapshot_id"] / XLSX_NAME
+    path.unlink()
+    outside = tmp_path / "outside.xlsx"
+    outside.write_bytes(BODIES[XLSX_NAME])
+    path.symlink_to(outside)
+    world.run(list(units.values()), seed=seed)
+    check(only_stale(world, units[XLSX_NAME])["reason"] == "seed_missing" and world.sink.captured == [], "a link is not an original")
+
+
+def test_a_run_without_a_seed_folder_never_downloads_an_ahrq_file(world: World) -> None:
+    units, _ = ahrq_world(world)
+    report = world.run(list(units.values()))
+    check({only_stale(world, unit)["reason"] for unit in units.values()} == {"seed_required"}, "every unit is stale: the run has no seed")
+    check(world.site.seen == [] and report.http_requests == 0 and world.sink.captured == [], "no request was sent, robots.txt included")

@@ -538,6 +538,28 @@ def is_seeded(mode: str, context: Context) -> bool:
     return context.seed is not None and mode in manual_content.REBUILT_MODES
 
 
+def seed_only_unit(unit: dict, spec: dict, mode: str, name: str, context: Context) -> tuple[dict[str, Path] | None, str | None]:
+    """A unit of a seed-only mode: its original is bound to the locked plan and captured as it is. Sends no request, whatever happens.
+
+    No seed folder is a stale unit ("seed_required"), and so is an absent original or a link ("seed_missing"): the unit is listed for the owner, and the
+    other units still run. A file that the plan does not bind, or of another format than its name says, is stale with "contract_failed".
+    """
+    if context.seed is None:
+        return None, "seed_required"
+    original = seed_original(unit, name, context)
+    if not original.is_file() or original.is_symlink():
+        return None, "seed_missing"
+    folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
+    staged_original = folder / name
+    shutil.copyfile(original, staged_original)
+    try:
+        derived = manual_content.accept(mode, staged_original, name, context.scopes)
+    except ContentRefusal as refusal:
+        return None, refusal.reason
+    files = staged(staged_original, derived, spec)
+    return (files, None) if files is not None else (None, "contract_failed")
+
+
 def seed_original(unit: dict, name: str, context: Context) -> Path:
     return (context.seed or Path()) / "manual_units" / unit["snapshot_id"] / name
 
@@ -574,7 +596,9 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
         if newest is not None and context.clock.now() - datetime.strptime(newest["attempted_at_utc"], TIME_FORMAT).replace(tzinfo=UTC) < RETRY_INTERVAL:
             return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"], newest)
         files, status = None, None
-        if is_seeded(mode, context):
+        if mode in manual_content.SEED_ONLY_MODES:
+            files, reason = seed_only_unit(unit, spec, mode, name, context)
+        elif is_seeded(mode, context):
             files, reason = seed_unit(unit, spec, mode, name, context)
         elif (reason := context.gate.admit(unit["url"])) is None:
             files, reason, status = download_unit(unit, spec, mode, name, context)

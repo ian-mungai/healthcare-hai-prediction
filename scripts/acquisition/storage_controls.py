@@ -45,11 +45,6 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
 
         verify_reference_capture(receipt, source, lineage, root, evidence_only)
         return
-    if mode == "ahrq_compendium":
-        from scripts.acquisition.ahrq_compendium_contract import verify_capture as verify_ahrq_capture
-
-        verify_ahrq_capture(receipt, source, lineage, root, evidence_only)
-        return
     if mode in {"census_acs_detailed", "acs_derived"}:
         from scripts.acquisition.census_acs_detailed_contract import verify_capture as verify_census_detailed_capture
 
