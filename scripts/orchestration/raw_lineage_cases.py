@@ -1,7 +1,9 @@
-"""Cases of the lineage that starts at acquisition: the raw files an acquisition run stored and the raw files a bronze run loaded.
+"""Cases of the lineage that starts at acquisition and of the evidence step of the job DAGs.
 
-Both sides name a raw file the same way (``s3://<bucket>`` and the object key, with the object version as the dataset version facet), so OpenMetadata joins
-the acquisition run's outputs to the bronze run's inputs. The saved acquisition states are stand-ins written by the case in a temporary folder, in the
+An acquisition run names each raw file it stored as the dataset ``s3://<bucket>`` and the object key, with the object version as the dataset version facet,
+and its START and COMPLETE events carry every stored file as an output. A bronze run sends no table events: its task events name no dataset, and its run
+record is what the catalog writer reads for each table's raw files. The evidence step of a gold job sends the per-table events, within the provider's timeout
+and the total deadline, and only when HTTP lineage is on. The saved acquisition states are stand-ins written by the case in a temporary folder, in the
 shapes ``scripts/acquisition/batch.py`` (``completed_collection_layout.json``) and ``scripts/acquisition/s3_store.py`` (the reconciliation record) write, with
 a receipt in the shape of ``config/acquisition/snapshot_contract.schema.json``. No acquisition runs and nothing reaches S3.
 """

@@ -249,7 +249,7 @@ run "cluster_capacity" {
       aws_ecs_capacity_provider.host.name == "example_project_host_dev" &&
       one(aws_ecs_capacity_provider.host.auto_scaling_group_provider).auto_scaling_group_arn == data.aws_autoscaling_group.host.arn
     )
-    error_message = "The cluster offers only the host (the IAM stack's group) as a capacity provider and as the default for run tasks: no Fargate provider remains."
+    error_message = "The cluster offers only the host (the IAM stack's group) as a capacity provider and as the default for run tasks."
   }
 }
 

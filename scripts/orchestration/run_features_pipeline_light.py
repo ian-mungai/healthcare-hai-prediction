@@ -8,7 +8,6 @@ that is removed at the end. The report goes to ``data/e2e/features_pipeline_ligh
 from __future__ import annotations
 
 import argparse
-import ast
 import contextlib
 import copy
 import dataclasses
@@ -826,11 +825,6 @@ def case_templates_launcher(fixture: Fixture, scratch: Path) -> Checks:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Broker approval (E05, regression R3)
-# ---------------------------------------------------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------------------------------------------------
 # Run control (E01 completed, E08 control seal) and templates (E01 templates)
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -1174,20 +1168,8 @@ def case_online_join(fixture: Fixture, scratch: Path) -> Checks:
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-def work_steps(dag: str) -> tuple[str, ...] | None:
-    path = ROOT / "dags" / f"{dag}.py"
-    if not path.is_file():
-        return None
-    tree = ast.parse(path.read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "WORK_STEPS" for target in node.targets):
-            value = ast.literal_eval(node.value)
-            return tuple(value)
-    return None
-
-
 def case_graph(fixture: Fixture, scratch: Path) -> Checks:
-    """E01 (LB24, LB25, LB26, LB27, regression R4): chains, DAG files, parameters, runtime routing and the supervisor's DAG list."""
+    """E01 (LB24, LB25, LB26, LB27, regression R4): the collapsed and unchanged DAGs, the features DAG parameters, the runtime's gold selection and assets."""
     checks: Checks = {}
     base = base_module("graph_base", "orchestration/graph.py", scratch)
     triggers = {name: frozenset({"gate"}) for name in graph.TRIGGERS[BASE_DAG]}  # the base DAG starts the six model DAGs behind its gate

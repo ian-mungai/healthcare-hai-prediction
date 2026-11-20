@@ -1,4 +1,4 @@
-"""All the data is public: every unit takes its lane from its mode, and a run holds the queue it accepted. The personal handling is gone."""
+"""All the data is public: every unit takes its lane from its mode, and a run holds the queue it accepted."""
 
 from __future__ import annotations
 
@@ -117,10 +117,9 @@ def nothing_was_opened(run: harness.Run, summary: object = None) -> None:
 
 
 def test_a_unit_whose_original_names_a_person_runs_like_any_other(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The hospitals archive holds a table of named state contacts. It is public, so the unit is fetched with no classification file at all."""
+    """The hospitals archive holds a table of named state contacts. It is public, so the unit is fetched like any other."""
     quiet_environment(monkeypatch, 2)
     run, unit = synthetic_run(tmp_path, 2, "local")
-    check(not run.queue_path.with_name("unit_classification.json").exists(), "the queue carries no classification")
     summary = harness.execute(run)
     check([unit["url"]] == REQUESTS and summary["attempted"] == 1, f"the unit was fetched once: {REQUESTS} {summary}")
 

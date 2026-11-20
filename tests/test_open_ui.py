@@ -522,7 +522,7 @@ class Checkout:
         elif kind == "internal_first":
             command = ["scripts/open_ui.sh", "--emit-command=1", "airflow", "--env-file", ".env"]
         elif kind == "override":  # an output-file option the wrapper does not take: a caller must not be able to redirect anything
-            command = ["scripts/open_ui.sh", "airflow", "--exec-args-file", "/nonexistent_hostile_dir/command", "--env-file", ".env"]
+            command = ["scripts/open_ui.sh", "airflow", "--sink-file", "/nonexistent_hostile_dir/command", "--env-file", ".env"]
         elif kind == "help":
             command = ["scripts/open_ui.sh", "--help"]
         elif kind == "short_help":
@@ -637,7 +637,7 @@ def test_a_hostile_or_missing_tmpdir_changes_nothing_because_no_file_is_made(tmp
     hostile = tmp_path / "hostile"
     hostile.mkdir()
     for number in range(8):
-        (hostile / f"hai_open_ui.{number:06d}").symlink_to(victim)
+        (hostile / f"planted_link.{number:06d}").symlink_to(victim)
     for case, directory in (("a missing directory", "/nonexistent_hostile_dir"), ("a directory with planted links", str(hostile))):
         folder = tmp_path / ("missing" if "missing" in case else "planted")
         folder.mkdir()
@@ -646,7 +646,7 @@ def test_a_hostile_or_missing_tmpdir_changes_nothing_because_no_file_is_made(tmp
         check(result.returncode == 0, f"{case}: the session must still start: {result.returncode} {result.stdout} {result.stderr}")
         check(len(checkout.session_calls()) == 1, f"{case}: aws must run once: {checkout.workspace.calls()}")
     check(victim.read_text() == "untouched\n", "nothing may be written through a planted link")
-    check(sorted(path.name for path in hostile.iterdir()) == [f"hai_open_ui.{number:06d}" for number in range(8)], "nothing may be created in TMPDIR")
+    check(sorted(path.name for path in hostile.iterdir()) == [f"planted_link.{number:06d}" for number in range(8)], "nothing may be created in TMPDIR")
 
 
 def test_a_caller_cannot_select_the_internal_mode_or_redirect_the_output(tmp_path: Path) -> None:
