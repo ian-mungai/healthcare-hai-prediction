@@ -2517,6 +2517,20 @@ MODULE_CASES = [
         {"samplepkg/run.sh": f"python -m {ABSENT_MODULE}...; python -m {ABSENT_MODULE}\n"},
         missing_reason("samplepkg/run.sh", 1),
     ),
+    module_case("module prefix in double quotes with an ellipsis", {"samplepkg/run.sh": f'python -m "{ABSENT_MODULE}..."\n'}),
+    module_case("module prefix in single quotes behind a grouped option with an ellipsis", {"samplepkg/run.sh": f"python -Bm '{ABSENT_MODULE}...'\n"}),
+    module_case("module prefix in backticks with an ellipsis", {"samplepkg/run.sh": f"python -m `{ABSENT_MODULE}...`\n"}),
+    module_case("module prefix in double quotes inside a Markdown sentence", {"docs/run.md": f'Start with `python -m "{ABSENT_MODULE}..."` as the prefix.\n'}),
+    module_case(
+        "missing module after a quoted prefix with an ellipsis",
+        {"samplepkg/run.sh": f'python -m "{ABSENT_MODULE}..."; python -m {ABSENT_MODULE}_two\n'},
+        missing_reason("samplepkg/run.sh", 1, f"{ABSENT_MODULE}_two"),
+    ),
+    module_case(
+        "missing module of the same name beside a quoted prefix with an ellipsis",
+        {"samplepkg/run.sh": f'python -m {ABSENT_MODULE}; echo "see -m {ABSENT_MODULE}..."\n'},
+        missing_reason("samplepkg/run.sh", 1),
+    ),
     module_case("flag of a command", {"docs/run.md": f"Run `python -m {PRESENT_MODULE} --no-such-flag`.\n"}),
     module_case(
         "files that are history", {"CHANGELOG.md": f"Ran:\n\n```sh\npython -m {ABSENT_MODULE}\n```\n", "e2e/run.md": f"```sh\npython -m {ABSENT_MODULE}\n```\n"}
@@ -4811,6 +4825,25 @@ PLANTED_REGRESSIONS = [
         "if not GROUPED_M.search(text):",
         'if "-m" not in text:',
         0,
+    ),
+    (
+        "a quoted module prefix with an ellipsis is no command",
+        [
+            case
+            for case in MODULE_CASES
+            if case.name
+            in (
+                "python -m command, module prefix in double quotes with an ellipsis",
+                "python -m command, module prefix in single quotes behind a grouped option with an ellipsis",
+                "python -m command, module prefix in backticks with an ellipsis",
+                "python -m command, module prefix in double quotes inside a Markdown sentence",
+            )
+        ],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "[\\\"'`]?[\\w.]+\\.\\.\\.[\\\"'`]?",
+        "[\\w.]+\\.\\.\\.",
+        1,
     ),
     (
         "declared import roots",

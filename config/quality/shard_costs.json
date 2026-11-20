@@ -819,7 +819,14 @@
       "planted regressions of tracked paths come from a NUL-separated list: samples 1 to 1": 2.4,
       "planted regressions of a JSON finding names the line of its own key: samples 1 to 1": 2.4,
       "planted regressions of JSON pairs follow the key order of the text: samples 1 to 1": 2.4,
-      "planted regressions of a JSON object with an unknown line is named by its path: samples 1 to 1": 2.4
+      "planted regressions of a JSON object with an unknown line is named by its path: samples 1 to 1": 2.4,
+      "python -m command, module prefix in double quotes with an ellipsis": 2.0,
+      "python -m command, module prefix in single quotes behind a grouped option with an ellipsis": 2.0,
+      "python -m command, module prefix in backticks with an ellipsis": 2.0,
+      "python -m command, module prefix in double quotes inside a Markdown sentence": 2.0,
+      "python -m command, missing module after a quoted prefix with an ellipsis": 2.0,
+      "python -m command, missing module of the same name beside a quoted prefix with an ellipsis": 2.0,
+      "planted regressions of a quoted module prefix with an ellipsis is no command: samples 1 to 4": 9.6
     }
   }
 }
