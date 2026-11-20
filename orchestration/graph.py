@@ -274,7 +274,11 @@ def display_name_violations(dag: Any) -> list[Violation]:
             if model_label(model) not in str(getattr(task, "doc_md", None) or ""):
                 problems.append(f"the doc of trigger_{model} lacks {model_label(model)}")
     if dag_id in DOC_MODELS:
-        problems += [f"the doc shows {model} without its name" for model in MODELS if re.search(rf"\b{model}\b(?! \({re.escape(MODEL_LABELS[model])}\))", doc)]
+        # Markdown shows ``_m2_`` and ``**m2**`` as a bare m2, so emphasis marks at a word's edge are dropped first; ``features_m2_dag`` keeps its underscores.
+        shown = re.sub(r"(?<![A-Za-z0-9_])[_*]+(?=\S)|(?<=\S)[_*]+(?![A-Za-z0-9_])", "", doc)
+        problems += [
+            f"the doc shows {model} without its name" for model in MODELS if re.search(rf"\b{model}\b(?! \({re.escape(MODEL_LABELS[model])}\))", shown)
+        ]
     problems += [f"the doc lacks {model_label(model)}" for model in DOC_MODELS.get(dag_id, ()) if model_label(model) not in doc]
     return [Violation("display_name", dag_id, problem) for problem in problems]
 

@@ -454,7 +454,8 @@ def test_the_release_refusal_names_the_promotion_models_it_accepts() -> None:
 
 def keys_without_a_name(doc: str, model: str) -> list[str]:
     """The places in ``doc`` where ``model`` stands without its name after it."""
-    return re.findall(rf"\b{model}\b(?! \({re.escape(OWNER_NAMES[model])}\))", doc)
+    shown = re.sub(r"(?<![A-Za-z0-9_])[_*]+(?=\S)|(?<=\S)[_*]+(?![A-Za-z0-9_])", "", doc)
+    return re.findall(rf"\b{model}\b(?! \({re.escape(OWNER_NAMES[model])}\))", shown)
 
 
 def test_a_model_dag_doc_shows_the_name_beside_every_key_it_repeats(loaded: dict[str, dict[str, Any]]) -> None:
@@ -470,6 +471,12 @@ def test_the_graph_rules_refuse_a_model_dag_doc_that_repeats_a_bare_key(loaded: 
     check({row.rule for row in rows} == {"display_name"} and "m2 without" in rows[0].detail, f"a doc with a bare key was accepted: {rows}")
     named = "Build the m2 (Elastic Net) model set.\n\nModel: m2 (Elastic Net)."
     check(graph.display_name_violations(SimpleNamespace(**{**vars(shipped), "doc_md": named})) == [], "a doc with the name beside every key was refused")
+    for emphasized in ("_m2_", "*m2*", "**m2**", "__m2__"):
+        marked = f"Build the {emphasized} model set.\n\nModel: m2 (Elastic Net)."
+        rows = graph.display_name_violations(SimpleNamespace(**{**vars(shipped), "doc_md": marked}))
+        check(any("m2 without" in row.detail for row in rows), f"a doc with the bare key in emphasis ({emphasized}) was accepted: {rows}")
+    identifier = "The DAG features_m2_dag builds the m2 (Elastic Net) model set.\n\nModel: m2 (Elastic Net)."
+    check(graph.display_name_violations(SimpleNamespace(**{**vars(shipped), "doc_md": identifier})) == [], "a doc that names a code identifier was refused")
 
 
 def test_no_doc_of_a_dag_that_names_models_shows_a_bare_key(loaded: dict[str, dict[str, Any]]) -> None:
