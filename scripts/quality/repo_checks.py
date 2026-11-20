@@ -2020,12 +2020,20 @@ def removed_names() -> list[Finding]:
     return findings
 
 
-def json_task_ids(node: Any) -> list[tuple[str | None, str]]:
-    """Every object at any depth with a string ``task_id``, in document order, as its ``dag_id`` (None when it has none or not a string) and task."""
+def json_task_ids(node: Any, where: str = "$") -> list[tuple[str | None, str, str]]:
+    """Every object at any depth with a string ``task_id``, in key order, which is document order: its ``dag_id`` (None when it has none or not a string), the
+    task and the path of the object (``$.rows[1]``)."""
+    found: list[tuple[str | None, str, str]] = []
     if isinstance(node, dict):
-        own = [(node["dag_id"] if isinstance(node.get("dag_id"), str) else None, node["task_id"])] if isinstance(node.get("task_id"), str) else []
-        return own + [pair for value in node.values() for pair in json_task_ids(value)]
-    return [pair for value in node for pair in json_task_ids(value)] if isinstance(node, list) else []
+        for key, value in node.items():
+            if key == "task_id" and isinstance(value, str):
+                found.append((node["dag_id"] if isinstance(node.get("dag_id"), str) else None, value, where))
+            else:
+                found += json_task_ids(value, f"{where}.{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found += json_task_ids(value, f"{where}[{index}]")
+    return found
 
 
 def python_task_ids(tree: ast.AST, dag_at: int, task_at: int) -> list[tuple[int, str | None, str]]:
@@ -2045,8 +2053,9 @@ def python_task_ids(tree: ast.AST, dag_at: int, task_at: int) -> list[tuple[int,
                 named = {"dag_id": text(node.args[dag_at]), "task_id": text(node.args[task_at])}
         else:
             continue
-        if named.get("dag_id") and named.get("task_id"):
-            found.append((node.lineno, str(named["dag_id"]), str(named["task_id"])))
+        dag, task = named.get("dag_id"), named.get("task_id")
+        if dag is not None and task is not None:
+            found.append((node.lineno, dag, task))
     return found
 
 
@@ -2054,8 +2063,13 @@ def task_ids() -> list[Finding]:
     """A task ID written beside the ID of a shipped DAG names a task that DAG has.
 
     Reads the current tree: every tracked JSON object and every Python dict, call with keyword arguments or ``SubmissionRequest`` call (by its field order) that
-    holds a ``dag_id`` and a ``task_id`` as string literals. A DAG that ``orchestration.graph`` does not ship is a made-up fixture DAG and is not judged, nor is
-    a value that is not a literal. A file that does not parse is skipped: Ruff and the JSON check already block it, and a fixture may hold bad JSON on purpose.
+    holds a ``dag_id`` and a ``task_id`` as string literals, an empty string included. Python source is read as bytes, so a declared encoding applies, and the
+    tracked paths come from a NUL-separated list. Only the DAGs of ``orchestration.graph.GRAPH_DAGS`` are judged. A DAG outside that inventory is not: five real
+    DAG files under ``dags/`` (the drift, ingestion and metadata DAGs) lie outside it, and so does a made-up fixture DAG. A value that is not a literal is not
+    judged either. These files are skipped: a Python file that does not parse (Ruff blocks it at commit) and a JSON file that does not parse or is not UTF-8
+    (no other hook is guaranteed to read every JSON path: the schema hook reads only the mapped files, workflows and schema definitions, and a fixture may hold
+    bad JSON on purpose). A JSON finding names the line of its ``task_id`` key. When the keys found in the text and in the parsed value differ in number, it
+    names the path of the object instead, for example ``rows[1]``.
     """
     from orchestration import graph, interface
 
@@ -2063,21 +2077,26 @@ def task_ids() -> list[Finding]:
     dag_at, task_at = names.index("dag_id"), names.index("task_id")
     tasks = {dag: sorted(graph.reference_graph(dag)) for dag in graph.GRAPH_DAGS}
     findings = []
-    for path in sorted(git("ls-files", "*.json", "*.py").splitlines()):
+    for path in sorted(name for name in git("ls-files", "-z", "*.json", "*.py").split("\0") if name):
         try:
-            text = Path(path).read_text(encoding="utf-8")
+            data = Path(path).read_bytes()
+            found: list[tuple[str, str | None, str]]
             if path.endswith(".json"):
+                text = data.decode("utf-8")
                 pairs = json_task_ids(json.loads(text))
-                keyed = [number for number, line in enumerate(text.splitlines(), 1) if TASK_KEY.search(line)]
-                found = [(keyed[index] if len(keyed) == len(pairs) else 1, dag, task) for index, (dag, task) in enumerate(pairs)]
+                lines = [text.count("\n", 0, match.start()) + 1 for match in TASK_KEY.finditer(text)]
+                found = [
+                    (f"{path}:{lines[index]}" if len(lines) == len(pairs) else f"{path} ({where.removeprefix('$.')})", dag, task)
+                    for index, (dag, task, where) in enumerate(pairs)
+                ]
             else:
-                found = python_task_ids(ast.parse(text), dag_at, task_at)
+                found = [(f"{path}:{line}", dag, task) for line, dag, task in python_task_ids(ast.parse(data), dag_at, task_at)]
         except (OSError, SyntaxError, ValueError):
             continue
-        for line, dag, task in found:
+        for location, dag, task in found:
             if dag in tasks and task not in tasks[dag]:
                 fix = "name a task the DAG has, or use a DAG name that is not shipped if the fixture is not about a real DAG"
-                findings.append(Finding(f"{path}:{line}", f"task '{task}' is not a task of {dag}. Its tasks are {', '.join(tasks[dag])}", TASK_IDS_RULE, fix))
+                findings.append(Finding(location, f"task '{task}' is not a task of {dag}. Its tasks are {', '.join(tasks[dag])}", TASK_IDS_RULE, fix))
     return findings
 
 

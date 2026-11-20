@@ -2263,6 +2263,10 @@ NESTED_JSON = "\n".join(
     ["{", '  "rows": [', '    {"run": 1},', "    {", f'      "dag_id": "{SHIPPED_DAG}",', f'      "task_id": "{STALE_TASK}"', "    }", "  ]", "}", ""]
 )
 
+OUTER_JSON = "\n".join(
+    ["{", f'  "inner": {{"dag_id": "{SHIPPED_DAG}", "task_id": "{REAL_TASK}"}},', f'  "dag_id": "{SHIPPED_DAG}",', f'  "task_id": "{STALE_TASK}"', "}", ""]
+)
+
 
 def stale_reason(path: str, line: int, dag: str = SHIPPED_DAG, task: str = STALE_TASK) -> str:
     """The start of the finding the task ID check prints for a pair of ``dag`` and ``task`` at ``path:line``."""
@@ -2309,6 +2313,47 @@ TASK_ID_CASES = [
     task_case(
         "values that are not literals",
         {"app/launch.py": f'launch(dag_id="{SHIPPED_DAG}", task_id=name)\nREQUEST = {{"dag_id": dag, "task_id": "{STALE_TASK}"}}\n'},
+    ),
+    task_case(
+        "stale pair in an object under a key",
+        {"config/holder.json": f'{{\n  "holder": {{"dag_id": "{SHIPPED_DAG}", "task_id": "{STALE_TASK}"}}\n}}\n'},
+        stale_reason("config/holder.json", 2),
+    ),
+    task_case(
+        "empty task ID in a Python dict",
+        {"app/request.py": f'REQUEST = {{"dag_id": "{SHIPPED_DAG}", "task_id": ""}}\n'},
+        stale_reason("app/request.py", 1, task=""),
+    ),
+    task_case(
+        "empty task ID in keyword arguments", {"app/launch.py": f'launch(dag_id="{SHIPPED_DAG}", task_id="")\n'}, stale_reason("app/launch.py", 1, task="")
+    ),
+    task_case("empty task ID in JSON", {"config/jobs.json": STALE_JSON.replace(STALE_TASK, "")}, stale_reason("config/jobs.json", 3, task="")),
+    task_case(
+        "Python source in a declared Latin-1 encoding",
+        {"app/record.py": f'# coding: latin-1\n# caf\xe9\nrecord = {{"dag_id": "{SHIPPED_DAG}", "task_id": "{STALE_TASK}"}}\n'.encode("latin-1")},
+        stale_reason("app/record.py", 3),
+    ),
+    task_case(
+        "Python file with a non-ASCII path",
+        {"app/caf\u00e9.py": f'record = {{"dag_id": "{SHIPPED_DAG}", "task_id": "{STALE_TASK}"}}\n'},
+        stale_reason("app/caf\u00e9.py", 1),
+    ),
+    task_case(
+        "two compact JSON objects on one line",
+        {"config/compact.json": f'\n\n[{{"task_id":"neutral","dag_id":"{MADE_UP_DAG}"}}, {{"dag_id":"{SHIPPED_DAG}","task_id":"{STALE_TASK}"}}]\n'},
+        stale_reason("config/compact.json", 3),
+    ),
+    task_case(
+        "an outer object whose task ID follows a nested object",
+        {
+            "config/outer.json": OUTER_JSON,
+        },
+        stale_reason("config/outer.json", 4),
+    ),
+    task_case(
+        "a JSON object whose line cannot be known is named by its path",
+        {"config/twice.json": f'{{"rows": [{{"run": 1}}, {{"dag_id": "{SHIPPED_DAG}", "task_id": "{REAL_TASK}", "task_id": "{STALE_TASK}"}}]}}\n'},
+        f"config/twice.json (rows[1]): task '{STALE_TASK}' is not a task of {SHIPPED_DAG}",
     ),
     task_case("Python file that does not parse", {"app/broken.py": f'launch(dag_id="{SHIPPED_DAG}", task_id="{STALE_TASK}"\n'}),
     task_case("JSON file that does not parse", {"config/broken.json": STALE_JSON.replace("\n}", ",\n")}),
@@ -4333,12 +4378,83 @@ PLANTED_REGRESSIONS = [
         0,
     ),
     (
-        "task ID pairs are read in nested JSON objects",
+        "task ID pairs are read in JSON arrays",
         [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in a nested JSON object",)],
         TASK_IDS_COMMAND,
         "scripts/quality/repo_checks.py",
-        "return own + [pair for value in node.values() for pair in json_task_ids(value)]",
-        "return own",
+        'found += json_task_ids(value, f"{where}[{index}]")',
+        "pass",
+        0,
+    ),
+    (
+        "task ID pairs are read in JSON objects under a key",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, stale pair in an object under a key",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'found += json_task_ids(value, f"{where}.{key}")',
+        "pass",
+        0,
+    ),
+    (
+        "an empty task ID is a task ID",
+        [
+            case
+            for case in TASK_ID_CASES
+            if case.name
+            in (
+                "task ID, empty task ID in a Python dict",
+                "task ID, empty task ID in keyword arguments",
+            )
+        ],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if dag is not None and task is not None:",
+        "if dag and task:",
+        0,
+    ),
+    (
+        "Python source is read with its declared encoding",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, Python source in a declared Latin-1 encoding",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "ast.parse(data)",
+        'ast.parse(data.decode("utf-8"))',
+        0,
+    ),
+    (
+        "tracked paths come from a NUL-separated list",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, Python file with a non-ASCII path",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'git("ls-files", "-z", "*.json", "*.py").split("\\0")',
+        'git("ls-files", "*.json", "*.py").split("\\n")',
+        0,
+    ),
+    (
+        "a JSON finding names the line of its own key",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, two compact JSON objects on one line",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'lines = [text.count("\\n", 0, match.start()) + 1 for match in TASK_KEY.finditer(text)]',
+        "lines = [number for number, line in enumerate(text.splitlines(), 1) if TASK_KEY.search(line)]",
+        0,
+    ),
+    (
+        "JSON pairs follow the key order of the text",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, an outer object whose task ID follows a nested object",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "for key, value in node.items():",
+        'for key, value in sorted(node.items(), key=lambda item: item[0] != "task_id"):',
+        0,
+    ),
+    (
+        "a JSON object with an unknown line is named by its path",
+        [case for case in TASK_ID_CASES if case.name in ("task ID, a JSON object whose line cannot be known is named by its path",)],
+        TASK_IDS_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if len(lines) == len(pairs) else",
+        "if True else",
         0,
     ),
     (
@@ -4777,7 +4893,8 @@ def run_planted_regression_case(rule_index: int, first: int, stop: int) -> tuple
                     return False, f"cannot plant the regression of the {rule}: {marker!r} is not in {source} once\n"
                 path.write_text(text.replace(marker, replacement, 1))
                 planted = run_command(python, command, cwd=repo, timeout=180)
-                caught = planted.returncode == planted_exit
+                moved = bool(case.reason) and planted.returncode == 1 and case.reason not in planted.stdout + planted.stderr
+                caught = planted.returncode == planted_exit or moved
                 ok = ok and real.returncode == (0 if case.expect_pass else 1) and caught
                 lines.append(f"{rule}, {case.name}: real check exit={real.returncode}; planted regression exit={planted.returncode}, caught={caught}\n")
     return ok, "".join(lines)

@@ -729,7 +729,6 @@
       "task ID, Python file that does not parse": 14.1,
       "task ID, JSON file that does not parse": 14.1,
       "planted regressions of task ID pairs of JSON files are read: samples 1 to 2": 14.6,
-      "planted regressions of task ID pairs are read in nested JSON objects: samples 1 to 1": 7.3,
       "planted regressions of task ID pairs of a Python dict are read: samples 1 to 1": 7.3,
       "planted regressions of task ID pairs of keyword arguments are read: samples 1 to 1": 7.3,
       "planted regressions of task ID pairs of a positional SubmissionRequest are read: samples 1 to 1": 7.3,
@@ -803,7 +802,24 @@
       "python -m command, missing module in a second command of the same name after an ellipsis command": 2.0,
       "planted regressions of the ellipsis belongs to its own module token: samples 1 to 2": 4.8,
       "planted regressions of a grouped interpreter option may carry the module option: samples 1 to 2": 4.8,
-      "planted regressions of a grouped interpreter option carries the module option of a deleted module: samples 1 to 1": 2.4
+      "planted regressions of a grouped interpreter option carries the module option of a deleted module: samples 1 to 1": 2.4,
+      "task ID, stale pair in an object under a key": 14.1,
+      "task ID, empty task ID in a Python dict": 14.1,
+      "task ID, empty task ID in keyword arguments": 14.1,
+      "task ID, empty task ID in JSON": 14.1,
+      "task ID, Python source in a declared Latin-1 encoding": 14.1,
+      "task ID, Python file with a non-ASCII path": 14.1,
+      "task ID, two compact JSON objects on one line": 14.1,
+      "task ID, an outer object whose task ID follows a nested object": 14.1,
+      "task ID, a JSON object whose line cannot be known is named by its path": 14.1,
+      "planted regressions of task ID pairs are read in JSON arrays: samples 1 to 1": 2.4,
+      "planted regressions of task ID pairs are read in JSON objects under a key: samples 1 to 1": 2.4,
+      "planted regressions of an empty task ID is a task ID: samples 1 to 2": 4.8,
+      "planted regressions of Python source is read with its declared encoding: samples 1 to 1": 2.4,
+      "planted regressions of tracked paths come from a NUL-separated list: samples 1 to 1": 2.4,
+      "planted regressions of a JSON finding names the line of its own key: samples 1 to 1": 2.4,
+      "planted regressions of JSON pairs follow the key order of the text: samples 1 to 1": 2.4,
+      "planted regressions of a JSON object with an unknown line is named by its path: samples 1 to 1": 2.4
     }
   }
 }
