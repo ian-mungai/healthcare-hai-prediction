@@ -4159,6 +4159,7 @@ def run_case(case: Case) -> tuple[bool, str]:
 # The removed-names check and the importer check run as plain commands: planted regressions need the check's own source, not the hook wrapper.
 REMOVED_NAMES_COMMAND = ["-m", "scripts.quality.repo_checks", "removed-names"]
 TASK_IDS_COMMAND = ["-m", "scripts.quality.repo_checks", "task-ids"]
+LOCATION_MOVES = -1  # The planted exit code of a plant that keeps the finding and changes only the location it names.
 MODULES_COMMAND = ["-m", "scripts.quality.repo_checks", "command-modules"]
 IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
 # Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
@@ -4452,7 +4453,7 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         'lines = [text.count("\\n", 0, match.start()) + 1 for match in TASK_KEY.finditer(text)]',
         "lines = [number for number, line in enumerate(text.splitlines(), 1) if TASK_KEY.search(line)]",
-        0,
+        LOCATION_MOVES,
     ),
     (
         "JSON pairs follow the key order of the text",
@@ -4461,7 +4462,7 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         "for key, value in node.items():",
         'for key, value in sorted(node.items(), key=lambda item: item[0] != "task_id"):',
-        0,
+        LOCATION_MOVES,
     ),
     (
         "a JSON object with an unknown line is named by its path",
@@ -4470,7 +4471,7 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         "if len(lines) == len(pairs) else",
         "if True else",
-        0,
+        LOCATION_MOVES,
     ),
     (
         "task ID pairs of a Python dict are read",
@@ -4914,7 +4915,11 @@ def planted_regression_units() -> list[tuple[str, int, int, int]]:
 
 
 def run_planted_regression_case(rule_index: int, first: int, stop: int) -> tuple[bool, str]:
-    """Every sample passes or blocks as the real check says and flips once the rule it shows is reverted in the scratch copy of the check."""
+    """Every sample passes or blocks as the real check says and has the planted exit code once the rule it shows is reverted in the scratch copy of the check.
+
+    A plant of ``LOCATION_MOVES`` keeps the finding of the sample and changes only the location it names: the real run prints the sample's reason, and the
+    planted run exits 1 with the finding but not the reason. An unrelated failure, an exception or another finding, is never caught.
+    """
     python = str(ROOT / ".venv/bin/python")
     lines, ok = [], True
     position = -1
@@ -4936,9 +4941,16 @@ def run_planted_regression_case(rule_index: int, first: int, stop: int) -> tuple
                     return False, f"cannot plant the regression of the {rule}: {marker!r} is not in {source} once\n"
                 path.write_text(text.replace(marker, replacement, 1))
                 planted = run_command(python, command, cwd=repo, timeout=180)
-                moved = bool(case.reason) and planted.returncode == 1 and case.reason not in planted.stdout + planted.stderr
-                caught = planted.returncode == planted_exit or moved
-                ok = ok and real.returncode == (0 if case.expect_pass else 1) and caught
+                seen = planted.stdout + planted.stderr
+                moves = planted_exit == LOCATION_MOVES
+                finding = case.reason.partition(": ")[2]
+                caught = (
+                    planted.returncode == 1 and bool(finding) and finding in seen and case.reason not in seen and "Traceback" not in seen
+                    if moves
+                    else planted.returncode == planted_exit
+                )
+                shown = not moves or case.reason in real.stdout + real.stderr
+                ok = ok and real.returncode == (0 if case.expect_pass else 1) and shown and caught
                 lines.append(f"{rule}, {case.name}: real check exit={real.returncode}; planted regression exit={planted.returncode}, caught={caught}\n")
     return ok, "".join(lines)
 
