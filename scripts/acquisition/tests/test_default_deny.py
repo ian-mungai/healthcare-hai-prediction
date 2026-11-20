@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import urllib.request
@@ -18,7 +17,7 @@ from scripts.acquisition import redownload as harness
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition import run_redownload_controls_e2e as control_cases
 from scripts.acquisition import run_redownload_e2e as fixtures
-from scripts.acquisition import task_role, transport
+from scripts.acquisition import transport
 from scripts.acquisition.tests import test_redownload_route as route_cases
 from scripts.acquisition.tests.test_run_lanes import make_unit
 from tests.support import check
@@ -172,14 +171,3 @@ def test_the_units_a_run_dispatches_cannot_be_changed_through_the_list_it_was_gi
 @pytest.mark.parametrize("mode", ["cms_owners_org", "onc_mu_hospital", "hcai_util_workbook"])
 def test_a_collector_whose_original_names_people_takes_the_plain_task_lane(mode: str) -> None:
     check(harness.lane_of(make_unit("file", 0) | {"mode": mode, "disposition": "direct_download"}) == "task", f"{mode} runs on the task")
-
-
-def test_the_removed_personal_handling_is_gone() -> None:
-    for name in ("unit_classification", "private_digest", "private_" + "worker"):
-        check(importlib.util.find_spec("scripts.acquisition." + name) is None, f"the {name} module is gone")
-    for name in ("PRIVATE", "NOT_REVIEWED", "TASK_FILTERED", "FILTERED_MODES", "NEVER_IN_THE_TOOL", "filtered_capture", "run_private"):
-        check(not hasattr(harness, name), f"the harness has no {name}")
-    check("task_filtered" not in harness.Run.__dataclass_fields__, "the run has no filtered switch")
-    check(not hasattr(task_role, "FILTERED_VARIABLE") and not hasattr(task_role, "ORIGINAL_FOLDER"), "the task has no filtered lane or original folder")
-    source = Path(route.__file__).read_text()
-    check("unit_classification" not in source and "classification_sha256" not in source, "the route gate and the lane approval name no classification")

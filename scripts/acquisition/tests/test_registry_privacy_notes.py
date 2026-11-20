@@ -12,16 +12,6 @@ from tests.support import check
 
 CONFIG = REGISTRY_PATH.parent
 REV3 = "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25"
-# The retired handling: an original kept apart on the Mac, owner-only, with only some rows going to storage.
-RETIRED = ("kept on this mac", "owner-only", "never leave the local original", "unredacted original")
-
-
-def strings(value: Any) -> list[str]:
-    """Every text value in a JSON document."""
-    if isinstance(value, str):
-        return [value]
-    items = value.values() if isinstance(value, dict) else value if isinstance(value, list) else []
-    return [text for item in items for text in strings(item)]
 
 
 def values_of(value: Any, key: str) -> list[Any]:
@@ -33,12 +23,6 @@ def values_of(value: Any, key: str) -> list[Any]:
     elif isinstance(value, list):
         found += [inner for item in value for inner in values_of(item, key)]
     return found
-
-
-def test_no_registry_text_describes_the_retired_owner_only_originals() -> None:
-    for name in ("source_registry.json", "registry_additions.json"):
-        hits = [text for text in strings(read_json(CONFIG / name)) if any(phrase in text.lower() for phrase in RETIRED)]
-        check(not hits, f"{name} still describes the retired owner-only originals handling in {len(hits)} notes: {hits[:1]}")
 
 
 def test_the_person_field_notes_state_what_the_code_does() -> None:

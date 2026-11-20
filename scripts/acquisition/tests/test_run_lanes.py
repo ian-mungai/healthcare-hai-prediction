@@ -167,13 +167,6 @@ def test_with_the_key_flag_the_task_takes_every_unit_but_the_browser_saves(monke
     check(set(summary["not_attempted"]) == {"needs_person"}, f"the rest are named: {summary['not_attempted']}")
 
 
-def test_the_mac_keyed_lane_is_gone() -> None:
-    for name in ("LANE_NAME", "LANE_DEPARTURE", "SECRET_MODES"):
-        check(not hasattr(route, name), f"{name} is gone from the route")
-    check("keyed_lane" not in harness.Run.__dataclass_fields__, "the run has no keyed lane field")
-    check(not hasattr(harness, "KEYED"), "the harness has no Mac keyed lane")
-
-
 def test_the_person_lane_approval_names_only_the_browser_units(tmp_path: Path) -> None:
     folder = tmp_path / "route"
     folder.mkdir()

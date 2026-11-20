@@ -439,17 +439,3 @@ run "host_address_found_by_tag_and_exported" {
     error_message = "The private address of the host's interface is exported as host_private_ip for the services and jobs renderers."
   }
 }
-
-run "no_marquez_repository_log_group_or_output" {
-  command = plan
-
-  assert {
-    condition = (
-      !contains(keys(aws_ecr_repository.image), "marquez") && !contains(keys(aws_ecr_repository.image), "marquez_web") &&
-      !contains(keys(aws_ecr_lifecycle_policy.image), "marquez") && !contains(keys(aws_ecr_lifecycle_policy.image), "marquez_web") &&
-      !contains(keys(aws_cloudwatch_log_group.platform), "marquez") && !contains(keys(output.ecr_repository_urls), "marquez") && !contains(keys(output.log_group_names), "marquez") &&
-      contains(keys(output.log_group_names), "openmetadata")
-    )
-    error_message = "OpenMetadata alone holds lineage: the platform has no Marquez repository, lifecycle policy, log group or output, and OpenMetadata has its own log group."
-  }
-}

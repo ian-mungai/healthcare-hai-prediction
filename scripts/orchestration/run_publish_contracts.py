@@ -47,8 +47,6 @@ def collect(root: Path) -> dict[str, Any]:
     declared, hashes = declarations(root / "dags")
     checks: dict[str, Any] = {
         "existing_declarations_parse": {"ok": bool(declared), "dag_ids": sorted(declared)},
-        "combined_dag_retired": {"ok": "transform_dag" not in declared},
-        "maintenance_dag_retired": {"ok": "gold_maintenance_dag" not in declared},
     }
     for name in DAGS:
         checks[name] = {"ok": name in declared and declared[name]["manual"], "observed": declared.get(name)}

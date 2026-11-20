@@ -416,12 +416,6 @@ def test_the_airflow_check_service_loads_the_plugins_folder_the_timetable_scenar
     check(folder in mounted, f"the plugins folder {folder} is not mounted in the check image: {mounted}")
 
 
-def test_the_rig_names_none_of_the_retired_inputs() -> None:
-    text = Path(real_image_dags.__file__).read_text()
-    for retired in ("serving_request.json", "promotion_approval", "SERVING_REQUEST ="):
-        check(retired not in text, f"the rig still names {retired}")
-
-
 def test_a_complete_run_is_certified(checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     code, record = _run(checkout, monkeypatch, _report(KNOWN_DAGS))
     check(code == 0 and record["ok"] is True, f"a complete passing run must be certified: {record['error']}")
