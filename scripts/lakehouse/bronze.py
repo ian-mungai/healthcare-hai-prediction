@@ -1290,7 +1290,7 @@ def drop_removed(spark: Any, names: list[str], namespace: str, dictionary_namesp
 class S3Storage:
     """Read versioned source objects with the local project profile or the AWS task identity."""
 
-    def __init__(self, *, task_role: bool = False) -> None:
+    def __init__(self, *, task_role: bool = False, config: Any = None) -> None:
         import boto3
 
         session = (
@@ -1298,7 +1298,7 @@ class S3Storage:
             if task_role
             else boto3.Session(profile_name=os.environ["AWS_PROFILE"], region_name=os.environ["AWS_REGION"])
         )
-        self.client = session.client("s3")
+        self.client = session.client("s3", config=config)
 
     @classmethod
     def from_client(cls, client: Any) -> S3Storage:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,13 +18,32 @@ ORIGINAL = f"ingestion_{HEX}"
 BUCKET = "example-bucket"
 RECORD_KEY = f"lakehouse/bronze_runs/{RUN}/carried_over.json"
 NOTICE_KEY = f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"
+SLOW = 11.0
+NOW = [0.0]
 TOPIC = "arn:aws:sns:us-west-2:" + "1" * 12 + ":alerts"
 
 
-def run_record(failed: list[str], completed: list[str] | None = None, refused: list[str] = (), keyed: list[str] = ()) -> bytes:
+@pytest.fixture(autouse=True)
+def notice_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The notice reads one fake clock that the slow calls of the bucket advance."""
+    NOW[0] = 0.0
+    monkeypatch.setattr(bronze_run, "notice_clock", lambda: NOW[0], raising=False)
+
+
+def run_record(
+    failed: list[str],
+    completed: list[str] | None = None,
+    refused: list[str] = (),
+    keyed: list[str] = (),
+    changed: list[str] = (),
+    unchanged: list[str] = (),
+    raw: dict | None = None,
+) -> bytes:
+    """A run record: the names become units, and ``raw`` replaces whole unit lists as they are."""
     units = {"failed": [{"snapshot_id": name} for name in failed], "refused": [{"snapshot_id": name} for name in refused], "keyed_not_attempted": list(keyed)}
-    units |= {"paused_not_attempted": [], "completed": [{"snapshot_id": name} for name in completed or []], "changed": [], "unchanged": []}
-    return json.dumps({"units": units}).encode()
+    units |= {"paused_not_attempted": [], "completed": [{"snapshot_id": name} for name in completed or []]}
+    units |= {"changed": [{"snapshot_id": name} for name in changed], "unchanged": [{"snapshot_id": name} for name in unchanged]}
+    return json.dumps({"units": units | (raw or {})}).encode()
 
 
 class Body:
@@ -44,10 +64,13 @@ class Bucket:
         self.puts: list[Any] = []
 
     def list_object_versions(self, **arguments: str) -> dict[str, Any]:
+        self.listed += 1
+        NOW[0] += self.read_delay
         return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}
 
     def get_object(self, **arguments: str) -> dict[str, Any]:
         key = arguments["Key"]
+        NOW[0] += self.read_delay
         if key not in self.objects:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "missing key, no list grant"}}, "GetObject")
         if "VersionId" in arguments and arguments["VersionId"] != f"v-{key}":
@@ -56,6 +79,8 @@ class Bucket:
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
         key = arguments["Key"]
+        if self.deny_put:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no write grant"}}, "PutObject")
         if arguments.get("IfNoneMatch") == "*" and key in self.objects:
             raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "exists"}}, "PutObject")
         self.objects[key] = arguments["Body"]
@@ -63,6 +88,8 @@ class Bucket:
         return {}
 
     def publish(self, **arguments: str) -> dict[str, str]:
+        self.puts_at_send = list(self.puts)
+        NOW[0] += self.send_delay
         if self.fail_publish:
             raise OSError("the topic does not answer")
         self.published.append(arguments)
@@ -114,15 +141,6 @@ def test_a_failed_notice_is_recorded_once_and_not_tried_again() -> None:
     check(again["notice"] == "failed: OSError" and not store.published, f"a retry sent a notice after a failed one was recorded: {again} {store.published}")
 
 
-def test_an_interrupted_attempt_that_won_the_claim_but_recorded_no_outcome_is_reported_as_unknown_and_never_sent_again() -> None:
-    store = bucket(["a__1__x"])
-    carried(store)
-    del store.objects[NOTICE_KEY]
-    again = carried(store)
-    check(again["notice"].startswith("unknown") and "no outcome" in again["notice"], f"{again}")
-    check(len(store.published) == 1, "an interrupted attempt was sent again")
-
-
 @pytest.mark.parametrize(
     ("failed", "topic", "root", "notice"),
     [
@@ -149,12 +167,23 @@ def test_a_run_with_no_ingestion_run_record_says_so_and_names_no_file_and_a_repe
     check("Captured files" not in message and "not captured" not in message and "Every file" not in message, f"a missing record was counted:\n{message}")
 
 
-def test_the_notice_outcome_is_written_after_the_notice_and_only_once() -> None:
+def test_the_notice_is_sent_first_and_then_one_record_holds_what_was_reported_and_the_outcome() -> None:
     store = bucket(["a__1__x"])
     carried(store)
     carried(store)
-    check(store.puts == [RECORD_KEY, NOTICE_KEY], f"the writes were {store.puts}")
-    check(json.loads(store.objects[NOTICE_KEY])["notice"] == "sent", "the outcome record does not say sent")
+    check(store.puts_at_send == [] and store.puts == [RECORD_KEY], f"the record was written before the send, or twice: {store.puts_at_send} {store.puts}")
+    stored = json.loads(store.objects[RECORD_KEY])
+    check(stored["notice"] == "sent" and stored["carried_over"] == ["a__1__x"] and NOTICE_KEY not in store.objects, f"{stored}")
+
+
+def test_a_write_the_bucket_refuses_after_the_send_stops_nothing_and_the_next_attempt_sends_again(capsys: pytest.CaptureFixture[str]) -> None:
+    store = bucket(["a__1__x"], deny_put=True)
+    first = carried(store)
+    check(len(store.published) == 1 and first["notice"] == "sent; stopped: ClientError", f"{first}")
+    check("the capture notice stopped" in capsys.readouterr().err, "the stop is not shown on standard error")
+    store.deny_put = False
+    carried(store)
+    check(len(store.published) == 2 and store.puts == [RECORD_KEY], f"{len(store.published)} sent, writes {store.puts}")
 
 
 def test_a_skipped_table_with_no_carried_over_file_is_recorded_and_noticed_once_and_a_repeat_sends_nothing() -> None:
@@ -192,14 +221,6 @@ def test_a_skipped_table_with_no_alerts_topic_is_recorded_and_says_no_notice_was
     first = carried(store, topic="", skipped=EMPTY)
     check(first["notice"] == "not sent: no alerts topic" and first["skipped_tables"] == EMPTY and not store.published, f"{first}")
     check(json.loads(store.objects[RECORD_KEY])["skipped_tables"] == EMPTY, "the record does not name the skipped table")
-
-
-def test_an_interrupted_attempt_for_a_skipped_table_is_reported_as_unknown_and_never_sent_again() -> None:
-    store = bucket([])
-    carried(store, skipped=EMPTY)
-    del store.objects[NOTICE_KEY]
-    again = carried(store, skipped=EMPTY)
-    check(again["notice"].startswith("unknown") and len(store.published) == 1, f"{again} {len(store.published)}")
 
 
 def test_a_failed_notice_for_a_skipped_table_is_recorded_once_and_not_tried_again() -> None:
@@ -260,3 +281,109 @@ def test_an_original_record_that_is_not_json_not_an_object_or_has_no_failed_list
     check(first["notice"] == "sent" and first["carried_over"] is None and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
     check(f"The run record of {ORIGINAL} cannot be read, so its files are not counted." in message, message)
     check("Captured files" not in message and "Every file" not in message, message)
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        {"failed": [{"snapshot_id": 1}]},
+        {"keyed_not_attempted": [17]},
+        {"keyed_not_attempted": "abc"},
+        {"refused": [{"snapshot_id": None}]},
+        {"completed": "abc"},
+        {"changed": [{"snapshot_id": ["x"]}]},
+        {"paused_not_attempted": {"a": 1}},
+    ],
+)
+def test_a_unit_list_or_id_of_the_wrong_type_makes_an_unreadable_record_and_never_a_count_or_an_error(units: dict[str, Any]) -> None:
+    store = bucket([], run_record([], ["a__1__x"], raw=units))
+    first = carried(store)
+    message = store.published[0]["Message"]
+    check(first["notice"] == "sent" and first["unread_records"] == {ORIGINAL: "cannot be read"}, f"{first}")
+    check("Captured files" not in message and "Every file" not in message and f"The run record of {ORIGINAL} cannot be read" in message, message)
+
+
+def test_a_failure_in_a_retry_record_counts_although_the_original_failed_nothing_and_no_success_is_claimed() -> None:
+    store = bucket([], run_record([], ["a__1__x"]), {2: run_record(["b__1__x"]), 3: run_record(["b__1__x"])})
+    first = carried(store)
+    message = store.published[0]["Message"]
+    lines = message.split("\n")
+    check(first["carried_over"] == ["b__1__x"] and first["counts"] == {"captured": 1, "failed": 1, "held": 0}, f"{first}")
+    check("Every file was captured." not in lines and "- b__1__x" in lines and "Failed files: 1" in lines, message)
+
+
+def test_a_unit_is_counted_once_by_its_snapshot_id_and_a_held_unit_that_later_failed_is_failed() -> None:
+    store = bucket(
+        [],
+        run_record([], ["a__1__x"], keyed=["k__1__x"]),
+        {2: run_record(["k__1__x"], ["a__1__x"], unchanged=["a__1__x"]), 3: run_record(["k__1__x"], changed=["a__1__x"])},
+    )
+    carried(store)
+    lines = store.published[0]["Message"].split("\n")
+    check(all(line in lines for line in ("Captured files: 1", "Failed files: 1", "Held files: 0")), store.published[0]["Message"])
+
+
+def test_files_a_retry_changed_or_found_unchanged_are_captured_and_no_longer_failed() -> None:
+    store = bucket([], run_record(["a__1__x", "b__1__x"]), {2: run_record([], changed=["a__1__x"]), 3: run_record([], unchanged=["b__1__x"])})
+    first = carried(store)
+    check(first["counts"] == {"captured": 2, "failed": 0, "held": 0} and first["carried_over"] == [], f"{first}")
+
+
+def test_a_run_with_no_capture_root_reads_no_capture_record() -> None:
+    store = bucket([])
+    carried(store, root="", skipped=EMPTY)
+    check(store.listed == 0 and len(store.published) == 1, f"{store.listed} listings, {len(store.published)} notices")
+
+
+def test_the_message_says_the_bronze_run_completed_and_names_the_capture_records_it_read_without_claiming_a_load() -> None:
+    store = bucket(["a__1__x"], retries={2: run_record([])})
+    carried(store)
+    lines = store.published[0]["Message"].split("\n")
+    check(f"Bronze run {RUN} completed." in lines and f"Capture records read: {ORIGINAL}, ingestion_retry_{HEX}_2." in lines, store.published[0]["Message"])
+    check("loaded the data" not in store.published[0]["Message"], "the message links the load to the ingestion run")
+    none = Bucket({})
+    carried(none, root="", skipped=EMPTY)
+    check("Capture records read: none." in none.published[0]["Message"] and "loaded the data" not in none.published[0]["Message"], none.published[0]["Message"])
+
+
+def test_slow_reads_end_at_the_bound_and_the_notice_is_recorded_as_not_sent() -> None:
+    store = bucket(["a__1__x"], read_delay=SLOW)
+    first = carried(store)
+    check(NOW[0] == SLOW and not store.published, f"{NOW[0]} seconds of reads, {len(store.published)} sent")
+    check(first["notice"] == "failed: TimeoutError" and json.loads(store.objects[RECORD_KEY])["notice"] == "failed: TimeoutError", f"{first}")
+
+
+def test_a_slow_send_ends_at_the_bound_and_is_recorded() -> None:
+    store = bucket(["a__1__x"], send_delay=SLOW, fail_publish=True)
+    first = carried(store)
+    check(first["notice"] == "failed: OSError" and store.puts == [RECORD_KEY] and NOW[0] == SLOW, f"{first} {NOW[0]}")
+
+
+def test_the_notice_clients_have_short_timeouts_and_one_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "x")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
+    options = bronze_run.notice_storage().client.meta.config
+    check(
+        options.connect_timeout + options.read_timeout <= 5 and options.retries["total_max_attempts"] == 1,
+        f"{options.connect_timeout} {options.read_timeout} {options.retries}",
+    )
+    check(bronze_run.NOTICE_SECONDS + 5 + 5 <= 20, "the stated bound of 20 seconds does not hold")
+
+
+def test_the_sns_client_of_the_notice_is_made_with_the_short_timeouts_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, made = bucket(["a__1__x"]), []
+    monkeypatch.setattr("boto3.client", lambda *args, **kwargs: made.append((args, kwargs)) or store)
+    bronze_run.record_carried_over(store, BUCKET, RUN, "raw/", topic=TOPIC)
+    options = made[0][1]["config"]
+    check(made[0][0] == ("sns",) and options.connect_timeout + options.read_timeout <= 5 and options.retries["total_max_attempts"] == 1, f"{made}")
+    check(len(store.published) == 1, "the notice was not sent through the client")
+
+
+def test_a_notice_that_cannot_even_make_its_client_leaves_the_check_phase_going(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    def refuse() -> Any:
+        raise KeyError("AWS_REGION")
+
+    monkeypatch.setattr(bronze_run, "notice_storage", refuse)
+    bronze_run.run_notice(SimpleNamespace(bucket=BUCKET, run=RUN), [])
+    check("the capture notice did not start" in capsys.readouterr().err, "the failure is not shown on standard error")

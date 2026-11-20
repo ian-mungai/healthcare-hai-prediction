@@ -357,6 +357,7 @@ def patched(root: Path) -> Iterator[Case]:
         mock.patch.object(bronze_run, "run_module", loader),
         mock.patch.object(bronze_run, "storage", lambda: STORAGE[0]),
         mock.patch.object(bronze_run, "owner_storage", lambda: STORAGE[0]),
+        mock.patch.object(bronze_run, "notice_storage", lambda: STORAGE[0]),
         mock.patch.object(bronze_run, "read_staged", staged_object),
         mock.patch.dict(
             os.environ, {"BRONZE_DRY_RUN": "", "BRONZE_TABLES": "", "BRONZE_TARGET": "", "BRONZE_REQUEST_SHA256": "", "BRONZE_INVENTORY_SHA256": ""}
@@ -831,8 +832,7 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     registered = {name: text for name, text in mirror["tables"].items() if text == "created"}
     require(mirror["status"] == "ok" and sorted(registered) == sorted(tables), f"the real hook did not register the loaded tables: {mirror}")
     require(mirror["tables"]["empty_data"] == bronze_mirror.LEFT_OUT, f"the hook did not leave the stage's skipped table out like the register: {mirror}")
-    outcome = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"])
-    require(outcome["notice"] == "sent", f"{outcome}")
+    require(claim["notice"] == "sent" and f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json" not in STORAGE[0].client.puts, f"{claim}")
 
 
 def case_a_dropped_table_with_sources_is_refused(case: Case) -> None:
@@ -954,6 +954,22 @@ def case_a_real_run_records_the_files_it_carried_over(case: Case) -> None:
     document = json.loads(stored[key])
     require(document["carried_over"] is None and "no run record" in document["note"] and document["bronze_run"] == RUN, document)
     require("carried over: unknown files" in case.out, case.out)
+
+
+def case_a_notice_record_the_bucket_refuses_does_not_fail_the_check(case: Case) -> None:
+    """The notice is optional: a refused write of its record is shown on standard error, and the check still goes on to the mirror and the pipeline."""
+    client = STORAGE[0].client
+    put = client.put_object
+
+    def refuse_notice_record(**arguments: Any) -> dict[str, Any]:
+        if arguments["Key"].endswith("/carried_over.json"):
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no write grant"}}, "PutObject")
+        return put(**arguments)
+
+    with mock.patch.dict(os.environ, {"HAI_CAPTURE_ROOT": "raw/"}), mock.patch.object(client, "put_object", refuse_notice_record):
+        require(case.chain() == [0, 0, 0], case.err)
+    require("the capture notice stopped" in case.err and PIPELINE_DAG in case.out, f"{case.err} {case.out}")
+    require(any("/mirror_" in name for name in client.puts) and f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts, sorted(client.puts))
 
 
 def case_retry_has_no_second_effect(case: Case) -> None:
@@ -1375,6 +1391,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a first load never recorded is not accepted on a later retry's record": case_a_first_load_never_recorded_is_not_accepted,
     "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
+    "a notice record the bucket refuses does not fail the check": case_a_notice_record_the_bucket_refuses_does_not_fail_the_check,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
     "a changed request or a report changed alone is refused by every phase": case_a_changed_request_or_report_is_refused,

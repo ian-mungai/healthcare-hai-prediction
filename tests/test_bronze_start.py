@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 from orchestration import ingestion_schedule as schedule
 from tests.support import check
@@ -128,7 +129,12 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
             return {"Versions": [{"Key": key, "VersionId": f"v-{key}", "IsLatest": True} for key in self.objects if key.startswith(arguments["Prefix"])]}
 
         def get_object(self, **arguments: str) -> dict[str, Any]:
-            check(arguments.get("VersionId") == f"v-{arguments['Key']}", f"a run record was read without its exact version: {arguments}")
+            if arguments["Key"] not in self.objects:
+                raise ClientError({"Error": {"Code": "AccessDenied", "Message": "missing key, no list grant"}}, "GetObject")
+            check(
+                arguments.get("VersionId") == f"v-{arguments['Key']}" or "/bronze_runs/" in arguments["Key"],
+                f"a run record was read without its exact version: {arguments}",
+            )
             return {"Body": Body(self.objects[arguments["Key"]])}
 
         def put_object(self, **arguments: Any) -> dict[str, Any]:
@@ -147,9 +153,8 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
     result = bronze_run.record_carried_over(client, "bucket", f"bronze_{HEX}", "raw/", topic=f"arn:aws:sns:us-west-2:{'1' * 12}:alerts", notify=client)
     check(result["carried_over"] == ["a__1__x"] and result["notice"] == "sent", f"{result}")
     stored = json.loads(client.puts[f"lakehouse/bronze_runs/bronze_{HEX}/carried_over.json"])
-    check(stored["carried_over"] == ["a__1__x"] and stored["ingestion_run"] == ORIGINAL and stored["notice"] == "claimed", f"{stored}")
-    outcome = json.loads(client.puts[f"lakehouse/bronze_runs/bronze_{HEX}/carried_over_notice.json"])
-    check(outcome["notice"] == "sent", f"the notice outcome is not recorded: {outcome}")
+    check(stored["carried_over"] == ["a__1__x"] and stored["ingestion_run"] == ORIGINAL and stored["notice"] == "sent", f"{stored}")
+    check("carried_over_notice.json" not in " ".join(client.puts) and stored["notice"] == "sent", f"the notice outcome is not in the one record: {stored}")
     check(len(client.published) == 1 and "a__1__x" in client.published[0]["Message"], "the notice does not name the file")
     quiet = Client(objects)
     unset = bronze_run.record_carried_over(quiet, "bucket", f"bronze_{HEX}", "raw/", topic="", notify=quiet)

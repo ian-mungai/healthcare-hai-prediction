@@ -183,27 +183,39 @@ def pipeline_after_retry(original_run: str, day: int, context: Mapping[str, Any]
     return pipeline_run_for(original_run) if is_scheduled(context) and day == RETRY_LAST_DAY else None
 
 
-def captured_ids(record: Mapping[str, Any]) -> set[str]:
-    """The snapshot IDs a run record lists as captured (completed, changed or unchanged)."""
-    return {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in record["units"][name]}
-
-
+CAPTURED_STATES = ("completed", "changed", "unchanged")
 # The states the capture's own check counts (``capture_mode.outcome_problems``): a failed or refused unit did not complete, a held one was not attempted.
 FAILED_STATES = ("failed", "refused")
 HELD_STATES = ("paused_not_attempted", "keyed_not_attempted")
 
 
+def snapshot_ids(record: Mapping[str, Any], states: Sequence[str], wrapped: bool) -> set[str]:
+    """The snapshot IDs a run record lists in the named states: each state is a list of units (``wrapped``, each with a ``snapshot_id``) or of IDs. A missing
+    list, a value that is not a list and an ID that is not a string raise ``KeyError`` or ``TypeError``."""
+    found: list[Any] = []
+    for name in states:
+        units = record["units"][name]
+        if not isinstance(units, list):
+            raise TypeError(name)
+        found.extend(unit["snapshot_id"] if wrapped else unit for unit in units)
+    if not all(isinstance(snapshot_id, str) for snapshot_id in found):
+        raise TypeError("a snapshot ID is not a string")
+    return set(found)
+
+
 def capture_counts(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> tuple[set[str], set[str], set[str]]:
-    """The snapshot IDs the retry period captured, failed and held. Failed and held are the units the original run failed, refused, held or did not attempt
-    for a key, less those a run captured. A record without its unit lists raises ``ValueError``."""
+    """The snapshot IDs the capture captured, failed and held, from the original run record and the retry records read. A failure or hold in any of them
+    counts unless a record of the period captured that unit, and a unit counts once by its snapshot ID (a held unit that a retry then failed is failed). A
+    record whose unit lists are missing or of the wrong type raises ``ValueError``."""
     try:
-        captured = set().union(*(captured_ids(record) for record in (original, *retries)))
-        units = original["units"]
-        failed = {item["snapshot_id"] for name in FAILED_STATES for item in units[name]}
-        held = {snapshot_id for name in HELD_STATES for snapshot_id in units[name]}
+        records = (original, *retries)
+        captured, failed, held = (
+            set().union(*(snapshot_ids(record, states, wrapped) for record in records))
+            for states, wrapped in zip((CAPTURED_STATES, FAILED_STATES, HELD_STATES), (True, True, False), strict=True)
+        )
     except (KeyError, TypeError):
         raise ValueError("a run record names its failed, held and captured units") from None
-    return captured, failed - captured, held - captured
+    return captured, failed - captured, held - captured - failed
 
 
 def carried_over(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any]]) -> list[str]:

@@ -43,6 +43,7 @@ import re
 import sys
 import tarfile
 import tempfile
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -528,19 +529,40 @@ def json_bytes(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
 
 
-CLAIMED = "claimed"
-NO_OUTCOME = "unknown: an earlier attempt of this run claimed the notice and recorded no outcome, so it is not sent again"
+# The capture notice is optional and bounded. Its calls use their own client with short timeouts and one attempt, and no read or send starts after
+# NOTICE_SECONDS. The notice therefore adds at most NOTICE_SECONDS, the longest call in progress (NOTICE_CONNECT + NOTICE_READ) and the write of its record
+# (the same again): 20 seconds. A call after the deadline raises, and the notice is recorded as not sent.
+NOTICE_SECONDS = 10
+NOTICE_CONNECT, NOTICE_READ = 2, 3
+notice_clock = time.monotonic
 
 
-def recorded_carried_over(client: Any, bucket: str, run: str) -> dict[str, Any]:
-    """The carried-over record a first attempt of the run wrote, with the outcome of its notice. A repeated attempt reports this and sends nothing."""
-    document = read_own_record(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json")
-    if document is None:
-        return {"schema": 1, "bronze_run": run, "carried_over": None, "notice": "kept: an earlier attempt recorded it and the record cannot be read"}
-    if document.get("notice") == CLAIMED:
-        outcome = read_own_record(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over_notice.json")
-        document["notice"] = str(outcome["notice"]) if outcome is not None and "notice" in outcome else NO_OUTCOME
-    return document
+def notice_config() -> Any:
+    from botocore.config import Config
+
+    return Config(connect_timeout=NOTICE_CONNECT, read_timeout=NOTICE_READ, retries={"total_max_attempts": 1, "mode": "standard"})
+
+
+def notice_storage() -> Any:
+    """The reader and writer of the capture notice: the task identity with the notice's short timeouts."""
+    return bronze.S3Storage(task_role=True, config=notice_config())
+
+
+class Deadline:
+    """A client whose every call first checks the deadline: a call that would start after ``end`` raises ``TimeoutError``."""
+
+    def __init__(self, client: Any, end: float) -> None:
+        self.client, self.end = client, end
+
+    def __getattr__(self, name: str) -> Any:
+        call = getattr(self.client, name)
+
+        def bounded(*args: Any, **kwargs: Any) -> Any:
+            if notice_clock() > self.end:
+                raise TimeoutError(f"the {NOTICE_SECONDS} second deadline of the notice passed before {name}")
+            return call(*args, **kwargs)
+
+        return bounded
 
 
 def read_counted_record(client: Any, bucket: str, key: str) -> tuple[dict[str, Any] | None, str]:
@@ -555,62 +577,74 @@ def read_counted_record(client: Any, bucket: str, key: str) -> tuple[dict[str, A
         return None, "cannot be read"
 
 
-def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any, skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:
+def record_carried_over(
+    client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any = None, skipped: Sequence[dict[str, str]] = ()
+) -> dict[str, Any]:
     """Count the source files the ingestion run's capture captured, failed and held, name the files that no run of its retry period captured and the tables
     the stage left out (``skipped``, each with its reason), in the bronze run record and in the owner notice.
 
     Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The counts are those of the
-    capture's own check (``ingestion_schedule.capture_counts``). A run record that is missing or cannot be read is named in the notice and its files are not
-    counted. The notice is sent for every run that has a capture root, also when nothing is missing. A run with no capture root (a hand-staged bronze run)
-    sends it only for a skipped table, and the record names the skipped tables whether or not it is sent.
+    capture's own check over the original and the retry records read (``ingestion_schedule.capture_counts``). A run record that is missing or cannot be read
+    is named in the notice and its files are not counted. The notice is sent for every run that has a capture root, also when nothing is missing. A run with
+    no capture root (a hand-staged bronze run) sends it only for a skipped table, and the record names the skipped tables whether or not it is sent.
 
-    The record ``lakehouse/bronze_runs/<run>/carried_over.json`` is created once and is the claim on the notice: the attempt that creates it sends the notice,
-    and any later attempt reads the record, sends nothing and reports it. The outcome of the notice goes to ``carried_over_notice.json``, created once after the
-    send. So a notice is sent at most once per run. An attempt that is interrupted between the claim and the outcome leaves a record that says the outcome is
-    unknown: the notice may or may not have gone, and it is not sent again. A notice that fails is recorded and never fails the run.
+    An attempt first reads the record ``lakehouse/bronze_runs/<run>/carried_over.json`` of an earlier attempt: if it exists, the attempt sends nothing and
+    reports it. Otherwise it sends the notice and then writes that one record, with what was reported and the outcome of the send (``sent``,
+    ``failed: <error type>`` or why none was sent). A failed send is recorded and not tried again. An interruption between the send and the record, or two
+    attempts at once, sends twice: an email is never lost while the check runs again. Nothing in the notice fails the run: any error, including a refused
+    write of the record, is shown on standard error and returned in the report. Every read and the send start within ``NOTICE_SECONDS`` and use the short
+    timeouts of ``notice_config``, so the whole notice adds at most 20 seconds to the check.
     """
     original, retries = ingestion_schedule.ingestion_runs_of(run)
-    folder = f"{root}ingestion_runs/"
+    folder, key = f"{root}ingestion_runs/", f"lakehouse/bronze_runs/{run}/carried_over.json"
     document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries), "skipped_tables": list(skipped)}
-    files: list[str] | None = None
-    counts: dict[str, int] | None = None
-    unread: dict[str, str] = {}
-    if not root:
-        document |= {"carried_over": None, "note": "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"}
-    else:
+    document["carried_over"] = None
+    try:
+        reads = Deadline(client, notice_clock() + NOTICE_SECONDS)
+        earlier = read_own_record(reads, bucket, key)
+        if earlier is not None:
+            return earlier
+        files: list[str] | None = None
+        counts: dict[str, int] | None = None
         found: dict[str, dict[str, Any]] = {}
-        for name in (original, *retries):
-            record, why = read_counted_record(client, bucket, f"{folder}{name}/run.json")
-            if record is None:
-                unread[name] = why
-            else:
-                found[name] = record
-        if original not in found:
-            what = f"no run record of {original} under {folder}" if unread[original] == "is missing" else f"the run record of {original} cannot be read"
-            document |= {"carried_over": None, "note": f"{what}: the files carried over are not known"}
+        unread: dict[str, str] = {}
+        if not root:
+            document["note"] = "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"
         else:
-            captured, failed, held = ingestion_schedule.capture_counts(found[original], [found[name] for name in retries if name in found])
-            files, counts = sorted(failed | held), {"captured": len(captured), "failed": len(failed), "held": len(held)}
-            document |= {"carried_over": files, "counts": counts, "retry_records_read": len(found) - 1}
-        document["unread_records"] = unread
-    message: tuple[str, str] | None = None
-    if not root and not skipped:
-        document["notice"] = "not sent"
-    elif not topic:
-        document["notice"] = "not sent: no alerts topic"
-    else:
-        document["notice"] = CLAIMED
-        message = bronze_notice.carried_over_notice(run, original, counts, files or [], skipped, unread)
-    if not put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json", json_bytes(document)):
-        return recorded_carried_over(client, bucket, run)
-    if message is not None:
-        try:
-            notify.publish(TopicArn=topic, Subject=message[0], Message=message[1])
-            outcome = "sent"
-        except Exception as error:
-            outcome = f"failed: {type(error).__name__}"
-        put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over_notice.json", json_bytes({"schema": 1, "bronze_run": run, "notice": outcome}))
-        document["notice"] = outcome
+            for name in (original, *retries):
+                record, why = read_counted_record(reads, bucket, f"{folder}{name}/run.json")
+                if record is None:
+                    unread[name] = why
+                else:
+                    found[name] = record
+            if original not in found:
+                what = f"no run record of {original} under {folder}" if unread[original] == "is missing" else f"the run record of {original} cannot be read"
+                document["note"] = f"{what}: the files carried over are not known"
+            else:
+                captured, failed, held = ingestion_schedule.capture_counts(found[original], [found[name] for name in retries if name in found])
+                files, counts = sorted(failed | held), {"captured": len(captured), "failed": len(failed), "held": len(held)}
+                document |= {"carried_over": files, "counts": counts, "retry_records_read": len(found) - 1}
+            document["unread_records"] = unread
+        if not root and not skipped:
+            document["notice"] = "not sent"
+        elif not topic:
+            document["notice"] = "not sent: no alerts topic"
+        else:
+            subject, message = bronze_notice.carried_over_notice(run, original, counts, files or [], skipped, unread, list(found))
+            try:
+                if notify is None:
+                    import boto3
+
+                    notify = boto3.client("sns", config=notice_config())
+                Deadline(notify, reads.end).publish(TopicArn=topic, Subject=subject, Message=message)
+                document["notice"] = "sent"
+            except Exception as error:
+                document["notice"] = f"failed: {type(error).__name__}"
+        put_once(client, bucket, key, json_bytes(document))
+    except Exception as error:
+        sys.stderr.write(f"bronze_run: the capture notice stopped and the check goes on ({type(error).__name__}: {error})\n")
+        stopped = f"stopped: {type(error).__name__}"
+        document["notice"] = f"{document['notice']}; {stopped}" if "notice" in document else stopped
     return document
 
 
@@ -740,6 +774,18 @@ def record_mirror_attempt(job: Job, report: dict[str, Any], report_bytes: bytes,
     sys.stdout.write(f"mirror attempt record {outcome}: {key}\n")
 
 
+def run_notice(job: Job, skipped: Sequence[dict[str, str]]) -> None:
+    """The optional capture notice of a real run: nothing in it, not even the creation of its client, fails the check."""
+    try:
+        done = record_carried_over(
+            notice_storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=os.environ.get("ALERTS_TOPIC_ARN", ""), skipped=skipped
+        )
+        files = done["carried_over"]
+        sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
+    except Exception as error:
+        sys.stderr.write(f"bronze_run: the capture notice did not start and the check goes on ({type(error).__name__}: {error})\n")
+
+
 def check(job: Job) -> None:
     report, body = accept_report(job)
     sys.stdout.write(f"bronze run {job.run} passed: {','.join(job.tables)} in {' and '.join(job.namespaces)}\n")
@@ -749,15 +795,7 @@ def check(job: Job) -> None:
         accepted_unsourced(report, skipped)
         stored = store_run_record(storage().client, job.bucket, job.run, run_record(job, report, body, pinned_inventory(job), skipped))
         sys.stdout.write(f"run record {stored}; skipped_tables {len(skipped)}\n")
-        topic = os.environ.get("ALERTS_TOPIC_ARN", "")
-        notify = None
-        if topic:
-            import boto3
-
-            notify = boto3.client("sns")
-        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=topic, notify=notify, skipped=skipped)
-        files = done["carried_over"]
-        sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
+        run_notice(job, skipped)
         record_mirror_attempt(job, report, body, retry=stored == "kept")
     if job.target == "real":
         parts = run_id_parts(job.run)
