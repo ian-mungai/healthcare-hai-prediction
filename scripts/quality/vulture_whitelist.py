@@ -65,6 +65,9 @@ def uses(
         BaseHTTPRequestHandler.protocol_version,  # http.server reads it of the bridge's Handler to answer its clients with HTTP/1.1.
         bridge_handler.do_GET,  # http.server dispatches a GET request to the bridge's Handler by method name.
         bridge_handler.do_PUT,  # http.server dispatches a PUT request to the bridge's Handler by method name.
+        # Limit of the next three entries: vulture matches a name, not its owner, so each also counts the same name as used wherever else it is defined or
+        # assigned. One collision exists today: sender._request_signer._credentials in scripts/lakehouse/run_aws_catalog_setup_e2e.py, which botocore reads
+        # the same way. Another unused attribute of one of these names would pass: check such a name by hand.
         timetables.HaiTimetablesPlugin,  # Airflow's plugin manager loads each AirflowPlugin subclass of the plugins folder by scanning the module.
         connection.auto_open,  # http.client reads it of the lineage delivery's connection, which sets it to 0 so that a closed connection never reconnects.
         sender._credentials,  # botocore's request signer reads it of the send boundary case's sender, which the case sets to an expiring object.
