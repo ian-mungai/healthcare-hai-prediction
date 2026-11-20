@@ -512,7 +512,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint, named from config/quality_tools.json) with its version flag"
     },
@@ -525,7 +525,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs a declared shell interpreter (sh, bash, dash, zsh or ksh only, from the source's shebang or extension) with -n to check syntax"
     },
@@ -538,7 +538,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned SQLFluff from .tools/sqlfluff/bin with lint arguments"
     },
@@ -551,7 +551,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "two calls whose first line is the same code: line 258 runs pinned dbt from .tools/sqlfluff/bin with parse to read the macro call graph; line 327 runs pinned SQLFluff from .tools/sqlfluff/bin on temporary masked copies of DuckDB CLI scripts"
     },
@@ -564,7 +564,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs gofmt from the folder of the verified Go 1.27.3 program with -l"
     },
@@ -577,7 +577,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint --version"
     },
@@ -590,7 +590,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the private yamllint environment's Python, or the current interpreter, with -m yamllint on the selected sources"
     },
@@ -603,7 +603,7 @@
       "file_sha256": "d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs a pinned native linter from .tools/bin (shellcheck, actionlint or hadolint) on the selected sources"
     },
@@ -1323,7 +1323,7 @@
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "fa100c6e4fc86bd6c472382eea152a1328d4acadebaa53662f7e8f9825e7e8fe",
+      "file_sha256": "24f4062f8cffb048b82017b8cc78a3c3cad7c0255f9c61524f8108e08ddc8ac0",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
@@ -1333,8 +1333,8 @@
         "scripts/quality/core_commands.py": "sha256:cd670eab7706893fae24752f239624ed706cc94f452dccc0c7fb9fcc7c9c2416",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
         "scripts/quality/pre_push.py": "sha256:0af8078bc1348413cf2af933b5c1d33e0f1e7d0d84d5f3db0fce152fea290a61",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0",
-        "scripts/quality/run_checks_e2e.py": "sha256:a04fcbdbbf358b03f8b913a2c75d6b396a468ab2bb8ab3dd9e4760c47ae7ee35",
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6",
+        "scripts/quality/run_checks_e2e.py": "sha256:d06c92a08da51c850d7e60bfe3ad3aa5c0a9c8dc4671af4509c98c098ecfc0ce",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
         "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
         "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089",
@@ -1348,7 +1348,7 @@
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "fa100c6e4fc86bd6c472382eea152a1328d4acadebaa53662f7e8f9825e7e8fe",
+      "file_sha256": "24f4062f8cffb048b82017b8cc78a3c3cad7c0255f9c61524f8108e08ddc8ac0",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
@@ -1358,8 +1358,8 @@
         "scripts/quality/core_commands.py": "sha256:cd670eab7706893fae24752f239624ed706cc94f452dccc0c7fb9fcc7c9c2416",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
         "scripts/quality/pre_push.py": "sha256:0af8078bc1348413cf2af933b5c1d33e0f1e7d0d84d5f3db0fce152fea290a61",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0",
-        "scripts/quality/run_checks_e2e.py": "sha256:a04fcbdbbf358b03f8b913a2c75d6b396a468ab2bb8ab3dd9e4760c47ae7ee35",
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6",
+        "scripts/quality/run_checks_e2e.py": "sha256:d06c92a08da51c850d7e60bfe3ad3aa5c0a9c8dc4671af4509c98c098ecfc0ce",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
         "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
         "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089",
@@ -1451,7 +1451,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned trivy config scan over infra/ with its skip flags and a throwaway cache"
     },
@@ -1465,7 +1465,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned typos with _typos.toml over the given files"
     },
@@ -1479,7 +1479,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned check-jsonschema over mapped files"
     },
@@ -1493,7 +1493,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned .tools/bin/tflint with the project's .tflint.hcl over one Terraform folder"
     },
@@ -1507,7 +1507,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned import-linter with .importlinter"
     },
@@ -1521,7 +1521,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
     },
@@ -1535,7 +1535,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned zizmor in offline mode over .github/workflows"
     },
@@ -1549,7 +1549,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/lint_sources.py": "sha256:d27a4568ac23a3896f4cc8ae9816a47a9aa393f2e4cfbb13730a9a836fc7b3c5",
-        "scripts/quality/repo_checks.py": "sha256:34f0f071fbdbc3269968cb6e95084ba6d4d6d1940766a38ae13dcc8ee6fcebe0"
+        "scripts/quality/repo_checks.py": "sha256:8d6ad7d2e6bac0cdea257f5a7262692879c8de9897f525bf86fd196fcf052fa6"
       },
       "reason": "runs the pinned OSV-Scanner over the tracked requirements files"
     },
