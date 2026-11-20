@@ -401,7 +401,7 @@
       "occurrences": 1,
       "file_sha256": "9e8bc097f610f4a34cfa39cfb37fe6820412256af48c854fb98d8e244403f5ad",
       "dependencies": {
-        "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
+        "orchestration/code_digest.py": "sha256:7748a54d3745b714d3ec19c974d1e0235a6eb999ce65196dd8c40c9da9fea7bc",
         "orchestration/launcher.py": "sha256:bc235fb3720c5198f30630275b631c67619c963e77eaf33df75a33b5ac410150",
         "orchestration/mlflow_service.py": "sha256:56c24c4f1bbb4c9679f6cede9e7648a910bd7e7223dbe14df3f6435aa8dee368",
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
@@ -424,7 +424,7 @@
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/docker_calls.py": "sha256:1fd945eba023c5f1ceae05f3535127041aa19b33e8983341191bbd7fde5a2230",
-        "scripts/training/lane_b_cases.py": "sha256:e6c7fffcdaad0a61affb7eb166d274b5e263ac534ae31775c137313427ae0630",
+        "scripts/training/lane_b_cases.py": "sha256:42cd82b435073ab48666fd7b265528612e3e69cb7dafcea06ddc33d390ff7feb",
         "scripts/training/step_records.py": "sha256:ebf3160636fefcd3584ed3dc3a9d9eea39cef87e325e1e14e409bfa954544c4d"
       },
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
@@ -1403,11 +1403,11 @@
     },
     {
       "path": "scripts/training/run_training_e2e.py",
-      "line": 285,
+      "line": 277,
       "code_sha256": "b95cd0ad79eb069a8ee9d023080ef02ae686a3a1caf63df98a07dc57209f2a7a",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "6b21be3231a7eda252af7fedda1852c3f8baf04da0ffab70aedd4320b8e4c56b",
+      "file_sha256": "69b9aeecc98ec9ee5540245889355b28f91e00d1651d5565866a00fb4a576c32",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },

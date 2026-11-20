@@ -78,10 +78,6 @@ def _set_references(document: dict[str, Any], references: list[str]) -> None:
     document["references"] = references
 
 
-def _write_plan(folder: Path, content: bytes) -> None:
-    (folder / "docs/analysis_plan.md").write_bytes(content)
-
-
 def _append_reference(document: Any, reference: str) -> None:
     document["references"].append(reference)
 
@@ -115,9 +111,6 @@ def _fixture(folder: Path) -> None:
     seed.mkdir(parents=True)
     for path in sorted((ROOT / "dbt/seeds/gold").glob("*_bridge.csv")):
         shutil.copyfile(path, seed / path.name)
-    plan = folder / "docs/analysis_plan.md"
-    plan.parent.mkdir()
-    plan.write_bytes(b"# Synthetic analysis plan\n\nThis is a synthetic metadata fixture.\n")
     tables: dict[str, Any] = {
         "feature_matrix_care_compare": {
             "family": "care_compare",
@@ -251,7 +244,6 @@ def _source_digest() -> str:
         for path in (
             "scripts/process.py",
             "pyproject.toml",
-            "docs/analysis_plan.md",
             "data_contracts/features/feature_schema.json",
         )
     )
@@ -322,8 +314,8 @@ def _guard_cases(report: Report, scratch: Path) -> None:
     report.assertion("equal_inputs_give_equal_guard_records", first is not None and first == second)
     if first:
         report.assertion("snapshot_commit_is_recorded", first.get("git_commit") == COMMIT)
-        plan_hash = hashlib.sha256((baseline / "docs/analysis_plan.md").read_bytes()).hexdigest()
-        report.assertion("exact_plan_bytes_are_recorded", first.get("analysis_plan_sha256") == plan_hash)
+        report.assertion("a_checkout_without_the_plan_file_is_accepted", not (baseline / "docs").exists())
+        report.assertion("no_plan_hash_is_recorded", not any("plan" in key for key in first))
         expected_hashes = {
             name: hashlib.sha256((baseline / "config/training" / f"{name}.json").read_bytes()).hexdigest()
             for name in [
@@ -350,32 +342,6 @@ def _guard_cases(report: Report, scratch: Path) -> None:
         and first["training_config_sha256"] != changed_seed["training_config_sha256"]
         and changed_seed["master_seed"] == 43,
     )
-    for name, content in (
-        ("edited_plan", b"# Changed synthetic plan\n"),
-        ("bom_plan", b"\xef\xbb\xbf# Synthetic plan\n"),
-        ("crlf_plan", b"# Synthetic plan\r\n"),
-    ):
-        result = run(name, partial(_write_plan, content=content), design_case="E09")
-        report.assertion(name + "_hash", result is not None and result.get("analysis_plan_sha256") == hashlib.sha256(content).hexdigest())
-    run("missing_plan", lambda folder: (folder / "docs/analysis_plan.md").unlink(), "plan: missing", "E09")
-    run("empty_plan", partial(_write_plan, content=b""), "plan: empty", "E09")
-
-    def directory_plan(folder: Path) -> None:
-        (folder / "docs/analysis_plan.md").unlink()
-        (folder / "docs/analysis_plan.md").mkdir()
-
-    def linked_plan(folder: Path) -> None:
-        (folder / "docs/analysis_plan.md").unlink()
-        (folder / "docs/analysis_plan.md").symlink_to(baseline / "docs/analysis_plan.md")
-
-    run("directory_plan", directory_plan, "plan: regular", "E09")
-    run("linked_plan", linked_plan, "plan: symbolic link", "E09")
-
-    def linked_docs(folder: Path) -> None:
-        (folder / "docs").rename(folder / "real_docs")
-        (folder / "docs").symlink_to(folder / "real_docs", target_is_directory=True)
-
-    run("linked_plan_parent", linked_docs, "plan: symbolic link", "E09")
     mutations: list[tuple[str, str, Callable[[Any], None], str]] = [
         ("unknown_configuration_key", "models.json", lambda d: d.update(unreviewed=True), "models.json"),
         ("negative_seed", "models.json", lambda d: d.update(master_seed=-1), "master_seed"),
@@ -704,7 +670,7 @@ def _guard_cases(report: Report, scratch: Path) -> None:
     report.assertion("saved_guard_equals_command_record", result is not None and output.exists() and json.loads(output.read_text()) == result)
     report.command("invalid_snapshot_commit", "E09", "scripts.training.guards", ["--root", str(baseline), "--git-commit", "invalid"], "git_commit:")
     trial = Report()
-    trial.command("wrong_rejection_cause", "E09", "scripts.training.guards", ["--root", str(baseline), "--git-commit", "invalid"], "plan: missing")
+    trial.command("wrong_rejection_cause", "E09", "scripts.training.guards", ["--root", str(baseline), "--git-commit", "invalid"], "targets:")
     report.assertion(
         "wrong_rejection_reason_never_passes",
         len(trial.steps) == 1 and trial.steps[0]["verdict"] == "fail" and trial.steps[0].get("exit_code") == 1,

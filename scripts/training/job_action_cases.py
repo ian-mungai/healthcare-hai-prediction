@@ -59,7 +59,7 @@ from scripts.training.models.common import REGISTRABLE, SLOTS, Dataset, Deadline
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
-GUARD = {"analysis_plan_sha256": "7" * 64, "targets_sha256": "8" * 64, "training_config_sha256": "9" * 64}
+GUARD = {"targets_sha256": "8" * 64, "training_config_sha256": "9" * 64}
 SAVED: dict[str, Any] = {}
 CHILDREN = {"m2_elastic_net", "rq1_joint", "rq3_mediation", "hac_validation"}
 HAI_TYPE = "HAI_1"
@@ -2180,6 +2180,24 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(verdict == "fail:provenance", f"a dirty tree that beat the baseline was not failed on provenance alone: {verdict}")
         require(fixture.tracking.models[name]["aliases"] == {}, "a dirty first version got an alias")
 
+    def old_run_with_the_plan_tag() -> None:
+        fixture = promoted(folder / "old_plan_tag")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        next(iter(fixture.tracking.parents().values()))["tags"]["analysis_plan_sha256"] = "7" * 64
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        provenance = output_of(fixture, f"comparison_{HAI_TYPE}.json")["provenance"]
+        require(provenance == {"passed": True, "missing_tags": [], "git_dirty": "false"}, f"a run made with the plan tag failed provenance: {provenance}")
+
+    def new_run_without_the_plan_tag() -> None:
+        fixture = promoted(folder / "new_without_plan_tag")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        require("analysis_plan_sha256" not in next(iter(fixture.tracking.parents().values()))["tags"], "the staged run carries the plan tag")
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        provenance = output_of(fixture, f"comparison_{HAI_TYPE}.json")["provenance"]
+        require(provenance == {"passed": True, "missing_tags": [], "git_dirty": "false"}, f"a run made without the plan tag failed provenance: {provenance}")
+
     def first_one_percent() -> None:
         fixture = promoted(folder / "first_one_percent")
         baseline, observed = baseline_of(fixture)
@@ -2368,6 +2386,8 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_fails_a_damaged_champion_feature_list", champion_feature_list_damaged)
     cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)
     cases.check("job_promotion_check_fails_dirty_code", dirty_code)
+    cases.check("job_promotion_check_accepts_a_run_made_with_the_old_plan_tag", old_run_with_the_plan_tag)
+    cases.check("job_promotion_check_accepts_a_run_made_without_the_plan_tag", new_run_without_the_plan_tag)
     cases.check("job_promotion_check_retry_resumes_completed", retried)
     cases.check("job_promotion_check_retry_after_interrupt_keeps_one_version", interrupted)
     cases.check("job_promotion_check_refuses_unresolved_pending_create", pending_create)
@@ -2410,6 +2430,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         contract = json.loads((REAL / "data_contracts/training/model_contract.json").read_text())
         missing = [tag for tag in contract["required_run_tags"] if tag not in run["tags"]]
         require(not missing, f"required tags are missing: {missing}")
+        require("analysis_plan_sha256" not in run["tags"] and "analysis_plan_sha256" not in contract["required_run_tags"], "the plan hash is still a run tag")
         base = fixture.folder / f"in/fit/{BUNDLE}"
         done = json.loads((fixture.folder / "in/fit/fit.done.json").read_text())["outputs"]
         require(run["tags"]["bundle_sha256"] == bundle.sha256_of(done, HAI_TYPE), "the completion mark is not the bundle hash")

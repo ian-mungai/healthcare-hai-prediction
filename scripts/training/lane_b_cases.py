@@ -89,7 +89,6 @@ def fixture(root: Path) -> dict[str, Any]:
         "data_contracts/features",
         "data_contracts/lakehouse",
         "data_contracts/training",
-        "docs",
         "dbt/seeds/gold",
         "dbt/seeds/features",
     ):
@@ -99,7 +98,6 @@ def fixture(root: Path) -> dict[str, Any]:
         "orchestration/sample.py",
         "feature_store/feature_store.yaml",
         "data_contracts/lakehouse/sample.json",
-        "docs/analysis_plan.md",
     ):
         (root / name).write_text("synthetic snapshot input\n")
     for name in ("hai_outcome_measures_bridge.csv", "cost_report_measures_bridge.csv"):
@@ -836,11 +834,17 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
         lambda: require((run_folder / "code/dbt/seeds/features/frozen_hai_outcome_controls.csv").is_file(), "feature control identity was omitted"),
     )
     cases.check(
+        "snapshot_builds_without_the_plan_file",
+        lambda: require(
+            not (source / "docs").exists() and not any(entry["path"].startswith("docs/") for entry in record["files"]), "the snapshot lists a docs file"
+        ),
+    )
+    cases.check(
         "snapshot_untracked_provenance",
         lambda: require(record["git_dirty"] and record["untracked_files"] == ["scripts/sample.py"], "copied untracked code was not recorded"),
     )
     before = (run_folder / code_digest.RECORD).read_bytes()
-    (source / "docs/analysis_plan.md").write_text("changed live plan\n")
+    (source / "orchestration/sample.py").write_text("changed live input\n")
     cases.check(
         "snapshot_retry_ignores_live_edits",
         lambda: require(
@@ -860,9 +864,9 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
         )
     linked = folder / "linked"
     fixture(linked)
-    (linked / "docs/analysis_plan.md").rename(linked / "docs/plan_original.md")
-    (linked / "docs/analysis_plan.md").symlink_to("plan_original.md")
-    cases.refuses("snapshot_linked_plan_refused", lambda: code_digest.snapshot_training(linked, folder / "linked_run", RUN, git_reader=fixture_git), "link")
+    (linked / "orchestration/sample.py").rename(linked / "orchestration/original.py")
+    (linked / "orchestration/sample.py").symlink_to("original.py")
+    cases.refuses("snapshot_linked_input_refused", lambda: code_digest.snapshot_training(linked, folder / "linked_run", RUN, git_reader=fixture_git), "link")
     extras = run_folder / "code/unexpected.py"
     extras.write_text("unexpected staged code\n")
     cases.refuses("snapshot_added_code_refused", lambda: code_digest.verify_snapshot(run_folder, RUN), "changed")
@@ -926,7 +930,7 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
         lambda: require(
             all(
                 (str(run_folder / "code" / name), f"/workspace/{name}", True) in spec.mounts
-                for name in ("scripts", "orchestration", "feature_store", "config", "data_contracts", "docs", "dbt")
+                for name in ("scripts", "orchestration", "feature_store", "config", "data_contracts", "dbt")
             )
             and not any(host == str(source) for host, _, _ in spec.mounts),
             "fit mounts live code",

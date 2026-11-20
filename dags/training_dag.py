@@ -1,4 +1,4 @@
-"""Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library.
+"""Fit and evaluate one model of a training run through the training job of the direct ECS launch library.
 
 After its release, a training run of m1 (OLS baseline), m2 (Elastic Net) or m4 (Gradient boosting) that names its base run (``base_run``) starts
 ``research_dag`` for that base; the DAG skips until all three models have run on it. Another model, a hand start with no base and a run that did not

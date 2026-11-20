@@ -202,11 +202,7 @@ def lock_files(groups: dict[str, tuple[dict[str, str], dict[str, str]]]) -> dict
 # jsonschema as the real map does, because the scratch repository holds the launcher, which imports it. The map names the dependency
 # groups, the one direct group and the tools; a tool is used as a command, so nothing imports it.
 # The scratch repository holds this repository's scripts, whose fixtures name docs/ paths of their own.
-DOCS_ALLOWED = (
-    COPIED_ALLOWED
-    + "docs-path scripts/* -- check scripts copied into the scratch repository -- permanent\n"
-    + "docs-path config/quality/launcher_inputs.json -- the copied input list names the analysis plan, which the scratch repository lacks -- permanent\n"
-)
+DOCS_ALLOWED = COPIED_ALLOWED + "docs-path scripts/* -- check scripts copied into the scratch repository -- permanent\n"
 # A runtime map with an image whose lock file pins a package and a transitive pin, and a package the image provides. The host provides
 # jsonschema as the real map does, because the scratch repository holds the launcher, which imports it.
 RUNTIME_MAP = "config/quality/dependency_runtimes.json"

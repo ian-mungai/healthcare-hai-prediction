@@ -385,7 +385,6 @@ def run_tags(
     listed = job_inputs.read_json(job_inputs.ROOT / "config/training/targets.json", "targets_refused")["target_candidates"]
     image = os.environ.get("TRAINING_IMAGE_DIGEST", "unrecorded")
     key = {
-        "analysis_plan_sha256": guard["analysis_plan_sha256"],
         "targets_sha256": guard["targets_sha256"],
         "training_config_sha256": guard["training_config_sha256"],
         "code_digest": str(record["code_digest"]),
@@ -407,7 +406,6 @@ def run_tags(
         "base_run": manifest["base_run"],
         "target_control": next(entry["control"] for entry in listed if entry["hai_type"] == hai_type),
         "population": manifest["population"],
-        "analysis_plan_sha256": guard["analysis_plan_sha256"],
         "targets_sha256": guard["targets_sha256"],
         "training_config_sha256": guard["training_config_sha256"],
         "code_digest": str(record["code_digest"]),

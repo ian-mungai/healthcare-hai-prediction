@@ -1,4 +1,4 @@
-"""Validate static training inputs before data access and record the plan used by the run."""
+"""Validate static training inputs before data access and record the hashes of the files that fix a run."""
 
 from __future__ import annotations
 
@@ -6,9 +6,7 @@ import argparse
 import csv
 import hashlib
 import json
-import os
 import re
-import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -59,27 +57,6 @@ def _validate(path: Path, schema_path: Path) -> dict[str, Any]:
         field = ".".join(str(part) for part in error.absolute_path) or "root"
         raise GuardError(f"{path.name}: {field}: schema {error.validator} failed. Restore a value allowed by {schema_path.name}.")
     return document
-
-
-def _plan(root: Path) -> bytes:
-    path = root / "docs/analysis_plan.md"
-    for component in (root / "docs", path):
-        if component.is_symlink():
-            raise GuardError("plan: symbolic link is not allowed. Use a regular snapshot file at docs/analysis_plan.md.")
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError as error:
-        raise GuardError("plan: missing docs/analysis_plan.md") from error
-    except OSError as error:
-        raise GuardError(f"plan: cannot open docs/analysis_plan.md ({type(error).__name__})") from error
-    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-        os.close(descriptor)
-        raise GuardError("plan: regular file required at docs/analysis_plan.md")
-    with os.fdopen(descriptor, "rb") as handle:
-        content = handle.read()
-    if not content:
-        raise GuardError("plan: empty docs/analysis_plan.md")
-    return content
 
 
 def _bridge_controls(root: Path) -> tuple[set[str], dict[str, str]]:
@@ -234,7 +211,6 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
     """Return a deterministic guard record after validating only static snapshot metadata."""
     if not re.fullmatch(r"[0-9a-f]{40}", git_commit):
         raise GuardError("git_commit: a 40-character lowercase Git commit is required")
-    content = _plan(root)
     config, contracts = root / "config/training", root / "data_contracts/training"
     documents: dict[str, dict[str, Any]] = {}
     paths: dict[str, Path] = {}
@@ -274,7 +250,6 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
     config_hashes = {name: value for name, value in file_hashes.items() if name not in ("bundle", "model_contract")}
     return {
         "schema": 1,
-        "analysis_plan_sha256": hashlib.sha256(content).hexdigest(),
         "git_commit": git_commit,
         "targets_sha256": file_hashes["targets"],
         "training_config_sha256": hashlib.sha256(json.dumps(config_hashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),

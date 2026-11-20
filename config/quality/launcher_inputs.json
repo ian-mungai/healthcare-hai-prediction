@@ -94,8 +94,8 @@
     },
     {
       "module": "orchestration/code_digest.py",
-      "pattern": "^(scripts|orchestration|feature_store|config/training|data_contracts/(features|lakehouse|training))/|^docs/[a-z_]+[.]md$|^dbt/seeds/gold/[^/]+_bridge\\.csv$|^dbt/seeds/features/frozen_hai_outcome_controls\\.csv$",
-      "why": "reviewed: file_entries walks the fixed TRAINING_ROOTS (orchestration/code_digest.py:19) with iterdir (:72) and glob (:80) and git ls-files (:132); only the default roots are ever used (no other module calls file_entries), so the pattern is that tuple (the docs entry is written as any lowercase markdown file in the docs folder, which tracks only the analysis plan)"
+      "pattern": "^(scripts|orchestration|feature_store|config/training|data_contracts/(features|lakehouse|training))/|^dbt/seeds/gold/[^/]+_bridge\\.csv$|^dbt/seeds/features/frozen_hai_outcome_controls\\.csv$",
+      "why": "reviewed: file_entries walks the fixed TRAINING_ROOTS (orchestration/code_digest.py:19) with iterdir (:71) and glob (:79) and git ls-files (:131); only the default roots are ever used (no other module calls file_entries), so the pattern is that tuple"
     },
     {
       "module": "orchestration/launcher.py",
@@ -1237,7 +1237,6 @@
     "dbt/tests/features/assert_validation_control_identity.sql",
     "dbt/tests/features/assert_validation_measures_overlap.sql",
     "docker-compose.yaml",
-    "docs/analysis_plan.md",
     "feature_store/definitions.py",
     "feature_store/feature_store.yaml",
     "feature_store/feature_store_aws.yaml",

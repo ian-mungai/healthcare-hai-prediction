@@ -24,7 +24,6 @@ TRAINING_ROOTS = (
     "data_contracts/features",
     "data_contracts/lakehouse",
     "data_contracts/training",
-    "docs/analysis_plan.md",
     "dbt/seeds/gold/*_bridge.csv",
     "dbt/seeds/features/frozen_hai_outcome_controls.csv",
 )
@@ -191,9 +190,6 @@ def snapshot_training(checkout: Path, folder: Path, run_id: str, *, git_reader: 
         copied = file_entries(destination, deadline=stop)
         if copied != entries or file_entries(checkout, deadline=stop) != entries:
             raise SnapshotError("snapshot inputs changed while copying")
-        plan = destination / "docs/analysis_plan.md"
-        if not plan.stat().st_size:
-            raise SnapshotError("snapshot analysis plan is empty")
         record = {"schema_version": 1, "run_id": run_id, "code_digest": entries_digest(copied), "files": copied, **provenance}
         _write(pending, record)
         os.replace(destination, code)
