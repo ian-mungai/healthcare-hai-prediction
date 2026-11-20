@@ -26,5 +26,10 @@ timed "acquisition: source verification log" "$python_bin" -m scripts.acquisitio
 timed "acquisition: receipt index" "$python_bin" -m scripts.acquisition.source_receipt_index --check
 timed "acquisition: baseline run inputs" "$python_bin" -m scripts.acquisition.check_baseline_run
 timed "acquisition: shards E2E" "$python_bin" -m scripts.acquisition.run_shards_e2e
+# The gate reports only the files under this checkout's own scripts/acquisition (resolved now): a copy of the code that a test unpacks, another checkout or a
+# foreign trace can neither raise nor lower the total, and no path spelling can drop a tracked file from it.
+bound_config="$repo_root/data/e2e/acquisition_coverage/coverage.ini"
+timed "acquisition: coverage configuration bound to this checkout" "$python_bin" -m scripts.acquisition.shards bind \
+  --coverage-config config/acquisition/coverage.ini --coverage-source scripts/acquisition --output "$bound_config"
 timed "acquisition: pytest with coverage gate" "$python_bin" -m pytest scripts/acquisition/tests tests/test_source_registry.py --cov=scripts.acquisition \
-  --cov-config=config/acquisition/coverage.ini --cov-report=term-missing --cov-fail-under=90 -q
+  --cov-config="$bound_config" --cov-report=term-missing --cov-fail-under=90 -q

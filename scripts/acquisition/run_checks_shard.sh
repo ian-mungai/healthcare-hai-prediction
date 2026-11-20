@@ -23,5 +23,5 @@ status=0
 timed "acquisition shard $shard: pytest" "$python_bin" -m pytest scripts/acquisition/tests tests/test_source_registry.py \
   -p scripts.acquisition.shards --shard "$shard" --shard-output "$directory" \
   --cov=scripts.acquisition --cov-config=config/acquisition/coverage.ini --cov-report= --cov-fail-under=0 -q || status=$?
-"$python_bin" -m scripts.acquisition.shards seal --directory "$directory" --shard "$shard" --pytest-exit "$status" || status=1
+"$python_bin" -m scripts.acquisition.shards seal --directory "$directory" --shard "$shard" --pytest-exit "$status" --coverage-source scripts/acquisition || status=1
 exit "$status"

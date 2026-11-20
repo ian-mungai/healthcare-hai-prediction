@@ -28,6 +28,7 @@ E2E: ``.venv/bin/python -m scripts.acquisition.run_shards_e2e``.
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import json
 import math
@@ -440,6 +441,24 @@ def gate(directory: Path, count: int, expect: str, fail_under: float, paths: lis
     return merge_coverage(directory, manifests, config, fail_under)
 
 
+def bound_config(config: Path, source: Path, output: Path) -> Path:
+    """Write a copy of the coverage configuration whose report holds only the files under ``source``, the checkout's own acquisition folder.
+
+    The folder is resolved when the copy is written (real path, no matter how the checkout is named or where it sits), so no path spelling can drop a tracked
+    file from the gate, and no file outside it (a copy that a test unpacked, another checkout, a foreign trace) can raise or lower the total. The threshold, the
+    measured target and the omissions are the committed configuration's own."""
+    parser = configparser.ConfigParser(interpolation=None)
+    if not parser.read(config, encoding="utf-8"):
+        raise ShardError(f"the coverage configuration {config} cannot be read")
+    if not parser.has_section("report"):
+        parser.add_section("report")
+    parser.set("report", "include", f"\n{source.resolve()}/**")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", encoding="utf-8") as stream:
+        parser.write(stream)
+    return output
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -448,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--directory", type=Path, required=True)
         sub.add_argument("--shard", required=True)
         sub.add_argument("--coverage-config", type=Path, default=COVERAGE_CONFIG)
+        sub.add_argument("--coverage-source", type=Path, help="report only the files under this folder (resolved now); see bound_config")
         sub.add_argument("--pytest-exit", type=int, default=1)
         sub.add_argument("--reason", default="")
     sub = commands.add_parser("gate")
@@ -456,17 +476,28 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--expect", choices=("run", "skip"), required=True)
     sub.add_argument("--fail-under", type=float, default=90.0)
     sub.add_argument("--coverage-config", type=Path, default=COVERAGE_CONFIG)
+    sub.add_argument("--coverage-source", type=Path, help="report only the files under this folder (resolved now); see bound_config")
     sub.add_argument("--root", type=Path, default=ROOT, help="folder the test paths are relative to")
     sub.add_argument("--weights", type=Path, default=WEIGHTS, help="seconds of each test, as the shards were given")
     sub.add_argument("paths", nargs="*")
+    sub = commands.add_parser("bind", help="write the coverage configuration bound to one folder (run_checks.sh passes it to pytest-cov)")
+    sub.add_argument("--coverage-config", type=Path, default=COVERAGE_CONFIG)
+    sub.add_argument("--coverage-source", type=Path, required=True)
+    sub.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "gate":
-            sys.stdout.write(gate(args.directory, args.count, args.expect, args.fail_under, args.paths, args.coverage_config, args.root, args.weights) + "\n")
-        elif args.command == "seal":
-            seal(args.directory, parse_shard(args.shard), args.pytest_exit, args.coverage_config)
-        else:
-            skip(args.directory, parse_shard(args.shard), args.reason)
+        with tempfile.TemporaryDirectory(prefix="coverage_bound_") as folder:
+            config = args.coverage_config
+            if args.command != "skip" and args.coverage_source is not None:
+                config = bound_config(args.coverage_config, args.coverage_source, args.output if args.command == "bind" else Path(folder) / "coverage.ini")
+            if args.command == "bind":
+                return 0
+            if args.command == "gate":
+                sys.stdout.write(gate(args.directory, args.count, args.expect, args.fail_under, args.paths, config, args.root, args.weights) + "\n")
+            elif args.command == "seal":
+                seal(args.directory, parse_shard(args.shard), args.pytest_exit, config)
+            else:
+                skip(args.directory, parse_shard(args.shard), args.reason)
     except (ShardError, OSError, ValueError, KeyError) as error:
         sys.stderr.write(f"acquisition shards: {error}\n")
         return 1

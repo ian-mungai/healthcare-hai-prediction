@@ -25,4 +25,4 @@ if [[ "$expect" == "run" ]]; then
   timed "acquisition combine: shards E2E" "$python_bin" -m scripts.acquisition.run_shards_e2e
 fi
 timed "acquisition combine: gate expecting $expect" "$python_bin" -m scripts.acquisition.shards gate --directory "$directory" --count "${ACQUISITION_SHARD_COUNT:-4}" \
-  --expect "$expect" --fail-under 90 -- scripts/acquisition/tests tests/test_source_registry.py
+  --expect "$expect" --fail-under 90 --coverage-source scripts/acquisition -- scripts/acquisition/tests tests/test_source_registry.py
