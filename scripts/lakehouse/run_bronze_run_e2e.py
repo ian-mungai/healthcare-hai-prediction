@@ -30,7 +30,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 from orchestration import raw_lineage
 from orchestration.training_contract import PIPELINE_DAG, PIPELINE_RUN
@@ -972,6 +972,22 @@ def case_a_notice_record_the_bucket_refuses_does_not_fail_the_check(case: Case) 
     require(any("/mirror_" in name for name in client.puts) and f"lakehouse/bronze_runs/{RUN}/check.json" in client.puts, sorted(client.puts))
 
 
+def case_a_stalled_read_of_the_notice_record_does_not_fail_the_check(case: Case) -> None:
+    """A read of the earlier notice record that stalls past its timeout stops the optional notice with no record, and the check still goes on."""
+    client = STORAGE[0].client
+    get = client.get_object
+
+    def stall_notice_record(**arguments: Any) -> dict[str, Any]:
+        if arguments["Key"].endswith("/carried_over.json"):
+            raise ReadTimeoutError(endpoint_url="https://example.invalid")
+        return get(**arguments)
+
+    with mock.patch.dict(os.environ, {"HAI_CAPTURE_ROOT": "raw/"}), mock.patch.object(client, "get_object", stall_notice_record):
+        require(case.chain() == [0, 0, 0], case.err)
+    require("the capture notice stopped" in case.err and PIPELINE_DAG in case.out, f"{case.err} {case.out}")
+    require(f"lakehouse/bronze_runs/{RUN}/carried_over.json" not in client.puts and any("/mirror_" in name for name in client.puts), sorted(client.puts))
+
+
 def case_retry_has_no_second_effect(case: Case) -> None:
     require(case.chain(label="first") == [0, 0, 0], case.err)
     first_catalog, first_keys = catalog(), {item["object_key"] for item in writes() if item["kind"] == "table"}
@@ -1392,6 +1408,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "the latest attempt is the last number when the clock goes back": case_the_latest_attempt_is_the_last_number_on_a_reversed_clock,
     "a real run records the files it carried over": case_a_real_run_records_the_files_it_carried_over,
     "a notice record the bucket refuses does not fail the check": case_a_notice_record_the_bucket_refuses_does_not_fail_the_check,
+    "a stalled read of the notice record does not fail the check": case_a_stalled_read_of_the_notice_record_does_not_fail_the_check,
     "the stage phase writes the inputs the chain then runs on": case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on,
     "a request that drops a table with sources is refused at the pin even when the stage report names it": case_a_dropped_table_with_sources_is_refused,
     "a changed request or a report changed alone is refused by every phase": case_a_changed_request_or_report_is_refused,
