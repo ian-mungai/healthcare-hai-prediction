@@ -1,9 +1,9 @@
 """Repository checks run by pre-commit and CI.
 
-Run from the repository root: ``.venv/bin/python -m scripts.quality.repo_checks <check> [paths ...]``. Each finding
-names the file and line, the rule, how to fix it and what to do when the rule seems wrong; any finding exits 1. A check
-that cannot run raises and exits non-zero, so it fails closed. There are no bypasses. Markers the checks look for are
-assembled from fragments, so this file does not flag itself. The rules are the check functions below.
+Run from the repository root: ``.venv/bin/python -m scripts.quality.repo_checks <check> [paths ...]``. Each finding names the file and line (a JSON finding
+of task-ids names the path of the object when its line cannot be known), the rule, how to fix it and what to do when the rule seems wrong; any finding
+exits 1. A check that cannot run raises and exits non-zero, so it fails closed. There are no bypasses. Markers the checks look for are assembled from
+fragments, so this file does not flag itself. The rules are the check functions below.
 """
 
 from __future__ import annotations
@@ -2067,10 +2067,10 @@ def task_ids() -> list[Finding]:
     holds a ``dag_id`` and a ``task_id`` as string literals, an empty string included. Python source is read as bytes, so a declared encoding applies, and the
     tracked paths come from a NUL-separated list. Only the DAGs of ``orchestration.graph.GRAPH_DAGS`` are judged. A DAG outside that inventory is not: five real
     DAG files under ``dags/`` (the drift, ingestion and metadata DAGs) lie outside it, and so does a made-up fixture DAG. A value that is not a literal is not
-    judged either. These files are skipped: a Python file that does not parse (Ruff blocks it at commit) and a JSON file that does not parse or is not UTF-8
-    (no other hook is guaranteed to read every JSON path: the schema hook reads only the mapped files, workflows and schema definitions, and a fixture may hold
-    bad JSON on purpose). A JSON finding names the line of its ``task_id`` key. When the keys found in the text and in the parsed value differ in number, it
-    names the path of the object instead, for example ``rows[1]``.
+    judged either. These files are skipped: a tracked path that cannot be read, a Python file that does not parse (Ruff blocks it at commit) and a JSON file
+    that does not parse or is not UTF-8 (no other hook is guaranteed to read every JSON path: the schema hook reads only the mapped files, workflows and schema
+    definitions, and a fixture may hold bad JSON on purpose). A JSON finding names the line of its ``task_id`` key. When the keys found in the text and in the
+    parsed value differ in number, it names the path of the object instead, for example ``rows[1]``.
     """
     from orchestration import graph, interface
 
