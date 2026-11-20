@@ -326,7 +326,7 @@ def fake() -> dict[str, bool]:
     """The fake keeps the interface's promises: one launch per request, refusals, no-ops and failures."""
     fake_subs = FakeSubmissions(load("job_templates.json"), {"gold_validate": 1}, running={"silver_validate"})
     subs: Submissions = fake_subs  # tasks see only the interface; the ledger is the fake's own
-    request = SubmissionRequest("silver_build", RUN, "fixture", 1, "lineage_fixture", "silver_build", "manual__" + str(RUN))
+    request = SubmissionRequest("silver_build", RUN, "fixture", 1, "lineage_fixture", task_id="silver_build", dag_run_id="manual__" + str(RUN))
     first, second = subs.submit(request), subs.submit(request)
     intents = [line for line in fake_subs.ledger if line["event"] == "intent"]
     noop = subs.submit(SubmissionRequest("pin_bronze", RUN, "fixture", 1, "lineage_fixture", "pin_bronze", "manual__" + str(RUN)))
