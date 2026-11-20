@@ -5196,10 +5196,12 @@ def run_workflow_range_case() -> tuple[bool, str]:
         removed = "--branch" + "-removed-value"
         api = "scripts/acquisition/range_sample.py"
         original = f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{removed}")\n'
-        repo = scratch_repo(Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.sh": f"run {removed}\n"}))
+        repo = scratch_repo(
+            Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.sh": f"python {api} {removed}\n"})
+        )
         ancestor = git(repo, "rev-parse", "HEAD").strip()
         git(repo, "checkout", "-qb", "topic")
-        write(repo, {"README.md": f"# Example\n\n`{function}` is named in this branch.\n"})
+        write(repo, {"README.md": f"# Example\n\n`python {api} {function}` is named in this branch.\n"})
         git(repo, "add", "--", "README.md")
         git(repo, "commit", "-qm", "docs: describe the branch")
         head = git(repo, "rev-parse", "HEAD").strip()
