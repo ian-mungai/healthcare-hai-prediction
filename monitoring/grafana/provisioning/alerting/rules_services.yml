@@ -45,7 +45,7 @@ groups:
         annotations:
           summary: An ECS service runs fewer tasks than it should.
           headline: 'ECS service runs too few tasks'
-          recovered: 'The running count is no longer below the desired count. The desired count may also have been lowered.'
+          recovered: 'The missing-task warning cleared. The running count may have reached the desired count. The desired count may have been lowered. Either count may also no longer be reported.'
           resolved_affects: 'Work that the service should have done in the gap may be missing.'
           resolved_next: 'Open the HAI services and disk dashboard and check the running and desired counts of the service.'
           affects: 'The service runs fewer tasks than it should.'
@@ -130,8 +130,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: More than 2 tasks of a service stopped in the last hour, so it is restarting.
-          headline: 'A service keeps restarting'
+          summary: More than two non-user tasks of this service stopped in the last hour.
+          headline: 'Service tasks keep stopping'
           recovered: 'At most two non-user task stops are reported in the last hour.'
           resolved_affects: 'Earlier task stops may have interrupted work.'
           resolved_next: 'Read the stop reasons on the HAI services and disk dashboard.'
@@ -349,7 +349,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The latest run of a one-shot bootstrap task (code fetch, Polaris bootstrap or OpenMetadata bootstrap) did not exit with 0.
+          summary: The latest run of the setup task named in Details failed.
           headline: 'A bootstrap task failed'
           recovered: 'The latest run of this setup task is not reported as failed.'
           resolved_affects: 'The service may have run without its bootstrap in the meantime.'

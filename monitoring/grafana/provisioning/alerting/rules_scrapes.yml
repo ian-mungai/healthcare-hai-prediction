@@ -219,7 +219,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: The Redis exporter cannot reach Redis, so the online feature store is unavailable.
+          summary: The Redis exporter cannot reach Redis. The online feature store may be unavailable.
           headline: 'Redis is down'
           recovered: 'The Redis exporter no longer reports Redis as down. It may also have stopped reporting.'
           resolved_affects: 'Requests in the gap may have failed to read features.'

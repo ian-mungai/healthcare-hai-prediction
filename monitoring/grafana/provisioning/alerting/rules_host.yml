@@ -87,7 +87,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The host state exporter cannot read one of its sources (the ECS capacity or the OpenMetadata health check).
+          summary: The host state exporter cannot read the source named in Details.
           headline: 'Host state source cannot be read'
           recovered: 'The source is no longer reported as down. The exporter may also have stopped reporting it.'
           resolved_affects: 'Data from that source is missing for the gap.'

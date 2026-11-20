@@ -87,7 +87,7 @@ groups:
         annotations:
           summary: A host job phase stopped sending heartbeats for 3 minutes without an exit push, so it was killed or lost. Its last heartbeat shows its memory.
           headline: 'Host job went silent'
-          recovered: 'A new heartbeat of this job phase is reported or its running record is gone because it ended.'
+          recovered: 'The heartbeat warning cleared. A heartbeat or an exit may have been recorded. Monitoring data may also be missing.'
           resolved_affects: 'The earlier heartbeat gap may have left incomplete work.'
           resolved_next: 'Check the outcome of the affected run in Airflow.'
           affects: 'The job phase was killed or lost, so its output is missing.'
@@ -130,9 +130,9 @@ groups:
         annotations:
           summary: A host job phase used more than 90 percent of the host job cap at its peak.
           headline: 'Host job near its memory cap'
-          recovered: 'The latest peak of this job phase is at or under 90 percent of the host job cap or is not reported.'
+          recovered: 'The peak-memory warning cleared. The peak may be within the cap. The peak or the cap reading may also be missing.'
           resolved_affects: 'A larger input can still run out of memory.'
-          resolved_next: 'Check the peak memory of the next run on the HAI host jobs dashboard.'
+          resolved_next: 'Check the peak memory and the cap on the HAI host jobs dashboard, now and after the next run.'
           affects: 'The job phase may be killed for memory on a larger input.'
           next_step: 'Open the HAI host jobs dashboard to see the peak memory. Plan a higher cap before the next run.'
           dashboard: 'HAI host jobs'
@@ -172,7 +172,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Prometheus cannot scrape the Pushgateway, so the jobs' own metrics are lost.
+          summary: Prometheus cannot scrape the Pushgateway, so job metrics are unavailable to Prometheus.
           headline: 'Pushgateway is down'
           recovered: 'The Pushgateway scrape is no longer reported as failed. The target may also have been removed.'
           resolved_affects: 'Job metrics were unavailable to Prometheus during the gap. Intermediate samples or alerts may be missing.'

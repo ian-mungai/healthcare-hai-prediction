@@ -694,7 +694,7 @@ def labels_name_the_failed_source_and_task(root: Path) -> dict[str, bool]:
 
 
 def dag_ids(root: Path) -> set[str]:
-    return {match for path in sorted((root / "dags").glob("*.py")) for match in re.findall(r'dag_id="([a-z_]+)"', path.read_text(encoding="utf-8"))}
+    return {match for path in sorted((root / "dags").glob("*.py")) for match in re.findall(r'dag_id="([a-z0-9_]+)"', path.read_text(encoding="utf-8"))}
 
 
 def texts_match_the_rules_they_describe(root: Path) -> dict[str, bool]:

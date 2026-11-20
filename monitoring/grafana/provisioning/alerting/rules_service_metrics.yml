@@ -225,7 +225,7 @@ groups:
           headline: 'Grafana rules fail to evaluate'
           recovered: 'No new rule-evaluation failure is reported in the last ten minutes.'
           resolved_affects: 'An alert that should have fired in the gap may be missing. Evaluations may also have stopped.'
-          resolved_next: 'Check that evaluations are running: open the HAI Grafana dashboard and read Rule evaluations per second.'
+          resolved_next: 'Check that evaluations are running: open the HAI Grafana dashboard and read the panel Rule evaluations per second.'
           affects: 'Some alerts cannot fire.'
           next_step: 'Open the HAI Grafana dashboard. Read the Grafana log to find the failing rule.'
           dashboard: 'HAI Grafana'
