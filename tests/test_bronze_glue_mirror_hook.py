@@ -1019,20 +1019,26 @@ def test_an_early_failure_of_the_real_pair_names_every_dictionary_with_the_cause
     check(all(report["tables"][key].startswith("failed: not attempted") and "RuntimeError" in report["tables"][key] for key in DICTIONARY_KEYS), f"{report}")
 
 
+@pytest.mark.parametrize("caller_waits", [False, True])
 @pytest.mark.parametrize("write", [False, True])
-def test_a_worker_that_is_dispatched_after_the_deadline_starts_neither_a_read_nor_a_write(write: bool) -> None:
+def test_a_worker_that_is_dispatched_after_the_deadline_starts_neither_a_read_nor_a_write(write: bool, caller_waits: bool) -> None:
     import threading
     import time
+    from types import SimpleNamespace
 
     real_thread = threading.Thread
     ready, release, done = threading.Event(), threading.Event(), threading.Event()
     started: list[float] = []
     workers: list[Any] = []
+    clock = SimpleNamespace(now=100.0)
 
     def make_thread(*, target: Any, daemon: bool) -> Any:
         def held() -> None:
             ready.set()
-            release.wait(3)
+            if caller_waits:
+                clock.now = 102.0
+            else:
+                release.wait(3)
             try:
                 target()
             finally:
@@ -1041,24 +1047,25 @@ def test_a_worker_that_is_dispatched_after_the_deadline_starts_neither_a_read_no
         workers.append(real_thread(target=held, daemon=daemon))
         return workers[-1]
 
-    budget = glue_mirror.Budget(0.12)
+    budget = glue_mirror.Budget(2, clock=lambda: clock.now) if caller_waits else glue_mirror.Budget(0.12)
     with mock.patch.object(glue_mirror.threading, "Thread", side_effect=make_thread):
         try:
             budget.run("a probe", lambda: started.append(time.monotonic()), write=write)
-        except glue_mirror.MirrorDeadline:
-            pass
+        except glue_mirror.MirrorDeadline as error:
+            outcome = str(error)
         else:
-            raise AssertionError("the held worker did not time out")
+            outcome = "the call returned"
         finally:
             release.set()
             done.wait(3)
             workers[0].join(3)
     check(ready.is_set() and started == [], f"a worker that began after the deadline ran its {'write' if write else 'read'}: {started}")
+    check(("passed before a probe" if caller_waits else "passed during a probe") in outcome, outcome)
 
 
 @pytest.mark.parametrize("phase", ["snapshot", "registration"])
 @pytest.mark.parametrize("kind", ["requests", "empty_mapping", "error_none", "error_without_code", "text", "list"])
-def test_an_error_of_any_shape_fails_one_dictionary_alone_and_names_the_original_type(phase: str, kind: str) -> None:
+def test_an_error_of_any_shape_fails_one_dictionary_alone_with_the_original_type_and_message(phase: str, kind: str) -> None:
     from requests.exceptions import ConnectionError as RequestsConnectionError
 
     class Odd(Exception):
@@ -1091,7 +1098,7 @@ def test_an_error_of_any_shape_fails_one_dictionary_alone_and_names_the_original
     glue = Broken()
     report = load_hook(glue, read_loader=read)
     text = report["tables"][f"{DICTIONARY}.alpha_data"]
-    check(text.startswith("failed") and type(error).__name__ in text, f"the original error type is not named: {text}")
+    check(text == f"failed: {type(error).__name__}: {error}", f"the failed outcome is not the original type and message: {text}")
     check("AttributeError" not in json.dumps(report), f"the formatter failed instead of the error: {report}")
     check(report["tables"][f"{DICTIONARY}.beta_data"] == "created" and (DICTIONARY, "beta_data") in glue.tables, f"{report}")
     check(report["tables"]["alpha_data"] == "created" and report["tables"]["beta_data"] == "created" and report["status"] == "failed", f"{report}")

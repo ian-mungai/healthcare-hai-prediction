@@ -224,11 +224,8 @@ run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
   }
 
   assert {
-    condition = (
-      length(aws_iam_role_policy.bronze_writer) == 1 &&
-      length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) < 10240
-    )
-    error_message = "The inline policies of the bronze role stay inside the 10240 character quota of one role with the mirror grant added."
+    condition     = length(aws_iam_role_policy.bronze_writer) == 1
+    error_message = "The bronze role keeps its one storage policy beside the mirror grant."
   }
 }
 
@@ -275,23 +272,21 @@ run "bronze_writer_dictionary_grant_covers_only_the_dictionary_mirror_database" 
   }
 
   assert {
-    condition = (
-      !anytrue([for name, policy in aws_iam_role_policy.athena_mirror_writer : anytrue([for r in flatten([for s in jsondecode(policy.policy).Statement : s.Resource]) : strcontains(r, "_e2e")])]) &&
-      length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy))) < 10240
-    )
-    error_message = "No mirror grant names a qualification database, and the inline policies of the bronze role stay inside the 10240 character quota with both mirror grants."
+    condition     = !anytrue([for name, policy in aws_iam_role_policy.athena_mirror_writer : anytrue([for r in flatten([for s in jsondecode(policy.policy).Statement : s.Resource]) : strcontains(r, "_e2e")])])
+    error_message = "No mirror grant names a qualification database."
   }
 
   assert {
     condition = (
       output.bronze_inline_policy_chars == (
         length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) +
-        length(jsonencode(jsondecode(aws_iam_role_policy.job_writer_stage["silver"].policy))) +
+        length(jsonencode(jsondecode(aws_iam_role_policy.job_writer_stage["bronze"].policy))) +
         length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) +
         length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy)))
-      )
+      ) &&
+      output.bronze_inline_policy_chars <= 10240
     )
-    error_message = "The size that the quota guard of the bronze role checks counts the storage policy, the stage read and both Glue mirror grants, the dictionary grant included."
+    error_message = "The size that the quota guard of the bronze role checks counts the storage policy, the bronze stage read and both Glue mirror grants, the dictionary grant included, and stays inside the 10240 character quota of one role."
   }
 }
 
