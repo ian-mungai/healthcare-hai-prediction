@@ -236,6 +236,7 @@ def exercise(root: Path) -> list[dict]:
         single_copy_scenarios(scenario, plan, data_entry, root, downloads)
         adapted_scenarios(scenario, plan, data_entry, doc_entry, root, downloads, receipt_path)
         round2_scenarios(scenario, plan, data_entry, doc_entry, root, downloads)
+        round3_scenarios(scenario, plan, data_entry, root, downloads)
 
         def tampered_plan() -> None:
             original = plan_path.read_bytes()
@@ -1057,9 +1058,12 @@ class ReadingFake(FakeS3):
         self.timeouts: list[float] = []
         self.bounded_failure: str | None = None
         self.damaged: str | None = None
+        self.tick: Any = None
 
     def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
         self.timeouts.append(timeout)
+        if self.tick:
+            self.tick()
         if self.bounded_failure:
             raise s3_store.StorageError(operation, self.bounded_failure)
         return self.call(service, operation, arguments)
@@ -1231,6 +1235,125 @@ def verify_s3_scenarios(scenario: Any, plan: dict, root: Path, downloads: Path) 
         require(bool(store.verify_remote(plan, target, s3)[1]), "The remote check accepted cleared objects")
 
     scenario("reviewer_reproduction_cleared_objects_replay_stays_local_and_verify_catches_it", cleared_repro)
+
+
+class SetClock:
+    """A clock the cases move by hand."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def round3_scenarios(scenario: Any, plan: dict, data_entry: dict, root: Path, downloads: Path) -> None:
+    """Every mode excludes every other, a verification needs the full object count, one deadline covers an object, and the root and lock are checked."""
+    count = len(plan["files"])
+    receipt = root / "never_used_receipt.json"
+    modes = {
+        "execute": ["--execute"],
+        "verify_s3": ["--verify-s3"],
+        "validate_receipt": ["--validate-receipt", str(receipt)],
+        "build_plan": ["--build-plan"],
+    }
+
+    def pair(first: str, second: str) -> Any:
+        def run() -> None:
+            target, s3 = root / f"m_{first}_{second}", ReadingFake()
+            code = command(["--downloads", str(downloads), *modes[first], *modes[second]], target, s3)
+            require(code != 0 and not s3.calls and not target.exists(), f"Two modes ran together: exit {code}")
+
+        return run
+
+    names = list(modes)
+    for i, first in enumerate(names):
+        for second in names[i + 1 :]:
+            scenario(f"modes_{first}_and_{second}_cannot_be_combined", pair(first, second))
+
+    def verify_with_receipt_on_empty_store() -> None:
+        target, s3 = stored_all(root, "m_empty", downloads, plan)
+        path = next(target.glob("files/*/capture/receipt.json"))
+        empty = ReadingFake()
+        code = command(["--verify-s3", "--validate-receipt", str(path)], target, empty)
+        require(code != 0 and not empty.calls, f"Verify plus validate returned {code} with an empty store")
+
+    scenario("verify_s3_with_validate_receipt_on_an_empty_store_is_refused", verify_with_receipt_on_empty_store)
+
+    def count_check() -> None:
+        target, s3 = stored_all(root, "m_count", downloads, plan)
+        results, failed = store.verify_remote(plan, target, s3)
+        require(len(results) == count and store.all_proven(plan, results, failed), "The full set was not proven")
+        require("NOT PROVEN" in store.verification_summary(plan, results[:-1], []), "A skipped file still read as proven")
+        short = [dict(r) for r in results]
+        short[0]["objects_verified"] = 3
+        require("NOT PROVEN" in store.verification_summary(plan, short, []) and not store.all_proven(plan, short, []), "A short object count read as proven")
+        log = LogRecorder()
+        with patch.object(store, "verify_remote", lambda *a, **k: (results[:-1], [])):
+            code = command(["--verify-s3"], target, s3, log=log)
+        require(code != 0 and "may now be removed" not in log.text(), f"A skipped file passed: exit {code}")
+
+    scenario("verify_s3_never_succeeds_when_a_file_or_object_was_not_read_back", count_check)
+
+    def shared_budget() -> None:
+        target, s3 = stored_all(root, "d_shared", downloads, plan)
+        clock = SetClock()
+        s3.tick = lambda: setattr(clock, "now", clock.now + 90)
+        results, failed = store.verify_remote(plan, target, s3, clock=clock)
+        require(
+            not results and bool(failed) and all("deadline" in f["reason"] for f in failed), f"A 90 s HEAD plus a 90 s read passed: {results[:1]} {failed[:1]}"
+        )
+        require(max(s3.timeouts) <= store.VERIFY_OBJECT_SECONDS and min(s3.timeouts) <= 30, f"The second call got a fresh budget: {s3.timeouts[:4]}")
+
+    scenario("one_object_deadline_covers_the_head_and_the_download", shared_budget)
+
+    def expiry_in_hash() -> None:
+        target, s3 = stored_all(root, "d_hash", downloads, plan)
+        clock, original = SetClock(), store.verify_version
+
+        def slow(client: Any, key: str, version: Any, digest: str, size: int) -> None:
+            original(client, key, version, digest, size)
+            clock.now = store.VERIFY_TOTAL_SECONDS + 1
+
+        with patch.object(store, "verify_version", slow):
+            results, failed = store.verify_remote(plan, target, s3, clock=clock)
+        require(not results and bool(failed) and all("deadline" in f["reason"] for f in failed), f"Expiry during the hash passed: {len(results)} proven")
+        require(not store.all_proven(plan, results, failed), "An expired run read as proven")
+
+    scenario("deadline_that_passes_while_hashing_stops_the_file_from_counting", expiry_in_hash)
+
+    def run_budget_from_the_start() -> None:
+        target, s3 = stored_all(root, "d_start", downloads, plan)
+        clock = SetClock()
+        clock.now = store.VERIFY_TOTAL_SECONDS + 5
+        results, failed = store.verify_remote(plan, target, s3, clock=clock, started=0.0)
+        require(not results and len(failed) == count, "Time spent before the first read did not count against the run")
+
+    scenario("run_deadline_counts_from_the_start_of_the_command", run_budget_from_the_start)
+
+    def linked_root() -> None:
+        target, outside = root / "k_root", root / "k_root_outside"
+        outside.mkdir(parents=True)
+        target.symlink_to(outside, target_is_directory=True)
+        run_all(plan, target, downloads, True, ReadingFake(), OUTPUTS)
+
+    scenario("owned_root_that_is_a_symlink_is_refused", linked_root, "outside the tool's own folder")
+    scenario(
+        "owned_root_symlink_leaves_the_target_untouched",
+        lambda: require(not any((root / "k_root_outside").rglob("*")), "Files were written through the root link"),
+    )
+
+    def linked_lock() -> None:
+        target, elsewhere = root / "k_lock", root / "k_lock_elsewhere.lock"
+        target.mkdir()
+        (target / ".collection.lock").symlink_to(elsewhere)
+        run_all(plan, target, downloads, True, ReadingFake(), OUTPUTS)
+
+    scenario("collection_lock_that_is_a_symlink_is_refused", linked_lock, "outside the tool's own folder")
+    scenario(
+        "collection_lock_symlink_creates_nothing_outside",
+        lambda: require(not (root / "k_lock_elsewhere.lock").exists(), "The lock was created through the link"),
+    )
 
 
 def root_choice_scenarios(scenario: Any, plan: dict, root: Path, downloads: Path) -> None:

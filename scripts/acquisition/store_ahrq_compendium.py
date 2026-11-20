@@ -78,6 +78,12 @@ def confine(root: Path, branch: Path, file_name: str) -> None:
         require(not path.is_symlink() and path.resolve().is_relative_to(base), OUTSIDE)
 
 
+def confine_root(root: Path) -> None:
+    """Refuse an owned root, any folder above it inside the repository, or its collection lock that is a symbolic link, before the lock is taken."""
+    chain = [root, *(p for p in root.parents if root.is_relative_to(REPO_ROOT) and p.is_relative_to(REPO_ROOT) and p != REPO_ROOT)]
+    require(not any(p.is_symlink() for p in [*chain, root / ".collection.lock"]), OUTSIDE)
+
+
 def stage(entry: dict, downloads: Path, branch: Path) -> Path:
     """Copy the exact planned file write-once with its origin proof; after that the Downloads copy is not needed."""
     cached, proof = branch / "source" / entry["file_name"], branch / "source" / "download.json"
@@ -359,6 +365,8 @@ def run_all(
 ) -> tuple[list[dict], list[dict]]:
     """Process every planned file independently; return completed results and held files with their public reason."""
     results, held = [], []
+    if not read_only:
+        confine_root(root)
     with nullcontext() if read_only else collection_lock(root):
         for entry in plan["files"]:
             try:
@@ -376,31 +384,45 @@ LOCAL_STATUS = {"stored": "local_record_of_upload"}
 LOCAL_NOTE = "These results come from local records of past uploads and are not a check of S3. Run --verify-s3 before removing any local copy."
 
 
+def key_prefix(key: str) -> str:
+    """The collection prefix of a stored key, with any capture root before it; a content-addressed key has none."""
+    return key[: key.index(contract.PUBLISHER_PREFIX) + len(contract.PUBLISHER_PREFIX)] if contract.PUBLISHER_PREFIX in key else "(content-addressed key)"
+
+
 class ReadOnlyReader:
-    """Hand the version check a client that only reads objects, within the per-object limit and the deadline of the whole run."""
+    """Hand the version check a client that only reads objects. Every call gets only the time left of its object, which one deadline covers from the HEAD
+    through the download and the hash, and never more than the time left of the whole run."""
 
     def __init__(self, client: AwsCli, deadline: float, clock: Callable[[], float]) -> None:
         self.client, self.deadline, self.clock = client, deadline, clock
+        self.object_deadline = deadline
+
+    def begin_object(self) -> None:
+        """Start the one deadline of the next object, capped by the deadline of the run."""
+        self.object_deadline = min(self.clock() + VERIFY_OBJECT_SECONDS, self.deadline)
+
+    def remaining(self) -> float:
+        return min(self.object_deadline, self.deadline) - self.clock()
+
+    def check(self) -> None:
+        """Refuse to go on, or to count an object as verified, once its deadline or the deadline of the run has passed."""
+        require(self.remaining() > 0, "AHRQ verification deadline reached")
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
         require(service == "s3api" and operation in READ_OPERATIONS, "AHRQ verification may only read stored objects")
-        remaining = self.deadline - self.clock()
-        require(remaining > 0, "AHRQ verification deadline reached")
-        return self.client.call_bounded(service, operation, arguments, timeout=min(VERIFY_OBJECT_SECONDS, remaining))
+        self.check()
+        return self.client.call_bounded(service, operation, arguments, timeout=self.remaining())
 
 
 def verify_object(reader: ReadOnlyReader, record: dict, sha256: str, size: int) -> None:
     """Read one recorded version: its size is checked by a HEAD before any download, then the stored bytes are hashed and compared."""
     require(0 < size <= contract.MAX_BYTES, "AHRQ S3 object size is outside the planned bound")
+    reader.begin_object()
     head = reader.call("s3api", "head-object", ["--key", record["key"], "--version-id", record["version_id"]])
     require(head.get("VersionId") == record["version_id"], "AHRQ S3 version differs from the recorded one")
     require(head.get("ContentLength") == size, "AHRQ S3 object size differs from the record")
     verify_version(cast(AwsCli, reader), record["key"], record["version_id"], sha256, size)
-
-
-def key_prefix(key: str) -> str:
-    """The collection prefix of a stored key, with any capture root before it; a content-addressed key has none."""
-    return key[: key.index(contract.PUBLISHER_PREFIX) + len(contract.PUBLISHER_PREFIX)] if contract.PUBLISHER_PREFIX in key else "(content-addressed key)"
+    reader.check()
 
 
 def verify_remote_file(plan: dict, entry: dict, root: Path, client: AwsCli, reader: ReadOnlyReader) -> dict:
@@ -429,9 +451,14 @@ def verify_remote_file(plan: dict, entry: dict, root: Path, client: AwsCli, read
     }
 
 
-def verify_remote(plan: dict, root: Path, client: AwsCli, clock: Callable[[], float] = time.monotonic) -> tuple[list[dict], list[dict]]:
+OBJECTS_PER_FILE = 4
+
+
+def verify_remote(
+    plan: dict, root: Path, client: AwsCli, clock: Callable[[], float] = time.monotonic, started: float | None = None
+) -> tuple[list[dict], list[dict]]:
     """Read back every planned file from S3 without writing anywhere; return the proven files and the files that are not proven, with the reason."""
-    reader, results, failed = ReadOnlyReader(client, clock() + VERIFY_TOTAL_SECONDS, clock), [], []
+    reader, results, failed = ReadOnlyReader(client, (clock() if started is None else started) + VERIFY_TOTAL_SECONDS, clock), [], []
     for entry in plan["files"]:
         try:
             results.append(verify_remote_file(plan, entry, root, client, reader))
@@ -445,14 +472,21 @@ def verify_remote(plan: dict, root: Path, client: AwsCli, clock: Callable[[], fl
     return results, failed
 
 
-def verification_summary(total: int, results: list[dict], failed: list[dict]) -> str:
+def all_proven(plan: dict, results: list[dict], failed: list[dict]) -> bool:
+    """True only when no file failed and every planned file was read back, object for object: the count is checked, not assumed."""
+    planned = sorted(f["file_name"] for f in plan["files"])
+    return not failed and sorted(r["file_name"] for r in results) == planned and all(r["objects_verified"] == OBJECTS_PER_FILE for r in results)
+
+
+def verification_summary(plan: dict, results: list[dict], failed: list[dict]) -> str:
     """Say in plain words whether every planned file is proven on S3, and whether the local copies may go."""
-    if len(results) == total and not failed:
+    if all_proven(plan, results, failed):
         return (
-            f"All {total} files are proven on S3: each recorded version was read back and matches the locked hash and size. "
+            f"All {len(plan['files'])} files are proven on S3: each recorded version was read back and matches the locked hash and size. "
             "The local copies may now be removed."
         )
-    names = ", ".join(sorted({f["file_name"] for f in failed}) or ["no file was checked"])
+    proven = {r["file_name"] for r in results} - {f["file_name"] for f in failed}
+    names = ", ".join(sorted({f["file_name"] for f in failed} | ({f["file_name"] for f in plan["files"]} - proven)))
     return f"NOT PROVEN on S3: {names}. Do not remove any local copy."
 
 
@@ -497,16 +531,17 @@ def main() -> None:
     """Validate offline by default; --build-plan writes the plan; --execute is the only write; --verify-s3 proves the stored files by reading S3."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--downloads", type=Path, default=Path.home() / "Downloads" / "ahrq_compendium")
-    parser.add_argument("--build-plan", action="store_true", help="Bind the reviewed request list to the saved files; writes the plan and its lock")
     modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--build-plan", action="store_true", help="Bind the reviewed request list to the saved files; writes the plan and its lock")
     modes.add_argument("--execute", action="store_true")
     modes.add_argument("--verify-s3", action="store_true", help="Read every stored object back at its recorded version; writes and deletes nothing")
     parser.add_argument(
         "--capture-root",
         help="The bucket root to use: raw/ or ingestion_test/<run>/. Omit it for the original layout; an environment root is refused unless this names it",
     )
-    parser.add_argument("--validate-receipt", type=Path)
+    modes.add_argument("--validate-receipt", type=Path)
     args = parser.parse_args()
+    started = time.monotonic()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.validate_receipt:
         receipt = verify_local(args.validate_receipt)
@@ -529,13 +564,13 @@ def main() -> None:
         if client is not None:
             LOGGER.info(json.dumps({"destination": destination(client, root)}))
         if args.verify_s3:
-            proven, failed = verify_remote(plan, ROOT, cast(AwsCli, client))
+            proven, failed = verify_remote(plan, ROOT, cast(AwsCli, client), started=started)
             for line in proven:
                 LOGGER.info(json.dumps(line, sort_keys=True))
             for item in failed:
                 LOGGER.error(json.dumps({"status": "not_verified_on_s3"} | item, sort_keys=True))
-            LOGGER.info(verification_summary(len(plan["files"]), proven, failed))
-            sys.exit(0 if len(proven) == len(plan["files"]) and not failed else 1)
+            LOGGER.info(verification_summary(plan, proven, failed))
+            sys.exit(0 if all_proven(plan, proven, failed) else 1)
         results, held = run_all(plan, ROOT, args.downloads, args.execute, client, outputs, not args.execute)
     for result in results:
         LOGGER.info(
