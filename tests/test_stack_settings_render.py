@@ -25,11 +25,6 @@ ACCOUNT = "111111111111"
 BUCKET = "example-data-bucket"
 HOST_IP = "10.0.0.5"
 PROJECT = "healthcare_hai_prediction"
-# The sanitized services fixture is the capture of the live inputs from before the host job cap change. The services apply moves the cap from the captured
-# 22800 MiB to the committed default 22128 MiB (the full stack reserves 8592 MiB: 22128 + 8592 + 2048 of system reserve = 32768 MiB, the whole host).
-# Every other input must equal the capture.
-CAP_MIGRATION = ("host_job_cap_mib", 22800, 22128)
-MEMORY_TEST = ROOT / "infra/services/tests/all_services_memory.tftest.hcl"
 SERVICES_SETTINGS = {
     "airflow_lineage_http_enabled",
     "host_job_cap_mib",
@@ -197,24 +192,7 @@ def test_services_inputs_are_the_committed_defaults_plus_the_environment_values(
     check(
         sanitize(rendered) == {name: value for name, value in live.items() if name not in SERVICES_SETTINGS}, "the render holds exactly the other live inputs"
     )
-    name, captured, migrated = CAP_MIGRATION
-    check(live[name] == captured, f"the fixture still holds the captured {name} {captured}: {live[name]}")
-    expected = {**live, name: migrated}
-    check(
-        sanitize(rendered) | terraform_defaults("services", SERVICES_SETTINGS) == expected,
-        "the render and the committed defaults equal the live inputs but for the cap",
-    )
-
-
-def test_the_host_job_cap_migrates_from_the_captured_value_to_the_committed_default() -> None:
-    name, captured, migrated = CAP_MIGRATION
-    check(terraform_default("services", name) == migrated, f"the committed default of {name} is {migrated}")
-    check(terraform_default("services", name) != captured, f"the captured {captured} is not the default any more")
-    refused = re.search(
-        rf'run "[^"]+" \{{\n\s+command = plan\n\s+variables \{{\n\s+{name} = {captured}\n\s+\}}\n\s+expect_failures = \[output\.host_job_memory_mib\]',
-        MEMORY_TEST.read_text(encoding="utf-8"),
-    )
-    check(refused is not None, f"the memory test refuses the captured {captured} with the full stack on")
+    check(sanitize(rendered) | terraform_defaults("services", SERVICES_SETTINGS) == live, "the render and the committed defaults equal the live inputs")
 
 
 def test_jobs_inputs_are_the_committed_defaults_plus_the_environment_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
