@@ -372,14 +372,23 @@ def tables_to_mirror(config: MirrorConfig, layer: str, mode: str, published: Seq
     return wanted, "" if wanted else f"the {layer} publish named no table"
 
 
-def explain(error: Exception) -> str:
-    code = getattr(error, "response", {}).get("Error", {}).get("Code") if hasattr(error, "response") else None
-    return f"{code} from Glue" if code else f"{type(error).__name__}: {error}"
-
-
 def glue_error_code(error: Exception) -> str | None:
+    """The service error code of ``error``, or None for any error without one: no response, a response that is not a mapping, no ``Error`` or no code."""
     response = getattr(error, "response", None)
-    return response.get("Error", {}).get("Code") if isinstance(response, dict) else None
+    detail = response.get("Error") if isinstance(response, Mapping) else None
+    code = detail.get("Code") if isinstance(detail, Mapping) else None
+    return str(code) if code else None
+
+
+def explain(error: Exception) -> str:
+    """The cause of a failure in one line: the service error code, or else the error's type and message. It never raises, whatever the error carries."""
+    code = glue_error_code(error)
+    if code:
+        return f"{code} from Glue"
+    try:
+        return f"{type(error).__name__}: {error}"
+    except Exception:
+        return type(error).__name__
 
 
 def current(glue: Any, database: str, table: str) -> dict[str, Any] | None:

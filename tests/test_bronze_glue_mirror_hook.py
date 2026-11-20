@@ -833,3 +833,47 @@ def test_the_dictionary_grant_allows_the_registration_actions_on_its_database_an
     wrong = [f"{action} {resource}" for action, resource in allowed if not decide(grant, Request(action, resource)).allowed]
     wrong += [f"{action} {resource} must be refused" for action, resource in refused if decide(grant, Request(action, resource)).allowed]
     check(wrong == [], f"{wrong}")
+
+
+# An error of any shape fails only the dictionary it came from.
+
+
+@pytest.mark.parametrize("phase", ["snapshot", "registration"])
+@pytest.mark.parametrize("kind", ["requests", "empty_mapping", "error_none", "error_without_code", "text", "list"])
+def test_an_error_of_any_shape_fails_one_dictionary_alone_and_names_the_original_type(phase: str, kind: str) -> None:
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+
+    class Odd(Exception):
+        def __init__(self, response: Any) -> None:
+            super().__init__("stand-in failure")
+            self.response = response
+
+    errors = {
+        "requests": RequestsConnectionError("stand-in connection failed"),
+        "empty_mapping": Odd({}),
+        "error_none": Odd({"Error": None}),
+        "error_without_code": Odd({"Error": {"Message": "stand-in"}}),
+        "text": Odd("a response body"),
+        "list": Odd(["not", "a", "mapping"]),
+    }
+    error = errors[kind]
+    inner = dictionary_reader()
+
+    def read(spark: Any, namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
+        if phase == "snapshot" and namespace == DICTIONARY and tables == ["alpha_data"]:
+            raise error
+        return inner(spark, namespace, tables)
+
+    class Broken(FakeGlue):
+        def get_table(self, DatabaseName: str, Name: str) -> dict[str, Any]:
+            if phase == "registration" and DatabaseName == DICTIONARY and Name == "alpha_data":
+                raise error
+            return super().get_table(DatabaseName, Name)
+
+    glue = Broken()
+    report = load_hook(glue, read_loader=read)
+    text = report["tables"][f"{DICTIONARY}.alpha_data"]
+    check(text.startswith("failed") and type(error).__name__ in text, f"the original error type is not named: {text}")
+    check("AttributeError" not in json.dumps(report), f"the formatter failed instead of the error: {report}")
+    check(report["tables"][f"{DICTIONARY}.beta_data"] == "created" and (DICTIONARY, "beta_data") in glue.tables, f"{report}")
+    check(report["tables"]["alpha_data"] == "created" and report["tables"]["beta_data"] == "created" and report["status"] == "failed", f"{report}")
