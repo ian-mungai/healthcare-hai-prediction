@@ -111,7 +111,7 @@ CLEANUP_ALLOWLIST = ".cleanup_allowlist"
 CLEANUP_RULE = f"{POLICY}: removed and unused code"
 # The collectors' code-version records list the code hashes of stored captures; the file path of each fingerprint is history, like the changelog.
 CODE_VERSION_RECORDS = re.compile(r"config/acquisition/[^/]*_code_versions\.json")
-REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "airflow", "dependency"]
+REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "dependency"]
 UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused", "docs-path"]
 CODE_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts", ".sql", ".tf", ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".j2", ".jinja"}
 CODE_NAMES = {"Dockerfile", "Makefile", ".env.example"}
@@ -126,7 +126,6 @@ CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)
 TF_NESTED_BLOCK = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*\{")
 SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
-TASK_ID = re.compile(r"""task_id\s*=\s*["']([\w.-]+)["']""")
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
 # Distribution names whose import name differs; any other package imports as its name with dashes as underscores.
 MODULE_NAMES = {
@@ -1056,121 +1055,6 @@ def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
     return names
 
 
-def target_names(target: ast.expr) -> set[str]:
-    """Return the names an assignment target stores.
-
-    Only name, tuple, list and starred targets bind. An attribute or subscript target reads its receiver and its index (``table[key] = 1`` binds
-    neither), and an expression inside it (a comprehension, a lambda) has a scope of its own.
-    """
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, ast.Tuple | ast.List):
-        return {name for element in target.elts for name in target_names(element)}
-    if isinstance(target, ast.Starred):
-        return target_names(target.value)
-    return set()
-
-
-def walrus_names(node: ast.AST) -> set[str]:
-    """Return the names the walrus operators in the expressions of one statement bind in the scope that holds the statement.
-
-    A comprehension binds its walrus names in the scope around it, so they count. A lambda body and parameters are a scope of their own, so they
-    do not count, but the default values of a lambda run in the scope around it, so they do. The statements nested in this one are not entered:
-    the caller visits them.
-    """
-    if isinstance(node, ast.Lambda):
-        defaults = [*node.args.defaults, *(default for default in node.args.kw_defaults if default is not None)]
-        return {name for default in defaults for name in walrus_names(default)}
-    names = target_names(node.target) if isinstance(node, ast.NamedExpr) else set()
-    for child in ast.iter_child_nodes(node):
-        if not isinstance(child, ast.stmt):
-            names |= walrus_names(child)
-    return names
-
-
-def pattern_names(pattern: ast.pattern) -> set[str]:
-    """Return the names a match pattern captures: a capture, an as-pattern, a star capture, a mapping rest and a class keyword capture."""
-    names: set[str] = set()
-    for node in ast.walk(pattern):
-        if isinstance(node, ast.MatchAs | ast.MatchStar) and node.name:
-            names.add(node.name)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            names.add(node.rest)
-    return names
-
-
-def module_bindings(body: list[ast.stmt]) -> set[str]:
-    """Return the names a scope's statements bind in that scope.
-
-    A function, class, import alias, type alias, assignment, annotated assignment with a value, augmented assignment, loop target, with target,
-    match capture or walrus binds its name here. The blocks that open no scope (if, loops, try, with and match) are searched for the same
-    bindings. An annotation without a value, a del and a temporary except alias bind nothing. The body of a function or class is never entered:
-    its names are local to it. A comprehension or generator variable, a lambda parameter and a function parameter never bind here.
-    """
-    names: set[str] = set()
-    for node in body:
-        names |= walrus_names(node)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            names.add(node.name)
-        elif isinstance(node, ast.TypeAlias):
-            names |= target_names(node.name)
-        elif isinstance(node, ast.Import | ast.ImportFrom):
-            names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
-        elif isinstance(node, ast.Assign):
-            names |= {name for target in node.targets for name in target_names(target)}
-        elif isinstance(node, ast.AnnAssign | ast.AugAssign):
-            names |= target_names(node.target) if node.value is not None else set()
-        elif isinstance(node, ast.If | ast.While):
-            names |= module_bindings(node.body) | module_bindings(node.orelse)
-        elif isinstance(node, ast.For | ast.AsyncFor):
-            names |= target_names(node.target) | module_bindings(node.body) | module_bindings(node.orelse)
-        elif isinstance(node, ast.With | ast.AsyncWith):
-            names |= {name for item in node.items if item.optional_vars for name in target_names(item.optional_vars)} | module_bindings(node.body)
-        elif isinstance(node, ast.Try | ast.TryStar):
-            names |= module_bindings(node.body) | module_bindings(node.orelse) | module_bindings(node.finalbody)
-            names |= {name for handler in node.handlers for name in module_bindings(handler.body)}
-        elif isinstance(node, ast.Match):
-            names |= {name for case in node.cases for name in pattern_names(case.pattern) | module_bindings(case.body)}
-    return names
-
-
-def global_declarations(body: list[ast.stmt]) -> set[str]:
-    """Return the names a scope's own statements declare global, nested blocks included and nested scopes left out."""
-    names: set[str] = set()
-    pending: list[ast.AST] = list(body)
-    while pending:
-        node = pending.pop()
-        if isinstance(node, ast.Global):
-            names |= set(node.names)
-        elif not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
-            pending.extend(ast.iter_child_nodes(node))
-    return names
-
-
-def global_bindings(tree: ast.Module) -> set[str]:
-    """Return the names a function or class body declares global and also binds: running that body binds them in module scope."""
-    names: set[str] = set()
-    for scope in ast.walk(tree):
-        if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            names |= global_declarations(scope.body) & module_bindings(scope.body)
-    return names
-
-
-def bound_names(files: dict[str, list[str]]) -> set[str]:
-    """Return the names the current Python code binds in module scope (see ``module_bindings`` and ``global_bindings``)."""
-    names: set[str] = set()
-    for path, lines in files.items():
-        if not path.endswith(".py"):
-            continue
-        try:
-            tree = ast.parse("\n".join(lines), filename=path)
-        except SyntaxError:
-            continue
-        names |= module_bindings(tree.body)
-        names |= global_bindings(tree)
-    return names
-
-
 DOTTED_WORD = re.compile(r"[A-Za-z_]\w*(?:\.\w+)*")
 IMPORT_CALLS = {"__import__", "import_module", "find_spec"}
 # The program of a Python command: python, python3, python3.12 (any folder) or a shell variable named like it.
@@ -1651,10 +1535,6 @@ def removed_definitions(
     kinds["script"] |= {schema_id: file_name_pattern(schema_id) for schema_id in removed_ids - live}
     for name in python_left - live:
         kinds["python"][name] = re.compile(rf"(?<![\w./-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
-    removed_tasks = set(TASK_ID.findall(code_removed)) - set(TASK_ID.findall(code_now))
-    # The same word still bound in module scope (function, class, import alias or assignment) is a live name of its own, not a task reference.
-    for name in gone(removed_tasks, bound_names(files) if removed_tasks else set()):
-        kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
     for name in config_left - live:
         kinds["config"][name] = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
     old_blocks = {block for path, lines in before.items() if path.endswith(".tf") for block in hcl_blocks(lines)}
@@ -2058,11 +1938,9 @@ def without_deferral_record(lines: list[str]) -> list[str]:
 def removed_names() -> list[Finding]:
     """A name the change removed is no longer referenced in any file that describes current behavior.
 
-    Kinds: scripts, command-line flags, environment variables, config keys, Terraform declarations, dbt models, Airflow
-    task IDs and dependencies. Code names match code and config files and only the code spans and fences of Markdown, so
-    a removed ``main`` does not flag "the main branch" in prose. A task ID word that module scope still binds (a function,
-    class, import alias or assignment, also inside a module-level if, loop, try, with or match block, never inside a function or
-    class body) is a live name, not a leftover. Python functions, classes and modules
+    Kinds: scripts, command-line flags, environment variables, config keys, Terraform declarations, dbt models and
+    dependencies. Code names match code and config files and only the code spans and fences of Markdown, so
+    a removed ``main`` does not flag "the main branch" in prose. Python functions, classes and modules
     are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
     Only the Python files MyPy does not cover keep a text check for them, until they join MyPy. The names of a deleted
     module are not part of it: only a reference to the module counts (see ``deleted_module_findings``), in any file. The known limits of that
