@@ -1,11 +1,11 @@
 """Compare the models of one base run and promote what passes: research, then the canary check, the promotion and the owner notice of each type's challenger.
 
-``training_dag`` starts this DAG after each training run of m1, m2 or m4 on a base run, with the run ID derived from the base run. The DAG ends skipped
-until all three models have passed training runs on that base. Then one research task launches in the promote family and the chain task runs, for each
-infection type with a challenger, the canary check, the promotion, the release of the model set's held online load and the owner notice
-(``orchestration/promotion_chain.py``). No step needs the owner's approval. A second run for the same base joins the launches of the first and starts
-nothing again. A run whose research failed does not start again: its launch is terminal, so the form's ``research_attempt`` starts the same base's research as
-a run of its own.
+``training_dag`` starts this DAG after each training run of m1 (OLS baseline), m2 (Elastic Net) or m4 (Gradient boosting) on a base run, with the run ID
+derived from the base run. The DAG ends skipped until all three models have passed training runs on that base. Then one research task launches in the
+promote family and the chain task runs, for each infection type with a challenger, the canary check, the promotion, the release of the model set's held
+online load and the owner notice (``orchestration/promotion_chain.py``). No step needs the owner's approval. A second run for the same base joins the
+launches of the first and starts nothing again. A run whose research failed does not start again: its launch is terminal, so the form's ``research_attempt``
+starts the same base's research as a run of its own.
 """
 
 from __future__ import annotations

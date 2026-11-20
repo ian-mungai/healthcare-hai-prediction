@@ -16,12 +16,14 @@ follows only the one before it, and every task runs under ``all_success`` but th
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from orchestration.training_contract import (
     FEATURE_DAGS,
+    MODEL_LABELS,
     MODELS,
     PROMOTION_MODELS,
     TRAINING_STEPS,
@@ -227,7 +229,7 @@ def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transfor
 
 
 # The DAGs with a ``model`` parameter, which show the name of each model beside its key in the trigger form.
-MODEL_PARAM_DAGS = ("training_dag", "drift_monitoring_dag")
+MODEL_PARAM_DAGS = ("training_dag", "drift_monitoring_dag", "drift_live_check_dag")
 # The DAGs whose text names models: the models that the text of each must show with their names.
 DOC_MODELS = {
     **{dag_id: (model,) for dag_id, model in FEATURE_DAGS.items()},
@@ -271,6 +273,8 @@ def display_name_violations(dag: Any) -> list[Violation]:
                 problems.append(f"trigger_{model} shows {task.task_display_name!r}, not {trigger_display_name(model)!r}")
             if model_label(model) not in str(getattr(task, "doc_md", None) or ""):
                 problems.append(f"the doc of trigger_{model} lacks {model_label(model)}")
+    if dag_id in DOC_MODELS:
+        problems += [f"the doc shows {model} without its name" for model in MODELS if re.search(rf"\b{model}\b(?! \({re.escape(MODEL_LABELS[model])}\))", doc)]
     problems += [f"the doc lacks {model_label(model)}" for model in DOC_MODELS.get(dag_id, ()) if model_label(model) not in doc]
     return [Violation("display_name", dag_id, problem) for problem in problems]
 

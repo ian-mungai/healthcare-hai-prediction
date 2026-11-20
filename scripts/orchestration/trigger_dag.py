@@ -103,6 +103,7 @@ from orchestration.training_contract import (
     chain_layer_run,
     compose_run_id,
     drift_attempt_of,
+    model_choices,
     model_drift_run_id,
     model_features_run_id,
     new_run_hex,
@@ -215,7 +216,7 @@ def new_run_id(dag: str, model: str | None = None) -> str:
         return compose_run_id("drift", new_run_hex(), 1, MODEL_NAMES[model])
     if dag == "training_dag":
         if model not in MODELS:
-            raise TriggerError(f"refused: a training run needs --model, one of {', '.join(MODELS)}")
+            raise TriggerError(f"refused: a training run needs --model, one of {model_choices()}")
         return compose_run_id("training", new_run_hex(), 1, MODEL_NAMES[model])
     if dag not in HAND_START_NAMES:
         raise TriggerError(f"refused: {dag} has no run ID of its own to make")
@@ -326,7 +327,7 @@ def live_conf(given: dict[str, Any]) -> dict[str, str]:
 
 
 def live_refusal() -> str:
-    return f"refused: the live drift check needs --model, one of {', '.join(MODELS)}, and --hai-type, one of {', '.join(HAI_TYPES)}"
+    return f"refused: the live drift check needs --model, one of {model_choices()}, and --hai-type, one of {', '.join(HAI_TYPES)}"
 
 
 def base_run_plan(
@@ -355,7 +356,7 @@ def base_run_plan(
             raise TriggerError(f"refused: --research-attempt: {error}") from None
     else:
         if model not in MODELS:
-            raise TriggerError(f"refused: --base-run needs --model, one of {', '.join(MODELS)}, to derive the training run")
+            raise TriggerError(f"refused: --base-run needs --model, one of {model_choices()}, to derive the training run")
         derived, features, extra = trained_run_id(base_run, model), model_features_run_id(base_run, model), {"base_run": base_run}
         if features_run is not None and features_run != features:
             raise TriggerError(f"refused: with --base-run the features run is the one of the model's set, {features}, not {features_run!r}")
@@ -419,7 +420,7 @@ def drift_attempt_conf(args: argparse.Namespace) -> dict[str, Any]:
     except ValueError as error:
         raise TriggerError(f"refused: --drift-attempt: {error}") from None
     if args.model not in MODELS:
-        raise TriggerError(f"refused: a drift attempt needs --model, one of {', '.join(MODELS)}")
+        raise TriggerError(f"refused: a drift attempt needs --model, one of {model_choices()}")
     if args.features_run is None or not RUN_ID.fullmatch(args.features_run):
         raise TriggerError("refused: a drift attempt needs --features-run, the features run ID of the model's set (not latest)")
     if args.mlflow != "aws":

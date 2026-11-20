@@ -1,4 +1,4 @@
-"""Build the m4 model set's feature table from the published base run through the direct ECS launch library, then start that model's drift check.
+"""Build the m4 (Gradient boosting) model set's feature table from the published base run through the direct ECS launch library and start its drift check.
 
 Once the set is published and its acceptance checks passed, the drift check of the set runs (``drift_monitoring_dag``) and starts the model's training only
 when its gate says so. The trigger does not wait, and its run derives from this run, so a retried run starts nothing new."""

@@ -12,10 +12,11 @@ from __future__ import annotations
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import HAI_TYPES, MODELS, RUN_ID
+from orchestration.training_contract import HAI_TYPES, RUN_ID, model_choices, model_param_schema
 
 with DAG(
     dag_id="drift_live_check_dag",
+    doc_md=f"{__doc__}\n\nModels: {model_choices()}.",
     schedule=None,
     catchup=False,
     max_active_runs=1,
@@ -24,7 +25,7 @@ with DAG(
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
         "mode": Param("real", type="string", enum=["real"]),
         # The model whose Production baseline is checked (orchestration.training_contract.MODELS) and the HAI type of that baseline.
-        "model": Param(type="string", enum=list(MODELS)),
+        "model": Param(type="string", **model_param_schema()),
         "hai_type": Param(type="string", enum=list(HAI_TYPES)),
     },
     default_args={"retries": 0},

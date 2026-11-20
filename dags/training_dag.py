@@ -1,8 +1,9 @@
 """Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library.
 
-After its release, a training run of m1, m2 or m4 that names its base run (``base_run``) starts ``research_dag`` for that base; the DAG skips until all three
-models have run on it. Another model, a hand start with no base and a run that did not pass its release start nothing. The same release also starts the catalog
-(``metadata_ingest_dag``, a ``start_metadata`` task, under the catalog run of the base run) once for every base run, whichever model finishes first.
+After its release, a training run of m1 (OLS baseline), m2 (Elastic Net) or m4 (Gradient boosting) that names its base run (``base_run``) starts
+``research_dag`` for that base; the DAG skips until all three models have run on it. Another model, a hand start with no base and a run that did not
+pass its release start nothing. The same release also starts the catalog (``metadata_ingest_dag``, a ``start_metadata`` task, under the catalog run of the
+base run) once for every base run, whichever model finishes first.
 """
 
 from __future__ import annotations

@@ -58,6 +58,7 @@ DISPLAY_DAGS = (
     "features_m6_dag",
     "training_dag",
     "drift_monitoring_dag",
+    "drift_live_check_dag",
     "research_dag",
 )
 DISPLAY_VIOLATION = {"rule": "display_name", "task": "drift_monitoring_dag", "detail": "the doc lacks m2 (Elastic Net)"}

@@ -199,7 +199,7 @@ def live_parameters(request: SubmissionRequest) -> tuple[str, str]:
         raise LaunchRefused(f"the live drift check takes exactly {', '.join(sorted(LIVE_KEYS))}, not {', '.join(sorted(training)) or 'nothing'}")
     model, hai_type = training["model"], training["hai_type"]
     if model not in MODELS:
-        raise LaunchRefused(f"the live drift check names {model!r}, which is not one of {', '.join(MODELS)}")
+        raise LaunchRefused(f"the live drift check names {model!r}, which is not one of {model_choices()}")
     if hai_type not in HAI_TYPES:
         raise LaunchRefused(f"the live drift check names {hai_type!r}, which is not one of {', '.join(HAI_TYPES)}")
     return str(model), str(hai_type)

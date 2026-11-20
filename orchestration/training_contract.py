@@ -424,7 +424,7 @@ def decide_drift_gate(model: str, baseline: Mapping[str, Any], records: Mapping[
     """Return the drift gate decision of ``model`` from the baseline phase's record (``monitored`` types and ``unmonitored`` types with their reasons) and
     the drift record of each monitored type. The drift task writes it into its marker and the drift DAG recomputes it from the same records."""
     if model not in MODELS:
-        raise GateRefused(f"{model} is not one of {', '.join(MODELS)}")
+        raise GateRefused(f"{model} is not one of {model_choices()}")
     monitored, unmonitored = list(baseline["monitored"]), dict(baseline["unmonitored"])
     if set(monitored) & set(unmonitored) or any(hai_type not in HAI_TYPES for hai_type in (*monitored, *unmonitored)):
         raise GateRefused("the baseline record names a type twice or an unknown type")
@@ -615,7 +615,7 @@ def release_parameters_for(raw: Mapping[str, Any]) -> dict[str, str]:
     if raw["hai_type"] not in HAI_TYPES:
         raise ValueError("hai_type must be a supported HAI type")
     if raw["model"] not in PROMOTION_MODELS:
-        raise ValueError(f"model must be one of {', '.join(PROMOTION_MODELS)}")
+        raise ValueError(f"model must be one of {model_choices(PROMOTION_MODELS)}")
     if not isinstance(raw["features_run"], str) or not re.fullmatch(SET_RUN, raw["features_run"]):
         raise ValueError("features_run must be the ID of a model set's features run")
     return {name: str(raw[name]) for name in sorted(RELEASE_KEYS)}

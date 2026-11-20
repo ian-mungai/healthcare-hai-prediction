@@ -5,9 +5,11 @@ The DAG files run under the declared Airflow SDK stand-ins of ``scripts.training
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import logging
+import re
 import runpy
 import sys
 from collections.abc import Callable, Iterator
@@ -26,6 +28,7 @@ from tests.support import check
 ROOT = Path(__file__).resolve().parents[1]
 IN_IMAGE = ROOT / "scripts/orchestration/in_image_checks.py"
 RUN = "20261117T000000Z-aaaaaaaa"
+LIVE_DAG = "drift_live_check_dag"
 OWNER_NAMES = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
 
 
@@ -110,7 +113,7 @@ def as_airflow_dag(namespace: dict[str, Any]) -> SimpleNamespace:
 
 @pytest.fixture(scope="module")
 def loaded() -> Iterator[dict[str, dict[str, Any]]]:
-    yield {name: run_dag_file(name) for name in graph.DOC_MODELS}
+    yield {name: run_dag_file(name) for name in {*graph.DOC_MODELS, LIVE_DAG}}
 
 
 def test_names_are_the_owner_decision_and_cover_every_model() -> None:
@@ -159,7 +162,7 @@ def test_every_model_dag_shows_its_name_and_keeps_its_ids(loaded: dict[str, dict
         check(set(loaded[dag_id]["dag"].task_dict) == {"preflight", "job", "evidence", "gate", "trigger_drift"}, "the tasks of a model DAG changed")
 
 
-@pytest.mark.parametrize("dag_id", ["training_dag", "drift_monitoring_dag"])
+@pytest.mark.parametrize("dag_id", ["training_dag", "drift_monitoring_dag", LIVE_DAG])
 def test_the_model_choice_of_a_form_shows_every_name(loaded: dict[str, dict[str, Any]], dag_id: str) -> None:
     schema = loaded[dag_id]["dag"].settings["params"]["model"].settings
     check(schema["enum"] == list(training_contract.MODELS), "the model choice lost or changed its values")
@@ -176,6 +179,7 @@ def test_the_model_choice_of_a_form_shows_every_name(loaded: dict[str, dict[str,
         ("training_dag", training_contract.MODELS),
         ("research_dag", ("m1", "m2", "m4")),
         ("drift_monitoring_dag", training_contract.MODELS),
+        (LIVE_DAG, training_contract.MODELS),
         ("features_base_dag", training_contract.MODELS),
     ],
 )
@@ -355,13 +359,17 @@ def shipped_dags(loaded: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {dag_id: as_airflow_dag(namespace) for dag_id, namespace in loaded.items()}
 
 
-def drift_without_names(folder: Path) -> dict[str, Any]:
-    """The drift DAG file with the model list of its doc and the display names of its model choice taken out."""
-    source = (ROOT / "dags/drift_monitoring_dag.py").read_text(encoding="utf-8")
+def dag_without_names(dag_id: str, folder: Path) -> dict[str, Any]:
+    """The DAG file with the model list of its doc and the display names of its model choice taken out."""
+    source = (ROOT / f"dags/{dag_id}.py").read_text(encoding="utf-8")
     doc, choice = '    doc_md=f"{__doc__}\\n\\nModels: {model_choices()}.",\n', "**model_param_schema()"
-    check(doc in source and choice in source, "the drift DAG no longer holds the lines that this case takes out")
-    (folder / "drift_monitoring_dag.py").write_text(source.replace(doc, "").replace(choice, 'enum=["m1", "m2", "m3", "m4", "m5", "m6"]'), encoding="utf-8")
-    return run_dag_file("drift_monitoring_dag", folder)
+    check(doc in source and choice in source, f"{dag_id} no longer holds the lines that this case takes out")
+    (folder / f"{dag_id}.py").write_text(source.replace(doc, "").replace(choice, 'enum=["m1", "m2", "m3", "m4", "m5", "m6"]'), encoding="utf-8")
+    return run_dag_file(dag_id, folder)
+
+
+def drift_without_names(folder: Path) -> dict[str, Any]:
+    return dag_without_names("drift_monitoring_dag", folder)
 
 
 def test_the_in_image_check_runs_the_display_rules_on_every_dag_that_shows_a_model_key(loaded: dict[str, dict[str, Any]], tmp_path: Path) -> None:
@@ -394,3 +402,78 @@ def test_the_drift_launch_refusal_names_the_models_it_accepts() -> None:
     request = SubmissionRequest("drift", RUN, "real", 1, "drift_monitoring_dag", "drift_run", "synthetic-dag-run", input_run_id=RUN, training={"model": "m9"})
     with pytest.raises(ecs_launch.LaunchRefused, match=r"'m9', which is not one of m1 \(OLS baseline\), m2 \(Elastic Net\)"):
         ecs_preflight.drift_model(request)
+
+
+def test_the_in_image_check_fails_on_a_live_drift_dag_with_a_missing_display_value(loaded: dict[str, dict[str, Any]], tmp_path: Path) -> None:
+    report = load_in_image(shipped_dags(loaded)).display_names()
+    check(LIVE_DAG in report, "the in-image report leaves out the live drift check DAG")
+    check(report[LIVE_DAG] == {"present": True, "violations": []}, f"the shipped live drift check DAG breaks a display rule: {report.get(LIVE_DAG)}")
+    broken = {**shipped_dags(loaded), LIVE_DAG: as_airflow_dag(dag_without_names(LIVE_DAG, tmp_path))}
+    rows = load_in_image(broken).display_names()[LIVE_DAG]["violations"]
+    check(
+        {row["rule"] for row in rows} == {"display_name"} and len(rows) >= 2, f"the in-image check accepts a live drift DAG with no labels and no doc: {rows}"
+    )
+    values = dict(loaded[LIVE_DAG]["dag"].settings["params"]["model"].settings)
+    values["values_display"] = {**values["values_display"], "m4": "m4"}
+    planted = shipped_dags(loaded)[LIVE_DAG]
+    planted.params = SimpleNamespace(get_param=lambda key: SimpleNamespace(schema=values))
+    names = {row["detail"] for row in load_in_image({**shipped_dags(loaded), LIVE_DAG: planted}).display_names()[LIVE_DAG]["violations"]}
+    check(names == {"the model parameter does not show the display name of each model"}, f"one missing display value was not refused alone: {names}")
+
+
+def model_param_dag_files() -> set[str]:
+    """The DAG files whose ``params`` declare a ``model`` parameter, read from their source."""
+    found = set()
+    for path in sorted((ROOT / "dags").glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Dict) and any(
+                isinstance(key, ast.Constant) and key.value == "model" and isinstance(value, ast.Call) and ast.unparse(value.func) == "Param"
+                for key, value in zip(node.keys, node.values, strict=True)
+            ):
+                found.add(path.stem)
+    return found
+
+
+def test_every_dag_with_a_model_parameter_is_in_the_display_inventory() -> None:
+    check(model_param_dag_files() == set(graph.MODEL_PARAM_DAGS), f"a DAG with a model parameter is missing from MODEL_PARAM_DAGS: {model_param_dag_files()}")
+    check(set(graph.MODEL_PARAM_DAGS) <= set(graph.DOC_MODELS), "a model parameter DAG is missing from DOC_MODELS")
+
+
+def test_the_live_drift_refusal_names_the_models_it_accepts() -> None:
+    request = SubmissionRequest("drift_live_run", RUN, "real", 1, LIVE_DAG, "job", "synthetic-dag-run", None, training={"model": "m9", "hai_type": "HAI_1"})
+    with pytest.raises(ecs_launch.LaunchRefused, match=r"'m9', which is not one of m1 \(OLS baseline\), m2 \(Elastic Net\)"):
+        ecs_preflight.live_parameters(request)
+
+
+def test_the_release_refusal_names_the_promotion_models_it_accepts() -> None:
+    raw = {"hai_type": "HAI_1", "model": "m3", "features_run": RUN}
+    with pytest.raises(ValueError, match=re.escape(f"model must be one of {training_contract.model_choices(training_contract.PROMOTION_MODELS)}")):
+        training_contract.release_parameters_for(raw)
+    check("m4 (Gradient boosting)" in training_contract.model_choices(training_contract.PROMOTION_MODELS), "the promotion models lose a label")
+
+
+def keys_without_a_name(doc: str, model: str) -> list[str]:
+    """The places in ``doc`` where ``model`` stands without its name after it."""
+    return re.findall(rf"\b{model}\b(?! \({re.escape(OWNER_NAMES[model])}\))", doc)
+
+
+def test_a_model_dag_doc_shows_the_name_beside_every_key_it_repeats(loaded: dict[str, dict[str, Any]]) -> None:
+    for dag_id, model in training_contract.FEATURE_DAGS.items():
+        doc = loaded[dag_id]["dag"].settings["doc_md"]
+        check(keys_without_a_name(doc, model) == [], f"the doc of {dag_id} shows {model} without its name: {doc[:160]!r}")
+
+
+def test_the_graph_rules_refuse_a_model_dag_doc_that_repeats_a_bare_key(loaded: dict[str, dict[str, Any]]) -> None:
+    shipped = as_airflow_dag(loaded["features_m2_dag"])
+    plain = "Build the m2 model set.\n\nModel: m2 (Elastic Net)."
+    rows = graph.display_name_violations(SimpleNamespace(**{**vars(shipped), "doc_md": plain}))
+    check({row.rule for row in rows} == {"display_name"} and "m2 without" in rows[0].detail, f"a doc with a bare key was accepted: {rows}")
+    named = "Build the m2 (Elastic Net) model set.\n\nModel: m2 (Elastic Net)."
+    check(graph.display_name_violations(SimpleNamespace(**{**vars(shipped), "doc_md": named})) == [], "a doc with the name beside every key was refused")
+
+
+def test_no_doc_of_a_dag_that_names_models_shows_a_bare_key(loaded: dict[str, dict[str, Any]]) -> None:
+    for dag_id in {*graph.DOC_MODELS, LIVE_DAG}:
+        doc = loaded[dag_id]["dag"].settings["doc_md"]
+        for model in training_contract.MODELS:
+            check(keys_without_a_name(doc, model) == [], f"the doc of {dag_id} shows {model} without its name")
