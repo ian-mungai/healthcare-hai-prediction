@@ -87,14 +87,15 @@ run "prepared_mirror_has_silver_gold_and_features_databases_and_a_limited_workgr
 
   assert {
     condition = (
-      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features", "bronze"]) &&
+      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features", "bronze", "bronze_dictionary"]) &&
       aws_glue_catalog_database.athena_mirror["silver"].name == "silver" &&
       aws_glue_catalog_database.athena_mirror["gold"].name == "gold" &&
       aws_glue_catalog_database.athena_mirror["features"].name == "features" &&
       aws_glue_catalog_database.athena_mirror["bronze"].name == "bronze" &&
+      aws_glue_catalog_database.athena_mirror["bronze_dictionary"].name == "bronze_dictionary" &&
       alltrue([for database in aws_glue_catalog_database.athena_mirror : database.tags.DataClassification == "Public"])
     )
-    error_message = "One Glue database each for the bronze, silver, gold and features layers, named by the tracked config and tagged Public like the collected research data they list."
+    error_message = "One Glue database each for the bronze, bronze_dictionary, silver, gold and features layers, named by the tracked config and tagged Public like the collected research data they list. No qualification database exists."
   }
 
   assert {
@@ -185,8 +186,8 @@ run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
   }
 
   assert {
-    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["silver", "gold", "features", "bronze"])
-    error_message = "The bronze writer joins the three layer writers in the mirror grant, and nothing else does."
+    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["silver", "gold", "features", "bronze", "bronze_dictionary"])
+    error_message = "The bronze writer joins the three layer writers in the mirror grant with one policy for the bronze database and one for the bronze_dictionary database, and nothing else does."
   }
 
   assert {
@@ -230,6 +231,57 @@ run "bronze_writer_grant_covers_only_the_bronze_mirror_database" {
   }
 }
 
+# Owner decision of Nov 20 2026: the bronze load also registers the dictionary of each of its tables, in the bronze_dictionary database. The bronze writer role carries a second
+# inline policy for it, under its own name so that the applied bronze policy does not change, and the grant reaches that one database and its tables only.
+run "bronze_writer_dictionary_grant_covers_only_the_dictionary_mirror_database" {
+  command = plan
+  variables {
+    athena_mirror_prepared          = true
+    athena_owner_user               = "example_owner"
+    job_writer_layers_prepared      = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://example-project-ci-bucket/lakehouse/bronze/"
+      bronze_dictionary = "s3://example-project-ci-bucket/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].role == aws_iam_role.bronze_writer[0].name &&
+      aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].name == "glue_mirror_registrations_bronze_dictionary" &&
+      aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].role == aws_iam_role_policy.athena_mirror_writer["bronze"].role &&
+      aws_iam_role_policy.athena_mirror_writer["bronze"].name == "glue_mirror_registrations" &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy).Statement : s.Action])) ==
+      toset(["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy).Statement : s.Resource])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:catalog",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze_dictionary/*",
+      ]) &&
+      alltrue([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy).Statement : s.Effect == "Allow"])
+    )
+    error_message = "The bronze writer may register tables in the bronze_dictionary database only for this policy: the same four actions, no delete, no other database, no wildcard, and the name differs from the bronze policy."
+  }
+
+  assert {
+    condition = (
+      !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy).Statement : s.Resource]), "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary") &&
+      !anytrue([for layer in ["silver", "gold", "features"] : contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_mirror_writer[layer].policy).Statement : s.Resource]), "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary")])
+    )
+    error_message = "No other writer gains reach into the dictionary database, and the applied bronze grant is unchanged."
+  }
+
+  assert {
+    condition = (
+      !anytrue([for name, policy in aws_iam_role_policy.athena_mirror_writer : anytrue([for r in flatten([for s in jsondecode(policy.policy).Statement : s.Resource]) : strcontains(r, "_e2e")])]) &&
+      length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze"].policy))) + length(jsonencode(jsondecode(aws_iam_role_policy.athena_mirror_writer["bronze_dictionary"].policy))) < 10240
+    )
+    error_message = "No mirror grant names a qualification database, and the inline policies of the bronze role stay inside the 10240 character quota with both mirror grants."
+  }
+}
+
 run "bronze_writer_grant_needs_the_mirror_switch" {
   command = plan
   variables {
@@ -257,8 +309,8 @@ run "bronze_writer_grant_needs_the_prepared_bronze_writer" {
   }
 
   assert {
-    condition     = !contains(keys(aws_iam_role_policy.athena_mirror_writer), "bronze") && length(aws_iam_role.bronze_writer) == 0
-    error_message = "With no bronze writer role the mirror creates no bronze grant."
+    condition     = !contains(keys(aws_iam_role_policy.athena_mirror_writer), "bronze") && !contains(keys(aws_iam_role_policy.athena_mirror_writer), "bronze_dictionary") && length(aws_iam_role.bronze_writer) == 0
+    error_message = "With no bronze writer role the mirror creates no bronze or bronze_dictionary grant."
   }
 }
 
@@ -276,8 +328,8 @@ run "bronze_writer_grant_stands_without_the_layer_writers" {
   }
 
   assert {
-    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["bronze"])
-    error_message = "The bronze grant follows the bronze writer switch, not the layer writer switch."
+    condition     = toset(keys(aws_iam_role_policy.athena_mirror_writer)) == toset(["bronze", "bronze_dictionary"])
+    error_message = "The bronze grants follow the bronze writer switch, not the layer writer switch."
   }
 }
 
@@ -327,9 +379,11 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:glue:eu-west-1:111111111111:table/features/*",
         "arn:aws:glue:eu-west-1:111111111111:database/bronze",
         "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze_dictionary/*",
       ])
     )
-    error_message = "Glue reads reach the silver, gold, features and bronze mirror databases and their tables, and no other database."
+    error_message = "Glue reads reach the silver, gold, features, bronze and bronze_dictionary mirror databases and their tables, and no other database."
   }
 
   assert {
@@ -339,11 +393,12 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary/*",
       ]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the four layer folders and writes reach only the results prefix. Nothing deletes."
+    error_message = "Data reads reach only the five layer folders and writes reach only the results prefix. Nothing deletes."
   }
 
   assert {
@@ -355,6 +410,7 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/publish_runs/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary/publish_runs/*",
       ])
     )
     error_message = "One explicit deny keeps the publish_runs bookkeeping table of each layer unreadable, even though its folder sits inside the layer folder."
@@ -387,18 +443,22 @@ run "reader_policy_names_no_principal_and_no_wider_resource" {
       "arn:aws:glue:eu-west-1:111111111111:table/features/*",
       "arn:aws:glue:eu-west-1:111111111111:database/bronze",
       "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary",
+      "arn:aws:glue:eu-west-1:111111111111:table/bronze_dictionary/*",
       "arn:aws:s3:::example-project-ci-bucket",
       "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/publish_runs/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/publish_runs/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary/publish_runs/*",
     ])
-    error_message = "The reader policy reaches exactly the mirror workgroup, the four mirror databases, the results prefix, the bucket and the four layer folders with their publish_runs denials."
+    error_message = "The reader policy reaches exactly the mirror workgroup, the five mirror databases, the results prefix, the bucket and the five layer folders with their publish_runs denials."
   }
 }
 
@@ -482,7 +542,8 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
         "lakehouse/gold_e2e/dim_state/data/a.parquet",
         "lakehouse/silver_e2e/hospital/data/a.parquet",
         "lakehouse/features_e2e/feature_matrix_hospital/data/a.parquet",
-        "lakehouse/bronze_dictionary/cms_hospitals_dictionaries/data/a.parquet",
+        "lakehouse/bronze_dictionary_e2e/cms_hospitals_dictionaries/data/a.parquet",
+        "lakehouse/bronze_dictionaryx/cms_hospitals_dictionaries/data/a.parquet",
         "lakehouse/bronzer/hospital/data/a.parquet",
         "lakehouse/goldfish/dim_state/data/a.parquet",
         "bronze_objects/sha256/a",
@@ -492,17 +553,17 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
           ]) if s.Effect == "Allow" && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")
       ])
     ])
-    error_message = "Test namespaces, the bronze dictionary namespace, a folder that only starts with a layer name and the rest of the bucket are not readable. Each layer grant ends at the directory boundary."
+    error_message = "Test namespaces, the qualification dictionary namespace, a folder that only starts with a layer name and the rest of the bucket are not readable. Each layer grant ends at the directory boundary."
   }
 
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
       !contains(s.Action, "s3:ListBucket") || alltrue([
-        for p in s.Condition.StringLike["s3:prefix"] : contains(["athena/results/*", "lakehouse/silver/*", "lakehouse/gold/*", "lakehouse/features/*", "lakehouse/bronze/*"], p)
+        for p in s.Condition.StringLike["s3:prefix"] : contains(["athena/results/*", "lakehouse/silver/*", "lakehouse/gold/*", "lakehouse/features/*", "lakehouse/bronze/*", "lakehouse/bronze_dictionary/*"], p)
       ])
     ])
-    error_message = "Listing the bucket needs a prefix limited to the results folder and the four layer folders."
+    error_message = "Listing the bucket needs a prefix limited to the results folder and the five layer folders."
   }
 
   assert {
@@ -579,9 +640,11 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
         "arn:aws:glue:eu-west-1:111111111111:table/features/*",
         "arn:aws:glue:eu-west-1:111111111111:database/bronze",
         "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze_dictionary/*",
       ])
     )
-    error_message = "Without the catalog the endpoint policy allows the four mirror actions on the four mirror databases and their tables only, nothing else of Glue."
+    error_message = "Without the catalog the endpoint policy allows the four mirror actions on the five mirror databases and their tables only, nothing else of Glue."
   }
 
   assert {
@@ -591,7 +654,7 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
       "arn:aws:iam::111111111111:role/example_project_job_write_features_task_dev",
       "arn:aws:iam::111111111111:role/example_project_job_write_bronze_task_dev",
     ]) && keys(jsondecode(aws_vpc_endpoint.athena_glue[0].policy).Statement[0].Condition) == ["ArnEquals"]
-    error_message = "Only the bronze, silver, gold and features writer roles may use the endpoint for these actions."
+    error_message = "Only the bronze, silver, gold and features writer roles may use the endpoint for these actions: the dictionary layer is written by the bronze writer and names no role of its own."
   }
 
   assert {
@@ -628,10 +691,12 @@ run "catalog_reads_the_mirror_through_the_endpoint" {
         "arn:aws:glue:eu-west-1:111111111111:table/features/*",
         "arn:aws:glue:eu-west-1:111111111111:database/bronze",
         "arn:aws:glue:eu-west-1:111111111111:table/bronze/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/bronze_dictionary",
+        "arn:aws:glue:eu-west-1:111111111111:table/bronze_dictionary/*",
       ]) &&
       alltrue([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Effect == "Allow"])
     )
-    error_message = "The catalog task role reads the four mirror databases and their tables and has no Glue write and no other database."
+    error_message = "The catalog task role reads the five mirror databases and their tables (the bronze_dictionary database included, owner decision of Nov 20 2026) and has no Glue write and no other database."
   }
 
   assert {

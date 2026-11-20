@@ -119,13 +119,15 @@ def plan(stack: Path, target: str) -> list[dict[str, Any]]:
 
 
 def grant_verdict(changes: list[dict[str, Any]]) -> Mapping[str, bool]:
-    """The Glue grants: the bronze writer's is created, the three applied ones are untouched. The roles that the target pulls in are not under test."""
+    """The Glue grants: the bronze writer's two are created (the bronze database and the bronze_dictionary database), the three applied ones are untouched.
+    The roles that the target pulls in are not under test."""
     actions = {change["address"]: change["change"]["actions"] for change in changes if change["type"] == "aws_iam_role_policy"}
     applied = [GRANT_ADDRESS.format(layer=layer) for layer in ("silver", "gold", "features")]
     return {
         "the bronze writer's Glue grant is created": actions.get(GRANT_ADDRESS.format(layer="bronze")) == ["create"],
+        "the bronze writer's dictionary Glue grant is created": actions.get(GRANT_ADDRESS.format(layer="bronze_dictionary")) == ["create"],
         "the three applied Glue grants are untouched": all(actions.get(address) == ["no-op"] for address in applied),
-        "no other inline policy is planned": len(actions) == 4,
+        "no other inline policy is planned": len(actions) == 5,
     }
 
 
