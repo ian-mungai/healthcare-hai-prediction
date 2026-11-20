@@ -315,6 +315,7 @@
     "code": [
       "removed-names",
       "task-ids",
+      "command-modules",
       "temporary-code",
       "unused-code",
       "unused-dependencies",

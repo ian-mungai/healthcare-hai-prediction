@@ -72,6 +72,12 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: command-modules
+        name: A python -m command of this repository names a module that exists
+        entry: .venv/bin/python -m scripts.quality.repo_checks command-modules
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: typecheck-importers
         name: MyPy on the changed Python files and the files that import them
         entry: .venv/bin/python -m scripts.quality.typecheck_importers

@@ -127,6 +127,8 @@ TF_NESTED_BLOCK = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*\{")
 SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TASK_IDS_RULE = f"{POLICY}: a task ID beside a shipped DAG names a task the DAG has"
 TASK_KEY = re.compile(r'"task_id"\s*:\s*"')
+COMMAND_STRING = re.compile(r'"([^"]*)"|\'([^\']*)\'')
+COMMAND_MODULES_RULE = f"{POLICY}: a python -m command names a module of this repository that exists"
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
 # Distribution names whose import name differs; any other package imports as its name with dashes as underscores.
@@ -2069,6 +2071,41 @@ def task_ids() -> list[Finding]:
     return findings
 
 
+def missing_command_modules() -> list[Finding]:
+    """A ``python -m`` command of a module of this repository names a module that exists: ``<path>.py`` or ``<path>/__main__.py``.
+
+    Reads the current tree: the files that describe current behavior (``reference_files``) outside data/. A module is this repository's when its first name part
+    is a top-level name of tracked Python code, below the project root or an import root that pyproject.toml declares. The module of another package is not
+    judged, neither is a flag of the command nor a name that ends in an ellipsis (a prefix in prose). A command is read from the line and, outside Python
+    files, from each quoted string of it (a Terraform or JSON value).
+    """
+    from scripts.quality import typecheck_importers
+
+    try:
+        roots = typecheck_importers.declared_roots(Path.cwd(), "HEAD")
+    except ValueError as error:
+        raise SystemExit(f"command-modules: cannot read the import roots, so a module cannot be matched by its path: {error}") from error
+    tracked = set(git("ls-files").splitlines())
+    first_party = {typecheck_importers.module_of(path, roots).split(".")[0] for path in tracked if path.endswith(".py")}
+    folders = ["", *[f"{folder}/" for folder in roots]]
+    findings = []
+    for path, lines in sorted(reference_files().items()):
+        if path.startswith("data/"):
+            continue
+        for number, line in enumerate(lines, 1):
+            quoted = [] if path.endswith(".py") else [first or second for first, second in COMMAND_STRING.findall(line)]
+            for module in dict.fromkeys(m for text in (line, *quoted) for m in command_modules(text)):
+                base = module.replace(".", "/")
+                if (
+                    module.split(".")[0] in first_party
+                    and f"{module}..." not in line
+                    and not any(f"{folder}{base}{tail}" in tracked for folder in folders for tail in (".py", "/__main__.py"))
+                ):
+                    problem = f"python -m {module} names a module that does not exist: there is no {base}.py or {base}/__main__.py"
+                    findings.append(Finding(f"{path}:{number}", problem, COMMAND_MODULES_RULE, "name a module that exists, or update the command"))
+    return findings
+
+
 def is_conventional(subject: str) -> bool:
     """Return whether a commit subject follows Conventional Commits.
 
@@ -2871,7 +2908,17 @@ def warn(findings: list[Finding]) -> int:
 
 def main() -> int:
     """Run the named check and report its findings, then count the permanent allowlist entries it read."""
-    checks = ["credential-files", "data-files", "suppressions", "subprocess-imports", "lint-settings", "env-example", "removed-names", "task-ids"]
+    checks = [
+        "credential-files",
+        "data-files",
+        "suppressions",
+        "subprocess-imports",
+        "lint-settings",
+        "env-example",
+        "removed-names",
+        "task-ids",
+        "command-modules",
+    ]
     checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -2920,6 +2967,7 @@ def run(args: argparse.Namespace) -> int:
         "env-example": env_example,
         "removed-names": removed_names,
         "task-ids": task_ids,
+        "command-modules": missing_command_modules,
         "unused-code": unused_code,
         "unused-dependencies": unused_dependencies,
         "orphan-files": orphan_files,

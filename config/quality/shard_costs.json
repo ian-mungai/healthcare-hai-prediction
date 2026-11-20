@@ -756,7 +756,28 @@
       "planted regressions of the path of a script marks its command: samples 1 to 1": 2.4,
       "planted regressions of the module of a script marks its command: samples 1 to 1": 2.4,
       "planted regressions of the owning script is not searched for its own flag: samples 1 to 1": 2.4,
-      "planted regressions of a flag is read as a whole word: samples 1 to 1": 2.4
+      "planted regressions of a flag is read as a whole word: samples 1 to 1": 2.4,
+      "python -m command, missing module in Markdown": 2.0,
+      "python -m command, missing module in a workflow": 2.0,
+      "python -m command, missing module in a shell script": 2.0,
+      "python -m command, missing module in a Terraform string": 2.0,
+      "python -m command, existing module": 2.0,
+      "python -m command, package with a __main__ file": 2.0,
+      "python -m command, package without a __main__ file": 2.0,
+      "python -m command, module of another package": 2.0,
+      "python -m command, python -c and a -m after the script name": 2.0,
+      "python -m command, command in a Python string": 2.0,
+      "python -m command, flag of a command": 2.0,
+      "python -m command, files that are history": 2.0,
+      "planted regressions of a __main__ file runs its package: samples 1 to 1": 2.4,
+      "planted regressions of a module file runs its module: samples 1 to 1": 2.4,
+      "planted regressions of a package without a __main__ file does not run: samples 1 to 1": 2.4,
+      "planted regressions of only modules of this repository are judged: samples 1 to 1": 2.4,
+      "planted regressions of history files are not read: samples 1 to 1": 2.4,
+      "planted regressions of quoted strings are read outside Python files: samples 1 to 1": 2.4,
+      "planted regressions of a Python string is read by its line only: samples 1 to 1": 2.4,
+      "python -m command, module prefix written with an ellipsis": 2.0,
+      "planted regressions of a module prefix written with an ellipsis is no command: samples 1 to 1": 2.4
     }
   }
 }

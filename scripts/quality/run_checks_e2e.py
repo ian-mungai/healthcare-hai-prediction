@@ -2383,6 +2383,55 @@ def flag_cases() -> list[Case]:
     ]
 
 
+ABSENT_MODULE = "samplepkg." + "absent_job"
+PRESENT_MODULE = "samplepkg.present_job"
+TOOLS_BASE = {"samplepkg/present_job.py": "VALUE = 1\n", "samplepkg/pkg_main/__main__.py": "VALUE = 1\n", "samplepkg/pkg_plain/__init__.py": ""}
+
+
+def module_case(name: str, files: dict[str, str | bytes], reason: str = "") -> Case:
+    """A command-modules case on the sample code of ``tools/``: it passes when ``reason`` is empty and is blocked for that finding otherwise."""
+    return Case(f"python -m command, {name}", "command-modules", not reason, {**TOOLS_BASE, **files}, reason=reason)
+
+
+def missing_reason(path: str, line: int, module: str = ABSENT_MODULE) -> str:
+    """The start of the finding that the command-modules check prints for a missing ``module`` at ``path:line``."""
+    return f"{path}:{line}: python -m {module} names a module that does not exist"
+
+
+MODULE_CASES = [
+    module_case("missing module in Markdown", {"docs/run.md": f"Run:\n\n```sh\npython -m {ABSENT_MODULE}\n```\n"}, missing_reason("docs/run.md", 4)),
+    module_case(
+        "missing module in a workflow",
+        {".github/workflows/job.yml": f"jobs:\n  run:\n    steps:\n      - run: python -m {ABSENT_MODULE}\n"},
+        missing_reason(".github/workflows/job.yml", 4),
+    ),
+    module_case(
+        "missing module in a shell script",
+        {"samplepkg/run.sh": f"cd /work\n.venv/bin/python -m {ABSENT_MODULE} --check\n"},
+        missing_reason("samplepkg/run.sh", 2),
+    ),
+    module_case("missing module in a Terraform string", {"infra/job.tf": f'command = "python -m {ABSENT_MODULE}"\n'}, missing_reason("infra/job.tf", 1)),
+    module_case("existing module", {"docs/run.md": f"Run `python -m {PRESENT_MODULE} --flag`.\n"}),
+    module_case("package with a __main__ file", {"docs/run.md": "Run:\n\n```sh\npython -m samplepkg.pkg_main\n```\n"}),
+    module_case(
+        "package without a __main__ file",
+        {"docs/run.md": "Run:\n\n```sh\npython -m samplepkg.pkg_plain\n```\n"},
+        missing_reason("docs/run.md", 4, "samplepkg.pkg_plain"),
+    ),
+    module_case("module of another package", {"docs/run.md": "Run `python -m pytest tests` or `python -m pip install tool`.\n"}),
+    module_case(
+        "python -c and a -m after the script name",
+        {"docs/run.md": f"Run `python -c 'print(1)' -m {ABSENT_MODULE}` or `python samplepkg/present_job.py -m {ABSENT_MODULE}`.\n"},
+    ),
+    module_case("command in a Python string", {"samplepkg/entry.py": f'ENTRY = "python -m {PRESENT_MODULE}\\n"\n'}),
+    module_case("module prefix written with an ellipsis", {"docs/run.md": f"Use python -m {ABSENT_MODULE}... for any job.\n"}),
+    module_case("flag of a command", {"docs/run.md": f"Run `python -m {PRESENT_MODULE} --no-such-flag`.\n"}),
+    module_case(
+        "files that are history", {"CHANGELOG.md": f"Ran:\n\n```sh\npython -m {ABSENT_MODULE}\n```\n", "e2e/run.md": f"```sh\npython -m {ABSENT_MODULE}\n```\n"}
+    ),
+]
+
+
 FLAG_CASES = flag_cases()
 
 
@@ -3405,6 +3454,7 @@ CASES = [
         },
     ),
     *TASK_ID_CASES,
+    *MODULE_CASES,
     Case("permanent file with no temporary code", "temporary-code", True, {**TEMPORARY_BASE, "scripts/lakehouse/perm.py": "VALUE = 2\n"}),
     Case(
         "temporary file imports permanent code",
@@ -3987,6 +4037,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             "temporary-code",
             "removed-names",
             "task-ids",
+            "command-modules",
             "env-example",
             IMPORTERS_HOOK,
             *CLEANUP_HOOKS,
@@ -4001,6 +4052,7 @@ def run_case(case: Case) -> tuple[bool, str]:
 # The removed-names check and the importer check run as plain commands: planted regressions need the check's own source, not the hook wrapper.
 REMOVED_NAMES_COMMAND = ["-m", "scripts.quality.repo_checks", "removed-names"]
 TASK_IDS_COMMAND = ["-m", "scripts.quality.repo_checks", "task-ids"]
+MODULES_COMMAND = ["-m", "scripts.quality.repo_checks", "command-modules"]
 IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
 # Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
 # Fields: rule, the cases that show it, the command, the source file, the marker text, its replacement and the exit code the damaged check must give.
@@ -4401,6 +4453,78 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         "{re.escape(flag)}(?![\\w-]))(?=",
         "{re.escape(flag)})(?=",
+        1,
+    ),
+    (
+        "a __main__ file runs its package",
+        [case for case in MODULE_CASES if case.name in ("python -m command, package with a __main__ file",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        '(".py", "/__main__.py")',
+        '(".py",)',
+        1,
+    ),
+    (
+        "a module file runs its module",
+        [case for case in MODULE_CASES if case.name in ("python -m command, existing module",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        '(".py", "/__main__.py")',
+        '("/__main__.py",)',
+        1,
+    ),
+    (
+        "a package without a __main__ file does not run",
+        [case for case in MODULE_CASES if case.name in ("python -m command, package without a __main__ file",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        '(".py", "/__main__.py")',
+        '(".py", "/__main__.py", "/__init__.py")',
+        0,
+    ),
+    (
+        "only modules of this repository are judged",
+        [case for case in MODULE_CASES if case.name in ("python -m command, module of another package",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'module.split(".")[0] in first_party',
+        "True",
+        1,
+    ),
+    (
+        "history files are not read",
+        [case for case in MODULE_CASES if case.name in ("python -m command, files that are history",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if path == "CHANGELOG.md" or path.startswith("e2e/") or path == CLEANUP_ALLOWLIST or not Path(path).is_file():',
+        "if path == CLEANUP_ALLOWLIST or not Path(path).is_file():",
+        1,
+    ),
+    (
+        "quoted strings are read outside Python files",
+        [case for case in MODULE_CASES if case.name in ("python -m command, missing module in a Terraform string",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'quoted = [] if path.endswith(".py") else [',
+        "quoted = [] if True else [",
+        0,
+    ),
+    (
+        "a Python string is read by its line only",
+        [case for case in MODULE_CASES if case.name in ("python -m command, command in a Python string",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'quoted = [] if path.endswith(".py") else [',
+        "quoted = [] if False else [",
+        1,
+    ),
+    (
+        "a module prefix written with an ellipsis is no command",
+        [case for case in MODULE_CASES if case.name in ("python -m command, module prefix written with an ellipsis",)],
+        MODULES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'and f"{module}..." not in line',
+        "",
         1,
     ),
     (
