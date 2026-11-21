@@ -10,6 +10,7 @@ import argparse
 import base64
 import contextlib
 import functools
+import importlib.util
 import io
 import json
 import logging
@@ -642,6 +643,80 @@ def captured(call: Callable[[], int]) -> tuple[int, str]:
     return code, output.getvalue() + "\n".join(handler.lines)
 
 
+def secret_writes_stay_out_of_debug_logs(root: Path) -> dict[str, bool]:
+    """With the root logger at DEBUG, no write path of a secret puts its value in a log record; the values are synthetic markers, never a real secret."""
+    from scripts.infrastructure import create_model_api_redis_password, mlflow_reader_setup, openmetadata_persistent_bootstrap, openmetadata_secrets
+
+    def marker(label: str) -> str:
+        return f"marker-{label}-" + os.urandom(8).hex()
+
+    def logged(call: Callable[[], Any]) -> str:
+        return captured(lambda: call() and 0)[1]
+
+    one, two, three, collided, token, control = marker("put"), marker("ensure"), marker("send"), marker("collide"), marker("token"), marker("control")
+    with StandIn(shared={}) as stand_in:
+        store = secret_store.open_store(root, stand_in.endpoint)
+        control_text = logged(lambda: store.parameters.put_parameter(Name=NAME, Value=control, Type="SecureString", Overwrite=True))
+        put_text = logged(lambda: store.put(secret_store.AIRFLOW_JWT_SECRET, one))
+        ensure_text = logged(lambda: store.ensure(secret_store.POLARIS_ROOT_SECRET, lambda: two))
+        send_text = logged(lambda: store.send(secret_store.POSTGRES_EXPORTER_PASSWORD, three, overwrite=False))
+        collision_text = logged(lambda: store.send(secret_store.POSTGRES_EXPORTER_PASSWORD, collided, overwrite=False))
+        token_text = logged(
+            lambda: openmetadata_persistent_bootstrap.write_parameter(store.parameters, secret_store.PREFIX + "openmetadata_bot_lineage", token)
+        )
+        reader_text = logged(lambda: mlflow_reader_setup.stored_reader_login(store.parameters, secret_store.PREFIX + "mlflow_reader_password"))
+        reader_value = stand_in.values.get(secret_store.PREFIX + "mlflow_reader_password", "")
+        token_read_text = logged(lambda: openmetadata_persistent_bootstrap.read_parameter(store.parameters, secret_store.PREFIX + "openmetadata_bot_lineage"))
+    with StandIn(shared={}) as stand_in:
+        redis_text = captured(lambda: create_model_api_redis_password.run(root, stand_in.endpoint))[1]
+        redis_value = stand_in.values.get(create_model_api_redis_password.NAME, "")
+    with StandIn(shared={}) as stand_in:
+        om_text = captured(lambda: openmetadata_secrets.main(["--root", str(root)], stand_in.endpoint))[1]
+        om_values = [stand_in.values.get(name, "") for name in openmetadata_secrets.NAMES]
+    with StandIn(shared={}) as stand_in:
+        redis_exporter_text = captured(lambda: redis_exporter_password_run(root, stand_in.endpoint))[1]
+        redis_exporter_value = stand_in.values.get(secret_store.REDIS_EXPORTER_PASSWORD, "")
+        postgres_exporter_text = captured(lambda: postgres_exporter_password_run(root, stand_in.endpoint))[1]
+        postgres_exporter_value = stand_in.values.get(secret_store.POSTGRES_EXPORTER_PASSWORD, "")
+    script = root / "scripts" / "infrastructure" / "openmetadata_persistent_bootstrap.py"
+    spec = importlib.util.spec_from_file_location("bootstrap_run_by_path", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("the bootstrap file cannot be loaded by path")
+    plain_script = importlib.util.module_from_spec(spec)
+    with (
+        mock.patch.dict(sys.modules, {"scripts.sdk_logs": None, "scripts.infrastructure.openmetadata_bootstrap": None}),
+        mock.patch.object(sys, "path", [str(script.parent), *sys.path]),
+    ):
+        spec.loader.exec_module(plain_script)
+    return {
+        "the unguarded control shows its marker, so the check can see a leak": control in control_text,
+        "put keeps its value out of the log": one not in put_text,
+        "an ensure that creates keeps its value out of the log": two not in ensure_text,
+        "a create that succeeds keeps its value out of the log": three not in send_text,
+        "a create that collides keeps its value out of the log": collided not in collision_text,
+        "the Redis password for the model API stays out of the log": len(redis_value) >= 32 and redis_value not in redis_text,
+        "the OpenMetadata passwords stay out of the log": all(len(value) >= 32 and value not in om_text for value in om_values),
+        "the Redis exporter password stays out of the log": len(redis_exporter_value) >= 32 and redis_exporter_value not in redis_exporter_text,
+        "the Postgres exporter password stays out of the log": len(postgres_exporter_value) >= 32 and postgres_exporter_value not in postgres_exporter_text,
+        "an OpenMetadata bot token write and read stay out of the log": token not in token_text and token not in token_read_text,
+        "the MLflow reader password stays out of the log": len(reader_value) >= 32 and reader_value not in reader_text,
+        "the bootstrap, run as a plain script without the repository root on the import path, still loads the guard": plain_script.sdk_logs.__name__
+        == "sdk_logs",
+    }
+
+
+def redis_exporter_password_run(root: Path, endpoint: str) -> int:
+    from scripts.infrastructure import create_redis_exporter_password as tool
+
+    return tool.run(root, endpoint)
+
+
+def postgres_exporter_password_run(root: Path, endpoint: str) -> int:
+    from scripts.infrastructure import create_postgres_exporter_password as tool
+
+    return tool.run(root, endpoint)
+
+
 def serving_secrets_store(root: Path) -> dict[str, bool]:
     """The serving secrets tool creates each Parameter Store value once, keeps the model API key hashes consistent with the page key and never overwrites."""
     from scripts.infrastructure import create_serving_secrets as tool
@@ -1107,6 +1182,7 @@ CASES: dict[str, Case] = {
     "model_api_redis_password": model_api_redis_password,
     "redis_exporter_password": redis_exporter_password,
     "postgres_exporter_password": postgres_exporter_password,
+    "secret_writes_stay_out_of_debug_logs": secret_writes_stay_out_of_debug_logs,
     "serving_secrets_store": serving_secrets_store,
     "serving_secrets_mlflow": serving_secrets_mlflow,
     "scan_with_pipe": scan_with_pipe,

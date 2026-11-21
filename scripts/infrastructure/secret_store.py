@@ -315,7 +315,8 @@ class SecretStore:
         if len(value.encode()) > MAX_VALUE_BYTES:
             raise SecretStoreError(f"secret {name} value is larger than {MAX_VALUE_BYTES} bytes")
         try:
-            self.parameters.put_parameter(Name=name, Value=value, Type=PARAMETER_TYPE, Tier=PARAMETER_TIER, Overwrite=overwrite)
+            with quiet_sdk_logs():
+                self.parameters.put_parameter(Name=name, Value=value, Type=PARAMETER_TYPE, Tier=PARAMETER_TIER, Overwrite=overwrite)
         except (ClientError, BotoCoreError) as error:
             if not overwrite and self.code(error) == "ParameterAlreadyExists":
                 return False

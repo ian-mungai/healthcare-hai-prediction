@@ -27,18 +27,27 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import re
 import sys
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 try:
     base = importlib.import_module("scripts.infrastructure.openmetadata_bootstrap")
+    sdk_logs = importlib.import_module("scripts.sdk_logs")
 except ImportError:
     base = importlib.import_module("openmetadata_bootstrap")
+    # The task runs this file by its path, so the repository root is not on the import path; load the standard-library-only guard from the mounted checkout.
+    _spec = importlib.util.spec_from_file_location("sdk_logs", Path(__file__).resolve().parents[1] / "sdk_logs.py")
+    if _spec is None or _spec.loader is None:
+        raise
+    sdk_logs = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(sdk_logs)
 
 CALLER_ROLES = {"lineage": "IngestionBotRole", "ingestion": "IngestionBotRole"}
 RETIRED_CALLERS = ("comparison",)
@@ -52,13 +61,20 @@ class ParameterMissing(Exception):
 def read_parameter(ssm: Any, name: str) -> str | None:
     """The decrypted value of a parameter, or None when it does not exist."""
     try:
-        return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
+        with sdk_logs.quiet_sdk_logs():
+            return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
     except ParameterMissing:
         return None
     except Exception as error:
         if type(error).__name__ == "ParameterNotFound":
             return None
         raise
+
+
+def write_parameter(ssm: Any, name: str, value: str) -> None:
+    """Replace the SecureString parameter with the value."""
+    with sdk_logs.quiet_sdk_logs():
+        ssm.put_parameter(Name=name, Value=value, Type="SecureString", Overwrite=True)
 
 
 def bot_names(raw: str) -> dict[str, str] | None:
@@ -261,7 +277,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
         try:
             token = ensure_bot(api, session, caller)
             if read_parameter(ssm, name) != token:
-                ssm.put_parameter(Name=name, Value=token, Type="SecureString", Overwrite=True)
+                write_parameter(ssm, name, token)
                 sys.stdout.write(f"openmetadata_persistent_bootstrap: {caller} token written\n")
             else:
                 sys.stdout.write(f"openmetadata_persistent_bootstrap: {caller} token current\n")

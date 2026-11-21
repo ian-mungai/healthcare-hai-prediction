@@ -42,6 +42,7 @@ from scripts.infrastructure.openmetadata_mlmodel_edges import (
     server_problem,
 )
 from scripts.infrastructure.openmetadata_raw_files import Http, http_request
+from scripts.sdk_logs import quiet_sdk_logs
 
 READER_PARAMETER = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
 ADMIN_PARAMETER = "/healthcare_hai_prediction/mlflow_admin_password"
@@ -56,7 +57,8 @@ def basic(user: str, secret: str) -> dict[str, str]:
 def read_parameter(ssm: Any, name: str) -> str | None:
     """The decrypted value, or None when the parameter does not exist. Any other failure is raised by its code only."""
     try:
-        return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
+        with quiet_sdk_logs():
+            return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
     except ClientError as error:
         code = str(error.response.get("Error", {}).get("Code", ""))
         if code == "ParameterNotFound":
@@ -73,7 +75,8 @@ def stored_reader_login(ssm: Any, name: str) -> tuple[str, bool]:
         return found, False
     value = secrets.token_urlsafe(32)
     try:
-        ssm.put_parameter(Name=name, Value=value, Type="SecureString", Overwrite=False)
+        with quiet_sdk_logs():
+            ssm.put_parameter(Name=name, Value=value, Type="SecureString", Overwrite=False)
     except ClientError as error:
         code = str(error.response.get("Error", {}).get("Code", ""))
         again = read_parameter(ssm, name) if code == "ParameterAlreadyExists" else None
