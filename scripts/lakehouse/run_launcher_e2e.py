@@ -6688,7 +6688,7 @@ def training_render_checks(env: Env, config: Any, registry_id: str, rendered_tem
 
     code = {
         (str(run_folder / "code" / name), f"/workspace/{name}", True)
-        for name in ("scripts", "orchestration", "feature_store", "config", "data_contracts", "docs", "dbt")
+        for name in ("scripts", "orchestration", "feature_store", "config", "data_contracts", "dbt")
     }
     f = job("training_extract", "extract")
     out["training_extract fixture: the feature-store image and extract module, snapshot code read-only, the synthetic publication, no network"] = (
