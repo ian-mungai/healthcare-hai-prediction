@@ -62,6 +62,10 @@ class BudgetError(RuntimeError):
     """Docker could not be read, a size was not understood or too little memory is free."""
 
 
+class WorkerShareError(BudgetError):
+    """The plan holds too little memory for every worker of a pool to have the minimum share."""
+
+
 @dataclass(frozen=True)
 class Budget:
     """The figures a limit comes from, in bytes, and the limit as DuckDB and Spark read it."""
@@ -186,7 +190,7 @@ def pool_plan(plan: LaunchPlan, workers: int) -> dict[str, Any]:
         return {"environment": plan.environment(), "record": record}
     share = plan.budget.allocation // workers
     if share < FLOOR:
-        raise BudgetError(f"{workers} workers need {FLOOR / GIB:.0f} GiB each; the plan holds {plan.budget.allocation / GIB:.1f} GiB")
+        raise WorkerShareError(f"{workers} workers need {FLOOR / GIB:.0f} GiB each; the plan holds {plan.budget.allocation / GIB:.1f} GiB")
     environment = {
         "JOB_MEMORY_LIMIT": str(share),
         "DUCKDB_MEMORY_LIMIT": f"{(share * 4 // 5) // 1000**3}GB",

@@ -47,7 +47,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from unittest import mock
 
 from orchestration import launcher
@@ -5289,72 +5289,146 @@ class ReceiptStorage:
         return self.objects[(key, version_id)]
 
 
-def period_receipt_checks() -> dict[str, bool]:
-    """Each period generator rebuilds its seed rows from S3 alone, from the receipt its manifest lists, read by key and exact version."""
-    from scripts.lakehouse import bronze
+def allocation_checks() -> dict[str, bool]:
+    """The pool's step-down down to one worker shares one deadline, and it retries only when the launcher refuses the worker share."""
 
-    bucket = "synthetic-bucket"
-    storage = ReceiptStorage()
-    tables = {
-        "cms_provider_of_services": ("cms/provider_of_services", "pos"),
-        "cms_hsa_csv": ("cms/hospital_service_area", "hsa"),
-        "cms_hospital_enrollments": ("cms/hospital_ownership", "enroll"),
+    class Refusing:
+        def __init__(self, code: str) -> None:
+            self.code = code
+            self.waits: list[float] = []
+
+        def allocate(self, workers: int = 1, seconds: float = 120.0) -> str:
+            self.waits.append(seconds)
+            time.sleep(0.05)
+            raise launcher.ClientError(f"{workers} workers need 4 GiB each", self.code)
+
+    share, other = Refusing("worker_share"), Refusing("budget")
+    for client in (share, other):
+        with contextlib.suppress(launcher.ClientError):
+            allocate_down(client, 6)
+    return {
+        "the_step_down_shares_one_deadline": len(share.waits) == 6 and all(first > second for first, second in zip(share.waits, share.waits[1:], strict=False)),
+        "an_allocation_failure_other_than_the_worker_share_is_not_retried": len(other.waits) == 1,
     }
 
-    def store(table: str, release: str, period: tuple[str, str], tamper: bool = False) -> tuple[str, str]:
-        """Store a capture's receipt, then its manifest, which lists the receipt by key, version, SHA-256 and length; return the receipt's key and version."""
-        collection, dataset = tables[table]
-        label = json.dumps({"catalog_temporal": f"{period[0]}/{period[1]}"}) if table != "cms_hospital_enrollments" else "Release 2020"
-        body = json.dumps(
-            {
-                "snapshot_id": release,
-                "release": {"publisher_release_label": "2020"},
-                "measurement_periods": [
-                    {"label": label, "source_basis": "publisher_stated", "start_date": period[0], "end_date": period[1]},
-                ],
-            }
-        ).encode()
-        base = f"{collection}/manifests/release_date=2026-01-01/{release}/{dataset}"
-        version = storage.put(f"{base}/receipt.json", body)
-        listed = hashlib.sha256(body + b"x" if tamper else body).hexdigest()
-        data = f"{collection}/datasets/{dataset}/{release}/{dataset}.csv"
-        entries = [
-            {"role": "data", "dataset_id": dataset, "object": {"bucket": bucket, "key": data, "version_id": "dv", "sha256": "d" * 64, "byte_count": 1}},
-            {
-                "role": "capture_receipt",
-                "dataset_id": dataset,
-                "object": {"bucket": bucket, "key": f"{base}/receipt.json", "version_id": version, "sha256": listed, "byte_count": len(body)},
-            },
-        ]
-        manifest = {"snapshot_id": release, "source_id": dataset.upper(), "dataset_id": dataset, "release_id": release, "objects": entries}
-        storage.put(f"{base}/manifest.json", json.dumps(manifest).encode())
-        return f"{base}/receipt.json", version
 
-    for table in tables:
-        store(table, f"rel_{table}", ("2020-01-01", "2020-12-31"))
+RECEIPT_BUCKET = "synthetic-bucket"
+RECEIPT_TABLES = {
+    "cms_provider_of_services": ("cms/provider_of_services", "pos"),
+    "cms_hsa_csv": ("cms/hospital_service_area", "hsa"),
+    "cms_hospital_enrollments": ("cms/hospital_ownership", "enroll"),
+}
+
+
+def receipt_capture(storage: ReceiptStorage, table: str, release: str, period: tuple[str, str] = ("2020-01-01", "2020-12-31"), defect: str = "") -> str:
+    """Store one capture's receipt and its manifest, which lists the receipt by key, version, SHA-256 and length; ``defect`` spoils it. Return the manifest key.
+
+    Defects: ``no_receipt``, ``two_receipts``, ``no_version`` (the listed object has no version ID) and ``tamper`` (a SHA-256 the bytes do not have).
+    """
+    collection, dataset = RECEIPT_TABLES[table]
+    label = json.dumps({"catalog_temporal": f"{period[0]}/{period[1]}"}) if table != "cms_hospital_enrollments" else "Release 2020"
+
+    def receipt(snapshot: str, note: str = "") -> bytes:
+        measured = {"label": label + note, "source_basis": "publisher_stated", "start_date": period[0], "end_date": period[1]}
+        return json.dumps({"snapshot_id": snapshot, "release": {"publisher_release_label": "2020"}, "measurement_periods": [measured]}).encode()
+
+    base = f"{collection}/manifests/release_date=2026-01-01/{release}/{dataset}"
+
+    def listed(body: bytes, note: str = "") -> dict[str, Any]:
+        digest = hashlib.sha256(body).hexdigest()
+        key = f"{base}/{digest}/receipt{note}.json"
+        stored = {
+            "bucket": RECEIPT_BUCKET,
+            "key": key,
+            "version_id": storage.put(key, body),
+            "sha256": hashlib.sha256(body + b"x").hexdigest() if defect == "tamper" else digest,
+            "byte_count": len(body),
+        }
+        if defect == "no_version":
+            del stored["version_id"]
+        return {"role": "capture_receipt", "dataset_id": dataset, "object": stored}
+
+    data = f"{collection}/datasets/{dataset}/{release}/{dataset}.csv"
+    entries = [
+        {"role": "data", "dataset_id": dataset, "object": {"bucket": RECEIPT_BUCKET, "key": data, "version_id": "dv", "sha256": "d" * 64, "byte_count": 1}}
+    ]
+    if defect != "no_receipt":
+        entries.append(listed(receipt(release)))
+    if defect == "two_receipts":
+        entries.append(listed(receipt(release, " again"), "_again"))
+    manifest = {"snapshot_id": release, "source_id": dataset.upper(), "dataset_id": dataset, "release_id": release, "objects": entries}
+    manifest_key = f"{base}/manifest.json"
+    storage.put(manifest_key, json.dumps(manifest).encode())
+    return manifest_key
+
+
+def receipt_declared_twice(storage: ReceiptStorage) -> tuple[str, str]:
+    """An enrollment manifest and an owner manifest, both loaded, list one stored receipt with different SHA-256 values; return both manifest keys."""
+    first = receipt_capture(storage, "cms_hospital_enrollments", "rel_a")
+    manifest = json.loads(storage.get(RECEIPT_BUCKET, first, storage.current[first]))
+    data, entry = manifest["objects"][0], next(item for item in manifest["objects"] if item["role"] == "capture_receipt")
+    other = {**manifest, "snapshot_id": "rel_b", "release_id": "rel_b", "dataset_id": "cms_owners", "source_id": "CMS_OWNERS"}
+    other["objects"] = [
+        {
+            **data,
+            "dataset_id": "cms_owners",
+            "object": {**data["object"], "key": data["object"]["key"].replace("rel_a", "rel_b").replace("enroll", "cms_owners")},
+        },
+        {**entry, "dataset_id": "cms_owners", "object": {**entry["object"], "sha256": "f" * 64}},
+    ]
+    second = first.replace("rel_a", "rel_b").replace("/enroll/", "/cms_owners/")
+    storage.put(second, json.dumps(other).encode())
+    return first, second
+
+
+def period_receipt_checks() -> dict[str, bool]:
+    """Each period generator rebuilds its seed rows from S3 alone, from the one receipt its manifest lists, read by key and exact version.
+
+    A manifest that lists no receipt, two, or one without a required field, and a receipt that another manifest declares differently, stop the run with
+    the manifest named.
+    """
+    from scripts.lakehouse import bronze
+
+    storage = ReceiptStorage()
+    for table in RECEIPT_TABLES:
+        receipt_capture(storage, table, f"rel_{table}")
     # A later version of the enrollment receipt states another period; the manifest lists the earlier version, so that one must be read.
-    key, version = store("cms_hospital_enrollments", "rel_cms_hospital_enrollments", ("2020-01-01", "2020-12-31"))
-    storage.put(key, storage.objects[(key, version)].replace(b"2020-12-31", b"2021-12-31"))
-    generators = (pos_file_periods, geography_file_periods, ownership_release_periods)
+    manifest = json.loads(storage.get(RECEIPT_BUCKET, *next(identity for identity in storage.objects if identity[0].endswith("enroll/manifest.json"))))
+    listed = next(item["object"] for item in manifest["objects"] if item["role"] == "capture_receipt")
+    identity = (listed["key"], listed["version_id"])
+    storage.put(identity[0], storage.objects[identity].replace(b"2020-12-31", b"2021-12-31"))
     checks: dict[str, bool] = {}
-    with mock.patch.object(period_receipts, "source", return_value=(storage, bucket, bronze.load_table_map(), bronze.RetiredObjects())):
-        for module in generators:
-            name = module.__name__.rsplit(".", 1)[-1]
+
+    def run(module: Any, world: ReceiptStorage) -> tuple[list[dict[str, str]], BaseException | None]:
+        table_map = bronze.load_table_map()
+        with mock.patch.object(period_receipts, "source", return_value=(world, RECEIPT_BUCKET, table_map, bronze.RetiredObjects())):
             try:
-                rows = module.build()
-            except Exception:
-                rows = []
-            checks[f"{name}_rebuilt_from_s3_receipts"] = len(rows) == 1 and (rows[0]["period_start"], rows[0].get("period_end", "2020-12-31")) == (
-                "2020-01-01",
-                "2020-12-31",
-            )
-        # A receipt whose stored bytes differ from the manifest's SHA-256 stops the run.
-        store("cms_hospital_enrollments", "rel_cms_hospital_enrollments", ("2020-01-01", "2020-12-31"), tamper=True)
-        try:
-            ownership_release_periods.build()
-            checks["a_receipt_that_differs_from_its_manifest_stops_the_run"] = False
-        except (period_receipts.ReceiptError, ownership_release_periods.PeriodError):
-            checks["a_receipt_that_differs_from_its_manifest_stops_the_run"] = True
+                return module.build(), None
+            except Exception as error:
+                return [], error
+
+    for module in (pos_file_periods, geography_file_periods, ownership_release_periods):
+        rows, _error = run(module, storage)
+        name = module.__name__.rsplit(".", 1)[-1]
+        stated = (rows[0]["period_start"], rows[0].get("period_end", "2020-12-31")) if len(rows) == 1 else ()
+        checks[f"{name}_rebuilt_from_s3_receipts"] = stated == ("2020-01-01", "2020-12-31")
+    stopped = {
+        "tamper": ("a_receipt_that_differs_from_its_manifest_stops_the_run", "differs from the SHA-256"),
+        "no_receipt": ("a_manifest_without_a_receipt_stops_the_run", "lists 0 capture receipts"),
+        "two_receipts": ("a_manifest_with_two_receipts_stops_the_run", "lists 2 capture receipts"),
+        "no_version": ("a_receipt_without_a_version_stops_the_run_with_the_manifest_named", "lacks version_id"),
+    }
+    for defect, (name, text) in stopped.items():
+        world = ReceiptStorage()
+        manifest_key = receipt_capture(world, "cms_hospital_enrollments", "rel_a", defect=defect)
+        _rows, error = run(ownership_release_periods, world)
+        checks[name] = isinstance(error, period_receipts.ReceiptError) and text in str(error) and manifest_key in str(error)
+    world = ReceiptStorage()
+    named = receipt_declared_twice(world)
+    _rows, error = run(ownership_release_periods, world)
+    checks["conflicting_declarations_of_one_receipt_stop_the_run"] = (
+        isinstance(error, period_receipts.ReceiptError) and "conflicting declarations" in str(error) and all(key in str(error) for key in named)
+    )
     return checks
 
 
@@ -5383,6 +5457,8 @@ INTERRUPTED = threading.Event()
 # Seconds each fixture case took to build, for the report.
 CASE_SECONDS: dict[str, float] = {}
 FLOOR = 4 * 1024**3
+# The seconds that every step of one allocation retry shares.
+ALLOCATION_SECONDS = 120.0
 
 
 def launcher_client() -> launcher.LauncherClient:
@@ -5401,6 +5477,12 @@ def record_budget(case: str, client: launcher.LauncherClient, allocation: str) -
     BUDGETS.append({"case": case, "launch": len(BUDGETS) + 1, **record})
 
 
+class Allocator(Protocol):
+    """What the step-down needs of a launcher client."""
+
+    def allocate(self, workers: int = 1, seconds: float = 120.0) -> str: ...
+
+
 def light_allocation(client: launcher.LauncherClient) -> str:
     """An allocation for one query or set-up launch: the plan split so that its share is the floor, not the whole machine.
 
@@ -5411,16 +5493,18 @@ def light_allocation(client: launcher.LauncherClient) -> str:
     return allocate_down(client, max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)))[0]
 
 
-def allocate_down(client: launcher.LauncherClient, workers: int) -> tuple[str, int]:
-    """Allocate this many workers, or one fewer each time the budget refuses, down to one; return the allocation and its worker count.
+def allocate_down(client: Allocator, workers: int, seconds: float = ALLOCATION_SECONDS) -> tuple[str, int]:
+    """Allocate this many workers, or one fewer each time the launcher refuses the worker share, down to one; return the allocation and its count.
 
     The allocation computes its own plan and holds a reserve for registered services, so it can refuse the count that the runner's plan reading chose.
+    Any other failure (such as Docker not answering) is raised at once. Every step shares one deadline of ``seconds``.
     """
+    deadline = time.monotonic() + seconds
     while True:
         try:
-            return client.allocate(workers=workers), workers
+            return client.allocate(workers=workers, seconds=max(0.1, deadline - time.monotonic())), workers
         except launcher.ClientError as error:
-            if error.code != "budget" or workers == 1:
+            if error.code != launcher.WORKER_SHARE_CODE or workers == 1 or time.monotonic() >= deadline:
                 raise
             workers -= 1
 
@@ -6467,7 +6551,7 @@ OWNER_BRIDGE = tuple(
 
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     """Build every fixture case (in parallel when asked), then run each check in order and return its outcome."""
-    checks: dict[str, bool] = dict(query_coverage_checks()) | period_receipt_checks()
+    checks: dict[str, bool] = dict(query_coverage_checks()) | period_receipt_checks() | allocation_checks()
     want = expected(BASE)
     jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]] = [
         ("base", BASE, frozenset()),
@@ -7783,11 +7867,13 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=4, help="fixture cases built at once; 1 is serial; capped by memory and cores [687] [688]")
     parser.add_argument("--test-registry", help="a test registry folder (for tests of this runner only)")
     parser.add_argument(
-        "--check-queries", action="store_true", help="only the host checks (reader query table coverage, period generator receipts); no container, no build"
+        "--check-queries",
+        action="store_true",
+        help="only the host checks (reader query table coverage, period generator receipts, allocation retry); no container, no build",
     )
     args = parser.parse_args()
     if args.check_queries:
-        outcome = query_coverage_checks() | period_receipt_checks()
+        outcome = query_coverage_checks() | period_receipt_checks() | allocation_checks()
         for name, ok in outcome.items():
             sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}\n")
         sys.stdout.write(f"staging e2e query coverage: {sum(outcome.values())} of {len(outcome)} passed\n")

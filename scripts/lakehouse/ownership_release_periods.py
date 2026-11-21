@@ -85,7 +85,7 @@ def rows_for(loaded: Iterable[Mapping[str, str]], periods: Mapping[str, tuple[st
 
 def build() -> list[dict[str, str]]:
     """Return the seed rows from the loaded files and the receipts that their S3 manifests list."""
-    files, receipts = period_receipts.loaded(TABLES)
+    files, receipts = period_receipts.loaded(TABLES, TABLES)
     return rows_for(files, receipt_periods([receipt for table in TABLES for receipt in receipts.get(table, [])]))
 
 

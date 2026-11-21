@@ -45,7 +45,8 @@ def receipt_periods(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[st
         release = str(receipt["snapshot_id"])
         if len(found) > 1:
             raise PeriodError(f"release {release} records more than one catalog coverage")
-        coverage = found.pop()
+        start, end = found.pop()
+        coverage = (start, end)
         if periods.setdefault(release, coverage) != coverage:
             raise PeriodError(f"release {release} has two catalog coverages")
     return periods
@@ -66,7 +67,7 @@ def rows_for(loaded: Iterable[Mapping[str, str]], periods: Mapping[str, tuple[st
 
 def build() -> list[dict[str, str]]:
     """Return the seed rows from the loaded files and the receipts that their S3 manifests list."""
-    files, receipts = period_receipts.loaded((TABLE,))
+    files, receipts = period_receipts.loaded((TABLE,), (TABLE,))
     return rows_for(files, receipt_periods(receipts.get(TABLE, [])))
 
 

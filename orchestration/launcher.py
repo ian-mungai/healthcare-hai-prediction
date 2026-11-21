@@ -525,6 +525,10 @@ def missing_bind_sources(body: Mapping[str, Any], roots: Sequence[Path]) -> list
     return sorted(set(missing))
 
 
+# The code of an allocation that fails because the plan cannot give every worker the minimum share; a client may retry it with fewer workers.
+WORKER_SHARE_CODE = "worker_share"
+
+
 def failure_text(error: object) -> str:
     """The text a record may keep for a failure: a Docker error as its status and reason, a launcher refusal as the launcher composed it, any other
     exception as its type name."""
@@ -6418,7 +6422,8 @@ class Launcher:
             if allocation is None or allocation["state"] != "planning":
                 return
             if outcome != "ok":
-                allocation.update({"state": "failed", "error": failure_text(value)})
+                refusal = {"code": WORKER_SHARE_CODE} if isinstance(value, memory_budget.WorkerShareError) else {}
+                allocation.update({"state": "failed", "error": failure_text(value), **refusal})
                 return
             allocation.update({"state": "held", "environment": value["environment"], "record": value["record"]})
 
@@ -10223,7 +10228,7 @@ class LauncherClient:
         reply = self.call("allocate", {"workers": workers})
         record = self.wait_for("allocation", reply["alloc_id"], "state", ("held", "failed"), self.principal_alloc(reply["alloc_id"]), seconds)
         if record["state"] != "held":
-            raise ClientError(str(record.get("error", f"allocation {reply['alloc_id']} is {record['state']}")), "budget")
+            raise ClientError(str(record.get("error", f"allocation {reply['alloc_id']} is {record['state']}")), str(record.get("code", "budget")))
         return str(reply["alloc_id"])
 
     def release_allocation(self, alloc_id: str) -> ReleaseOutcome:

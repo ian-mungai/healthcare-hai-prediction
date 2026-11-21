@@ -167,7 +167,8 @@ def receipt_coverage(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[s
         release = str(receipt["snapshot_id"])
         if len(found) > 1:
             raise PeriodError(f"release {release} records more than one catalog coverage")
-        start_end = found.pop()
+        first, last = found.pop()
+        start_end = (first, last)
         if coverage.setdefault(release, start_end) != start_end:
             raise PeriodError(f"release {release} has two catalog coverages")
     return coverage
@@ -246,7 +247,7 @@ def rows_for(
 
 def build() -> list[dict[str, str]]:
     """Return the seed rows from the loaded files and the receipts that their S3 manifests list."""
-    files, receipts = period_receipts.loaded(TABLES)
+    files, receipts = period_receipts.loaded(TABLES, (QUARTER_TABLE, COVERAGE_TABLE, DATABASE_TABLE, *EDITION_TABLES))
     return rows_for(
         files,
         receipt_quarters(receipts.get(QUARTER_TABLE, [])),

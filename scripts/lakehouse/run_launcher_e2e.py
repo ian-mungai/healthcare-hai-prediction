@@ -8822,7 +8822,16 @@ def staging_pool_plan_shrinks(env: Env) -> dict[str, bool]:
 
     env.start()
     real_call = launcher.LauncherClient.call
+    real_allocate = launcher.LauncherClient.allocate
     asked: list[int] = []
+    codes: list[str] = []
+
+    def allocate_noting_refusals(self: launcher.LauncherClient, *args: Any, **kwargs: Any) -> str:
+        try:
+            return real_allocate(self, *args, **kwargs)
+        except launcher.ClientError as error:
+            codes.append(error.code)
+            raise
 
     def plan_reads_high(self: launcher.LauncherClient, method: str, *args: Any, **kwargs: Any) -> Any:
         # The plan reading sees three times the memory the allocation's own plan will find a moment later.
@@ -8838,7 +8847,10 @@ def staging_pool_plan_shrinks(env: Env) -> dict[str, bool]:
     staging.TEST_REGISTRY = str(env.registry)
     results: dict[str, Any] = {}
     try:
-        with mock.patch.object(launcher.LauncherClient, "call", plan_reads_high):
+        with (
+            mock.patch.object(launcher.LauncherClient, "call", plan_reads_high),
+            mock.patch.object(launcher.LauncherClient, "allocate", allocate_noting_refusals),
+        ):
             results = staging.build_cases([(name, tuple(staging.BASE), frozenset[str]()) for name in names], 64)
     except (RuntimeError, OSError, launcher.ClientError) as error:
         results = {"error": error}
@@ -8848,10 +8860,50 @@ def staging_pool_plan_shrinks(env: Env) -> dict[str, bool]:
             shutil.rmtree(staging.CASES / name, ignore_errors=True)
     state = env.state()
     return {
+        "every refusal of a worker count carries the worker share code": bool(codes) and set(codes) == {"worker_share"},
         "the pool built both cases without an allocation error": sorted(results) == names and not any(isinstance(r, BaseException) for r in results.values()),
         "the first worker count was refused and a smaller one followed": len(asked) >= 2 and asked == sorted(asked, reverse=True) and asked[-1] < asked[0],
         "the refused allocations failed and the one that was granted was released": sorted(a["state"] for a in state["allocations"].values())
         == ["failed"] * (len(asked) - 1) + ["released"],
+    }
+
+
+@case("staging_pool_docker_failure", stub_host=True)
+def staging_pool_docker_failure(env: Env) -> dict[str, bool]:
+    """A Docker failure while the allocation plans is not a refusal of the worker share: the pool asks once and the run fails with the cause, so a smaller
+    count that later succeeds never hides it."""
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    env.start()
+    real_call = launcher.LauncherClient.call
+    asked: list[int] = []
+
+    def plan_then_docker_fails(self: launcher.LauncherClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        reply = real_call(self, method, *args, **kwargs)
+        if method == "plan":
+            # The plan reading is done; the allocation's own plan read now meets a Docker that cannot list its containers.
+            env.daemon.fail_list = True
+        if method == "allocate":
+            asked.append(int((args[0] if args else kwargs.get("params", {})).get("workers", 1)))
+        return reply
+
+    # Parallel shards share the case folder, so this case keeps its own folder names.
+    names = ["l1a_pool_docker_a", "l1a_pool_docker_b"]
+    staging.TEST_REGISTRY = str(env.registry)
+    outcome: BaseException | dict[str, Any] | None = None
+    try:
+        with mock.patch.object(launcher.LauncherClient, "call", plan_then_docker_fails):
+            outcome = staging.build_cases([(name, tuple(staging.BASE), frozenset[str]()) for name in names], 64)
+    except (RuntimeError, OSError, launcher.ClientError) as error:
+        outcome = error
+    finally:
+        env.daemon.fail_list = False
+        staging.TEST_REGISTRY = None
+        for name in names:
+            shutil.rmtree(staging.CASES / name, ignore_errors=True)
+    return {
+        "the pool asked for an allocation once": len(asked) == 1,
+        "the run failed with the allocation error": isinstance(outcome, RuntimeError) and "no allocation for the fixture cases" in str(outcome),
     }
 
 
@@ -11353,6 +11405,7 @@ ALL_CASES = (
     staging_read_share,
     staging_read_plan_shrinks,
     staging_pool_plan_shrinks,
+    staging_pool_docker_failure,
     runner_ends_before_close,
     runner_ends_with_hosted_launcher,
     pool_signal_scenarios,
