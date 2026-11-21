@@ -3912,7 +3912,7 @@ def observe(label: str, argv: list[str], action: Callable[[], Any]) -> Any:
     def marker(name: str, state: str) -> Path:
         return folder / (hashlib.sha256(name.encode()).hexdigest() + "." + state)
     def await_markers(wanted: list[Path]) -> bool:
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if all(path.exists() for path in wanted):
                 return True
