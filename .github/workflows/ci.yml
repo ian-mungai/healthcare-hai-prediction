@@ -104,8 +104,10 @@ jobs:
 
       # The setup steps below (setup_tf to setup_deps) are written once here and reused by an alias in every later job (a YAML anchor must come before its
       # aliases, so this first job holds them). They replace a local composite action, which zizmor reports as a self-repository reference. Edit them here only.
-      # pip accepts a package found in a restored environment as already satisfied, so the Python environment is built fresh from the hash-pinned groups
-      # of uv.lock (the host group here; SQLFluff, import-linter and check-jsonschema have their own), and pip checks every hash again on a pip cache hit.
+      # The host Python environment (.venv) is restored from a cache keyed on the Python version and the lock, and used only after scripts/quality/hosted_python_env.sh has
+      # run `lock_env verify host` on it: exactly the pinned packages with every installed file at its recorded hash. pip accepts a package found in a restored environment as already
+      # satisfied without a hash check, so a miss or a failed verification builds the environment fresh from the hash-pinned host group of uv.lock (--require-hashes, wheels only;
+      # SQLFluff, import-linter and check-jsonschema have their own groups and are not cached). The cache is saved right after that install, so a later step cannot add to it.
       # The native tools (gitleaks, TFLint, trivy, OSV-Scanner, zizmor, typos, uv and the rest) are downloaded from the pins of config/quality_tools.json on
       # every run and checked by SHA-256 before they are written to .tools/bin; nothing restored from a cache is trusted without that check.
       - &setup_tf
@@ -117,6 +119,7 @@ jobs:
 
       - &setup_py
         name: Setup Python
+        id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -154,14 +157,21 @@ jobs:
           path: ~/.terraform.d/plugin-cache
           key: terraform-providers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('infra/.terraform.lock.hcl', 'infra/iam/.terraform.lock.hcl') }}
 
+      - &setup_env_cache
+        name: Restore the Python environment
+        id: python_env
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
+
       - &setup_deps
         name: Install shared dependencies
         shell: bash
+        env:
+          ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
         run: |
-          python -m venv .venv
-          .venv/bin/python scripts/quality/install_tools.py
-          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
-          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}"
           .venv/bin/python -m pip check
           .venv/bin/python -m scripts.quality.install_markdownlint
           .venv/bin/python -m scripts.quality.install_sqlfluff
@@ -171,6 +181,14 @@ jobs:
           fi
           mkdir -p "$HOME/.terraform.d/plugin-cache"
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
+
+      - &save_env_cache
+        name: Save the Python environment
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Check commit messages and removed names of the pushed range
         if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
@@ -243,7 +261,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Install the lint tools
         if: ${{ matrix.group == 'code' }}
@@ -327,7 +349,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Install import-linter for the typecheck-importers samples
         shell: bash
@@ -377,12 +403,25 @@ jobs:
 
       - *setup_py
 
+      - name: Restore the Python environment
+        id: python_env
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
+
       - name: Install shared dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python scripts/quality/install_tools.py --tool uv
-          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
-          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+        shell: bash
+        env:
+          ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
+        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv
+
+      - name: Save the Python environment
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Download the shard manifests of this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -482,7 +521,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       # The Redis cases start a real redis-server and the hosted runner image has none. The exact version of the Ubuntu 24.04 archive (noble and noble-updates,
       # packages.ubuntu.com, published 2026-10-06) is installed with its redis-tools of the same version, and the step fails when that version is no longer in the
@@ -552,7 +595,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Run the CI groups reuse and gate stage E2Es
         env:
@@ -609,7 +656,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Run the layer's checks (skipped with a reason when the range changes nothing it depends on)
         env:
@@ -667,7 +718,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Run one feature sources shard with range selection
         env:
@@ -720,7 +775,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Run one feature columns shard with range selection
         env:
@@ -779,7 +838,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Select feature evidence for the checked range
         id: selection
@@ -854,7 +917,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       # 258 cases that each build a scratch repository and run a pre-commit hook: they run at the same time, up to the runner's CPU count (at most 4).
       - name: Run the gold model metadata E2E (skipped with a reason when the range does not reach the gold layer)
@@ -908,7 +975,11 @@ jobs:
 
       - *setup_tf_cache
 
+      - *setup_env_cache
+
       - *setup_deps
+
+      - *save_env_cache
 
       - name: Run one launcher E2E shard
         env:
@@ -963,17 +1034,31 @@ jobs:
           terraform_wrapper: false
 
       - name: Setup Python
+        id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       # The capture specification test runs the real outgoing secret scan (scripts/quality/scan_secrets.py), which reads .tools/bin/gitleaks.
+      - name: Restore the Python environment
+        id: python_env
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
+
       - name: Install shared dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python scripts/quality/install_tools.py --tool uv --tool gitleaks
-          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
-          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+        shell: bash
+        env:
+          ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
+        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv --tool gitleaks
+
+      - name: Save the Python environment
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - *setup_dbt_cache
 
@@ -1045,16 +1130,30 @@ jobs:
           terraform_wrapper: false
 
       - name: Setup Python
+        id: python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
+      - name: Restore the Python environment
+        id: python_env
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
+
       - name: Install shared dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python scripts/quality/install_tools.py --tool uv
-          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
-          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+        shell: bash
+        env:
+          ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
+        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv
+
+      - name: Save the Python environment
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Download the shard manifests and coverage data of this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

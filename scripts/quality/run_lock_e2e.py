@@ -332,6 +332,140 @@ def acquisition_formats_enforced() -> Problems:
     return problems
 
 
+def environment_verdict(python: Path, group: str = "import_linter") -> tuple[int, str]:
+    """The exit code and text of ``lock_env verify`` on one environment."""
+    result = run_command(sys.executable, ["-m", "scripts.quality.lock_env", "verify", group, "--environment", str(python.parents[1])], cwd=ROOT, timeout=300)
+    return result.returncode, result.stdout + result.stderr
+
+
+def planted_environment(site: Path, name: str, plant: Callable[[Path], tuple[Path, str]]) -> tuple[int, str]:
+    """Apply one change to an installed environment, verify it, and put the changed file back."""
+    path, original = plant(site)
+    python = site.parents[2] / "bin/python"
+    try:
+        return environment_verdict(python)
+    finally:
+        if original:
+            path.write_text(original, encoding="utf-8")
+        else:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def verified_environment() -> Problems:
+    """A restored environment passes ``lock_env verify`` only with exactly the pinned packages and every installed file at its recorded hash."""
+    problems: Problems = []
+    with tempfile.TemporaryDirectory(prefix="lock_verify_") as folder:
+        top = Path(folder)
+        run_command(sys.executable, ["-m", "venv", str(top / "env")], timeout=300, check=True)
+        requirements = lock_env.write_files("import_linter", top / "export")[0]
+        code, error = pip_install(top / "env", requirements)
+        if code:
+            return [f"the import_linter group did not install: {error[-300:]}"]
+        site = next((top / "env/lib").glob("python*/site-packages"))
+        code, text = environment_verdict(top / "env/bin/python")
+        if code:
+            problems.append(f"the installed group failed its verification: {text[-300:]}")
+
+        def changed_file(root: Path) -> tuple[Path, str]:
+            record = next(root.glob("import_linter-*.dist-info/RECORD"))
+            rows = [line.split(",") for line in record.read_text(encoding="utf-8").splitlines()]
+            target = root / next(row[0] for row in rows if row[0].endswith(".py") and row[1])
+            original = target.read_text(encoding="utf-8")
+            target.write_text(original + "\n# planted\n", encoding="utf-8")
+            return target, original
+
+        def extra_package(root: Path) -> tuple[Path, str]:
+            target = root / "planted_extra-1.0.dist-info"
+            target.mkdir()
+            (target / "METADATA").write_text("Metadata-Version: 2.1\nName: planted-extra\nVersion: 1.0\n", encoding="utf-8")
+            return target, ""
+
+        def wrong_version(root: Path) -> tuple[Path, str]:
+            target = next(root.glob("import_linter-*.dist-info/METADATA"))
+            original = target.read_text(encoding="utf-8")
+            target.write_text(re.sub(r"(?m)^Version: .*$", "Version: 0.0.1", original, count=1), encoding="utf-8")
+            return target, original
+
+        def missing_package(root: Path) -> tuple[Path, str]:
+            target = next(root.glob("grimp-*.dist-info/METADATA"))
+            original = target.read_text(encoding="utf-8")
+            target.write_text(original.replace("Name: grimp", "Name: grimp_gone", 1), encoding="utf-8")
+            return target, original
+
+        for label, plant, wanted in (
+            ("a changed installed file", changed_file, "changed"),
+            ("an installed package the lock does not pin", extra_package, "not in the lock"),
+            ("a different installed version", wrong_version, "0.0.1"),
+            ("a pinned package that is not installed", missing_package, "grimp"),
+        ):
+            code, text = planted_environment(site, label, plant)
+            if code == 0 or wanted not in text:
+                problems.append(f"{label}: verify did not fail with {wanted!r}: exit {code}, {text.strip()[-200:]}")
+        code, text = environment_verdict(top / "env/bin/python")
+        if code:
+            problems.append(f"the restored files still fail after the plants were undone: {text[-300:]}")
+    return problems
+
+
+HOSTED_ENV_SCRIPT = "scripts/quality/hosted_python_env.sh"
+SHIM = """#!/bin/bash
+echo "$(basename "$0")|$*" >> "$SHIM_LOG"
+if [[ "$1 $2 $3" == "-m venv .venv" ]]; then
+  mkdir -p .venv/bin
+  cp "$0" .venv/bin/python
+fi
+if [[ "$1 $2 $3" == "-m scripts.quality.lock_env verify" ]]; then
+  exit "${SHIM_VERIFY_EXIT:-0}"
+fi
+exit 0
+"""
+
+
+def hosted_env_run(top: Path, restored: str, verify_exit: int, existing: bool) -> list[str]:
+    """Run the hosted environment script against stand-ins for python and the venv python; return the commands it started."""
+    work = top / f"work_{restored}_{verify_exit}_{int(existing)}"
+    (work / "bin").mkdir(parents=True)
+    shim = work / "bin/python"
+    shim.write_text(SHIM, encoding="utf-8")
+    shim.chmod(0o755)
+    if existing:
+        (work / ".venv/bin").mkdir(parents=True)
+        (work / ".venv/bin/python").write_text(SHIM, encoding="utf-8")
+        (work / ".venv/bin/python").chmod(0o755)
+    log = work / "calls.log"
+    environment = {"PATH": f"{work / 'bin'}:/usr/bin:/bin", "SHIM_LOG": str(log), "SHIM_VERIFY_EXIT": str(verify_exit), "RUNNER_TEMP": str(work / "temp")}
+    result = run_command("/bin/bash", [str(ROOT / HOSTED_ENV_SCRIPT), restored, "--tool", "uv"], cwd=work, env=environment, timeout=60)
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return [f"exit {result.returncode}", *calls]
+
+
+def hosted_environment_script() -> Problems:
+    """The hosted environment script installs from the hash-pinned lock on a miss, keeps a restored environment that verifies and rebuilds one that does not."""
+    problems: Problems = []
+    with tempfile.TemporaryDirectory(prefix="lock_hosted_env_") as folder:
+        top = Path(folder)
+        miss = hosted_env_run(top, "false", 0, existing=False)
+        hit = hosted_env_run(top, "true", 0, existing=True)
+        drift = hosted_env_run(top, "true", 1, existing=True)
+        for label, calls in (("miss", miss), ("hit", hit), ("drift", drift)):
+            if calls[0] != "exit 0":
+                problems.append(f"{label}: the script failed: {calls}")
+        if not any("-m venv .venv" in call for call in miss) or not any("pip install" in call and "--require-hashes" in call for call in miss):
+            problems.append(f"a miss must create the environment and install with --require-hashes: {miss}")
+        if any("lock_env verify" in call for call in miss):
+            problems.append(f"a miss has nothing to verify: {miss}")
+        if not any("lock_env verify host --environment .venv" in call for call in hit) or any("pip install" in call or "-m venv" in call for call in hit):
+            problems.append(f"a restored environment must be verified and not reinstalled: {hit}")
+        if not any("--tool uv" in call and "install_tools.py" in call for call in hit):
+            problems.append(f"the native tools are checked and installed on every run: {hit}")
+        if not any("-m venv .venv" in call for call in drift) or not any("pip install" in call and "--require-hashes" in call for call in drift):
+            problems.append(f"a restored environment that fails its verification must be rebuilt from the hashes: {drift}")
+        absent = hosted_env_run(top, "true", 0, existing=False)
+        if not any("-m venv .venv" in call for call in absent):
+            problems.append(f"a cache hit without a restored folder must build the environment: {absent}")
+    return problems
+
+
 CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("declared groups", declared_groups),
     ("every export is pinned with hashes", exports_are_pinned),
@@ -344,6 +478,8 @@ CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("image requirement files", image_files_written),
     ("acquisition formats are enforced in the locked host environment", acquisition_formats_enforced),
     ("hash-checked install", hashed_install),
+    ("a restored environment is verified against the lock", verified_environment),
+    ("the hosted environment script restores, verifies and rebuilds", hosted_environment_script),
 )
 
 

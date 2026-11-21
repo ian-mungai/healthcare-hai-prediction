@@ -461,7 +461,7 @@
       "file_sha256": "dba241d23a9e7119bf77e73cec0bffbf9dfb25f933689d6c6cd232f3d3c1516b",
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
+        "scripts/quality/lock_env.py": "sha256:820052234812b2d12a21b5f981423887fc7e1a6c5c4c0823d3e157067409476a"
       },
       "reason": "base_python() is the interpreter recorded in pyvenv.cfg or sys.executable; it creates the sqlfluff virtual environment",
       "lines": [
@@ -1423,7 +1423,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/install_sqlfluff.py": "sha256:dba241d23a9e7119bf77e73cec0bffbf9dfb25f933689d6c6cd232f3d3c1516b",
-        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
+        "scripts/quality/lock_env.py": "sha256:820052234812b2d12a21b5f981423887fc7e1a6c5c4c0823d3e157067409476a"
       },
       "reason": "creates a virtual environment for a pinned lint tool with the interpreter the running environment was made from"
     },
@@ -1437,7 +1437,7 @@
       "dependencies": {
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/install_sqlfluff.py": "sha256:dba241d23a9e7119bf77e73cec0bffbf9dfb25f933689d6c6cd232f3d3c1516b",
-        "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a"
+        "scripts/quality/lock_env.py": "sha256:820052234812b2d12a21b5f981423887fc7e1a6c5c4c0823d3e157067409476a"
       },
       "reason": "runs the pinned lint tool named in config/quality_tools.json with --version to check its version"
     },
