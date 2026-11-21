@@ -87,7 +87,7 @@
     "STANDIN_CALLS": {"category": "test", "reason": "Set and read only by the stand-in commands of scripts/infrastructure/run_activation_inputs_e2e.py"},
     "STANDIN_OUTPUTS": {"category": "test", "reason": "Set and read only by the stand-in commands of scripts/infrastructure/run_activation_inputs_e2e.py"},
     "STANDIN_PLAN": {"category": "test", "reason": "Set and read only by the stand-in commands of scripts/infrastructure/run_activation_inputs_e2e.py"},
-    "STAND_IN_STATE": {"category": "test", "reason": "Set and read only by the owner list E2E stand-ins (scripts/infrastructure/owner_list_stand_ins.py)"},
+    "STAND_IN_STATE": {"category": "test", "reason": "Set and read only by the owner scripts E2E stand-ins (scripts/infrastructure/owner_list_stand_ins.py)"},
     "STARTUP_CHECK_TEST_FAULT": {"category": "test", "reason": "Set and read only by the startup check tests (tests/test_startup_check_*.py)"},
     "STARTUP_CHECK_TEST_PROBE": {"category": "test", "reason": "Set and read only by the startup check tests (tests/test_startup_check_*.py)"},
     "STUB_ALIGN_FRACTION": {"category": "test", "reason": "Set and read only by the stand-in dispatcher of scripts/quality/run_worker_deadline_e2e.py"},

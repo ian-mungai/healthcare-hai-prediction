@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The configuration_host_checks check group of scripts/run_ci.sh: the configuration E2Es of the owner lists, the layer acceptance and report, the host session, the host code
+# The configuration_host_checks check group of scripts/run_ci.sh: the configuration E2Es of the owner scripts, the layer acceptance and report, the host session, the host code
 # one-shot, the AWS catalog and Glue mirror and the IAM preflight, split from configuration_checks so the two groups run side by side (the same checks, each once). The
 # dispatcher runs the group in its own shell process (run_group), which loads only scripts/quality/timing.sh (timed) and this file, and then calls the entry function. It
 # gets python_bin, repo_root, scratch, quality_output, e2e_output and CI_TIMING_FILE from the dispatcher beside the exported environment. This file defines functions only:
@@ -7,7 +7,7 @@
 # shellcheck disable=SC2154,SC2329
 
 configuration_host_checks() {
-  timed "configuration_host_checks: owner list E2E" "$python_bin" -m scripts.infrastructure.run_owner_list_e2e --out "$quality_output/owner_list"
+  timed "configuration_host_checks: owner scripts E2E" "$python_bin" -m scripts.infrastructure.run_owner_scripts_e2e --out "$quality_output/owner_scripts"
   timed "configuration_host_checks: layer acceptance E2E" "$python_bin" -m scripts.lakehouse.run_layer_acceptance_e2e --out "$quality_output/layer_acceptance"
   timed "configuration_host_checks: layer report E2E" "$python_bin" -m scripts.lakehouse.run_layer_report_e2e --out "$quality_output/layer_report"
   timed "configuration_host_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e

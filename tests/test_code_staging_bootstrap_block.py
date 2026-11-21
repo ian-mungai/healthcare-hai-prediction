@@ -1,8 +1,7 @@
-"""The owner's block that runs the code-staging bootstrap: its shape, its inputs from .env, its masked output and its stop, run with a stand-in tool."""
+"""The owner's script that runs the code-staging bootstrap: its shape, its inputs from .env, its masked output and its stop, run with a stand-in tool."""
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -14,22 +13,18 @@ from scripts.process import CompletedProcess, run_command
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
-TITLE = "Code staging setup on GitHub"
+SCRIPT = "scripts/infrastructure/owner/code_staging_github.sh"
 REGION, PROFILE, BUCKET, PROJECT = "us-west-2", "stand-in-profile", "stand-in-bucket-name", "stand_in_project"
-ZSH = shutil.which("zsh")
+BASH = shutil.which("bash")
 
 
 def block() -> str:
-    text = json.loads((ROOT / "config/aws/owner_command_lists.json").read_text())[TITLE]
-    found = re.search(r"```sh\n(.*?)```", text, re.S)
-    if found is None:
-        pytest.fail("the list holds no fenced block")
-    return found.group(1)
+    return (ROOT / SCRIPT).read_text()
 
 
-def test_the_block_is_one_zsh_heredoc_that_stops_on_error_names_no_placeholder_and_reads_only_names_the_example_env_has() -> None:
+def test_the_script_is_a_bash_script_that_stops_on_error_names_no_placeholder_and_reads_only_names_the_example_env_has() -> None:
     body = block()
-    check(body.startswith("zsh <<'OWNER_BLOCK'\n") and body.rstrip().endswith("OWNER_BLOCK"), "one quoted heredoc for zsh")
+    check(body.startswith("#!/usr/bin/env bash\n"), "a bash script")
     check("set -euo pipefail" in body and re.search(r"trap '.*' ERR", body) is not None, "it stops on error and traps ERR")
     check(re.search(r"<[A-Za-z_]+>", re.sub(r"<(bucket|profile|project|region)>", "", body)) is None, "no placeholder is left for the owner to fill")
     names = set(re.findall(r"\bvalue ([A-Z0-9_]+)\b", body))
@@ -38,12 +33,12 @@ def test_the_block_is_one_zsh_heredoc_that_stops_on_error_names_no_placeholder_a
     check("github_code_staging_bootstrap" in body, "it runs the bootstrap script")
 
 
-def test_the_block_passes_the_script_no_option_because_it_takes_everything_from_env_and_terraform() -> None:
+def test_the_script_passes_the_bootstrap_no_option_because_it_takes_everything_from_env_and_terraform() -> None:
     line = next(item for item in block().splitlines() if "github_code_staging_bootstrap" in item)
-    check("--" not in line.split("github_code_staging_bootstrap", 1)[1].replace("2>&1", ""), f"the block passes an option the script does not take: {line}")
+    check("--" not in line.split("github_code_staging_bootstrap", 1)[1].replace("2>&1", ""), f"the script passes an option the bootstrap does not take: {line}")
 
 
-TOOLS = ("git", "grep", "head", "sed", "zsh")
+TOOLS = ("git", "grep", "head", "sed", "bash")
 ISOLATION = ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL")
 
 
@@ -78,7 +73,7 @@ def stand_in(tmp_path: Path, env_text: str, signed_in: bool = True) -> Path:
         wrapper = tmp_path / "tool_bin" / name
         wrapper.write_text(f'#!/bin/sh\nexec "{found}" "$@"\n')
         wrapper.chmod(0o755)
-    (tmp_path / "block.zsh").write_text(block())
+    (tmp_path / "block.sh").write_text(block())
     return tmp_path
 
 
@@ -99,14 +94,14 @@ def child_environment(folder: Path) -> dict[str, str]:
 
 
 def run_block(folder: Path) -> CompletedProcess[str]:
-    return run_command(str(ZSH), ["block.zsh"], cwd=folder, env=child_environment(folder), timeout=60)
+    return run_command(str(BASH), ["block.sh"], cwd=folder, env=child_environment(folder), timeout=60)
 
 
 FULL = f'PROJECT_NAME={PROJECT}\nAWS_REGION="{REGION}"\nAWS_PROFILE={PROFILE}\nS3_BUCKET={BUCKET}\nOTHER=1\n'
 
 
-@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
-def test_the_block_gives_the_script_the_profile_of_env_and_masks_every_env_value_in_the_output(tmp_path: Path) -> None:
+@pytest.mark.skipif(BASH is None, reason="bash is not installed")
+def test_the_script_gives_the_bootstrap_the_profile_of_env_and_masks_every_env_value_in_the_output(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL)
     done = run_block(folder)
     shown = done.stdout + done.stderr
@@ -117,8 +112,8 @@ def test_the_block_gives_the_script_the_profile_of_env_and_masks_every_env_value
     check(all(value not in shown for value in (PROFILE, BUCKET, PROJECT, REGION)), f"the output shows a value it must mask: {shown}")
 
 
-@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
-def test_a_gh_that_is_not_signed_in_stops_the_block_before_the_script_runs_and_says_to_sign_in(tmp_path: Path) -> None:
+@pytest.mark.skipif(BASH is None, reason="bash is not installed")
+def test_a_gh_that_is_not_signed_in_stops_the_script_before_the_bootstrap_runs_and_says_to_sign_in(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL, signed_in=False)
     done = run_block(folder)
     check(done.returncode != 0 and "gh auth login" in done.stderr, f"it stopped and said to sign in: {done.returncode} {done.stderr}")
@@ -126,15 +121,15 @@ def test_a_gh_that_is_not_signed_in_stops_the_block_before_the_script_runs_and_s
     check(not (folder / "calls.txt").exists(), "the script did not run")
 
 
-@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
-def test_a_missing_env_name_stops_the_block_before_the_script_runs_and_names_the_missing_name(tmp_path: Path) -> None:
+@pytest.mark.skipif(BASH is None, reason="bash is not installed")
+def test_a_missing_env_name_stops_the_script_before_the_bootstrap_runs_and_names_the_missing_name(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL.replace(f"S3_BUCKET={BUCKET}\n", ""))
     done = run_block(folder)
     check(done.returncode != 0 and "S3_BUCKET" in done.stderr, f"it stopped and named the name: {done.returncode} {done.stderr}")
     check(not (folder / "calls.txt").exists(), "the script did not run")
 
 
-@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
+@pytest.mark.skipif(BASH is None, reason="bash is not installed")
 def test_the_child_reads_no_system_or_global_git_setting_even_where_one_is_planted(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL)
     system = tmp_path / "planted_system_config"
@@ -144,8 +139,8 @@ def test_the_child_reads_no_system_or_global_git_setting_even_where_one_is_plant
     (folder / "xdg/git/config").write_text("[probe]\n\txdg = planted\n")
     planted = {**child_environment(folder), "GIT_CONFIG_SYSTEM": str(system)}
     listing = ["-c", "git config --list --show-origin"]
-    child = run_command(str(ZSH), listing, cwd=folder, env=planted, timeout=60)
+    child = run_command(str(BASH), listing, cwd=folder, env=planted, timeout=60)
     check(child.returncode == 0 and "probe." not in child.stdout, f"the child read a planted setting: {child.stdout} {child.stderr}")
     control = {name: value for name, value in planted.items() if name not in ISOLATION}
-    seen = run_command(str(ZSH), listing, cwd=folder, env=control, timeout=60).stdout
+    seen = run_command(str(BASH), listing, cwd=folder, env=control, timeout=60).stdout
     check(all(marker in seen for marker in ("probe.system=planted", "probe.home=planted", "probe.xdg=planted")), f"the planted settings are not real: {seen}")

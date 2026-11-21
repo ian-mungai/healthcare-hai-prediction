@@ -1,12 +1,13 @@
-"""Run the delivered alert email owner blocks as written, against stand-in tools, and check what each one does.
+"""Run the committed alert email owner scripts as written, against stand-in tools, and check what each one does.
 
-Every ``sh`` block of the bootstrap and teardown lists is a bash heredoc that runs one call of ``scripts.infrastructure.alert_email`` under
-``set -euo pipefail`` and a fixed ERR trap. The cases write the block text to a file in a
-scratch repository root with a valid ``.env``, the stack folders and a stand-in ``aws``, ``terraform``, wrapper and ``.venv/bin/python`` first on the PATH
-(``owner_list_stand_ins``), and run it with ``bash``. Every read that the helper makes can be made to fail or to return the wrong shape, and the case checks
-that the block stops with a status word before any later command. Every run of every block adds its terminal output to one list, and one check holds that
-list to the closed vocabulary of the helper: every line is ``<subject>: <status>`` from its two enums, so no ARN, topic name, account number, address or
-subscription identifier is printed. The planted defects are changes to the helper's source, run through the same blocks.
+Every script of the bootstrap and teardown (``scripts/infrastructure/owner/alert_email_*.sh``) is one bash step that runs one call of
+``scripts.infrastructure.alert_email`` under ``set -euo pipefail``, a fixed ERR trap and a change into the repository root. The cases write the
+script text to a file in the owner folder of a scratch repository root with a valid ``.env``, the stack folders and a stand-in ``aws``,
+``terraform``, wrapper and ``.venv/bin/python`` first on the PATH (``owner_list_stand_ins``), and run it with ``bash``. Every read that the helper
+makes can be made to fail or to return the wrong shape, and the case checks that the script stops with a status word before any later command.
+Every run of every script adds its terminal output to one list, and one check holds that list to the closed vocabulary of the helper: every line is
+``<subject>: <status>`` from its two enums, so no ARN, topic name, account number, address or subscription identifier is printed. The planted
+defects are changes to the helper's source, run through the same scripts.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import alert_email, owner_commands
+from scripts.infrastructure import alert_email
 from scripts.infrastructure import owner_list_stand_ins as world
 from scripts.process import CompletedProcess, run_command
 
@@ -34,8 +35,9 @@ NUMERIC_DIGEST = hashlib.sha256(b"synthetic-policy-plan-2").hexdigest()
 PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
 # One helper command: plain lowercase words and options, and the one quoted variable of the administrator profile. No operator, redirect or substitution fits.
 HELPER_LINE = re.compile(rf'{re.escape(HELPER_CALL)}(?: (?:--[a-z][a-z-]*|[a-z][a-z-]*|"\$\{{ADMIN_PROFILE:-\}}"))+')
-HEREDOC_OPEN = "bash <<'BLOCK'"
-HEREDOC_CLOSE = "BLOCK"
+OWNER_FOLDER = "scripts/infrastructure/owner"
+SHEBANG = "#!/usr/bin/env bash"
+ROOT_LINE = 'cd "$(dirname "$0")/../../.."'
 STRICT_OPTIONS = "set -euo pipefail"
 # The trap holds no value: its body has only the exit status variable and one fixed status line of the helper's vocabulary.
 TRAP_LINE = re.compile(r"trap '(?P<body>[^']*)' ERR")
@@ -74,13 +76,16 @@ ENV_FILE = (
 )
 
 
-def fences(section: str) -> list[str]:
-    return re.findall(r"```sh\n(.*?)```", section, re.DOTALL)
+def fences(prefix: str) -> list[str]:
+    """The text of every committed script of one procedure (``alert_email_bootstrap`` or ``alert_email_teardown``), in file name order."""
+    return [path.read_text(encoding="utf-8") for path in sorted((ROOT / OWNER_FOLDER).glob(f"{prefix}_*.sh"))]
 
 
 def pick(section: str, *needles: str) -> str:
-    """The one block of the section that holds every needle."""
-    found = [block for block in fences(section) if all(needle in block for needle in needles)]
+    """The first script of the procedure whose command lines (not its comments) hold every needle."""
+    found = [
+        block for block in fences(section) if all(needle in "\n".join(line for line in block.splitlines() if not line.startswith("#")) for needle in needles)
+    ]
     return found[0] if found else ""
 
 
@@ -149,7 +154,8 @@ class Scratch:
 
     def run(self, block: str, *, admin: bool = True, timeout: int = 120) -> tuple[int, str, list[str]]:
         """Run the block text as delivered, with the helper call replaced only in a planted-defect run."""
-        file = self.root / "block.sh"
+        file = self.root / OWNER_FOLDER / "block.sh"
+        file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(block.replace(HELPER_CALL, self.helper))
         before = len(self.read()["calls"])
         environment = {
@@ -189,49 +195,52 @@ def syntax_check(file: Path, shell: str = "bash") -> CompletedProcess[str]:
 
 
 def block_problems(block: str) -> list[str]:
-    """What a delivered block lacks: it is a quoted bash heredoc of exactly the strict options, a fixed value-free ERR trap and one helper call."""
-    lines = [line for line in block.splitlines() if line.strip()]
-    if len(lines) != 5:
-        return [f"the block has {len(lines)} lines, not 5"]
+    """What a committed step lacks: it is a bash script of exactly the strict options, a fixed value-free ERR trap, the change into the repository root and one
+    helper call. Comment lines, which hold the prose of the step, are free."""
+    lines = [line for line in block.splitlines() if line.strip() and not line.startswith("#")]
+    if len(lines) != 4:
+        return [f"the script has {len(lines)} command lines, not 4"]
     problems = []
-    if lines[0] != HEREDOC_OPEN or lines[4] != HEREDOC_CLOSE:
-        problems.append("not a quoted bash heredoc")
-    if lines[1] != STRICT_OPTIONS:
+    if not block.startswith(SHEBANG + "\n"):
+        problems.append("not a bash script")
+    if lines[0] != STRICT_OPTIONS:
         problems.append("no strict options")
-    trap = TRAP_LINE.fullmatch(lines[2])
+    trap = TRAP_LINE.fullmatch(lines[1])
     status = TRAP_STATUS.fullmatch(trap["body"]) if trap else None
     if not status or not VOCABULARY.fullmatch(status["text"]):
         problems.append("no fixed value-free ERR trap")
-    if not HELPER_LINE.fullmatch(lines[3]) or PLACEHOLDER.search(block):
+    if lines[2] != ROOT_LINE:
+        problems.append("no change into the repository root")
+    if not HELPER_LINE.fullmatch(lines[3]) or PLACEHOLDER.search("\n".join(lines)):
         problems.append("not one placeholder-free helper command of plain words")
     return problems
 
 
 def helper_call(block: str) -> str | None:
-    """The helper call of a block that is exactly the frame ``block_problems`` pins, or None when the block is not."""
-    return None if block_problems(block) else [line for line in block.splitlines() if line.strip()][3]
+    """The helper call of a script that is exactly the frame ``block_problems`` pins, or None when the script is not."""
+    return None if block_problems(block) else [line for line in block.splitlines() if line.strip() and not line.startswith("#")][3]
 
 
-def static_checks(sections: dict[str, str]) -> dict[str, bool]:
-    """Every block is a bash heredoc with the strict options, a fixed value-free ERR trap and one placeholder-free call of the helper, with valid syntax in
-    bash and in zsh, and nothing of the removed path is left in the lists."""
+def static_checks(procedures: dict[str, str]) -> dict[str, bool]:
+    """Every script is a bash step with the strict options, a fixed value-free ERR trap and one placeholder-free call of the helper, with valid syntax in
+    bash and in zsh, and nothing of the removed path is left in them."""
     checks: dict[str, bool] = {}
-    blocks = [(name, block) for name, section in sections.items() for block in fences(section)]
-    checks["the alert email lists hold 13 shell blocks"] = len(blocks) == 13
+    blocks = [(name, block) for name, prefix in procedures.items() for block in fences(prefix)]
+    checks["the alert email scripts are 13 (9 of the bootstrap and 4 of the teardown)"] = len(blocks) == 13
     with tempfile.TemporaryDirectory(prefix="alert_blocks_") as folder:
         for number, (name, block) in enumerate(blocks, 1):
             file = Path(folder) / f"block_{number}.sh"
             file.write_text(block)
             call = next((line for line in block.splitlines() if line.startswith(HELPER_CALL)), "")
             problems = block_problems(block)
-            checks[f"{name} block {number} is a strict bash heredoc with a fixed ERR trap ({problems}): {call[len(HELPER_CALL) :].strip()[:60]}"] = not problems
+            checks[f"{name} block {number} is a strict bash script with a fixed ERR trap ({problems}): {call[len(HELPER_CALL) :].strip()[:60]}"] = not problems
             checks[f"{name} block {number} has valid syntax in bash: {call[len(HELPER_CALL) :].strip()[:60]}"] = syntax_check(file).returncode == 0
             if shutil.which("zsh"):
                 checks[f"{name} block {number} has valid syntax in zsh, the owner's terminal: {call[len(HELPER_CALL) :].strip()[:60]}"] = (
                     syntax_check(file, "zsh").returncode == 0
                 )
-    text = "".join(sections.values())
-    checks["the lists keep nothing of the administrator confirmation, the hand import or the terminal token"] = not [
+    text = "".join(block for _, block in blocks)
+    checks["the scripts keep nothing of the administrator confirmation, the hand import or the terminal token"] = not [
         word for word in REMOVED_WORDS if word in text
     ]
     return checks
@@ -627,10 +636,9 @@ def teardown_cases(section: str, sink: list[str], helper: str) -> tuple[dict[str
     return checks, calls
 
 
-def cases(text: str, helper: str = HELPER_CALL) -> tuple[dict[str, bool], list[str]]:
-    """The checks of both lists and every stand-in command the blocks ran, for the parser checks of the caller."""
-    bootstrap = owner_commands.section(text, "Alert email at bootstrap")
-    teardown = owner_commands.section(text, "Alert email teardown")
+def cases(helper: str = HELPER_CALL) -> tuple[dict[str, bool], list[str]]:
+    """The checks of both procedures and every stand-in command the scripts ran, for the parser checks of the caller."""
+    bootstrap, teardown = "alert_email_bootstrap", "alert_email_teardown"
     checks = static_checks({"bootstrap": bootstrap, "teardown": teardown})
     results: dict[str, bool] = {}
     calls: list[str] = []
@@ -713,7 +721,7 @@ MUTANTS = (
 )
 
 
-def mutant_checks(text: str) -> dict[str, bool]:
+def mutant_checks() -> dict[str, bool]:
     """Each planted defect in the helper must fail at least one case, so the cases test the helper and not themselves."""
     checks: dict[str, bool] = {}
     source = HELPER_SOURCE.read_text(encoding="utf-8")
@@ -724,6 +732,6 @@ def mutant_checks(text: str) -> dict[str, bool]:
                 continue
             mutant = Path(folder) / f"mutant_{number}.py"
             mutant.write_text(source.replace(old, new, 1), encoding="utf-8")
-            results, _ = cases(text, helper=f".venv/bin/python {mutant}")
+            results, _ = cases(helper=f".venv/bin/python {mutant}")
             checks[f"alert helper mutant {label} is caught"] = not all(results.values())
     return checks

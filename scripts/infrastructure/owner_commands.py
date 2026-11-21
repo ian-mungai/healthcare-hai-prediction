@@ -29,7 +29,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "111111111111"
-SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp", "cp", "grep", "git", "sed", "cut", "tee", "read")
+SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp", "cp", "grep", "git", "sed", "cut", "tee", "read", "echo", "confirm")
 PARSE_FAILURES = re.compile(
     "|".join(
         (
@@ -116,14 +116,28 @@ def section(text: str, heading: str) -> str:
     return found.group(1) if found else ""
 
 
+FUNCTION_OPEN = re.compile(r"[a-z_]+\(\) \{")
+SCRIPT_FRAME = ("set -", "trap ", 'cd "$(')
+
+
 def commands(body: str) -> list[str]:
-    """The logical command lines of the ``sh`` fences: a line that ends in a backslash continues on the next one."""
+    """The logical command lines of the ``sh`` fences of a document section, or of a whole script when the text has no fence: a line that ends in a backslash
+    continues on the next one. Of a script, the frame (the strict options, the trap and the change into the root folder) and the functions it defines are not
+    commands to check."""
+    fences = re.findall(r"```sh\n(.*?)```", body, re.S)
+    script = not fences
     lines: list[str] = []
-    for fence in re.findall(r"```sh\n(.*?)```", body, re.S):
+    for fence in fences or [body]:
         pending = ""
+        inside = False
         for raw in fence.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
+                continue
+            if script and (inside or FUNCTION_OPEN.fullmatch(line)):
+                inside = line != "}"
+                continue
+            if script and not pending and line.startswith(SCRIPT_FRAME):
                 continue
             pending += line[:-1].rstrip() + " " if line.endswith("\\") else line
             if not line.endswith("\\"):
