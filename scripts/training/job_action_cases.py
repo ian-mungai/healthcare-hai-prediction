@@ -451,9 +451,6 @@ def standins(fixture: Fixture) -> Iterator[None]:
         yield
 
 
-REAL_OPEN_STORE = run_tracking.open_store
-
-
 class NotFound(Exception):
     """The error MLflow raises for a missing entity, with its error code."""
 

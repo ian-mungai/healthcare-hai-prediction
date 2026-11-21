@@ -15,6 +15,7 @@ from scripts.acquisition import shards
 from scripts.acquisition.discover_history import Links
 from scripts.acquisition.hcai_util_contract import _Markup
 from scripts.acquisition.tests.conftest import synthetic_collection_routes
+from scripts.acquisition.tests.test_ahrq_manual_units import no_recorded_copies
 from scripts.acquisition.tests.test_capture_mode import stand_in_modes
 from scripts.acquisition.tests.test_person_lane import raw_route
 from scripts.acquisition.tests.test_publisher_host_run import isolated_environment
@@ -41,6 +42,7 @@ def uses(
         _Markup.handle_data,  # HTMLParser calls it for workbook XML text.
         _Markup.handle_startendtag,  # HTMLParser calls it for self-closing workbook XML tags.
         synthetic_collection_routes,  # pytest runs autouse fixtures without a reference.
+        no_recorded_copies,  # pytest runs the autouse fixture of test_ahrq_manual_units without a reference.
         no_hosts_file_between_cases,  # pytest runs autouse fixtures without a reference (test_task_keys, test_task_owners, test_task_state).
         fake_pyspark,  # pytest runs autouse fixtures without a reference.
         raw_route,  # pytest runs it by name: autouse in test_task_ledgers and test_verify_publisher_run, usefixtures in test_person_lane.
@@ -64,6 +66,7 @@ def uses(
         # scripts.quality may not import scripts.orchestration (.importlinter), so the Handler and Bridge of aws_http_bridge.py are named through their bases.
         BaseHTTPRequestHandler.protocol_version,  # http.server reads it of the bridge's Handler to answer its clients with HTTP/1.1.
         bridge_handler.do_GET,  # http.server dispatches a GET request to the bridge's Handler by method name.
+        bridge_handler.do_DELETE,  # http.server dispatches a DELETE request to the handler of run_catalog_restore_e2e.py by method name (it drops a table).
         bridge_handler.do_PUT,  # http.server dispatches a PUT request to the bridge's Handler by method name.
         # Limit of the next three entries: vulture matches a name, not its owner, so each also counts the same name as used wherever else it is defined or
         # assigned. One collision exists today: sender._request_signer._credentials in scripts/lakehouse/run_aws_catalog_setup_e2e.py, which botocore reads

@@ -346,7 +346,7 @@ class Registry:
             artifact_uri = ARTIFACT_URI
             list_artifacts = staticmethod(self.server.list_artifacts)
 
-        def http_request(creds: Any, endpoint: str, method: str, **options: Any) -> Any:
+        def http_request(_creds: Any, endpoint: str, method: str, **options: Any) -> Any:
             if method != "GET" or options != {"stream": True}:
                 raise AssertionError(f"the download is a streamed GET: {method} {options}")
             return self.server.get(endpoint.removeprefix("/"))

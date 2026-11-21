@@ -331,9 +331,6 @@ def a_retry_of_a_run_with_its_own_code_uses_that_code() -> None:
     require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 3)) == ORIGINAL, "the retry was not bound to the run whose code it used")
 
 
-PIPELINE_START = [(PIPELINE_DAG, "pipeline_ab12cd34", {"run_id": "pipeline_ab12cd34", "mode": "real", "start_from": "bronze"})]
-
-
 def a_hand_started_ingestion_run_starts_nothing_after_it() -> None:
     """The first DAG runs the stages after ingestion, so ingestion alone ends at its gate: no start task, no DAG run, whatever the capture root."""
     for environment in (PRODUCTION, {}):
