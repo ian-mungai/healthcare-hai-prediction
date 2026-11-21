@@ -290,7 +290,7 @@ class Reader:
 
     def __init__(self, present: dict[str, int], empty: tuple[str, ...] = ()) -> None:
         self.present, self.empty = present, empty
-        self.asked: list[list[str]] = []
+        self.asked: list[Any] = []
 
     def __call__(self, _spark: Any, _namespace: str, tables: Any) -> tuple[dict[str, int], list[str]]:
         self.asked.append(list(tables))
@@ -871,7 +871,8 @@ class Calls:
     """Where the stand-ins write the time each call starts and what to do at a call (advance the clock, stall)."""
 
     def __init__(self, now: Any, actions: dict[str, Any] | None = None) -> None:
-        self.now, self.starts, self.actions = now, [], actions or {}
+        self.now, self.actions = now, actions or {}
+        self.starts: list[tuple[str, Any]] = []
 
     def note(self, label: str) -> None:
         self.starts.append((label, self.now()))
@@ -1064,17 +1065,15 @@ def test_a_worker_that_is_dispatched_after_the_deadline_starts_neither_a_read_no
 
 
 @pytest.mark.parametrize("phase", ["snapshot", "registration"])
-@pytest.mark.parametrize("kind", ["requests", "empty_mapping", "error_none", "error_without_code", "text", "list"])
+@pytest.mark.parametrize("kind", ["response_none", "empty_mapping", "error_none", "error_without_code", "text", "list"])
 def test_an_error_of_any_shape_fails_one_dictionary_alone_with_the_original_type_and_message(phase: str, kind: str) -> None:
-    from requests.exceptions import ConnectionError as RequestsConnectionError
-
     class Odd(Exception):
         def __init__(self, response: Any) -> None:
             super().__init__("stand-in failure")
             self.response = response
 
     errors = {
-        "requests": RequestsConnectionError("stand-in connection failed"),
+        "response_none": Odd(None),
         "empty_mapping": Odd({}),
         "error_none": Odd({"Error": None}),
         "error_without_code": Odd({"Error": {"Message": "stand-in"}}),

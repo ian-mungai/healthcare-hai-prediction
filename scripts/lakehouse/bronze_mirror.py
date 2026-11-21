@@ -252,7 +252,7 @@ def register_dictionaries(
     to read fails alone. Never raises, and every one of ``names`` has exactly one outcome: whatever was not reached when an error or the deadline came is
     reported failed with its cause.
     """
-    if not dictionary_enabled(config, dictionary_namespace):
+    if dictionary_namespace is None or not dictionary_enabled(config, dictionary_namespace):
         return {}
     outcomes: dict[str, str] = {}
 

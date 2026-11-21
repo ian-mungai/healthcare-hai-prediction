@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
@@ -30,10 +31,10 @@ TOPIC = "arn:aws:sns:us-west-2:" + "1" * 12 + ":alerts"
 def run_record(
     failed: list[str],
     completed: list[str] | None = None,
-    refused: list[str] = (),
-    keyed: list[str] = (),
-    changed: list[str] = (),
-    unchanged: list[str] = (),
+    refused: Sequence[str] = (),
+    keyed: Sequence[str] = (),
+    changed: Sequence[str] = (),
+    unchanged: Sequence[str] = (),
     raw: dict | None = None,
 ) -> bytes:
     """A run record: the names become units, and ``raw`` replaces whole unit lists as they are."""
@@ -59,7 +60,8 @@ class Bucket:
         self.objects, self.broken = dict(objects), dict(broken or {})
         self.published: list[Any] = []
         self.puts: list[Any] = []
-        self.listed, self.puts_at_send, self.send_calls = 0, None, 0
+        self.listed, self.send_calls = 0, 0
+        self.puts_at_send: list[str] | None = None
 
     def fail(self, call: str) -> None:
         """The call raises the fault that the test set for it, as the SDK raises when the connection is refused or a read stalls past its timeout."""
@@ -331,8 +333,14 @@ def test_the_notice_clients_have_short_timeouts_and_one_attempt(monkeypatch: pyt
 
 
 def test_the_sns_client_of_the_notice_is_made_with_the_short_timeouts_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
-    store, made = bucket(["a__1__x"]), []
-    monkeypatch.setattr("boto3.client", lambda *args, **kwargs: made.append((args, kwargs)) or store)
+    store = bucket(["a__1__x"])
+    made: list[tuple[Any, Any]] = []
+
+    def make_client(*args: Any, **kwargs: Any) -> Any:
+        made.append((args, kwargs))
+        return store
+
+    monkeypatch.setattr("boto3.client", make_client)
     bronze_run.record_carried_over(store, BUCKET, RUN, "raw/", topic=TOPIC)
     options = made[0][1]["config"]
     check(made[0][0] == ("sns",) and (options.connect_timeout, options.read_timeout, options.retries["total_max_attempts"]) == (2, 3, 1), f"{made}")
@@ -344,7 +352,7 @@ def test_a_notice_that_cannot_even_make_its_client_leaves_the_check_phase_going(
         raise KeyError("AWS_REGION")
 
     monkeypatch.setattr(bronze_run, "notice_storage", refuse)
-    bronze_run.run_notice(SimpleNamespace(bucket=BUCKET, run=RUN), [])
+    bronze_run.run_notice(cast("bronze_run.Job", SimpleNamespace(bucket=BUCKET, run=RUN)), [])
     check("the capture notice did not start" in capsys.readouterr().err, "the failure is not shown on standard error")
 
 
