@@ -47,7 +47,7 @@ from scripts.acquisition.run_cms_owners_e2e import synthetic_plan as owners_plan
 from scripts.acquisition.run_onc_mu_e2e import body as onc_body
 from scripts.acquisition.run_onc_mu_e2e import locked as onc_locked
 from scripts.acquisition.s3_store import encoded_json
-from scripts.acquisition.source_registry import REPO_ROOT, read_json
+from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json
 from scripts.acquisition.tests.test_task_owners import ACCOUNT, BUCKET, TaskS3, Web, opener, storage
 from tests.support import check
 
@@ -784,6 +784,56 @@ def archive(reference: bytes, data: bytes) -> bytes:
 
 def pdf(number: int) -> bytes:
     return b"%PDF-1.7\nexample documentation " + str(number).encode() + b"\n%%EOF"
+
+
+def raising_adapter(error: BaseException) -> Any:
+    """A collector stand-in that fails with ``error`` before it sends anything."""
+
+    def adapt(unit: dict, spec: dict, folder: Path, run: mode.CaptureRun, opener: Any) -> Path:
+        raise error
+
+    return adapt
+
+
+def failed_entry(tmp_path: Path, error: BaseException) -> tuple[dict, str]:
+    """The one failed entry of a run whose hud_api collector raised ``error``, and the run record's stored text."""
+    world, _ = api_world(tmp_path)
+    result = world.run(adapters={"hud_api": raising_adapter(error)})
+    (entry,) = result["units"]["failed"]
+    return entry, world.bucket.objects[f"{ROOT}ingestion_runs/run01/run.json"][1].decode()
+
+
+def test_a_failed_unit_names_the_message_of_a_contract_exception_and_its_category(tmp_path: Path) -> None:
+    message = "HUD HTTP 401 or non-JSON type rejected; no redirect followed"
+    entry, stored = failed_entry(tmp_path, RegistryError(message))
+    check(entry["reason"] == "registry_contract" and entry["detail"] == message, str(entry))
+    check(message in stored, "the stored run record holds the detail")
+
+
+def test_a_failed_unit_of_another_exception_type_names_only_the_type(tmp_path: Path) -> None:
+    entry, stored = failed_entry(tmp_path, KeyError("synthetic-secret-token-value"))
+    check(entry["detail"] == "KeyError" and "synthetic-secret-token-value" not in stored, f"{entry}")
+
+
+def test_a_storage_failure_names_only_its_type_because_its_text_carries_the_service_error_code(tmp_path: Path) -> None:
+    entry, stored = failed_entry(tmp_path, s3_store.StorageError("list-objects-v2", "AccessDenied"))
+    check(entry["reason"] == "storage_contract" and entry["detail"] == "StorageError" and "AccessDenied" not in stored, f"{entry}")
+
+
+def test_a_long_contract_message_is_cut_to_300_characters(tmp_path: Path) -> None:
+    entry, _ = failed_entry(tmp_path, transport.CaptureError("word " * 200))
+    check(len(entry["detail"]) == 300 and entry["detail"].startswith("word word"), f"{len(entry['detail'])}")
+
+
+def test_a_refused_unit_names_its_refusal_as_detail(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    key, body = next(iter(world.records().items()))
+    body["data_objects"][0]["sha256"] = "f" * 64
+    version, _, fields = world.bucket.objects[key]
+    world.bucket.objects[key] = (version, encoded_json(body), fields)
+    (entry,) = world.run()["units"]["refused"]
+    check(entry["detail"] == entry["reason"] and 0 < len(entry["detail"]) <= 300, str(entry))
 
 
 class SlowClock:

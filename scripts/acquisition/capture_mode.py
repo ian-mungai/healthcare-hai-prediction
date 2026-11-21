@@ -63,6 +63,7 @@ BYTE_CAP = 128 * 2**30
 STALE_RETRY = timedelta(hours=20)
 MAX_ATTEMPTS = 2
 MIN_DOWNLOAD_RATE = 512 * 1024
+DETAIL_LIMIT = 300
 UNIT_FOLDER = re.compile(r"[a-f0-9]{64}")
 MANUAL_MODES = redownload.MANUAL_MODES
 COLLECTOR_MODES = frozenset(redownload.PLANNED) | {"mmd_api"}
@@ -1076,6 +1077,7 @@ class Result:
     unit: dict
     status: str
     reason: str | None = None
+    detail: str | None = None
 
 
 def rechecks(run: CaptureRun, unit: Mapping[str, Any]) -> bool:
@@ -1196,6 +1198,16 @@ def failure_reason(error: Exception) -> str:
     return redownload.error_category(error)
 
 
+def failure_detail(error: Exception) -> str:
+    """What the run record says about a failed unit besides its code: the message of the project's own contract exceptions (``CaptureError``,
+    ``RegistryError`` and ``ContractFailure`` with their subclasses), cut to ``DETAIL_LIMIT`` characters, and only the type name of any other exception. The
+    messages are fixed text: a response, a request detail and a credential are never put in one. A ``StorageError`` names its type only, because its text
+    carries the storage service's own error code, which no record may hold."""
+    if isinstance(error, (CaptureError, RegistryError, ContractFailure)) and not isinstance(error, StorageError):
+        return " ".join(str(error).split())[:DETAIL_LIMIT]
+    return type(error).__name__
+
+
 def decide_skip(run: CaptureRun, unit: Mapping[str, Any], key: str, now: datetime, expected: Mapping[str, Any]) -> tuple[str, str | None]:
     """Before any request: ``complete`` (a verified record), ``refused`` (a record that does not verify), ``stale`` (retry interval not over) or ``go``."""
     if not rechecks(run, unit):
@@ -1232,7 +1244,11 @@ def save_cooldown(run: CaptureRun, source: str, seconds: int, form: str) -> date
 
 
 def entry(result: Result) -> dict[str, Any]:
-    return {"unit_key": result.key, "source_id": result.unit["source_id"], "snapshot_id": result.unit["snapshot_id"], "reason": result.reason}
+    """The run record's entry of a unit. A failed or refused unit also names its detail: the exception's detail, else its refusal text."""
+    item = {"unit_key": result.key, "source_id": result.unit["source_id"], "snapshot_id": result.unit["snapshot_id"], "reason": result.reason}
+    if result.status in {"failed", "refused"}:
+        item["detail"] = (result.detail if result.detail is not None else str(result.reason))[:DETAIL_LIMIT]
+    return item
 
 
 def execute(run: CaptureRun) -> dict[str, Any]:
@@ -1301,7 +1317,9 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 key, expected = unit_key_of(unit, spec), expectation(run, unit, spec)
             except SpecError:
                 tried.add(source)
-                done["failed"].append({"unit_key": None, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete"})
+                done["failed"].append(
+                    {"unit_key": None, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete", "detail": "SpecError"}
+                )
                 if first:
                     paused.add(source)
                 continue
@@ -1310,7 +1328,9 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 verdict, why = decide_skip(run, unit, key, run.clock(), expected)
             except StorageError as error:
                 tried.add(source)
-                done["failed"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": failure_reason(error)})
+                done["failed"].append(
+                    {"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": failure_reason(error), "detail": failure_detail(error)}
+                )
                 paused.add(source)
                 continue
             if journal.faults != decided:
@@ -1321,7 +1341,9 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 elif verdict == "stale":
                     done["skipped_recent_stale"].append(key)
                 else:
-                    done["refused"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why})
+                    done["refused"].append(
+                        {"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why, "detail": str(why)[:DETAIL_LIMIT]}
+                    )
                 continue
             if source not in checked:
                 checked.add(source)
@@ -1341,7 +1363,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             try:
                 result = attempt(run, unit, spec, key, opener, state, expected)
             except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
-                result = Result(key, unit, "failed", failure_reason(error))
+                result = Result(key, unit, "failed", failure_reason(error), failure_detail(error))
                 limited = error if isinstance(error, RateLimit) else None
             state["bytes_downloaded"] = observer.bytes
             if result.reason == source_cooldown.REASON:
