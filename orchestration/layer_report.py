@@ -41,6 +41,7 @@ LISTING_PREFIX = "lakehouse/"
 LISTING_LIMIT = acceptance.LIMIT
 ARCHIVE_LIMIT = acceptance.ARCHIVE_LIMIT
 DEADLINE_SECONDS = 720.0  # the evidence task stops at 15 minutes
+FAILURE_EVIDENCE_SECONDS = 120.0  # the closing evidence of a failed launch is a best effort: it holds the pool slots, so it gets a short budget
 CHUNK = acceptance.CHUNK
 LOG = logging.getLogger(__name__)
 
@@ -313,8 +314,9 @@ def container_instance_ids(access: ReportAccess, arns: list[str]) -> list[str]:
     return ids
 
 
-def host_facts(access: ReportAccess) -> dict[str, Any]:
-    """The facts the host check reads: the group's desired capacity and instances and the EC2 instances of the active container instances."""
+def host_facts(access: ReportAccess, deadline: float) -> dict[str, Any]:
+    """The facts the host check reads: the group's desired capacity and instances and the EC2 instances of the active container instances. No page is
+    requested after ``deadline`` (a ``time.monotonic`` value)."""
     if not access.host_group:
         raise ReportError("HAI_LAUNCH_HOST_GROUP is not set in the Airflow service environment")
     try:
@@ -324,6 +326,8 @@ def host_facts(access: ReportAccess) -> dict[str, Any]:
         containers: list[str] = []
         token: dict[str, str] = {}
         while True:
+            if time.monotonic() > deadline:
+                raise ReportError("the host description did not finish before its deadline")
             reply = access.ecs.list_container_instances(cluster=access.cluster, status="ACTIVE", **token)
             containers += container_instance_ids(access, [str(arn) for arn in reply.get("containerInstanceArns") or []])
             if not reply.get("nextToken"):
@@ -341,16 +345,18 @@ def host_facts(access: ReportAccess) -> dict[str, Any]:
     }
 
 
-def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int = LISTING_LIMIT) -> Path:
+def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int = LISTING_LIMIT, seconds: float = DEADLINE_SECONDS) -> Path:
     """Save the evidence that closes the job's window once for the run: the listing of ``lakehouse/`` after the launch, the description of the stopped task, the
-    host family's running tasks and the host facts. The job task calls it right after the launch, while it still holds the pool slot. A record that exists is
-    kept (and checked)."""
+    host family's running tasks and the host facts. The job task calls it right after the launch, while it still holds the pool slot, and after a launch that
+    ended in a failure. A record that exists is kept (and checked). When an earlier attempt could not save it (the task was not yet stopped or the save failed),
+    a retry that saves it late takes the listing at retry time: the writes of other runs between the stop and the retry are then in the listing. Every wait
+    ends at ``seconds`` after the call, and a write that fails is a ``ReportError``."""
     folder = folder_of(access, layer, run)
     path = folder / "closing.json"
     if path.exists() or path.is_symlink():
         checked_closing(path, layer, run)
         return path
-    deadline = time.monotonic() + DEADLINE_SECONDS
+    deadline = time.monotonic() + seconds
     _, events = launch_events(access, layer, run)
     task = task_description(access, str(events["started"]["task_arn"]))
     if task["tasks"][0].get("lastStatus") != "STOPPED":
@@ -362,12 +368,15 @@ def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int
         "after": listing_document(layer, run, list_versions(access.s3, access.bucket, limit, deadline)),
         "task": task,
         "running": running_facts(access, layer, deadline),
-        "host": host_facts(access),
+        "host": host_facts(access, deadline),
     }
     data = json.dumps(document).encode()
     if len(data) > 2 * limit:
         raise ReportError("the closing evidence is larger than the report limit")
-    write_private(path, data)
+    try:
+        write_private(path, data)
+    except OSError as error:
+        raise ReportError(f"the closing evidence could not be written ({type(error).__name__})") from None
     return path
 
 

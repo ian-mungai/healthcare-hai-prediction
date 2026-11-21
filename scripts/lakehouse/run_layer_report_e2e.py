@@ -933,6 +933,69 @@ def failed_launch_cases(work: Path) -> dict[str, bool]:
     failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in")
     raised = job_step(box, env, request, failure)
     checks["a task ECS still describes as running is not recorded as stopped, and the failure goes on"] = raised is failure and saved(box, env) is None
+
+    class Runaway(Exception):
+        """The stand-in stops an endless walk that no deadline stopped, so the check fails instead of hanging."""
+
+    class EndlessEcs(FakeEcs):
+        """Every page of the active container instances names another page, and each request takes 100 seconds on the clock the report reads."""
+
+        def __init__(self, box: Box, clock: list[float], requests: list[float]) -> None:
+            super().__init__(box)
+            self.clock, self.requests = clock, requests
+
+        def list_container_instances(self, **arguments: Any) -> dict[str, Any]:
+            self.requests.append(self.clock[0])
+            if len(self.requests) > 30:
+                raise Runaway
+            self.clock[0] += 100.0
+            return {"containerInstanceArns": [], "nextToken": f"page{len(self.requests)}"}
+
+    def endless(name: str, outcome: str | None) -> tuple[Box, fixtures.Env, SubmissionRequest, list[float], Any]:
+        box, env, request = rig(name, outcome)
+        clock, requests = [0.0], []
+        box.access = replace(box.access, ecs=EndlessEcs(box, clock, requests))
+        return box, env, request, requests, mock.patch.object(layer_report, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    box, env, request, requests, fake_time = endless("endless_save", None)
+    box.s3.entries = entries_of(json.loads((env.root / "after.json").read_text()))
+    with fake_time:
+        try:
+            result = attempt(lambda: layer_report.save_closing_evidence(box.access, "silver", env.spec.run))
+        except Runaway:
+            result = ("runaway", None)
+    checks["the host facts of a closing save stop at the 720 second deadline when every page names another page"] = (
+        result[0] == "error" and "deadline" in str(result[1]) and len(requests) <= 9 and max(requests, default=0.0) <= 720.0
+    )
+    checks["a closing save that hit its deadline leaves no closing evidence"] = saved(box, env) is None
+    box, env, request, requests, fake_time = endless("endless_failure", "failed")
+    failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in")
+    with fake_time:
+        raised = job_step(box, env, request, failure)
+    checks["a failed launch whose host facts never end: the same failure goes on within the short budget of the helper"] = (
+        raised is failure and len(requests) <= 4
+    )
+    checks["a failed launch whose host facts never end: the failure carries a note that no evidence was saved"] = raised is failure and any(
+        "closing evidence was not saved" in note for note in getattr(failure, "__notes__", [])
+    )
+    checks["a failed launch whose host facts never end: no closing evidence is saved"] = saved(box, env) is None
+    for label, outcome in (("a failed launch", "failed"), ("a launch that succeeded", None)):
+        box, env, request = rig(f"disk_full_{outcome}", outcome)
+        failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in") if outcome else None
+        box.s3.entries = entries_of(json.loads((env.root / "before.json").read_text()))
+        layer_report.save_before_listing(box.access, "silver", env.spec.run)  # kept by job_step, so only the closing write meets the full disk
+        with mock.patch.object(layer_report, "write_private", mock.Mock(side_effect=OSError(28, "No space left on device"))):
+            raised = job_step(box, env, request, failure)
+        if outcome:
+            checks[f"{label}: a full disk while writing the closing evidence keeps the failure and notes it"] = raised is failure and any(
+                "closing evidence was not saved" in note for note in getattr(failure, "__notes__", [])
+            )
+        else:
+            checks[f"{label}: a full disk while writing the closing evidence fails the step by name, not with a raw OSError"] = isinstance(
+                raised, airflow_steps.LaunchRefused
+            )
+    doc = layer_report.save_closing_evidence.__doc__ or ""
+    checks["save_closing_evidence documents that a retry that saves late takes the listing at retry time"] = "retry time" in " ".join(doc.split())
     return checks
 
 

@@ -360,14 +360,21 @@ def report_access(found: LaunchServices) -> layer_report.ReportAccess:
     return found.report
 
 
-def keep_closing_evidence(found: LaunchServices, job: str, run: str) -> None:
+def keep_closing_evidence(found: LaunchServices, job: str, run: str) -> str:
     """After a launch that ended in a failure, save the closing evidence of its stopped task before the failure goes on: ECS describes a stopped task for about
     an hour only, and a retry adopts the same failure. A launch with no end record (the task is unresolved or still running) or a task that ECS does not
-    describe as stopped saves nothing. The launch's own failure is what the task reports, so a failure to save is only logged."""
+    describe as stopped saves nothing. This is a best effort that holds the pool slots, so it has a short deadline (``FAILURE_EVIDENCE_SECONDS``) and never
+    raises: it returns "" when the evidence is saved, otherwise the reason it is not, for the caller to note on the launch's own failure."""
     try:
-        layer_report.save_closing_evidence(report_access(found), job, run)
+        layer_report.save_closing_evidence(report_access(found), job, run, seconds=layer_report.FAILURE_EVIDENCE_SECONDS)
     except (layer_report.ReportError, LaunchRefused) as error:
-        LOG.warning("no closing evidence was saved for the failed %s run %s: %s", job, run, error)
+        reason = str(error)
+    except OSError as error:
+        reason = f"the closing evidence could not be saved ({type(error).__name__})"
+    else:
+        return ""
+    LOG.warning("no closing evidence was saved for the failed %s run %s: %s", job, run, reason)
+    return reason
 
 
 def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str], built: Callable[[Any], None] | None = None) -> str:
@@ -390,15 +397,17 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
             raise LaunchRefused(str(error)) from None
     try:
         launch(found, request, spec, context, built)
-    except Exception:
-        if report:
-            keep_closing_evidence(found, spec.job, request.run_id)
+    except Exception as failure:
+        if report and (reason := keep_closing_evidence(found, spec.job, request.run_id)):
+            failure.add_note(f"the closing evidence was not saved: {reason}")
         raise
     if report:
         try:
             layer_report.save_closing_evidence(report_access(found), spec.job, request.run_id)
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
+        except OSError as error:
+            raise LaunchRefused(f"the closing evidence could not be saved ({type(error).__name__})") from None
     return "succeeded"
 
 

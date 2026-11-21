@@ -350,7 +350,9 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
             mock.patch.object(airflow_steps, "UNAVAILABLE_SECONDS", 1.0),
             mock.patch.object(shutil, "disk_usage", lambda _path: SimpleNamespace(total=SCRATCH_FREE, used=0, free=SCRATCH_FREE)),
             mock.patch.object(airflow_steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
-            mock.patch.object(airflow_steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
+            mock.patch.object(
+                airflow_steps.layer_report, "save_closing_evidence", lambda access, layer, run, **_: rig.reports.append(f"closing {layer} {run}")
+            ),
             mock.patch.object(
                 airflow_steps.layer_report,
                 "accept",
