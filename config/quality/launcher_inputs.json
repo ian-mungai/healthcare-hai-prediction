@@ -369,8 +369,8 @@
     },
     {
       "module": "scripts/orchestration/ecs_lineage_cases.py",
-      "pattern": "^data_contracts/openlineage/[^/]+[.]json$",
-      "why": "reviewed: the lineage cases list the copied OpenLineage specification files with glob at scripts/orchestration/ecs_lineage_cases.py:162 and :863 on SPEC_FOLDER (:43 = ROOT / data_contracts / openlineage) and read each match; the second site compares the folder with the digests that orchestration/ecs_lineage.py pins, so an extra file fails; no other folder is listed"
+      "pattern": "^data_contracts/openlineage/[^/]+[.]json$|^dbt/models/.+[.](sql|yml)$",
+      "why": "reviewed: the lineage cases list two folders of the checkout. The copied OpenLineage specification files are listed with glob at scripts/orchestration/ecs_lineage_cases.py:162 and :904 on SPEC_FOLDER (:43 = ROOT / data_contracts / openlineage) and each match is read; the second site compares the folder with the digests that orchestration/ecs_lineage.py pins, so an extra file fails. The dbt project is listed in dbt_layers at :401, :402 and :403 on ROOT / dbt/models: iterdir for the model folders, rglob of *.sql inside each folder to see whether it holds SQL, and rglob of *.yml read as YAML for the declared source schemas, so the pattern is the SQL and YAML files under dbt/models; no other folder is listed"
     },
     {
       "module": "scripts/orchestration/in_image_checks.py",
@@ -506,7 +506,7 @@
     "scripts/lakehouse/silver_input.py": 2,
     "scripts/lakehouse/silver_quality.py": 1,
     "scripts/orchestration/airflow_mode_cases.py": 3,
-    "scripts/orchestration/ecs_lineage_cases.py": 2,
+    "scripts/orchestration/ecs_lineage_cases.py": 5,
     "scripts/orchestration/in_image_checks.py": 1,
     "scripts/orchestration/ledger.py": 1,
     "scripts/orchestration/offline_checks.py": 1,
