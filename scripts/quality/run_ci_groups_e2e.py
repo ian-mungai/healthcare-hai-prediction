@@ -935,9 +935,19 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             [*silver_downstream, "orchestration_checks", "sql_style"],
         ),
         path_case(
-            "layer_silver_model_selects_silver_gold_and_features",
+            "layer_silver_model_read_by_the_bronze_consumer_columns_selects_every_layer",
             "dbt/models/silver/staging/_staging__models.yml",
-            [*silver_downstream, "orchestration_checks", "sql_style"],
+            [*LAYERS, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_intermediate_model_read_by_the_bronze_consumer_columns_selects_every_layer",
+            "dbt/models/silver/intermediate/int_acs_county_values.sql",
+            [*LAYERS, "orchestration_checks", "sql_style"],
+        ),
+        path_case(
+            "layer_identity_classification_read_by_the_bronze_consumer_columns_selects_every_layer",
+            "config/lakehouse/identity_classification.csv",
+            [*LAYERS, "configuration_checks"],
         ),
         path_case("layer_gold_seed_selects_gold_and_features", "dbt/seeds/gold/identity_splits.csv", [*LAYERS[2:], "orchestration_checks", "sql_style"]),
         path_case(
@@ -997,11 +1007,6 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
             "dbt/models/silver/intermediate/int_silver_build_marker.sql",
             [*LAYERS, "orchestration_checks", "sql_style"],
         ),
-        path_case(
-            "layer_staging_model_nothing_upstream_reads_selects_silver_gold_and_features",
-            "dbt/models/silver/staging/stg_acs_dp02.sql",
-            [*silver_downstream, "orchestration_checks", "sql_style"],
-        ),
         path_case("layer_shared_macro_selects_every_layer", "dbt/macros/file_metadata.sql", [*LAYERS, "orchestration_checks", "sql_style"]),
         path_case("layer_gold_contract_is_read_by_bronze_first", "data_contracts/lakehouse/gold_contract.json", [*LAYERS, "orchestration_checks"]),
         path_case("layer_gold_suite_is_read_by_bronze_first", "data_contracts/great_expectations/gold/gold_keys.json", [*LAYERS, "orchestration_checks"]),
@@ -1027,9 +1032,9 @@ def layer_cases(work: Path) -> list[dict[str, Any]]:
         ),
         staged_case(
             work,
-            "layer_staged_silver_model_selects_silver_gold_and_features",
+            "layer_staged_silver_model_selects_every_layer",
             [["update-index", "--add", "--cacheinfo", f"100644,{blob},dbt/models/silver/staged_copy.yml"]],
-            [*silver_downstream, "orchestration_checks", "sql_style"],
+            [*LAYERS, "orchestration_checks", "sql_style"],
         ),
         path_case(
             "layer_feast_job_only_change_selects_features_only",
@@ -1816,7 +1821,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
                 ("README.md", ["repository_code_checks"]),
                 (
                     "dbt/models/silver/intermediate/_intermediate__models.yml",
-                    [*LAYERS[1:], "orchestration_checks", "repository_code_checks", "sql_style"],
+                    [*LAYERS, "orchestration_checks", "repository_code_checks", "sql_style"],
                 ),
             )
         ),
