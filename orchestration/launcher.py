@@ -8680,7 +8680,7 @@ class Launcher:
             ends = record.get("ends") if record["phase"] == "command" else None
             if ends is not None and now + deadline > ends:
                 # The running command is stopped at a time fixed when it began; a caller that would wait longer cannot be served by it.
-                left = f"{max(ends - now, 0):.0f}"
+                left = str(int(max(ends - now, 0)))  # rounded down, so a caller that asks with this deadline is admitted
                 raise LauncherError(
                     f"a Docker Desktop start is running and its command is stopped in {left} s: ask again after it ends, or with a deadline of at most that",
                     "refused",
