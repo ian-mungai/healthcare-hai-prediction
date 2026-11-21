@@ -1494,6 +1494,30 @@ def reader_scan_case(tracked: set[str]) -> dict[str, Any]:
 
 
 HOSTED_ENTRY_POINTS = {
+    "lakehouse_bronze": (
+        (
+            'scripts.lakehouse.run_aws_bronze_writer_e2e --out "$quality_output/aws_bronze_writer"'
+            " --journal-module scripts/lakehouse/catalog_journal.py --plant-defects",
+            (
+                "scripts/lakehouse/run_aws_bronze_writer_e2e.py",
+                "scripts/lakehouse/bronze_writer_cases.py",
+                "scripts/infrastructure/bronze_policy_cases.py",
+                "infra/iam/owner_policies/bronze_writer_storage.json",
+                "infra/iam/owner_policies/bronze_writer_source_lists.json",
+                "infra/iam/owner_policies/bronze_writer_source_objects.json",
+                "infra/iam/owner_policies/bronze_writer_pseudonym_key.json",
+                "infra/iam/owner_policies/bronze_writer_run_record_writes.json",
+                "infra/iam/owner_policies/bronze_writer_run_records.json",
+                "infra/iam/owner_policies/bronze_execution.json",
+                "infra/iam/owner_policies/bronze_project_delta.json",
+                "infra/iam/owner_policies/owner_notice.json",
+                "infra/iam/owner_policies/job_stage_read.json",
+                "infra/iam/bronze_writer.tf",
+                "infra/iam/bronze_writer_variables.tf",
+                "infra/iam/tests/bronze_writer.tftest.hcl",
+            ),
+        ),
+    ),
     "lakehouse_features_store": (
         ("scripts.features.feature_schema check", ("scripts/features/feature_schema.py", "data_contracts/features/feature_schema_rules.json")),
         ("scripts.features.run_feature_store_e2e --mode static", ("scripts/features/run_feature_store_e2e.py", "scripts/features/feature_schema.py")),
