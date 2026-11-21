@@ -2466,7 +2466,7 @@ def change_parts(root: Path, remove: str = "", repeat: str = "") -> None:
 
 
 # The saved cost of each feature case in seconds (config/quality/feature_case_costs.json) and the shard counts it is balanced for (owner decision 163).
-FEATURE_SHARD_PLAN = {"sources": (16, 450.0), "columns": (4, 100.0)}
+FEATURE_SHARD_PLAN = {"sources": (16, 400.0), "columns": (2, 110.0)}
 
 
 def feature_weight_cases() -> list[dict[str, Any]]:
@@ -2493,7 +2493,7 @@ def feature_weight_cases() -> list[dict[str, Any]]:
                     and sorted(with_new) == sorted(extra)
                     and set(costs) == set(names)
                     and max(loads) <= bound
-                    and (suite != "columns" or (len(heavy) == 4 and len(expensive) == 4)),
+                    and (suite != "columns" or (len(heavy) == 4 and len(expensive) == 2)),
                     "configured_count": config[suite],
                     "cases": len(names),
                     "heaviest_shard_seconds": max(loads),
@@ -2503,6 +2503,28 @@ def feature_weight_cases() -> list[dict[str, Any]]:
         except Exception as error:
             results.append({"case": name, "passed": False, "error": f"{type(error).__name__}: {error}"})
     return results
+
+
+# The four samples shards (the test-checks hook) are packed by the saved case seconds (config/quality/shard_costs.json): no shard is over this bound.
+SAMPLES_SHARD_BOUND = 1000.0
+
+
+def sample_weight_cases() -> list[dict[str, Any]]:
+    """The samples shards balance the saved case costs: each case runs in one shard and no shard holds more than the bound of seconds."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))["hook_shards"]
+    costs = case_shards.saved_costs("run_checks_e2e")
+    names = list(costs)
+    count = int(config["samples"])
+    shards = case_shards.weighted_shards(names, costs, count)
+    loads = [round(sum(costs[case] for case in shard), 1) for shard in shards]
+    return [
+        {
+            "case": "samples_shards_are_weighted_by_the_saved_costs",
+            "passed": count == 4 and sorted(case for shard in shards for case in shard) == sorted(names) and max(loads) <= SAMPLES_SHARD_BOUND,
+            "shards": count,
+            "loads": loads,
+        }
+    ]
 
 
 WORKER_KINDS = (
@@ -2724,12 +2746,14 @@ def feature_gather_suite_cases(scratch: Path, run_id: str, suite: str, count: in
     def passed_first_then_failed(downloads: Path) -> None:
         artifact(downloads, 2, 2, report(2, "fail"))
 
+    missing = min(3, count)
+
     def shard_never_uploaded(downloads: Path) -> None:
-        shutil.rmtree(downloads / f"feature_{suite}_shard_3_{run_id}_1")
+        shutil.rmtree(downloads / f"feature_{suite}_shard_{missing}_{run_id}_1")
 
     def another_run_stands_in(downloads: Path) -> None:
-        shutil.rmtree(downloads / f"feature_{suite}_shard_3_{run_id}_1")
-        artifact(downloads, 3, 1, report(3), run="999")
+        shutil.rmtree(downloads / f"feature_{suite}_shard_{missing}_{run_id}_1")
+        artifact(downloads, missing, 1, report(missing), run="999")
 
     def newest_attempt_uploaded_nothing(downloads: Path) -> None:
         artifact(downloads, 2, 1, report(2, "fail"))
@@ -2738,8 +2762,8 @@ def feature_gather_suite_cases(scratch: Path, run_id: str, suite: str, count: in
     cases = (
         ("rerun_shard_that_failed_then_passed_combines", failed_first_then_passed, True, ""),
         ("newest_report_of_a_shard_wins_over_an_earlier_pass", passed_first_then_failed, False, "shard 2/"),
-        ("shard_without_any_report_names_the_cause", shard_never_uploaded, False, "no attempt of run 424242 uploaded a report for shard 3:"),
-        ("report_of_another_run_never_stands_in", another_run_stands_in, False, "no attempt of run 424242 uploaded a report for shard 3:"),
+        ("shard_without_any_report_names_the_cause", shard_never_uploaded, False, f"no attempt of run 424242 uploaded a report for shard {missing}:"),
+        ("report_of_another_run_never_stands_in", another_run_stands_in, False, f"no attempt of run 424242 uploaded a report for shard {missing}:"),
         ("newest_attempt_without_a_report_falls_back_to_the_earlier_failure", newest_attempt_uploaded_nothing, False, "did not pass"),
     )
     for label, plant, expect_pass, intended in cases:
@@ -3948,6 +3972,7 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
         *timeout_cases(),
         *core_command_cases(),
         *feature_weight_cases(),
+        *sample_weight_cases(),
     ]
 
 

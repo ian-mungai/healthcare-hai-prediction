@@ -317,9 +317,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Hosted run 43730985805 (Nov 15 2026) took 25.6 to 42.7 minutes per shard. Its per-case seconds now balance the shards at about 33.4 minutes each;
-    # 51 minutes is 1.5 times that. Resize from the first hosted run of the balanced shards.
-    timeout-minutes: 51
+    # Hosted run 44930295246 (Nov 21 2026) took 22.6, 15.4, 15.8 and 16.2 minutes per shard. Its per-case seconds balance the shards at about 955 s of cases (18 minutes with setup).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -691,7 +690,8 @@ jobs:
     runs-on: ubuntu-24.04
     # Measured job wall time with eight shards on main (3 runs, Oct 28 2026): max 22.7 min (shard 1, 1037 s of cases), shards 16.6 to 22.7 min, so about 325 s of setup
     # and gates. The sixteen shards are packed by the saved case costs (config/quality/feature_case_costs.json): at most 440 s of cases in a shard.
-    # Wall time: 12.8 min, estimate: 440 s of cases plus 325 s of setup and gates. Resize from the first complete hosted run.
+    # Hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 min, 230 to 265 s of that setup and gates. Repacked by the measured case seconds (about 381 s of cases per shard):
+    # estimate 11 min.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -744,16 +744,16 @@ jobs:
           retention-days: 14
 
   feature_columns:
-    name: Feature Columns (Shard ${{ matrix.shard }} of 4)
+    name: Feature Columns (Shard ${{ matrix.shard }} of 2)
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 7.1 min (shard 1), shards 4.9 to 7.1 min.
-    timeout-minutes: 30
+    # Hosted run 44930295246 (Nov 21 2026): four shards took 3.9 to 4.7 min, about 230 s of that setup. Two shards hold about 105 s of cases each (209 s in all): estimate 6 min.
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -784,7 +784,7 @@ jobs:
       - name: Run one feature columns shard with range selection
         env:
           CI_PART: feature_columns
-          FEATURE_SHARD: ${{ matrix.shard }}/4
+          FEATURE_SHARD: ${{ matrix.shard }}/2
           CI_SCOPE: ${{ needs.plan.outputs.scope }}
           RANGE_START: ${{ needs.plan.outputs.range_start }}
           RANGE_END: ${{ needs.plan.outputs.range_end }}
@@ -878,7 +878,7 @@ jobs:
         if: ${{ steps.selection.outputs.run == 'true' }}
         run: |
           .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite sources --count 16 --directory data/e2e/quality/feature_shards/sources
-          .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite columns --count 4 --directory data/e2e/quality/feature_shards/columns
+          .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite columns --count 2 --directory data/e2e/quality/feature_shards/columns
 
       - name: Retain the combined evidence
         if: ${{ always() }}

@@ -46,27 +46,27 @@
     },
     {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "measured_minutes": 34,
-      "timeout_minutes": 51,
-      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "hosted run 44930295246 (Nov 21 2026): the four shards took 22.6, 15.4, 15.8 and 16.2 minutes (1257, 825, 866 and 875 s of test-checks); repacked by the measured case seconds (3818 s in all) the estimate is about 955 s plus 100 s of setup"
     },
     {
       "job": "Repository Hooks (samples, shard 2 of 4)",
-      "measured_minutes": 34,
-      "timeout_minutes": 51,
-      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "hosted run 44930295246 (Nov 21 2026): the four shards took 22.6, 15.4, 15.8 and 16.2 minutes (1257, 825, 866 and 875 s of test-checks); repacked by the measured case seconds (3818 s in all) the estimate is about 955 s plus 100 s of setup"
     },
     {
       "job": "Repository Hooks (samples, shard 3 of 4)",
-      "measured_minutes": 34,
-      "timeout_minutes": 51,
-      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "hosted run 44930295246 (Nov 21 2026): the four shards took 22.6, 15.4, 15.8 and 16.2 minutes (1257, 825, 866 and 875 s of test-checks); repacked by the measured case seconds (3818 s in all) the estimate is about 955 s plus 100 s of setup"
     },
     {
       "job": "Repository Hooks (samples, shard 4 of 4)",
-      "measured_minutes": 34,
-      "timeout_minutes": 51,
-      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
+      "measured_minutes": 18,
+      "timeout_minutes": 30,
+      "basis": "hosted run 44930295246 (Nov 21 2026): the four shards took 22.6, 15.4, 15.8 and 16.2 minutes (1257, 825, 866 and 875 s of test-checks); repacked by the measured case seconds (3818 s in all) the estimate is about 955 s plus 100 s of setup"
     },
     {
       "job": "Repository Hooks (samples)",
@@ -190,123 +190,111 @@
     },
     {
       "job": "Feature Sources (Shard 1 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 2 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 3 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 4 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 5 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 6 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 7 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 8 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 9 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 10 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 11 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 12 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 13 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 14 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 15 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
       "job": "Feature Sources (Shard 16 of 16)",
-      "measured_minutes": 12.8,
+      "measured_minutes": 11,
       "timeout_minutes": 20,
-      "basis": "estimate, at most 440 s of cases (packed by the saved case costs) plus about 325 s of setup and gates; local Mac Nov 3 2026: shard 8 of 16 took 220 s, all 16 shards and the combine 411 s"
+      "basis": "hosted run 44930295246 (Nov 21 2026): shards took 7.6 to 13.4 minutes, 230 to 265 s of which was setup and gates; repacked by the measured case seconds (6101 s in all, about 381 s of cases per shard) the estimate is 381 s plus 265 s"
     },
     {
-      "job": "Feature Columns (Shard 1 of 4)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
+      "job": "Feature Columns (Shard 1 of 2)",
+      "measured_minutes": 6,
+      "timeout_minutes": 12,
+      "basis": "estimate from hosted run 44930295246 (Nov 21 2026): four shards took 3.9 to 4.7 minutes, mostly setup (about 230 s) and gates; two shards run about 105 s of cases each (209 s in all) plus that setup"
     },
     {
-      "job": "Feature Columns (Shard 2 of 4)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
-    },
-    {
-      "job": "Feature Columns (Shard 3 of 4)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
-    },
-    {
-      "job": "Feature Columns (Shard 4 of 4)",
-      "measured_minutes": 14,
-      "timeout_minutes": 30,
-      "basis": "estimate, case-list partition plus setup and gates; local Mac Nov 3 2026: shard 1 of 4 took 125 s, all 4 shards and the combine 128 s"
+      "job": "Feature Columns (Shard 2 of 2)",
+      "measured_minutes": 6,
+      "timeout_minutes": 12,
+      "basis": "estimate from hosted run 44930295246 (Nov 21 2026): four shards took 3.9 to 4.7 minutes, mostly setup (about 230 s) and gates; two shards run about 105 s of cases each (209 s in all) plus that setup"
     },
     {
       "job": "Feature Combined Evidence",

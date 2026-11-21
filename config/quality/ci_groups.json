@@ -349,7 +349,7 @@
   "core_budget": 12,
   "feature_shards": {
     "sources": 16,
-    "columns": 4
+    "columns": 2
   },
   "hook_groups": {
     "privacy": [
@@ -558,8 +558,8 @@
       "cores": 2
     },
     "lakehouse_features_columns": {
-      "job": "Feature Columns (Shard 1 of 4)",
-      "minutes": 30,
+      "job": "Feature Columns (Shard 1 of 2)",
+      "minutes": 12,
       "cores": 2
     },
     "lakehouse_features_sources_check": {
@@ -568,8 +568,8 @@
       "cores": 1
     },
     "lakehouse_features_columns_check": {
-      "job": "Feature Columns (Shard 1 of 4)",
-      "minutes": 30,
+      "job": "Feature Columns (Shard 1 of 2)",
+      "minutes": 12,
       "cores": 1
     },
     "combine_feature_sources": {
@@ -609,7 +609,7 @@
     },
     "hook_samples": {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "minutes": 51,
+      "minutes": 30,
       "cores": 2
     },
     "hook_samples_combine": {
