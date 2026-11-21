@@ -3432,6 +3432,82 @@ def desktop_start_joined_deadlines(env: Env) -> dict[str, bool]:
     }
 
 
+@case("desktop_start_longer_joiner", timings={"start_wait": 6})
+def desktop_start_longer_joiner(env: Env) -> dict[str, bool]:
+    """A caller that joins a running Docker Desktop start with a deadline beyond the time its command is stopped is refused at once with that time named;
+    the caller that began the start is not disturbed and fails at its own deadline."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.write_settings()
+    env.start()
+    owner = {"kind": "any", "owner": True}
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    set_mode(env, "start", "hang")
+    outcomes: dict[str, tuple[BaseException | None, float]] = {}
+
+    def call_after(name: str, delay: float, deadline: float) -> None:
+        time.sleep(delay)
+        began = time.monotonic()
+        error = expect_error(lambda: env.client().call("desktop_start", {"owner": True, "deadline": deadline}, owner, timeout=60))
+        outcomes[name] = (error, time.monotonic() - began)
+
+    threads = [threading.Thread(target=call_after, args=("first", 0.0, 6)), threading.Thread(target=call_after, args=("longer", 1.5, 20))]
+    for thread in threads:
+        thread.start()
+        env.threads.append(thread)
+    for thread in threads:
+        thread.join(timeout=40)
+    first, first_seconds = outcomes.get("first", (None, 0.0))
+    longer, longer_seconds = outcomes.get("longer", (None, 0.0))
+    runs = len(command_runs(env, "start"))
+    set_mode(env, "start", "act")
+    return {
+        "the longer joiner is refused at once and the refusal names the time left": refused(longer, "refused", "its command is stopped in")
+        and longer_seconds < 3,
+        "the refusal does not claim the joiner's own deadline passed": "within 20 s" not in str(longer),
+        "the caller that began the start fails at its own deadline": refused(first, "degraded", "did not answer within 6 s") and first_seconds >= 5,
+        "one start command ran": runs == 1,
+        "no start record is left": env.state()["launcher"]["desktop"] is None,
+    }
+
+
+@case("desktop_start_old_record", timings={"start_wait": 6})
+def desktop_start_old_record(env: Env) -> dict[str, bool]:
+    """A Docker Desktop start that an earlier launcher recorded (one began and deadline for all its requests, no expiry per request) is migrated when a
+    launcher starts on that registry: with time left the start goes on and ends, and past its deadline it ends at once and runs no command."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=0.5", delay=0.2)
+    env.write_settings()
+    env.start()
+    env.stop_launcher()
+
+    def plant(ago: float, deadline: float, request: str) -> None:
+        old = {"id": request, "phase": "probe", "requests": [request], "at": launcher.utc_now(), "began": time.time() - ago, "deadline": deadline, "ran": False}
+        with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+            state["launcher"]["desktop"] = old
+
+    def log_text() -> str:
+        return (env.registry / "launcher.log").read_text(errors="replace") if (env.registry / "launcher.log").exists() else ""
+
+    env.daemon.quit_desktop()
+    plant(1, 30, "old-time-left")
+    env.start(wait_serving=False)
+    ended = bool(env.wait(lambda: env.state()["launcher"]["desktop"] is None, 20, "the old record with time left ends"))
+    ran_with_time = len(command_runs(env, "start"))
+    env.wait(lambda: env.ping().get("status") == "serving", 20, "the launcher serves after the start")
+    env.stop_launcher()
+    env.daemon.quit_desktop()
+    plant(100, 5, "old-expired")
+    env.start(wait_serving=False)
+    expired = bool(env.wait(lambda: env.state()["launcher"]["desktop"] is None, 20, "the expired old record ends"))
+    time.sleep(1.0)
+    ran_after_expiry = len(command_runs(env, "start")) - ran_with_time
+    return {
+        "an old record with time left is advanced: the start command ran once and the record ended": ended and ran_with_time == 1,
+        "an old record past its deadline gains no time: it ended and no command ran": expired and ran_after_expiry == 0,
+        "the launcher advanced without a KeyError": "KeyError" not in log_text(),
+    }
+
+
 @case("docker_release_skips_and_refusals")
 def docker_release_skips_and_refusals(env: Env) -> dict[str, bool]:
     """R1, R2, R9, R23 and R28: docker_release skips with no container since the start time or with Docker down, and is refused (every foreign container
@@ -11111,6 +11187,8 @@ ALL_CASES = (
     docker_restart_answer_deadline,
     desktop_start,
     desktop_start_joined_deadlines,
+    desktop_start_longer_joiner,
+    desktop_start_old_record,
     docker_desktop_stale_stop,
     docker_release_skips_and_refusals,
     docker_release_quit,

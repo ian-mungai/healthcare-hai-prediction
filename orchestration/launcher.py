@@ -8658,15 +8658,33 @@ class Launcher:
         operation would hold the next operation's worker back and let the earlier worker's result end or refuse the next operation."""
         return f"{name}:{record.get('id') or record.get('request') or ''}"
 
+    @staticmethod
+    def desktop_record(state: dict[str, Any]) -> dict[str, Any] | None:
+        """The recorded Docker Desktop start. A record an earlier launcher wrote has one ``began`` and ``deadline`` for all its requests: each request
+        gets that ``began`` plus ``deadline`` as its expiry, so a migrated record keeps the time it had and gains none."""
+        record = state["launcher"].get("desktop")
+        if record and "expiries" not in record:
+            record["expiries"] = {key: record["began"] + record["deadline"] for key in record["requests"]}
+            record["deadlines"] = {key: record["deadline"] for key in record["requests"]}
+        return record
+
     def m_desktop_start(self, ctx: Ctx) -> Any:
         """Start Docker Desktop when the daemon does not answer and wait until the launcher serves, within one deadline (failure modes R7, R8, R15)."""
         deadline = self.seconds_param(ctx.params, "deadline", self.timings.start_wait)
         if self.status == "serving" and self.docker_ok:
             return {"started": False, "seconds": 0.0}
         self.desktop_program(self.cfg.start_command)
-        record = ctx.state["launcher"].get("desktop")
+        record = self.desktop_record(ctx.state)
         now = time.time()
         if record:
+            ends = record.get("ends") if record["phase"] == "command" else None
+            if ends is not None and now + deadline > ends:
+                # The running command is stopped at a time fixed when it began; a caller that would wait longer cannot be served by it.
+                left = f"{max(ends - now, 0):.0f}"
+                raise LauncherError(
+                    f"a Docker Desktop start is running and its command is stopped in {left} s: ask again after it ends, or with a deadline of at most that",
+                    "refused",
+                )
             record["requests"].append(ctx.key)
             record["expiries"][ctx.key], record["deadlines"][ctx.key] = now + deadline, deadline  # a joining caller keeps its own deadline
         else:
@@ -8698,7 +8716,9 @@ class Launcher:
         actions: list[Callable[[], None]] = []
         lapsed: list[tuple[str, str]] = []
         with self.tx() as state:
-            record = state["launcher"]["desktop"]
+            record = self.desktop_record(state)
+            if record is None:
+                return
             now = time.time()
             for key in [key for key in record["requests"] if record["expiries"][key] <= now]:
                 record["requests"].remove(key)
@@ -8714,6 +8734,7 @@ class Launcher:
             elif record["phase"] == "command":
                 command_key = self.operation_key("desktop:cmd", record)
                 if command_key not in self.inflight:
+                    record["ends"] = now + left  # the command is stopped then, so a later caller with a longer deadline is refused
                     actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
             elif self.status == "serving" and self.docker_ok:
                 state["launcher"]["desktop"] = None
@@ -8746,7 +8767,7 @@ class Launcher:
         """The start command ended: wait for the daemon, or fail the waiting requests (a timeout names each caller's own deadline)."""
         errors: dict[str, LauncherError] = {}
         with self.tx() as state:
-            record = state["launcher"].get("desktop")
+            record = self.desktop_record(state)
             if not record or record["phase"] != "command" or key != self.operation_key("desktop:cmd", record):
                 return
             if outcome == "ok":
