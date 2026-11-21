@@ -187,7 +187,8 @@ def source_identity(url: str) -> str:
 
 def canonical_url(url: str) -> str:
     """The one form every route comparison uses. A host reads these spellings as one address: percent-encoded unreserved characters, the case of the scheme and
-    host, a default port, dot segments, a fragment and a host's trailing dot. A repeated or trailing slash is folded too, as a match can only add a denial."""
+    host, a default port, dot segments, a fragment and a host's trailing dot. A repeated or trailing slash is folded too.
+    The route tables match on this form, to deny an address or to select the route that approves it."""
     parts = urllib.parse.urlsplit(url.strip())
     scheme = parts.scheme.lower()
     host = urllib.parse.unquote(parts.hostname or "").lower().rstrip(".")

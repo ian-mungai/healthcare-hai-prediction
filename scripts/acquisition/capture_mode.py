@@ -1190,7 +1190,8 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, stat
 
 
 def failure_reason(error: Exception) -> str:
-    """A fixed code for a failed unit. Response text and exception messages never reach a record."""
+    """A fixed code for a failed unit. Response text and exception messages never become the code. The bounded message of a project contract exception
+    reaches the run record only in its ``detail`` field, through ``failure_detail``."""
     if isinstance(error, ContractFailure):
         return str(error)
     if isinstance(error, SpecError):

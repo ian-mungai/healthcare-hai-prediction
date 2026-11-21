@@ -452,6 +452,30 @@ def test_an_address_that_an_allowed_route_names_is_approved_by_that_route_althou
     check(json.loads(receipt["lineage"]["extraction_or_query"])["route_id"] == "named_route", "the capture names the allowed route, not the index")
 
 
+@pytest.mark.parametrize("failed", ["access_failed", "HTTP_403_file_route_unverified"])
+@pytest.mark.parametrize("same_source", [True, False], ids=["same source", "another source"])
+@pytest.mark.parametrize("failed_first", [True, False], ids=["failed route listed first", "allowed route listed first"])
+def test_an_explicit_failed_route_status_denies_the_address_although_an_allowed_route_names_it_too(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failed: str, same_source: bool, failed_first: bool
+) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+
+    def registry(**_options: Any) -> dict:
+        document = naming_registry(unit, *[{"route_id": "named_route"}])
+        if same_source:
+            source = next(item for item in document["sources"] if item["source_id"] == unit["source_id"])
+            failing = {"route_id": "failed_route", "url": unit["url"], "status": failed}
+            source["file_routes"] = [failing, *source["file_routes"]] if failed_first else [*source["file_routes"], failing]
+        else:
+            other = next(item for item in document["sources"] if item["source_id"] != unit["source_id"])
+            other["file_routes"] = [*other.get("file_routes", []), {"route_id": "elsewhere", "url": unit["url"], "status": failed}]
+        return document
+
+    monkeypatch.setattr(harness, "load_registry", registry)
+    check(harness.execute(run)["outcomes"] == {"blocked": 1} and not bucket.objects, "a failed route status denies the address and nothing is stored")
+
+
 def test_an_address_that_only_denied_routes_name_stays_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bucket = TaskS3()
     run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)

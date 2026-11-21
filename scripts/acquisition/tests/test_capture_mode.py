@@ -31,6 +31,7 @@ from scripts.acquisition import (
     collect_hud_api,
     collect_mmd_api,
     collection_layout,
+    mapped_archives,
     redownload_controls,
     s3_store,
     store_cms_owners,
@@ -919,6 +920,65 @@ def test_nested_members_with_one_file_name_and_different_content_keep_their_plai
     check(len(first["units"]["completed"]) == 1, str(first["units"]))
     (only,) = world.records().values()
     check(sorted(item["stored_file_name"] for item in only["data_objects"]) == ["plain.csv", "shared.csv", "shared.csv"], str(only["data_objects"]))
+
+
+def nested_release(plain: dict[str, bytes], nested: dict[str, bytes]) -> bytes:
+    """A release zip with top-level data files and two nested zips that each hold every leaf of ``nested``."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as handle:
+        for name, body in plain.items():
+            handle.writestr(name, body)
+        for zip_name in ("one.zip", "two.zip"):
+            inner = io.BytesIO()
+            with zipfile.ZipFile(inner, "w") as child:
+                for name, body in nested.items():
+                    child.writestr(name, body)
+            handle.writestr(zip_name, inner.getvalue())
+    return buffer.getvalue()
+
+
+def release_members(plain: list[str], nested: list[str]) -> list[dict]:
+    chains = [[name] for name in plain] + [[zip_name, name] for zip_name in ("one.zip", "two.zip") for name in nested]
+    return [{"member_chain": chain, "role": "data", "dataset_id": "synthetic_table"} for chain in chains]
+
+
+def stored_names_of_release(tmp_path: Path, plain: dict[str, bytes], nested: dict[str, bytes]) -> list[str]:
+    world = World(tmp_path, ["a.zip"], {"a.zip": release_members(list(plain), list(nested))})
+    world.bodies[world.units[0]["url"]] = nested_release(plain, nested)
+    first = world.run()
+    check([item["reason"] for item in first["units"]["failed"]] == [] and len(first["units"]["completed"]) == 1, str(first["units"]))
+    (only,) = world.records().values()
+    again = world.run(recheck=True)
+    check(
+        again["counters"]["unchanged"] == 1 and again["counters"]["objects_created"] == 0,
+        f"a monthly run of the same archive sees no change: {again['counters']}",
+    )
+    return [item["stored_file_name"] for item in only["data_objects"]]
+
+
+def test_a_generated_member_name_never_equals_the_plain_name_of_another_member(tmp_path: Path) -> None:
+    body = b"id,value\n1,2\n"
+    generated = mapped_archives.stored_member_names([{**item, "sha256": hashlib.sha256(body).hexdigest()} for item in release_members([], ["shared.csv"])])
+    squatters = {name: body for name in generated.values()}
+    names = stored_names_of_release(tmp_path, squatters, {"shared.csv": body})
+    check(len(names) == len(set(names)) == len(squatters) + 2, f"every member has its own stored name: {names}")
+    check(all(name in names for name in squatters), f"each plain member keeps its own name: {names}")
+
+
+def test_two_identical_members_with_a_name_that_fills_the_name_limit_get_distinct_bounded_stored_names(tmp_path: Path) -> None:
+    long_name = "a." + "b" * 198
+    body = b"id,value\n1,2\n"
+    names = stored_names_of_release(tmp_path, {"plain.csv": b"id,value\n9,9\n"}, {long_name: body})
+    check(len(names) == len(set(names)) == 3 and all(len(name) <= 200 for name in names), f"bounded and distinct: {[len(name) for name in names]}")
+    check("plain.csv" in names, f"the unaffected member keeps its name: {names}")
+
+
+def test_the_stored_names_of_the_members_do_not_depend_on_their_order_or_on_a_one_pass_input() -> None:
+    body = hashlib.sha256(b"x").hexdigest()
+    members = [{**item, "sha256": body} for item in release_members(["shared.csv"], ["shared.csv"])]
+    forward = mapped_archives.stored_member_names(members)
+    check(mapped_archives.stored_member_names(reversed(members)) == forward, "the order of the members does not change a name")
+    check(mapped_archives.stored_member_names(iter(members)) == forward, "an iterator gives the same names as a list")
 
 
 def test_a_data_change_in_a_later_run_counts_as_changed_and_a_reference_change_as_unchanged(tmp_path: Path) -> None:

@@ -47,22 +47,43 @@ def stored_member_names(members: Iterable[Mapping[str, Any]]) -> dict[tuple[str,
     """The stored file name of every mapped member, by member chain. A member keeps its plain name: the last part of its chain, cleaned and cut to 200.
 
     Data members of one dataset that have the same plain name and the same content would be stored under one key and counted once, so each of them gets a
-    name that adds a short digest of its own member chain before its extension. A member whose plain name is its own, or that differs in content, is unchanged.
+    generated name: the stem cut to fit, a short digest of its own member chain and the extension cut to 32 characters, 200 characters at most. A generated
+    name never equals a name another data member of the dataset and content already holds. When it would, the digest grows by eight characters until the name
+    is free. The members are named in the order of their chains, so the names do not depend on the order of the input. A member whose plain name is its own,
+    or that differs in content, is unchanged.
     """
+    members = list(members)
     plain = {}
     for item in members:
         chain = tuple(item["member_chain"])
         name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(chain[-1]).name)
         plain[chain] = ("member_" + name if not name or not name[0].isalnum() else name)[:200]
-    groups = Counter((item["dataset_id"], plain[tuple(item["member_chain"])], item["sha256"]) for item in members if item["role"] == "data")
-    names = {}
-    for item in members:
+    data = [item for item in members if item["role"] == "data"]
+    shared = Counter((item["dataset_id"], plain[tuple(item["member_chain"])], item["sha256"]) for item in data)
+    names = dict(plain)
+    reserved: dict[tuple[str, str], set[str]] = {}
+    for item in data:
+        name = plain[tuple(item["member_chain"])]
+        if shared[(item["dataset_id"], name, item["sha256"])] == 1:
+            reserved.setdefault((item["dataset_id"], item["sha256"]), set()).add(name)
+    for item in sorted(data, key=lambda entry: tuple(entry["member_chain"])):
         chain, name = tuple(item["member_chain"]), plain[tuple(item["member_chain"])]
-        if item["role"] == "data" and groups[(item["dataset_id"], name, item["sha256"])] > 1:
-            ending = Path(name).suffix
-            name = f"{name[: 200 - len(ending) - 9]}_{canonical_hash(list(chain))[:8]}{ending}"
-        names[chain] = name
+        if shared[(item["dataset_id"], name, item["sha256"])] > 1:
+            taken = reserved.setdefault((item["dataset_id"], item["sha256"]), set())
+            names[chain] = generated_name(name, canonical_hash(list(chain)), taken)
+            taken.add(names[chain])
     return names
+
+
+def generated_name(name: str, digest: str, taken: set[str]) -> str:
+    """``name`` with a digest of its member chain before its extension, the shortest form that is not in ``taken``."""
+    ending = Path(name).suffix[:32]
+    stem = name[: len(name) - len(Path(name).suffix)]
+    for length in range(8, len(digest) + 1, 8):
+        candidate = f"{stem[: 200 - len(ending) - length - 1]}_{digest[:length]}{ending}"
+        if candidate not in taken:
+            return candidate
+    raise CaptureError("An archive member has no free stored name.")
 
 
 def mapped_storage_entries(receipt_path: Path, receipt: dict, registry: dict, mapping: dict, route: dict) -> tuple[list[dict], set[str]]:

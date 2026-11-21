@@ -50,7 +50,7 @@ from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, load_registry, read_json, require
-from scripts.acquisition.storage_controls import route_denied
+from scripts.acquisition.storage_controls import DENIED_ROUTE_STATUSES, route_denied
 from scripts.acquisition.transport import (
     APPROVED_HOSTS_APPROVAL_VARIABLE,
     APPROVED_HOSTS_VARIABLE,
@@ -740,7 +740,8 @@ def file_unit(unit: dict, run: Run) -> dict:
 
 def queue_approved_registry(unit: dict, registry: dict) -> dict:
     """The registry the storage check reads for a queue unit. A route the registry names keeps its own identity and restrictions, in any source and under any
-    spelling. A denied route of another source denies the address. In the unit's own source an address is refused only when every route that names it is
+    spelling. A denied route of another source denies the address. A route with a failed status (``DENIED_ROUTE_STATUSES``) denies it in any source and no
+    allowed route overrides that. In the unit's own source a discovery index (``file_index``) refuses the address only when every route that names it is
     denied, so an allowed route approves it. Only an address no route names takes the frozen queue's approval: most stored captures came from routes the
     current registry no longer names and their old registries are not catalogued, the owner reviewed the queue, its digest binds the run and the hosts file
     limits its hosts."""
@@ -756,7 +757,8 @@ def queue_approved_registry(unit: dict, registry: dict) -> dict:
         ]
 
     own = naming(True)
-    if any(route_denied(route) for route in naming(False)) or (own and all(route_denied(route) for route in own)):
+    failed = any(route.get("status") in DENIED_ROUTE_STATUSES for route in own)
+    if any(route_denied(route) for route in naming(False)) or failed or (own and all(route_denied(route) for route in own)):
         raise CaptureError("The registry denies this route, so the frozen queue cannot approve it.")
     view = copy.deepcopy(registry)
     sources = [item for item in view["sources"] if item["source_id"] == unit["source_id"]]
