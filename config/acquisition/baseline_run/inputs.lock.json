@@ -1,10 +1,10 @@
 {
-  "bundle_sha256": "e298108ec649b85f1ae7e2820b89ae68f7657439fea49b07cc5d00971daa87f8",
+  "bundle_sha256": "f5eb77f1f98f7efe10099967091751537c9bb5ee5a93506e86698140e63e4a61",
   "files": [
     {
-      "bytes": 5579129,
+      "bytes": 5579287,
       "path": "capture_specs.json",
-      "sha256": "77e831da467acbcc9bb08841728db1cd1e50b788347304dac0dce056a0f8f6a1"
+      "sha256": "08908c5aa2bc5b2177f92ce6327675e88a2dead73befd3a3d52325932052cafc"
     },
     {
       "bytes": 5183,

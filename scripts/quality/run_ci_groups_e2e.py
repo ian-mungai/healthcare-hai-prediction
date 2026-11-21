@@ -1910,7 +1910,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         acquisition_selection_case(work, "config/lakehouse/bronze_tables.json", True),
         acquisition_selection_case(work, "uv.lock", True),
         acquisition_selection_case(work, "pyproject.toml", True),
-        acquisition_selection_case(work, "docs/analysis_plan.md", False),
+        acquisition_selection_case(work, "docs/restore_after_teardown.md", False),
     ]
     return cases
 

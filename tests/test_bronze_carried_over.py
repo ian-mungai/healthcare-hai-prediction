@@ -55,10 +55,16 @@ class Bucket:
     """A bucket whose calls can raise a fault. It refuses a second write of a key that carries ``IfNoneMatch``, answers 403 for a missing key (the role cannot
     list the folder of its own records) and keeps every call the notice service receives."""
 
-    def __init__(self, objects: dict[str, bytes], fail_publish: bool = False) -> None:
-        self.objects, self.fail_publish = dict(objects), fail_publish
+    def __init__(self, objects: dict[str, bytes], broken: dict[str, Exception] | None = None) -> None:
+        self.objects, self.broken = dict(objects), dict(broken or {})
         self.published: list[Any] = []
         self.puts: list[Any] = []
+        self.listed, self.puts_at_send, self.send_calls = 0, None, 0
+
+    def fail(self, call: str) -> None:
+        """The call raises the fault that the test set for it, as the SDK raises when the connection is refused or a read stalls past its timeout."""
+        if call in self.broken:
+            raise self.broken[call]
 
     def list_object_versions(self, **arguments: str) -> dict[str, Any]:
         self.listed += 1
