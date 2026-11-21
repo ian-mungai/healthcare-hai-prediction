@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 import traceback
+import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -2824,7 +2825,7 @@ def resumed_start_stopped(env: Env, elsewhere: Path, when: str) -> bool:
     dies; a launcher whose checkout differs then opens the registry. It must not resume the startup: it tears down what exists and stays down.
 
     A create paused before its effect is released before the second launcher starts, so its effect lands first. A dead launcher's request that
-    lands after the second launcher's teardown can leave one empty network, which no scan sees (amendment A88)."""
+    lands after the second launcher's teardown can leave one empty network; the periodic network listing removes it (catalog_late_network_reconciled)."""
     env.settings.pop("catalog_checkout", None)
     env.write_settings()
     env.start()
@@ -2914,6 +2915,86 @@ def catalog_checkout_guard(env: Env) -> dict[str, bool]:
     checks["a startup resumed after its network create took effect with the reply lost is torn down"] = resumed_start_stopped(env, elsewhere, "after")
     checks["a pending database start is not repeated by a launcher from another checkout, and is torn down"] = pending_service_start_stopped(env, elsewhere)
     return checks
+
+
+def plant_catalog_network(env: Env) -> str:
+    """Put an empty catalog network of this registry into the fake daemon, as a create from a dead launcher does when it lands late."""
+    registry_id = env.registry_id()
+    network_id = uuid.uuid4().hex
+    with env.daemon.lock:
+        env.daemon.networks[network_id] = {
+            "Id": network_id,
+            "Name": f"hai-{registry_id[:8]}-net",
+            "Labels": {launcher.LABEL_REGISTRY: registry_id},
+            "Internal": False,
+        }
+    return network_id
+
+
+@case("catalog_late_network_reconciled", timings={"network_reconcile": 1.0})
+def catalog_late_network_reconciled(env: Env) -> dict[str, bool]:
+    """A launcher dies while its catalog network create is inside the daemon; the next launcher tears the startup down; the create then lands.
+    The empty network is found by the periodic listing while the catalog is down and removed through the recorded teardown; a network of a
+    catalog that is up is never taken for a stray."""
+    catalog_script(env)
+    elsewhere = env.temp / "main_checkout"
+    elsewhere.mkdir()
+    env.settings.pop("catalog_checkout", None)
+    env.write_settings()
+    env.start()
+    gate = env.daemon.add_gate("net_create", "before")
+    env.client().call("catalog_up")
+    gate.wait_reached()
+    env.kill_launcher()
+    env.settings["catalog_checkout"] = str(elsewhere)
+    env.write_settings()
+    env.start()
+    env.wait(lambda: catalog_phase(env) == "down" and not env.daemon.networks and env.state()["launcher"]["barrier"] is None, 40, "the startup is torn down")
+    gate.release()
+    env.wait(lambda: bool(env.daemon.networks), 10, "the dead launcher's create has landed")
+    landed = bool(env.daemon.networks)
+    env.wait(lambda: not env.daemon.networks, 20, "the stray network is removed")
+    env.wait(lambda: env.state()["launcher"]["barrier"] is None and catalog_phase(env) == "down", 20, "the teardown is finished")
+    state = env.state()
+    opened = [o for o in state["operations"].values() if o["state"] == "open"]
+    removals = [o for o in state["operations"].values() if o["kind"] == "network_remove" and o["state"] != "open"]
+    checks = {
+        "the late create left an empty network while the catalog was down": landed,
+        "the periodic listing removed it": not env.daemon.networks,
+        "the removal is a recorded network operation": bool(removals),
+        "the catalog is down, the barrier is clear and no operation is open": catalog_phase(env) == "down" and not opened,
+    }
+    env.settings.pop("catalog_checkout", None)
+    env.write_settings()
+    env.stop_launcher()
+    env.start()
+    checks["control: the catalog comes up"] = catalog_up(env) == "up"
+    network_ids = set(env.daemon.networks)
+    time.sleep(2.5)  # more than two reconcile periods
+    checks["control: the network of a catalog that is up is kept"] = (
+        catalog_phase(env) == "up" and set(env.daemon.networks) == network_ids and bool(network_ids)
+    )
+    env.client().call("catalog_down")
+    env.wait(lambda: catalog_phase(env) == "down" and not env.daemon.networks, 40, "the catalog is down")
+    return checks
+
+
+@case("catalog_stray_network_on_scan", timings={"network_reconcile": 1_000_000_000.0})
+def catalog_stray_network_on_scan(env: Env) -> dict[str, bool]:
+    """An empty catalog network that exists when a launcher starts, with the catalog down, is found by its first scan and removed."""
+    catalog_script(env)
+    env.start()
+    env.stop_launcher()
+    plant_catalog_network(env)
+    env.start()
+    env.wait(lambda: not env.daemon.networks, 20, "the stray network is removed")
+    env.wait(lambda: env.state()["launcher"]["barrier"] is None and catalog_phase(env) == "down", 20, "the teardown is finished")
+    opened = [o for o in env.state()["operations"].values() if o["state"] == "open"]
+    return {
+        "the scan removed the stray network": not env.daemon.networks,
+        "the catalog is down, the barrier is clear and no operation is open": catalog_phase(env) == "down" and not opened,
+        "the catalog still comes up": catalog_up(env) == "up",
+    }
 
 
 @case("catalog_lifecycle")
@@ -11030,6 +11111,8 @@ ALL_CASES = (
     unrelated_and_reused_pid,
     catalog_checkout_guard,
     catalog_lifecycle,
+    catalog_late_network_reconciled,
+    catalog_stray_network_on_scan,
     bootstrap_failure,
     catalog_down_refusals,
     catalog_down_barrier,

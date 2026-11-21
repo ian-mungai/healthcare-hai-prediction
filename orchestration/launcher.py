@@ -215,6 +215,8 @@ class Timings:
     poll_patience: float = 180.0
     history_retain: float = 86400.0
     compact_every: float = 600.0
+    # How often the launcher lists the registry's networks while the catalog is down, to remove a catalog network that a late create left behind.
+    network_reconcile: float = 60.0
     compact_threshold: int = 1_000_000
     compact_floor: float = 3600.0
     stuck_after: float = 30.0
@@ -3430,6 +3432,7 @@ class Launcher:
         self.bound: dict[str, str] = {}
         self.last_maintenance = 0.0
         self.last_compact = 0.0
+        self.last_network_reconcile = 0.0
         self.maintained: tuple[int, str] | None = None
         self.compacted_at: tuple[int, str] | None = None
         self.create_deadlines: list[tuple[str, float]] = []
@@ -3486,6 +3489,7 @@ class Launcher:
             "netcreate": self.on_netcreate,
             "health": self.on_health,
             "netremove": self.on_netremove,
+            "netscan": self.on_netscan,
             "catalogconfirm": self.on_catalogconfirm,
             "onlinelimits": self.on_onlinelimits,
             "onlinehealth": self.on_onlinehealth,
@@ -4171,6 +4175,7 @@ class Launcher:
         self.networks_seen = sorted(str(n.get("Name")) for n in listing["networks"])
         self.settle_unresolved_creates(listing["seq"])
         self.settle_network_ops(listing["networks"])
+        self.reconcile_catalog_networks(listing["networks"])
         self.settle_orchestration_network_ops(listing["networks"])
         self.settle_online_network_ops(listing["networks"])
         self.dirty.update(self.bound.values())
@@ -5819,6 +5824,12 @@ class Launcher:
         expired = any(wall > deadline and f"op:{op_id}" not in self.inflight for op_id, deadline in self.create_deadlines)
         if expired and not any(k.startswith("scan:") for k in self.inflight):
             self.start_scan()
+        if now - self.last_network_reconcile >= self.timings.network_reconcile:
+            self.last_network_reconcile = now
+            with self.tx(write=False) as state:
+                idle = self.catalog_idle(state)
+            if idle:
+                self.spawn("catalog:netscan", "netscan", self.docker.networks, self.network_label())
         for op_id, container_id in self.orphan_retries:
             if f"op:{op_id}" not in self.inflight:
                 self.spawn(f"op:{op_id}", "orphan", self.docker_dispose, container_id)
@@ -7636,6 +7647,33 @@ class Launcher:
                     if catalog["phase"] == "tearing_down":
                         catalog["network"] = None
                         catalog["stop_step"] = "confirm"
+
+    def catalog_idle(self, state: Mapping[str, Any]) -> bool:
+        """True while the catalog is down with no teardown barrier and no Docker restart, so no network of it may exist."""
+        launcher_state = state["launcher"]
+        return (launcher_state.get("catalog") or {}).get("phase", "down") == "down" and not launcher_state.get("barrier") and not launcher_state.get("restart")
+
+    def on_netscan(self, key: str, outcome: str, value: Any) -> None:
+        """A periodic network listing while the catalog was down."""
+        if outcome == "ok":
+            self.reconcile_catalog_networks(value)
+
+    def reconcile_catalog_networks(self, networks: Sequence[Mapping[str, Any]]) -> None:
+        """Remove the catalog network that exists while the catalog is down, through the recorded teardown (barrier, removal, confirmation).
+
+        A launcher that dies while its network create is inside the daemon can have that create applied after the next launcher has torn the
+        startup down. The scan at the start and the periodic listing see the empty network; a listing that began before a ``catalog_up``
+        finds the catalog no longer down and leaves the network to the startup.
+        """
+        name = self.renderer_network_name()
+        stray = next((str(network["Id"]) for network in networks if network.get("Name") == name), None)
+        if stray is None:
+            return
+        with self.tx() as state:
+            if not self.catalog_idle(state):
+                return
+            state["launcher"]["barrier"] = {"phase": "stopping", "at": utc_now()}
+            self.catalog_record(state).update({"phase": "tearing_down", "after": "down", "stop_step": "network", "network": stray})
 
     def renderer_network_name(self) -> str:
         """The catalog network's name."""
