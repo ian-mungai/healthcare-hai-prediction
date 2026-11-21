@@ -49,8 +49,12 @@ Base = tuple[str, str]
 Matcher = Callable[[Json, "Scope"], "Value | None"]
 
 UNKNOWN = "<unknown>"
-# The models whose unknown member may carry null natural key parts (gold contract unknown_member rule).
-NULL_SENTINEL_MODELS = frozenset({"dim_measure", "dim_date", "dim_hospital_owner_history"})
+# The unknown member carries '<unknown>' in every natural key part (gold contract unknown_member rule), except the null parts listed here per model.
+NULL_SENTINEL_PARTS = {
+    "dim_measure": frozenset({"fact", "measure_key", "value_column"}),
+    "dim_date": frozenset({"calendar_date"}),
+    "dim_hospital_owner_history": frozenset({"valid_from"}),
+}
 ARITHMETIC = frozenset({"+", "-", "*", "/", "%", "//", "**", "add", "subtract", "multiply", "divide", "mod"})
 BOOLEAN_TYPES = frozenset(
     {"OPERATOR_IS_NULL", "OPERATOR_IS_NOT_NULL", "OPERATOR_NOT", "COMPARE_IN", "COMPARE_NOT_IN", "COMPARE_BETWEEN", "COMPARE_NOT_BETWEEN"}
@@ -923,13 +927,19 @@ class Walker:
                     carried = arm.get(spec.edition) if spec.edition else None
                     names = (*spec.columns, spec.edition) if carried is not None and no_edition(carried) else spec.columns
                     natural = [arm.get(name) for name in names]
-                    null_allowed = self.model in NULL_SENTINEL_MODELS
-                    if all(
-                        value is not None
-                        and not value.bases
-                        and ((null_allowed or name == spec.edition) and value.flow.null or value.flow.literals == {UNKNOWN})
+                    nulls = NULL_SENTINEL_PARTS.get(self.model, frozenset())
+                    wrong = [
+                        name
                         for name, value in zip(names, natural, strict=True)
-                    ):
+                        if value is None or value.bases or not (value.flow.null if name in nulls or name == spec.edition else value.flow.literals == {UNKNOWN})
+                    ]
+                    text_output = IDENTITY_OUTPUTS.get(self.model) if column.name == dimension_key(self.model) else None
+                    stored = arm.get(text_output[0]) if text_output else None
+                    if text_output and (stored is None or stored.bases or stored.flow.literals != {UNKNOWN}):
+                        wrong.append(text_output[0])
+                    if wrong:
+                        self.flag("functions", f"the unknown member of {self.model} must carry the contract's sentinel in {', '.join(wrong)}")
+                    else:
                         arm.columns[index] = replace(column, inputs=tuple(Value(value.bases, value.labels, flow=value.flow) for value in natural if value))
         if node["setop_type"] in {"EXCEPT", "INTERSECT"}:
             identity = self.identity_number()

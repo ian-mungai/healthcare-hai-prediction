@@ -1259,6 +1259,24 @@ def round5_probes() -> list[Probe]:
     return result
 
 
+def sentinel_probes(rendered: dict[str, str]) -> list[Probe]:
+    """The unknown row of each exempt dimension carries the exact sentinel of the contract's unknown_member rule: a delivered model with one sentinel value
+    changed is refused, and the delivered model itself is accepted (``accept_<model>``)."""
+    cases: list[Probe] = []
+    for name, model, before, after in (
+        ("date_text_sentinel", "dim_date", "cast(null as date) as calendar_date", "'<unknown>' as calendar_date"),
+        ("date_real_value", "dim_date", "cast(null as date) as calendar_date", "cast('1900-01-01' as date) as calendar_date"),
+        ("owner_ccn_null", "dim_hospital_owner_history", "'<unknown>' as ccn", "cast(null as varchar) as ccn"),
+        ("owner_role_other", "dim_hospital_owner_history", "'<unknown>' as role_code", "'00' as role_code"),
+        ("owner_valid_from_value", "dim_hospital_owner_history", "cast(null as date) as valid_from", "cast('1900-01-01' as date) as valid_from"),
+        ("measure_identity_null", "dim_measure", "'<unknown>' as measure_identity", "cast(null as varchar) as measure_identity"),
+        ("measure_identity_other", "dim_measure", "'<unknown>' as measure_identity", "'other' as measure_identity"),
+        ("measure_fact_text", "dim_measure", "cast(null as varchar) as fact", "'<unknown>' as fact"),
+    ):
+        cases.append(Probe("R6_sentinel_" + name, model, changed(rendered[model], before, after), EXPR, "unknown member"))
+    return cases
+
+
 def round4_siblings() -> list[Probe]:
     """Exercise domain restrictions and ordered value identities beyond the exact reviewer forms."""
     originals = {probe.name.removeprefix("R4_review_"): probe.sql for probe in round4_review_probes()}
@@ -3199,6 +3217,7 @@ def run(out: Path, proposals: Path | None = None, only_g4: bool = False) -> bool
         + round4_review_probes()
         + round4_siblings()
         + round5_probes()
+        + sentinel_probes(rendered)
     )
     original_pins = dict(getattr(gold_checks.gold_sql, "PINS", {}))
     fixes = near_delivered_probes(rendered) + pinned_model_probes(rendered) + second_pin_probes(rendered) + qualified_function_probes(rendered)
