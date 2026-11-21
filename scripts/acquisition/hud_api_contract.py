@@ -147,12 +147,19 @@ def ratio_profile(rows: list[dict]) -> dict:
     return profile
 
 
+def shown(value: object) -> str:
+    """A value of the response or the plan as it appears in a failure message: its text, quoted and cut to 40 characters."""
+    return repr(str(value)[:40])
+
+
 def validate_response(raw: bytes, batch: dict, plan: dict) -> tuple[bytes, dict]:
     """Write a lossless CSV while refusing scope, schema or geographic incompleteness."""
     data = parse(raw)
     require(sorted(data) == plan["envelope_fields"], "HUD data envelope fields differ; possible pagination or schema change")
-    require(str(data["year"]) == str(batch["year"]) and str(data["quarter"]) == str(batch["quarter"]), "HUD response period differs")
-    require(data["input"] == batch["query"] and data["crosswalk_type"] == CROSSWALKS[batch["type"]], "HUD response scope differs")
+    for name in ("year", "quarter"):
+        require(str(data[name]) == str(batch[name]), f"HUD response period differs: {name} expected {shown(batch[name])}, received {shown(data[name])}")
+    for name, expected in (("input", batch["query"]), ("crosswalk_type", CROSSWALKS[batch["type"]])):
+        require(data[name] == expected, f"HUD response scope differs: {name} expected {shown(expected)}, received {shown(data[name])}")
     results = data["results"]
     require(isinstance(results, list) and bool(results), "HUD results missing")
     fields = sorted(results[0]) if isinstance(results[0], dict) else []

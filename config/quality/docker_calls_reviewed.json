@@ -65,7 +65,7 @@
         "scripts/acquisition/collection_layout.py": "sha256:dcc4c7e6a949f3e8c98200df56a1cde91884e5543b601d967d1f5054e8686621",
         "scripts/acquisition/data_paths.py": "sha256:2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42",
         "scripts/acquisition/dataset_layout.py": "sha256:f4f2ab6d2a81e9ee387633bf37a4b5b566332e5302df9363a3094f9f8d96d4a8",
-        "scripts/acquisition/hud_api_contract.py": "sha256:a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd",
+        "scripts/acquisition/hud_api_contract.py": "sha256:887178d7cb25e304fd022b7328127fbad2217503f5f94e23d5c2b0e53a26f814",
         "scripts/acquisition/hud_api_transport.py": "sha256:b3c64bcdeb49742eb6a745dd7038c49397a34b3e2468338038135449ffa90f0a",
         "scripts/acquisition/legacy_versions.py": "sha256:ca66d0226179136947759508e1a887b8a02fad73b88d6e7c342c340de85fca99",
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",

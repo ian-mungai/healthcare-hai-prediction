@@ -119,10 +119,16 @@ def exercise(root: Path) -> list[dict]:
                 rows[1]["tot_ratio"] = 1.5
             elif kind == "string_ratio":
                 rows[1]["tot_ratio"] = "1"
+            elif kind == "wrong_year":
+                body["data"]["year"] = "2020"
             elif kind == "wrong_quarter":
                 body["data"]["quarter"] = "2"
+            elif kind == "wrong_input":
+                body["data"]["input"] = "CA"
             elif kind == "wrong_crosswalk":
                 body["data"]["crosswalk_type"] = "county-zip"
+            elif kind == "long_wrong_input":
+                body["data"]["input"] = "x" * 500
             elif kind == "pagination_marker":
                 body["data"]["next_page"] = 2
             elif kind == "no_envelope":
@@ -137,13 +143,27 @@ def exercise(root: Path) -> list[dict]:
             ("short_county", "identifier invalid"),
             ("ratio_above_one", "ratio invalid"),
             ("string_ratio", "ratio invalid"),
-            ("wrong_quarter", "period differs"),
-            ("wrong_crosswalk", "scope differs"),
+            ("wrong_year", "HUD response period differs: year expected '2021', received '2020'"),
+            ("wrong_quarter", "HUD response period differs: quarter expected '1', received '2'"),
+            ("wrong_input", "HUD response scope differs: input expected 'All', received 'CA'"),
+            ("wrong_crosswalk", "HUD response scope differs: crosswalk_type expected 'zip-county', received 'county-zip'"),
             ("pagination_marker", "envelope fields"),
             ("no_envelope", "envelope changed"),
         ]:
             scenario(name, lambda name=name: malformed(name), error)
         scenario("html_rejected", lambda: contract.validate_response(b"<h1>Login</h1>", batch, plan), "invalid JSON")
+
+        def long_value_cut() -> None:
+            try:
+                malformed("long_wrong_input")
+            except ValueError as failure:
+                require(
+                    str(failure).startswith("HUD response scope differs: input expected 'All', received 'xxx") and len(str(failure)) < 120, "Long value not cut"
+                )
+                return
+            require(False, "Long wrong input accepted")
+
+        scenario("a_long_received_value_is_cut_in_the_message", long_value_cut)
 
         def corrupt(kind: str) -> None:
             target = root / kind
