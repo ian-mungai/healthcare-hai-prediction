@@ -594,12 +594,62 @@ def test_a_run_that_fails_the_evidence_check_stops_with_its_problems_counted(hos
     )
 
 
+def problem_line(out: str) -> dict[str, Any]:
+    """The one log line that holds the evidence problems of the run."""
+    found = [json.loads(line) for line in out.splitlines() if line.startswith("{") and "evidence_problem_kinds" in line]
+    check(len(found) == 1, f"one evidence problems line: {out}")
+    return found[0]
+
+
+def test_the_log_shows_a_count_per_problem_kind_and_the_first_fifty_problems_before_the_failure(
+    host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    problems = [f"unit a__{number}__x did not complete: value_error" for number in range(60)] + ["unit a__9__y was not attempted (paused_not_attempted)"] * 3
+    monkeypatch.setattr(capture_mode, "check_run", lambda *_arguments: problems)
+    with pytest.raises(publisher_run.PublisherError):
+        host.run(monkeypatch)
+    out = capsys.readouterr().out
+    line = problem_line(out)
+    check(
+        line["evidence_problem_kinds"] == {"unit * did not complete: value_error": 60, "unit * was not attempted (paused_not_attempted)": 3},
+        f"one count per kind: {line['evidence_problem_kinds']}",
+    )
+    check(line["evidence_problems_first"] == problems[:50], "the first fifty problem texts, in order")
+    check(out.index('"counters"') < out.index("evidence_problem_kinds"), "the counters line stays and comes first")
+
+
+def test_a_run_with_no_problems_logs_no_problems_line(host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    host.run(monkeypatch)
+    check("evidence_problem_kinds" not in capsys.readouterr().out, "no problems line for a clean run")
+
+
+def test_the_evidence_failure_names_the_check_phase_and_code_not_unknown(
+    host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The failure line that the launcher keeps is the closed record of ``scripts.phase_failure``: the check phase and its error code, written once."""
+    from scripts import phase_failure, resource_peaks
+
+    monkeypatch.setattr(capture_mode, "check_run", lambda *_arguments: ["a stand-in problem"])
+    monkeypatch.setattr("sys.argv", ["publisher_run.py"])
+    with pytest.raises(publisher_run.PublisherError):
+        resource_peaks.recorded(lambda: host.run(monkeypatch), scratch=(tmp_path / "peaks",), interval=0.02)
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith(phase_failure.MARKER)]
+    check(len(lines) == 1, f"one failure line: {lines}")
+    found = json.loads(lines[0].removeprefix(phase_failure.MARKER))
+    check(found["phase"] == "check" and found["codes"] == ["check_error"], f"the check phase and its code: {found}")
+
+
 def test_a_run_with_a_failed_unit_ends_the_job_with_a_failure_through_the_evidence_check_and_keeps_its_record(
-    host: Host, monkeypatch: pytest.MonkeyPatch
+    host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     host.world.site.bodies.pop(host.world.units[1]["url"])
     with pytest.raises(publisher_run.PublisherError, match="evidence check found 1 problem "):
         host.run(monkeypatch)
+    kinds = problem_line(capsys.readouterr().out)["evidence_problem_kinds"]
+    check(
+        len(kinds) == 1 and next(iter(kinds)).startswith("unit * did not complete: ") and sum(kinds.values()) == 1,
+        f"the failed unit is counted by kind: {kinds}",
+    )
     run = json.loads(host.world.bucket.objects[record.run_record_key("raw/", RUN_ID)][1])
     check(len(run["units"]["completed"]) == 1 and len(run["units"]["failed"]) == 1, f"one unit completed and one failed: {run['units']}")
 

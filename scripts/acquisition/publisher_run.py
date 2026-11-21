@@ -19,7 +19,8 @@ import os
 import re
 import sys
 import tarfile
-from collections.abc import Callable, Mapping
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -27,7 +28,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-from scripts import resource_peaks
+from scripts import phase_failure, resource_peaks
 from scripts.acquisition import capture_mode, host_inputs, listing_fetch, listing_readers, plan_rebuild, publisher_metrics, stored_mirror, task_role
 from scripts.acquisition.collection_layout import run_state_root
 from scripts.acquisition.completion_record import run_record_key as record_key
@@ -54,6 +55,39 @@ ClientFactory = Callable[[str, str], Any]
 
 class PublisherError(ValueError):
     """The job cannot start or finish. The message holds only fixed text and variable names."""
+
+
+class EvidenceCheckFailed(PublisherError):
+    """The evidence check found problems in the run. ``failure_codes`` are the closed codes of the job's failure record (``scripts.phase_failure``)."""
+
+    failure_codes = ("check_error",)
+
+
+PROBLEM_SAMPLE = 50
+
+
+def problem_kind(text: str) -> str:
+    """A problem text with each unit key, snapshot ID, object key and number cut to ``*``, so the problems of one sort count together."""
+    words: list[str] = []
+    after_unit = False
+    for word in text.split():
+        cut = after_unit or "/" in word or word.strip(":;,()").isdigit()
+        after_unit = word == "unit"
+        if not cut:
+            words.append(word)
+        elif not words or words[-1] != "*":
+            words.append("*")
+    return " ".join(words)
+
+
+def problem_summary(problems: Sequence[str]) -> dict[str, Any]:
+    """The log line of the evidence problems: a count for each kind and the first texts. The texts come from the evidence check and hold unit keys, snapshot
+    IDs, object keys and fixed reasons only, each cut to the unit detail limit."""
+    kinds = Counter(problem_kind(text) for text in problems)
+    return {
+        "evidence_problem_kinds": dict(kinds.most_common(PROBLEM_SAMPLE)),
+        "evidence_problems_first": [text[: capture_mode.DETAIL_LIMIT] for text in problems[:PROBLEM_SAMPLE]],
+    }
 
 
 def workspace_of(environment: Mapping[str, str]) -> Path:
@@ -368,10 +402,14 @@ def main(
     problems = capture_mode.check_run(storage, record, before)
     publisher_metrics.run_record(record, env["PUBLISHER_RUN_KIND"], len(problems))
     emit({"counters": record["counters"], "evidence_problems": len(problems)})
+    if problems:
+        emit(problem_summary(problems))
     if env["PUBLISHER_RUN_KIND"] == "monthly":
         write_plan_report(run, bundle, links_of or listing_readers.links_reader(workspace_of(env) / "listing"), emit)
     if problems:
-        raise PublisherError(f"The evidence check found {len(problems)} problem{'s' if len(problems) != 1 else ''} in the run.")
+        failure = EvidenceCheckFailed(f"The evidence check found {len(problems)} problem{'s' if len(problems) != 1 else ''} in the run.")
+        phase_failure.emit_error("check", failure)
+        raise failure
     if env["PUBLISHER_RUN_KIND"] == "bootstrap":
         body = json.dumps({"kind": "bootstrap_run", "run_id": env["RUN_ID"], "code_sha256": env["CODE_SHA256"]}, sort_keys=True).encode()
         capture_mode.put_once(run, bootstrap_key(root, env["RUN_ID"]), body)
