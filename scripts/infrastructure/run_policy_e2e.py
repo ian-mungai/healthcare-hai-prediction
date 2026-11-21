@@ -34,6 +34,8 @@ BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
 DELIVERY_BOUNDARY_FILE = "healthcare_hai_prediction_delivery_boundary_policy.json"
 DEPLOY_BOUNDARY_FILE = "healthcare_hai_prediction_deploy_boundary_policy.json"
 CODE_STAGING_BOUNDARY_FILE = "healthcare_hai_prediction_code_staging_boundary_policy.json"
+ECS_POLICY_FILE = "healthcare_hai_prediction_ecs_policy.json"
+ECS_ENVIRONMENTS = ("dev", "prod")
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
 GITHUB_OIDC = REPO_ROOT / "infra" / "iam" / "github_oidc.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
@@ -768,6 +770,16 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         (padded_deploy / DEPLOY_BOUNDARY_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         record("a deploy boundary fits the old fixture but is over the limit at the longest names the variables accept", check_boundary_sizes(padded_deploy))
         results[-1]["missed_by_the_longest_fixture"] = not check_sizes(padded)
+        # The project ECS policy with a statement that fits the 25 character fixture and passes the limit at the longest names, in either environment.
+        padded_ecs = root / "padded_ecs_policy"
+        padded_ecs.mkdir()
+        document = json.loads((POLICY_DIRECTORY / ECS_POLICY_FILE).read_text(encoding="utf-8"))
+        document["Statement"].append({"Sid": "Padding", "Effect": "Deny", "Action": "sns:Publish", "Resource": ""})
+        empty = non_whitespace_length(render_template(json.dumps(document), LONGEST_VALUES, check_size=False))
+        document["Statement"][-1]["Resource"] = "x" * (MAX_POLICY_CHARACTERS - empty - 100)
+        (padded_ecs / ECS_POLICY_FILE).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        record("the project ECS policy fits the old fixture but is over the limit at the longest names the variables accept", check_ecs_policy_size(padded_ecs))
+        results[-1]["missed_by_the_longest_fixture"] = not check_sizes(policy_directory=padded_ecs)
         oidc = root / "github_oidc.tf"
         original_oidc = GITHUB_OIDC.read_text(encoding="utf-8")
         oidc.write_text(
@@ -788,9 +800,9 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return results
 
 
-def check_sizes(boundary_directory: Path = BOUNDARY_DIRECTORY) -> list[str]:
+def check_sizes(boundary_directory: Path = BOUNDARY_DIRECTORY, policy_directory: Path = POLICY_DIRECTORY) -> list[str]:
     """Each project user policy and the boundary, rendered with the longest values of the real deployment, stay under the managed policy limit."""
-    rendered = load_policies(POLICY_DIRECTORY, LONGEST_VALUES)
+    rendered = load_policies(policy_directory, LONGEST_VALUES)
     for path in sorted(boundary_directory.glob("*.json")):
         rendered[path.stem] = render_template(path.read_text(encoding="utf-8"), LONGEST_VALUES)
     return [
@@ -850,6 +862,26 @@ def check_boundary_sizes(directory: Path = BOUNDARY_DIRECTORY, variables: Path =
     ]
 
 
+def ecs_policy_sizes(directory: Path = POLICY_DIRECTORY, variables: Path = VARIABLES) -> dict[str, int]:
+    """The characters of the project ECS policy that IAM counts, rendered with the longest names the variables accept, for each environment."""
+    bounds = name_bounds(variables)
+    text = (directory / ECS_POLICY_FILE).read_text(encoding="utf-8")
+    return {
+        environment: non_whitespace_length(render_template(text, {**bounds, "ENVIRONMENT": environment}, check_size=False)) for environment in ECS_ENVIRONMENTS
+    }
+
+
+def check_ecs_policy_size(directory: Path = POLICY_DIRECTORY, variables: Path = VARIABLES) -> list[str]:
+    """The project ECS policy stays under the managed policy limit at the supported name bounds in each environment, not only for one fixture."""
+    bounds = name_bounds(variables)
+    description = ", ".join(f"{key.lower()} {len(value)}" for key, value in bounds.items() if key != "ENVIRONMENT")
+    return [
+        f"{ECS_POLICY_FILE} ({environment}): {size} characters over the {MAX_POLICY_CHARACTERS} limit at the supported name bounds ({description})"
+        for environment, size in ecs_policy_sizes(directory, variables).items()
+        if size > MAX_POLICY_CHARACTERS
+    ]
+
+
 def run_suite(output: Path) -> dict[str, Any]:
     """Evaluate the shipped policies, then every planted defect, and return the report."""
     started = time.perf_counter()
@@ -865,6 +897,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         check_inventory(documents, operations)
         + check_sizes()
         + check_boundary_sizes()
+        + check_ecs_policy_size()
         + check_names(documents)
         + check_name_source()
         + check_roles()
@@ -928,6 +961,7 @@ def run_suite(output: Path) -> dict[str, Any]:
             "names": {key: len(value) for key, value in name_bounds().items()},
             "characters": boundary_sizes(),
         },
+        "ecs_policy_sizes_at_the_name_bounds": {"limit": MAX_POLICY_CHARACTERS, "characters": ecs_policy_sizes()},
         "planted_defects": defects,
         "planted_name_defects": name_checks,
         "script_tests": script_report,
