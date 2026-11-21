@@ -66,23 +66,20 @@ class EvidenceCheckFailed(PublisherError):
 PROBLEM_SAMPLE = 50
 
 
+UNIT_KEY = re.compile(r"\bunit \S+")
+OBJECT_KEY = re.compile(r"[^\s;:,()'\"{}]*/[^\s;:,()'\"{}]*")
+NUMBER = re.compile(r"(?<!\w)[0-9]+(?!\w)")
+
+
 def problem_kind(text: str) -> str:
-    """A problem text with each unit key, snapshot ID, object key and number cut to ``*``, so the problems of one sort count together."""
-    words: list[str] = []
-    after_unit = False
-    for word in text.split():
-        cut = after_unit or "/" in word or word.strip(":;,()").isdigit()
-        after_unit = word == "unit"
-        if not cut:
-            words.append(word)
-        elif not words or words[-1] != "*":
-            words.append("*")
-    return " ".join(words)
+    """A problem text with each unit key, object key and number cut to ``*``, whatever punctuation stands next to it, so the problems of one sort count."""
+    return NUMBER.sub("*", OBJECT_KEY.sub("*", UNIT_KEY.sub("unit *", text)))
 
 
 def problem_summary(problems: Sequence[str]) -> dict[str, Any]:
     """The log line of the evidence problems: a count for each kind and the first texts. The texts come from the evidence check and hold unit keys, snapshot
-    IDs, object keys and fixed reasons only, each cut to the unit detail limit."""
+    IDs, object keys, the fixed reasons of the checks and the code of a storage failure, each cut to the unit detail limit. No response body, request detail or
+    credential is among them."""
     kinds = Counter(problem_kind(text) for text in problems)
     return {
         "evidence_problem_kinds": dict(kinds.most_common(PROBLEM_SAMPLE)),
@@ -353,7 +350,9 @@ def main(
     opener: Any = None,
     links_of: listing_fetch.LinksOf | None = None,
 ) -> None:
-    """Run one publisher task. The job writes one line per unit and no line holds a key, a digest or a name."""
+    """Run one publisher task. The job writes one line per unit: its snapshot ID, source and status, and for a failed or refused unit its reason and bounded
+    detail. When the evidence check finds problems it also writes one line that counts their kinds and shows the first texts, which hold unit keys, snapshot IDs
+    and object keys. No line holds a credential or a response body."""
     env = os.environ if environment is None else environment
     missing = [name for name in REQUIRED if not env.get(name)]
     if missing:

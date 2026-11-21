@@ -618,6 +618,46 @@ def test_the_log_shows_a_count_per_problem_kind_and_the_first_fifty_problems_bef
     check(out.index('"counters"') < out.index("evidence_problem_kinds"), "the counters line stays and comes first")
 
 
+@pytest.mark.parametrize("count", [3, 7, 12])
+def test_the_kinds_of_the_real_counter_problems_do_not_change_with_the_counts(
+    host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], count: int
+) -> None:
+    """The counters message of ``check_run`` holds two dicts of numbers: its kind is the same for every count and holds no digit."""
+    real = capture_mode.check_run
+
+    def wrong_counters(storage: Any, run_record: dict, before: list) -> list[str]:
+        counters = run_record["counters"] | {"objects_created": count, "intents_created": count + 1}
+        return real(storage, run_record | {"counters": counters}, before)
+
+    monkeypatch.setattr(capture_mode, "check_run", wrong_counters)
+    with pytest.raises(publisher_run.PublisherError):
+        host.run(monkeypatch)
+    kinds = problem_line(capsys.readouterr().out)["evidence_problem_kinds"]
+    check(len(kinds) == 2 and set(kinds.values()) == {1}, f"two problems of two kinds: {kinds}")
+    check(not any(re.search(r"[0-9]", kind) for kind in kinds), f"no number stays in a kind: {kinds}")
+    (counters_kind,) = [kind for kind in kinds if kind.startswith("the recorded writes hold")]
+    check(counters_kind.count("*") == 6 and counters_kind.endswith("}"), f"every counter of both dicts is a star: {counters_kind}")
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("version of raw/ingestion_units/a/1.json was removed or replaced", "version of * was removed or replaced"),
+        ("new delete marker on raw/x.json", "new delete marker on *"),
+        ("unexpected new version of raw/x.json", "unexpected new version of *"),
+        ("3 new versions of raw/x.json; the run may add 1", "* new versions of *; the run may add *"),
+        ("unit a__b__1 has 2 completion records", "unit * has * completion records"),
+        ("unit a__b__1 did not complete: value_error", "unit * did not complete: value_error"),
+        ("unit a__b__1 was not attempted (paused_not_attempted)", "unit * was not attempted (paused_not_attempted)"),
+        ("the listing holds 3 new intents; the counters say 4", "the listing holds * new intents; the counters say *"),
+        ("raw/x/1.json: Completion record is not JSON", "*: Completion record is not JSON"),
+        ("the run record is not new", "the run record is not new"),
+    ],
+)
+def test_a_problem_kind_cuts_keys_and_numbers_and_keeps_the_words(text: str, kind: str) -> None:
+    check(publisher_run.problem_kind(text) == kind, f"{publisher_run.problem_kind(text)!r}")
+
+
 def test_a_run_with_no_problems_logs_no_problems_line(host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     host.run(monkeypatch)
     check("evidence_problem_kinds" not in capsys.readouterr().out, "no problems line for a clean run")
