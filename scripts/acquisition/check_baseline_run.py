@@ -20,7 +20,18 @@ from pathlib import Path
 from scripts.acquisition.ahrq_seed_copy import COPIES
 from scripts.acquisition.api_keys import SHARED_KEYS
 from scripts.acquisition.history_routes import RELEASE_BINDINGS, lineage_bindings
-from scripts.acquisition.manual_content import MODES, REBUILT_MODES, SEED_ONLY_MODES, ContentRefusal, Scopes, accept, rebuild, recorded_derived
+from scripts.acquisition.manual_content import (
+    MODES,
+    REBUILT_MODES,
+    SEED_ONLY_MODES,
+    ContentRefusal,
+    ManualUnitError,
+    Scopes,
+    accept,
+    archive_binding,
+    rebuild,
+    recorded_derived,
+)
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
 from scripts.acquisition.s3_store import access_released, encoded_json
 from scripts.process import run_command
@@ -30,10 +41,10 @@ SEED_ROOT = Path("config/acquisition/bootstrap_seed")
 LOCK_NAME = "inputs.lock.json"
 EXPECTED_NAME = "expected_plan_inputs.json"
 SEED_MANIFEST = "manifest.json"
-SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md"})
+SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md", "release_assets.json"})
 SEED_KIND = "bootstrap_seed_manifest"
 # The manual units whose stored files the seed holds. The ACS units are manual too, but they move to the Census API collector (owner, Nov 12 2026).
-SEED_MODES = ("hud_xlsx", "wonder_export", "ahrq_compendium")
+SEED_MODES = ("hud_xlsx", "wonder_export", "ahrq_compendium", "hospital_archive")
 SECRETS_NAME = "required_secrets.json"
 SECRETS_KIND = "bootstrap_required_secrets"
 CONFIG = Path("config/acquisition")
@@ -262,7 +273,7 @@ def derivation_problems(root: Path, seed_root: Path, scopes: Scopes | None = Non
 
 
 def seed_only_problems(root: Path, seed_root: Path, scopes: Scopes | None = None) -> list[str]:
-    """Return the seeded originals of the seed-only units (the AHRQ files) that the locked plan does not bind. An absent original is pending."""
+    """Return the seeded originals of the seed-only units that their plan or specification does not bind. An absent original is pending."""
     queue = json.loads((root / "queue.json").read_bytes())["queue"]
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
     scopes = Scopes() if scopes is None else scopes
@@ -274,10 +285,15 @@ def seed_only_problems(root: Path, seed_root: Path, scopes: Scopes | None = None
         if len(names) != 1:
             found.append(f"unit {unit['snapshot_id']} needs exactly one stored file")
             continue
+        try:
+            binding = archive_binding(unit, specs[unit["snapshot_id"]]) if unit["mode"] == "hospital_archive" else None
+        except ManualUnitError as refusal:
+            found.append(f"unit {unit['snapshot_id']}: {refusal}")
+            continue
         path = seed_root / f"manual_units/{unit['snapshot_id']}/{names[0]}"
         if path.is_file():
             try:
-                accept(unit["mode"], path, names[0], scopes)
+                accept(unit["mode"], path, names[0], scopes, binding)
             except ContentRefusal:
                 found.append(f"manual_units/{unit['snapshot_id']}/{names[0]} is not the file the locked plan binds for unit {unit['snapshot_id']}")
     return found
@@ -308,6 +324,26 @@ def copy_problems(root: Path, plan: dict) -> list[str]:
         if entry is None or (entry["sha256"], entry["bytes"]) == (recorded["original_sha256"], recorded["original_bytes"]):
             found.append(f"the plan binds the original of {name}, not its seeded copy")
     return found
+
+
+def release_assets(seed_root: Path) -> list[dict]:
+    """The assets of the seed release manifest, or none when the seed has no such manifest."""
+    path = seed_root / "release_assets.json"
+    return json.loads(path.read_text(encoding="utf-8"))["assets"] if path.is_file() else []
+
+
+def release_problems_of_seed(root: Path, seed_root: Path) -> list[str]:
+    """Return why the seed release manifest is not exactly what the queue and the specifications give: the units whose seed files are release assets, each with
+    its size, its recorded digest and its address."""
+    from scripts.acquisition.build_release_manifest import build
+
+    path = seed_root / "release_assets.json"
+    if not path.is_file():
+        return []
+    document = json.loads(path.read_text(encoding="utf-8"))
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))
+    expected = build((root / "queue.json").read_bytes(), specs, document["tag"])
+    return [] if json.loads(expected) == document else ["release_assets.json differs from the queue and the specifications it is built from"]
 
 
 def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
@@ -362,6 +398,7 @@ def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: b
         found += seed_problems(root, seed_root, manifest, require_files=require_files)
         found += derivation_problems(root, seed_root)
         found += seed_only_problems(root, seed_root)
+        found += release_problems_of_seed(root, seed_root)
         found += copy_problems(root, Scopes().plan("ahrq_compendium"))
         found += secret_problems(root, secrets_read_by_code())
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
@@ -386,7 +423,8 @@ def main() -> None:
         (args.root / LOCK_NAME).write_bytes(build_lock(args.root))
     found = problems(args.root, args.seed_root, require_files=args.require_files)
     manifest = json.loads((args.seed_root / SEED_MANIFEST).read_text(encoding="utf-8")) if (args.seed_root / SEED_MANIFEST).is_file() else {"files": []}
-    found += lfs_problems([item["path"] for item in manifest["files"]], args.seed_root)
+    released = {item["path"] for item in release_assets(args.seed_root)}
+    found += lfs_problems([item["path"] for item in manifest["files"] if item["path"] not in released], args.seed_root)
     if found:
         sys.stderr.write("\n".join(found) + "\n")
         raise SystemExit(1)

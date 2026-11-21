@@ -42,6 +42,9 @@ from scripts.acquisition import (
     census_acs_tables_transport,
     collect_mmd_api,
     hud_api_transport,
+    manual_content,
+    manual_receipt,
+    manual_units,
     rate_limit,
     redownload,
     redownload_controls,
@@ -320,6 +323,7 @@ class CaptureRun:
     hosts: Path | None = None
     hosts_approval: Path | None = None
     opener: Any = None
+    seed: Path | None = None
     adapters: Mapping[str, Callable[..., Path]] = field(default_factory=dict)
     task_keys: Callable[[str], Any] | None = None
     api_request: Callable | None = None
@@ -476,6 +480,15 @@ def adapt_onc_mu(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
     # The plan raises the time and size bounds for this one large file; only the attempt count is lowered.
     limits = StopAtRateLimit(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
     return Path(collector.execute(plan, folder, True, False, None, {}, opener, limits)["receipt_path"])
+
+
+def adapt_local(files: Mapping[str, Path]) -> Callable[..., Path]:
+    """The adapter of a manual unit: its checked files, which the handler staged, become the receipt of the normal capture path. Nothing is downloaded."""
+
+    def adapt(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+        return manual_receipt.capture_local(unit, spec, files, folder, registry_of(run, unit), validator_of(run), run.clock())
+
+    return adapt
 
 
 ADAPTERS: dict[str, Callable[..., Path]] = {
@@ -915,6 +928,16 @@ def skip_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> lis
     return problems
 
 
+def manual_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> list[str]:
+    """Problems with the manual units the run lists as stale or missing: each keeps its last capture and has a stale record, so the owner's list is complete."""
+    listed = [*run_record.get("stale_units", []), *run_record.get("missing_units", [])]
+    return [
+        f"unit {item['unit_key']} is listed as stale but has no stale record"
+        for item in listed
+        if not list_objects(storage, records.stale_prefix(root, item["unit_key"]))
+    ]
+
+
 def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
     """The host evidence step: reconcile every unit, verify the records by version and diff the version listings before and after the run.
 
@@ -944,6 +967,7 @@ def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -
         problems.append(f"the listing holds {len(new_intents)} new intents; the counters say {counters['intents_created']}")
     problems.extend(outcome_problems(units))
     problems.extend(skip_problems(storage, root, run_record))
+    problems.extend(manual_problems(storage, root, run_record))
     problems.extend(intent_problems(storage, root, run_record, new_intents))
     problems.extend(verify_records(storage, root))
     if not run_record["recheck"]:
@@ -1265,6 +1289,144 @@ def entry(result: Result) -> dict[str, Any]:
     return item
 
 
+class HostClock:
+    """The manual-unit handler's clock: the run's own time, and the real monotonic clock and sleep for the spacing between requests to one host."""
+
+    def __init__(self, clock: Callable[[], datetime]) -> None:
+        self.clock = clock
+
+    def now(self) -> datetime:
+        return self.clock()
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+class ManualClient:
+    """The storage calls of the manual-unit handler over the run's storage client. The task storage only heads, puts and reads by version, so a listing goes
+    through the store's own listing and a read of the current version names that version first."""
+
+    def __init__(self, storage: Any) -> None:
+        self.storage = storage
+
+    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        given = arguments or []
+        if operation == "list-objects-v2":
+            found = list_objects(self.storage, given[given.index("--prefix") + 1])
+            return {"Contents": [{"Key": item["Key"]} for item in found]} if found else {}
+        if operation == "get-object" and "--version-id" not in given:
+            key = given[given.index("--key") + 1]
+            version = str(self.storage.call(service, "head-object", ["--key", key])["VersionId"])
+            return self.storage.call(service, operation, [*given[:-1], "--version-id", version, given[-1]])
+        return self.storage.call(service, operation, arguments)
+
+
+def served_by_handler(unit: Mapping[str, Any]) -> bool:
+    """Whether the run serves the unit through the manual-unit handler: an approved manual unit of a seed-only mode. Their files come from the seed folder and
+    their receipts are written by ``manual_receipt``. The HUD and WONDER units stay outside the run until their originals are in the seed and their receipts
+    follow their own storage contracts (``store_hud_xlsx`` and ``store_wonder_export``)."""
+    return unit["disposition"] == "approved_manual" and unit.get("mode") in manual_content.SEED_ONLY_MODES
+
+
+def manual_context(run: CaptureRun, specs: Mapping[str, dict], base: transport.ReviewedTransport, capture_unit: Callable) -> Any:
+    """What the handler needs: the run's storage, identity and clock, its own transport handlers and the unit key and collection of the normal capture path."""
+    return manual_units.Context(
+        client=ManualClient(run.storage),
+        root=run.root,
+        run_id=run.run_id,
+        code_sha256=run.code_sha256,
+        bundle_sha256=run.bundle_sha256,
+        scratch=run.scratch / "manual_units",
+        capture=capture_unit,
+        unit_key=lambda unit: unit_key_of(unit, specs[unit["snapshot_id"]]),
+        collection=lambda unit: expectation(run, unit, specs[unit["snapshot_id"]])["collection"],
+        clock=HostClock(run.clock),
+        handlers=base.handlers,
+        seed=run.seed,
+    )
+
+
+def serve_manual(
+    run: CaptureRun,
+    units: list[dict],
+    specs: Mapping[str, dict],
+    base: transport.ReviewedTransport,
+    opener: Any,
+    state: dict[str, Any],
+    done: dict[str, list],
+    counters: Counter,
+) -> Any:
+    """Run the manual-unit handler over the units that no earlier record completes, and put each unit it captured through the normal capture path.
+
+    A unit with a verified completion record is skipped before the handler, as every unit is. The handler's capture hands the checked files to ``attempt`` with
+    an adapter that writes their receipt, so the unit gets its intent, its stored objects read back by version and its completion record. A unit the handler
+    marks stale keeps its last capture and gets a stale record; a failure of the capture path ends only that unit.
+    """
+    ready: list[dict] = []
+    for unit in units:
+        spec = specs.get(unit["snapshot_id"])
+        try:
+            if spec is None:
+                raise SpecError("The unit has no specification")
+            key, expected = unit_key_of(unit, spec), expectation(run, unit, spec)
+            verdict, why = decide_skip(run, unit, key, run.clock(), expected)
+        except SpecError:
+            done["failed"].append(
+                {"unit_key": None, "source_id": unit["source_id"], "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete", "detail": "SpecError"}
+            )
+            continue
+        except StorageError as error:
+            done["failed"].append(
+                {
+                    "unit_key": key,
+                    "source_id": unit["source_id"],
+                    "snapshot_id": unit["snapshot_id"],
+                    "reason": failure_reason(error),
+                    "detail": failure_detail(error),
+                }
+            )
+            continue
+        if verdict == "complete":
+            done["skipped_complete"].append(key)
+        elif verdict == "refused":
+            done["refused"].append(
+                {"unit_key": key, "source_id": unit["source_id"], "snapshot_id": unit["snapshot_id"], "reason": why, "detail": str(why)[:DETAIL_LIMIT]}
+            )
+        else:
+            ready.append(unit)
+    if not ready:
+        return None
+    results: dict[str, Result] = {}
+
+    def capture_unit(unit: dict, spec: dict, files: dict[str, Path]) -> dict:
+        key, expected = unit_key_of(unit, spec), expectation(run, unit, spec)
+        state["attempts"][key] = state["attempts"].get(key, 0) + 1
+        carrying = replace(run, adapters={**run.adapters, redownload.handler_mode(unit): adapt_local(files)})
+        try:
+            results[unit["snapshot_id"]] = attempt(carrying, unit, spec, key, opener, state, expected)
+        except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
+            results[unit["snapshot_id"]] = Result(key, unit, "failed", failure_reason(error), failure_detail(error))
+        return {}
+
+    report = manual_units.run(ready, specs, manual_context(run, specs, base, capture_unit))
+    for outcome in report.outcomes:
+        unit = next(item for item in ready if item["snapshot_id"] == outcome.snapshot_id)
+        if outcome.status == "skipped_recent_stale":
+            done["skipped_recent_stale"].append(unit_key_of(unit, specs[outcome.snapshot_id]))
+        elif outcome.status == "captured":
+            result = results[outcome.snapshot_id]
+            counters["units_attempted"] += 1
+            if result.status in {"unchanged", "changed"}:
+                counters[result.status] += 1
+            done[result.status].append(entry(result))
+        else:
+            counters["units_attempted"] += 1
+    return report
+
+
 def execute(run: CaptureRun) -> dict[str, Any]:
     """Process the queue once and return the run record, which is also stored create-once. A crash leaves no run record.
 
@@ -1309,11 +1471,12 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
     checked: set[str] = set()
     cooling: dict[str, str] = {}
     with observing(observer):
-        for unit in units:
-            if unit["disposition"] not in redownload.ACTIVE:
-                continue
+        active = [unit for unit in units if unit["disposition"] in redownload.ACTIVE]
+        manual_report = serve_manual(run, [unit for unit in active if served_by_handler(unit)], specs, base, opener, state, done, counters)
+        for unit in active:
             if unit["disposition"] == "approved_manual" or redownload.handler_mode(unit) in MANUAL_MODES:
-                outside["manual_not_attempted"].append(unit["snapshot_id"])
+                if not served_by_handler(unit):
+                    outside["manual_not_attempted"].append(unit["snapshot_id"])
                 continue
             source = unit["source_id"]
             if source in paused:
@@ -1393,8 +1556,12 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             if result.status in {"unchanged", "changed"}:
                 counters[result.status] += 1
             done[result.status].append(entry(result))
-            log_unit(run, done[result.status][-1], result.status, **({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds}))
-    return finish(run, started, observer, journal, state, done, outside, paused | set(cooling), counters, queue_sha256, cooling)
+            if run.log is not None:
+                run.log(
+                    {"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status}
+                    | ({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds})
+                )
+    return finish(run, started, observer, journal, state, done, outside, paused | set(cooling), counters, queue_sha256, cooling, manual_report)
 
 
 def finish(
@@ -1409,6 +1576,7 @@ def finish(
     counters: Counter,
     queue_sha256: str,
     cooling: Mapping[str, str],
+    manual_report: Any = None,
 ) -> dict[str, Any]:
     """Save the run state, derive the counters from the observer and the journal, and store the run record last.
 
@@ -1427,6 +1595,8 @@ def finish(
         len(done["skipped_complete"]),
         len(done["skipped_recent_stale"]),
     )
+    if manual_report is not None:
+        counters["http_requests"] += manual_report.http_requests
     run_record = {
         "kind": "ingestion_run",
         "run_id": run.run_id,
@@ -1444,6 +1614,10 @@ def finish(
     }
     if cooling:
         run_record["source_cooldowns"] = dict(sorted(cooling.items()))
+    if manual_report is not None:
+        run_record |= manual_report.run_record()
+        if run.log is not None:
+            run.log({"manual_units": manual_report.counts, "manual_notice": manual_units.notice_text(manual_report.stale_units, manual_report.missing_units)})
     save_run_record(run, run_record)
     return run_record
 

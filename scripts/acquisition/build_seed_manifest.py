@@ -2,11 +2,12 @@
 
 The seed folder holds what a run in an empty environment cannot fetch: the plan inputs that are data files (12 browser-history CSVs, 3 MMD references and the
 2010 county adjacency file), the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API) and the 10 AHRQ Compendium
-files, which are seed-only units. A unit's derived
+files and the 34 hospital archives, which are seed-only units. A unit's derived
 file (a HUD crosswalk.csv or a WONDER county_year.csv) is rebuilt on the host from its original, so the seed holds the original only. The manifest lists
 each file with the folder it takes and, where a tracked source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references
 from the MMD plan, the county adjacency file from the geography file period seed, the HUD workbooks from the HUD plan, the WONDER originals from the
-WONDER plan and the AHRQ files from the AHRQ plan. Every other file has no digest until the files are added; the check then refuses a present file without one.
+WONDER plan, the AHRQ files from the AHRQ plan and the hospital archives from the digest each specification records. Every other file has no digest until
+the files are added; the check then refuses a present file without one.
 """
 
 from __future__ import annotations
@@ -113,6 +114,12 @@ def manifest_body(root: Path) -> bytes:
     originals |= {stored_name(batch): batch["sha256"] for batch in json.loads(WONDER_PLAN.read_text(encoding="utf-8"))["batches"]}
     originals |= {item["file_name"]: item["sha256"] for item in json.loads(AHRQ_PLAN.read_text(encoding="utf-8"))["files"]}
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))
+    queue = json.loads((root / "queue.json").read_bytes())["queue"]
+    originals |= {
+        specs["specs"][unit["snapshot_id"]]["stored_data_files"][0]: specs["specs"][unit["snapshot_id"]]["receipt_template"]["expected_sha256"]
+        for unit in queue
+        if unit["disposition"] == "approved_manual" and unit["mode"] == "hospital_archive"
+    }
     return build((root / "queue.json").read_bytes(), specs, inputs, digests, originals)
 
 

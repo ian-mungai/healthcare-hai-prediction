@@ -4,17 +4,26 @@ The archive of a commit carries the tracked bundle (``config/acquisition/baselin
 (``config/acquisition/bootstrap_seed/``, files through Git LFS). ``prepare`` checks the bundle against its lock, copies the tracked plan inputs and the
 seed files that the collector plans read into the code root as real files, and checks that every expected plan input is there. It reads no bucket and
 makes no request. A problem stops the run and names the files, never a digest or a value.
+
+The seed also names files that are public assets of one GitHub release of this repository (``release_assets.json``: name, size, SHA-256 and address). The
+code archive does not carry them. ``prepare`` downloads each one that the seed folder lacks through the project's reviewed transport, within its size bound,
+checks size and SHA-256 and places it in the seed folder only when every asset passes. A missing asset, a size or a digest that differs stops the run before
+any capture request, so a capture never reads a file that was not checked.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from scripts.acquisition import check_baseline_run
+from scripts.acquisition import capture_mode, check_baseline_run, redownload_route, transport
 
 BUNDLE = Path("config/acquisition/baseline_run")
 SEED = Path("config/acquisition/bootstrap_seed")
@@ -24,6 +33,12 @@ SEED_KIND = "bootstrap_seed_manifest"
 DIGEST = re.compile(r"[0-9a-f]{64}")
 POINTER_HEAD = b"version https://"
 POINTER_BYTES = 1024
+RELEASE_MANIFEST = "release_assets.json"
+RELEASE_KIND = "bootstrap_seed_release_manifest"
+# A release asset is at most 2 GiB (GitHub's own limit), and so is each download here.
+ASSET_LIMIT = 2 * 2**30
+ASSET_FORMATS = {".zip": "zip", ".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf", ".txt": "txt", ".csv": "csv"}
+DOWNLOAD_FOLDER = ".release_download"
 
 
 class InputsError(ValueError):
@@ -131,9 +146,10 @@ def require_expected(code_root: Path, coming: set[PurePosixPath]) -> None:
         raise InputsError(f"Plan inputs are missing: {named([f'{path} is not in the code root' for path in missing])}.")
 
 
-def prepare(code_root: Path) -> Path:
-    """Check the bundle against its lock and the seed against its manifest, then copy the tracked plan inputs and the seed files into the code root and return
-    the bundle folder. Nothing is copied unless every check passes."""
+def prepare(code_root: Path, opener: transport.ReviewedTransport | None = None, log: Callable[[dict], None] | None = None) -> Path:
+    """Check the bundle against its lock and the seed against its manifest, download the seed's release assets, then copy the tracked plan inputs and the seed
+    files into the code root and return the bundle folder. Nothing is copied unless every check passes, and no capture request comes before the assets
+    passed."""
     bundle = code_root / BUNDLE
     problems = check_baseline_run.lock_problems(bundle)
     if problems:
@@ -146,9 +162,139 @@ def prepare(code_root: Path) -> Path:
     require_expected(code_root, set(files))
     if any(conflict(code_root, relative, body) for relative, body in files.items()):
         raise InputsError("A plan input already in the code root differs from the tracked one.")
+    fetch_release_assets(code_root, opener, log)
     for relative, body in files.items():
         target = code_root / relative
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(body)
     return bundle
+
+
+def release_entries(code_root: Path) -> list[dict[str, Any]]:
+    """The release assets the seed names, after the manifest passes its checks against the bundle's queue and the seed manifest. None named means no list."""
+    path = code_root / SEED / RELEASE_MANIFEST
+    if not path.is_file():
+        return []
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        queue = hashlib.sha256((code_root / BUNDLE / "queue.json").read_bytes()).hexdigest()
+        kind, bound, tag, assets = document.get("kind"), document.get("queue_sha256"), document["tag"], document["assets"]
+        listed = {item["path"]: item.get("sha256") for item in json.loads((code_root / SEED / MANIFEST).read_text(encoding="utf-8"))["files"]}
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        raise InputsError("The seed release manifest is not usable.") from None
+    if kind != RELEASE_KIND or bound != queue or not isinstance(tag, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", tag):
+        raise InputsError("The seed release manifest is not a seed release manifest of this queue.")
+    problems: list[str] = []
+    if not isinstance(assets, list):
+        raise InputsError("The seed release manifest is not usable.")
+    for item in assets:
+        name, path_text = (item.get("name"), item.get("path")) if isinstance(item, dict) else (None, None)
+        if not (isinstance(name, str) and isinstance(path_text, str)):
+            raise InputsError("The seed release manifest is not usable.")
+        relative = PurePosixPath(path_text)
+        found = [
+            "is not a plain stored file name" if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", name) is None else None,
+            "has a format that has no check" if Path(name).suffix.lower() not in ASSET_FORMATS else None,
+            "is not a seed path of its own name"
+            if relative.is_absolute() or ".." in relative.parts or relative.parts[:1] != ("manual_units",) or relative.name != name
+            else None,
+            "has no size within the bound" if type(item.get("bytes")) is not int or not 0 < item["bytes"] <= ASSET_LIMIT else None,
+            "has no usable digest" if not isinstance(item.get("sha256"), str) or not DIGEST.fullmatch(item["sha256"]) else None,
+            "has an address other than its release download address" if item.get("url") != f"{transport.RELEASE_DOWNLOAD_PREFIX}{tag}/{name}" else None,
+            "is not listed in the seed manifest with its digest" if listed.get(path_text) != item.get("sha256") else None,
+        ]
+        problems += [f"{name} {why}" for why in found if why is not None]
+    names = [item["name"] for item in assets]
+    problems += [f"{name} is listed twice" for name in sorted({name for name in names if names.count(name) > 1})]
+    if problems:
+        raise InputsError(f"The seed release manifest is not usable: {named(problems)}.")
+    return list(assets)
+
+
+def asset_problem(folder: Path, item: dict[str, Any]) -> str | None:
+    """Why a seed file in place cannot stand for its release asset, or None: another size or another digest. A file that is not there has no problem."""
+    found = folder / item["path"]
+    if not found.exists() and not found.is_symlink():
+        return None
+    if found.is_symlink() or not found.is_file():
+        return f"{item['name']} in the seed folder is not a plain file"
+    body = found.read_bytes()
+    if len(body) != item["bytes"] or hashlib.sha256(body).hexdigest() != item["sha256"]:
+        return f"{item['name']} in the seed folder differs from the release manifest"
+    return None
+
+
+@contextmanager
+def approved_hosts(code_root: Path) -> Iterator[None]:
+    """The approved hosts file and its approval, checked against the queue as capture mode checks them, set for the transport while the assets download."""
+    bundle = code_root / BUNDLE
+    hosts, approval = bundle / "publisher_hosts_scope.json", bundle / "hosts_approval.json"
+    found = redownload_route.host_problems((bundle / "queue.json").read_bytes(), hosts, approval)
+    if found:
+        raise InputsError(f"The approved hosts file cannot govern the release download: {named(found)}.")
+    names = (transport.APPROVED_HOSTS_VARIABLE, transport.APPROVED_HOSTS_APPROVAL_VARIABLE)
+    earlier = {name: os.environ.get(name) for name in names}
+    os.environ[names[0]], os.environ[names[1]] = str(hosts), str(approval)
+    try:
+        yield
+    finally:
+        for name, value in earlier.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def download_asset(item: dict[str, Any], folder: Path, opener: transport.ReviewedTransport) -> tuple[Path | None, str | None]:
+    """Download one asset into its own folder. Returns the file, or no file with the problem: the transport's fixed failure code, a size or a digest."""
+    limits = transport.Limits(attempts=2, max_seconds=capture_mode.download_seconds(item["bytes"]), max_bytes=min(ASSET_LIMIT, item["bytes"] + 1))
+    try:
+        result = transport.download(item["url"], folder, item["name"], ASSET_FORMATS[Path(item["name"]).suffix.lower()], "data", limits, opener=opener)
+    except transport.CaptureError as refusal:
+        return None, f"{item['name']} was refused: {refusal}"
+    if not result.complete:
+        return None, f"{item['name']} is not served by the release ({result.failure})"
+    if result.byte_count != item["bytes"]:
+        return None, f"{item['name']} differs from the release manifest size"
+    if result.sha256 != item["sha256"]:
+        return None, f"{item['name']} differs from the release manifest digest"
+    return result.path, None
+
+
+def fetch_release_assets(code_root: Path, opener: transport.ReviewedTransport | None = None, log: Callable[[dict], None] | None = None) -> None:
+    """Download the release assets the seed folder lacks and place them there. Every asset is checked before any is placed, and a seed file already in place
+    is checked and never downloaded again."""
+    assets = release_entries(code_root)
+    folder = code_root / SEED
+    in_place = [problem for item in assets if (problem := asset_problem(folder, item)) is not None]
+    if in_place:
+        raise InputsError(f"The seed holds a file that is not its release asset: {named(in_place)}.")
+    pending = [item for item in assets if not (folder / item["path"]).exists()]
+    if log is not None:
+        log({"seed_release": {"assets": len(assets), "in_place": len(assets) - len(pending), "to_download": len(pending)}})
+    if not pending:
+        return
+    base = opener if opener is not None else transport.ReviewedTransport(transport.PublicHTTPSHandler())
+    work = folder / DOWNLOAD_FOLDER
+    shutil.rmtree(work, ignore_errors=True)
+    found: dict[str, Path] = {}
+    problems: list[str] = []
+    try:
+        with approved_hosts(code_root):
+            for number, item in enumerate(pending):
+                path, problem = download_asset(item, work / f"{number:03}", base)
+                if path is None:
+                    problems.append(problem or f"{item['name']} was not downloaded")
+                else:
+                    found[item["name"]] = path
+        if problems:
+            raise InputsError(f"The seed release assets are not usable: {named(problems)}.")
+        for item in pending:
+            target = folder / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(found[item["name"]], target)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if log is not None:
+        log({"seed_release": {"downloaded": len(pending)}})

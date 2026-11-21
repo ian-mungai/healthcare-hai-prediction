@@ -56,6 +56,10 @@ mlruns/
 !config/lakehouse/identity_classification.csv
 # The bootstrap seed folder (declared in scripts/quality/repo_checks.py) holds public publisher captures, stored through Git LFS (.gitattributes).
 !config/acquisition/bootstrap_seed/**/*.csv
+# The 34 CMS hospital archives are public assets of a GitHub release, tracked by their manifest only (release_assets.json). The host downloads them into this
+# folder; they are never committed, through LFS or otherwise.
+config/acquisition/bootstrap_seed/manual_units/*/hospitals_*.zip
+config/acquisition/bootstrap_seed/.release_download/
 *.jsonl
 
 # Data collection code, configuration and tests are tracked so CI can run the acquisition checks;

@@ -8,18 +8,21 @@ the caller marks the unit stale.
 from __future__ import annotations
 
 import hashlib
+import re
+import tempfile
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from scripts.acquisition import ahrq_compendium_contract, hud_xlsx_contract, redownload_route, transport, wonder_export_contract
+from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.source_registry import canonical_hash, read_json
 
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
-MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv"), "ahrq_compendium": (None, None)}
+MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv"), "ahrq_compendium": (None, None), "hospital_archive": ("zip", None)}
 # The format of an AHRQ file comes from its name: the six linkage workbooks are .xls or .xlsx and the four technical documents are .pdf.
-SUFFIX_FORMATS = {".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf"}
+SUFFIX_FORMATS = {".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf", ".zip": "zip"}
 WORKBOOK_PART = "xl/workbook.xml"
 # The modes whose derived file is rebuilt from the original: the bootstrap seed holds the original only (owner, Nov 13 2026).
 REBUILT_MODES = ("hud_xlsx", "wonder_export")
@@ -100,9 +103,14 @@ def expected_format(mode: str, name: str | None = None) -> str:
     return SUFFIX_FORMATS[Path(name or "").suffix.lower()]
 
 
-def accept(mode: str, original: Path, name: str, scopes: Scopes) -> dict[str, bytes]:
-    """Check the downloaded original and return the derived file its contract writes. Raises ContentRefusal."""
+def accept(mode: str, original: Path, name: str, scopes: Scopes, binding: dict | None = None) -> dict[str, bytes]:
+    """Check the downloaded original and return the derived file its contract writes. Raises ContentRefusal.
+
+    A hospital archive is bound by ``binding`` (see ``archive_binding``), not by a locked plan: the unit and its specification record what the file must be.
+    """
     try:
+        if mode == "hospital_archive":
+            return hospital(original, binding)
         if mode == "ahrq_compendium":
             return ahrq(original, name, scopes.plan(mode))
         return hud(original, name, scopes.plan(mode)) if mode == "hud_xlsx" else wonder(original, name, scopes.plan(mode))
@@ -162,5 +170,36 @@ def ahrq(original: Path, name: str, plan: dict) -> dict[str, bytes]:
         raise ContentRefusal("contract_failed")
     # The generic check accepts any package with a content types part, so a Word or PowerPoint file bound by the plan would pass as a workbook.
     if form == "xlsx" and WORKBOOK_PART not in zipfile.ZipFile(original).namelist():
+        raise ContentRefusal("contract_failed")
+    return {}
+
+
+def archive_binding(unit: Mapping, spec: Mapping) -> dict:
+    """What binds a seeded hospital archive: the SHA-256 its specification records in the receipt template, the size of its unit and its reviewed members."""
+    digest = (spec.get("receipt_template") or {}).get("expected_sha256")
+    if not (isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise ManualUnitError("The specification of a hospital archive unit records no digest of its archive")
+    members = {tuple(item["member_chain"]) for item in spec.get("archive_members") or []}
+    if not members:
+        raise ManualUnitError("The specification of a hospital archive unit lists no member")
+    return {"sha256": digest, "bytes": unit["bytes"], "members": members}
+
+
+def hospital(original: Path, binding: dict | None) -> dict[str, bytes]:
+    """A hospital archive bound to its recorded SHA-256 and size and to its reviewed members, with no derived file.
+
+    The expansion needs room for the declared size of the archive: ``binding["workspace"]`` names the folder for it, and none names the system temporary folder.
+
+    The members are read as capture mode reads them (``expand_tree``: the bounded, checksum-pinned expansion of nested archives, without the operating
+    system packaging files), so a seeded archive passes here exactly when its capture would pass the member check.
+    """
+    if binding is None:
+        raise ManualUnitError("A hospital archive is checked against the digest, size and members its unit records")
+    bound(original.read_bytes(), binding)
+    if transport.inspect_payload(original, "zip", "data") is not None:
+        raise ContentRefusal("contract_failed")
+    with tempfile.TemporaryDirectory(dir=binding.get("workspace")) as scratch:
+        leaves = expand_tree(original, Path(scratch) / "leaves", binding["sha256"])
+    if {tuple(chain) for chain in leaves} != binding["members"]:
         raise ContentRefusal("contract_failed")
     return {}

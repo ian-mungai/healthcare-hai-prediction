@@ -363,8 +363,13 @@ def main(
         raise PublisherError("The run kind is not one the launch lists.")
     retry = check_retry(env)
     root = state_root(env)
+
+    def emit(item: dict) -> None:
+        sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")
+        sys.stdout.flush()
+
     try:
-        bundle = host_inputs.prepare(Path.cwd())
+        bundle = host_inputs.prepare(Path.cwd(), opener, emit)
     except host_inputs.InputsError as error:
         raise PublisherError(str(error)) from None
     startup_check.check_environment("publisher")
@@ -375,11 +380,6 @@ def main(
         require_bootstrap(storage, root)
     recheck_units = outstanding_units(storage, root, *retry) if retry is not None else frozenset()
     before = capture_mode.list_versions(storage, capture_mode.evidence_prefixes(root))
-
-    def emit(item: dict) -> None:
-        sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")
-        sys.stdout.flush()
-
     run = capture_mode.CaptureRun(
         queue_path=bundle / "queue.json",
         specs_path=bundle / "capture_specs.json",
@@ -392,6 +392,7 @@ def main(
         hosts=bundle / "publisher_hosts_scope.json",
         hosts_approval=bundle / "hosts_approval.json",
         opener=opener,
+        seed=Path.cwd() / host_inputs.SEED,
         task_keys=partial(task_role.TaskKeys, environment=env) if switched else None,
         recheck=env["PUBLISHER_RUN_KIND"] == "monthly",
         recheck_units=recheck_units,

@@ -501,6 +501,8 @@ def test_the_committed_checkout_holds_every_seed_file_a_plan_reads_and_the_host_
     check(len(wanted) == 16, f"the seed manifest names {len(wanted)} plan input files, not 16")
     shutil.copytree(check_run.ROOT, tmp_path / check_run.ROOT)
     shutil.copytree(check_run.SEED_ROOT, tmp_path / check_run.SEED_ROOT)
+    # The seed release assets are downloaded from the network; the cases of test_manual_host_run cover them with a stand-in, and this case stays offline.
+    (tmp_path / check_run.SEED_ROOT / host_inputs.RELEASE_MANIFEST).unlink()
     try:
         host_inputs.prepare(tmp_path)
     except host_inputs.InputsError as error:

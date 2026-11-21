@@ -557,8 +557,9 @@ def seed_only_unit(unit: dict, spec: dict, mode: str, name: str, context: Contex
     folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
     staged_original = folder / name
     shutil.copyfile(original, staged_original)
+    binding = manual_content.archive_binding(unit, spec) | {"workspace": folder} if mode == "hospital_archive" else None
     try:
-        derived = manual_content.accept(mode, staged_original, name, context.scopes)
+        derived = manual_content.accept(mode, staged_original, name, context.scopes, binding)
     except ContentRefusal as refusal:
         return None, refusal.reason
     files = staged(staged_original, derived, spec)

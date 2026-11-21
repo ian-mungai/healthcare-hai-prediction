@@ -15,8 +15,11 @@ from scripts.acquisition.dataset_layout import dataset_id
 from scripts.acquisition.source_registry import canonical_hash
 from scripts.acquisition.transport import CaptureError, canonical_url
 
+# The expanded bytes one archive tree may declare in all: the republished annual hospital archive holds five quarterly archives of 1.36 GB together.
+TREE_BYTES = 2 * 1024**3
 
-def expand_tree(path: Path, output: Path, digest: str, *, max_bytes: int = 1024**3, max_members: int = 10000, max_depth: int = 5) -> dict:
+
+def expand_tree(path: Path, output: Path, digest: str, *, max_bytes: int = TREE_BYTES, max_members: int = 10000, max_depth: int = 5) -> dict:
     """Return leaf members of a checksum-pinned archive tree within shared expansion bounds."""
     leaves: dict = {}
     budget = {"bytes": max_bytes, "members": max_members}

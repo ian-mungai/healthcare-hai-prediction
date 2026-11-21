@@ -7,11 +7,11 @@
   "byte_cap": 137438953472,
   "max_primary_attempts": 4100,
   "pages_recorded": 2050,
-  "recorded_bytes": 25110850242,
+  "recorded_bytes": 25134141128,
   "units_by_route": {
-   "manual_browser_download": 60,
+   "manual_browser_download": 94,
    "publisher_api": 1297,
-   "publisher_url": 693
+   "publisher_url": 659
   }
  },
  "derived_from": {
@@ -51,6 +51,11 @@
     "units": 52
    }
   },
+  "hospital_archive_units": {
+   "moved": 34,
+   "moved_snapshot_ids_sha256": "0eca10e1e85d72740335742aa48fe3c7f85bac51761e5f323d7e004fcc1dc027",
+   "rule": "move each main-hai-pdc archive unit to a seed-only manual unit, because the publisher's content delivery network refuses a scripted download (owner, Nov 20 2026)"
+  },
   "inputs_sha256": {
    "data/acquisition_planning/full_redownload_20260929/capture_inventory_amendment2.json": "1837ade63d84788c99cbcfaa00f9bf7fef02215c8753de000d9217bdb7dd75ea",
    "data/acquisition_planning/run3_scope_20261004/bronze_copies.csv": "17dfbc8bb470f29ae8d93494c7677dea823072c21165de2097b014701b09a492",
@@ -64,8 +69,8 @@
  },
  "dispositions": {
   "api": 1297,
-  "approved_manual": 60,
-  "direct_download": 693
+  "approved_manual": 94,
+  "direct_download": 659
  },
  "entries": 2050,
  "execution_status": "frozen_offline_no_requests_made",
@@ -79,15 +84,15 @@
  "queue": [
   {
    "bytes": 14114406,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/snapshots/main-hai-pdc/main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55/receipt.json",
    "receipt_sha256": "b25e10d50f56a6d667080a2dd6bb4cd037f02bae5f3c616f450d334171728e03",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2026-08-13.zip"
@@ -1601,45 +1606,45 @@
   },
   {
    "bytes": 18544644,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/reviewed_archives/3157744d61c665d7af949b123ae9cdd7ef497e168989016d340356314b2c9124/captures/main-hai-pdc/main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3/receipt.json",
    "receipt_sha256": "7b50524f4b7de4ef0c8973a69113f8228856bf4093587977f89cb63474aba4cb",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2019-03-04.zip"
   },
   {
    "bytes": 16188156,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/reviewed_archives/235cd0b2ffe78ec0749ad15c360eddb98a5b869a541cddd36049fe5412167b10/captures/main-hai-pdc/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/receipt.json",
    "receipt_sha256": "fc43f6b6f1eed64263db65bfb41f851bf72113b47d817cb2ad5230e12859be04",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2020-01-04.zip"
   },
   {
    "bytes": 15146617,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/reviewed_archives/5ecd0150e6586a88f627fd781873c036e791a0285f2b9cd36fc655dec465a8fa/captures/main-hai-pdc/main-hai-pdc__20260924T170628Z__0b4abd63da7145d48ba9ddd2e22c4730/receipt.json",
    "receipt_sha256": "1e0330bbf3d3b0dc43c6d81bfbc43143b2fdb4265b111b293b5f19295cfcb701",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T170628Z__0b4abd63da7145d48ba9ddd2e22c4730",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2024-10-30.zip"
@@ -1763,45 +1768,45 @@
   },
   {
    "bytes": 15810924,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_afb9ad1c5cd823ad/captures/main-hai-pdc/main-hai-pdc__20260924T171752Z__aed6ffe2fed84b4888c94d7fa17abc18/receipt.json",
    "receipt_sha256": "6f18968d926408f12b4e20b4862b694810fe7079602ee10f9d1bb61aa8ff1fb7",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T171752Z__aed6ffe2fed84b4888c94d7fa17abc18",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2025-11-26.zip"
   },
   {
    "bytes": 13830630,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_6e8bf296ca7666f0/captures/main-hai-pdc/main-hai-pdc__20260924T171752Z__4f282353e185479880dd80523e14d564/receipt.json",
    "receipt_sha256": "190db492b6648cc038652de7103a9ce181a435443be2d9f3d5af7c30a355a779",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T171752Z__4f282353e185479880dd80523e14d564",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2026-05-13.zip"
   },
   {
    "bytes": 13806586,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_80175d3233d0e8de/captures/main-hai-pdc/main-hai-pdc__20260924T171752Z__6d2235c410b0433ab12a05f058345309/receipt.json",
    "receipt_sha256": "113d72b9a1c5574430bc3d778b0a31f134b0cc8eaec99cba8e03546cb6b17ea5",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T171752Z__6d2235c410b0433ab12a05f058345309",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2026-02-25.zip"
@@ -1821,45 +1826,45 @@
   },
   {
    "bytes": 15564973,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_6ddd01aaa6552cb9/captures/main-hai-pdc/main-hai-pdc__20260924T172127Z__08b9994d96364eb8b125b2b33e16b1cf/receipt.json",
    "receipt_sha256": "b6b1c43a1d49a5ea137fde81438d2d697497f069cfd34aa04087f46334bd7139",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172127Z__08b9994d96364eb8b125b2b33e16b1cf",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2025-08-14.zip"
   },
   {
    "bytes": 15302069,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_aa8256a46ac6b705/captures/main-hai-pdc/main-hai-pdc__20260924T172138Z__d75b49ce41e347599b4fa39d6f763991/receipt.json",
    "receipt_sha256": "c5625aee41db4eb4e8547ba090834c3e126147002a85e49aa4a02aa7d534ef27",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172138Z__d75b49ce41e347599b4fa39d6f763991",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2025-04-30.zip"
   },
   {
    "bytes": 15297582,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_b07b43f77deb4966/captures/main-hai-pdc/main-hai-pdc__20260924T172142Z__4bc60545bbab4dc9b98451b70c2eadeb/receipt.json",
    "receipt_sha256": "bcb85b261ae4ce2df1a87f74403df9abb6baa9b333582f4b83c51a002badbd68",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172142Z__4bc60545bbab4dc9b98451b70c2eadeb",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2025-02-19.zip"
@@ -2503,45 +2508,45 @@
   },
   {
    "bytes": 14318139,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_3da86c026fa7deb9/captures/main-hai-pdc/main-hai-pdc__20260924T172748Z__5ba3daaab9c7435facc170e9a94d3a79/receipt.json",
    "receipt_sha256": "d4247a95b79993bb5baf0734cc17a4b51548921e4953146b99d34474080e28b9",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172748Z__5ba3daaab9c7435facc170e9a94d3a79",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2024-07-31.zip"
   },
   {
    "bytes": 14171467,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_337be1ca253e399a/captures/main-hai-pdc/main-hai-pdc__20260924T172802Z__8c410463442e4d858bbc71e75cad7c92/receipt.json",
    "receipt_sha256": "83f6a93d05d225622617a72ed324bc38651fc0256c14d42243d6c3950bd33489",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172802Z__8c410463442e4d858bbc71e75cad7c92",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2024-04-24.zip"
   },
   {
    "bytes": 14240989,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_1b809260c8d6352b/captures/main-hai-pdc/main-hai-pdc__20260924T172812Z__e092163da37847ee878c8a77330f05f9/receipt.json",
    "receipt_sha256": "960214178e86d1889d627c987bfee2962059f85644952168df1374452574c8ab",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T172812Z__e092163da37847ee878c8a77330f05f9",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2024-01-31.zip"
@@ -2990,15 +2995,15 @@
   },
   {
    "bytes": 16527213,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_8e0a79c0b4d024fd/captures/main-hai-pdc/main-hai-pdc__20260924T173340Z__2bad8e8505324565a7db74386490621f/receipt.json",
    "receipt_sha256": "d7ccbdace03dddadb4bb38b75c0989f28bec78d41f5c6f8d6ab0e0e4fa67657c",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T173340Z__2bad8e8505324565a7db74386490621f",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2023-11-06.zip"
@@ -3031,15 +3036,15 @@
   },
   {
    "bytes": 15878693,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_e49b41a22f54aafd/captures/main-hai-pdc/main-hai-pdc__20260924T173403Z__fd4eb1cfc1754d9e8fc78629e4691dc5/receipt.json",
    "receipt_sha256": "db4f89d9d301082deba641e006d4b1d8849a174f184a62c83a748cd92ddc9bc9",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T173403Z__fd4eb1cfc1754d9e8fc78629e4691dc5",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2023-10-06.zip"
@@ -3059,15 +3064,15 @@
   },
   {
    "bytes": 15880188,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_66dea2ede7d3c52f/captures/main-hai-pdc/main-hai-pdc__20260924T173425Z__f0b5ef8b101f4ac1a38d07501ab3160f/receipt.json",
    "receipt_sha256": "07446c74db0608fdcc79841516f9bd1488248d856cddadb86de59a96735762b8",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T173425Z__f0b5ef8b101f4ac1a38d07501ab3160f",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2023-07-06.zip"
@@ -3516,15 +3521,15 @@
   },
   {
    "bytes": 17719823,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_dddea450f870a3fe/captures/main-hai-pdc/main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216/receipt.json",
    "receipt_sha256": "557893d18973dad0268aea933c8b0c2e8445917dd5f1a9c4517358c88efc65aa",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2019-04-04.zip"
@@ -5385,30 +5390,30 @@
   },
   {
    "bytes": 15903726,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_1e3f516ca036f25f/captures/main-hai-pdc/main-hai-pdc__20260924T175935Z__ab4fa34b372045019cb13c7b5594cc52/receipt.json",
    "receipt_sha256": "12df1ac5ebc72cfca34d2d98f007a74110d73a98c109753d3dda0699efecd6a7",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T175935Z__ab4fa34b372045019cb13c7b5594cc52",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2023-04-06.zip"
   },
   {
    "bytes": 16142558,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_44ecd80561a19081/captures/main-hai-pdc/main-hai-pdc__20260924T175937Z__799f05d298ac49749a7d89fd3db16c1b/receipt.json",
    "receipt_sha256": "6f6a904120e40bd831ee96f707c973b9c614deb5f84fa94fe24dd1a042542562",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T175937Z__799f05d298ac49749a7d89fd3db16c1b",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2023-01-06.zip"
@@ -5441,15 +5446,15 @@
   },
   {
    "bytes": 14753205,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_eed859f9cc0690ef/captures/main-hai-pdc/main-hai-pdc__20260924T175948Z__966e0689434c4daa91faf0412d457c78/receipt.json",
    "receipt_sha256": "bf615549a38919549764ba8fb3214866eb954ac2aafcb9c47eb998117de7528d",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T175948Z__966e0689434c4daa91faf0412d457c78",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2022-10-06.zip"
@@ -5482,105 +5487,105 @@
   },
   {
    "bytes": 14788971,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_3c91957e34ee59b6/captures/main-hai-pdc/main-hai-pdc__20260924T180549Z__bba401a9342647a39d3fc85114fa5633/receipt.json",
    "receipt_sha256": "9a3af1cbb318eea9b2a72309f5e365c4d1fd14b7bbd8fb2f83ae2c11e5e07892",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T180549Z__bba401a9342647a39d3fc85114fa5633",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2022-07-06.zip"
   },
   {
    "bytes": 15985403,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_bf9bef7e94ea25de/captures/main-hai-pdc/main-hai-pdc__20260924T180606Z__82a8d9bc0ae94502a63233ea8a54a5b8/receipt.json",
    "receipt_sha256": "f42f7fbe9f89cdadea91684655fc4f63ab337719a88a2be6e62a75a64b10047a",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T180606Z__82a8d9bc0ae94502a63233ea8a54a5b8",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2022-04-06.zip"
   },
   {
    "bytes": 15878925,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_551dc9f530fe360e/captures/main-hai-pdc/main-hai-pdc__20260924T180619Z__d3549803bbe44765af9dff3b5f615958/receipt.json",
    "receipt_sha256": "7571bf4b0c8bf6f6d3929438583cba0ed9a86face510345e04f2ab449086ca01",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T180619Z__d3549803bbe44765af9dff3b5f615958",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2022-01-06.zip"
   },
   {
-   "bytes": 43570839,
-   "disposition": "direct_download",
+   "bytes": 66861725,
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_annual_review/jobs/main-hai-pdc_history_0f21299a5b14bd61/captures/main-hai-pdc/main-hai-pdc__20260924T181018Z__868f0a9dcfce4ba3991fe003edfe4535/receipt.json",
    "receipt_sha256": "ed77d294244bc3bd94ca87386e0015afff86b252ab3949c5b676345a87990242",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181018Z__868f0a9dcfce4ba3991fe003edfe4535",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_annual_2026.zip"
   },
   {
    "bytes": 14769479,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_8f1fe473fd1c3381/captures/main-hai-pdc/main-hai-pdc__20260924T181035Z__666c1a23a8494457814c4cf5319cf6fa/receipt.json",
    "receipt_sha256": "b9007cbb52cbbc0bdda8e1dede529ac6f395c8271987177b72af46ed7e0d44a8",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181035Z__666c1a23a8494457814c4cf5319cf6fa",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2021-10-27.zip"
   },
   {
    "bytes": 14374687,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_fafff568800946cb/captures/main-hai-pdc/main-hai-pdc__20260924T181140Z__49bd961f027c4b09b0fdbb45803e3af9/receipt.json",
    "receipt_sha256": "da9bbbb55633c072b45b941c597797c9becaf88f480b26fb5a4039fb0251a6af",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181140Z__49bd961f027c4b09b0fdbb45803e3af9",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2021-07-21.zip"
   },
   {
    "bytes": 14625171,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_ecdc1f307957e220/captures/main-hai-pdc/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/receipt.json",
    "receipt_sha256": "455290535ef373e81be6113d71add204524028bc68a05ec44e5cec9ab5c04559",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2021-04-28.zip"
@@ -5769,105 +5774,105 @@
   },
   {
    "bytes": 14415213,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_70a95aa09d15acb2/captures/main-hai-pdc/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/receipt.json",
    "receipt_sha256": "3de80046fb1e2b94e1761949cf5be505bb08f2e59de0aee4186aad667b4331f1",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2021-03-31.zip"
   },
   {
    "bytes": 14617095,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_78b2425a92bb2521/captures/main-hai-pdc/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/receipt.json",
    "receipt_sha256": "21cbd5732a8c0c754521104ef4c864193ebd2f6d2f292998f69af60b92060d33",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2021-01-27.zip"
   },
   {
    "bytes": 14966863,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_399e8ed50be9f943/captures/main-hai-pdc/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/receipt.json",
    "receipt_sha256": "33fd056c1ef85dfffe55417b6b10bdc1e6a1c5d67294bd2429c079e872fe8d26",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2020-10-16.zip"
   },
   {
    "bytes": 13002445,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_ae7cb709d5433f62/captures/main-hai-pdc/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/receipt.json",
    "receipt_sha256": "ca53bd4d48d82dd6a17497299dccdca93116ec26aff85dce4582406ff91baee4",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2020-07-04.zip"
   },
   {
    "bytes": 16306683,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_6c7fba30d980a746/captures/main-hai-pdc/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/receipt.json",
    "receipt_sha256": "3736e1cba461834989924c0292120da477f28cfbbda4abe153bace1c11a9e919",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2020-05-01.zip"
   },
   {
    "bytes": 17056453,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_36d02de41c4137e6/captures/main-hai-pdc/main-hai-pdc__20260924T182040Z__14cb30f56f4946e5a914b80489e29c8c/receipt.json",
    "receipt_sha256": "8fd3d4d4178216d6e54b5d5cc113e63df1252adb01e146a85d79e38d15a8054d",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T182040Z__14cb30f56f4946e5a914b80489e29c8c",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2019-10-31.zip"
   },
   {
    "bytes": 21768646,
-   "disposition": "direct_download",
+   "disposition": "approved_manual",
    "flags": [
     "original_contains_personal_details:private_owner_only:redacted_derivative_only"
    ],
-   "mode": "file",
+   "mode": "hospital_archive",
    "pages": 1,
    "receipt": "data/historical_acquisition/cms_history/jobs/main-hai-pdc_history_611abefcd10ff6a8/captures/main-hai-pdc/main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a/receipt.json",
    "receipt_sha256": "4af5b826429090cb37f28a1e0d833f9aa67a10d56f921b7978f938cefb652bc2",
-   "route": "publisher_url",
+   "route": "manual_browser_download",
    "snapshot_id": "main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a",
    "source_id": "main-hai-pdc",
    "url": "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/hospitals_2019-07-31.zip"

@@ -94,7 +94,7 @@ def run_job(monkeypatch: pytest.MonkeyPatch, workspace: Path, cloud: Cloud | Non
     bundle.mkdir(parents=True)
     (bundle / "queue.json").write_bytes(QUEUE)
     monkeypatch.chdir(workspace / "code")
-    monkeypatch.setattr(host_inputs, "prepare", lambda _code_root: bundle)
+    monkeypatch.setattr(host_inputs, "prepare", lambda _code_root, *_arguments: bundle)
     cloud = cloud or Cloud()
 
     def started(*_arguments: Any) -> None:

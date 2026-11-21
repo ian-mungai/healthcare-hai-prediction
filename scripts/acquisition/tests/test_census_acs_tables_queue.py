@@ -64,17 +64,25 @@ def test_the_tracked_queue_swaps_the_16_manual_acs_units_for_173_api_units_after
     check(api[0] == last_file + 1, "the API units do not follow the last ACS file unit")
     check([units[i] for i in api] == [expected_unit(b) for b in plan_units()], "the unit entries differ from the plan")
     manual = Counter(u["mode"] for u in queue["queue"] if u["disposition"] == "approved_manual")
-    check(manual == {"hud_xlsx": 44, "wonder_export": 6, "ahrq_compendium": 10}, f"the manual set is {dict(manual)}")
+    check(manual == {"hud_xlsx": 44, "wonder_export": 6, "ahrq_compendium": 10, "hospital_archive": 34}, f"the manual set is {dict(manual)}")
     budgets = queue["budgets"]
     check(budgets["acquisition_units"] == 2050 and budgets["max_primary_attempts"] == 4100 and budgets["pages_recorded"] == 2050, f"budgets: {budgets}")
-    check(budgets["units_by_route"] == {"manual_browser_download": 60, "publisher_api": 1297, "publisher_url": 693}, f"routes: {budgets['units_by_route']}")
-    check(queue["dispositions"] == {"api": 1297, "approved_manual": 60, "direct_download": 693}, f"dispositions: {queue['dispositions']}")
+    check(budgets["units_by_route"] == {"manual_browser_download": 94, "publisher_api": 1297, "publisher_url": 659}, f"routes: {budgets['units_by_route']}")
+    check(queue["dispositions"] == {"api": 1297, "approved_manual": 94, "direct_download": 659}, f"dispositions: {queue['dispositions']}")
     check(check_run.queue_problems(ROOT) == [], f"queue problems: {check_run.queue_problems(ROOT)}")
 
 
-def test_the_other_1867_units_are_byte_equal_to_the_entries_the_queue_held_before() -> None:
+def before_the_move(unit: dict) -> dict:
+    """A hospital archive unit as the queue held it before the owner saved it in a browser (the annual archive was 43,570,839 bytes)."""
+    if unit["mode"] != "hospital_archive":
+        return unit
+    size = 43_570_839 if unit["url"].endswith("hospitals_annual_2026.zip") else unit["bytes"]
+    return unit | {"disposition": "direct_download", "route": "publisher_url", "mode": "file", "bytes": size}
+
+
+def test_the_other_1867_units_are_byte_equal_to_the_entries_the_queue_held_before_but_for_the_move_of_the_hospital_archives() -> None:
     queue = tracked()
-    others = [u for u in queue["queue"] if u["mode"] not in ("census_acs_tables", "ahrq_compendium")]
+    others = [before_the_move(u) for u in queue["queue"] if u["mode"] not in ("census_acs_tables", "ahrq_compendium")]
     check(len(others) == 1867 and units_digest(others) == UNCHANGED_UNITS_SHA256, "an entry other than the swapped ones changed")
     swap = queue["derived_from"]["acs_api_swap"]
     check(swap["kept_units_sha256"] == UNCHANGED_UNITS_SHA256 and swap["dropped"] == 16 and swap["added"] == 173, f"swap record: {swap}")
@@ -259,7 +267,10 @@ def test_the_seed_manifest_binds_the_new_queue_and_holds_no_acs_file() -> None:
     check(check_run.seed_problems(ROOT, SEED, manifest) == [], f"seed problems: {check_run.seed_problems(ROOT, SEED, manifest)}")
     modes = {u["snapshot_id"]: u["mode"] for u in json.loads(body)["queue"]}
     seeded = {item["unit"] for item in manifest["files"] if "unit" in item}
-    check(seeded and {modes[s] for s in seeded} == {"hud_xlsx", "wonder_export", "ahrq_compendium"}, "a seeded unit is not a HUD, WONDER or AHRQ unit")
+    check(
+        seeded and {modes[s] for s in seeded} == {"hud_xlsx", "wonder_export", "ahrq_compendium", "hospital_archive"},
+        "a seeded unit is not a HUD, WONDER, AHRQ or hospital unit",
+    )
     check(not any(Path(item["path"]).name.startswith("ACS") for item in manifest["files"]), "an ACS file is in the seed")
 
 

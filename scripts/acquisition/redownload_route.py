@@ -18,7 +18,15 @@ from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
 from scripts.acquisition.raw_root import is_test_root
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import RegistryError
-from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, UNSIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
+from scripts.acquisition.storage_controls import SEED_ONLY_MODES
+from scripts.acquisition.transport import (
+    RELEASE_ASSET_HOST,
+    RELEASE_DOWNLOAD_HOST,
+    SIGNED_REDIRECT_ROUTES,
+    UNSIGNED_REDIRECT_ROUTES,
+    CaptureError,
+    hosts_digest,
+)
 from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
@@ -108,15 +116,19 @@ def confirmation_problems(confirmation_path: Path, removal: dict) -> list[str]:
     return problems
 
 
-# The modes whose original comes from the bootstrap seed only. The run never requests their URL, so their host is not a host of the run (owner, Nov 19 2026).
-SEED_ONLY_MODES = frozenset({"ahrq_compendium"})
+# The modes whose seed files are public assets of one GitHub release that the host downloads after each bootstrap (owner, Nov 21 2026). Their units add the
+# release download host and the one host it redirects to; the units themselves still add no publisher host.
+RELEASE_SEEDED_MODES = frozenset({"hospital_archive"})
 
 
 def queue_hosts(queue: dict) -> set[str]:
     """Return the hosts of the active queue units, plus the target host of each reviewed redirect an active unit can take: its signed route, or the
-    unsigned route of its host. A route no active unit uses adds nothing. A unit of a seed-only mode adds nothing: its URL is never requested."""
+    unsigned route of its host. A route no active unit uses adds nothing. A unit of a seed-only mode adds nothing: its URL is never requested. A unit whose
+    seed files come from the GitHub release adds the two hosts of that download."""
     hosts: set[str] = set()
     for unit in queue["queue"]:
+        if unit["disposition"] in ACTIVE and unit.get("mode") in RELEASE_SEEDED_MODES:
+            hosts |= {RELEASE_DOWNLOAD_HOST, RELEASE_ASSET_HOST}
         if unit["disposition"] in ACTIVE and unit.get("mode") not in SEED_ONLY_MODES:
             host = str(urllib.parse.urlsplit(unit["url"]).hostname)
             hosts.add(host)

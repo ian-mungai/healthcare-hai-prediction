@@ -40,6 +40,13 @@ UNSIGNED_REDIRECT_ROUTES = {
     "data.chhs.ca.gov": "https://s3.amazonaws.com/og-production-open-data-chelseama-892364687672/resources/",
 }
 REDIRECT_CODES = {301, 302, 303, 307, 308}
+# Reviewed release download route (owner decision "PDC archives as public GitHub release assets", Nov 21 2026): a seed file is a public asset of one release of
+# this repository. GitHub answers the download address with one redirect to a signed address on its release asset host (checked live on Nov 21 2026: 302 to
+# release-assets.githubusercontent.com, then 200). Only that one hop is followed, only from an address below the prefix, and the query of the destination is
+# dropped from every saved record, as for a signed publisher redirect.
+RELEASE_DOWNLOAD_PREFIX = "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/"
+RELEASE_DOWNLOAD_HOST = "github.com"
+RELEASE_ASSET_HOST = "release-assets.githubusercontent.com"
 
 
 APPROVED_HOSTS_VARIABLE = "HAI_APPROVED_HOSTS"
@@ -411,6 +418,8 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         if self.unsigned_destination is not None:
             raise CaptureError("Additional redirects after a reviewed cross-host redirect are not approved.")
         require_approved(newurl)
+        if (self.source_url or "").startswith(RELEASE_DOWNLOAD_PREFIX):
+            return self.follow_release_route(req, code, newurl)
         # A source with a reviewed signed route keeps that exact handling; only a source without one may take its host's unsigned route. Both lookups read
         # the source in one spelling, so another case or the default port cannot turn the signed source into an unsigned one.
         source = source_identity(self.source_url or req.full_url)
@@ -450,6 +459,26 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         if urllib.parse.urlsplit(newurl).hostname not in self.allowed_hosts:
             raise CaptureError("Redirect host has not been reviewed for this capture.")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    def follow_release_route(self, req: Any, code: int, newurl: str) -> Any:
+        """Follow the one reviewed redirect of a release download: a GET of the exact release address, answered by a redirect to the release asset host over
+        HTTPS, without credentials, a fragment or another port. The signed query is allowed, sent to that host only and redacted from the saved record. The
+        refusals never repeat the target."""
+        parts = urllib.parse.urlsplit(newurl)
+        if (
+            req.full_url != self.source_url
+            or req.get_method() != "GET"
+            or code not in REDIRECT_CODES
+            or parts.hostname != RELEASE_ASSET_HOST
+            or parts.port not in (None, 443)
+            or parts.username
+            or parts.password
+            or parts.fragment
+        ):
+            raise CaptureError("Redirect differs from the reviewed release download route.")
+        safe_url(urllib.parse.urlunsplit(parts._replace(query="")))
+        self.signed_destination = newurl
+        return HttpsRequest(newurl, headers={"Accept-Encoding": "identity", "User-Agent": "HistoricalSourceCapture/1.0"})
 
     def follow_unsigned_route(self, req: Any, code: int, newurl: str, route: str) -> Any:
         """Follow one reviewed unsigned redirect below its exact prefix with a new request; the refusals never repeat the target.

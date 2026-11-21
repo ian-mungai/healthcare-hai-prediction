@@ -1,7 +1,8 @@
 """Repeatable offline verification of the host's manual-unit handler, with a result file that names every case.
 
-The cases are in ``tests/test_manual_units.py``. They use a stand-in publisher, a create-once S3 stand-in and a clock that never sleeps, so nothing
-reaches a network or AWS. Run: ``python -m scripts.acquisition.run_manual_units_e2e --output data/e2e/ingestion_manual_units/<name>``.
+The cases are in ``tests/test_manual_units.py`` (the handler) and ``tests/test_manual_host_run.py`` (the host run: the seed release download and the capture
+of manual units through the normal path). They use a stand-in publisher, a stand-in for the GitHub release, a create-once S3 stand-in and a clock that never
+sleeps, so nothing reaches a network or AWS. Run: ``python -m scripts.acquisition.run_manual_units_e2e --output data/e2e/ingestion_manual_units/<name>``.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ import pytest
 
 from scripts.acquisition.source_registry import REPO_ROOT
 
-CASES = Path(__file__).resolve().parent / "tests" / "test_manual_units.py"
-MODULES = ("manual_units.py", "manual_content.py", "stale_record.py", "completion_record.py")
+CASES = tuple(Path(__file__).resolve().parent / "tests" / name for name in ("test_manual_units.py", "test_manual_host_run.py"))
+MODULES = ("manual_units.py", "manual_content.py", "manual_receipt.py", "stale_record.py", "completion_record.py", "host_inputs.py", "capture_mode.py")
 
 
 class Collector:
@@ -36,7 +37,7 @@ class Collector:
 def code_sha256() -> str:
     """One digest over the handler, its content checks, its record schema and the cases, so a result names the code it ran on."""
     digest = hashlib.sha256()
-    for path in [*(CASES.parent.parent / name for name in MODULES), CASES]:
+    for path in [*(CASES[0].parent.parent / name for name in MODULES), *CASES]:
         digest.update(path.name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
@@ -47,7 +48,7 @@ def main() -> int:
     arguments = parser.parse_args()
     collector = Collector()
     started = code_sha256()
-    status = int(pytest.main([str(CASES), "-q", "-p", "no:cacheprovider"], plugins=[collector]))
+    status = int(pytest.main([*map(str, CASES), "-q", "-p", "no:cacheprovider"], plugins=[collector]))
     counts = {name: sum(1 for value in collector.outcomes.values() if value == name) for name in ("passed", "failed", "error", "skipped")}
     result = {
         "suite": "manual_units",
@@ -56,7 +57,7 @@ def main() -> int:
         "cases": dict(sorted(collector.outcomes.items())),
         "code_sha256": started,
         "code_unchanged_during_run": code_sha256() == started,
-        "network": "none: stand-in publisher, create-once S3 stand-in and an injected clock",
+        "network": "none: stand-in publisher, stand-in release, create-once S3 stand-in and an injected clock",
     }
     arguments.output.mkdir(parents=True, exist_ok=True)
     (arguments.output / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

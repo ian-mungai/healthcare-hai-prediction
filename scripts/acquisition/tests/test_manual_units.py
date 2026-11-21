@@ -868,8 +868,15 @@ def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_lock
     for unit in ahrq:
         check(manual_content.plan_unit(unit, specs[unit["snapshot_id"]])[1] in planned, f"{unit['snapshot_id']} is a planned AHRQ file")
         check(not manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is not a host the run requests")
+    archives = [unit for unit in manual if unit["mode"] == HOSPITAL]
+    check(len(archives) == 34 and Counter(unit["source_id"] for unit in archives) == {"main-hai-pdc": 34}, "the hospital archive set is 34 seed-only units")
+    for unit in archives:
+        spec = specs[unit["snapshot_id"]]
+        check(manual_content.plan_unit(unit, spec)[1] == unit["url"].rsplit("/", 1)[-1], f"{unit['snapshot_id']} stores the file its URL names")
+        check(manual_content.archive_binding(unit, spec)["bytes"] == unit["bytes"], f"{unit['snapshot_id']} records its digest and members")
+        check(not manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is not a host the run requests")
     refused: Counter[tuple[str, str, bool]] = Counter()
-    for unit in (unit for unit in manual if unit not in units and unit not in ahrq):
+    for unit in (unit for unit in manual if unit not in units and unit not in ahrq and unit not in archives):
         with pytest.raises(manual_units.ManualUnitError, match="not a manual unit|no content contract") as error:
             manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
         refused[(unit["source_id"], unit["mode"], "not a manual unit" in str(error.value))] += 1
@@ -1623,3 +1630,106 @@ def test_a_plan_entry_under_another_name_with_the_same_bytes_does_not_bind_the_u
     world.plans = dataclasses.replace(world.plans, ahrq=plan)
     world.run(list(units.values()), seed=seed)
     check(only_stale(world, units[XLSX_NAME])["reason"] == "contract_failed" and world.sink.captured == [], "the name must be the planned one")
+
+
+HOSPITAL = "hospital_archive"
+HOSPITAL_BASE = "https://data.cms.gov/provider-data/sites/default/files/dataset-archives/theme/hospitals/"
+HOSPITAL_NAME = "hospitals_2026-02-25.zip"
+HOSPITAL_MEMBERS = {"hospitals_2026-02-25/a.csv": b"id,value\n1,2\n", "hospitals_2026-02-25/b.csv": b"id,value\n3,4\n"}
+PACKAGING = {"__MACOSX/hospitals_2026-02-25/._a.csv": b"resource fork", "hospitals_2026-02-25/.DS_Store": b"finder"}
+
+
+def archive_of(members: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, body in members.items():
+            archive.writestr(name, body)
+    return buffer.getvalue()
+
+
+def hospital_spec(body: bytes, members: dict[str, bytes], *, digest: str | None = None) -> dict:
+    template = {"mode": "file", "expected_sha256": digest if digest is not None else hashlib.sha256(body).hexdigest()}
+    listed = [{"dataset_id": "cms_a", "member_chain": [name], "role": "data"} for name in members]
+    return {"mode": HOSPITAL, "stored_data_files": [HOSPITAL_NAME], "expected_format": "zip", "archive_members": listed, "receipt_template": template}
+
+
+def hospital_world(world: World, held: bytes | None = None, *, spec: dict | None = None, size: int | None = None) -> tuple[dict, Path, bytes]:
+    """One seed-only hospital archive unit whose seeded file is HELD (the right archive by default) and whose specification binds the right archive."""
+    right = archive_of(HOSPITAL_MEMBERS)
+    unit = make_unit("main-hai-pdc", HOSPITAL, HOSPITAL_BASE + HOSPITAL_NAME, "main-hai-pdc__0") | {"bytes": len(right) if size is None else size}
+    world.add(unit, spec if spec is not None else hospital_spec(right, HOSPITAL_MEMBERS))
+    seed = world.scratch.parent / "seed"
+    folder = seed / "manual_units" / unit["snapshot_id"]
+    folder.mkdir(parents=True)
+    (folder / HOSPITAL_NAME).write_bytes(right if held is None else held)
+    return unit, seed, right
+
+
+def test_a_seeded_hospital_archive_is_bound_to_its_digest_and_members_and_captured_alone_with_no_request(world: World) -> None:
+    unit, seed, body = hospital_world(world)
+    report = world.run([unit], seed=seed)
+    check([(name, list(files)) for name, files in world.sink.captured] == [(unit["snapshot_id"], [HOSPITAL_NAME])], f"{world.sink.captured}")
+    check(world.sink.captured[0][1][HOSPITAL_NAME] == body, "the captured bytes are the seeded bytes")
+    check(world.site.seen == [] and report.http_requests == 0 and world.counter == [], "no request, not even robots.txt")
+    check(read_all(world) == [] and report.counts["captured"] == 1, f"no stale record: {report.counts}")
+
+
+def test_operating_system_packaging_in_a_hospital_archive_is_not_a_member(world: World) -> None:
+    packed = archive_of(HOSPITAL_MEMBERS | PACKAGING)
+    unit, seed, _ = hospital_world(world, packed, size=len(packed))
+    world.specs[unit["snapshot_id"]] = hospital_spec(packed, HOSPITAL_MEMBERS)
+    world.run([unit], seed=seed)
+    check(len(world.sink.captured) == 1 and read_all(world) == [], "the Finder and resource fork files do not count against the member list")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [lambda body: body[:-1] + b"X", lambda body: body + b"X", lambda body: body[:-2]],
+    ids=["same_size_other_hash", "longer", "shorter"],
+)
+def test_a_hospital_archive_with_another_hash_or_size_than_its_unit_is_stale_and_never_captured(world: World, change: Callable[[bytes], bytes]) -> None:
+    unit, seed, body = hospital_world(world, size=len(archive_of(HOSPITAL_MEMBERS)))
+    (seed / "manual_units" / unit["snapshot_id"] / HOSPITAL_NAME).write_bytes(change(body))
+    world.run([unit], seed=seed)
+    check(only_stale(world, unit)["reason"] == "contract_failed", "the mismatch makes the unit stale")
+    check(world.sink.captured == [] and world.site.seen == [], "nothing was captured and no request was sent")
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        {**HOSPITAL_MEMBERS, "hospitals_2026-02-25/c.csv": b"id\n9\n"},
+        {name: body for name, body in HOSPITAL_MEMBERS.items() if name.endswith("a.csv")},
+        {"hospitals_2026-02-25/a.csv": HOSPITAL_MEMBERS["hospitals_2026-02-25/a.csv"], "hospitals_2026-02-25/z.csv": b"id\n1\n"},
+    ],
+    ids=["extra_member", "missing_member", "renamed_member"],
+)
+def test_a_hospital_archive_whose_members_differ_from_the_reviewed_list_is_stale_even_when_its_digest_matches(world: World, members: dict[str, bytes]) -> None:
+    other = archive_of(members)
+    unit, seed, _ = hospital_world(world, other, size=len(other))
+    world.specs[unit["snapshot_id"]] = hospital_spec(other, HOSPITAL_MEMBERS)
+    world.run([unit], seed=seed)
+    check(only_stale(world, unit)["reason"] == "contract_failed" and world.sink.captured == [], "the member list is checked as capture mode checks it")
+
+
+def test_a_hospital_unit_whose_specification_records_no_digest_stops_the_run_before_any_request(world: World) -> None:
+    right = archive_of(HOSPITAL_MEMBERS)
+    spec = hospital_spec(right, HOSPITAL_MEMBERS)
+    del spec["receipt_template"]["expected_sha256"]
+    unit, seed, _ = hospital_world(world, spec=spec)
+    with pytest.raises(manual_units.ManualUnitError, match="digest"):
+        world.run([unit], seed=seed)
+    check(world.site.seen == [] and world.sink.captured == [], "nothing was requested or captured")
+
+
+def test_a_hospital_archive_that_is_not_a_zip_is_stale_even_when_its_digest_is_recorded(world: World) -> None:
+    html = b"<!doctype html><html><body>access denied</body></html>"
+    unit, seed, _ = hospital_world(world, html, spec=hospital_spec(html, HOSPITAL_MEMBERS), size=len(html))
+    world.run([unit], seed=seed)
+    check(only_stale(world, unit)["reason"] == "contract_failed" and world.sink.captured == [], "the format check refuses it")
+
+
+def test_a_run_without_a_seed_folder_never_downloads_a_hospital_archive(world: World) -> None:
+    unit, _, _ = hospital_world(world)
+    report = world.run([unit])
+    check(only_stale(world, unit)["reason"] == "seed_required" and world.site.seen == [] and report.http_requests == 0, "no seed means no request")

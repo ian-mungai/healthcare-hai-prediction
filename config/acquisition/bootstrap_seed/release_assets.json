@@ -1,0 +1,245 @@
+{
+ "assets": [
+  {
+   "bytes": 14114406,
+   "name": "hospitals_2026-08-13.zip",
+   "path": "manual_units/main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55/hospitals_2026-08-13.zip",
+   "sha256": "0a4a8507cab940dbc49b248892f24391a822c7f0c4776cf4e37dddcc48862d77",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2026-08-13.zip"
+  },
+  {
+   "bytes": 15146617,
+   "name": "hospitals_2024-10-30.zip",
+   "path": "manual_units/main-hai-pdc__20260924T170628Z__0b4abd63da7145d48ba9ddd2e22c4730/hospitals_2024-10-30.zip",
+   "sha256": "c0bb9ca111aeec16b9220da52b1aa5b33582284ecfd9cf29f1c3c39f1250ae8b",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2024-10-30.zip"
+  },
+  {
+   "bytes": 16188156,
+   "name": "hospitals_2020-01-04.zip",
+   "path": "manual_units/main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1/hospitals_2020-01-04.zip",
+   "sha256": "a8b320477f7d93cfc9907ae44fb9d84c77676188d9b86b8cff41b6abfb71ec8b",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2020-01-04.zip"
+  },
+  {
+   "bytes": 18544644,
+   "name": "hospitals_2019-03-04.zip",
+   "path": "manual_units/main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3/hospitals_2019-03-04.zip",
+   "sha256": "1a0e71473719b4108796d7f2e42e68011d5fd0560e33b9a35ceb2a7674ce19ef",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2019-03-04.zip"
+  },
+  {
+   "bytes": 13830630,
+   "name": "hospitals_2026-05-13.zip",
+   "path": "manual_units/main-hai-pdc__20260924T171752Z__4f282353e185479880dd80523e14d564/hospitals_2026-05-13.zip",
+   "sha256": "a0816ffb0fdd9f1bd4fe1efe37928de71b604f2bd8b75c23925edaf6d9c9f7d0",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2026-05-13.zip"
+  },
+  {
+   "bytes": 13806586,
+   "name": "hospitals_2026-02-25.zip",
+   "path": "manual_units/main-hai-pdc__20260924T171752Z__6d2235c410b0433ab12a05f058345309/hospitals_2026-02-25.zip",
+   "sha256": "0e8e9e1f64872d01102a9cb29223ab0c32eab87a42533b4486627e0ccb45c877",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2026-02-25.zip"
+  },
+  {
+   "bytes": 15810924,
+   "name": "hospitals_2025-11-26.zip",
+   "path": "manual_units/main-hai-pdc__20260924T171752Z__aed6ffe2fed84b4888c94d7fa17abc18/hospitals_2025-11-26.zip",
+   "sha256": "f3d447ccb50d2ba189c19bbb0d84f72031452bb36ca03b51df9e0d8924b52e72",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2025-11-26.zip"
+  },
+  {
+   "bytes": 15564973,
+   "name": "hospitals_2025-08-14.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172127Z__08b9994d96364eb8b125b2b33e16b1cf/hospitals_2025-08-14.zip",
+   "sha256": "0e75bec0d6bc52b562114eb619e0b620f272d6883af01614f629503f010f83f3",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2025-08-14.zip"
+  },
+  {
+   "bytes": 15302069,
+   "name": "hospitals_2025-04-30.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172138Z__d75b49ce41e347599b4fa39d6f763991/hospitals_2025-04-30.zip",
+   "sha256": "515977986a28c7279579ed639d2792781992e2cb1edf7100795c497c03818618",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2025-04-30.zip"
+  },
+  {
+   "bytes": 15297582,
+   "name": "hospitals_2025-02-19.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172142Z__4bc60545bbab4dc9b98451b70c2eadeb/hospitals_2025-02-19.zip",
+   "sha256": "632d67c2a1c9a5840a8833e11f2961260c50b243f7bd0358f22f9ae5d58227f1",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2025-02-19.zip"
+  },
+  {
+   "bytes": 14318139,
+   "name": "hospitals_2024-07-31.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172748Z__5ba3daaab9c7435facc170e9a94d3a79/hospitals_2024-07-31.zip",
+   "sha256": "c01d018759f1e1bfee39788a52767239c797d55d0ff92662b4889e1c9f481ffe",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2024-07-31.zip"
+  },
+  {
+   "bytes": 14171467,
+   "name": "hospitals_2024-04-24.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172802Z__8c410463442e4d858bbc71e75cad7c92/hospitals_2024-04-24.zip",
+   "sha256": "ed2a42b6be355bab3de2a837533a48f1f1c8695acc339e97fbd1dcaadf7d723c",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2024-04-24.zip"
+  },
+  {
+   "bytes": 14240989,
+   "name": "hospitals_2024-01-31.zip",
+   "path": "manual_units/main-hai-pdc__20260924T172812Z__e092163da37847ee878c8a77330f05f9/hospitals_2024-01-31.zip",
+   "sha256": "940976162678c4e1e64c3ac7e5b5bc5897f8b212a2f53808ec882da261b2d487",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2024-01-31.zip"
+  },
+  {
+   "bytes": 16527213,
+   "name": "hospitals_2023-11-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T173340Z__2bad8e8505324565a7db74386490621f/hospitals_2023-11-06.zip",
+   "sha256": "2a39f58397aeed70bb4281e85b57f41aa84322c9c6eb0c760c2d8d5e62e4534f",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2023-11-06.zip"
+  },
+  {
+   "bytes": 15878693,
+   "name": "hospitals_2023-10-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T173403Z__fd4eb1cfc1754d9e8fc78629e4691dc5/hospitals_2023-10-06.zip",
+   "sha256": "f7d9326737338189b154a980892d1eb832cbf80982e591fe096547d4cc3b0175",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2023-10-06.zip"
+  },
+  {
+   "bytes": 15880188,
+   "name": "hospitals_2023-07-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T173425Z__f0b5ef8b101f4ac1a38d07501ab3160f/hospitals_2023-07-06.zip",
+   "sha256": "a50dafbdc099a874a7580d6bb315e2a4441b062c8b37263e2db4405c6544b157",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2023-07-06.zip"
+  },
+  {
+   "bytes": 17719823,
+   "name": "hospitals_2019-04-04.zip",
+   "path": "manual_units/main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216/hospitals_2019-04-04.zip",
+   "sha256": "669e1de85a23c821319a9774f971b06d9a843c9c0e9ea687541c50f739ff3a08",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2019-04-04.zip"
+  },
+  {
+   "bytes": 15903726,
+   "name": "hospitals_2023-04-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T175935Z__ab4fa34b372045019cb13c7b5594cc52/hospitals_2023-04-06.zip",
+   "sha256": "71c720be75afe15aaa40965a5a249e9f63f9ab651da2f549ae2f54dd868e42e3",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2023-04-06.zip"
+  },
+  {
+   "bytes": 16142558,
+   "name": "hospitals_2023-01-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T175937Z__799f05d298ac49749a7d89fd3db16c1b/hospitals_2023-01-06.zip",
+   "sha256": "a4b617e313a0b1f47df4331bd001f089493674ddfdff5622fe1d3e9af51624aa",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2023-01-06.zip"
+  },
+  {
+   "bytes": 14753205,
+   "name": "hospitals_2022-10-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T175948Z__966e0689434c4daa91faf0412d457c78/hospitals_2022-10-06.zip",
+   "sha256": "cd258649ad9b0ae9928321a891a6060c85fe90b87f6e7be5b2ad9d81e0359038",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2022-10-06.zip"
+  },
+  {
+   "bytes": 14788971,
+   "name": "hospitals_2022-07-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T180549Z__bba401a9342647a39d3fc85114fa5633/hospitals_2022-07-06.zip",
+   "sha256": "4cf34418a3153872406fdf2dbf9eb68871224aa67abc7db52de93c78c4ec8011",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2022-07-06.zip"
+  },
+  {
+   "bytes": 15985403,
+   "name": "hospitals_2022-04-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T180606Z__82a8d9bc0ae94502a63233ea8a54a5b8/hospitals_2022-04-06.zip",
+   "sha256": "d94b74be177259cd623e5948f05d3786a398a5961bf13e76c3ad4fd5c35796d3",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2022-04-06.zip"
+  },
+  {
+   "bytes": 15878925,
+   "name": "hospitals_2022-01-06.zip",
+   "path": "manual_units/main-hai-pdc__20260924T180619Z__d3549803bbe44765af9dff3b5f615958/hospitals_2022-01-06.zip",
+   "sha256": "b2b170c28a77a2dcbe6f78dca6bb2db55bd8ca8be028b8c40161e277fb6ce4e3",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2022-01-06.zip"
+  },
+  {
+   "bytes": 66861725,
+   "name": "hospitals_annual_2026.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181018Z__868f0a9dcfce4ba3991fe003edfe4535/hospitals_annual_2026.zip",
+   "sha256": "66d34f59080dbf132f74960b7b4d20e4b1726cd4fe9cba72cbede1315de2de78",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_annual_2026.zip"
+  },
+  {
+   "bytes": 14769479,
+   "name": "hospitals_2021-10-27.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181035Z__666c1a23a8494457814c4cf5319cf6fa/hospitals_2021-10-27.zip",
+   "sha256": "4fcaeea27c81a382b029b4ffb28689590a4192027475dd69112437a01c4bcdae",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2021-10-27.zip"
+  },
+  {
+   "bytes": 14374687,
+   "name": "hospitals_2021-07-21.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181140Z__49bd961f027c4b09b0fdbb45803e3af9/hospitals_2021-07-21.zip",
+   "sha256": "2eae19c287e7a7e9999cae01ec1fdb2e61d4446554f17374fcdbdf66cd0a0810",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2021-07-21.zip"
+  },
+  {
+   "bytes": 14625171,
+   "name": "hospitals_2021-04-28.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f/hospitals_2021-04-28.zip",
+   "sha256": "1aedd054556e45eb56d8de3e59c5fdc4aa0f96b8780356bb55fbf684edde3fd8",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2021-04-28.zip"
+  },
+  {
+   "bytes": 14415213,
+   "name": "hospitals_2021-03-31.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8/hospitals_2021-03-31.zip",
+   "sha256": "aec2bdab209c6e2fba813e5d698e1154169397c9e4bb6daee96217447b8a1451",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2021-03-31.zip"
+  },
+  {
+   "bytes": 14617095,
+   "name": "hospitals_2021-01-27.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96/hospitals_2021-01-27.zip",
+   "sha256": "fcc13aa5e5bfe2d2434b8e23ee0cde9801acc65799897afff13a8ddc7234492b",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2021-01-27.zip"
+  },
+  {
+   "bytes": 14966863,
+   "name": "hospitals_2020-10-16.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403/hospitals_2020-10-16.zip",
+   "sha256": "b98a03865d76fbcc50398caabaca355d6aa5a9ee55d48d910dd1567c3acea277",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2020-10-16.zip"
+  },
+  {
+   "bytes": 13002445,
+   "name": "hospitals_2020-07-04.zip",
+   "path": "manual_units/main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66/hospitals_2020-07-04.zip",
+   "sha256": "11928234440d6dc6f8e0f6f263602167ae444cb7a781e4eb719365e2d677a8c0",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2020-07-04.zip"
+  },
+  {
+   "bytes": 16306683,
+   "name": "hospitals_2020-05-01.zip",
+   "path": "manual_units/main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653/hospitals_2020-05-01.zip",
+   "sha256": "19f7d1e07fa2c248f716dfda6fae054dcfdeedea6e88dce49b32e01920cdd4c1",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2020-05-01.zip"
+  },
+  {
+   "bytes": 17056453,
+   "name": "hospitals_2019-10-31.zip",
+   "path": "manual_units/main-hai-pdc__20260924T182040Z__14cb30f56f4946e5a914b80489e29c8c/hospitals_2019-10-31.zip",
+   "sha256": "9118772dc7e95068cb6508c7a685cc282e15393bcc3e2214d6761828c65b628d",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2019-10-31.zip"
+  },
+  {
+   "bytes": 21768646,
+   "name": "hospitals_2019-07-31.zip",
+   "path": "manual_units/main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a/hospitals_2019-07-31.zip",
+   "sha256": "c8d33b44ca7d039c99ae241160df2eae27a68867d73055cb1a1fbf5a4ac11912",
+   "url": "https://github.com/ian-mungai/healthcare-hai-prediction/releases/download/seed-main-hai-pdc-20261120/hospitals_2019-07-31.zip"
+  }
+ ],
+ "kind": "bootstrap_seed_release_manifest",
+ "queue_sha256": "d079bee85a6e21bfebfc7e5cf1569a19880e260e27adcd754fd5802a0a66b703",
+ "tag": "seed-main-hai-pdc-20261120"
+}

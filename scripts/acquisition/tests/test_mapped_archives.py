@@ -13,10 +13,12 @@ import pytest
 
 from scripts.acquisition import s3_store
 from scripts.acquisition.capture import capture
+from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.source_registry import canonical_hash, read_json
 from scripts.acquisition.tests.test_capture import Opener, Response
 from scripts.acquisition.tests.test_capture import setup_capture as setup_capture
 from scripts.acquisition.tests.test_s3_store import OUTPUTS, FakeS3
+from scripts.acquisition.transport import CaptureError
 from tests.support import check
 
 
@@ -245,3 +247,25 @@ def test_recursive_archive_preserves_office_and_enforces_global_budget(tmp_path:
     )
     with pytest.raises(ValueError):
         expand_tree(path, tmp_path / "too_small", digest, max_bytes=10)
+
+
+def test_a_nested_tree_that_declares_more_than_one_gibibyte_is_expanded_by_default(tmp_path: Path) -> None:
+    """The republished annual hospital archive holds five quarterly archives that declare 1.36 GB together, more than the earlier 1 GiB bound."""
+    chunk, parts = b"0" * 2**20, 600
+    inner = []
+    for name in ("first.zip", "second.zip"):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive, archive.open("table.csv", "w", force_zip64=True) as member:
+            for _ in range(parts):
+                member.write(chunk)
+        inner.append((name, buffer.getvalue()))
+    outer = tmp_path / "annual.zip"
+    with zipfile.ZipFile(outer, "w") as archive:
+        for name, body in inner:
+            archive.writestr(name, body)
+    digest = hashlib.sha256(outer.read_bytes()).hexdigest()
+    leaves = expand_tree(outer, tmp_path / "leaves", digest)
+    check(sorted(leaves) == [("first.zip", "table.csv"), ("second.zip", "table.csv")], f"{sorted(leaves)}")
+    check(sum(item["byte_count"] for item in leaves.values()) == 2 * parts * 2**20 and 2 * parts * 2**20 > 1024**3, "more than 1 GiB declared and expanded")
+    with pytest.raises(CaptureError, match="exceeds"):
+        expand_tree(outer, tmp_path / "bounded", digest, max_bytes=1024**3)

@@ -10,6 +10,10 @@ from scripts.acquisition.source_registry import canonical_hash, read_json
 from scripts.acquisition.transport import CaptureError, canonical_url
 
 DENIED_ROUTE_STATUSES = frozenset({"access_failed", "HTTP_403_file_route_unverified"})
+# The modes whose original comes from the bootstrap seed only. The run never requests their URL, so their host is not a host of the run (owner, Nov 19 2026
+# for the AHRQ files and Nov 20 2026 for the CMS hospital archives, which the content delivery network refuses to a script). Storage reads their receipts
+# as it reads a file unit's: the exact approved file route of the unit.
+SEED_ONLY_MODES = frozenset({"ahrq_compendium", "hospital_archive"})
 
 
 def route_denied(route: dict) -> bool:
@@ -85,7 +89,7 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
 
         verify_capture(receipt, source, lineage, root, evidence_only)
         return
-    if mode == "file":
+    if mode in {"file", *SEED_ONLY_MODES}:
         routes = [route for route in source["file_routes"] if route["route_id"] == lineage.get("route_id")]
         if len(routes) != 1 or canonical_url(routes[0]["url"]) != canonical_url(receipt["acquisition"]["requested_url"]):
             raise CaptureError("Storage requires the receipt's exact approved file route.")

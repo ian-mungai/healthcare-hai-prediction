@@ -9,6 +9,7 @@
     "data.cms.gov",
     "data.hrsa.gov",
     "download.bls.gov",
+    "github.com",
     "gmcboard.vermont.gov",
     "hcai.ca.gov",
     "healthcarereportcard.illinois.gov",
@@ -19,6 +20,7 @@
     "mhanet.org",
     "nursesupport.maryland.gov",
     "qualityindicators.ahrq.gov",
+    "release-assets.githubusercontent.com",
     "s3.amazonaws.com",
     "svi2.cdc.gov",
     "wonder.cdc.gov",
@@ -37,6 +39,6 @@
     "www2.ccwdata.org",
     "www2.census.gov"
   ],
-  "hosts_sha256": "ef45ad78fe029b3569b96919fc0d7c897c92739238fc4470e715d3414d16e47a",
-  "queue_sha256": "7f6f60e22ede970cf9aab5a9180271b72a879cced287e07e17e8ab106a3d249b"
+  "hosts_sha256": "6126d8dd7e6425f7927a04c85811630aaac8b6b6ec77c8839a1e2e50fa1a8398",
+  "queue_sha256": "d079bee85a6e21bfebfc7e5cf1569a19880e260e27adcd754fd5802a0a66b703"
 }
