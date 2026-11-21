@@ -127,8 +127,6 @@ def exercise(root: Path) -> list[dict]:
                 body["data"]["input"] = "CA"
             elif kind == "wrong_crosswalk":
                 body["data"]["crosswalk_type"] = "county-zip"
-            elif kind == "long_wrong_input":
-                body["data"]["input"] = "x" * 500
             elif kind == "pagination_marker":
                 body["data"]["next_page"] = 2
             elif kind == "no_envelope":
@@ -146,24 +144,53 @@ def exercise(root: Path) -> list[dict]:
             ("wrong_year", "HUD response period differs: year expected '2021', received '2020'"),
             ("wrong_quarter", "HUD response period differs: quarter expected '1', received '2'"),
             ("wrong_input", "HUD response scope differs: input expected 'All', received 'CA'"),
-            ("wrong_crosswalk", "HUD response scope differs: crosswalk_type expected 'zip-county', received 'county-zip'"),
+            ("wrong_crosswalk", "HUD response scope differs: crosswalk_type expected 'zip-county', received <unexpected value>"),
             ("pagination_marker", "envelope fields"),
             ("no_envelope", "envelope changed"),
         ]:
             scenario(name, lambda name=name: malformed(name), error)
         scenario("html_rejected", lambda: contract.validate_response(b"<h1>Login</h1>", batch, plan), "invalid JSON")
 
-        def long_value_cut() -> None:
+        def message_for(field: str, value: Any) -> str:
+            body = fixture()
+            body["data"][field] = value
             try:
-                malformed("long_wrong_input")
+                contract.validate_response(encode(body), batch, plan)
             except ValueError as failure:
-                require(
-                    str(failure).startswith("HUD response scope differs: input expected 'All', received 'xxx") and len(str(failure)) < 120, "Long value not cut"
-                )
-                return
-            require(False, "Long wrong input accepted")
+                return str(failure)
+            return "accepted"
 
-        scenario("a_long_received_value_is_cut_in_the_message", long_value_cut)
+        hostile = "SYNTHETICPARTIALKEY0123456789"
+        placeholder = "<unexpected value>"
+        for name, field, value, expected in [
+            ("a_partial_key_in_input_is_not_shown", "input", hostile, f"HUD response scope differs: input expected 'All', received {placeholder}"),
+            (
+                "a_partial_key_after_the_year_is_not_shown",
+                "year",
+                f"2021 {hostile}",
+                f"HUD response period differs: year expected '2021', received {placeholder}",
+            ),
+            ("a_quarter_outside_one_to_four_is_not_shown", "quarter", "5", f"HUD response period differs: quarter expected '1', received {placeholder}"),
+            ("a_year_of_five_digits_is_not_shown", "year", "20211", f"HUD response period differs: year expected '2021', received {placeholder}"),
+            (
+                "an_unknown_crosswalk_is_not_shown",
+                "crosswalk_type",
+                f"zip-county-{hostile}",
+                f"HUD response scope differs: crosswalk_type expected 'zip-county', received {placeholder}",
+            ),
+            ("a_lowercase_state_code_is_not_shown", "input", "ca", f"HUD response scope differs: input expected 'All', received {placeholder}"),
+            ("a_list_in_input_is_not_shown", "input", [hostile], f"HUD response scope differs: input expected 'All', received {placeholder}"),
+        ]:
+            scenario(
+                name,
+                lambda field=field, value=value, expected=expected: require(
+                    message_for(field, value) == expected, f"Message differs: {message_for(field, value)}"
+                ),
+            )
+        scenario(
+            "no_message_holds_the_hostile_text",
+            lambda: require(hostile not in message_for("input", hostile) + message_for("year", f"2021 {hostile}"), "Hostile text shown"),
+        )
 
         def corrupt(kind: str) -> None:
             target = root / kind

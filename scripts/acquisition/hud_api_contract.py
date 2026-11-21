@@ -147,9 +147,21 @@ def ratio_profile(rows: list[dict]) -> dict:
     return profile
 
 
-def shown(value: object) -> str:
-    """A value of the response or the plan as it appears in a failure message: its text, quoted and cut to 40 characters."""
-    return repr(str(value)[:40])
+# The public form of each response field that a failure message may show: a year, a quarter, the query of the plan (All or a state code) and a crosswalk name.
+PUBLIC_FORMS = {
+    "year": re.compile(r"[0-9]{4}"),
+    "quarter": re.compile(r"[1-4]"),
+    "input": re.compile(r"All|[A-Z]{2}"),
+    "crosswalk_type": re.compile("|".join(re.escape(name) for name in CROSSWALKS.values())),
+}
+UNEXPECTED = "<unexpected value>"
+
+
+def shown(field: str, value: object) -> str:
+    """A value as it appears in a failure message: quoted when its text has the public form of its field, else a fixed placeholder. Any other text of a
+    response never enters a message, so a partial credential echo or a page of text cannot reach a run record or a log."""
+    text = str(value) if type(value) in (str, int, Decimal) else ""
+    return f"'{text}'" if PUBLIC_FORMS[field].fullmatch(text) else UNEXPECTED
 
 
 def validate_response(raw: bytes, batch: dict, plan: dict) -> tuple[bytes, dict]:
@@ -157,9 +169,11 @@ def validate_response(raw: bytes, batch: dict, plan: dict) -> tuple[bytes, dict]
     data = parse(raw)
     require(sorted(data) == plan["envelope_fields"], "HUD data envelope fields differ; possible pagination or schema change")
     for name in ("year", "quarter"):
-        require(str(data[name]) == str(batch[name]), f"HUD response period differs: {name} expected {shown(batch[name])}, received {shown(data[name])}")
+        require(
+            str(data[name]) == str(batch[name]), f"HUD response period differs: {name} expected {shown(name, batch[name])}, received {shown(name, data[name])}"
+        )
     for name, expected in (("input", batch["query"]), ("crosswalk_type", CROSSWALKS[batch["type"]])):
-        require(data[name] == expected, f"HUD response scope differs: {name} expected {shown(expected)}, received {shown(data[name])}")
+        require(data[name] == expected, f"HUD response scope differs: {name} expected {shown(name, expected)}, received {shown(name, data[name])}")
     results = data["results"]
     require(isinstance(results, list) and bool(results), "HUD results missing")
     fields = sorted(results[0]) if isinstance(results[0], dict) else []
