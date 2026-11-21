@@ -944,7 +944,11 @@ def cases_catalog() -> dict[str, Scenario]:
             api.log.clear()
             seen: dict[tuple[str, str], frozenset[str]] = {}
             watched.update(seen=seen, before=frozenset(code_bindings(rig)))
-            api.on_create = lambda dag, run: seen.setdefault((dag, run), frozenset(code_bindings(rig)))
+
+            def note_binding(dag: str, run: str) -> None:
+                seen.setdefault((dag, run), frozenset(code_bindings(rig)))
+
+            api.on_create = note_binding
             return api
 
         return build

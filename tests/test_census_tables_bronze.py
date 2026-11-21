@@ -41,6 +41,9 @@ class ManifestStorage:
         check(version_id == version, "The bronze read names the stored version")
         return body
 
+    def download(self, bucket: str, key: str, version_id: str, path: Path) -> None:
+        path.write_bytes(self.get(bucket, key, version_id))
+
 
 def census_tables() -> list[dict]:
     return [table for table in bronze.load_table_map()["tables"] if table["collection"] == "census/acs" and table["roles"] == ["data"]]

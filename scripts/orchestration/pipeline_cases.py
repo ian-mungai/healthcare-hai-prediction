@@ -970,12 +970,15 @@ def the_bronze_request_the_image_run_stages_passes_the_launch_check() -> None:
     modes = image.rig_modules().cases
     bucket = modes.BUCKET
     steps = [
-        (name, step) for name, scenario in image.cases_catalog().items() for step in scenario.steps if step.dag_id == "bronze_dag" and step.prepare is not None
+        (name, step, step.prepare)
+        for name, scenario in image.cases_catalog().items()
+        for step in scenario.steps
+        if step.dag_id == "bronze_dag" and step.prepare is not None
     ]
-    require(steps, "no image scenario stages a bronze request for the bronze DAG")
-    for name, step in steps:
+    require(bool(steps), "no image scenario stages a bronze request for the bronze DAG")
+    for name, step, prepare in steps:
         rig = image.cases_catalog()[name].rig()
-        step.prepare(rig)
+        prepare(rig)
         reader = ecs_preflight.bronze_request_reader(rig.stage, bucket, collections_of_table_map())
         try:
             values = reader(step.params["run_id"])

@@ -15,12 +15,12 @@ import re
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest import mock
 
 from orchestration import training_contract
@@ -52,7 +52,7 @@ from scripts.training.lane_b_cases import RUN, Cases, require
 from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
-from scripts.training.models.common import REGISTRABLE, SLOTS, Feature, NotEstimable
+from scripts.training.models.common import REGISTRABLE, SLOTS, Dataset, Deadline, Feature, ModelRequest, NotEstimable, SlotResult
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
@@ -390,6 +390,24 @@ class Fixture:
         manifest = self.manifest(hai_type)
         change(manifest)
         (self.extract / f"manifest_{hai_type}.json").write_bytes(canonical(manifest) + b"\n")
+
+
+class HoldoutOnly(Dataset):
+    """A holdout that skips the extract validation, so the self-check writer's own rules are reached with rows that carry no label."""
+
+    def __post_init__(self) -> None:
+        """Skip the extract validation."""
+
+    def split(self) -> tuple[Dataset, Dataset]:
+        """Return the rows as the holdout."""
+        return self, self
+
+
+def self_check_suite(rows: tuple[Mapping[str, Any], ...], predictions: tuple[float, ...], positions: tuple[int, ...]) -> suite.ModelSuite:
+    """A suite that holds only what the self-check writer reads: the holdout rows and the registry candidate's predictions for them."""
+    request = ModelRequest(HoldoutOnly(rows, (), HAI_TYPE, frozenset()), {}, {}, (), (), "", 1, Deadline(0.0))
+    result = SlotResult("m2_elastic_net", "fitted", predictions=predictions, holdout_positions=positions)
+    return suite.ModelSuite(request, {"m2_elastic_net": result}, None, "m2_elastic_net", {}, {})
 
 
 def tracking_fetch(fixture: Fixture, run_id: str, path: str, local_path: str, limit: int) -> str:
@@ -826,14 +844,8 @@ def fit_cases(cases: Any, folder: Path) -> None:
         features = (Feature("view:process", "number"), Feature("view:kind", "category"))
         for count in (3, 1):
             rows = tuple({"spine_key": f"k{index}", "process": float(index) if index else None, "kind": index} for index in range(count))
-            holdout = SimpleNamespace(rows=rows, keys=tuple(row["spine_key"] for row in rows))
-            result = SimpleNamespace(holdout_positions=tuple(range(count)), predictions=tuple(0.5 + index for index in range(count)))
-            standin = SimpleNamespace(
-                candidate="m2_elastic_net",
-                slots={"m2_elastic_net": result},
-                request=SimpleNamespace(data=SimpleNamespace(split=lambda holdout=holdout: (None, holdout))),
-            )
-            document = bundle.self_check_document(cast(Any, standin), features)
+            standin = self_check_suite(rows, tuple(0.5 + index for index in range(count)), tuple(range(count)))
+            document = bundle.self_check_document(standin, features)
             require(document["rows"] == [[None if index == 0 else float(index), str(index)] for index in range(count)], f"{count} rows: {document['rows']}")
             require(document["predictions"] == [0.5 + index for index in range(count)], f"{count} rows: predictions {document['predictions']}")
 
@@ -844,13 +856,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         features = (Feature("view:kind", "category"),)
 
         def document_for(category: Any) -> dict[str, Any]:
-            rows = ({"spine_key": "k0", "kind": category},)
-            standin = SimpleNamespace(
-                candidate="m2_elastic_net",
-                slots={"m2_elastic_net": SimpleNamespace(holdout_positions=(0,), predictions=(0.5,))},
-                request=SimpleNamespace(data=SimpleNamespace(split=lambda: (None, SimpleNamespace(rows=rows, keys=("k0",))))),
-            )
-            return bundle.self_check_document(standin, features)
+            return bundle.self_check_document(self_check_suite(({"spine_key": "k0", "kind": category},), (0.5,), (0,)), features)
 
         saved = document_for("x" * 256)
         require(saved["rows"] == [["x" * 256]], "a category of 256 characters was changed")
@@ -1961,9 +1967,9 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         """A champion is admitted before its model file is read: its provenance must hold the closure digest of this job's own code root and its self-check must
         pass the data rules of the model API. A champion that predates the closure record is refused by name (the owner deletes such models at rollout). A
         refused champion is never fetched past its self-check, never loaded and never scored, and the check writes and tags nothing."""
-        refusals: dict[str, tuple[Callable[[Fixture], None], str]] = {}
+        refusals: dict[str, tuple[Callable[[Fixture], object], str]] = {}
 
-        def provenance(**changes: Any) -> Callable[[Fixture], None]:
+        def provenance(**changes: Any) -> Callable[[Fixture], object]:
             def plant(fixture: Fixture) -> None:
                 path = champion_run_file(fixture, "bundle/provenance.json")
                 document = {**json.loads(path.read_text()), **changes}
@@ -1971,13 +1977,13 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 
             return plant
 
-        def write(path: str, data: bytes) -> Callable[[Fixture], None]:
+        def write(path: str, data: bytes) -> Callable[[Fixture], object]:
             return lambda fixture: champion_run_file(fixture, path).write_bytes(data)
 
-        def remove(path: str) -> Callable[[Fixture], None]:
+        def remove(path: str) -> Callable[[Fixture], object]:
             return lambda fixture: champion_run_file(fixture, path).unlink()
 
-        def self_check(**changes: Any) -> Callable[[Fixture], None]:
+        def self_check(**changes: Any) -> Callable[[Fixture], object]:
             def plant(fixture: Fixture) -> None:
                 path = champion_run_file(fixture, "bundle/self_check.json")
                 path.write_text(json.dumps({**json.loads(path.read_text()), **changes}) + "\n")
