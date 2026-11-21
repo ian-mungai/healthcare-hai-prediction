@@ -10,6 +10,7 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --run-kind bootstrap --capture-root raw/ --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --capture-root ingestion_test/<run id>/ --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_retry_dag --mode real --original-run <ingestion run ID> --day 2 --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_base_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag training_dag --mode real --model m1 --base-run <base run id> --wait-seconds 14400
@@ -58,6 +59,12 @@ the research run that ``serving_deploy_dag`` takes as ``--research-run``: a cana
 ``ingestion_test/<run id>/`` folder). Both are checked exactly as the launch preflight checks a publisher request (``require_publisher_request``), before the
 secret is read and before any request, and no other workflow takes them. An option left out is left to the form's default.
 
+``ingestion_retry_dag`` retries the files that the monthly run could not fetch. Its form takes no run ID: it takes ``--original-run`` (the ingestion run ID of
+the monthly run) and ``--day`` (2 or 3), both required, and ``--capture-root`` as ``ingestion_dag`` does. The retry's own run ID derives from the two
+(``ingestion_retry_<hex>_<day>``, ``orchestration.ingestion_schedule.retry_run_id``), so ``--run-id`` may name only that run, and the conf sent carries the
+form's parameters and no run ID. Both are checked as the launch preflight checks a retry request, before the secret is read and before any request. A
+hand-started retry starts no pipeline run. No other workflow takes these options.
+
 A trigger creates the run before it polls, so a trigger that fails after the create can leave a queued or running run behind. ``--status`` reads the state of
 one run (``absent`` when Airflow holds none) and its task states, and changes nothing. ``--settle`` pauses the DAG, so the scheduler starts nothing more of
 it, marks a run that has not ended failed and reads it again until it is terminal; an absent or ended run is left as it is. Both end at ``--wait-seconds``.
@@ -89,6 +96,7 @@ from typing import Any
 
 from orchestration.ecs_launch import LaunchRefused
 from orchestration.ecs_preflight import require_publisher_request
+from orchestration.ingestion_schedule import RETRY_KIND, retry_run_id
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS as TRAINING_DAGS
 from orchestration.training_contract import (
@@ -100,6 +108,8 @@ from orchestration.training_contract import (
     PIPELINE_DAG,
     PIPELINE_RUN,
     PIPELINE_STAGES,
+    RETRY_FIRST_DAY,
+    RETRY_LAST_DAY,
     chain_layer_run,
     compose_run_id,
     drift_attempt_of,
@@ -129,10 +139,12 @@ DRIFT_DAG = "drift_monitoring_dag"
 # The options of each workflow's form besides the mode and the wait, by the name of their argument. A workflow takes no other option: one that is given and is
 # not here is refused before the secret is read, whatever its value and even when it equals the default.
 BRONZE_DAG = "bronze_dag"
+RETRY_DAG = "ingestion_retry_dag"
 ACCEPTED_OPTIONS = {
     BRONZE_DAG: {"run_id"},
     PIPELINE_DAG: {"run_id", "start_from", "run_kind", "capture_root"},
     "ingestion_dag": {"run_id", "run_kind", "capture_root"},
+    RETRY_DAG: {"run_id", "original_run", "day", "capture_root"},
     "silver_transform_dag": {"run_id"},
     "gold_transform_dag": {"run_id", "silver_snapshot_run"},
     "features_base_dag": {"run_id", "gold_snapshot_run"},
@@ -151,6 +163,8 @@ OPTION_NAMES = (
     "silver_snapshot_run",
     "run_kind",
     "capture_root",
+    "original_run",
+    "day",
     "gold_snapshot_run",
     "base_run",
     "features_run",
@@ -170,7 +184,18 @@ OPTION_NAMES = (
 FAILED_TASK_STATES = ("failed", "upstream_failed")
 # The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
 PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
-DAGS = (PIPELINE_DAG, BRONZE_DAG, "ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG, LIVE_DAG)
+DAGS = (
+    PIPELINE_DAG,
+    BRONZE_DAG,
+    "ingestion_dag",
+    RETRY_DAG,
+    "silver_transform_dag",
+    "gold_transform_dag",
+    "features_base_dag",
+    *PARAMETER_DAGS,
+    SERVING_DAG,
+    LIVE_DAG,
+)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
@@ -233,10 +258,12 @@ def run_conf(
     run_kind: str | None = None,
     capture_root: str | None = None,
     start_from: str | None = None,
+    original_run: str | None = None,
+    day: int | None = None,
 ) -> dict[str, Any]:
     """The validated configuration of one run. Gold names the committed silver run it reads, features and feature store the gold run; the others name
     none. Ingestion may name its run kind and capture root, which the launch preflight checks again, and the first DAG takes them for its ingestion stage and
-    the stage a run starts from."""
+    the stage a run starts from. The retry DAG names the original run and the day instead, with the capture root, and no run kind."""
     if dag not in DAGS or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: unknown workflow or run ID ({dag!r}, {run_id!r})")
     accepted = FORM_MODES.get(dag, MODES)
@@ -251,6 +278,10 @@ def run_conf(
             raise TriggerError(f"refused: {dag} takes a bronze run ID, not {run_id!r}")
         if any(value is not None for value in given_publisher.values()):
             raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag and {PIPELINE_DAG} do")
+    elif dag == RETRY_DAG:
+        if run_kind is not None:
+            raise TriggerError(f"refused: {dag} takes no run kind, its kind is {RETRY_KIND}")
+        conf |= retry_conf(mode, run_id, original_run, day, capture_root)
     elif dag == PIPELINE_DAG:
         if run_id_parts(run_id).name != PIPELINE_RUN:
             raise TriggerError(f"refused: {dag} takes a {PIPELINE_RUN} run ID, not {run_id!r}")
@@ -378,6 +409,32 @@ def publisher_conf(dag: str, mode: str, run_id: str, given: dict[str, str | None
     return {name: value for name, value in given.items() if value is not None}
 
 
+def retry_run_plan(run_id: str | None, original_run: str | None, day: int | None) -> str:
+    """The run ID of the retry of ``original_run`` on ``day``, which is the only run ID a retry may name. A retry needs both and refuses any other."""
+    if original_run is None or day is None:
+        raise TriggerError(f"refused: {RETRY_DAG} needs --original-run, the ingestion run ID it retries, and --day, day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY}")
+    try:
+        derived = retry_run_id(original_run, day)
+    except ValueError as error:
+        raise TriggerError(f"refused: {error}") from None
+    if run_id is not None and run_id != derived:
+        raise TriggerError(f"refused: the retry of {original_run} on day {day} is {derived}, the derived run; --run-id may name only that run")
+    return derived
+
+
+def retry_conf(mode: str, run_id: str, original_run: str | None, day: int | None, capture_root: str | None) -> dict[str, Any]:
+    """The form's parameters of a retry (the original run, the day and the capture root when named), after the request that they make passes the preflight's
+    own check of a retry request."""
+    root = PUBLISHER_DEFAULTS["capture_root"] if capture_root is None else capture_root
+    publisher = {"kind": RETRY_KIND, "capture_root": root, "original_run": original_run, "day": day}
+    try:
+        require_publisher_request(SubmissionRequest("publisher_run", run_id, mode, 1, RETRY_DAG, "trigger", "manual__trigger", publisher=publisher))
+    except LaunchRefused as error:
+        raise TriggerError(f"refused: {error}") from None
+    conf: dict[str, Any] = {"original_run": original_run, "day": day}
+    return conf if capture_root is None else conf | {"capture_root": capture_root}
+
+
 def api_port() -> int:
     """The loopback port of the Airflow API from the committed platform configuration."""
     return int(json.loads(PLATFORM_FILE.read_text())["listeners"]["airflow_api"]["port"])
@@ -428,6 +485,7 @@ def drift_attempt_conf(args: argparse.Namespace) -> dict[str, Any]:
     given = {"--base-run": args.base_run, "--research-attempt": args.research_attempt, "--silver-snapshot-run": args.silver_snapshot_run}
     given |= {"--gold-snapshot-run": args.gold_snapshot_run, "--run-kind": args.run_kind, "--capture-root": args.capture_root}
     given |= {"--hai-type": args.hai_type, "--model-version": args.model_version, "--deploy-mode": args.deploy_mode, "--research-run": args.research_run}
+    given |= {"--original-run": args.original_run, "--day": args.day}
     extra = sorted(name for name, value in given.items() if value is not None)
     if extra:
         raise TriggerError(f"refused: {DRIFT_DAG} takes only --model, --features-run, --drift-attempt and --run-id, not {', '.join(extra)}")
@@ -457,12 +515,14 @@ def activate(api: AirflowApi, dags: tuple[str, ...]) -> None:
 
 
 def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
-    """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states."""
+    """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states. The retry DAG's form has no
+    run ID parameter, so its run ID names the Airflow run and is left out of the conf it gets."""
     started = time.monotonic()
     run_id = conf["run_id"]
+    form = {name: value for name, value in conf.items() if name != "run_id"} if dag == RETRY_DAG else conf
     try:
         activate(api, ACTIVATION.get(dag, (dag,)))
-        api.trigger(dag, run_id, conf)
+        api.trigger(dag, run_id, form)
         run = wait_for_end(api, dag, run_id, deadline, wait_seconds)
         tasks = api.task_states(dag, run_id)
     except AirflowApiError as error:
@@ -541,6 +601,8 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--start-from", choices=PIPELINE_STAGES, help=f"{PIPELINE_DAG} only: the first stage to run (the form's default is ingestion)")
     cli.add_argument("--run-kind", help="ingestion_dag and the first DAG only: bootstrap (the form's default) or monthly")
     cli.add_argument("--capture-root", help="ingestion_dag and the first DAG only: raw/ (the form's default) or ingestion_test/<run id>/")
+    cli.add_argument("--original-run", help=f"{RETRY_DAG} only, required: the ingestion run ID of the monthly run whose missing files it retries")
+    cli.add_argument("--day", type=int, help=f"{RETRY_DAG} only, required: the retry day, day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY} of the month")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
     cli.add_argument(
         "--base-run", help="training_dag and research_dag: the features_base_dag run whose model set is trained or researched; derives the run IDs"
@@ -589,8 +651,13 @@ def main(argv: list[str] | None = None) -> int:
         or args.capture_root is not None
         or args.drift_attempt is not None
         or args.start_from is not None
+        or args.original_run is not None
+        or args.day is not None
     ):
-        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind, no --capture-root, no --drift-attempt and no --start-from")
+        cli.error(
+            f"--{inspecting} needs --run-id and takes no --mode, no --run-kind, no --capture-root, no --drift-attempt, no --start-from, no --original-run "
+            "and no --day"
+        )
     if not inspecting and args.mode is None:
         cli.error("a trigger needs --mode")
     try:
@@ -625,6 +692,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.dag != "training_dag" and args.features_run is not None:
             raise TriggerError(f"refused: {args.dag} takes no features run, only training_dag does")
         run_id, features_run, extra = base_run_plan(args.dag, args.base_run, args.model, args.run_id, args.features_run, args.research_attempt)
+        if args.dag == RETRY_DAG:
+            run_id = retry_run_plan(run_id, args.original_run, args.day)
         training = None
         if args.dag == "training_dag":
             args.features_run = "latest" if features_run is None else features_run
@@ -651,6 +720,8 @@ def main(argv: list[str] | None = None) -> int:
             args.run_kind,
             args.capture_root,
             args.start_from,
+            args.original_run,
+            args.day,
         )
         conf |= extra
         require_accepted_options(args.dag, given)

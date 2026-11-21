@@ -654,6 +654,10 @@ def live_check_cases() -> dict[str, bool]:
 PIPELINE_RUN = "pipeline_0a1b2c3d"
 BRONZE_RUN = "bronze_0a1b2c3d"
 BRONZE = "bronze_dag"
+RETRY = "ingestion_retry_dag"
+ORIGINAL = "ingestion_0a1b2c3d"
+ORIGINAL_ATTEMPT = "ingestion_0a1b2c3d_2"
+RETRY_RUN = "ingestion_retry_0a1b2c3d_2"
 
 
 def bronze_cases() -> dict[str, bool]:
@@ -786,6 +790,66 @@ def pipeline_cases() -> dict[str, bool]:
     }
 
 
+def retry_cases() -> dict[str, bool]:
+    """``ingestion_retry_dag`` is started by hand with ``--original-run`` (an ingestion run ID) and ``--day`` (2 or 3), which its form takes in place of a
+    run ID. The retry's own run ID derives from the two, so ``--run-id`` may name only that run; the capture root is the only other option. Every refusal
+    comes before the secret is read and before any Airflow call, and the conf carries the form's parameters and no run ID."""
+    base = ["--dag", RETRY, "--mode", "real", "--wait-seconds", "5"]
+
+    def started(*extra: str) -> tuple[int, Ends]:
+        api = Ends()
+        return invoke(api, [*base, *extra])[0], api
+
+    day2_code, day2 = started("--original-run", ORIGINAL, "--day", "2")
+    day3_code, day3 = started("--original-run", ORIGINAL_ATTEMPT, "--day", "3")
+    root_code, root = started("--original-run", ORIGINAL, "--day", "2", "--capture-root", TEST_ROOT)
+    named_code, named = started("--original-run", ORIGINAL, "--day", "2", "--run-id", RETRY_RUN)
+    printed = invoke(Ends(), [*base, "--original-run", ORIGINAL, "--day", "2"])[1]
+    return {
+        "a retry start sends the original run, the day and the mode, and no run ID": day2_code == 0
+        and day2.confs == [{"original_run": ORIGINAL, "day": 2, "mode": "real"}],
+        "the retry runs under the run ID that its original run and day give": list(day2.runs) == [RETRY_RUN]
+        and printed is not None
+        and printed["run_id"] == RETRY_RUN
+        and printed["dag"] == RETRY,
+        "a later attempt of the original run puts its suffix before day 3": day3_code == 0
+        and day3.confs == [{"original_run": ORIGINAL_ATTEMPT, "day": 3, "mode": "real"}]
+        and list(day3.runs) == ["ingestion_retry_0a1b2c3d_2_3"],
+        "a capture root reaches the conf": root_code == 0 and root.confs == [{"original_run": ORIGINAL, "day": 2, "mode": "real", "capture_root": TEST_ROOT}],
+        "a run ID that is the derived run is accepted": named_code == 0 and list(named.runs) == [RETRY_RUN],
+        "a hand start activates the retry DAG alone": day2.paused == {RETRY: False},
+        "a retry without its original run or its day is refused before any call": all(
+            refused_quietly([*base, *extra], words)
+            for extra, words in ((["--day", "2"], "--original-run"), (["--original-run", ORIGINAL], "--day"), ([], "--original-run"))
+        ),
+        "an original run that is not an ingestion run ID is refused before any call": all(
+            refused_quietly([*base, "--original-run", bad, "--day", "2"], "original run ID")
+            for bad in ("latest", "bronze_0a1b2c3d", "pipeline_0a1b2c3d", "ingestion_retry_0a1b2c3d_2", "ingestion_0a1b2c3", "scheduled")
+        ),
+        "a day outside days 2 and 3 is refused before any call": all(
+            refused_quietly([*base, "--original-run", ORIGINAL, "--day", bad], "retry day") for bad in ("0", "1", "4", "31", "-2")
+        ),
+        "a day that is not a whole number is stopped by the parser": invoke(Ends(), [*base, "--original-run", ORIGINAL, "--day", "2.5"])[0] == 2,
+        "a run ID that is not the derived run is refused before any call": all(
+            refused_quietly([*base, "--original-run", ORIGINAL, "--day", "2", "--run-id", bad], "derived run")
+            for bad in ("ingestion_retry_0a1b2c3d_3", "ingestion_0a1b2c3d", "ingestion_retry_ffffffff_2")
+        ),
+        "a run kind is refused before any call": refused_quietly([*base, "--original-run", ORIGINAL, "--day", "2", "--run-kind", "retry"], "run kind"),
+        "a capture root outside the form is refused before any call": all(
+            refused_quietly([*base, "--original-run", ORIGINAL, "--day", "2", "--capture-root", bad], "publisher_request_has_wrong_capture_root")
+            for bad in ("raw", "other/", "ingestion_test/latest/")
+        ),
+        "the status of a retry run can be read": invoke(
+            StandIn({RETRY_RUN: "success"}), ["--dag", RETRY, "--status", "--run-id", RETRY_RUN, "--wait-seconds", "5"]
+        )[0]
+        == 0,
+        "status with a day or an original run is refused": all(
+            invoke(StandIn({RETRY_RUN: "queued"}), ["--dag", RETRY, "--status", "--run-id", RETRY_RUN, "--wait-seconds", "5", *extra])[0] == 2
+            for extra in (["--day", "2"], ["--original-run", ORIGINAL])
+        ),
+    }
+
+
 FLAG_VALUES = {
     "--start-from": "bronze",
     "--run-id": RUN,
@@ -807,12 +871,15 @@ FLAG_VALUES = {
     "--promotion-mode": "rollback",
     "--deploy-mode": "stable",
     "--research-run": RESEARCH_RUN,
+    "--original-run": ORIGINAL,
+    "--day": "2",
 }
 # What each workflow's form takes besides the mode and the wait: the contract, written out here and not read from the command.
 ACCEPTED_FLAGS = {
     "bronze_dag": {"--run-id"},
     "pipeline_dag": {"--run-id", "--start-from", "--run-kind", "--capture-root"},
     "ingestion_dag": {"--run-id", "--run-kind", "--capture-root"},
+    "ingestion_retry_dag": {"--run-id", "--original-run", "--day", "--capture-root"},
     "silver_transform_dag": {"--run-id"},
     "gold_transform_dag": {"--run-id", "--silver-snapshot-run"},
     "features_base_dag": {"--run-id", "--gold-snapshot-run"},
@@ -824,6 +891,7 @@ ACCEPTED_FLAGS = {
     "drift_monitoring_dag": {"--run-id", "--model", "--features-run", "--drift-attempt", "--mlflow"},
 }
 REQUIRED_FLAGS = {
+    "ingestion_retry_dag": ("--original-run", "--day"),
     "gold_transform_dag": ("--silver-snapshot-run",),
     "features_base_dag": ("--gold-snapshot-run",),
     "training_dag": ("--model",),
@@ -865,6 +933,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "live check": live_check_cases,
     "pipeline": pipeline_cases,
     "bronze": bronze_cases,
+    "retry": retry_cases,
     "activation": activation_cases,
     "accepted options": every_workflow_takes_only_its_options,
 }
