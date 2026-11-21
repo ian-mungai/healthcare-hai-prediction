@@ -29,8 +29,9 @@ groups: scripts/run_ci.sh runs them in every scope.
 
 The plan prints as JSON, or with ``--format shell`` as lines: ``reason``, ``run <group>`` and ``skip <group> <reason>``.
 
-The part ``core`` is the union of the ten hosted Core parts named in ``parts`` (core_static, core_sql_terraform, core_terraform_proofs, core_configuration,
-core_configuration_host, core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine and core_orchestration_offline);
+The part ``core`` is the union of the fourteen hosted Core parts named in ``parts`` (core_static, core_sql_terraform, core_terraform_services,
+core_terraform_proofs, core_terraform_replace_proofs, core_configuration, core_configuration_policy, core_configuration_host, core_configuration_owner,
+core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine and core_orchestration_offline);
 every group of ``core`` is in exactly one of them, and loading the configuration
 refuses one where a group is in none or in two.
 

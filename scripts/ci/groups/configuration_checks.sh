@@ -5,10 +5,8 @@
 # shellcheck disable=SC2154,SC2329
 
 configuration_checks() {
-  local policy_output="${POLICY_ARTIFACT_DIR:-$repo_root/data/e2e/policies/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
   timed "configuration_checks: infrastructure E2E" "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output/infrastructure"
   timed "configuration_checks: activation inputs E2E" "$python_bin" -m scripts.infrastructure.run_activation_inputs_e2e --out "$quality_output/activation_inputs"
-  timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
   timed "configuration_checks: job IAM E2E" "$python_bin" -m scripts.infrastructure.run_jobs_iam_e2e --output "$quality_output/jobs_iam"
   timed "configuration_checks: Airflow launch policy cases" "$python_bin" -m scripts.infrastructure.airflow_launch_policy_cases --output "$quality_output/airflow_launch_policy"
   timed "configuration_checks: Catalog setup policy cases" "$python_bin" -m scripts.infrastructure.catalog_setup_policy_cases --output "$quality_output/catalog_setup_policy"
@@ -17,13 +15,4 @@ configuration_checks() {
   timed "configuration_checks: persistent OpenMetadata bootstrap E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_persistent_e2e --output-root "$e2e_output/openmetadata_persistent"
   timed "configuration_checks: OpenMetadata catalog task E2E" "$python_bin" -m scripts.infrastructure.run_openmetadata_e2e --output-directory "$e2e_output/openmetadata"
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
-  timed "configuration_checks: OpenMetadata image mirror E2E" "$python_bin" -m scripts.infrastructure.run_push_images_e2e
-  timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
-  timed "configuration_checks: install the pinned DVC" "$python_bin" -m scripts.quality.install_dvc
-  timed "configuration_checks: DVC setup E2E" "$python_bin" -m scripts.quality.run_dvc_e2e
-  timed "configuration_checks: DVC training baseline E2E" "$python_bin" -m scripts.training.run_dvc_baseline_e2e
-  timed "configuration_checks: drift monitoring E2E" "$python_bin" -m monitoring.run_drift_e2e
-  timed "configuration_checks: task cleanup E2E" "$python_bin" -m scripts.infrastructure.run_aws_tasks_e2e
-  timed "configuration_checks: task cleanup plants" "$python_bin" -m scripts.infrastructure.aws_tasks_plants
-  timed "configuration_checks: pytest with coverage" "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 }

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The terraform_proofs check group of scripts/run_ci.sh: the two Terraform proofs of the jobs stack that take the longest, split from terraform_checks so the two groups run
-# side by side (the same checks, each once). The dispatcher runs the group in its own shell process (run_group), which loads only scripts/quality/timing.sh (timed) and
-# this file, and then calls the entry function. It gets python_bin, repo_root, scratch, quality_output, e2e_output and CI_TIMING_FILE from the dispatcher beside the
-# exported environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
+# The terraform_proofs check group of scripts/run_ci.sh: the retired definitions proof of the jobs stack, the longest of the Terraform proofs. The jobs host-only proof and the two
+# replace order proofs are the terraform_replace_proofs group, so the two groups run side by side (the same checks, each once; the proofs were split from terraform_checks before).
+# The dispatcher runs the group in its own shell process (run_group), which loads only scripts/quality/timing.sh (timed) and
+# this file, and then calls the entry function. It gets python_bin, repo_root, scratch, quality_output, e2e_output and CI_TIMING_FILE from the dispatcher beside the exported
+# environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
 # shellcheck disable=SC2154,SC2329
 
 terraform_proofs() {
@@ -17,15 +18,7 @@ terraform_proofs() {
   export AWS_SHARED_CREDENTIALS_FILE="$scratch/empty_aws_credentials"
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
-  # Every task definition of the jobs plan, child modules included, is an EC2 bridge task, and a task definition planted through each way of writing one is caught.
-  timed "terraform_proofs: jobs host-only proof" "$python_bin" -m scripts.infrastructure.run_jobs_host_only_e2e --out "$e2e_output/jobs_host_only"
   # The apply that removes the retired Fargate job definitions only forgets them: the plan against the historical state changes exactly the 19 retired addresses and no host definition,
   # and the plan after it is empty.
   timed "terraform_proofs: retired definitions proof" "$python_bin" -m scripts.infrastructure.run_retired_definitions_e2e --out "$e2e_output/retired_definitions"
-  # A jobs apply that replaces a task definition registers the new revision before it retires the old one: the plan of a replacement of all sixteen host and publisher definitions
-  # creates first, and the old revision stays registered (skip_destroy), so a registration that ECS refuses keeps the old definition.
-  timed "terraform_proofs: jobs replace order proof" "$python_bin" -m scripts.infrastructure.run_jobs_replace_order_e2e --out "$e2e_output/jobs_replace_order"
-  # A services apply that replaces a task definition registers the new revision before it retires the old one: the plan of a replacement of all twelve service and four one-shot definitions
-  # creates first, the old revision stays registered (skip_destroy), and every fixed service updates to the new revision, so a registration that ECS refuses keeps the old definition.
-  timed "terraform_proofs: services replace order proof" "$python_bin" -m scripts.infrastructure.run_services_replace_order_e2e --out "$e2e_output/services_replace_order"
 }

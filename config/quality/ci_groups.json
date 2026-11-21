@@ -224,6 +224,23 @@
       "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
+    "configuration_policy_checks": [
+      "^scripts/(infrastructure|quality|training)/",
+      "^monitoring/",
+      "^data_contracts/monitoring/",
+      "^data_contracts/infrastructure/",
+      "^dags/drift_monitoring_dag\\.py$",
+      "^orchestration/launcher\\.py$",
+      "^\\.dvc(ignore)?(/|$)",
+      "^tests/",
+      "^config/",
+      "^infra/",
+      "^monitoring/",
+      "^\\.env\\.example$",
+      "^orchestration/layer_report\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
+      "^scripts/ci/groups/configuration_policy_checks\\.sh$"
+    ],
     "configuration_host_checks": [
       "^scripts/(infrastructure|quality|training)/",
       "^monitoring/",
@@ -240,6 +257,23 @@
       "^orchestration/layer_report\\.py$",
       "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
       "^scripts/ci/groups/configuration_host_checks\\.sh$"
+    ],
+    "configuration_owner_checks": [
+      "^scripts/(infrastructure|quality|training)/",
+      "^monitoring/",
+      "^data_contracts/monitoring/",
+      "^data_contracts/infrastructure/",
+      "^dags/drift_monitoring_dag\\.py$",
+      "^orchestration/launcher\\.py$",
+      "^\\.dvc(ignore)?(/|$)",
+      "^tests/",
+      "^config/",
+      "^infra/",
+      "^monitoring/",
+      "^\\.env\\.example$",
+      "^orchestration/layer_report\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|catalog_restore|run_catalog_restore_e2e|catalog_setup_state|catalog_setup_stand_in|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e|bronze_mirror|bronze_mirror_signoff)\\.py$",
+      "^scripts/ci/groups/configuration_owner_checks\\.sh$"
     ],
     "sql_style": [
       "^dbt/",
@@ -260,12 +294,32 @@
       "^tests/fixtures/bronze_writer_policies_applied_state\\.json$",
       "^config/aws/serving_release\\.json$"
     ],
+    "terraform_services_checks": [
+      "^infra/",
+      "^\\.github/scripts/",
+      "^scripts/quality/(static_checks|install_tools)\\.py$",
+      "^config/quality_tools\\.json$",
+      "^scripts/ci/groups/terraform_services_checks\\.sh$",
+      "^scripts/infrastructure/run_(platform_groups|serving_release_real|serving_transition|jobs_replace_order|services_replace_order|iam_upgrade_plan)_e2e\\.py$",
+      "^tests/fixtures/bronze_writer_policies_applied_state\\.json$",
+      "^config/aws/serving_release\\.json$"
+    ],
     "terraform_proofs": [
       "^infra/",
       "^\\.github/scripts/",
       "^scripts/quality/(static_checks|install_tools)\\.py$",
       "^config/quality_tools\\.json$",
       "^scripts/ci/groups/terraform_proofs\\.sh$",
+      "^scripts/infrastructure/run_(platform_groups|serving_release_real|serving_transition|jobs_replace_order|services_replace_order|iam_upgrade_plan)_e2e\\.py$",
+      "^tests/fixtures/bronze_writer_policies_applied_state\\.json$",
+      "^config/aws/serving_release\\.json$"
+    ],
+    "terraform_replace_proofs": [
+      "^infra/",
+      "^\\.github/scripts/",
+      "^scripts/quality/(static_checks|install_tools)\\.py$",
+      "^config/quality_tools\\.json$",
+      "^scripts/ci/groups/terraform_replace_proofs\\.sh$",
       "^scripts/infrastructure/run_(platform_groups|serving_release_real|serving_transition|jobs_replace_order|services_replace_order|iam_upgrade_plan)_e2e\\.py$",
       "^tests/fixtures/bronze_writer_policies_applied_state\\.json$",
       "^config/aws/serving_release\\.json$"
@@ -420,26 +474,46 @@
     },
     "configuration_checks": {
       "job": "Core Configuration Checks",
-      "minutes": 50,
+      "minutes": 30,
+      "cores": 2
+    },
+    "configuration_policy_checks": {
+      "job": "Core Configuration Policy Checks",
+      "minutes": 30,
       "cores": 2
     },
     "configuration_host_checks": {
       "job": "Core Configuration Host Checks",
-      "minutes": 50,
+      "minutes": 30,
+      "cores": 2
+    },
+    "configuration_owner_checks": {
+      "job": "Core Configuration Owner and Catalog Checks",
+      "minutes": 30,
       "cores": 2
     },
     "sql_style": {
       "job": "Core SQL and Terraform Checks",
-      "minutes": 40,
+      "minutes": 30,
       "cores": 2
     },
     "terraform_checks": {
       "job": "Core SQL and Terraform Checks",
-      "minutes": 40,
+      "minutes": 30,
+      "cores": 2
+    },
+    "terraform_services_checks": {
+      "job": "Core Terraform Services and Jobs Checks",
+      "minutes": 30,
       "cores": 2
     },
     "terraform_proofs": {
       "job": "Core Terraform Proof Checks",
+      "minutes": 30,
+      "cores": 2
+    },
+    "terraform_replace_proofs": {
+      "job": "Core Terraform Replace Proof Checks",
       "minutes": 30,
       "cores": 2
     },
@@ -577,14 +651,26 @@
       "sql_style",
       "terraform_checks"
     ],
+    "core_terraform_services": [
+      "terraform_services_checks"
+    ],
     "core_terraform_proofs": [
       "terraform_proofs"
+    ],
+    "core_terraform_replace_proofs": [
+      "terraform_replace_proofs"
     ],
     "core_configuration": [
       "configuration_checks"
     ],
+    "core_configuration_policy": [
+      "configuration_policy_checks"
+    ],
     "core_configuration_host": [
       "configuration_host_checks"
+    ],
+    "core_configuration_owner": [
+      "configuration_owner_checks"
     ],
     "core_ci_tooling": [
       "ci_tooling_checks"

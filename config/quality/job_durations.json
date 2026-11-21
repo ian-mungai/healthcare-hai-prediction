@@ -82,27 +82,51 @@
     },
     {
       "job": "Core SQL and Terraform Checks",
-      "measured_minutes": 23.5,
-      "timeout_minutes": 40,
-      "basis": "estimate, SQL style 1169 s from the hosted run 41521618599 (the Terraform checks, 751 s, run beside it) plus about 4 minutes of setup and gates; local Mac run Nov 3 2026: 249 s for the whole part"
+      "measured_minutes": 17,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): SQL style 851 s beside the storage, iam, platform and alerts stacks and the services proofs (684 s) plus about 3 minutes of setup and gates; the services and jobs stacks are Core Terraform Services and Jobs Checks"
+    },
+    {
+      "job": "Core Terraform Services and Jobs Checks",
+      "measured_minutes": 17,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): services stack 352 s, jobs stack 435 s and their static checks 10 s (797 s) plus about 3 minutes of setup and gates"
     },
     {
       "job": "Core Terraform Proof Checks",
-      "measured_minutes": 13,
+      "measured_minutes": 18,
       "timeout_minutes": 30,
-      "basis": "estimate, Mac run Nov 14 2026: jobs host-only proof 157 s and retired definitions proof 374 s (531 s) plus about 4 minutes of setup and gates"
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): retired definitions proof 849 s plus about 3.5 minutes of setup and gates; the other three proofs are Core Terraform Replace Proof Checks"
+    },
+    {
+      "job": "Core Terraform Replace Proof Checks",
+      "measured_minutes": 15,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): jobs host-only proof 277 s, jobs replace order proof 341 s and services replace order proof 64 s (682 s) plus about 3.5 minutes of setup and gates"
     },
     {
       "job": "Core Configuration Checks",
-      "measured_minutes": 21,
-      "timeout_minutes": 50,
-      "basis": "estimate, Mac runs Nov 14 2026: 21 commands, about 1020 s (infrastructure E2E 453 s, policy E2E 123 s, drift monitoring E2E 151 s) plus about 4 minutes of setup and gates; the other 10 commands are Core Configuration Host Checks"
+      "measured_minutes": 17,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 10 commands, 760 s (infrastructure E2E 406 s, activation inputs E2E 123 s, Airflow launch policy cases 80 s) plus about 4 minutes of setup and gates; the other commands are Core Configuration Policy Checks"
+    },
+    {
+      "job": "Core Configuration Policy Checks",
+      "measured_minutes": 17,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 10 commands, about 790 s (policy E2E 350 s, monitoring files E2E 146 s, drift monitoring E2E 81 s; the task cleanup E2Es and the pytest run are the Nov 18 2026 times of run 44230499285 scaled by 1.4) plus about 4 minutes of setup and gates"
     },
     {
       "job": "Core Configuration Host Checks",
-      "measured_minutes": 21,
-      "timeout_minutes": 50,
-      "basis": "estimate, Mac runs Nov 14 and Nov 21 2026: 10 commands, up to about 1180 s (IAM preflight E2E 472 s, owner scripts E2E 341 to 714 s) plus about 4 minutes of setup and gates"
+      "measured_minutes": 16,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 10 commands, 757 s (IAM preflight E2E 698 s) plus about 3 minutes of setup and gates; the other commands are Core Configuration Owner and Catalog Checks"
+    },
+    {
+      "job": "Core Configuration Owner and Catalog Checks",
+      "measured_minutes": 16,
+      "timeout_minutes": 30,
+      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 4 commands, 784 s (the owner list E2E, now the owner scripts E2E, 279 s, host session plants 320 s, AWS catalog setup E2E 157 s, Glue mirror E2E 28 s) plus about 3 minutes of setup and gates"
     },
     {
       "job": "Core CI Tooling Checks",

@@ -34,7 +34,7 @@ PIPELINE = "orchestration/pipeline_render.py"
 TRAINING = "orchestration/training_render.py"
 JOB = "scripts/training/job.py"
 EXTRACT = "scripts/features/training_extract.py"
-TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
+TERRAFORM_GROUPS = ("scripts/ci/groups/terraform_checks.sh", "scripts/ci/groups/terraform_services_checks.sh")
 # Where the Terraform stacks read repository files from above their own folder. Each form starts somewhere else: ${path.module} at the folder of the file that
 # declares the read (a child module's own folder, or the stack folder for a test), ${path.root}, ${path.cwd} and a path with no prefix at the stack folder
 # where terraform runs. A read counts when its target is a file of the repository outside the stack folder. The jobs root's repository path is a prefix.
@@ -531,9 +531,12 @@ def scenarios(source: dict[str, str]) -> list[Case]:
 
 
 def group_stack_files() -> list[str]:
-    """The repository files the terraform_checks group copies beside every stack it checks."""
-    found = re.search(r"for config_read_by_stacks in ([^;]+); do", (ROOT / TERRAFORM_GROUP).read_text(encoding="utf-8"))
-    return found.group(1).split() if found else []
+    """The repository files the two Terraform stack groups (terraform_checks and terraform_services_checks) copy beside every stack, from both lists."""
+    names: list[str] = []
+    for group in TERRAFORM_GROUPS:
+        found = re.search(r"for config_read_by_stacks in ([^;]+); do", (ROOT / group).read_text(encoding="utf-8"))
+        names += [name for name in (found.group(1).split() if found else []) if name not in names]
+    return names
 
 
 def stack_folder(root: Path, path: Path) -> Path:

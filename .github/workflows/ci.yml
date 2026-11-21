@@ -408,7 +408,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # The former Local CI Core job is ten jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
+    # The former Local CI Core job is fourteen jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
     # suites of its groups and splits no command and no scenario; config/quality/core_commands.json lists every command and the CI groups E2E fails on a dropped or a
     # duplicated one. The wall time beside each timeout is an estimate until a complete hosted run of the new jobs exists: the longest group of the part from the
     # command seconds of the last complete hosted run of the former job (run 41521618599 of pull request 72, where all its groups ran together, so the figure is an
@@ -424,16 +424,28 @@ jobs:
             timeout: 12  # wall time 7.5 min, estimate: typecheck 203 s
           - part: core_sql_terraform
             title: Core SQL and Terraform Checks
-            timeout: 40  # wall time 23.5 min, estimate: SQL style 1169 s (Terraform 751 s runs beside it)
+            timeout: 30  # wall time 17 min, estimate: SQL style 851 s hosted (Nov 21 2026) beside the storage, iam, platform and alerts stacks and the services proofs (684 s)
+          - part: core_terraform_services
+            title: Core Terraform Services and Jobs Checks
+            timeout: 30  # wall time 17 min, estimate: services stack 352 s and jobs stack 435 s hosted (Nov 21 2026) plus their static checks and about 3 minutes of setup and gates
           - part: core_configuration
             title: Core Configuration Checks
-            timeout: 50  # wall time 22 min, estimate: 21 commands, about 1000 s on the Mac (the host checks are Core Configuration Host Checks)
+            timeout: 30  # wall time 17 min, estimate: 10 commands, 760 s hosted (Nov 21 2026: infrastructure E2E 406 s); the policy, monitoring, DVC, drift and pytest commands are Core Configuration Policy Checks
+          - part: core_configuration_policy
+            title: Core Configuration Policy Checks
+            timeout: 30  # wall time 17 min, estimate: 10 commands, about 790 s hosted (Nov 21 2026: policy E2E 350 s, monitoring files E2E 146 s)
           - part: core_configuration_host
             title: Core Configuration Host Checks
-            timeout: 50  # wall time 22 min, estimate: 10 commands, up to about 1180 s on the Mac (the IAM preflight about 470 s, the owner scripts 340 to 710 s)
+            timeout: 30  # wall time 16 min, estimate: 10 commands, 757 s hosted (Nov 21 2026: IAM preflight E2E 698 s); the owner scripts, host session plants, catalog and Glue mirror E2Es are Core Configuration Owner and Catalog Checks
+          - part: core_configuration_owner
+            title: Core Configuration Owner and Catalog Checks
+            timeout: 30  # wall time 16 min, estimate: 4 commands, 784 s hosted (Nov 21 2026: host session plants 320 s, owner scripts E2E, AWS catalog setup E2E 157 s)
           - part: core_terraform_proofs
             title: Core Terraform Proof Checks
-            timeout: 30  # wall time 13 min, estimate: jobs host-only proof 157 s and retired definitions proof 374 s on the Mac plus about 4 minutes of setup and gates
+            timeout: 30  # wall time 18 min, estimate: retired definitions proof 849 s hosted (Nov 21 2026) plus about 3.5 minutes of setup and gates
+          - part: core_terraform_replace_proofs
+            title: Core Terraform Replace Proof Checks
+            timeout: 30  # wall time 15 min, estimate: jobs host-only proof 277 s, jobs replace order proof 341 s and services replace order proof 64 s hosted (Nov 21 2026)
           - part: core_ci_tooling
             title: Core CI Tooling Checks
             timeout: 30  # wall time 12 min, estimate: group selection 344 s and process stops 150 s on the Mac (387 s and about 275 s hosted) plus about 4 minutes

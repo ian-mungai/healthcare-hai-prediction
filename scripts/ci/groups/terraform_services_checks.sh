@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# The terraform_services_checks check group of scripts/run_ci.sh: the services and jobs Terraform stacks (init, validate, test and the static checks), split from terraform_checks so the groups run side by side (the same checks, each once). The dispatcher runs the group in its own shell process (run_group), which loads only
+# scripts/quality/timing.sh (timed) and this file, and then calls the entry function. It gets python_bin, repo_root, scratch, quality_output, e2e_output and
+# CI_TIMING_FILE from the dispatcher beside the exported environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
+# shellcheck disable=SC2154,SC2329
+
+terraform_services_checks() {
+  export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$scratch/provider_cache}"
+  mkdir -p "$TF_PLUGIN_CACHE_DIR"
+  # Isolate tests from local credentials, deployment inputs and real Terraform state (this group runs in its own
+  # subshell, so the other groups keep their environment).
+  unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+  unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+  unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
+  export AWS_CONFIG_FILE="$scratch/empty_aws_config"
+  export AWS_SHARED_CREDENTIALS_FILE="$scratch/empty_aws_credentials"
+  export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
+  touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
+  # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
+  for stack in services jobs; do
+    source_dir="$repo_root/infra/$stack"
+    stack_root="$scratch/${stack//\//_}"
+    test_dir="$stack_root/${source_dir#"$repo_root"/}"
+    mkdir -p "$test_dir"
+    # Every repository file that a stack or a stack test reads above its own folder. scripts.quality.run_container_mounts_e2e lists them from the stacks
+    # and fails when one is missing here.
+    for config_read_by_stacks in infra/iam/policies/healthcare_hai_prediction_sns_policy.json infra/services/images.json config/lakehouse/bronze_tables.json config/lakehouse/aws_bronze_grants.json config/orchestration/ecs_broker_jobs.json config/orchestration/ecs_launch.json config/orchestration/direct_jobs.json config/orchestration/host_jobs.json config/lakehouse/athena_mirror.json config/lakehouse/person_policies.json data_contracts/lakehouse/gold_contract.json data_contracts/lakehouse/silver_publish.json data_contracts/lakehouse/features_publish.json config/metadata/ingestion/dbt.json config/metadata/ingestion/glue.json scripts/infrastructure/openmetadata_bootstrap.py scripts/infrastructure/openmetadata_bounded_run.sh scripts/infrastructure/openmetadata_ingest.py scripts/infrastructure/openmetadata_migrate.sh scripts/orchestration/task_guard.py; do
+      mkdir -p "$stack_root/$(dirname "$config_read_by_stacks")"
+      cp "$repo_root/$config_read_by_stacks" "$stack_root/$config_read_by_stacks"
+    done
+    # Copy every file Git tracks in the stack folder so a new template folder is
+    # always tested and local state, variable files and provider folders never are. The listing starts at the repository root
+    # with the folder as a pathspec: inside a commit hook GIT_DIR is set, and git -C <folder> would then list the whole tree.
+    prefix="${source_dir#"$repo_root"/}/"
+    while IFS= read -r -d '' file; do
+      relative="${file#"$prefix"}"
+      mkdir -p "$test_dir/$(dirname "$relative")"
+      cp "$repo_root/$file" "$test_dir/$relative"
+    done < <(git -C "$repo_root" ls-files -z -- "$prefix")
+    # The jobs root uses the services flow test module as its stand-in network (source "../services/tests/flow").
+    if [[ "$stack" == "jobs" ]]; then
+      while IFS= read -r -d '' file; do
+        mkdir -p "$stack_root/$(dirname "$file")"
+        cp "$repo_root/$file" "$stack_root/$file"
+      done < <(git -C "$repo_root" ls-files -z -- infra/services/tests/flow/)
+    fi
+    printf '\nChecking %s Terraform configuration\n' "$stack"
+    timed "terraform_services_checks: $stack init" terraform -chdir="$test_dir" init -backend=false -input=false -lockfile=readonly -no-color
+    timed "terraform_services_checks: $stack validate" terraform -chdir="$test_dir" validate -no-color
+    timed "terraform_services_checks: $stack test" terraform -chdir="$test_dir" test -no-color
+  done
+  static_failed=0
+  for stack in services jobs; do
+    source_dir="$repo_root/infra/$stack"
+    if ! timed "terraform_services_checks: $stack static checks" "$python_bin" -m scripts.quality.static_checks --directory "$source_dir" --output-directory "$quality_output/$stack"; then
+      static_failed=1
+    fi
+  done
+  if [[ "$static_failed" != 0 ]]; then
+    printf '\nTerraform static checks failed; review the retained quality evidence.\n' >&2
+    return 1
+  fi
+}

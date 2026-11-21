@@ -53,6 +53,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -124,6 +125,9 @@ def stack_config_read_cases() -> list[dict[str, Any]]:
             "count": len(real),
         }
     )
+    # The services and jobs stacks are checked by their own group (terraform_services_checks), which copies the same files beside each of its stacks.
+    other = config_reads_of((ROOT / GROUP_FILES / "terraform_services_checks.sh").read_text(encoding="utf-8"))
+    results.append({"case": "stack_config_reads_are_the_same_in_both_terraform_stack_groups", "passed": other == real, "first": real, "second": other})
     return results
 
 
@@ -228,10 +232,14 @@ CORE = [
     "ci_tooling_checks",
     "ci_tooling_runtime",
     "configuration_checks",
+    "configuration_policy_checks",
     "configuration_host_checks",
+    "configuration_owner_checks",
     "sql_style",
     "terraform_checks",
+    "terraform_services_checks",
     "terraform_proofs",
+    "terraform_replace_proofs",
 ]
 # The groups split from another group select on the same paths, apart from their own body file: a path that selects the origin selects the split group too.
 SPLIT_FROM = {
@@ -239,7 +247,11 @@ SPLIT_FROM = {
     "ci_tooling_checks": "repository_code_checks",
     "ci_tooling_runtime": "ci_tooling_checks",
     "configuration_host_checks": "configuration_checks",
+    "configuration_policy_checks": "configuration_checks",
+    "configuration_owner_checks": "configuration_host_checks",
     "terraform_proofs": "terraform_checks",
+    "terraform_services_checks": "terraform_checks",
+    "terraform_replace_proofs": "terraform_proofs",
 }
 
 
@@ -1537,13 +1549,17 @@ HOSTED_ENTRY_POINTS = {
     ),
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
+    ),
+    "configuration_policy_checks": (
         ("scripts.infrastructure.run_push_images_e2e", ("scripts/infrastructure/run_push_images_e2e.py", "scripts/infrastructure/push_images.py")),
         ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),
         ("scripts.infrastructure.aws_tasks_plants", ("scripts/infrastructure/aws_tasks_plants.py", "scripts/infrastructure/aws_tasks.py")),
     ),
+    "configuration_owner_checks": (
+        ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
+    ),
     "configuration_host_checks": (
         ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
-        ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
         (
             'scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"',
             (
@@ -2367,7 +2383,7 @@ def core_scratch(root: Path) -> Path:
 
 
 def core_command_cases() -> list[dict[str, Any]]:
-    """Every Core command runs once, in one of the ten hosted Core parts, and the guard fails on a dropped or a duplicated command."""
+    """Every Core command runs once, in one of the fourteen hosted Core parts, and the guard fails on a dropped or a duplicated command."""
     cases: list[dict[str, Any]] = [
         {"case": "core_commands_run_exactly_once", "passed": not core_commands.findings(ROOT), "findings": core_commands.findings(ROOT)}
     ]
@@ -2382,10 +2398,20 @@ def core_command_cases() -> list[dict[str, Any]]:
             elif value:
                 hosted.append(value)
     hosted = sorted(part for part in hosted if part.startswith("core_"))
+    # The base command list is unchanged except that each Terraform stack command runs in two groups (one loop per group), so the inventory lists it twice.
+    inventory_commands = Counter(json.loads((ROOT / "config/quality/core_commands.json").read_text(encoding="utf-8"))["commands"])
+    stack_commands = sorted(command for command, count in inventory_commands.items() if count == 2)
     cases.append(
         {
-            "case": "ten_hosted_core_jobs_run_the_ten_parts",
-            "passed": len(config.get("parts", {})) == 10 and hosted == sorted(config.get("parts", {})),
+            "case": "only_the_terraform_stack_commands_run_in_two_groups",
+            "passed": len(stack_commands) == 4 and all("terraform" in command or "static_checks" in command for command in stack_commands),
+            "twice": stack_commands,
+        }
+    )
+    cases.append(
+        {
+            "case": "fourteen_hosted_core_jobs_run_the_fourteen_parts",
+            "passed": len(config.get("parts", {})) == 14 and hosted == sorted(config.get("parts", {})),
             "parts": sorted(config.get("parts", {})),
             "hosted": hosted,
         }
@@ -2394,6 +2420,11 @@ def core_command_cases() -> list[dict[str, Any]]:
     plants = {
         "dropped_command_is_found": ("dropped command", lambda root: drop_first_command(root, first_group)),
         "duplicated_command_is_found": ("duplicated command", lambda root: duplicate_first_command(root, first_group)),
+        # A third line of a stack command is a duplicate: the inventory lists it twice, once for each stack group.
+        "stack_command_over_its_count_is_found": (
+            "duplicated command",
+            lambda root: duplicate_first_command(root, "terraform_checks", "init -backend=false"),
+        ),
         "unplaced_group_is_found": ("is in no hosted Core part", lambda root: change_parts(root, remove=first_group)),
         "group_in_two_parts_is_found": ("hosted Core parts", lambda root: change_parts(root, repeat=first_group)),
     }
@@ -2413,10 +2444,10 @@ def drop_first_command(root: Path, group: str) -> None:
     path.write_text("".join(lines[:index] + lines[index + 1 :]), encoding="utf-8")
 
 
-def duplicate_first_command(root: Path, group: str) -> None:
+def duplicate_first_command(root: Path, group: str, needle: str = "") -> None:
     path = root / "scripts/ci/groups" / f"{group}.sh"
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}")
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}" and needle in line)
     path.write_text("".join(lines[: index + 1] + [lines[index]] + lines[index + 1 :]), encoding="utf-8")
 
 
@@ -4066,7 +4097,16 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
         for entry in (
             CORE[:1] + CORE[2:]
             if not staged
-            else ["python_lint", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "configuration_checks", "configuration_host_checks"]
+            else [
+                "python_lint",
+                "repository_code_checks",
+                "ci_tooling_checks",
+                "ci_tooling_runtime",
+                "configuration_checks",
+                "configuration_policy_checks",
+                "configuration_host_checks",
+                "configuration_owner_checks",
+            ]
         )
     ]
     if part == "all":
@@ -4325,10 +4365,14 @@ BODY_SELECTION = {
     "ci_tooling_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "ci_tooling_runtime": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "configuration_checks": ["configuration_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "configuration_policy_checks": ["configuration_policy_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "configuration_host_checks": ["configuration_host_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "configuration_owner_checks": ["configuration_owner_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
     "sql_style": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "sql_style"],
     "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_checks"],
+    "terraform_services_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_services_checks"],
     "terraform_proofs": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_proofs"],
+    "terraform_replace_proofs": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_replace_proofs"],
     "launcher": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher"],
     "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher", "reuse_gate_checks"],
 }

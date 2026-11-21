@@ -1,13 +1,14 @@
 """Guard that every command of the Core check groups runs exactly once, in exactly one hosted Core part.
 
-The hosted Core work is ten jobs (the ``parts`` of ``config/quality/ci_groups.json``), and ``scripts/run_ci.sh`` runs the same groups locally. A command
+The hosted Core work is fourteen jobs (the ``parts`` of ``config/quality/ci_groups.json``), and ``scripts/run_ci.sh`` runs the same groups locally. A command
 moves between group files when a group is split, so a command could be dropped or run twice without any test noticing. This guard reads every
 ``timed "<label>" <command>`` line of the body files of the Core groups and compares the list with the committed inventory
 ``config/quality/core_commands.json``:
 
 * a command of the inventory that no Core group file runs is *dropped*;
 * a command that a Core group file runs and the inventory does not list is *added* (the inventory is updated on purpose with ``--update``, in the same change);
-* a command that two lines run, in one group file or in two, is *duplicated*;
+* a command that more lines run than the inventory lists, in one group file or in two, is *duplicated* (the Terraform stack loop is a line in each of the two
+  stack groups, so the inventory lists each of its commands twice);
 * a Core group that no part holds, or that two parts hold, is named.
 
 A command is identified by its text after the label, so renaming a group or a label does not change it. Run it from the repository root:
@@ -67,9 +68,13 @@ def findings(root: Path) -> list[str]:
     current = inventory(root)
     seen = Counter(command for commands in current.values() for command in commands)
     expected = Counter(json.loads((root / INVENTORY).read_text(encoding="utf-8"))["commands"])
-    problems += [f"duplicated command ({count} lines run it): {command}" for command, count in sorted(seen.items()) if count > 1]
-    problems += [f"dropped command (the inventory lists it, no Core group runs it): {command}" for command in sorted(set(expected) - set(seen))]
-    problems += [f"added command (a Core group runs it, the inventory lacks it; run --update): {command}" for command in sorted(set(seen) - set(expected))]
+    problems += [f"duplicated command ({seen[command]} lines run it): {command}" for command in sorted(seen) if seen[command] > max(expected[command], 1)]
+    problems += [
+        f"dropped command (the inventory lists it {expected[command]} times, the Core groups run it {seen[command]}): {command}"
+        for command in sorted(expected)
+        if seen[command] < expected[command]
+    ]
+    problems += [f"added command (a Core group runs it, the inventory lacks it; run --update): {command}" for command in sorted(seen) if not expected[command]]
     parts = config.get("parts", {})
     placed = [group for groups in parts.values() for group in groups]
     problems += [f"group {group} is in no hosted Core part" for group in current if group not in placed]
