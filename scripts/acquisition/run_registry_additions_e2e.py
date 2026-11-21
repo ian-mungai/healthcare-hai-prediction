@@ -555,6 +555,15 @@ def run_lineage_cases(root: Path) -> list[dict[str, Any]]:
     return cases
 
 
+NAMED_TABLE_RULE = "bronze_table_named_by_dataset_id"
+
+
+def placement_child(root: Path, mode: str) -> CompletedProcess[str]:
+    """Derive four dataset IDs in a fresh process, with the named table rule as it is (``real``) or switched off (``removed``)."""
+    argv = [sys.executable, "-B", "-m", "scripts.acquisition.source_metadata_probe", "--mode", mode, "--workdir", str(root)]
+    return run_argv(argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+
+
 def run_cases(root: Path) -> list[dict[str, Any]]:
     """Execute every scenario from the failure-mode list and return per-case assertions."""
     cases: list[dict[str, Any]] = []
@@ -771,6 +780,36 @@ def run_cases(root: Path) -> list[dict[str, Any]]:
         [
             {"name": "repeated_derivation_identical", "passed": first.returncode == second.returncode == 0 and fingerprint(case / FILES[2]) == before},
             {"name": "all_stored_placement_values_reproduced", "passed": read_json(case / FILES[2]) == document},
+        ],
+    )
+    named = [placement_child(root, "real"), placement_child(root, "removed")]
+    rows = {row["dataset_id"]: row for row in json.loads(named[0].stdout)["placements"]} if named[0].returncode == 0 else {}
+    plant = json.loads(named[1].stdout) if named[1].returncode == 0 else {}
+    record(
+        "placement_named_table_rule",
+        named[0],
+        [
+            {
+                "name": "member_pattern_table_named_by_the_id_places_it",
+                "passed": rows.get("acs_b16005", {}).get("source_id") == "ACS" and rows["acs_b16005"]["rule"] == NAMED_TABLE_RULE,
+            },
+            {
+                "name": "a_retired_key_agrees_after_the_rule",
+                "passed": rows.get("acs_b25070", {}).get("rule") == NAMED_TABLE_RULE and rows["acs_b25070"]["detail"].endswith("; also by retired_object_key"),
+            },
+            {
+                "name": "an_id_that_an_earlier_rule_places_keeps_its_rule_and_detail",
+                "passed": rows.get("svi")
+                == {"dataset_id": "svi", "source_id": "SVI", "rule": "id_equal_source_folder", "detail": rows.get("svi", {}).get("detail")}
+                and NAMED_TABLE_RULE not in rows["svi"]["detail"],
+            },
+            {"name": "an_id_no_table_is_named_by_stays_unplaced", "passed": "acs_zz999" not in rows},
+            {
+                "name": "plant_without_the_rule_leaves_the_table_ids_unplaced",
+                "passed": named[1].returncode == 0
+                and {row["dataset_id"] for row in plant.get("unresolved", [])} >= {"acs_b16005"}
+                and "acs_b16005" not in {row["dataset_id"] for row in plant.get("placements", [])},
+            },
         ],
     )
     for label, values, message in [

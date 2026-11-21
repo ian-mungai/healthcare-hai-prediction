@@ -12,6 +12,7 @@ import shutil
 import sys
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -36,6 +37,9 @@ TRACKED = registry.REPO_ROOT / "config/acquisition"
 # The builder never writes the receipt index: source_receipt_index.py builds it from the local capture receipts after every change of the verification
 # log, so the earlier state keeps the index of its own log and the committed index belongs to the current one.
 WRITTEN_ELSEWHERE = {"source_receipt_index.json"}
+# The placement derivation (scripts.acquisition.source_metadata) rewrites the rule and detail text of the stored placements after the builder ran, and the
+# additions lock follows the additions file. The builder reproduces the revision 3 text of them, so these two files are compared without that text.
+REWRITTEN_LATER = {"registry_additions.json", "registry_additions_lock.json"}
 
 
 def git(*arguments: str) -> str:
@@ -100,10 +104,25 @@ def loaders_accept(root: Path) -> None:
     reference_download_contract.load_plan(config / "reference_downloads_plan.json")
     with patch.object(nber_hc_contract, "gate_sha256", nber_hc_contract.registry_gate_sha256):
         nber_hc_contract.load_plan(config / "nber_hospital_compare_plan.json")
-    differing = [
-        path.name for path in sorted(config.glob("*.json")) if path.name not in WRITTEN_ELSEWHERE and path.read_bytes() != (TRACKED / path.name).read_bytes()
-    ]
+    skipped = WRITTEN_ELSEWHERE | REWRITTEN_LATER
+    differing = [path.name for path in sorted(config.glob("*.json")) if path.name not in skipped and path.read_bytes() != (TRACKED / path.name).read_bytes()]
     check(not differing, f"these files differ from the committed ones: {differing}")
+    check(
+        without_rederived_text(config) == without_rederived_text(TRACKED),
+        "the additions and their lock differ from the committed ones beyond the placement text",
+    )
+
+
+def without_rederived_text(config: Path) -> dict[str, Any]:
+    """The additions file without the rule and detail of each stored placement and evidence record, and its lock without the additions hash."""
+    additions = json.loads((config / "registry_additions.json").read_text(encoding="utf-8"))
+    records = [*additions["dataset_id_placements"], *(record for entry in additions["source_metadata"] for record in entry["dataset_ids_evidence"])]
+    for record in records:
+        record.pop("rule", None)
+        record.pop("detail", None)
+    lock = json.loads((config / "registry_additions_lock.json").read_text(encoding="utf-8"))
+    lock.pop("additions_sha256")
+    return {"additions": additions, "lock": lock}
 
 
 def sandbox(before: Path, tmp_path: Path) -> Path:

@@ -10,92 +10,92 @@
     },
     {
       "dataset_id": "acs_b16005",
-      "detail": "bronze table acs_b16005 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_b16005 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_b19013",
-      "detail": "bronze table acs_b19013 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_b19013 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_b25070",
-      "detail": "bronze table acs_b25070 selects it in collection census/acs, which collection_layout gives to ACS only; also by retired_object_key",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_b25070 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID; also by retired_object_key",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_b25091",
-      "detail": "bronze table acs_b25091 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_b25091 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_b26001",
-      "detail": "bronze table acs_b26001 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_b26001 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_c16001",
-      "detail": "bronze table acs_c16001 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_c16001 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_dp02",
-      "detail": "bronze table acs_dp02 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_dp02 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_dp03",
-      "detail": "bronze table acs_dp03 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_dp03 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_dp04",
-      "detail": "bronze table acs_dp04 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_dp04 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_dp05",
-      "detail": "bronze table acs_dp05 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_dp05 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_s0101",
-      "detail": "bronze table acs_s0101 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_s0101 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_s0601",
-      "detail": "bronze table acs_s0601 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_s0601 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_s1701",
-      "detail": "bronze table acs_s1701 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_s1701 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_s2503",
-      "detail": "bronze table acs_s2503 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_s2503 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
       "dataset_id": "acs_s2701",
-      "detail": "bronze table acs_s2701 selects it in collection census/acs, which collection_layout gives to ACS only",
-      "rule": "single_source_collection",
+      "detail": "bronze table acs_s2701 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+      "rule": "bronze_table_named_by_dataset_id",
       "source_id": "ACS"
     },
     {
@@ -831,78 +831,78 @@
         },
         {
           "dataset_id": "acs_b16005",
-          "detail": "bronze table acs_b16005 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_b16005 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_b19013",
-          "detail": "bronze table acs_b19013 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_b19013 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_b25070",
-          "detail": "bronze table acs_b25070 selects it in collection census/acs, which collection_layout gives to ACS only; also by retired_object_key",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_b25070 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID; also by retired_object_key",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_b25091",
-          "detail": "bronze table acs_b25091 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_b25091 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_b26001",
-          "detail": "bronze table acs_b26001 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_b26001 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_c16001",
-          "detail": "bronze table acs_c16001 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_c16001 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_dp02",
-          "detail": "bronze table acs_dp02 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_dp02 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_dp03",
-          "detail": "bronze table acs_dp03 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_dp03 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_dp04",
-          "detail": "bronze table acs_dp04 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_dp04 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_dp05",
-          "detail": "bronze table acs_dp05 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_dp05 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_s0101",
-          "detail": "bronze table acs_s0101 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_s0101 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_s0601",
-          "detail": "bronze table acs_s0601 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_s0601 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_s1701",
-          "detail": "bronze table acs_s1701 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_s1701 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_s2503",
-          "detail": "bronze table acs_s2503 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_s2503 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         },
         {
           "dataset_id": "acs_s2701",
-          "detail": "bronze table acs_s2701 selects it in collection census/acs, which collection_layout gives to ACS only",
-          "rule": "single_source_collection"
+          "detail": "bronze table acs_s2701 selects its export files by member pattern in collection census/acs, which collection_layout gives to ACS only; the table is named by the dataset ID",
+          "rule": "bronze_table_named_by_dataset_id"
         }
       ],
       "publisher": "U.S. Census Bureau",

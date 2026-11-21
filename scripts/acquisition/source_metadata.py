@@ -28,6 +28,7 @@ RULE_ORDER = (
     "cms_token_in_registry_record",
     "cms_alias_in_dataset_layout",
     "single_source_collection",
+    "bronze_table_named_by_dataset_id",
     "retired_object_key",
 )
 ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_]{0,119}")
@@ -68,10 +69,13 @@ def candidate_placements(
     tables = json.loads(BRONZE_TABLES.read_text(encoding="utf-8"))["tables"]
     table_collections: dict[str, set[str]] = defaultdict(set)
     table_names: dict[str, set[str]] = defaultdict(set)
+    named_tables: dict[str, str] = {}
     for table in tables:
         for dataset_id in table.get("dataset_ids", []):
             table_collections[dataset_id].add(table["collection"])
             table_names[dataset_id].add(table["table"])
+        if "member_pattern" in table:
+            named_tables[table["table"]] = table["collection"]
     retired: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for item in json.loads(RETIRED_OBJECTS.read_text(encoding="utf-8"))["objects"]:
         match = re.match(r"[a-z0-9_]+/[a-z0-9_]+/datasets/([a-z0-9_]+)/capture_id=(.+?)__", item["key"])
@@ -113,6 +117,14 @@ def candidate_placements(
                 rules["single_source_collection"].append(
                     (owners[0], f"bronze table {tables_text} selects it in collection {collection}, which collection_layout gives to {owners[0]} only")
                 )
+        if not rules and dataset_id in named_tables:
+            collection = named_tables[dataset_id]
+            owners = sources_in.get(collection, [])
+            if len(owners) == 1:
+                owner = owners[0]
+                detail = f"bronze table {dataset_id} selects its export files by member pattern in collection {collection}, "
+                detail += f"which collection_layout gives to {owner} only; the table is named by the dataset ID"
+                rules["bronze_table_named_by_dataset_id"].append((owner, detail))
         for source_id, prefix in sorted(retired.get(dataset_id, set())):
             if source_id in sources:
                 rules["retired_object_key"].append((source_id, f"retired_objects.json holds a key {prefix}/datasets/{dataset_id}/capture_id={source_id}__..."))
