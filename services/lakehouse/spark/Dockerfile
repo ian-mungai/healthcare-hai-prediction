@@ -16,10 +16,14 @@ ARG ICEBERG_VERSION=1.11.0
 ARG ICEBERG_RUNTIME_SHA512=f4620bb2d20777146a769a8a939a5bed658e1d5708b6a5155e1f6e831c0bfd29bd1f82618dc59bc0f30399ffcb03add3e66656286692dc6c2be94e4e1f4e7479
 ARG ICEBERG_AWS_SHA512=bb50f7dc5f36a001efecf15e4d03eff955466f06557261fbacdd7fe0d88113c82e0b9b2af96cd554cef4a1d4c2348fc950270bc3f51cf6bf1e4526f46ce336a0
 
-# Package versions follow the Ubuntu archive at build time; dated snapshot pins are tracked for the next image build.
-# hadolint ignore=DL3008
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends python3 python3-venv curl ca-certificates \
+# apt reads the Ubuntu archive as it was at one dated snapshot (snapshot.ubuntu.com), because Ubuntu removes superseded versions from noble-updates.
+# The snapshot is the build time of the image whose package versions these pins record (2026-10-22T03:57Z), so a rebuild installs the same versions.
+# The snapshot service holds arm64 packages under /ubuntu/, and apt does not apply its snapshot option to the ports archive that this base image uses.
+ARG UBUNTU_SNAPSHOT=20261022T035700Z
+RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports/|https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/|" /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends \
+       python3=3.12.3-0ubuntu2.1 python3-venv=3.12.3-0ubuntu2.1 curl=8.5.0-2ubuntu10.16 ca-certificates=20260816ubuntu0.24.04.1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
