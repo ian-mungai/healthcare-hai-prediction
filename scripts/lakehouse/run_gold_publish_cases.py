@@ -1186,6 +1186,45 @@ def maintenance_protection(h: Harness) -> Check:
         (), run_id(9), None, "chain"
     )
 
+    def run_chain_with(models: tuple[maintenance.Item, ...]) -> dict[str, Any]:
+        return maintenance.maintain(maint(), maintenance.chain_protection(run_id(9), models), now=future, orphan_now=datetime.now(UTC))
+
+    behind_a_model = (maintenance.Item("registration", "model clabsi_v1", run_id=run_id(1)),)
+    h.restore("four")
+    result = run_chain_with(behind_a_model)
+    checks["the chain rule keeps the gold run behind a trained model with the newest sets, and the other old set goes"] = (
+        result["kept_runs"] == sorted([run_id(1), run_id(3), run_id(4)]) and result["model_runs_expired"] == [] and survivors() == 3
+    )
+    h.restore("four")
+    checks["a model run that names no committed set stops maintenance before any expiry"] = (
+        refuses(lambda: run_chain_with((maintenance.Item("registration", "model typo", run_id=run_id(8)),))) and survivors() == 4
+    )
+    h.restore("four")
+    run_chain(run_id(9))
+    result = run_chain_with(behind_a_model)
+    checks["a model run listed after its snapshots expired is reported, not hidden, and maintenance goes on"] = (
+        result["model_runs_expired"] == [run_id(1)] and survivors() == 2
+    )
+
+    models_file = write("model_runs_valid", {"schema": 1, "runs": [{"run_id": run_id(1), "model": "clabsi version 1"}]})
+    checks["the model runs file names each run as a registration of its model"] = maintenance.load_model_runs(models_file) == (
+        maintenance.Item("registration", "model clabsi version 1", run_id=run_id(1)),
+    )
+    checks["an empty model runs file is a valid list"] = maintenance.load_model_runs(write("model_runs_empty", {"schema": 1, "runs": []})) == ()
+    bad_files = {
+        "no file": folder / "model_runs_absent.json",
+        "text that is not JSON": write("model_runs_text", "{ not json"),
+        "another schema": write("model_runs_schema", {"schema": 2, "runs": []}),
+        "a field it does not define": write("model_runs_extra", {"schema": 1, "runs": [], "note": "x"}),
+        "an entry with another field": write("model_runs_entry", {"schema": 1, "runs": [{"run_id": run_id(1), "model": "m", "since": "x"}]}),
+        "a run that is not a stored run ID": write("model_runs_form", {"schema": 1, "runs": [{"run_id": "not a run", "model": "m"}]}),
+        "the same run twice": write("model_runs_twice", {"schema": 1, "runs": [{"run_id": run_id(1), "model": "a"}, {"run_id": run_id(1), "model": "b"}]}),
+        "a model that is not text": write("model_runs_model", {"schema": 1, "runs": [{"run_id": run_id(1), "model": 7}]}),
+    }
+    for label, path in bad_files.items():
+        checks[f"a model runs file with {label} is refused"] = refuses(lambda path=path: maintenance.load_model_runs(path))
+    checks["the model runs file the project commits is valid"] = isinstance(maintenance.load_model_runs(), tuple)
+
     h.restore("four")
     path = write("moving", protected_doc([]))
 

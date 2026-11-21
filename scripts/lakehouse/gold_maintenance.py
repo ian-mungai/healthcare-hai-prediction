@@ -46,7 +46,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse.gold_publish import MODES, Context, Plan, ident, load_plan, published_runs, table_exists, table_refs, write_record
+from scripts.lakehouse.gold_publish import MODES, REPO_ROOT, Context, Plan, ident, load_plan, published_runs, table_exists, table_refs, write_record
 from scripts.lakehouse.gold_publish_record import READER_NAME, RUN_ID, STORED_RUN, PublishError
 
 SCHEMA = 1
@@ -54,6 +54,8 @@ TOP_KEYS = frozenset({"schema", "fence", "items"})
 FENCE_KEYS = frozenset({"run_id", "attempt_id", "taken_at"})
 ITEM_KEYS = {"registration": frozenset({"kind", "id", "run_id"}), "pending": frozenset({"kind", "id", "since"})}
 ATTEMPT_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+MODEL_RUNS_FILE = REPO_ROOT / "config/lakehouse/gold_model_runs.json"
+MODEL_RUN_KEYS = frozenset({"run_id", "model"})
 MARGIN_SECONDS = 60
 MIN_ORPHAN_AGE = timedelta(days=1)
 LIST_SNAPSHOTS = "SELECT snapshot_id, committed_at FROM {table}.snapshots ORDER BY committed_at"
@@ -145,11 +147,33 @@ def load_protected(path: Path | None) -> Protected:
     return Protected(tuple(items), str(fence["run_id"]), str(fence["attempt_id"]))
 
 
-def chain_protection(run_id: str) -> Callable[[], Protected]:
-    """The source of the AWS chain: no item, bound to the maintenance run ``run_id`` (the gold run whose job runs it)."""
+def load_model_runs(path: Path = MODEL_RUNS_FILE) -> tuple[Item, ...]:
+    """The gold runs behind trained models, each as the registration of its model. A missing file, a field the file does not define, a run that is not a
+    stored run ID and a run listed twice refuse the run, so a typo never reads as an empty list."""
+    try:
+        document = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise PublishError(f"the model runs file {path.name} cannot be read") from error
+    if not isinstance(document, dict) or set(document) != {"schema", "runs"} or document["schema"] != SCHEMA or not isinstance(document["runs"], list):
+        raise PublishError(f"the model runs file {path.name} is not a schema {SCHEMA} document with exactly the fields schema and runs")
+    items: list[Item] = []
+    for raw in document["runs"]:
+        if not isinstance(raw, dict) or set(raw) != MODEL_RUN_KEYS or not isinstance(raw["model"], str) or not raw["model"].strip():
+            raise PublishError(f"the model runs file {path.name} holds an entry that is not a run and its model")
+        if not isinstance(raw["run_id"], str) or not STORED_RUN.fullmatch(raw["run_id"]):
+            raise PublishError(f"the model runs file {path.name} holds a run that is not a stored run ID")
+        if any(item.run_id == raw["run_id"] for item in items):
+            raise PublishError(f"the model runs file {path.name} lists a run twice")
+        items.append(Item("registration", f"model {raw['model'].strip()}", run_id=raw["run_id"]))
+    return tuple(items)
+
+
+def chain_protection(run_id: str, model_runs: Sequence[Item] = ()) -> Callable[[], Protected]:
+    """The source of the AWS chain: the gold runs behind trained models (``load_model_runs``) and no reader item, bound to the maintenance run ``run_id`` (the
+    gold run whose job runs it)."""
     if not RUN_ID.fullmatch(run_id):
         raise PublishError("the chain protection needs the gold run ID of its job")
-    return lambda: Protected((), run_id, None, "chain")
+    return lambda: Protected(tuple(model_runs), run_id, None, "chain")
 
 
 def kept_runs(runs: Sequence[Mapping[str, Any]], protected: Protected, retain_sets: int) -> set[str]:
@@ -182,6 +206,25 @@ def protected_snapshots(plan: Plan, runs: Sequence[Mapping[str, Any]], protected
 
 def gather_refs(ctx: Context) -> dict[str, dict[str, int]]:
     return {name: table_refs(ctx, name) for name in [*ctx.plan.tables, ctx.plan.runs_table] if table_exists(ctx, name)}
+
+
+def model_runs_expired(ctx: Context, runs: Sequence[Mapping[str, Any]], protected: Protected) -> list[str]:
+    """The gold runs behind trained models (the chain's registrations) that have lost a snapshot already: a run listed after an earlier maintenance expired it
+    cannot be kept, and the record says so."""
+    if protected.rule != "chain":
+        return []
+    live: dict[str, set[int]] = {}
+    lost: list[str] = []
+    for item in protected.items:
+        run = next((run for run in runs if run["run_id"] == item.run_id), None)
+        if run is None:
+            continue
+        for table, snapshot in dict(run["snapshot_set"]).items():
+            if table not in live:
+                live[table] = {int(row[0]) for row in ctx.sql(LIST_SNAPSHOTS, table=ctx.fq(table)).collect()}
+            if int(snapshot) not in live[table] and str(item.run_id) not in lost:
+                lost.append(str(item.run_id))
+    return lost
 
 
 def candidates_to_expire(ctx: Context, name: str, cutoff: datetime, keep: set[int]) -> list[int]:
@@ -221,6 +264,9 @@ def maintain(
     if hooks.after_plan is not None:
         hooks.log.append("after_plan")
         hooks.after_plan()
+    lost = model_runs_expired(ctx, runs, protected)
+    if lost:
+        sys.stderr.write(f"gold maintenance: the snapshots of model runs {lost} were expired before they were listed\n")
     expired: dict[str, int] = {}
     for name in refs:
         if source() != protected:
@@ -240,6 +286,7 @@ def maintain(
         "protection": protected.rule,
         "fence_attempt": protected.fence_attempt,
         "expired": expired,
+        "model_runs_expired": lost,
         "orphans_removed": orphans,
         "kept_runs": sorted(kept_runs(published_runs(ctx), protected, ctx.plan.retain_sets)),
     }
@@ -269,7 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         spark = spark_session("gold_maintenance", warehouse=args.local_warehouse)
         try:
             ctx = Context(spark, plan, args.run, args.mode, Path(args.publish_dir), "", needs_sealed=False)
-            source = chain_protection(args.run) if args.protection == "chain" else (lambda: load_protected(Path(args.protected)))
+            source = chain_protection(args.run, load_model_runs()) if args.protection == "chain" else (lambda: load_protected(Path(args.protected)))
             result = maintain(ctx, source)
             write_record(ctx.path(f"maintenance_{args.run}.json"), result)
             sys.stdout.write(json.dumps(result) + "\n")
