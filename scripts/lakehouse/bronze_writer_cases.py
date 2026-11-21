@@ -399,14 +399,14 @@ def authority_epoch(subject: ModuleType, journal: ModuleType, out: Path) -> dict
 
 
 def worker_import_closure(subject: ModuleType, journal: ModuleType, out: Path) -> dict[str, Any]:
-    """Require every repository import and worker configuration file in the declared bootstrap snapshot."""
+    """Require every import that resolves inside the repository and every worker configuration file in the declared bootstrap snapshot."""
     root = Path(__file__).resolve().parents[2]
     definitions = json.loads((root / "config/lakehouse/aws_bronze_templates.json").read_text())
     pending = ["scripts.lakehouse.aws_bronze", *(template["module"] for template in definitions["templates"].values())]
     required: set[str] = set()
     while pending:
         name = pending.pop()
-        if not name.startswith("scripts."):
+        if not name:
             continue
         base = root.joinpath(*name.split("."))
         source = next((candidate for candidate in (base.with_suffix(".py"), base / "__init__.py") if candidate.is_file()), None)

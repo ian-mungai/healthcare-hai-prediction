@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
-from scripts.infrastructure.bronze_policy_cases import planted_storage_defects
+from scripts.infrastructure.bronze_policy_cases import STORAGE_DEFECTS, planted_storage_defects
 from scripts.lakehouse import bronze_writer_cases
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,12 +39,12 @@ DEFECTS = (
     ("namespace_override_allowed", "if binding.namespaces != expected_namespaces:", "if False:"),
 )
 
-STORAGE_DEFECT_COUNT = 22
 STAGE_DEFECTS = (
     "scripts/acquisition/single_copy.py",
     "scripts/lakehouse/__init__.py",
     "scripts/process.py",
     "scripts/lakehouse/bronze_mirror.py",
+    "orchestration/training_contract.py",
     "config/lakehouse/retired_objects.json",
     "config/lakehouse/bronze_consumer_columns.json",
 )
@@ -221,7 +221,7 @@ def main() -> int:
             and len(report["cases"]) == len(bronze_writer_cases.CASES)
             and all(row["status"] == "passed" for row in report["cases"])
             and all(row["status"] == "caught" for row in report["defects"])
-            and (not args.plant_defects or len(report["defects"]) == len(DEFECTS) + STORAGE_DEFECT_COUNT + len(STAGE_DEFECTS))
+            and (not args.plant_defects or len(report["defects"]) == len(DEFECTS) + len(STORAGE_DEFECTS) + len(STAGE_DEFECTS))
         )
     except (ImportError, OSError, ValueError, RuntimeError, TimeoutError) as error:
         report.update(passed=False, cause=str(error))

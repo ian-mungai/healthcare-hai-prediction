@@ -293,123 +293,125 @@ def storage_policy_scope(subject: ModuleType, journal: ModuleType, out: Path) ->
     return {"production_prefixes": list(PRODUCTION), "qualification_prefixes": list(TWINS), "source_collections": list(collections), "evaluator": "offline IAM"}
 
 
+STORAGE_DEFECTS = (
+    ("source_write_allowed", ("bronze_writer_source_objects", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:PutObject"')),
+    ("all_lakehouse_paths_writable", ("bronze_writer_storage", "${TABLE_OBJECT_ARNS}", json.dumps([f"{BUCKET}/lakehouse/*"]))),
+    (
+        "dictionary_storage_missing",
+        (
+            "bronze_writer_storage",
+            "${TABLE_OBJECT_ARNS}",
+            json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
+        ),
+    ),
+    ("run_record_write_widened", ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"]))),
+    (
+        "stage_write_widened",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_ARNS}",
+            json.dumps(
+                [f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/run_stage/*"]
+            ),
+        ),
+    ),
+    (
+        "stage_request_not_writable",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_ARNS}",
+            json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json"]),
+        ),
+    ),
+    (
+        "mirror_attempt_not_writable",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_ARNS}",
+            json.dumps(
+                [
+                    f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
+                ]
+            ),
+        ),
+    ),
+    (
+        "mirror_attempt_write_widened",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_ARNS}",
+            json.dumps(
+                [
+                    f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/mirror*",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
+                    f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
+                ]
+            ),
+        ),
+    ),
+    (
+        "mirror_attempt_not_readable",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_READ_ARNS}",
+            json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json"]),
+        ),
+    ),
+    (
+        "mirror_attempt_read_widened",
+        (
+            "bronze_writer_run_record_writes",
+            "${BRONZE_RUN_RECORD_READ_ARNS}",
+            json.dumps(
+                [
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/mirror_*.json",
+                    f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
+                ]
+            ),
+        ),
+    ),
+    (
+        "record_write_unconditional",
+        ("bronze_writer_run_record_writes", ',\n      "Condition": {"StringEquals": {"s3:if-none-match": "*"}}', ""),
+    ),
+    (
+        "record_write_any_header",
+        ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"StringLike": {"s3:if-none-match": "*"}'),
+    ),
+    (
+        "record_write_only_without_header",
+        ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"Null": {"s3:if-none-match": "true"}'),
+    ),
+    (
+        "record_read_widened",
+        ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_READ_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"])),
+    ),
+    ("run_record_delete_allowed", ("bronze_writer_run_record_writes", '"s3:PutObject"', '"s3:PutObject", "s3:DeleteObject"')),
+    ("run_record_read_widened", ("bronze_writer_run_records", "${RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/raw/ingestion_runs/*"]))),
+    ("run_record_current_read_allowed", ("bronze_writer_run_records", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:GetObject"')),
+    ("notice_topic_wildcard", ("owner_notice", "${ALERTS_TOPIC_ARN}", ALERTS_TOPIC.replace("alerts_dev", "*"))),
+    ("notice_subscribe_allowed", ("owner_notice", '"sns:Publish"', '["sns:Publish", "sns:Subscribe"]')),
+    ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:PutParameter"')),
+    ("key_single_read_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:GetParameter"')),
+    ("key_version_wildcard", ("bronze_writer_pseudonym_key", "${PSEUDONYM_KEY_ARN}", KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*"))),
+)
+
+
 def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
     """Require independent storage-scope assertions to catch widened or missing policy grants."""
-    defects = (
-        ("source_write_allowed", ("bronze_writer_source_objects", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:PutObject"')),
-        ("all_lakehouse_paths_writable", ("bronze_writer_storage", "${TABLE_OBJECT_ARNS}", json.dumps([f"{BUCKET}/lakehouse/*"]))),
-        (
-            "dictionary_storage_missing",
-            (
-                "bronze_writer_storage",
-                "${TABLE_OBJECT_ARNS}",
-                json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
-            ),
-        ),
-        ("run_record_write_widened", ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"]))),
-        (
-            "stage_write_widened",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_ARNS}",
-                json.dumps(
-                    [f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/run_stage/*"]
-                ),
-            ),
-        ),
-        (
-            "stage_request_not_writable",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_ARNS}",
-                json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json"]),
-            ),
-        ),
-        (
-            "mirror_attempt_not_writable",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_ARNS}",
-                json.dumps(
-                    [
-                        f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
-                    ]
-                ),
-            ),
-        ),
-        (
-            "mirror_attempt_write_widened",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_ARNS}",
-                json.dumps(
-                    [
-                        f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/mirror*",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
-                        f"{BUCKET}/lakehouse/run_stage/bronze_*/inputs/bronze_stage_report.json",
-                    ]
-                ),
-            ),
-        ),
-        (
-            "mirror_attempt_not_readable",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_READ_ARNS}",
-                json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json"]),
-            ),
-        ),
-        (
-            "mirror_attempt_read_widened",
-            (
-                "bronze_writer_run_record_writes",
-                "${BRONZE_RUN_RECORD_READ_ARNS}",
-                json.dumps(
-                    [
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/carried_over_notice.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/mirror_*.json",
-                        f"{BUCKET}/lakehouse/bronze_runs/*/check.json",
-                    ]
-                ),
-            ),
-        ),
-        (
-            "record_write_unconditional",
-            ("bronze_writer_run_record_writes", ',\n      "Condition": {"StringEquals": {"s3:if-none-match": "*"}}', ""),
-        ),
-        (
-            "record_write_any_header",
-            ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"StringLike": {"s3:if-none-match": "*"}'),
-        ),
-        (
-            "record_write_only_without_header",
-            ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"Null": {"s3:if-none-match": "true"}'),
-        ),
-        (
-            "record_read_widened",
-            ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_READ_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"])),
-        ),
-        ("run_record_delete_allowed", ("bronze_writer_run_record_writes", '"s3:PutObject"', '"s3:PutObject", "s3:DeleteObject"')),
-        ("run_record_read_widened", ("bronze_writer_run_records", "${RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/raw/ingestion_runs/*"]))),
-        ("run_record_current_read_allowed", ("bronze_writer_run_records", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:GetObject"')),
-        ("notice_topic_wildcard", ("owner_notice", "${ALERTS_TOPIC_ARN}", ALERTS_TOPIC.replace("alerts_dev", "*"))),
-        ("notice_subscribe_allowed", ("owner_notice", '"sns:Publish"', '["sns:Publish", "sns:Subscribe"]')),
-        ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:PutParameter"')),
-        ("key_single_read_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:GetParameter"')),
-        ("key_version_wildcard", ("bronze_writer_pseudonym_key", "${PSEUDONYM_KEY_ARN}", KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*"))),
-    )
     results = []
-    for name, defect in defects:
+    for name, defect in STORAGE_DEFECTS:
         documents = render(PRODUCTION, ("cms/hospitals",), raw=True, defect=defect)
         failures = evaluate(documents, PRODUCTION, ("cms/hospitals",), raw=True)
         folder = out / name
