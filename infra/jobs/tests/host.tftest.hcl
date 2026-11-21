@@ -1075,8 +1075,10 @@ run "the_smaller_jobs_keep_their_own_size_and_binding" {
   }
 
   assert {
-    condition     = tonumber(aws_ecs_task_definition.host["drift"].cpu) + tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 3072 && tonumber(aws_ecs_task_definition.host["drift"].memory) + tonumber(aws_ecs_task_definition.host["metadata"].memory) + tonumber(aws_ecs_task_definition.host["features_m1"].memory) <= 22128
-    error_message = "Drift and metadata fit the 3072 CPU units together, and with a small model set they fit the 22128 MiB job cap of the services default, so different tests can share the host (with a large set they need 23552 MiB and no longer fit)."
+    condition = alltrue([for pair in [["drift", "metadata"], ["drift", "features_m2"]] : (
+      sum([for family in pair : tonumber(aws_ecs_task_definition.host[family].cpu)]) <= 3072 && sum([for family in pair : tonumber(aws_ecs_task_definition.host[family].memory)]) <= 22128
+    )])
+    error_message = "Drift fits beside metadata (3,072 CPU units, 10,240 MiB) and beside a large model set (3,072 CPU units, 21,504 MiB) within the 3,072 CPU units and the 22,128 MiB job cap of the services default, so different tests can share the host. A third family beside drift and metadata needs more than 3,072 CPU units."
   }
 }
 
