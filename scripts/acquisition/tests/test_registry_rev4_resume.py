@@ -120,6 +120,28 @@ def loaders_accept(root: Path) -> None:
         (config / FROM_THE_ARCHIVE[1]).read_bytes() == expected_lock,
         "the additions lock differs from the lock of the revision 3 archive additions with the revision 4 base hash",
     )
+    committed = json.loads((TRACKED / FROM_THE_ARCHIVE[0]).read_text(encoding="utf-8"))
+    check(
+        without_derived_text(committed) == without_derived_text(expected),
+        "the committed additions differ from the revision 3 archive with the revision 4 base hash beyond the derived placement text",
+    )
+    committed_lock = json.loads((TRACKED / FROM_THE_ARCHIVE[1]).read_text(encoding="utf-8"))
+    expected_document = json.loads(expected_lock)
+    check(
+        {key: value for key, value in committed_lock.items() if key != "additions_sha256"}
+        == {key: value for key, value in expected_document.items() if key != "additions_sha256"},
+        "the committed additions lock differs from the lock of the revision 3 archive additions beyond the additions hash",
+    )
+
+
+def without_derived_text(additions: dict[str, Any]) -> dict[str, Any]:
+    """The additions without the rule and detail of each stored placement and source evidence record, the text that the placement derivation rewrites."""
+    document = json.loads(json.dumps(additions))
+    records = [*document["dataset_id_placements"], *(record for entry in document["source_metadata"] for record in entry["dataset_ids_evidence"])]
+    for record in records:
+        record.pop("rule", None)
+        record.pop("detail", None)
+    return document
 
 
 def sandbox(before: Path, tmp_path: Path) -> Path:
@@ -187,6 +209,39 @@ def test_damaged_additions_or_lock_output_is_refused(before: Path, tmp_path: Pat
     (config / "registry_additions.json").write_text(json.dumps(additions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (config / "registry_additions_lock.json").write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="revision 3 archive"):
+        loaders_accept(root)
+
+
+def drop_dataset_id(additions: dict[str, Any]) -> None:
+    """Remove acs_b25070 from the placements, the dataset IDs of its source and the evidence of that source."""
+    additions["dataset_id_placements"] = [row for row in additions["dataset_id_placements"] if row["dataset_id"] != "acs_b25070"]
+    entry = next(row for row in additions["source_metadata"] if row["source_id"] == "ACS")
+    entry["dataset_ids"].remove("acs_b25070")
+    entry["dataset_ids_evidence"] = [row for row in entry["dataset_ids_evidence"] if row["dataset_id"] != "acs_b25070"]
+
+
+def change_publisher(additions: dict[str, Any]) -> None:
+    next(row for row in additions["source_metadata"] if row["source_id"] == "ACS")["publisher"] = "Another Publisher"
+
+
+COMMITTED_DAMAGE = {"dataset_id_dropped": drop_dataset_id, "publisher_changed": change_publisher}
+
+
+@pytest.mark.parametrize("damage", COMMITTED_DAMAGE)
+def test_committed_additions_that_lose_their_inventory_or_payload_are_refused(
+    before: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    root = sandbox(before, tmp_path)
+    run(root)
+    committed = tmp_path / "committed"
+    shutil.copytree(TRACKED, committed)
+    additions = json.loads((committed / "registry_additions.json").read_text(encoding="utf-8"))
+    COMMITTED_DAMAGE[damage](additions)
+    current = registry.load_registry(root / "config/acquisition/source_registry.json", root / "config/acquisition/source_registry_lock.json")
+    (committed / "registry_additions.json").write_text(canonical_json(additions), encoding="utf-8")
+    (committed / "registry_additions_lock.json").write_text(canonical_json(additions_lock(additions, current)), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "TRACKED", committed)
+    with pytest.raises(AssertionError, match="committed additions"):
         loaders_accept(root)
 
 
