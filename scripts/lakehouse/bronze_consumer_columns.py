@@ -120,4 +120,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``bronze_consumer_declare`` imports the module by its package name: a second copy with a
+    # ``ConsumerColumnsError`` of its own. Run the package copy, so that every module shares one set of classes.
+    from scripts.lakehouse.bronze_consumer_columns import main as packaged_main
+
+    sys.exit(packaged_main())
