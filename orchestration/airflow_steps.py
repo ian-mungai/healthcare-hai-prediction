@@ -360,6 +360,16 @@ def report_access(found: LaunchServices) -> layer_report.ReportAccess:
     return found.report
 
 
+def keep_closing_evidence(found: LaunchServices, job: str, run: str) -> None:
+    """After a launch that ended in a failure, save the closing evidence of its stopped task before the failure goes on: ECS describes a stopped task for about
+    an hour only, and a retry adopts the same failure. A launch with no end record (the task is unresolved or still running) or a task that ECS does not
+    describe as stopped saves nothing. The launch's own failure is what the task reports, so a failure to save is only logged."""
+    try:
+        layer_report.save_closing_evidence(report_access(found), job, run)
+    except (layer_report.ReportError, LaunchRefused) as error:
+        LOG.warning("no closing evidence was saved for the failed %s run %s: %s", job, run, error)
+
+
 def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str], built: Callable[[Any], None] | None = None) -> str:
     """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job. ``built`` gets the launch operator (see ``launch``).
 
@@ -368,7 +378,8 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
     are in the listing. A listing that
     exists is kept. A listing that fails stops the step before the launch. Right after the launch, still holding the slot, the task saves the closing evidence
     (the listing after the launch, the running tasks of the host family and the host facts), so the job that takes the slot next cannot change it. A closing
-    record that fails fails this task, and the evidence task refuses the run."""
+    record that fails fails this task, and the evidence task refuses the run. A launch that fails after its task stopped saves the same evidence before the
+    failure goes on (``keep_closing_evidence``), so the failure is kept and the description is not lost."""
     found = services()
     spec = job_spec(found, request, context, selections)
     report = spec.job in layer_report.LAYERS
@@ -377,7 +388,12 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
             layer_report.save_before_listing(report_access(found), spec.job, request.run_id)
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
-    launch(found, request, spec, context, built)
+    try:
+        launch(found, request, spec, context, built)
+    except Exception:
+        if report:
+            keep_closing_evidence(found, spec.job, request.run_id)
+        raise
     if report:
         try:
             layer_report.save_closing_evidence(report_access(found), spec.job, request.run_id)

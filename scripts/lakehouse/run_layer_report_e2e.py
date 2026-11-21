@@ -30,6 +30,8 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration import airflow_steps, layer_report
+from orchestration.ecs_launch import LaunchUnavailable
+from orchestration.ecs_launch_operator import JobFailed
 from orchestration.interface import SubmissionRequest
 from scripts.lakehouse import layer_acceptance as acceptance
 from scripts.lakehouse import run_layer_acceptance_e2e as fixtures
@@ -859,6 +861,81 @@ def wiring_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def failed_launch_cases(work: Path) -> dict[str, bool]:
+    """A launch that ends in a terminal failure still saves the closing evidence of the stopped task before the failure goes on, because ECS describes a stopped
+    task for about an hour only and a retry adopts the same failure. The failure itself is never replaced. A task that is unresolved (no end record) or that ECS
+    still describes as running is never recorded as stopped."""
+    checks: dict[str, bool] = {}
+
+    def rig(name: str, outcome: str | None = None) -> tuple[Box, fixtures.Env, SubmissionRequest]:
+        box = sandbox(work, name)
+        env = make(work, f"{name}_run", "silver")
+        if outcome:
+            fixtures.edit(env.root / "launch/01/end.json", lambda d: d.update(outcome=outcome, exit_code=1))
+        stage(box, env)
+        box.current = env
+        request = SubmissionRequest("pin_bronze", env.spec.run, "real", 1, "silver_transform_dag", "job", "manual__x")
+        return box, env, request
+
+    def job_step(box: Box, env: fixtures.Env, request: SubmissionRequest, error: Exception | None) -> BaseException | None:
+        """Run ``job_step`` over a launch that raises ``error`` (or returns), and return what ``job_step`` raised."""
+        found = SimpleNamespace(preflight=SimpleNamespace(store=None), report=box.access)
+
+        def launched(*_: Any) -> None:
+            box.s3.entries = entries_of(json.loads((env.root / "after.json").read_text()))
+            if error is not None:
+                raise error
+
+        box.s3.entries = entries_of(json.loads((env.root / "before.json").read_text()))
+        with (
+            mock.patch.object(airflow_steps, "services", lambda: found),
+            mock.patch.object(airflow_steps, "job_spec", lambda *_: SimpleNamespace(job="silver")),
+            mock.patch.object(airflow_steps, "launch", launched),
+        ):
+            try:
+                airflow_steps.job_step(request, {}, {})
+            except Exception as caught:
+                return caught
+        return None
+
+    def saved(box: Box, env: fixtures.Env) -> dict[str, Any] | None:
+        path = box.access.directory / "silver" / env.spec.run / "closing.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    def described(document: dict[str, Any] | None, env: fixtures.Env) -> bool:
+        wanted = json.loads((env.root / "describe.json").read_text())["tasks"][0]["taskArn"]
+        task = (document or {}).get("task") or {}
+        return [item.get("taskArn") for item in task.get("tasks", [])] == [wanted] and task["tasks"][0].get("lastStatus") == "STOPPED"
+
+    for label, outcome in (("an initial failure", "failed"), ("a timeout", "timeout")):
+        box, env, request = rig(f"failed_{outcome}", outcome)
+        failure = JobFailed(f"silver attempt 1 ended {outcome} (exit 1): stand-in")
+        raised = job_step(box, env, request, failure)
+        checks[f"{label}: job_step raises the same failure and keeps the failed outcome"] = raised is failure
+        checks[f"{label}: the closing evidence holds the description of the stopped task"] = described(saved(box, env), env)
+        checks[f"{label}: the closing evidence is private (0600)"] = (
+            box.access.directory / "silver" / env.spec.run / "closing.json"
+        ).is_file() and stat.S_IMODE((box.access.directory / "silver" / env.spec.run / "closing.json").stat().st_mode) == 0o600
+    box, env, request = rig("failed_reattached")
+    run_key = f"lakehouse/launch_records/{env.spec.run}/silver/01/end.json"
+    box.s3.objects.pop(run_key)
+    unresolved = LaunchUnavailable("the task is not resolved yet")
+    raised = job_step(box, env, request, unresolved)
+    checks["an unresolved task (no end record): the failure goes on and no closing evidence is saved"] = raised is unresolved and saved(box, env) is None
+    fixtures.edit(env.root / "launch/01/end.json", lambda d: d.update(outcome="failed", exit_code=1))
+    box.s3.objects[run_key] = (env.root / "launch/01/end.json").read_bytes()
+    adopted = JobFailed("silver attempt 2 ended failed (exit 1) in an earlier attempt, nothing was launched, start a new run to try again: stand-in")
+    raised = job_step(box, env, request, adopted)
+    checks["a reattached failure: job_step raises the adopted failure again"] = raised is adopted
+    checks["a reattached failure: the closing evidence of the earlier stop is saved by the retry"] = described(saved(box, env), env)
+    box, env, request = rig("failed_running", "failed")
+    fixtures.edit(env.root / "describe.json", lambda d: d["tasks"][0].update(lastStatus="RUNNING"))
+    failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in")
+    raised = job_step(box, env, request, failure)
+    checks["a task ECS still describes as running is not recorded as stopped, and the failure goes on"] = raised is failure and saved(box, env) is None
+    return checks
+
+
 def static_cases() -> dict[str, bool]:
     steps = (Path(airflow_steps.__file__)).read_text()
     return {
@@ -895,6 +972,7 @@ def main() -> int:
             ("host", host_cases),
             ("dependency", dependency_cases),
             ("wiring", wiring_cases),
+            ("failed_launch", failed_launch_cases),
         ):
             results[name] = group(name, function, work)
     finally:

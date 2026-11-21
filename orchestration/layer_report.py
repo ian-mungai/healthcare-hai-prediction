@@ -352,12 +352,15 @@ def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int
         return path
     deadline = time.monotonic() + DEADLINE_SECONDS
     _, events = launch_events(access, layer, run)
+    task = task_description(access, str(events["started"]["task_arn"]))
+    if task["tasks"][0].get("lastStatus") != "STOPPED":
+        raise ReportError("ECS does not describe the task as stopped, so no closing evidence is saved")
     document = {
         "schema": 1,
         "run_id": run,
         "layer": layer,
         "after": listing_document(layer, run, list_versions(access.s3, access.bucket, limit, deadline)),
-        "task": task_description(access, str(events["started"]["task_arn"])),
+        "task": task,
         "running": running_facts(access, layer, deadline),
         "host": host_facts(access),
     }
