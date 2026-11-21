@@ -8659,34 +8659,48 @@ class Launcher:
             return {"started": False, "seconds": 0.0}
         self.desktop_program(self.cfg.start_command)
         record = ctx.state["launcher"].get("desktop")
+        now = time.time()
         if record:
             record["requests"].append(ctx.key)
+            record["expiries"][ctx.key], record["deadlines"][ctx.key] = now + deadline, deadline  # a joining caller keeps its own deadline
         else:
             ctx.state["launcher"]["desktop"] = {
                 "id": ctx.key,
                 "phase": "probe",
                 "requests": [ctx.key],
                 "at": utc_now(),
-                "began": time.time(),
-                "deadline": deadline,
+                "began": now,
+                "expiries": {ctx.key: now + deadline},
+                "deadlines": {ctx.key: deadline},
                 "ran": False,
             }
         return PENDING
 
+    @staticmethod
+    def desktop_deadline_text(record: Mapping[str, Any], key: str) -> str:
+        """The failure text of one waiting request of a Docker Desktop start: the deadline that caller gave."""
+        return f"Docker Desktop did not answer within {record['deadlines'][key]:g} s; open Docker Desktop, answer any dialog, then run the command again"
+
     def advance_desktop(self) -> None:
-        """The recorded start: ask whether the daemon answers, run the command if not, then wait for serving; the deadline covers all of it."""
+        """The recorded start: ask whether the daemon answers, run the command if not, then wait for serving.
+
+        Each waiting request has its own absolute expiry and fails at it alone; the start runs on for the requests that remain, until the last expiry.
+        """
         with self.tx(write=False) as state:
             if not state["launcher"].get("desktop"):
                 return
         actions: list[Callable[[], None]] = []
+        lapsed: list[tuple[str, str]] = []
         with self.tx() as state:
             record = state["launcher"]["desktop"]
+            now = time.time()
+            for key in [key for key in record["requests"] if record["expiries"][key] <= now]:
+                record["requests"].remove(key)
+                lapsed.append((key, self.desktop_deadline_text(record, key)))
             requests = list(record["requests"])
-            left = record["began"] + record["deadline"] - time.time()
-            if left <= 0:
+            left = max((record["expiries"][key] for key in requests), default=now) - now
+            if not requests:
                 state["launcher"]["desktop"] = None
-                message = f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
-                actions.append(lambda: self.finish_requests(requests, {}, Degraded(message)))
             elif record["phase"] == "probe":
                 ping_key = self.operation_key("desktop:ping", record)
                 if ping_key not in self.inflight:
@@ -8701,6 +8715,8 @@ class Launcher:
                 actions.append(lambda: self.finish_requests(requests, result))
             elif self.status == "degraded" and time.monotonic() - self.desktop_poked >= 1.0:
                 self.reconnect_now()
+        for key, message in lapsed:
+            self.finish_requests([key], {}, Degraded(message))
         for action in actions:
             action()
 
@@ -8721,9 +8737,8 @@ class Launcher:
             self.reconnect_now()
 
     def on_desktopcmd(self, key: str, outcome: str, value: Any) -> None:
-        """The start command ended: wait for the daemon, or fail the waiting requests."""
-        requests: list[str] = []
-        error: LauncherError | None = None
+        """The start command ended: wait for the daemon, or fail the waiting requests (a timeout names each caller's own deadline)."""
+        errors: dict[str, LauncherError] = {}
         with self.tx() as state:
             record = state["launcher"].get("desktop")
             if not record or record["phase"] != "command" or key != self.operation_key("desktop:cmd", record):
@@ -8731,17 +8746,15 @@ class Launcher:
             if outcome == "ok":
                 record.update({"phase": "wait", "ran": True})
             else:
-                requests = list(record["requests"])
+                for request in record["requests"]:
+                    if isinstance(value, TimeoutExpired):
+                        errors[request] = Degraded(self.desktop_deadline_text(record, request))
+                    else:
+                        errors[request] = LauncherError(f"docker start failed: {failure_text(value)}", "command_failed")
                 state["launcher"]["desktop"] = None
-                if isinstance(value, TimeoutExpired):
-                    error = Degraded(
-                        f"Docker Desktop did not answer within {record['deadline']:g} s; open Docker Desktop, answer any dialog, then run the command again"
-                    )
-                else:
-                    error = LauncherError(f"docker start failed: {failure_text(value)}", "command_failed")
-        if error is not None:
-            self.finish_requests(requests, {}, error)
-        else:
+        for request, error in errors.items():
+            self.finish_requests([request], {}, error)
+        if outcome == "ok":
             self.reconnect_now()
 
     def m_docker_release(self, ctx: Ctx) -> Any:

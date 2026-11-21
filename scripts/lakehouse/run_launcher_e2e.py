@@ -3393,6 +3393,45 @@ def desktop_start(env: Env) -> dict[str, bool]:
     }
 
 
+@case("desktop_start_joined_deadlines", timings={"start_wait": 6})
+def desktop_start_joined_deadlines(env: Env) -> dict[str, bool]:
+    """A caller that joins a Docker Desktop start in progress keeps its own deadline: it fails at that deadline with its own error while the start
+    keeps running for the caller that began it, which fails at its own, later deadline."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.write_settings()
+    env.start()
+    owner = {"kind": "any", "owner": True}
+    env.daemon.quit_desktop()
+    wait_degraded(env)
+    set_mode(env, "start", "hang")
+    outcomes: dict[str, tuple[BaseException | None, float]] = {}
+
+    def call_after(name: str, delay: float, deadline: float) -> None:
+        time.sleep(delay)
+        began = time.monotonic()
+        error = expect_error(lambda: env.client().call("desktop_start", {"owner": True, "deadline": deadline}, owner, timeout=60))
+        outcomes[name] = (error, time.monotonic() - began)
+
+    threads = [threading.Thread(target=call_after, args=("first", 0.0, 6)), threading.Thread(target=call_after, args=("joined", 1.0, 2))]
+    for thread in threads:
+        thread.start()
+        env.threads.append(thread)
+    for thread in threads:
+        thread.join(timeout=30)
+    first, first_seconds = outcomes.get("first", (None, 0.0))
+    joined, joined_seconds = outcomes.get("joined", (None, 0.0))
+    runs = len(command_runs(env, "start"))
+    set_mode(env, "start", "act")
+    return {
+        "the joined caller fails at its own deadline with its own error": refused(joined, "degraded", "did not answer within 2 s")
+        and 1.5 <= joined_seconds < 4.5,
+        "the start keeps running for the caller that began it: it fails at its own, later deadline": refused(first, "degraded", "did not answer within 6 s")
+        and first_seconds >= 5,
+        "one start command served both callers": runs == 1,
+        "no start record is left": env.state()["launcher"]["desktop"] is None,
+    }
+
+
 @case("docker_release_skips_and_refusals")
 def docker_release_skips_and_refusals(env: Env) -> dict[str, bool]:
     """R1, R2, R9, R23 and R28: docker_release skips with no container since the start time or with Docker down, and is refused (every foreign container
@@ -11049,6 +11088,7 @@ ALL_CASES = (
     docker_restart_command_and_client,
     docker_restart_answer_deadline,
     desktop_start,
+    desktop_start_joined_deadlines,
     docker_desktop_stale_stop,
     docker_release_skips_and_refusals,
     docker_release_quit,
