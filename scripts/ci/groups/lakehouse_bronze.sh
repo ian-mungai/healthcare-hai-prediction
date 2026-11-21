@@ -10,6 +10,7 @@ lakehouse_bronze() {
   timed "lakehouse_bronze: bronze consumer columns E2E" "$python_bin" -m scripts.lakehouse.run_bronze_consumer_columns_e2e
   timed "lakehouse_bronze: catalog journal E2E" "$python_bin" -m scripts.lakehouse.run_catalog_journal_e2e --output "$quality_output/catalog_journal"
   timed "lakehouse_bronze: catalog journal planted defects" "$python_bin" -m scripts.lakehouse.run_catalog_journal_defects --output "$quality_output/catalog_journal_defects"
+  timed "lakehouse_bronze: AWS bronze writer E2E" "$python_bin" -m scripts.lakehouse.run_aws_bronze_writer_e2e --out "$quality_output/aws_bronze_writer" --journal-module scripts/lakehouse/catalog_journal.py --plant-defects
   timed "lakehouse_bronze: provenance E2E" "$python_bin" -m scripts.lakehouse.run_provenance_e2e
   timed "lakehouse_bronze: jobs preparation E2E" "$python_bin" -m scripts.infrastructure.run_jobs_preparation_e2e --output "$quality_output/jobs_preparation"
   timed "lakehouse_bronze: storage single copy E2E" "$python_bin" -m scripts.lakehouse.run_storage_single_copy_e2e --report "$quality_output/storage_single_copy.json"
