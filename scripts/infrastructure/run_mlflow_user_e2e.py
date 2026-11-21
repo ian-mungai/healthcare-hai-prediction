@@ -8,6 +8,7 @@ and a dictionary stands in for Parameter Store. No AWS service is contacted and 
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -19,7 +20,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import secret_store
 from scripts.infrastructure.mlflow_auth_stand_in import MlflowAuthStandIn
+from scripts.infrastructure.secret_store_cases import captured
+from scripts.infrastructure.secret_store_stand_in import StandIn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "mlflow_user.py"
@@ -312,6 +316,30 @@ def case_an_expired_deadline_sends_no_request() -> dict[str, bool]:
     return {"the call is refused as past its deadline": "deadline" in refusal, "no request reached MLflow": calls == []}
 
 
+def case_the_stored_logins_never_reach_a_debug_log() -> dict[str, bool]:
+    """With the root logger at DEBUG, a run through the real SDK keeps the decrypted parameters out of every log record; the task source stands alone."""
+    server = stand_in()
+    stored = {NAMES["admin"]: ADMIN, NAMES["user"]: USER_NAME, NAMES["credential"]: USER_VALUE}
+    with StandIn(values=dict(stored), shared={}) as parameters:
+        client = secret_store.open_store(REPO_ROOT, parameters.endpoint).parameters
+        _, control = captured(lambda: client.get_parameter(Name=NAMES["credential"], WithDecryption=True) and 0)
+        with server:
+            code, text = captured(lambda: load().run(environment(server.url), client))
+    imports = [node for node in ast.walk(ast.parse(SCRIPT.read_text())) if isinstance(node, ast.Import | ast.ImportFrom)]
+    repository_imports = [node for node in imports if getattr(node, "level", 0) or any(name.split(".")[0] == "scripts" for name in modules_of(node))]
+    return {
+        "the unguarded control shows the stored credential, so the check can see a leak": USER_VALUE in control,
+        "the run through the real SDK exits 0": code == 0,
+        "no log record or output holds the administrator password": ADMIN not in text,
+        "no log record or output holds the stored credential": USER_VALUE not in text,
+        "the task source imports nothing from the repository, which the task does not mount": repository_imports == [] and "__file__" not in SCRIPT.read_text(),
+    }
+
+
+def modules_of(node: ast.Import | ast.ImportFrom) -> list[str]:
+    return [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "a_deny_grant_is_refused_and_never_reported_ready": case_a_deny_grant_is_refused_and_never_reported_ready,
     "a_deny_on_an_experiment_in_the_trash_is_refused": case_a_deny_on_an_experiment_in_the_trash_is_refused,
@@ -330,6 +358,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "an_unsupported_type_is_refused_before_any_request": case_an_unsupported_type_is_refused_before_any_request,
     "creates_the_user_and_grants_read": case_creates_the_user_and_grants_read,
     "every_served_type_is_covered": case_every_served_type_is_covered,
+    "the_stored_logins_never_reach_a_debug_log": case_the_stored_logins_never_reach_a_debug_log,
 }
 if len(CASES) != sum(name.startswith("case_") for name in globals()):
     raise SystemExit("a case_ function is missing from CASES")

@@ -42,8 +42,10 @@ experiment searches that any logged-in user may call. The per-object permission 
 from __future__ import annotations
 
 import base64
+import contextlib
 import http.client
 import json
+import logging
 import os
 import re
 import socket
@@ -51,7 +53,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 SECONDS = 30
@@ -151,10 +153,26 @@ def shut(held: list[socket.socket], expired: threading.Event) -> None:
             continue
 
 
+@contextlib.contextmanager
+def quiet_sdk_logs() -> Iterator[None]:
+    """Switch off DEBUG logging while a decrypted value is read, then restore the threshold found: the SDK logs each response body at DEBUG.
+
+    This is ``scripts/sdk_logs.py`` in short. The task runs this file as the ``-c`` text of ``python -I -c`` with no mounted checkout, so it cannot import
+    that module. The reads here run one after another in the main thread, so no count of readers is needed.
+    """
+    saved = logging.root.manager.disable
+    logging.disable(max(saved, logging.DEBUG))
+    try:
+        yield
+    finally:
+        logging.disable(saved)
+
+
 def parameter(ssm: Any, name: str) -> str | None:
     """The decrypted value of a parameter, or None when it does not exist."""
     try:
-        return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
+        with quiet_sdk_logs():
+            return str(ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"])
     except Exception as error:
         if type(error).__name__ == "ParameterNotFound":
             return None
