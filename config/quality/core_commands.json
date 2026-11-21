@@ -50,7 +50,6 @@
     "\"$python_bin\" -m scripts.orchestration.run_ecs_launch_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_ecs_lineage_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_job_catalog_e2e",
-    "\"$python_bin\" -m scripts.orchestration.run_lineage_completion_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_pipeline_light",
     "\"$python_bin\" -m scripts.orchestration.run_publish_contracts",

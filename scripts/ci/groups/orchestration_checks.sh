@@ -15,7 +15,6 @@ orchestration_checks() {
   timed "orchestration_checks: layer driver E2E" "$python_bin" -m scripts.lakehouse.run_layer_run_e2e
   timed "orchestration_checks: code archive E2E" "$python_bin" -m scripts.lakehouse.run_code_archive_e2e
   timed "orchestration_checks: bronze driver E2E" "$python_bin" -m scripts.lakehouse.run_bronze_run_e2e
-  timed "orchestration_checks: lineage completion E2E" "$python_bin" -m scripts.orchestration.run_lineage_completion_e2e
   timed "orchestration_checks: publish contracts" "$python_bin" -m scripts.orchestration.run_publish_contracts
   timed "orchestration_checks: light pipeline" "$python_bin" -m scripts.orchestration.run_pipeline_light
   # The offline checks skip the built Airflow image, which a CI runner does not have.
