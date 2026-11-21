@@ -277,7 +277,9 @@ def run_conf(
         if run_id_parts(run_id).name != "bronze":
             raise TriggerError(f"refused: {dag} takes a bronze run ID, not {run_id!r}")
         if any(value is not None for value in given_publisher.values()):
-            raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag and {PIPELINE_DAG} do")
+            raise TriggerError(
+                f"refused: {dag} takes no run kind and no capture root; ingestion_dag and {PIPELINE_DAG} take both, {RETRY_DAG} takes a capture root"
+            )
     elif dag == RETRY_DAG:
         if run_kind is not None:
             raise TriggerError(f"refused: {dag} takes no run kind, its kind is {RETRY_KIND}")
@@ -291,7 +293,9 @@ def run_conf(
                 raise TriggerError(f"refused: the start stage is one of {', '.join(PIPELINE_STAGES)}, not {start_from!r}")
             conf["start_from"] = start_from
     elif any(value is not None for value in given_publisher.values()):
-        raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag and {PIPELINE_DAG} do")
+        raise TriggerError(
+            f"refused: {dag} takes no run kind and no capture root; ingestion_dag and {PIPELINE_DAG} take both, {RETRY_DAG} takes a capture root"
+        )
     if start_from is not None and dag != PIPELINE_DAG:
         raise TriggerError(f"refused: {dag} takes no start stage, only {PIPELINE_DAG} does")
     if dag in (*PARAMETER_DAGS, SERVING_DAG, LIVE_DAG) and (silver_snapshot_run is not None or gold_snapshot_run is not None):
@@ -600,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
     cli.add_argument("--start-from", choices=PIPELINE_STAGES, help=f"{PIPELINE_DAG} only: the first stage to run (the form's default is ingestion)")
     cli.add_argument("--run-kind", help="ingestion_dag and the first DAG only: bootstrap (the form's default) or monthly")
-    cli.add_argument("--capture-root", help="ingestion_dag and the first DAG only: raw/ (the form's default) or ingestion_test/<run id>/")
+    cli.add_argument("--capture-root", help=f"ingestion_dag, the first DAG and {RETRY_DAG} only: raw/ (the form's default) or ingestion_test/<run id>/")
     cli.add_argument("--original-run", help=f"{RETRY_DAG} only, required: the ingestion run ID of the monthly run whose missing files it retries")
     cli.add_argument("--day", type=int, help=f"{RETRY_DAG} only, required: the retry day, day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY} of the month")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
