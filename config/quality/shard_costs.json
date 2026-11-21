@@ -1,5 +1,5 @@
 {
-  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run. scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 43730985805 of Nov 15 2026 (head 0033aaf, four shard jobs on separate hosted runners, 803 cases, 7662 seconds in all). The earlier Nov 14 2026 costs came from a validation run on a Mac and its total of 4361 seconds is 0.57 times the hosted total.",
+  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run. scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 43730985805 of Nov 15 2026 (head 0033aaf, four shard jobs on separate hosted runners, 803 cases, 7662 seconds in all). The earlier Nov 14 2026 costs came from a validation run on a Mac and its total of 4361 seconds is 0.57 times the hosted total. Fourteen privacy-scan cases of workbook and PDF samples have no hosted cost: their costs were measured locally on one Mac on 2026-11-20 as the mean of three timed runs of each case through run_case of scripts.quality.run_checks_e2e (rounded to 0.001 s), not taken from the hosted run. Three privacy-scan cases that do have a hosted cost took 3.35 to 3.54 s on the same Mac against 3.43 to 5.65 s hosted.",
   "suites": {
     "run_checks_e2e": {
       "clean file": 1.439,
@@ -832,7 +832,21 @@
       "planted regressions of a quoted module prefix with an ellipsis is no command: samples 1 to 4": 9.6,
       "planted regressions of a quote beside an ellipsis module is consumed only as the pair of the module's own: samples 1 to 3": 7.2,
       "flag removed, an absolute path with a space in a folder name is not seen (accepted limit)": 3.98,
-      "planted regressions of an absolute folder path may hold a space: samples 1 to 1": 2.4
+      "planted regressions of an absolute folder path may hold a space: samples 1 to 1": 2.4,
+      "workbook holding a user directory path is blocked by member": 3.432,
+      "workbook member named with a user directory path is blocked without printing the name": 3.407,
+      "workbook with an unreadable member named with a user directory path is blocked without printing the name": 3.412,
+      "workbook with a damaged LZMA member is blocked without a traceback": 3.514,
+      "workbook that needs a newer ZIP version is blocked without a traceback": 3.451,
+      "workbook with a malformed UTF-8 member name is blocked without a traceback": 3.494,
+      "workbook with a path in the first of two members of one name is blocked": 3.468,
+      "workbook with two clean members of one name is blocked": 3.428,
+      "legacy workbook holding a UTF-16 user directory path is blocked": 3.52,
+      "PDF holding a user directory path in a text stream is blocked": 3.469,
+      "clean PDF passes": 3.521,
+      "PDF with a placeholder path passes": 3.492,
+      "clean workbook passes": 3.517,
+      "workbook with a placeholder path passes": 3.483
     }
   }
 }
