@@ -59,7 +59,7 @@ def install() -> None:
         def __init__(self, **_keywords: object) -> None:
             pass
 
-        def client(self, _service: str) -> Client:
+        def client(self, _service: str, **_keywords: object) -> Client:
             return client
 
     class Spark:
