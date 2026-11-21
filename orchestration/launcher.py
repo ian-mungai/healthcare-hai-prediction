@@ -1612,11 +1612,13 @@ def held_secrets(source: Path) -> Path | None:
     the source points to a host path the container cannot reach through that mount. A folder that cannot be read refuses the mount.
     Each entry's name is judged under its folder's lexical name and its folder's resolved name (and a link inside the source by its own
     target), before folder deduplication can set either spelling aside: an alias of ``lakehouse`` reached first cannot hide its ``secrets`` child.
+    Deduplication records the names under which each folder was reached; a folder reached again under a new name is scanned once more under
+    that name, so a ``lakehouse`` link to a differently named folder that an earlier alias reached first still shows its ``secrets`` child.
     """
     if not source.is_dir():
         return None
     root = resolved_in(source, source)
-    queue, visited, seen = [source], {identity(root)}, 0
+    queue, visited, seen = [source], {identity(root): {folded(source.absolute())[-1], folded(root)[-1]}}, 0
     while queue:
         folder = queue.pop(0)
         try:
@@ -1642,9 +1644,14 @@ def held_secrets(source: Path) -> Path | None:
                 if not (target == root or target.is_relative_to(root)):
                     continue
             key = identity(child)
-            if key is None or key in visited:
+            if key is None:
                 continue
-            visited.add(key)
+            if key in visited:
+                if entry.name.casefold() not in visited[key]:  # the same folder under another name: its children are judged under that name too
+                    visited[key].add(entry.name.casefold())
+                    queue.append(child)
+                continue
+            visited[key] = {entry.name.casefold()}
             seen += 1
             if seen > MOUNT_SEARCH_LIMIT:
                 raise LauncherError(f"mount source {source} is too large to check for a secrets folder", "mount")
@@ -1874,7 +1881,8 @@ class Renderer:
     def check_mounts(self, mounts: Sequence[Mount]) -> None:
         """Refuse a source that equals, is inside or contains the token root or any checkout's secrets folder (D1 section 7 item 3).
 
-        The resolved source decides, also for an exact credential path: a link that leads into a protected folder is refused.
+        The resolved source decides, also for an exact credential path: a link that leads into a protected folder is refused. The source as
+        given is scanned for a secrets folder as well, so a requested alias keeps the name it was requested under.
         """
         protected = [self.config.token_root, self.config.registry.path / "launcher_test.json"]
         protected += [checkout / "data/lakehouse/secrets" for checkout in self.checkouts()]
@@ -1888,7 +1896,9 @@ class Renderer:
             if secrets_part(folded(source.absolute())) or secrets_part(folded(resolved)):
                 raise LauncherError(f"mount source {mount.source} lies in a secrets folder", "mount")
             # A folder that holds any checkout's secrets folder at any depth, listed or not, in any letter case.
-            held = held_secrets(resolved)
+            # The source as requested is scanned as well as its resolved folder: a requested ``lakehouse`` alias keeps its name for its children.
+            held = held_secrets(source.absolute()) if source.absolute() != resolved else None
+            held = held or held_secrets(resolved)
             if held is not None:
                 raise LauncherError(f"mount source {mount.source} contains a secrets folder ({held})", "mount")
             source_id, source_line = identity(resolved), identities(resolved)
@@ -1911,6 +1921,11 @@ class Renderer:
         roots = [self.checkout / "data", self.main / "data", *self.config.allowed_roots, *extra_roots]
         if not candidate.is_absolute() or not inside(candidate, roots):
             raise LauncherError(f"{what} {path!r} is outside the allowed folders", "args")
+        # Callers mount the resolved path, so the name a request gave a folder (a ``lakehouse`` link to a folder holding secrets) is judged here.
+        if candidate.is_dir() and candidate != resolve_checked(candidate, what):
+            held = held_secrets(candidate)
+            if held is not None:
+                raise LauncherError(f"{what} {path!r} contains a secrets folder ({held})", "mount")
         return candidate
 
     def assemble(

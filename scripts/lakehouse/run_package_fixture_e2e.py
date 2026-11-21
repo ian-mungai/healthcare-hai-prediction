@@ -170,13 +170,21 @@ def start_own_launcher(nonce: str) -> dict[str, Any] | None:
 def stop_owned_launcher(owned: dict[str, Any] | None, nonce: str) -> None:
     """Stop the test-registry launcher this run started and prove it is gone (failure mode 919): its recorded process no longer exists and no
     process holds the launcher lock. Ownership is the nonce this run started it with; a launcher this run did not start is never touched."""
-    if owned is None:
-        reply = ping()  # identified after an early failure, but only by this run's nonce
+
+    def own(reply: dict[str, Any]) -> dict[str, Any] | None:
+        """The identity of the launcher that answered with this run's nonce, or None."""
         if reply.get("launch_nonce") == nonce and (started := process_start(int(reply["pid"]))):
-            owned = {"pid": int(reply["pid"]), "started": started, "nonce": nonce}
+            return {"pid": int(reply["pid"]), "started": started, "nonce": nonce}
+        return None
+
     if owned is None:
-        if lock_holders() and not ping():
+        owned = own(ping())  # identified after an early failure, but only by this run's nonce
+    if owned is None and lock_holders():
+        reply = ping()  # the first ping may have failed while the launcher was busy: a second answer with this run's nonce identifies it too
+        owned = own(reply)
+        if owned is None and not reply:
             raise RuntimeError("cleanup unresolved: a launcher holds the test-registry lock and does not answer; this run cannot tell whether it is its own")
+    if owned is None:
         sys.stderr.write("cleanup: no launcher of this run serves the test registry (another client's launcher, if any, is left running)\n")
         return
     if ping().get("pid") == owned["pid"]:

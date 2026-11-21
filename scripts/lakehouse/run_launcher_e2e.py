@@ -5643,9 +5643,38 @@ def kit_launcher_ownership(env: Env) -> dict[str, bool]:
             observed["e_error"] = run_main()
         observed["e_kept"] = "e_pid" in observed and env.alive(observed["e_pid"]) and env.ping().get("pid") == observed["e_pid"]
         env.stop_launcher()
+        env.wait(lambda: lock_free(env.registry), 15, "the replacement's lock is free")
+
+        # F (delta recheck 6): the kit started its launcher but could not identify it (no recorded identity), the first cleanup ping is lost, the
+        # lock has a holder and the second ping answers with the kit's own nonce. Cleanup must act on that nonce and stop the launcher.
+        real_start = kit.start_own_launcher
+        cleaning: list[bool] = []
+        lost: list[bool] = []
+
+        def start_unidentified(nonce: str) -> None:
+            real_start(nonce)
+            observed["f_pid"] = int(env.ping()["pid"])
+
+        def first_cleanup_ping_lost() -> dict[str, Any]:
+            if cleaning and not lost:
+                lost.append(True)
+                return {}
+            return real_ping()
+
+        def clean_marked(*args: Any) -> None:
+            cleaning.append(True)
+            real_stop(*args)
+
+        with (
+            mock.patch.object(kit, "start_own_launcher", start_unidentified),
+            mock.patch.object(kit, "ping", first_cleanup_ping_lost),
+            mock.patch.object(kit, "stop_owned_launcher", clean_marked),
+        ):
+            observed["f_error"] = run_main()
+        observed["f_gone"] = "f_pid" in observed and not env.alive(observed["f_pid"]) and lock_free(env.registry)
     finally:
         sys.argv, kit.scenarios, kit.hold_machine = saved[0], saved[1], saved[2]
-        for key in ("b_pid", "c_pid", "d_pid", "e_pid"):
+        for key in ("b_pid", "c_pid", "d_pid", "e_pid", "f_pid"):
             if key in observed and env.alive(observed[key]):
                 os.kill(observed[key], signal.SIGKILL)
     return {
@@ -5656,6 +5685,8 @@ def kit_launcher_ownership(env: Env) -> dict[str, bool]:
         and bool(observed.get("d_kept")),
         "a replacement launcher that takes the registry after the preflight ping is not shut down": observed.get("e_error") is None
         and bool(observed.get("e_kept")),
+        "a launcher with no recorded identity that answers the second cleanup ping with the run's nonce is stopped": observed.get("f_error") is None
+        and bool(observed.get("f_gone")),
     }
 
 
@@ -5676,6 +5707,10 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
     aliased = outside / "aliased"
     (aliased / "unlisted" / "data" / "lakehouse" / "secrets").mkdir(parents=True)
     (aliased / "unlisted" / "data" / "a").symlink_to("lakehouse")  # sorts before the real folder, so the scan reaches the lakehouse inode through it first
+    renamed = outside / "renamed"  # data/lakehouse is itself a link to a differently named folder that an earlier alias reaches first
+    (renamed / "unlisted" / "data" / "vault" / "secrets").mkdir(parents=True)
+    (renamed / "unlisted" / "data" / "a").symlink_to("vault")
+    (renamed / "unlisted" / "data" / "lakehouse").symlink_to("vault")
     looped = outside / "looped"
     (looped / "data").mkdir(parents=True)
     (looped / "data" / "a").symlink_to("b")
@@ -5705,7 +5740,7 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
         )
 
     try:
-        env.settings["allowed_roots"] = [str(clean), str(deep), str(cased), str(linked), str(aliased), str(looped)]
+        env.settings["allowed_roots"] = [str(clean), str(deep), str(cased), str(linked), str(aliased), str(looped), str(renamed)]
         env.write_settings()
         env.start()
         principal = env.alloc_principal(env.allocate())
@@ -5722,6 +5757,13 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
             ),
             # Delta recheck 5 (F23): a directory alias of lakehouse that sorts before the real folder must not hide its secrets child.
             "a named root whose lakehouse alias sorts before the real folder is refused": refused(helper(principal, "d8", aliased), "mount"),
+            # Delta recheck 6 (F23): a lakehouse link to a differently named folder, reached first by another alias; a requested alias keeps its name.
+            "a named root whose lakehouse link and an earlier alias reach one differently named folder is refused": refused(
+                helper(principal, "d12", renamed), "mount"
+            ),
+            "a requested lakehouse alias of a differently named folder holding secrets is refused": refused(
+                helper(principal, "d13", renamed / "unlisted" / "data" / "lakehouse"), "mount"
+            ),
             "a named root holding a symlink loop is refused as a mount": refused(helper(principal, "d9", looped), "mount"),
             "the launcher still admits a clean named root after the loop": helper(principal, "d10", clean) is None,
             "a host path that is itself a symlink loop is refused as a mount": refused(helper(principal, "d11", source_loop), "mount"),
@@ -5743,6 +5785,8 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
         results |= {
             "check_mounts control: a clean source is admitted": admitted(clean),
             "check_mounts: a source that is itself a loop is refused as a mount": check(source_loop),
+            "check_mounts: an earlier alias does not hide the lakehouse link to the same folder": check(renamed),
+            "check_mounts: the requested lakehouse alias keeps its name beside its resolved folder": check(renamed / "unlisted" / "data" / "lakehouse"),
             "check_mounts: a loop below the source is refused as a mount": check(looped),
             "check_mounts: a loop below an alias inside the source is refused as a mount": check(below_alias),
             "check_mounts: a loop at the token root is refused as a mount": mount_refusal(
