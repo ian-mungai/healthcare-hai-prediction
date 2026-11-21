@@ -5317,12 +5317,18 @@ def light_allocation(client: launcher.LauncherClient) -> str:
     light read queued; a floor-sized share goes on whenever that much is free.
     """
     plan = client.call("plan")
-    workers = max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR))
+    return allocate_down(client, max(1, min(int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)))[0]
+
+
+def allocate_down(client: launcher.LauncherClient, workers: int) -> tuple[str, int]:
+    """Allocate this many workers, or one fewer each time the budget refuses, down to one; return the allocation and its worker count.
+
+    The allocation computes its own plan and holds a reserve for registered services, so it can refuse the count that the runner's plan reading chose.
+    """
     while True:
         try:
-            return client.allocate(workers=workers)
+            return client.allocate(workers=workers), workers
         except launcher.ClientError as error:
-            # The allocation computes its own plan; memory taken since the reading above can refuse this many floor shares.
             if error.code != "budget" or workers == 1:
                 raise
             workers -= 1
@@ -5399,7 +5405,7 @@ def build_cases(jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]], work
         count = min(workers, int(plan["threads"]), int(plan["environment"]["JOB_MEMORY_LIMIT"]) // FLOOR)
         if count < 1:
             raise RuntimeError("the plan holds too little memory for one worker")
-        allocation = client.allocate(workers=count)
+        allocation, count = allocate_down(client, count)
     except launcher.ClientError as error:
         raise RuntimeError(f"no allocation for the fixture cases: {error}") from error
     POOL = Allocation(client, allocation, count)

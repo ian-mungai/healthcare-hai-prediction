@@ -8814,6 +8814,47 @@ def staging_read_plan_shrinks(env: Env) -> dict[str, bool]:
     }
 
 
+@case("staging_pool_plan_shrinks", stub_host=True)
+def staging_pool_plan_shrinks(env: Env) -> dict[str, bool]:
+    """Staging run 7: the fixture pool sized its workers from the plan reading, and the allocation, which holds a reserve for registered services,
+    refused that many; the pool retries with one worker fewer, down to one, instead of failing the run."""
+    from scripts.lakehouse import run_staging_e2e as staging
+
+    env.start()
+    real_call = launcher.LauncherClient.call
+    asked: list[int] = []
+
+    def plan_reads_high(self: launcher.LauncherClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        # The plan reading sees three times the memory the allocation's own plan will find a moment later.
+        reply = real_call(self, method, *args, **kwargs)
+        if method == "plan":
+            reply = {**reply, "environment": {**reply["environment"], "JOB_MEMORY_LIMIT": str(3 * int(reply["environment"]["JOB_MEMORY_LIMIT"]))}}
+        if method == "allocate":
+            asked.append(int((args[0] if args else kwargs.get("params", {})).get("workers", 1)))
+        return reply
+
+    # Parallel shards share the case folder, so this case keeps its own folder names.
+    names = ["l1a_pool_shrinks_a", "l1a_pool_shrinks_b"]
+    staging.TEST_REGISTRY = str(env.registry)
+    results: dict[str, Any] = {}
+    try:
+        with mock.patch.object(launcher.LauncherClient, "call", plan_reads_high):
+            results = staging.build_cases([(name, tuple(staging.BASE), frozenset[str]()) for name in names], 64)
+    except (RuntimeError, OSError, launcher.ClientError) as error:
+        results = {"error": error}
+    finally:
+        staging.TEST_REGISTRY = None
+        for name in names:
+            shutil.rmtree(staging.CASES / name, ignore_errors=True)
+    state = env.state()
+    return {
+        "the pool built both cases without an allocation error": sorted(results) == names and not any(isinstance(r, BaseException) for r in results.values()),
+        "the first worker count was refused and a smaller one followed": len(asked) >= 2 and asked == sorted(asked, reverse=True) and asked[-1] < asked[0],
+        "the refused allocations failed and the one that was granted was released": sorted(a["state"] for a in state["allocations"].values())
+        == ["failed"] * (len(asked) - 1) + ["released"],
+    }
+
+
 @case("staging_runner_conversion")
 def staging_runner_conversion(env: Env) -> dict[str, bool]:
     """919: the staging runner's fixture launches (init, build, queries, packages) are launcher attempts; the case folder is the only writable mount."""
@@ -11311,6 +11352,7 @@ ALL_CASES = (
     staging_runner_conversion,
     staging_read_share,
     staging_read_plan_shrinks,
+    staging_pool_plan_shrinks,
     runner_ends_before_close,
     runner_ends_with_hosted_launcher,
     pool_signal_scenarios,
