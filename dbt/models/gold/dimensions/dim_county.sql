@@ -137,4 +137,15 @@ final as (
         cast(null as varchar) as retirement_basis
 )
 
-select * from final
+select
+    county_sk,
+    county_fips,
+    in_latest_county_list,
+    last_listed_vintage,
+    first_unlisted_vintage,
+    is_retired,
+    retired_effective_date,
+    successor_county_fips,
+    historical_county_name,
+    retirement_basis
+from final

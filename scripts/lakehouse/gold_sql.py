@@ -259,7 +259,7 @@ PINS: dict[tuple[str, str], Pin] = {
         "dim_measure: the first and last release date of each published name of a split measure bound its edition and reach its key and identity text",
     ),
     ("dim_county", "county_list_bounds"): Pin(
-        "0bc525cb1c8d686beb9faeacb9a2d205c280f858be83b861a0a051dcfcc77f80",
+        "ab7a78d5ec0f1d2914f6589198eece16cc7dd796a4cb40c726f3a634f4f715ab",
         "dim_county: the county-list vintage bounds and the membership in the latest adjacency list rest on its chain of lists, latest vintage and latest list",
     ),
     ("bridge_measure_control", "edition_year"): Pin(

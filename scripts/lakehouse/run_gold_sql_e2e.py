@@ -2487,7 +2487,7 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
 UNRELATED_EDITS = {
     "dim_rurality_code": ("select * from final", "select final.*, 'x' as note from final"),
     "dim_measure": ("select * from final", "select final.*, 'x' as note from final"),
-    "dim_county": ("select * from final", "select final.*, 'x' as note from final"),
+    "dim_county": ("    retirement_basis\nfrom final", "    retirement_basis,\n    'x' as note\nfrom final"),
     "bridge_measure_control": ("    source_row\nfrom keyed", "    source_row,\n    source_seed as seed_copy\nfrom keyed"),
 }
 
