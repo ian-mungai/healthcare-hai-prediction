@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts.acquisition import legacy_versions, store_nber_hc
+from scripts.acquisition import legacy_versions, source_registry, store_nber_hc
 from scripts.acquisition import nber_hc_contract as contract
 from scripts.acquisition.build_nber_hc_plan import build
 from scripts.acquisition.code_closure import closure_hashes
@@ -40,8 +40,6 @@ EARLIER_PLAN_FILE_SHA256 = "56a10255ace05f6b75968ab8915b68d80f1bbd4a9447af4aa4af
 # The committed plan as it was before registry revision 4 (it pinned revision 3): its canonical hash and the SHA-256 of its file bytes, the second predecessor.
 PLAN_BEFORE_REVISION_4 = "dec1ca5e7eab908bf64a25296a2ce17cb931695588c836700ef375e387de6fe5"
 PLAN_BEFORE_REVISION_4_FILE_SHA256 = "4a9700ced7431355527c35e6156ead17f8446e834522b2203c2d4d7ac9ad2dbd"
-# Registry revision 2, catalogued with its archived bytes: a plan that pinned it is an earlier plan whose captures recorded that registry.
-EARLIER_REGISTRY = "dbd6fa964a6001861f9701f6d2c785eccabb3ba314e586f860a462ab651bcad3"
 
 
 class Response(io.BytesIO):
@@ -502,38 +500,66 @@ def predecessor_scenarios(scenario: Any, root: Path, served: dict[str, bytes], g
     legacy_versions._catalog.cache_clear()
 
 
+@contextmanager
+def earlier_registry_catalog(folder: Path) -> Any:
+    """Patch in a version catalog, built in the temporary folder, whose one legacy entry is a synthetic earlier registry revision.
+
+    The real earlier revisions are private, Git-ignored archives that a clean checkout lacks, so the scenario builds its own: the current registry with
+    one marker field added, its lock re-hashed, and a locked catalog entry that names both files with their SHA-256 under an archive root of its own.
+    """
+    registry = {**read_json(source_registry.REGISTRY_PATH), "synthetic_earlier_revision": 2}
+    lock = {**read_json(source_registry.LOCK_PATH), "registry_sha256": canonical_hash(registry)}
+    archive = folder / "registry_archive"
+    archive.mkdir()
+    files = {}
+    for key, name, value in (("registry", "source_registry.json", registry), ("lock", "source_registry_lock.json", lock)):
+        write_once(archive / name, encoded_json(value))
+        files[key] = {"path": str(archive / name), "sha256": fingerprint(archive / name)[0]}
+    entry = {"registry_sha256": canonical_hash(registry), "registry_path": files["registry"]["path"], "lock_path": files["lock"]["path"], "files": files}
+    catalog = {"catalog_version": 1, "current_registry_sha256": canonical_hash(read_json(source_registry.REGISTRY_PATH)), "legacy_versions": [entry]}
+    write_once(folder / "registry_versions.json", encoded_json(catalog))
+    write_once(folder / "registry_versions.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+    with (
+        patch.object(source_registry, "VERSION_CATALOG_PATH", folder / "registry_versions.json"),
+        patch.object(source_registry, "VERSION_CATALOG_LOCK_PATH", folder / "registry_versions.lock.json"),
+        patch.object(source_registry, "LEGACY_ARCHIVES", (str(archive),)),
+    ):
+        yield entry["registry_sha256"]
+
+
 def earlier_registry_scenario(scenario: Any, root: Path, served: dict[str, bytes], gate_sha: str, web: Web) -> None:
     """A receipt captured under a plan that pinned an earlier registry revision keeps verifying through the catalogued predecessor plan."""
     folder = root / "earlier_registry"
     folder.mkdir()
     gate = {"sha256": gate_sha, "bytes": len(served[zip_url("2019/03")])}
-    earlier = {**build(plan_inputs(served, ("2018/07", "2018/10")), gate, []), "registry_sha256": EARLIER_REGISTRY}
-    earlier_path, archived = folder / "earlier_plan.json", folder / "archive" / "earlier_plan.json"
-    archived.parent.mkdir()
-    for path in (earlier_path, archived):
-        write_once(path, encoded_json(earlier))
-    write_once(earlier_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(earlier)}))
-    release = next(r for r in earlier["releases"] if r["folder"] == "2018/10")
-    with patch.object(contract, "PLAN_PATH", earlier_path):
-        execute(earlier, release, folder / "run", True, False, None, OUTPUTS, web, LIMITS)
-        receipt_path = folder / "run" / "batches" / release["id"] / "capture/receipt.json"
-        scenario("receipt_under_an_earlier_registry_verifies_under_its_own_plan", lambda: verify_local(receipt_path))
-    entry = {"archive_path": str(archived), "sha256": fingerprint(archived)[0], "canonical_sha256": canonical_hash(earlier)}
-    catalog = {"catalog_version": 1, "plans": {canonical_hash(contract.load_plan()): [entry]}, "records": {}}
-    write_once(folder / "catalog.json", encoded_json(catalog))
-    write_once(folder / "catalog.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+    with earlier_registry_catalog(folder) as earlier_registry:
+        earlier = {**build(plan_inputs(served, ("2018/07", "2018/10")), gate, []), "registry_sha256": earlier_registry}
+        earlier_path, archived = folder / "earlier_plan.json", folder / "archive" / "earlier_plan.json"
+        archived.parent.mkdir()
+        for path in (earlier_path, archived):
+            write_once(path, encoded_json(earlier))
+        write_once(earlier_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(earlier)}))
+        release = next(r for r in earlier["releases"] if r["folder"] == "2018/10")
+        with patch.object(contract, "PLAN_PATH", earlier_path):
+            execute(earlier, release, folder / "run", True, False, None, OUTPUTS, web, LIMITS)
+            receipt_path = folder / "run" / "batches" / release["id"] / "capture/receipt.json"
+            scenario("receipt_under_an_earlier_registry_verifies_under_its_own_plan", lambda: verify_local(receipt_path))
+        entry = {"archive_path": str(archived), "sha256": fingerprint(archived)[0], "canonical_sha256": canonical_hash(earlier)}
+        catalog = {"catalog_version": 1, "plans": {canonical_hash(contract.load_plan()): [entry]}, "records": {}}
+        write_once(folder / "catalog.json", encoded_json(catalog))
+        write_once(folder / "catalog.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
 
-    def through_catalog() -> None:
-        with (
-            patch.object(legacy_versions, "CATALOG_PATH", folder / "catalog.json"),
-            patch.object(legacy_versions, "CATALOG_LOCK_PATH", folder / "catalog.lock.json"),
-            patch.object(legacy_versions, "ARCHIVE", folder / "archive"),
-        ):
-            legacy_versions._catalog.cache_clear()
-            verify_local(receipt_path)
+        def through_catalog() -> None:
+            with (
+                patch.object(legacy_versions, "CATALOG_PATH", folder / "catalog.json"),
+                patch.object(legacy_versions, "CATALOG_LOCK_PATH", folder / "catalog.lock.json"),
+                patch.object(legacy_versions, "ARCHIVE", folder / "archive"),
+            ):
+                legacy_versions._catalog.cache_clear()
+                verify_local(receipt_path)
 
-    scenario("receipt_under_an_earlier_registry_verifies_through_the_catalogued_predecessor_plan", through_catalog)
-    legacy_versions._catalog.cache_clear()
+        scenario("receipt_under_an_earlier_registry_verifies_through_the_catalogued_predecessor_plan", through_catalog)
+        legacy_versions._catalog.cache_clear()
 
 
 def member_scenarios(scenario: Any, plan: dict, plan_path: Path, release: dict, root: Path, served: dict[str, bytes]) -> None:

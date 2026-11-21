@@ -963,6 +963,16 @@ jobs:
           .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
           .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
 
+      - *setup_dbt_cache
+
+      # The code archive tests render dbt_deps jobs from the pinned local package archive, which Git does not track. The fetch reads the recorded URLs
+      # over plain HTTPS and needs no AWS credentials.
+      - name: Fetch the dbt package archive
+        run: |
+          if ! .venv/bin/python -m scripts.lakehouse.dbt_package_archive verify; then
+            .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
+          fi
+
       # Same paths as the local acquisition-checks hook; a manual run, a push with no earlier commit or rewritten history runs every check.
       - name: Run this shard of the acquisition tests without AWS credentials or collected data
         env:
