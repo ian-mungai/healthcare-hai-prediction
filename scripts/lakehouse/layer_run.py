@@ -50,8 +50,10 @@ checked the abandoned catalog branch. A dry run takes no run ID and leaves no st
 the workspace of the same task.
 
 The whole task has a deadline, the one the job catalog gives the job, counted from the start time the init container writes to
-``<work>/task_started``. A hand-started task has no launch library to stop it, so every phase runs under what is left of that deadline and fails by name when
-it passes. The driver then stops the phase module and every process that module started, so nothing goes on writing while the task shuts down.
+``<work>/task_started`` and, when the launch library set ``HAI_DEADLINE_UTC`` (its own absolute deadline, in epoch seconds), no later than that. An init
+container that starts late then cannot give the driver a limit that ends after the launcher's. A hand-started task has no launch library to stop it, so every
+phase runs under what is left of that deadline and fails by name when it passes. The driver then stops the phase module and every process that module started,
+so nothing goes on writing while the task shuts down.
 
 With ``--dry-run`` or ``LAYER_DRY_RUN=1`` the phases up to ``export`` run as usual, because they write only the task's own working folder. ``publish``
 then reads the catalog without writing, prints and saves the plan of the real publish, ``upload`` uploads nothing and ``maintain`` and ``feast`` do nothing. The
@@ -109,6 +111,8 @@ BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path g
 UPLOAD_PREFIX = "lakehouse/layer_runs"
 JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job
 STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
+LAUNCH_DEADLINE = "HAI_DEADLINE_UTC"  # the absolute deadline of the launch in epoch seconds, set by the launch library (empty in a hand-started task)
+EPOCH_SECONDS = re.compile(r"[0-9]{1,12}")  # the form of the launch deadline
 PHASE_DEADLINE = "HAI_PHASE_DEADLINE_EPOCH"  # read by scripts.features.features_build: the time by which the phase must end
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")  # what the publisher emits: the decimal string of a sum cast to DECIMAL(38, 0)
 BRONZE_TABLES = Path(__file__).resolve().parents[2] / "config/lakehouse/bronze_tables.json"
@@ -295,14 +299,21 @@ def phase_deadline_environment(job: Job) -> dict[str, str]:
 
 
 def task_seconds_left(job: Job) -> float:
-    """Seconds left of the whole task: the job's deadline in the job catalog, counted from the start time that the init container wrote. A hand-started
+    """Seconds left of the whole task: the job's deadline in the job catalog, counted from the start time that the init container wrote, and no more than what
+    is left of the launch's own absolute deadline (``HAI_DEADLINE_UTC``), so a late init container cannot make the driver outlast the launcher. A hand-started
     task has no launch library to stop it, so the driver enforces the deadline itself."""
     limit = float(json.loads(JOBS_FILE.read_text())["jobs"][job.layer]["deadline_seconds"])
     started = job.code.parent / STARTED_FILE
     if not started.is_file():
         started.parent.mkdir(parents=True, exist_ok=True)
         started.write_text(f"{time.time():.0f}\n")
-    return limit - (time.time() - float(started.read_text()))
+    left = limit - (time.time() - float(started.read_text()))
+    text = os.environ.get(LAUNCH_DEADLINE, "")
+    if not text:
+        return left
+    if not EPOCH_SECONDS.fullmatch(text):
+        raise StepError(f"{LAUNCH_DEADLINE} is {text!r}, not a time in epoch seconds")
+    return min(left, int(text) - time.time())
 
 
 @contextmanager

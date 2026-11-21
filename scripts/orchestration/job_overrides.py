@@ -31,6 +31,9 @@ RELOAD_PHASE = "reload"
 # A hand-started task has no Airflow task to name its lineage events after, so LINEAGE_INVOCATION stays empty and the job sends no lineage events
 # (scripts/lakehouse/layer_run.py sends only with a value, which the launch fills from the DAG's request). A runbook may still pass one.
 HAND_START_EMPTY = ("LINEAGE_INVOCATION",)
+# Nor has it a launch library to fix the absolute deadline of the launch: HAI_DEADLINE_UTC stays empty in a layer job, and its driver counts the task limit from
+# the init container alone (scripts/lakehouse/layer_run.py). The bronze and publisher jobs still need their value.
+LAYER_HAND_START_EMPTY = ("HAI_DEADLINE_UTC",)
 
 
 class OverrideError(ValueError):
@@ -60,7 +63,8 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
     for container, names in jobs[job]["containers"].items():
         environment = []
         for name in names:
-            if not values.get(name) and name not in HAND_START_EMPTY and not (job == "features" and name in RELEASE_VARIABLES and name not in needed):
+            empty = name in HAND_START_EMPTY or (job in LAYERS and name in LAYER_HAND_START_EMPTY)
+            if not values.get(name) and not empty and not (job == "features" and name in RELEASE_VARIABLES and name not in needed):
                 raise OverrideError(f"{name} has no value: the {container} container of the {job} job needs it")
             environment.append({"name": name, "value": values.get(name, "")})
         if dry_run:

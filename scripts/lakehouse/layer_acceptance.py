@@ -85,6 +85,8 @@ REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")
 TASK_ARN = re.compile(r"arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9_-]+/[a-f0-9]{32}")
 RELEASE_VARIABLES = ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")  # a build task of the features job holds them empty: only a release launch sets them
+DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"  # the launch fills it with the absolute deadline of the launch in epoch seconds; a hand-started task leaves it empty
+EPOCH_SECONDS = re.compile(r"[0-9]{1,12}")
 LINEAGE_VARIABLE = "LINEAGE_INVOCATION"  # the launch fills it with the DAG step's lineage identity; a hand-started task leaves it empty
 GUARD_NAME = "guard"  # ECS stops the guard of a layer task when the last phase ends, so its exit code is never a result of the job
 LIMIT = 1 << 28  # the largest input: a version listing of the lakehouse prefix
@@ -216,7 +218,8 @@ def task_is_this_runs(layer: str, run: str, task: Mapping[str, Any], approved_sh
     return set(given) == set(wanted) and all(
         set(given[name]) == set(variables)
         and all(given[name][key] == values[key] for key in variables if key in values)
-        and all(given[name][key] for key in variables if key not in (*RELEASE_VARIABLES, LINEAGE_VARIABLE))
+        and all(given[name][key] for key in variables if key not in (*RELEASE_VARIABLES, LINEAGE_VARIABLE, DEADLINE_VARIABLE))
+        and all(given[name][key] == "" or EPOCH_SECONDS.fullmatch(str(given[name][key])) for key in variables if key == DEADLINE_VARIABLE)
         for name, variables in wanted.items()
     )
 

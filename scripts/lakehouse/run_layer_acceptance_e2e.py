@@ -950,6 +950,14 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
             if item["name"] == "LINEAGE_INVOCATION":
                 item["value"] = '{"template": "pin"}'
 
+    def deadline(value: str) -> Callable[[dict[str, Any], str], None]:
+        def change(container: dict[str, Any], name: str) -> None:
+            for item in container.get("environment", []):
+                if item["name"] == "HAI_DEADLINE_UTC":
+                    item["value"] = value
+
+        return change
+
     def drop_from_upload(container: dict[str, Any], name: str) -> None:
         if name == "upload":
             container["environment"] = [item for item in container["environment"] if item["name"] != "LINEAGE_INVOCATION"]
@@ -957,6 +965,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
     records = ("lakehouse/launch_records/{run}/{layer}/claim.json", "lakehouse/launch_records/{run}/{layer}/01/end.json")
     good = (
         ("a launched task whose lineage identity is filled (a hand-started one leaves it empty)", lineage(fill)),
+        ("a launched task whose launch deadline is an epoch time (a hand-started one leaves it empty)", lineage(deadline("1795000000"))),
         ("a host twin definition", definition("_host")),
         ("the launch records of the run", written(*records)),
         ("a host twin run with its launch records", both(definition("_host"), written(*records))),
@@ -965,6 +974,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
     planted = (
         ("a definition with no host suffix, the retired Fargate family name", definition(""), NAMES["task"]),
         ("an upload container without the lineage variable", lineage(drop_from_upload), NAMES["task"]),
+        ("a launch deadline that is no epoch time", lineage(deadline("2026-10-30T12:00:00Z")), NAMES["task"]),
         ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
         ("a definition with a suffix after host", definition("_host_x"), NAMES["task"]),
         ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),

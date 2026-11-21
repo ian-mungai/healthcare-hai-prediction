@@ -39,23 +39,23 @@ locals {
   layer_run_variables = {
     silver = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "LINEAGE_INVOCATION"]
-      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      validate = ["RUN_ID", "CODE_RUN_ID"]
-      verify   = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      export   = ["RUN_ID", "CODE_RUN_ID"]
-      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
+      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
+      validate = ["RUN_ID", "CODE_RUN_ID", "HAI_DEADLINE_UTC"]
+      verify   = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
+      export   = ["RUN_ID", "CODE_RUN_ID", "HAI_DEADLINE_UTC"]
+      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
     }
     gold = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION"]
-      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      validate = ["RUN_ID", "CODE_RUN_ID"]
-      export   = ["RUN_ID", "CODE_RUN_ID"]
-      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
-      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION"]
-      maintain = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
+      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
+      validate = ["RUN_ID", "CODE_RUN_ID", "HAI_DEADLINE_UTC"]
+      export   = ["RUN_ID", "CODE_RUN_ID", "HAI_DEADLINE_UTC"]
+      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
+      maintain = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"]
     }
     # LAYER_PHASE tells a phase which one phase the launch runs: empty for a features build; release or reload for a launch whose only work is the last container,
     # feast, which then releases or reloads the online load of a model set instead of applying Feast (scripts/lakehouse/layer_run.py). ECS allows 10 containers
@@ -63,13 +63,13 @@ locals {
     # (RELEASE_MODEL) and, for a release, the features run (FEATURES_RUN) whose held online load it releases.
     features = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"]
-      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
-      validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
-      export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
-      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
-      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"]
-      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
+      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE", "HAI_DEADLINE_UTC"]
+      validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "HAI_DEADLINE_UTC"]
+      export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "HAI_DEADLINE_UTC"]
+      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE", "HAI_DEADLINE_UTC"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"]
+      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE", "HAI_DEADLINE_UTC"]
     }
   }
   # The lineage events of a layer job (orchestration/job_lineage.py) leave from two containers only: the pin (the task's START, and its FAIL) and the upload (one

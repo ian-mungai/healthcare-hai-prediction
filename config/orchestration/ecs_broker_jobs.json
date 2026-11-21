@@ -44,35 +44,42 @@
           "CODE_RUN_ID",
           "CODE_SHA256",
           "POLARIS_URI",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ],
         "build": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ],
         "validate": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "HAI_DEADLINE_UTC"
         ],
         "verify": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ],
         "export": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "HAI_DEADLINE_UTC"
         ],
         "publish": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ],
         "upload": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ]
       },
       "chain": true,
@@ -97,35 +104,42 @@
           "CODE_SHA256",
           "POLARIS_URI",
           "INPUT_RUN_ID",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ],
         "build": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ],
         "validate": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "HAI_DEADLINE_UTC"
         ],
         "export": [
           "RUN_ID",
-          "CODE_RUN_ID"
+          "CODE_RUN_ID",
+          "HAI_DEADLINE_UTC"
         ],
         "publish": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ],
         "upload": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ],
         "maintain": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "HAI_DEADLINE_UTC"
         ]
       },
       "chain": true,
@@ -152,40 +166,46 @@
           "INPUT_RUN_ID",
           "FEATURE_SET",
           "LAYER_PHASE",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ],
         "build": [
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "HAI_DEADLINE_UTC"
         ],
         "validate": [
           "RUN_ID",
           "CODE_RUN_ID",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "HAI_DEADLINE_UTC"
         ],
         "export": [
           "RUN_ID",
           "CODE_RUN_ID",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "HAI_DEADLINE_UTC"
         ],
         "publish": [
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
           "FEATURE_SET",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "HAI_DEADLINE_UTC"
         ],
         "upload": [
           "RUN_ID",
           "CODE_RUN_ID",
           "FEATURE_SET",
           "LAYER_PHASE",
-          "LINEAGE_INVOCATION"
+          "LINEAGE_INVOCATION",
+          "HAI_DEADLINE_UTC"
         ],
         "feast": [
           "RUN_ID",
@@ -194,7 +214,8 @@
           "FEATURE_SET",
           "FEATURES_RUN",
           "RELEASE_MODEL",
-          "LAYER_PHASE"
+          "LAYER_PHASE",
+          "HAI_DEADLINE_UTC"
         ]
       },
       "chain": true,

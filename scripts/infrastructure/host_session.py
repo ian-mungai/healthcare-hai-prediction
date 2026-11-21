@@ -1299,6 +1299,7 @@ class Session:
             "INPUT_RUN_ID": "",
             "FEATURE_SET": "",
             "LINEAGE_INVOCATION": "",  # a reload belongs to no pipeline run, so it has no identity to send lineage events under and sends none
+            "HAI_DEADLINE_UTC": "",  # a reload has no launch library to set a launch deadline: its driver counts from its init container
         }
         unknown = sorted({name for names in self.names.reload.variables.values() for name in names if name not in values})
         if unknown:

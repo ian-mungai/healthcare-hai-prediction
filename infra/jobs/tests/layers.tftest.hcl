@@ -188,7 +188,7 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
       contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
       !anytrue([for entry in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment : entry.name == "FEAST_REDIS_HOST"]) &&
       contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" }) &&
-      toset([for item in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"])
+      toset([for item in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE", "HAI_DEADLINE_UTC"])
     )
     error_message = "The features job ends with its feast container: the last, essential container on the feature store image and the AWS profile. A build launch applies Feast in it. A release or reload launch fills LAYER_PHASE, RELEASE_MODEL and FEATURES_RUN, and the same container then releases or reloads the online load of a model set."
   }
@@ -235,7 +235,7 @@ run "gold_maintenance_is_the_last_gold_container" {
       [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"][8].dependsOn == [{ containerName = "upload", condition = "SUCCESS" }] &&
       [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"][8].command == ["(cd /workspace/code && python -m scripts.lakehouse.layer_run maintain --layer gold --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"] &&
       [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"][8].image == var.images.spark &&
-      toset([for item in [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"][8].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"])
+      toset([for item in [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"][8].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"])
     )
     error_message = "Gold maintenance runs last on every gold run, after the upload, in the Spark image, with the catalog address and no input run."
   }
@@ -373,10 +373,10 @@ run "run_task_contract" {
       output.host_run_tasks["gold"].task_definition == "example_project_dev_job_gold_host" && output.host_run_tasks["gold"].task_role_key == "write_gold_task" &&
       output.host_run_tasks["gold"].capacity_provider == "example_project_host_dev" && output.host_run_tasks["gold"].network_mode == "bridge" &&
       output.host_run_tasks["gold"].network == "lakehouse" && output.host_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
-      output.host_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION"] &&
-      output.host_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"] &&
-      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION"] &&
-      output.host_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"] &&
+      output.host_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"] &&
+      output.host_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "HAI_DEADLINE_UTC"] &&
+      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE", "LINEAGE_INVOCATION", "HAI_DEADLINE_UTC"] &&
+      output.host_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE", "HAI_DEADLINE_UTC"] &&
       !contains(keys(output.host_run_tasks["features"].container_environment), "release")
     )
     error_message = "The output names the on-demand private placement, the layer's role key and the variables each container needs."
@@ -579,6 +579,13 @@ run "lineage_off_leaves_every_layer_container_as_before" {
       for container in jsondecode(output.host_container_definitions[layer]) : [for variable in container.environment : variable.name if variable.value == "" && variable.name == "LINEAGE_INVOCATION"] == [] || contains(["pin", "upload"], container.name)
     ])])
     error_message = "Only the pin and upload containers declare LINEAGE_INVOCATION for the launch to fill."
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
+      for container in jsondecode(output.host_container_definitions[layer]) : contains([for variable in container.environment : variable.name if variable.value == ""], "HAI_DEADLINE_UTC") == !contains(["init", "fetch", "guard"], container.name)
+    ])])
+    error_message = "Every driver container after the fetch declares HAI_DEADLINE_UTC for the launch to fill with its absolute deadline, and the init, fetch and guard containers do not."
   }
 }
 

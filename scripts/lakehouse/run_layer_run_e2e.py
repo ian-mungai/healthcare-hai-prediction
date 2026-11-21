@@ -1288,6 +1288,40 @@ def case_expired_task_deadline_stops_the_next_phase(case: Case) -> None:
     require(writes() == [], "a task past its deadline writes nothing to the catalog")
 
 
+def launch_deadline(seconds: float) -> dict[str, str]:
+    """The absolute deadline of the launch (epoch seconds) that the launch library sets in the environment of every driver container."""
+    return {"HAI_DEADLINE_UTC": f"{time.time() + seconds:.0f}"}
+
+
+def case_a_late_init_container_cannot_outlive_the_launch(case: Case) -> None:
+    started_seconds_ago(case, "silver", 10)  # the init container ran long after the launch: counted from it, the driver has almost the whole 21600 seconds
+    job = layer_run.Job("silver", CHAIN["silver"], "real", case.work("silver") / "code")
+    with mock.patch.dict(os.environ, launch_deadline(120)):
+        left = layer_run.task_seconds_left(job)
+        features = layer_run.Job("features", CHAIN["features"], "real", case.work("features") / "code")
+        started_seconds_ago(case, "features", 10)
+        with mock.patch.object(layer_run, "STEP_SECONDS", 10**6):
+            phase_end = float(layer_run.phase_deadline_environment(features)[layer_run.PHASE_DEADLINE])
+    require(0 < left <= 121, f"the driver's limit {left:.0f} s must not pass the launch's 120 s")
+    require(phase_end <= time.time() + 121, "the features phase deadline must not pass the launch deadline")
+    with mock.patch.dict(os.environ, {"HAI_DEADLINE_UTC": ""}):
+        require(layer_run.task_seconds_left(job) > 21000, "a task with no launch deadline (hand-started) counts from its init container")
+
+
+def case_a_passed_launch_deadline_stops_the_next_phase(case: Case) -> None:
+    for phase in ("pin", "build"):
+        require(case.phase("silver", phase) == 0, case.err)
+    with mock.patch.dict(os.environ, launch_deadline(-5)):
+        require(case.phase("silver", "validate") != 0 and "deadline" in case.err, case.err)
+        require(case.phase("silver", "publish") != 0 and "deadline" in case.err, case.err)
+    require(writes() == [], "a task past the launch deadline writes nothing to the catalog")
+
+
+def case_a_launch_deadline_that_is_no_time_fails_by_name(case: Case) -> None:
+    with mock.patch.dict(os.environ, {"HAI_DEADLINE_UTC": "soon"}):
+        require(case.phase("silver", "pin") != 0 and "HAI_DEADLINE_UTC" in case.err, case.err)
+
+
 def case_phase_that_outlives_the_deadline_is_stopped(case: Case) -> None:
     require(case.chain("silver")[:-1] == [0] * 6, case.err)
     started_seconds_ago(case, "silver", 21600 - 1)
@@ -1665,6 +1699,9 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a passing publish leaves one recovery snapshot per layer, written after the run row": case_a_passing_publish_leaves_one_recovery_snapshot_per_layer,
     "the dry run plan declares the recovery snapshot": case_the_dry_run_plan_declares_the_recovery_snapshot,
     "a task past its deadline stops at the next phase": case_expired_task_deadline_stops_the_next_phase,
+    "a late init container leaves the driver limit at or before the launch deadline": case_a_late_init_container_cannot_outlive_the_launch,
+    "a passed launch deadline stops the next phase": case_a_passed_launch_deadline_stops_the_next_phase,
+    "a launch deadline that is no time fails by name": case_a_launch_deadline_that_is_no_time_fails_by_name,
     "a phase that outlives the task deadline is stopped": case_phase_that_outlives_the_deadline_is_stopped,
     "a phase that passes the task deadline leaves no process behind": case_deadline_leaves_no_descendant_of_the_phase_module,
     "a module that passes the step limit leaves no process behind": case_step_timeout_leaves_no_descendant_of_the_phase_module,

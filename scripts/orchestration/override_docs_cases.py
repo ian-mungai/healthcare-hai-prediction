@@ -77,14 +77,14 @@ def check_overrides(table: dict) -> None:
 def a_features_build_leaves_the_release_variables_empty() -> None:
     """A features task that is not a release gets the three release variables empty, so a hand-started build needs no value for them: its feast container
     applies Feast and every build phase runs. The metadata job, which reads FEATURES_RUN too, still refuses it when it is missing."""
-    build_values = {name: value for name, value in VALUES.items() if name not in ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")}
+    build_values = {name: value for name, value in VALUES.items() if name not in ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN", "HAI_DEADLINE_UTC")}
     document = job_overrides.build("features", build_values)
     held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
     require(
         held["feast"]
         == {
             **{name: build_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET")},
-            **dict.fromkeys(("FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"), ""),
+            **dict.fromkeys(("FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE", "HAI_DEADLINE_UTC"), ""),
         },
         f"{held['feast']}",
     )
@@ -113,6 +113,29 @@ def a_hand_start_leaves_the_lineage_identity_empty() -> None:
         given = job_overrides.build(job, {**values, "LINEAGE_INVOCATION": "{}"})
         found = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in given["containerOverrides"]}
         require(found["pin"]["LINEAGE_INVOCATION"] == "{}", f"{job}: a given identity was dropped")
+
+
+def a_hand_start_leaves_the_launch_deadline_empty() -> None:
+    """A hand-started layer job has no launch library to set the absolute launch deadline (``HAI_DEADLINE_UTC``), so the driver counts its limit from its init
+    container alone. The generator builds every layer job without a value for it, never refuses for it, leaves it empty in every container after the fetch and
+    passes one through when a runbook gives it. The bronze job still needs its value."""
+    for job in job_overrides.LAYERS:
+        needed = {variable for variables in job_table()[job]["containers"].values() for variable in variables}
+        values = {name: VALUES[name] for name in needed if name in VALUES and name != "HAI_DEADLINE_UTC"}
+        document = job_overrides.build(job, values)
+        held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
+        carrying = sorted(name for name, environment in held.items() if "HAI_DEADLINE_UTC" in environment)
+        require(carrying == sorted(name for name in held if name != "fetch"), f"{job}: the launch deadline is in {carrying}")
+        require(all(held[name]["HAI_DEADLINE_UTC"] == "" for name in carrying), f"{job}: a hand start filled the launch deadline")
+        given = job_overrides.build(job, {**values, "HAI_DEADLINE_UTC": "1795000000"})
+        found = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in given["containerOverrides"]}
+        require(found["pin"]["HAI_DEADLINE_UTC"] == "1795000000", f"{job}: a given launch deadline was dropped")
+    try:
+        job_overrides.build("bronze", {name: value for name, value in VALUES.items() if name != "HAI_DEADLINE_UTC"})
+    except job_overrides.OverrideError as error:
+        require("HAI_DEADLINE_UTC" in str(error), f"the refusal does not name the variable: {error}")
+    else:
+        require(False, "the bronze job was built without its launch deadline")
 
 
 def a_release_names_its_model_and_run() -> None:
@@ -146,14 +169,16 @@ def a_release_names_its_model_and_run() -> None:
     feast = next(item for item in json.loads(done.stdout)["containerOverrides"] if item["name"] == "feast")
     held = {pair["name"]: pair["value"] for pair in feast["environment"]}
     require(
-        (held["LAYER_PHASE"], held["RELEASE_MODEL"], held["FEATURES_RUN"]) == ("release", "m2", VALUES["FEATURES_RUN"]) and len(feast["environment"]) == 7,
+        (held["LAYER_PHASE"], held["RELEASE_MODEL"], held["FEATURES_RUN"]) == ("release", "m2", VALUES["FEATURES_RUN"])
+        and held["HAI_DEADLINE_UTC"] == ""
+        and len(feast["environment"]) == 8,
         f"the feast container: {feast}",
     )
 
 
 def a_reload_names_its_model_and_no_features_run() -> None:
     """A reload launch (LAYER_PHASE reload, what ``host_session start`` sends) needs the model set and no features run: the reload picks its own run."""
-    reload_values = {name: value for name, value in VALUES.items() if name != "FEATURES_RUN"} | {"LAYER_PHASE": "reload"}
+    reload_values = {name: value for name, value in VALUES.items() if name not in ("FEATURES_RUN", "HAI_DEADLINE_UTC")} | {"LAYER_PHASE": "reload"}
     document = job_overrides.build("features", reload_values)
     held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
     require(
@@ -162,6 +187,7 @@ def a_reload_names_its_model_and_no_features_run() -> None:
             **{name: reload_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "RELEASE_MODEL", "FEATURE_SET")},
             "FEATURES_RUN": "",
             "LAYER_PHASE": "reload",
+            "HAI_DEADLINE_UTC": "",
         },
         f"{held['feast']}",
     )
@@ -187,7 +213,7 @@ def the_session_reload_launch_equals_the_generator_output() -> None:
     ours = session.reload_overrides("m2", code)["containerOverrides"]
     run = ours[0]["environment"][0]["value"]
     given = {
-        **VALUES,
+        **{name: value for name, value in VALUES.items() if name != "HAI_DEADLINE_UTC"},
         "RUN_ID": run,
         "CODE_RUN_ID": code[0],
         "CODE_SHA256": code[1],
@@ -249,6 +275,7 @@ CASES: dict[str, Callable[[], None]] = {
     "a_job_variable_without_a_sample_fails_the_check": a_job_variable_without_a_sample_fails_the_check,
     "a_features_build_leaves_the_release_variables_empty": a_features_build_leaves_the_release_variables_empty,
     "a_hand_start_leaves_the_lineage_identity_empty": a_hand_start_leaves_the_lineage_identity_empty,
+    "a_hand_start_leaves_the_launch_deadline_empty": a_hand_start_leaves_the_launch_deadline_empty,
     "a_release_names_its_model_and_run": a_release_names_its_model_and_run,
     "a_reload_names_its_model_and_no_features_run": a_reload_names_its_model_and_no_features_run,
     "the_session_reload_launch_equals_the_generator_output": the_session_reload_launch_equals_the_generator_output,
