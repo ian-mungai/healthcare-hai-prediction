@@ -6,13 +6,15 @@ stop explicitly. No output failure, no second signal and no record failure may b
 
 from __future__ import annotations
 
+import io
+import os
 import signal
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from scripts.infrastructure.host_session import HostSessionError, Session, TerminationRequested, install_termination_handler
+from scripts.infrastructure.host_session import HostSessionError, Session, TerminationRequested, deferred_signals, install_termination_handler
 from scripts.infrastructure.host_session_dev_cases import HOLD_SECONDS, folder, records
 from scripts.infrastructure.host_session_refresh_cases import OLD_SHA, build
 from scripts.infrastructure.host_session_stand_in import StandInHost
@@ -29,7 +31,7 @@ def run(session: Session, directory: Path) -> BaseException | None:
     """The exception the session raised (a session error, a signal or an output error), or None."""
     try:
         session.dev_session(HOLD_SECONDS, 0, directory)
-    except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError) as error:
+    except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError, RuntimeError) as error:
         return error
     return None
 
@@ -87,8 +89,10 @@ def a_second_signal_cannot_cut_the_cleanup_or_the_record_short() -> dict[str, bo
     return checks
 
 
-def broken_at(index: int, onward: bool, faults: set[str] | None = None) -> tuple[StandInHost, Session, BaseException | None, dict[str, Any]]:
-    """A session whose output raises BrokenPipeError at report number ``index`` (and at every later one when ``onward``)."""
+def broken_at(
+    index: int, onward: bool, faults: set[str] | None = None, error: Callable[[], Exception] = lambda: BrokenPipeError(32, "Broken pipe")
+) -> tuple[StandInHost, Session, BaseException | None, dict[str, Any]]:
+    """A session whose output raises ``error()`` (a closed pipe) at report number ``index`` (and at every later one when ``onward``)."""
     host, session, _ = build(faults, checkout=OLD_SHA)
     directory, seen = folder(), {"count": 0}
 
@@ -96,7 +100,7 @@ def broken_at(index: int, onward: bool, faults: set[str] | None = None) -> tuple
         number = seen["count"]
         seen["count"] += 1
         if number == index or (onward and number > index):
-            raise BrokenPipeError(32, "Broken pipe")
+            raise error()
 
     session.report = report
     raised = run(session, directory)
@@ -230,9 +234,125 @@ def an_unwritable_record_never_hides_the_failure_or_skips_the_cleanup() -> dict[
     )
 
 
+class SignalingRaw(io.RawIOBase):
+    """The raw end of a buffered writer on a real pipe. It raises the queued signals, one on each write, from inside the write: the buffered writer is then
+    busy, so a handler that writes to the same stream finds it busy (RuntimeError: reentrant call)."""
+
+    def __init__(self, descriptor: int) -> None:
+        super().__init__()
+        self.descriptor, self.queue = descriptor, list[int]()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data: Any) -> int:
+        if self.queue:
+            signal.raise_signal(self.queue.pop(0))
+        return os.write(self.descriptor, bytes(data))
+
+
+def buffered_pipe_session(fired: Sequence[int]) -> dict[str, Any]:
+    """A session whose reports go to a real buffered writer on a real pipe. A SIGTERM arrives while the status after the start is read and ``fired`` (signal
+    numbers) arrive one at a time inside the next writes of that stream. The answer holds what the checks need."""
+    host, session, _ = build(checkout=OLD_SHA)
+    directory = folder()
+    read_end, write_end = os.pipe()
+    raw = SignalingRaw(write_end)
+    writer = io.BufferedWriter(raw, buffer_size=8192)
+
+    def report(line: str) -> None:
+        writer.write(f"{line}\n".encode())
+        writer.flush()
+
+    session.report = report
+    calls = {"status": 0}
+    original_status = session.status
+
+    def status() -> dict[str, Any]:
+        calls["status"] += 1
+        if calls["status"] == 1:
+            raw.queue.extend(fired)
+            signal.raise_signal(signal.SIGTERM)
+        return original_status()
+
+    restore = install_termination_handler()
+    try:
+        with mock.patch.object(session, "status", status):
+            raised = run(session, directory)
+    finally:
+        restore()
+    os.close(write_end)
+    text = b"".join(iter(lambda: os.read(read_end, 65536), b"")).decode()
+    os.close(read_end)
+    return {"host": host, "raised": raised, "record": (records(directory) or [{}])[0], "text": text, "unwritten": raw.queue}
+
+
+def a_signal_during_a_buffered_report_cannot_break_the_cleanup() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for label, fired in (
+        ("a SIGINT inside the write of the first cleanup report", [signal.SIGINT]),
+        ("a SIGHUP inside the write of the first cleanup report", [signal.SIGHUP]),
+        ("four signals inside four writes in a row", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGINT]),
+    ):
+        result = buffered_pipe_session(fired)
+        record, text, raised = result["record"], result["text"], result["raised"]
+        checks |= {
+            f"{label}: the first error is the one the caller sees": isinstance(raised, TerminationRequested) and str(raised) == "SIGTERM",
+            f"{label}: every queued signal arrived": not result["unwritten"],
+            f"{label}: the host ends at capacity zero": result["host"].desired == 0,
+            f"{label}: the record is complete": record.get("cleanup") == "host_off_verified"
+            and str(record.get("ended_at", "")).endswith("Z")
+            and record.get("after_cleanup", {}).get("desired_capacity") == 0
+            and str(record.get("session_error", "")).startswith("TerminationRequested"),
+            f"{label}: the stream refused no write": record.get("output_errors") == 0,
+            f"{label}: every held signal is reported on the stream": text.count("signal_deferred") == len(fired),
+            f"{label}: the stream shows the verified host-off": "host_off_verified" in text,
+        }
+    return checks
+
+
+def the_signal_handler_only_records_the_signal() -> dict[str, bool]:
+    reports: list[tuple[str, str]] = []
+    before = signal.getsignal(signal.SIGINT)
+    with deferred_signals(lambda name, detail: reports.append((name, detail))):
+        signal.raise_signal(signal.SIGINT)
+        written_by_the_handler = list(reports)
+    return {
+        "the handler writes no report": written_by_the_handler == [],
+        "the held signal is reported when the hold ends": [name for name, _ in reports] == ["signal_deferred"] and "SIGINT" in reports[0][1],
+        "the earlier handler is back": signal.getsignal(signal.SIGINT) == before,
+    }
+
+
+def a_refused_reentrant_write_is_counted_and_carried_on() -> dict[str, bool]:
+    def reentrant() -> Exception:
+        return RuntimeError("reentrant call inside <_io.BufferedWriter name='<stdout>'>")
+
+    total = output_points()
+    leaving_host_on: list[int] = []
+    raising: list[int] = []
+    unrecorded: list[int] = []
+    for index in range(total):
+        host, _, raised, record = broken_at(index, False, error=reentrant)
+        if host.desired != 0:
+            leaving_host_on.append(index)
+        if raised is not None:
+            raising.append(index)
+        if record.get("stop") != "stopped" or record.get("output_errors", 0) < 1:
+            unrecorded.append(index)
+    return {
+        "no refused write leaves the host on": not leaving_host_on,
+        "no refused write ends the session with an error": not raising,
+        "every refused write is counted and the stop is recorded": not unrecorded,
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "a_second_signal_cannot_cut_the_cleanup_or_the_record_short": a_second_signal_cannot_cut_the_cleanup_or_the_record_short,
     "a_closed_output_at_any_point_never_skips_the_stop": a_closed_output_at_any_point_never_skips_the_stop,
     "a_closed_output_during_a_failed_start_still_stops_the_host": a_closed_output_during_a_failed_start_still_stops_the_host,
+    "a_signal_during_a_buffered_report_cannot_break_the_cleanup": a_signal_during_a_buffered_report_cannot_break_the_cleanup,
+    "the_signal_handler_only_records_the_signal": the_signal_handler_only_records_the_signal,
+    "a_refused_reentrant_write_is_counted_and_carried_on": a_refused_reentrant_write_is_counted_and_carried_on,
     "an_unwritable_record_never_hides_the_failure_or_skips_the_cleanup": an_unwritable_record_never_hides_the_failure_or_skips_the_cleanup,
 }

@@ -177,19 +177,50 @@ class TerminationRequested(Exception):
     """The process received SIGTERM or SIGHUP; it unwinds through the same cleanup as any other failure."""
 
 
+class HeldSignals:
+    """The signals that arrived while they were held. The handler only appends the number and writes nothing: a handler runs between two bytecodes of the
+    main program, possibly inside a write that it interrupted, and a buffered stream refuses a second write there (``RuntimeError: reentrant call``). The
+    reports are written by ``flush``, from the main program, at ``flush_held_signals`` points and when the hold ends."""
+
+    def __init__(self, report: Callable[[str, str], None]) -> None:
+        self.report, self.pending = report, list[int]()
+
+    def hold(self, number: int, _frame: object) -> None:
+        self.pending.append(number)
+
+    def flush(self) -> None:
+        """Report each held signal once, oldest first. A report that a closed output refuses is dropped: the signal was still held."""
+        while self.pending:
+            number = self.pending.pop(0)
+            with contextlib.suppress(OSError, ValueError, RuntimeError):
+                self.report("signal_deferred", f"{signal.Signals(number).name} received; stopping the host, please wait")
+
+
+ACTIVE_HOLDS: list[HeldSignals] = []
+
+
+def flush_held_signals() -> None:
+    """Report the signals that every active hold has recorded so far; a no-op when none is held."""
+    for held in list(ACTIVE_HOLDS):
+        held.flush()
+
+
 @contextlib.contextmanager
 def deferred_signals(report: Callable[[str, str], None]) -> Iterator[None]:
-    """Hold SIGINT, SIGTERM and SIGHUP while the host is being stopped, so a second signal cannot cut the cleanup short; each one is reported."""
-
-    def defer(number: int, _frame: object) -> None:
-        report("signal_deferred", f"{signal.Signals(number).name} received; stopping the host, please wait")
-
-    earlier = {number: signal.signal(number, defer) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    """Hold SIGINT, SIGTERM and SIGHUP while the host is being stopped, so a second signal cannot cut the cleanup short. The handler only records each
+    signal; it is reported through ``report`` outside the handler, at the next ``flush_held_signals`` and at the end of the hold."""
+    held = HeldSignals(report)
+    earlier = {number: signal.signal(number, held.hold) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    ACTIVE_HOLDS.append(held)
     try:
         yield
     finally:
-        for number, handler in earlier.items():
-            signal.signal(number, handler)
+        try:
+            held.flush()
+        finally:
+            for number, handler in earlier.items():
+                signal.signal(number, handler)
+            ACTIVE_HOLDS.remove(held)
 
 
 def install_termination_handler() -> Callable[[], None]:
@@ -439,7 +470,8 @@ class Session:
         self.output_errors = 0  # the reports that a closed output refused during a development session
 
     def step(self, name: str, detail: str = "ok") -> None:
-        """Report one finished step."""
+        """Report one finished step, after any held signal that has arrived."""
+        flush_held_signals()
         self.report(f"{name}: {detail}")
 
     def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict[str, Any]:
@@ -460,6 +492,7 @@ class Session:
         self.deadline = end if outer is None else min(end, outer)
         try:
             while True:
+                flush_held_signals()
                 try:
                     value = check()
                     failed = 0
@@ -1453,14 +1486,14 @@ class Session:
         return True
 
     def safe_report(self) -> Callable[[], None]:
-        """Route every line through a writer that cannot raise: a closed output (a broken pipe, a closed stream) is counted and the session carries on. The
-        answer puts the earlier writer back."""
+        """Route every line through a writer that cannot raise: a closed output (a broken pipe, a closed stream, a buffered stream that refuses a reentrant
+        write) is counted and the session carries on. The answer puts the earlier writer back."""
         earlier = self.report
 
         def write(line: str) -> None:
             try:
                 earlier(line)
-            except (OSError, ValueError):
+            except (OSError, ValueError, RuntimeError):
                 self.output_errors += 1
 
         self.report = write

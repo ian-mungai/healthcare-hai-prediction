@@ -149,8 +149,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "session skips the cleanup after an abnormal end": ('self.stop_after_failure("session", False)', "pass"),
     "session lets a closed output raise": (
-        "            except (OSError, ValueError):\n                self.output_errors += 1",
-        "            except ValueError:\n                self.output_errors += 1",
+        "            except (OSError, ValueError, RuntimeError):\n                self.output_errors += 1",
+        "            except (ValueError, RuntimeError):\n                self.output_errors += 1",
     ),
     "session closes a failed session without holding signals": (
         "        with deferred_signals(self.step):\n            stopping = record.get",
@@ -161,6 +161,15 @@ PLANTS: dict[str, tuple[str, str]] = {
         "            if False:\n                error.add_note",
     ),
     "session does not stop the host after the hold": ("        self.stop(stop_wait_seconds)\n        with deferred_signals", "        with deferred_signals"),
+    "the signal handler writes the report itself": ("        self.pending.append(number)\n", "        self.pending.append(number)\n        self.flush()\n"),
+    "session lets a refused reentrant write raise": (
+        "            except (OSError, ValueError, RuntimeError):\n                self.output_errors += 1",
+        "            except (OSError, ValueError):\n                self.output_errors += 1",
+    ),
+    "a hold ends without reporting the signals it held": (
+        "        try:\n            held.flush()\n        finally:",
+        "        try:\n            pass\n        finally:",
+    ),
     "session stops the host after a job wait refused": (
         "            if not stopping and self.host_requested and self.cleanup_outcome is None:",
         "            if self.host_requested and self.cleanup_outcome is None:",
