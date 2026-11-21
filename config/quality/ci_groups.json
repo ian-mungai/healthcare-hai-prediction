@@ -396,7 +396,7 @@
     },
     "local_ci_seconds": {
       "range": 2700,
-      "full": 4500
+      "full": 5400
     }
   },
   "worker_limits": {

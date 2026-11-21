@@ -5846,10 +5846,10 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
 
 
 def deadline_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The local_ci step has 2700 s (range) and 4500 s (full, 75 minutes); every other step keeps its scope's deadline (2700 and 3600 s)."""
+    """The local_ci step has 2700 s (range) and 5400 s (full, 90 minutes); every other step keeps its scope's deadline (2700 and 3600 s)."""
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     results = []
-    for scope, arguments, local_ci, others in (("range", (), 2700, 2700), ("full", ("--full",), 4500, 3600)):
+    for scope, arguments, local_ci, others in (("range", (), 2700, 2700), ("full", ("--full",), 5400, 3600)):
         plan = pre_push_plan(pre_push_repo(scratch, f"pre_push_deadlines_{scope}"), arguments)
         by_name = {step["name"]: step["timeout_seconds"] for step in plan["steps"]}
         other_steps = {name: seconds for name, seconds in by_name.items() if name != "local_ci"}
@@ -5864,7 +5864,7 @@ def deadline_cases(scratch: Path) -> list[dict[str, Any]]:
     results.append(
         {
             "case": "core_budget_and_local_ci_deadline_are_the_owner_decisions",
-            "passed": config["core_budget"] == 12 and config["pre_push"]["local_ci_seconds"] == {"range": 2700, "full": 4500},
+            "passed": config["core_budget"] == 12 and config["pre_push"]["local_ci_seconds"] == {"range": 2700, "full": 5400},
             "core_budget": config["core_budget"],
             "local_ci_seconds": config["pre_push"]["local_ci_seconds"],
         }

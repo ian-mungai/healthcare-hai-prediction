@@ -21,7 +21,7 @@ check group files). A failed check stops the run before the long groups.
 The steps run at once, except the acquisition hook, the OSV-Scanner hook and the hook partitions: pre-commit takes the worktree's index lock,
 so they run one after the other in one worker.
 Every step has a deadline from ``pre_push.timeout_seconds``, except the ``local_ci`` step, which has the longer one of ``pre_push.local_ci_seconds``
-(75 minutes in the full scope, owner decision Nov 14 2026), and fails visibly with its name when it expires. The run and every step start without the
+(90 minutes in the full scope, owner decision Nov 21 2026), and fails visibly with its name when it expires. The run and every step start without the
 variables that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKIP`` included) and without the Git repository variables of the caller.
 
 The checks read the working tree, so ``run`` refuses a head that is not the checked-out commit and tracked files that differ from it (staged or unstaged).
