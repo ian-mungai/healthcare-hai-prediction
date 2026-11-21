@@ -27,7 +27,7 @@ CHILD_SECONDS = 120
 
 
 def entry(
-    *arguments: str, faults: tuple[str, ...] = (), tasks: tuple[dict[str, Any], ...] = (), host_on: bool = True
+    *arguments: str, faults: tuple[str, ...] = (), tasks: tuple[dict[str, Any], ...] = (), host_on: bool = True, stage: str = "dev"
 ) -> tuple[CompletedProcess[str], dict[str, Any]]:
     """Run ``python -m scripts.infrastructure.host_session`` with ``arguments`` against the stand-in; the answer is the finished child and its end state
     (empty when the child wrote none)."""
@@ -37,7 +37,7 @@ def entry(
         environment = {
             **os.environ,
             "PYTHONPATH": f"{root}{os.pathsep}{REPO_ROOT}",
-            SCENARIO: json.dumps({"faults": list(faults), "tasks": list(tasks), "host_on": host_on}),
+            SCENARIO: json.dumps({"faults": list(faults), "tasks": list(tasks), "host_on": host_on, "environment": stage}),
             RESULT: str(root / "result.json"),
         }
         finished = run_command(sys.executable, ["-m", "scripts.infrastructure.host_session", *arguments], cwd=REPO_ROOT, env=environment, timeout=CHILD_SECONDS)

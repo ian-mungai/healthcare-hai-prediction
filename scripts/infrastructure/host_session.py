@@ -1,4 +1,4 @@
-"""Start and stop the AWS host control plane for a working session: ``start``, ``refresh``, ``bootstrap``, ``stop`` and ``status``.
+"""Start and stop the AWS host control plane for a working session: ``start``, ``refresh``, ``bootstrap``, ``stop``, ``status`` and ``session``.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.host_session start``. The profile and region come from ``.env`` through
 ``load_configuration``. The cluster, the host group, the capacity provider, the service names and the one-shot task families come from the
@@ -15,6 +15,13 @@ ECS does not have.
 ``--wait-seconds N`` polls every 15 seconds until none runs and refuses when the N seconds pass. ``--force-stop`` skips the check. A listing that fails
 or cannot be read refuses; it is never read as "no job task is running". Stopping the host ends every task on it; a job launched in the seconds between
 the check and the stop is resumed by its DAG retry.
+
+``session`` is the development command that replaces the hand records of a host session. It runs ``start``, prints the host address, holds the host on for
+``--hold-seconds`` (default 3600, at most 43200; Ctrl+C or SIGTERM ends the hold early), runs ``stop`` with ``--stop-wait-seconds`` (default 1800) and writes
+one JSON record, ``data/host_session/sessions/session_<UTC time>_<id>.json`` (``--record-folder`` changes the folder). The record holds the phases, the times,
+the host address, the serial of the services state and the ``status`` document after the start and after the stop. A job task that still runs at the end
+refuses the stop, leaves the host on and says so in the record; stop it later with ``stop``. In production (``ENVIRONMENT=prod``) the host is always on, so
+``session`` refuses before any AWS call and no hand start, stop or record exists.
 """
 
 from __future__ import annotations
@@ -48,6 +55,11 @@ SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
 JOBS_DIRECTORY = REPO_ROOT / "infra" / "jobs"
 FEATURE_SCHEMA = REPO_ROOT / "data_contracts" / "features" / "feature_schema.json"
 BOOTSTRAP_MARKER = REPO_ROOT / "data" / "host_session" / "polaris_bootstrap.launched"
+SESSION_RECORDS = REPO_ROOT / "data" / "host_session" / "sessions"
+DEV_HOLD_SECONDS = 3600  # the default hold of a development session
+DEV_MAX_HOLD_SECONDS = 43200
+DEV_STOP_WAIT_SECONDS = 1800  # how long the end of a development session waits for a running job task
+PRODUCTION = "prod"
 STATE_FILE = "terraform.tfstate"
 MISSING = "MISSING"
 REGISTRATION_SECONDS = 600
@@ -421,6 +433,7 @@ class Session:
         self.launch_tokens: dict[str, str] = {}
         self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
+        self.environment = "dev"
 
     def step(self, name: str, detail: str = "ok") -> None:
         """Report one finished step."""
@@ -1408,6 +1421,95 @@ class Session:
             self.step("refresh_failed", f"the host stays on and is not stopped; read the failure above and run refresh again ({error})")
             raise
 
+    def utc_text(self) -> str:
+        """The clock time as UTC text, ``2026-11-21T18:57:43Z``."""
+        return datetime.fromtimestamp(self.clock.wall(), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def status_record(self) -> dict[str, Any]:
+        """The ``status`` document, or the reason it could not be read: a record keeps what it can."""
+        try:
+            return self.status()
+        except HostSessionError as error:
+            return {"error": str(error)}
+
+    def save_record(self, path: Path, record: dict[str, Any]) -> bool:
+        """Write the session record whole through a temporary name and report a failure as a step; True when it was written."""
+        temporary = path.with_name(path.name + ".part")
+        try:
+            temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            temporary.replace(path)
+        except OSError as error:
+            self.step("session_record_failed", f"the session record could not be written ({type(error).__name__})")
+            return False
+        return True
+
+    def dev_session(self, hold_seconds: int, stop_wait_seconds: int, record_folder: Path, code: tuple[str, str] | None = None) -> None:
+        """A development session in one command: ``start``, a hold, ``stop`` and a record of the status at each end.
+
+        The hold lasts ``hold_seconds`` and ends early on Ctrl+C or SIGTERM; the host work happens through the host's own services meanwhile (the owner opens
+        a web interface or triggers a DAG). The stop is ``stop`` with ``stop_wait_seconds``: it waits that long for a running job task and then refuses, which
+        leaves the host on and says so. A failed start stops the host as ``start`` does. The record is one JSON file in ``record_folder`` with the phases, the
+        times, the host address, the serial of the services state and the ``status`` document after the start and after the stop; it names no ARN. It is
+        written before the host turns on (a record that cannot be written refuses the session) and again after each phase. The production host is always on:
+        in production this refuses before any AWS call.
+        """
+        if self.environment == PRODUCTION:
+            raise HostSessionError("session refused: the production host is always on, so nobody starts or stops it by hand; this command is for development")
+        check_hold(hold_seconds)
+        started = self.utc_text()
+        path = record_folder / f"session_{started.replace('-', '').replace(':', '')}_{uuid.uuid4().hex[:8]}.json"
+        record: dict[str, Any] = {
+            "environment": self.environment,
+            "started_at": started,
+            "hold_seconds": hold_seconds,
+            "stop_wait_seconds": stop_wait_seconds,
+            "code_run": None if code is None else code[0],
+            "services_state_serial": self.names.state_serial,
+        }
+        try:
+            record_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise HostSessionError(f"the session record folder {record_folder} could not be made ({type(error).__name__}); nothing was started") from None
+        if not self.save_record(path, record):
+            raise HostSessionError(f"the session record could not be written in {record_folder}; nothing was started")
+        self.step("session_record", path.name)
+        try:
+            self.start(code=code)
+        except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
+            record |= {"start": "failed", "start_error": str(error) or type(error).__name__, "ended_at": self.utc_text()}
+            self.save_record(path, record)
+            raise
+        record |= {"start": "started", "host_address": self.names.host_address, "after_start": self.status_record()}
+        self.save_record(path, record)
+        self.step("host_address", self.names.host_address)
+        self.step("session_ready", f"the host is on and its services are stable; it stops by itself in {hold_seconds} s; press Ctrl+C to stop it sooner")
+        record["hold_ended"] = self.hold(hold_seconds)
+        self.step("hold_ended", str(record["hold_ended"]))
+        try:
+            self.stop(stop_wait_seconds)
+        except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
+            reason = str(error) or type(error).__name__
+            record |= {"stop": "refused" if reason.startswith("stop refused") else "failed", "stop_error": reason}
+            self.step("session_host_left_on", "the host may still be on; run stop when the job tasks are done")
+            record |= {"after_stop": self.status_record(), "ended_at": self.utc_text()}
+            self.save_record(path, record)
+            raise
+        record |= {"stop": "stopped", "after_stop": self.status_record(), "ended_at": self.utc_text()}
+        if not self.save_record(path, record):
+            raise HostSessionError("the host is off, but the session record could not be written")
+
+    def hold(self, seconds: int) -> str:
+        """Wait ``seconds`` with the host on, in steps of ``POLL_SECONDS``; the answer is ``time``, ``interrupted`` (Ctrl+C) or ``terminated`` (SIGTERM)."""
+        end = self.clock.now() + seconds
+        try:
+            while self.clock.now() < end:
+                self.clock.sleep(min(POLL_SECONDS, end - self.clock.now()))
+        except KeyboardInterrupt:
+            return "interrupted"
+        except TerminationRequested:
+            return "terminated"
+        return "time"
+
     def bootstrap(self, again: bool = False, keep_on: bool = False) -> None:
         """Run polaris_bootstrap once, only after postgres and polaris are stable. Once begun, any failure or SIGTERM stops the host unless ``keep_on``."""
         if self.marker.exists() and not again:
@@ -1546,7 +1648,14 @@ def open_session(reload: bool = False) -> Session:
     settings, _ = load_configuration(REPO_ROOT / ".env")
     session = Session(AwsCli(settings, tolerant_runner), load_names(settings, reload=reload))
     session.job_prefix = f"{settings['project_name']}_{settings['environment']}_job_"
+    session.environment = settings["environment"]
     return session
+
+
+def check_hold(seconds: int) -> None:
+    """Refuse a hold outside 1 to ``DEV_MAX_HOLD_SECONDS`` seconds."""
+    if not 1 <= seconds <= DEV_MAX_HOLD_SECONDS:
+        raise HostSessionError(f"the hold must be 1 to {DEV_MAX_HOLD_SECONDS} seconds, not {seconds}")
 
 
 def whole_seconds(text: str) -> int:
@@ -1595,6 +1704,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="while a job task runs, poll every 15 seconds until none runs and refuse when N seconds have passed (default 0: refuse at once)",
     )
     drain.add_argument("--force-stop", action="store_true", help="skip the running job task check; the host goes off and every job task on it ends")
+    development = commands.add_parser(
+        "session",
+        help="development only: start the host, hold it for a bounded time, stop it (waiting for a running job task) and record its status; production refuses",
+    )
+    development.add_argument(
+        "--hold-seconds", type=int, default=DEV_HOLD_SECONDS, help=f"how long the host stays on after the start, 1 to {DEV_MAX_HOLD_SECONDS}"
+    )
+    development.add_argument(
+        "--stop-wait-seconds",
+        type=whole_seconds,
+        default=DEV_STOP_WAIT_SECONDS,
+        metavar="N",
+        help="at the end, wait up to N seconds for a running job task and then refuse and leave the host on",
+    )
+    development.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
+    development.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
+    development.add_argument("--record-folder", type=Path, default=SESSION_RECORDS, help="where the session record is written")
     commands.add_parser("status", help="host and service counts, read only")
     return parser
 
@@ -1603,11 +1729,17 @@ def main(argv: list[str] | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, interrupted or terminated step, 2 on a configuration error."""
     arguments = build_parser().parse_args(argv)
     code = None
-    if arguments.command in {"start", "refresh"} and (arguments.code_run is not None or arguments.code_sha256 is not None):
+    if arguments.command in {"start", "refresh", "session"} and (arguments.code_run is not None or arguments.code_sha256 is not None):
         if not CODE_RUN_ID.fullmatch(arguments.code_run or "") or not CODE_SHA256.fullmatch(arguments.code_sha256 or ""):
             sys.stderr.write("usage: give --code-run <run ID> and --code-sha256 <64 lowercase hex characters> together\n")
             return 2
         code = (arguments.code_run, arguments.code_sha256)
+    if arguments.command == "session":
+        try:
+            check_hold(arguments.hold_seconds)
+        except HostSessionError as error:
+            sys.stderr.write(f"usage: {error}\n")
+            return 2
     if arguments.command == "catalog-setup":
         try:
             catalog_command(arguments.step, arguments.identity, arguments.namespace_approval, arguments.seconds, arguments.dry_run)
@@ -1615,7 +1747,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"usage: {error}\n")
             return 2
     try:
-        session = open_session(arguments.command == "start")
+        session = open_session(arguments.command in {"start", "session"})
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")
         return 2
@@ -1625,6 +1757,8 @@ def main(argv: list[str] | None = None) -> int:
             session.start(arguments.keep_on, code=code)
         elif arguments.command == "refresh":
             session.refresh(code=code)
+        elif arguments.command == "session":
+            session.dev_session(arguments.hold_seconds, arguments.stop_wait_seconds, arguments.record_folder, code=code)
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "catalog-setup":

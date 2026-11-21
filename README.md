@@ -58,6 +58,12 @@ Only the listed web interfaces can be opened from your Mac, each through its own
    bash scripts/host.sh start
    ```
 
+   In development, one command can start the host, keep it on for a bounded time, stop it and write a record of its status under `data/host_session/sessions/`. Run it in place of `start` and `stop`, then open the web interface from a second window. In production the host is always on and this command refuses:
+
+   ```sh
+   bash scripts/host.sh session --hold-seconds 3600
+   ```
+
 3. Open one web interface by the name in the list and keep the command running. The command reads `.env`, finds the one running host and prints the browser address:
 
    ```sh

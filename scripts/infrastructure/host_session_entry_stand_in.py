@@ -4,8 +4,8 @@ The case starts the real command in a child process with a ``sitecustomize.py`` 
 module loads. It replaces what the command reads from outside (the project configuration, the Terraform outputs, the ``aws`` program and the clock) and
 nothing of ``host_session`` or ``aws_tasks``, so the command runs as ``__main__`` and ``aws_tasks`` loads its own copy of the module, exactly as in
 production. The scenario comes from the environment: ``HOST_SESSION_ENTRY_SCENARIO`` (JSON: ``faults``, ``tasks`` as ``{"family": ..., "ends_at": seconds
-or null}`` and ``host_on``), ``HOST_SESSION_ENTRY_RESULT`` (the file that receives the end state) and, for the plants, ``HOST_SESSION_ENTRY_SOURCE`` (a file
-that loads in place of ``scripts/infrastructure/host_session.py``). Time is virtual: a sleep advances the stand-in.
+or null}``, ``host_on`` and ``environment``, ``dev`` unless given), ``HOST_SESSION_ENTRY_RESULT`` (the file that receives the end state) and, for the plants,
+``HOST_SESSION_ENTRY_SOURCE`` (a file that loads in place of ``scripts/infrastructure/host_session.py``). Time is virtual: a sleep advances the stand-in.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def install() -> None:
         if task.get("ends_at") is not None:
             host.tasks[arn]["stops_at"] = float(task["ends_at"])
     platform, services = outputs(stand_in)
-    settings = {"aws_profile": stand_in.PROFILE, "aws_region": stand_in.REGION, "project_name": "stand_in", "environment": "dev"}
+    settings = {"aws_profile": stand_in.PROFILE, "aws_region": stand_in.REGION, "project_name": "stand_in", "environment": scenario.get("environment", "dev")}
 
     def terraform_outputs(directory: Path, *_arguments: object, **_keywords: object) -> dict[str, Any]:
         return services if Path(directory).name == "services" else platform

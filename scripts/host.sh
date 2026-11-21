@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start, stop or inspect the AWS host (start, refresh, bootstrap, stop or status).
+# Start, stop or inspect the AWS host (start, refresh, bootstrap, stop, status or session).
 #
 #   bash scripts/host.sh [arguments]
 #
