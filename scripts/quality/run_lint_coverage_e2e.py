@@ -31,6 +31,7 @@ COPIED = (
     "config/quality_tools.json",
     "scripts/process.py",
     "scripts/quality/repo_checks.py",
+    "scripts/quality/document_paths.py",
     "scripts/quality/markdown_links.py",
     "scripts/quality/lint_sources.py",
 )
