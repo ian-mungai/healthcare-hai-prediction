@@ -258,6 +258,9 @@ ENCODED_FOLDER = re.compile(r"[^/\\\s\"'`<>]+")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
 ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|([/\"'\\]))")
+# A quoted string of a line, double or single, with its backslash pairs: the text inside it is read apart from the quotes around it.
+STRING_LITERAL = re.compile(r"\"((?:[^\"\\\n]|\\.)*)\"|'((?:[^'\\\n]|\\.)*)'")
+ESCAPED_QUOTES = "\"'"
 LFS_POINTER = b"version https://git-lfs"
 PRIVACY_PATTERNS = {
     "home-path": ("home-directory path with a user name", HOME_ROOT),
@@ -2404,26 +2407,35 @@ def other_twelve_digits(line: str) -> bool:
     return any(number != SYNTHETIC_ACCOUNT_ID for number in TWELVE_DIGITS.findall(UUID.sub("", line)))
 
 
-def unescape(text: str) -> str:
-    """Decode the backslash forms of a character (hex, Unicode, octal), an escaped slash or quote, and a pair of backslashes."""
+def unescape(text: str, quotes: bool = True) -> str:
+    """Decode the backslash forms of a character (hex, Unicode, octal), an escaped slash, a pair of backslashes and, with ``quotes``, an escaped quote.
+
+    A line keeps its escaped quotes: they are the quotes of a string around its text, so they stay out of the shell reading of the line. The text of each
+    string is decoded apart, with its quotes, by ``string_contents``.
+    """
 
     def one(match: re.Match[str]) -> str:
         if match.group(5):
-            return match.group(5)
+            return match.group(5) if quotes or match.group(5) not in ESCAPED_QUOTES else match.group(0)
         code = int(match.group(1) or match.group(2) or match.group(3) or match.group(4), 8 if match.group(4) else 16)
         return chr(code) if code <= sys.maxunicode else match.group(0)
 
     return ESCAPE.sub(one, text)
 
 
-def decoded_views(line: str) -> set[str]:
+def decoded_views(line: str, quotes: bool = False) -> set[str]:
     """The line and what it reads as after percent and backslash decoding, in every order up to three rounds."""
     views = {line}
     pending = [line]
     for _ in range(3):
-        pending = [view for text in pending for view in (urllib.parse.unquote(text), unescape(text)) if view not in views]
+        pending = [view for text in pending for view in (urllib.parse.unquote(text), unescape(text, quotes)) if view not in views]
         views.update(pending)
     return views
+
+
+def string_contents(line: str) -> list[str]:
+    """The text inside each quoted string of a line that holds a backslash, without the quotes around it (a JSON or YAML string, a Python string)."""
+    return [match.group(1) if match.group(1) is not None else match.group(2) for match in STRING_LITERAL.finditer(line) if "\\" in match.group()]
 
 
 def lex_words(text: str) -> list[tuple[str, list[int], str]]:
@@ -2465,7 +2477,7 @@ def lex_words(text: str) -> list[tuple[str, list[int], str]]:
             if char in HOME_QUOTES:
                 quote = char
                 segment += 1
-            elif char == "\\" and following and following in "\"'` \\":
+            elif char == "\\" and following and following in "\"'` \\" + SHELL_BREAKS:
                 index += 1
                 segment += 1
                 lead = text[index - 1 : index] if not chars else lead
@@ -2624,9 +2636,16 @@ def word_has_home(value: str, segments: list[int], lead: str = "") -> bool:
 
 
 def home_path_found(line: str) -> bool:
-    """Whether a line holds a home path with a user name, in its text or in any decoded reading of it."""
+    """Whether a line holds a home path with a user name, in its text or in any decoded reading of it.
+
+    A local file address is also read as a whole token, up to white space, since a shell separator inside it (; ( ) & |) ends no address."""
     views = decoded_views(line) if "%" in line or "\\" in line else {line}
-    return any(word_has_home(value, segments, lead) for view in views if HOME_HINT.search(view) for value, segments, lead in lex_words(view))
+    for text in string_contents(line):
+        views |= decoded_views(text, True)
+    hinted = [view for view in views if HOME_HINT.search(view)]
+    return any(word_has_home(value, segments, lead) for view in hinted for value, segments, lead in lex_words(view)) or any(
+        file_url_found(view) for view in hinted
+    )
 
 
 def line_privacy(line: str, values: list[str]) -> list[str]:

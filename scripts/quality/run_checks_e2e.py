@@ -1634,6 +1634,23 @@ def home_path_cases() -> list[Case]:
         "shared folder holding a home root with a brace placeholder climbing out": f"cat '{mac_users}Shared/{HOME_WORD}/{{user}}/../../../jdoe/private.txt'",
         "shared folder holding a home root with a percent placeholder climbing out": f"cat '{mac_users}Shared/{HOME_WORD}/%USER%/../../../jdoe/private.txt'",
         "home folder holding a home root with a variable climbing out": f"cat {LINUX_HOME}$USER/a/{HOME_WORD}/$USER/../../../../jdoe/private.txt",
+        # An escaped shell separator is a character of its word, so it ends no token before a parent folder.
+        "shared folder with an escaped semicolon before a parent": f"cat {mac_users}Shared/team\\;one/../../jdoe/private.txt",
+        "shared folder with an escaped pipe before a parent": f"cat {mac_users}Shared/team\\|one/../../jdoe/private.txt",
+        "shared folder with an escaped ampersand before a parent": f"cat {mac_users}Shared/team\\&one/../../jdoe/private.txt",
+        "shared folder with an escaped opening parenthesis before a parent": f"cat {mac_users}Shared/team\\(one/../../jdoe/private.txt",
+        "shared folder with an escaped closing parenthesis before a parent": f"cat {mac_users}Shared/team\\)one/../../jdoe/private.txt",
+        "shared folder with an escaped tab before a parent": f"cat {mac_users}Shared/team\\\tone/../../jdoe/private.txt",
+        "shared folder with an escaped semicolon right before a parent": f"cat {mac_users}Shared/team\\;/../../jdoe/private.txt",
+        # A local file address is one token up to its first white space, whatever the shell would do with a separator inside it.
+        "local file address with a semicolon in its path before a parent": f"file://{mac_users}Shared;one/../jdoe/private.txt",
+        "local file address with a parenthesis in its path before a parent": f"file://{mac_users}Shared(one)/../jdoe/private.txt",
+        "local file address with an ampersand in its path before a parent": f"file://{mac_users}Shared&one/../jdoe/private.txt",
+        "local file address with a semicolon after the shared folder": f"file://{mac_users}Shared/team;one/../../jdoe/private.txt",
+        # Decoding a JSON or YAML string reads its own text, not the quotes around it.
+        "JSON string with a literal apostrophe and a double quote around a parent name": (
+            f'{{"command": "cat {mac_users}Shared/\\"\'\\"/../../jdoe/private.txt"}}'
+        ),
     }
     cases = [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
     # The macOS shared folder is no user's home. Only the macOS root has this folder, so the Linux twin above stays flagged.
@@ -1685,6 +1702,11 @@ def home_path_cases() -> list[Case]:
         "shared folder holding a home root with a brace placeholder": f"cat '{mac_users}Shared/{HOME_WORD}/{{user}}/run.log'",
         "nested web route below a parenthesized folder": "https://example.invalid/api(foo)/users/login",
         "parenthesized route folder before a user folder route": "(api)/users/login",
+        "shared folder with an escaped semicolon that stays inside": f"cat {mac_users}Shared/team\\;one/../run.log",
+        "local file address with a semicolon that stays inside the shared folder": f"file://{mac_users}Shared/team;one/../run.log",
+        "JSON string with apostrophes around a parent name": f"""{{"command": "cat {mac_users}Shared/\\"'..'\\"/private.txt"}}""",
+        "YAML double-quoted string with apostrophes around a parent name": f"""command: "cat {mac_users}Shared/\\"'..'\\"/private.txt\"""",
+        "YAML list item with apostrophes around a parent name": f"""- "cat {mac_users}Shared/\\"'..'\\"/private.txt\"""",
     }
     cases += [Case(name, "privacy-scan", True, {"notes.md": f"Log at {text}\n"}) for name, text in passing.items()]
     return cases
