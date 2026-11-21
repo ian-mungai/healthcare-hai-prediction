@@ -582,10 +582,29 @@ def build_pipeline_start() -> Any:
     because the files still missing then are carried over. A hand-started retry and a test capture root start none (a hand-started ingestion run starts
     none either: the first DAG runs ingestion itself). A start that fails (a paused or missing first DAG, a refused request) fails the task and so the DAG run,
     in plain sight: nothing else would start the later stages. A pipeline run that exists counts as started.
+
+    The task is the last one of the DAG and runs after a failure too, and Airflow ends a DAG run by its last tasks, where a skipped one counts as
+    success. So the task fails itself, after the handoff it owes, when the gate or a task before it did not succeed: a failed retry day never ends as a
+    successful run.
     """
 
     @task(task_id="start_pipeline", trigger_rule=TriggerRule.ALL_DONE, retries=0, execution_timeout=CHECK_TIMEOUT)
     def start_pipeline() -> str:
+        from airflow.sdk.exceptions import AirflowSkipException
+
+        states = task_states((*CHAIN_TASKS, "gate"))
+        failures = [f"{name} {state}" for name, state in states.items() if state != "success"]
+        try:
+            started = hand_over_to_pipeline()
+        except AirflowSkipException:
+            if not failures:
+                raise
+            started = "no pipeline run started"
+        if failures:
+            raise RuntimeError(f"the retry day failed ({', '.join(failures)}). Pipeline handoff: {started}")
+        return started
+
+    def hand_over_to_pipeline() -> str:
         from airflow.sdk.exceptions import AirflowSkipException
 
         context = get_current_context()

@@ -256,8 +256,8 @@ MUTANTS = (
     Mutant(
         "the host command takes the bronze DAG",
         TRIGGER,
-        "DAGS = (PIPELINE_DAG, BRONZE_DAG, ",
-        "DAGS = (PIPELINE_DAG, ",
+        "DAGS = (\n    PIPELINE_DAG,\n    BRONZE_DAG,\n",
+        "DAGS = (\n    PIPELINE_DAG,\n",
         "trigger",
     ),
     Mutant(

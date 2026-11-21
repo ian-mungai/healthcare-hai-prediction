@@ -10,6 +10,8 @@ as its original and the day of the month as its day, 2 or 3 (orchestration/inges
 
 The last retry day ends the retry period: its ``start_pipeline`` task starts the first DAG (``pipeline_dag``) from its bronze stage under ``pipeline_<hex>``
 whatever the day's own result, because the files still missing then keep their earlier capture. A hand-started retry starts no pipeline run.
+The task is the last one of the DAG, so a retry day whose gate or earlier task failed ends the task failed too (after any handoff), because Airflow counts a
+skipped last task as success.
 """
 
 from __future__ import annotations

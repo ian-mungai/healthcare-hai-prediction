@@ -64,6 +64,11 @@ WAITS = PASSED | {"start_pipeline": "skipped"}  # the pipeline start of a retry 
 STARTS = PASSED | {"start_pipeline": "success"}  # the pipeline start of a retry run that does
 
 
+def run_ends_failed(states: dict[str, str]) -> bool:
+    """Whether Airflow ends the DAG run failed: it reads the last tasks of the DAG, and a skipped last task counts as success."""
+    return states["start_pipeline"] in ("failed", "upstream_failed")
+
+
 @contextmanager
 def scheduled(
     rig: Rig,
@@ -392,8 +397,9 @@ def the_last_retry_day_starts_the_pipeline_from_bronze_whatever_its_result() -> 
     refused = mock.patch.object(steps, "preflight_step", side_effect=TaskRefused("a refusal of the retry day"))
     with scheduled(retry_rig(), PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 3, tzinfo=UTC)) as (current, _), refused:
         states = current.run_dag("ingestion_retry_dag.py")
-    require(states["gate"] == "failed" and states["start_pipeline"] == "success", f"the end of the retry period did not start the pipeline: {states}")
-    require(len(current.dag_runs) == 1 and current.dag_runs[0][1] == pipeline, f"the pipeline start was {current.dag_runs}")
+    require(states["gate"] == "failed" and run_ends_failed(states), f"the failed last retry day did not fail the DAG run: {states}")
+    require(len(current.dag_runs) == 1 and current.dag_runs[0][1] == pipeline, f"the end of the retry period did not start the pipeline: {current.dag_runs}")
+    require("preflight failed" in str(current.results["start_pipeline"]), f"the failure of the last day is not named: {current.results['start_pipeline']}")
 
 
 def a_paused_first_dag_fails_the_start_visibly_and_creates_no_run() -> None:
@@ -413,6 +419,32 @@ def a_hand_started_retry_starts_no_pipeline_run() -> None:
     with scheduled(rig, PRODUCTION, {"original_run": ORIGINAL, "day": schedule.RETRY_LAST_DAY, "mode": "real"}, "manual", RETRY_DAG) as (current, _):
         states = current.run_dag("ingestion_retry_dag.py")
     require(states == WAITS and not current.dag_runs, f"a hand retry started the pipeline: {states} {current.dag_runs}")
+
+
+def a_failed_retry_fails_the_dag_run_through_its_last_task() -> None:
+    """The last task of the retry DAG runs after a failure and skips when it starts no pipeline run, and Airflow counts a skipped last task as success, so a
+    failed retry day must fail that task itself: a hand-started retry, a test capture root and a scheduled day 2 each end failed, start no pipeline run and
+    name the failed tasks. A retry that passes still skips and still ends successful."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+    test_root = f"ingestion_test/{ORIGINAL}/"
+    for label, run_type, params, day in (
+        ("a hand-started retry", "manual", {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY, "mode": "real"}, LOGICAL_DATE),
+        ("a hand-started retry on the last day", "manual", {"original_run": ORIGINAL, "day": schedule.RETRY_LAST_DAY, "mode": "real"}, LOGICAL_DATE),
+        ("a retry of a test capture root", "manual", {"original_run": ORIGINAL, "day": 2, "mode": "real", "capture_root": test_root}, LOGICAL_DATE),
+        ("a scheduled day 2", "scheduled", dict(SCHEDULED_RETRY), datetime(2026, 12, schedule.RETRY_FIRST_DAY, tzinfo=UTC)),
+    ):
+        refused = mock.patch.object(steps, "preflight_step", side_effect=TaskRefused("a refusal of the retry day"))
+        with scheduled(retry_rig(), PRODUCTION, params, run_type, RETRY_DAG, day) as (current, _), refused:
+            states = current.run_dag("ingestion_retry_dag.py")
+        message = str(current.results["start_pipeline"])
+        require(states["gate"] == "failed" and run_ends_failed(states), f"{label}: the failed retry did not fail the DAG run: {states}")
+        require(not current.dag_runs, f"{label}: a failed retry day started a pipeline run: {current.dag_runs}")
+        require("preflight failed" in message and "gate failed" in message, f"{label}: the failed tasks are not named: {message}")
+    for run_type, params in (("manual", {"original_run": ORIGINAL, "day": 2, "mode": "real"}), ("scheduled", dict(SCHEDULED_RETRY))):
+        day = datetime(2026, 12, schedule.RETRY_FIRST_DAY, tzinfo=UTC)
+        with scheduled(retry_rig(), PRODUCTION, params, run_type, RETRY_DAG, day) as (current, _):
+            states = current.run_dag("ingestion_retry_dag.py")
+        require(states == WAITS and not run_ends_failed(states), f"a {run_type} retry that passed did not end successful and skip: {states}")
 
 
 class MissingParameter:
@@ -506,5 +538,6 @@ CASES: dict[str, Callable[[], None]] = {
     "the_last_retry_day_starts_the_pipeline_from_bronze_whatever_its_result": the_last_retry_day_starts_the_pipeline_from_bronze_whatever_its_result,
     "a_paused_first_dag_fails_the_start_visibly_and_creates_no_run": a_paused_first_dag_fails_the_start_visibly_and_creates_no_run,
     "a_hand_started_retry_starts_no_pipeline_run": a_hand_started_retry_starts_no_pipeline_run,
+    "a_failed_retry_fails_the_dag_run_through_its_last_task": a_failed_retry_fails_the_dag_run_through_its_last_task,
     "a_retry_of_a_run_with_its_own_code_uses_that_code": a_retry_of_a_run_with_its_own_code_uses_that_code,
 }

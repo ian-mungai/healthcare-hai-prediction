@@ -790,6 +790,27 @@ def pipeline_cases() -> dict[str, bool]:
     }
 
 
+FAILED_RETRY_TASKS: dict[str, str | None] = {
+    "preflight": "failed",
+    "job": "upstream_failed",
+    "evidence": "upstream_failed",
+    "gate": "failed",
+    "start_pipeline": "failed",
+}
+
+
+class EndsFailed(Clearable):
+    """A stand-in whose runs end in failure at the first poll, with the task states of a retry day whose preflight failed."""
+
+    def __init__(self, runs: dict[str, str] | None = None) -> None:
+        super().__init__(runs, FAILED_RETRY_TASKS)
+
+    def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+        record = super().run(dag_id, dag_run_id)
+        self.runs[dag_run_id] = "failed"
+        return record
+
+
 def retry_cases() -> dict[str, bool]:
     """``ingestion_retry_dag`` is started by hand with ``--original-run`` (an ingestion run ID) and ``--day`` (2 or 3), which its form takes in place of a
     run ID. The retry's own run ID derives from the two, so ``--run-id`` may name only that run; the capture root is the only other option. Every refusal
@@ -805,7 +826,17 @@ def retry_cases() -> dict[str, bool]:
     root_code, root = started("--original-run", ORIGINAL, "--day", "2", "--capture-root", TEST_ROOT)
     named_code, named = started("--original-run", ORIGINAL, "--day", "2", "--run-id", RETRY_RUN)
     printed = invoke(Ends(), [*base, "--original-run", ORIGINAL, "--day", "2"])[1]
+    failing = EndsFailed()
+    failed_code, failed_printed, _, _ = invoke(failing, [*base, "--original-run", ORIGINAL, "--day", "2"])
+    clearing = EndsFailed({RETRY_RUN: "failed"})
+    cleared_code = invoke(clearing, ["--dag", RETRY, "--clear-failed", "--run-id", RETRY_RUN, "--wait-seconds", "5"])[0]
     return {
+        "a retry that ends failed exits 1 and prints the failed state and the failed tasks": failed_code == 1
+        and failed_printed is not None
+        and failed_printed["state"] == "failed"
+        and failed_printed["tasks"] == FAILED_RETRY_TASKS,
+        "clear-failed runs the failed tasks of a failed retry again": cleared_code == 0
+        and clearing.cleared == [(RETRY, RETRY_RUN, ["evidence", "gate", "job", "preflight", "start_pipeline"])],
         "a retry start sends the original run, the day and the mode, and no run ID": day2_code == 0
         and day2.confs == [{"original_run": ORIGINAL, "day": 2, "mode": "real"}],
         "the retry runs under the run ID that its original run and day give": list(day2.runs) == [RETRY_RUN]
