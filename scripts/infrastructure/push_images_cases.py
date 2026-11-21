@@ -729,7 +729,18 @@ def no_program() -> dict[str, bool]:
 
 
 ENTRY_IMAGES = {
-    "model_api": ["module:scripts.serving.main", "file:data_contracts/serving/predictions.json", "file:feature_store/feature_store_aws.yaml"],
+    "model_api": [
+        "module:scripts.serving.main",
+        "module:scripts.model_code",
+        "module:scripts.training.models.common",
+        "module:scripts.training.models.elastic",
+        "module:scripts.training.models.linear",
+        "module:scripts.training.models.preprocessing",
+        "module:scripts.training.models.trees",
+        "file:data_contracts/serving/predictions.json",
+        "file:data_contracts/training/model_code.json",
+        "file:feature_store/feature_store_aws.yaml",
+    ],
     "streamlit": ["file:scripts/streamlit_app/app.py", "file:.streamlit/config.toml"],
     "mlflow": ["file:/opt/mlflow/start_server.py"],
     "training": ["file:/opt/hai/fetch_code.py"],

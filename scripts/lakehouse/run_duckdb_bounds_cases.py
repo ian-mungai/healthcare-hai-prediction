@@ -48,6 +48,7 @@ LEFT = {
     "scripts/lakehouse/provenance.py": "the container reader opens the sealed copy read only and runs a plain select of the marker table",
     "monitoring/current_window.py": "converts the JSON lines of rows it holds to Parquet with duckdb.read_json on the default connection",
     "monitoring/drift_check.py": "reads Parquet files with duckdb.read_parquet on the default in-memory connection",
+    "scripts/lakehouse/bronze_consumer_lineage.py": "parses compiled dbt SQL with json_serialize_sql on the default in-memory connection, in a CI check only",
     "scripts/features/feature_fixture.py": "builds the fixture databases of the feature checks in CI, never in a task",
 }
 

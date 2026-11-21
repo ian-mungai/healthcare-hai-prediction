@@ -1729,6 +1729,7 @@
     "scripts/acquisition/single_copy_index.py",
     "scripts/acquisition/source_cooldown.py",
     "scripts/acquisition/source_metadata.py",
+    "scripts/acquisition/source_metadata_probe.py",
     "scripts/acquisition/source_receipt_index.py",
     "scripts/acquisition/source_registry.py",
     "scripts/acquisition/source_verification_log.py",
