@@ -5302,13 +5302,18 @@ def allocation_checks() -> dict[str, bool]:
             time.sleep(0.05)
             raise launcher.ClientError(f"{workers} workers need 4 GiB each", self.code)
 
-    share, other = Refusing("worker_share"), Refusing("budget")
+    share, other, spent = Refusing("worker_share"), Refusing("budget"), Refusing("worker_share")
     for client in (share, other):
         with contextlib.suppress(launcher.ClientError):
             allocate_down(client, 6)
+    # Each refusal takes 0.05 s and the deadline is 0.12 s: the step-down stops at the deadline with the last refusal, not at one worker.
+    began = time.monotonic()
+    with contextlib.suppress(launcher.ClientError):
+        allocate_down(spent, 6, seconds=0.12)
     return {
         "the_step_down_shares_one_deadline": len(share.waits) == 6 and all(first > second for first, second in zip(share.waits, share.waits[1:], strict=False)),
         "an_allocation_failure_other_than_the_worker_share_is_not_retried": len(other.waits) == 1,
+        "the_step_down_stops_at_its_deadline_before_one_worker": 2 <= len(spent.waits) < 6 and time.monotonic() - began < 0.5,
     }
 
 

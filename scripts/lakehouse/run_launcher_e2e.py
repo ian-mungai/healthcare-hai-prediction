@@ -8907,6 +8907,59 @@ def staging_pool_docker_failure(env: Env) -> dict[str, bool]:
     }
 
 
+@case("staging_allocation_deadline", stub_host=True)
+def staging_allocation_deadline(env: Env) -> dict[str, bool]:
+    """One allocation deadline covers the request and every wait for the plan, and an allocation that outlives it is released, never left held.
+
+    Late success: a slow first request leaves less time for the wait, and the plan finishes after the deadline, so no allocation is returned. Expiry: a
+    plan that finishes only after the deadline leaves the allocation released once it settles."""
+    env.start()
+    seconds = 3.0
+    real_call = launcher.LauncherClient.call
+
+    def slow_first_request(self: launcher.LauncherClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        # The first request spends two of the three seconds.
+        if method == "allocate":
+            time.sleep(2.0)
+        return real_call(self, method, *args, **kwargs)
+
+    def attempt(plan_ready_after: float, slow: bool) -> tuple[str | BaseException, float]:
+        """Ask for an allocation whose plan read is held until ``plan_ready_after`` seconds; return what came back and when."""
+        gate = env.daemon.add_gate("list", "after", match=lambda context: not context["all"])
+        timer = threading.Timer(plan_ready_after, gate.release)
+        client = env.client()
+        begun = time.monotonic()
+        timer.start()
+        try:
+            with mock.patch.object(launcher.LauncherClient, "call", slow_first_request) if slow else contextlib.nullcontext():
+                outcome: str | BaseException = client.allocate(workers=1, seconds=seconds)
+        except (launcher.ClientError, OSError) as error:
+            outcome = error
+        finally:
+            timer.cancel()
+            gate.release()
+        took = time.monotonic() - begun
+        if isinstance(outcome, str):
+            # A returned allocation is released here, so the next scenario starts clean whatever the first returned.
+            with contextlib.suppress(launcher.ClientError):
+                client.release_allocation(outcome)
+        return outcome, took
+
+    def open_allocations() -> list[str]:
+        return [a["id"] for a in env.state()["allocations"].values() if a["state"] in ("planning", "held", "releasing")]
+
+    late, _ = attempt(3.8, slow=True)
+    after_late = open_allocations()
+    expired, _ = attempt(5.0, slow=False)
+    after_expired = open_allocations()
+    return {
+        "a plan that finishes after the deadline returns no allocation, however the time was spent": isinstance(late, launcher.ClientError),
+        "the allocation of a late success is not left held": not after_late,
+        "an allocation that outlives its deadline is refused with its cause": isinstance(expired, launcher.ClientError),
+        "the allocation that outlived its deadline is not left held": not after_expired,
+    }
+
+
 @case("staging_runner_conversion")
 def staging_runner_conversion(env: Env) -> dict[str, bool]:
     """919: the staging runner's fixture launches (init, build, queries, packages) are launcher attempts; the case folder is the only writable mount."""
@@ -11406,6 +11459,7 @@ ALL_CASES = (
     staging_read_plan_shrinks,
     staging_pool_plan_shrinks,
     staging_pool_docker_failure,
+    staging_allocation_deadline,
     runner_ends_before_close,
     runner_ends_with_hosted_launcher,
     pool_signal_scenarios,

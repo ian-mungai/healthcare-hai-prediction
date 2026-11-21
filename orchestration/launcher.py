@@ -10207,9 +10207,16 @@ class LauncherClient:
             raise ClientError(str(reply.get("error")), str(reply.get("code", "refused")))
         return reply["result"]
 
-    def wait_for(self, what: str, record_id: str, field_name: str, values: Sequence[str], principal: dict[str, Any], seconds: float) -> dict[str, Any]:
-        """Poll ``status`` with a wait until a field reaches one of the values or the time ends."""
-        deadline = time.monotonic() + seconds
+    def wait_for(
+        self, what: str, record_id: str, field_name: str, values: Sequence[str], principal: dict[str, Any], seconds: float, deadline: float | None = None
+    ) -> dict[str, Any]:
+        """Poll ``status`` with a wait until a field reaches one of the values or the time ends.
+
+        With an absolute ``deadline`` (a ``time.monotonic`` moment) every status exchange gets the time left as its call budget, so no reply that
+        arrives after the deadline is accepted and a spent deadline raises ``TimeoutError``.
+        """
+        bounded = deadline is not None
+        deadline = time.monotonic() + seconds if deadline is None else deadline
         while True:
             left = deadline - time.monotonic()
             record = self.call(
@@ -10217,6 +10224,7 @@ class LauncherClient:
                 {"what": what, "id": record_id, "wait": min(30.0, max(0.1, left)), "until": {"field": field_name, "values": list(values)}},
                 principal,
                 timeout=60,
+                budget=max(0.05, left) if bounded else None,
             )
             if str(record.get(field_name)) in values or left <= 0:
                 return dict(record)
@@ -10224,12 +10232,44 @@ class LauncherClient:
     # -- convenience -----------------------------------------------------------------------------------------------
 
     def allocate(self, workers: int = 1, seconds: float = 120.0) -> str:
-        """Take the machine for an allocation and wait until it is held; the holder is this process."""
-        reply = self.call("allocate", {"workers": workers})
-        record = self.wait_for("allocation", reply["alloc_id"], "state", ("held", "failed"), self.principal_alloc(reply["alloc_id"]), seconds)
+        """Take the machine for an allocation and wait until it is held; the holder is this process.
+
+        The request and every wait for the plan share one deadline of ``seconds``. An allocation that exists when the deadline ends is released once its
+        plan settles (``abandon_allocation``), so none is left held, and the call raises ``ClientError``.
+        """
+        deadline = time.monotonic() + seconds
+        try:
+            reply = self.call("allocate", {"workers": workers}, budget=seconds)
+        except TimeoutError as error:
+            raise ClientError(f"no reply to the allocation request within {seconds:g} s", "budget") from error
+        alloc_id = str(reply["alloc_id"])
+        try:
+            record = self.wait_for("allocation", alloc_id, "state", ("held", "failed"), self.principal_alloc(alloc_id), seconds, deadline)
+        except TimeoutError as error:
+            self.abandon_allocation(alloc_id)
+            raise ClientError(f"allocation {alloc_id} was not held within {seconds:g} s", "budget") from error
+        if record["state"] == "held" and time.monotonic() >= deadline:
+            record = {"state": "planning"}
         if record["state"] != "held":
-            raise ClientError(str(record.get("error", f"allocation {reply['alloc_id']} is {record['state']}")), str(record.get("code", "budget")))
-        return str(reply["alloc_id"])
+            if record["state"] == "planning":
+                self.abandon_allocation(alloc_id)
+            raise ClientError(str(record.get("error", f"allocation {alloc_id} is {record['state']}")), str(record.get("code", "budget")))
+        return alloc_id
+
+    def abandon_allocation(self, alloc_id: str) -> None:
+        """After a deadline: wait up to ``cleanup_budget`` for a planning allocation to settle, then release it if it is held.
+
+        A planning allocation cannot be released, and one that becomes held later would block every later allocation. A failure here is logged and the
+        launcher releases the allocation when this process ends.
+        """
+        principal = self.principal_alloc(alloc_id)
+        budget = self.config.timings.cleanup_budget
+        try:
+            record = self.wait_for("allocation", alloc_id, "state", ("held", "failed", "released"), principal, budget, time.monotonic() + budget)
+            if record["state"] == "held":
+                self.release_allocation(alloc_id)
+        except (ClientError, OSError) as error:
+            CLIENT_LOG.warning("allocation %s past its deadline was not released (%s); the launcher releases it when this process ends", alloc_id, error)
 
     def release_allocation(self, alloc_id: str) -> ReleaseOutcome:
         """Release an allocation and report what happened (``ReleaseOutcome``).
