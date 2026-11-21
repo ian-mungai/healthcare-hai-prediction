@@ -39,12 +39,14 @@ DEFECTS = (
     ("namespace_override_allowed", "if binding.namespaces != expected_namespaces:", "if False:"),
 )
 
-STORAGE_DEFECT_COUNT = 6
+STORAGE_DEFECT_COUNT = 22
 STAGE_DEFECTS = (
     "scripts/acquisition/single_copy.py",
     "scripts/lakehouse/__init__.py",
     "scripts/process.py",
+    "scripts/lakehouse/bronze_mirror.py",
     "config/lakehouse/retired_objects.json",
+    "config/lakehouse/bronze_consumer_columns.json",
 )
 
 

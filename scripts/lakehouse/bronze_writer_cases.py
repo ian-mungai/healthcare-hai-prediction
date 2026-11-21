@@ -431,6 +431,7 @@ def worker_import_closure(subject: ModuleType, journal: ModuleType, out: Path) -
                 pending.extend(f"{imported}.{alias.name}" for alias in node.names if alias.name != "*")
     configs = {
         "config/lakehouse/aws_bronze_templates.json",
+        "config/lakehouse/bronze_consumer_columns.json",
         "config/lakehouse/bronze_silver_readers.json",
         "config/lakehouse/bronze_tables.json",
         "config/lakehouse/person_policies.json",
