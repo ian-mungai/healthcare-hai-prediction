@@ -45,35 +45,83 @@ DEADLINE_ALLOWANCE = 0.2
 Case = Callable[[Path], dict[str, bool]]
 
 
-def recent_regular_bytes(path: Path, since: float) -> bytes | None:
-    """The bytes of a regular file written since ``since`` and at most 8 MiB, or ``None`` for anything else.
+STREAM_CHUNK = 1024 * 1024
+SCAN_SECONDS = 120.0
+SKIPPED_FOLDERS = (".git", ".venv", ".tools", "node_modules", ".terraform")
 
-    A link, a pipe, a device, an old file and a large file are skipped on one cheap look at the entry, unopened. The open that follows never waits
-    (a named pipe with no writer would block an ordinary open for ever) and never follows a link, and it checks the kind again on the descriptor,
-    so an entry swapped for a pipe after the look is still not waited on.
+
+def read_status(path: Path, needles: list[bytes], deadline: float) -> str:
+    """Read one regular file in chunks and say what was found: ``found``, ``clean``, ``skipped`` (no longer a regular file), ``changed`` or ``unfinished``.
+
+    The open never waits (a named pipe with no writer would block an ordinary open for ever) and never follows a link, and it checks the kind and the size again
+    on the descriptor. A file that grows past the size it had at the open, or a read that passes the deadline, ends as incomplete, so no read is unbounded.
     """
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_mtime < since or info.st_size > 8 * 1024 * 1024:
-        return None
+    overlap = max(len(needle) for needle in needles) - 1
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as handle:
-        return handle.read() if stat.S_ISREG(os.fstat(handle.fileno()).st_mode) else None
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return "skipped"
+        tail, total = b"", 0
+        while True:
+            if time.monotonic() > deadline:
+                return "unfinished"
+            chunk = handle.read(STREAM_CHUNK)
+            if not chunk:
+                return "clean"
+            total += len(chunk)
+            window = tail + chunk
+            if any(needle in window for needle in needles):
+                return "found"
+            if total > info.st_size:
+                return "changed"
+            tail = window[-overlap:] if overlap else b""
 
 
-def files_holding(values: Iterable[str], roots: Iterable[Path], since: float) -> list[str]:
-    """Every regular file under the roots written since ``since`` whose bytes hold one of the values; a pipe, a device or a link is skipped unopened."""
+def link_not_covered(path: Path, roots: list[Path]) -> bool:
+    """Whether a link points at an existing target that no scan root holds, so the scan reads it through no root."""
+    target = path.resolve()
+    return target.exists() and not any(target.is_relative_to(root) for root in roots)
+
+
+def files_holding(values: Iterable[str], roots: Iterable[Path], since: float, seconds: float = SCAN_SECONDS, report_links: bool = True) -> list[str]:
+    """Every regular file under the roots written since ``since`` whose bytes hold one of the values, read in chunks whatever its size.
+
+    The result also names what the scan could not cover, each with its reason, so that an empty result means a complete scan: a link made since ``since``
+    to a target outside the roots (unless ``report_links`` is false, for a folder that other runs share), a file that changed while it was read and a scan
+    that passed its
+    ``seconds`` deadline. A pipe, a device or a link is never opened.
+    """
     needles = [value.encode() for value in values if len(value) > 8]
-    found = []
-    for root in roots:
+    if not needles:
+        return []
+    found: list[str] = []
+    scanned = [Path(root) for root in roots]
+    resolved = [root.resolve() for root in scanned]
+    deadline = time.monotonic() + seconds
+    for root in scanned:
         for folder, names, files in os.walk(root):
-            names[:] = [name for name in names if name not in (".git", ".venv", ".tools", "node_modules", ".terraform")]
-            for name in files:
+            names[:] = [name for name in names if name not in SKIPPED_FOLDERS]
+            for name in [*names, *files]:
                 path = Path(folder) / name
                 try:
-                    content = recent_regular_bytes(path, since)
+                    info = path.lstat()
+                    if info.st_mtime < since:
+                        continue
+                    if stat.S_ISLNK(info.st_mode):
+                        if report_links and link_not_covered(path, resolved):
+                            found.append(f"{path}: not covered: a link to a target outside the scan roots")
+                        continue
+                    if not stat.S_ISREG(info.st_mode):
+                        continue
+                    status = read_status(path, needles, deadline)
                 except OSError:
                     continue
-                if content is not None and any(needle in content for needle in needles):
+                if status == "found":
                     found.append(str(path))
+                elif status in ("changed", "unfinished"):
+                    found.append(f"{path}: {status if status == 'changed' else 'not finished'}: the read did not complete")
+                if status == "unfinished":
+                    return found
     return found
 
 
@@ -191,7 +239,7 @@ def store_behaviour(root: Path) -> dict[str, bool]:
         "no message holds a secret value": not any(sentinel in message for message in messages),
         "nothing is printed": printed.getvalue() == "",
         "no file under the scratch folder or the repository holds a secret value": not files_holding(
-            [sentinel, "winner-" + sentinel], [Path(tempfile.gettempdir()), root], began
+            [sentinel, "winner-" + sentinel], [Path(tempfile.gettempdir()), root], began, report_links=False
         ),
     }
 
@@ -289,13 +337,25 @@ def store_deadline(root: Path) -> dict[str, bool]:
     }
 
 
+def regular_text(path: Path) -> str | None:
+    """The text of a regular file, or ``None`` for a link, a pipe or any other kind of entry, none of which is opened for a wait or followed."""
+    try:
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as handle:
+            return handle.read().decode() if stat.S_ISREG(os.fstat(handle.fileno()).st_mode) else None
+    except OSError:
+        return None
+
+
 def source_offenders(root: Path) -> list[str]:
     """The Terraform files that declare a secret or a parameter; only a data source of a public AWS parameter (``/aws/service/...``) is no offender."""
     found = []
     for path in sorted((root / "infra").rglob("*.tf")):
         if ".terraform" in path.parts:
             continue
-        text = path.read_text()
+        text = regular_text(path)
+        if text is None:
+            found.append(f"{path.relative_to(root)} (not a regular file)")
+            continue
         for match in SECRET_RESOURCE.finditer(text):
             body = text[match.end() : text.find("\n}", match.end())]
             if match.group(2) == "aws_ssm_parameter" and match.group(1) == "data" and re.search(r'^\s*name\s*=\s*"/aws/service/', body, re.MULTILINE):
@@ -526,7 +586,9 @@ def openmetadata_passwords(root: Path) -> dict[str, bool]:
         and f"{ADMIN_NAME}: present" in partial_output
         and f"{DB_NAME}: created" in partial_output
         and not any(value in printed.getvalue() for value in secrets_seen),
-        "no file under the scratch folder or the repository holds a password": not files_holding(secrets_seen, [Path(tempfile.gettempdir()), root], began),
+        "no file under the scratch folder or the repository holds a password": not files_holding(
+            secrets_seen, [Path(tempfile.gettempdir()), root], began, report_links=False
+        ),
     }
 
 
@@ -1172,6 +1234,78 @@ def scan_with_pipe(root: Path) -> dict[str, bool]:
     }
 
 
+def grown_size(real: Callable[[int], os.stat_result], small: int) -> Callable[[int], os.stat_result]:
+    """An ``os.fstat`` that tells a regular file's size as ``small`` bytes: the file then grows past it between the look and the read."""
+
+    def fstat(descriptor: int) -> os.stat_result:
+        info = real(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= small:
+            return info
+        fields = list(tuple(info))
+        fields[stat.ST_SIZE] = small
+        return os.stat_result(tuple(fields))
+
+    return fstat
+
+
+def scan_coverage(root: Path) -> dict[str, bool]:
+    """A scan for a secret value reads a file of any size, names a link it cannot cover and bounds every read; a Terraform input that is no file is refused."""
+    needle = "cover-" + os.urandom(8).hex()
+    mebibyte = 1024 * 1024
+    with tempfile.TemporaryDirectory(prefix="scan_coverage_cases_") as scratch, tempfile.TemporaryDirectory(prefix="scan_outside_cases_") as outside:
+        folder, elsewhere = Path(scratch), Path(outside)
+        began = time.time() - 1
+        large = folder / "large.bin"
+        with large.open("wb") as handle:
+            handle.seek(9 * mebibyte)
+            handle.write(needle.encode())
+        straddling = folder / "straddling.bin"
+        with straddling.open("wb") as handle:
+            handle.seek(mebibyte - len(needle) // 2)
+            handle.write(needle.encode())
+            handle.seek(3 * mebibyte)
+            handle.write(b"end")
+        (elsewhere / "held.txt").write_text(needle)
+        (folder / "link_to_file").symlink_to(elsewhere / "held.txt")
+        (folder / "link_to_folder").symlink_to(elsewhere, target_is_directory=True)
+        (folder / "inside_target.txt").write_text("nothing")
+        (folder / "link_inside").symlink_to(folder / "inside_target.txt")
+        growing = Path(scratch) / "growing"
+        growing.mkdir()
+        (growing / "grows.bin").write_bytes(b"x" * (2 * mebibyte) + needle.encode())
+        names = {"large": str(large), "straddling": str(straddling)}
+        found = files_holding([needle], [folder], began)
+        with mock.patch("os.fstat", grown_size(os.fstat, 10)):
+            grown = files_holding([needle], [growing], began)
+        late = files_holding([needle], [folder], time.time() + 1)
+        unbounded = files_holding([needle], [folder], began, seconds=0.0)
+        pipe_tree = Path(scratch) / "tf_tree"
+        (pipe_tree / "infra").mkdir(parents=True)
+        os.mkfifo(pipe_tree / "infra" / "main.tf")
+        offenders: list[list[str]] = []
+        reader = threading.Thread(target=lambda: offenders.append(source_offenders(pipe_tree)), name="tf-pipe", daemon=True)
+        reader.start()
+        reader.join(timeout=5)
+        reader_ended = not reader.is_alive()
+        if not reader_ended:
+            release_pipe(pipe_tree / "infra" / "main.tf")
+            reader.join(timeout=5)
+        listed = offenders[0] if offenders else []
+    return {
+        "a regular file over 8 MiB that holds the value is found": names["large"] in found,
+        "a value across a read boundary of a large file is found": names["straddling"] in found,
+        "a link to a file outside the scan roots is named as not covered": any("link_to_file" in item and "not covered" in item for item in found),
+        "a link to a folder outside the scan roots is named as not covered": any("link_to_folder" in item and "not covered" in item for item in found),
+        "a link to a file inside the scan roots is no report": not any("link_inside" in item for item in found),
+        "a link older than the run's start is no report": not any("not covered" in item for item in late),
+        "a file that grew past the size it had at its look is reported as changed": any("grows.bin" in item and "changed" in item for item in grown),
+        "a scan past its deadline reports itself unfinished": any("not finished" in item for item in unbounded),
+        "a scan inside its deadline reports nothing unfinished": not any("not finished" in item for item in found),
+        "a Terraform input that is a named pipe ends the source check at its deadline": reader_ended,
+        "a Terraform input that is a named pipe is an offender, not skipped": listed == ["infra/main.tf (not a regular file)"],
+    }
+
+
 CASES: dict[str, Case] = {
     "store_behaviour": store_behaviour,
     "store_races": store_races,
@@ -1186,6 +1320,7 @@ CASES: dict[str, Case] = {
     "serving_secrets_store": serving_secrets_store,
     "serving_secrets_mlflow": serving_secrets_mlflow,
     "scan_with_pipe": scan_with_pipe,
+    "scan_coverage": scan_coverage,
 }
 
 
