@@ -937,7 +937,7 @@ def queue_spans(sandbox: Sandbox) -> dict[str, tuple[float, float]]:
 
 def peak_cores(spans: dict[str, tuple[float, float]], cores: dict[str, int]) -> int:
     """The most cores that the items held at one moment, sampled at every start."""
-    return max((sum(cores[other] for other, (start, end) in spans.items() if start <= moment < end) for _, (moment, _) in spans.items()), default=0)
+    return max((sum(cores[other] for other, (began, end) in spans.items() if began <= moment < end) for _, (moment, _) in spans.items()), default=0)
 
 
 def overlaps(spans: dict[str, tuple[float, float]], one: str, other: str) -> bool:

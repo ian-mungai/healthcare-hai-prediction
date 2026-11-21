@@ -8214,6 +8214,13 @@ def docker_calls_check(env: Env) -> dict[str, bool]:
         "execve.py": 'import os\nprograms = {"d": "/usr/local/bin/docker"}\nos.execve(programs["d"], ["docker", "ps"], {})\n',
         "spawnve.py": 'import os\nprograms = {"d": "/usr/local/bin/docker"}\nos.spawnve(os.P_WAIT, programs["d"], ["docker", "ps"], {})\n',
         "pty_spawn.py": 'import pty\ncommands = {"stop": ["docker", "stop", "x"]}\npty.spawn(commands["stop"])\n',
+        # The process launcher's own start function is a process start like run_command (a docker call through it needs a reviewed entry).
+        "process_start.py": 'from scripts.process import start\nstart(["docker", "ps"], None, None, False)\n',
+        "process_start_module.py": 'from scripts import process\nprocess.start(["docker", "ps"], None, None, False)\n',
+        "process_start_keyword.py": 'import scripts.process as launch\nlaunch.start(argv=["docker", "ps"], cwd=None, env=None, new_session=False)\n',
+        "process_start_wrapper.py": (
+            "from scripts.process import start\n\n\ndef go(argv):\n    return start(argv, None, None, False)\n\n\ngo(['docker', 'ps'])\n"
+        ),
         # Further forms the inverted rule must find: a saved function, a computed getattr, a dynamic import, a wrapper of a wrapper and
         # a wrapper defined in another file.
         "saved_function.py": 'import subprocess\nstart = subprocess.run\nstart(["echo", "x"])\n',
@@ -8289,6 +8296,7 @@ def docker_calls_check(env: Env) -> dict[str, bool]:
             'run_command(sys.executable, ["-c", "print(1)"])\n'
         ),
         "proved_trampoline.py": 'import subprocess\nsubprocess.run(["env", "A=1", "git", "status"])\n',
+        "proved_process_start.py": 'from scripts.process import start\nstart(["git", "status"], None, None, False)\n',
         "relative_pkg/__init__.py": "",
         "relative_pkg/runner.py": "from scripts.process import run_command\n\n\ndef go(program):\n    return run_command(program, [])\n",
     }

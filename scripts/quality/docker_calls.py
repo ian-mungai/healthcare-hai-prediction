@@ -12,8 +12,8 @@ take at run time, so it refuses the routes it cannot prove instead of searching 
 
 Every call that starts a process (the ``subprocess`` functions, ``os.system``, ``os.popen``, the ``os.exec*``, ``os.spawn*`` and
 ``os.posix_spawn*`` families, ``pty.spawn``, ``asyncio`` subprocess creation, an event loop's ``subprocess_exec`` and
-``subprocess_shell`` and ``scripts.process.run_command``) is a finding unless its program is proved: every value it may hold is a literal
-path or name other than ``docker`` or ``docker-compose``, also through ``pathlib.Path``, ``str``, ``/``, ``resolve()``, ``shutil.which`` and
+``subprocess_shell``, ``scripts.process.run_command`` and ``scripts.process.start``) is a finding unless its program is proved: every value it may hold is a
+literal path or name other than ``docker`` or ``docker-compose``, also through ``pathlib.Path``, ``str``, ``/``, ``resolve()``, ``shutil.which`` and
 the other passthroughs in ``PASSTHROUGH`` (matched by their qualified definition, never by name alone). A program that runs other code
 needs its arguments proved too: a shell (literal commands that never name docker, or a script path), an interpreter such as
 ``sys.executable`` (``-c`` code that is literal, never names docker and uses no process API; ``-m`` with a literal module; or a script
@@ -53,7 +53,7 @@ from scripts.process import run_command
 LAUNCHER = "orchestration/launcher.py"
 EXEMPT = {
     LAUNCHER: "the launcher is the one place that calls Docker",
-    "scripts/process.py": "it defines run_command, which this check treats as a process start at every call",
+    "scripts/process.py": "it defines run_command and start, which this check treats as process starts at every call",
     "services/hai/deadline_run.py": "the in-container deadline entrypoint runs the job's own command inside a container that has no Docker socket",
 }
 # Process starts the check cannot prove, read by hand and found not to run Docker, each pinned to the SHA-256 of its stripped source line: an
@@ -96,6 +96,7 @@ PROCESS: dict[tuple[str, str], str] = {
     ("asyncio.subprocess", "create_subprocess_exec"): "exec",
     ("asyncio.subprocess", "create_subprocess_shell"): "shell",
     ("scripts.process", "run_command"): "exec",
+    ("scripts.process", "start"): "argv",
     ("asyncio.loop", "subprocess_exec"): "loop_exec",
     ("asyncio.loop", "subprocess_shell"): "loop_shell",
 }

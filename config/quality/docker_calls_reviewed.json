@@ -399,7 +399,7 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "4bb7b93a6b4f4d1fff49032249e3a2e60282d9f4093ed95ef72700c55f24a150",
+      "file_sha256": "6e82c09731857cdb812610f1176218320cf060008203d57fcfce67ccc6670cc6",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:82ff99594992447fcf22996d8fbd5ae59fa709a0761bb08bff87dcd881f0c417",
         "orchestration/launcher.py": "sha256:886db89140509bbbc0c2745d91fe360e120389435b6aeabc7fced144dff13f81",
@@ -423,7 +423,7 @@
         "scripts/lakehouse/run_staging_e2e.py": "sha256:8f73f4b7aac3ef37cd097c1e32dedcdc19be50c113d2ac662090c5d8174a16f5",
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
-        "scripts/quality/docker_calls.py": "sha256:1fd945eba023c5f1ceae05f3535127041aa19b33e8983341191bbd7fde5a2230",
+        "scripts/quality/docker_calls.py": "sha256:df0127e4b09055b10232b47c262b0de4ec2ec3c529b31a992eb758148f3425da",
         "scripts/training/lane_b_cases.py": "sha256:42cd82b435073ab48666fd7b265528612e3e69cb7dafcea06ddc33d390ff7feb",
         "scripts/training/step_records.py": "sha256:ebf3160636fefcd3584ed3dc3a9d9eea39cef87e325e1e14e409bfa954544c4d"
       },
@@ -441,8 +441,8 @@
       "occurrences": 1,
       "file_sha256": "ac3d1e8fb11a07f2486e8883ddf64cf2e73c031b5a2dcaca0b4fa0f30d33ee97",
       "dependencies": {
-        "orchestration/launcher.py": "sha256:886db89140509bbbc0c2745d91fe360e120389435b6aeabc7fced144dff13f81",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:4bb7b93a6b4f4d1fff49032249e3a2e60282d9f4093ed95ef72700c55f24a150",
+        "orchestration/launcher.py": "sha256:bc235fb3720c5198f30630275b631c67619c963e77eaf33df75a33b5ac410150",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:6e82c09731857cdb812610f1176218320cf060008203d57fcfce67ccc6670cc6",
         "scripts/lakehouse/run_lock.py": "sha256:3c2171aeaaec1881b51d482978be4996989bd19c57e0b192ecc903e4540253d6",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1590,6 +1590,32 @@
       "lines": [
         240
       ]
+    },
+    {
+      "path": "scripts/quality/run_process_e2e.py",
+      "line": 2434,
+      "code_sha256": "ded53791c6ab6492f416831f587be9bce75362ef48aba64c181427fcd36a8cc9",
+      "problem": "is used as a value",
+      "occurrences": 1,
+      "file_sha256": "985dbf2b87bc1c5fa02f289896e3a38d30f2b65b30e43039a9bd9e7bf05c57ad",
+      "dependencies": {
+        "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
+        "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089"
+      },
+      "reason": "a stand-in for process.start refuses a listing whose arguments exceed the budget and then runs the real start with the listing program's own arguments: a process listing (ps), never Docker"
+    },
+    {
+      "path": "scripts/quality/run_process_e2e.py",
+      "line": 2441,
+      "code_sha256": "dfb08362b55e0657eea0b0c0810bb3519eb362f3fb123c945c93da23361ea20b",
+      "problem": "whose program the check cannot prove",
+      "occurrences": 1,
+      "file_sha256": "985dbf2b87bc1c5fa02f289896e3a38d30f2b65b30e43039a9bd9e7bf05c57ad",
+      "dependencies": {
+        "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
+        "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089"
+      },
+      "reason": "a stand-in for process.start refuses a listing whose arguments exceed the budget and then runs the real start with the listing program's own arguments: a process listing (ps), never Docker"
     }
   ]
 }
