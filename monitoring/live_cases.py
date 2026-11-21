@@ -357,6 +357,7 @@ def a_rerun_reuses_the_recorded_outputs_byte_for_byte(folder: Path) -> Problems:
 
 def a_reused_run_calls_no_sink(folder: Path) -> Problems:
     """A rerun that reuses the recorded outputs is a no-op: the metrics sinks run for the first computation only."""
+    drift_cases.need_evidently()
     paths = write_baseline(folder, shifted=FEATURES)
     script = (
         "import json, sys\n"
