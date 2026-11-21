@@ -94,6 +94,8 @@ class FakeEcs:
         self.box = box
 
     def describe_tasks(self, cluster: str, tasks: list[str]) -> dict[str, Any]:
+        if self.box.ecs_forgets:
+            return {"failures": [{"reason": "MISSING"}], "tasks": []}
         document = json.loads((self.box.current.root / "describe.json").read_text())
         return document if tasks == [document["tasks"][0]["taskArn"]] else {"failures": [{"reason": "MISSING"}], "tasks": []}
 
@@ -143,6 +145,7 @@ class Box:
         self.current: Any = None
         self.unresolved = ""
         self.later_tasks: list[str] = []
+        self.ecs_forgets = False  # ECS describes a stopped task for about an hour only
         self.access = layer_report.ReportAccess(
             s3=self.s3,
             bucket=BUCKET,
@@ -344,6 +347,48 @@ def later_job_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def description_cases(work: Path) -> dict[str, bool]:
+    """The job task saves the description of its stopped task with the closing evidence, while the task is still described (ECS forgets a stopped task
+    after about an hour). The evidence task reads the saved description and asks ECS nothing about the task."""
+    checks: dict[str, bool] = {}
+    for layer in ("silver", "gold"):
+        box = sandbox(work, f"description_{layer}")
+        producer = None
+        if layer == "gold":
+            producer = make(work, "description_gold_producer", "silver")
+            flow(box, producer)
+        env = make(work, f"description_{layer}_run", layer, producer)
+        stage(box, env)
+        job_window(box, env)
+        closing = box.access.directory / layer / env.spec.run / "closing.json"
+        saved = json.loads(closing.read_text()).get("task") if closing.is_file() else None
+        expected = json.loads((env.root / "describe.json").read_text())["tasks"][0]["taskArn"]
+        checks[f"{layer}: the closing evidence holds the description of the stopped task"] = (
+            isinstance(saved, dict) and [item.get("taskArn") for item in saved.get("tasks", [])] == [expected] and saved.get("failures") == []
+        )
+        box.ecs_forgets = True
+        result = accept(box, env)
+        checks[f"{layer}: an evidence task that runs after ECS forgot the task still writes the passed report"] = (
+            result[0] == "ok" and result[1]["passed"] is True
+        )
+        again = accept(box, env)
+        checks[f"{layer}: a retry after ECS forgot the task returns the same passed report"] = again[0] == "ok" and again[1]["report"] == result[1]["report"]
+    for label, change, word in (
+        ("a description of another task", lambda d: d["task"]["tasks"][0].update(taskArn="arn:aws:ecs:us-west-2:111111111111:task/x/other"), "another task"),
+        ("no task part", lambda d: d.pop("task"), "task description"),
+        ("a task part that holds no task", lambda d: d["task"].update(tasks=[]), "task description"),
+    ):
+        box = sandbox(work, f"description_bad_{word.replace(' ', '_')}_{len(checks)}")
+        env = make(work, f"description_bad_{len(checks)}", "silver")
+        stage(box, env)
+        job_window(box, env)
+        fixtures.edit(box.access.directory / "silver" / env.spec.run / "closing.json", change)
+        box.ecs_forgets = True
+        result = accept(box, env)
+        checks[f"silver: closing evidence with {label} fails the evidence task by name"] = result[0] == "error" and word in str(result[1])
+    return checks
+
+
 def listing_cases(work: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     box = sandbox(work, "listing")
@@ -490,7 +535,7 @@ def cached_cases(work: Path) -> dict[str, bool]:
         return lambda env: f"lakehouse/launch_records/{env.spec.run}/{env.spec.layer}/{name}"
 
     def describe_edit(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
-        fixtures.edit(env.root / "describe.json", lambda d: d["tasks"][0].update(lastStatus="DEPROVISIONING"))
+        fixtures.edit(folder_of(box, env) / "closing.json", lambda d: d["task"]["tasks"][0].update(lastStatus="DEPROVISIONING"))
 
     def silver_report(change: Callable[[Path], None]) -> Callable[[Box, fixtures.Env, fixtures.Env | None], None]:
         def apply(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
@@ -843,6 +888,7 @@ def main() -> int:
             ("good", good_cases),
             ("window", window_cases),
             ("later", later_job_cases),
+            ("description", description_cases),
             ("listing", listing_cases),
             ("cached", cached_cases),
             ("archive", archive_cases),

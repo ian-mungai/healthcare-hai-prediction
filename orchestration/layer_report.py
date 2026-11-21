@@ -2,8 +2,9 @@
 
 The job task of a silver or gold DAG waits in the launch pool for every slot. When it holds them, it saves the listing of every object version under
 ``lakehouse/`` (``save_before_listing``) right before the launch, so the writes of another run during the wait are in the listing and not in the run's writes.
-It saves the closing evidence (``save_closing_evidence``: the listing after the launch, the tasks of the job still running and the host facts) right after the
-launch and before it releases the slot, so a job that takes the slot next cannot change it. The evidence task then reads the run's records from AWS and writes
+It saves the closing evidence (``save_closing_evidence``: the listing after the launch, the description of the stopped task, the tasks of the job still running
+and the host facts) right after the launch and before it releases the slot, so a job that takes the slot next cannot change it, and ECS, which describes a
+stopped task for about an hour only, is asked while it still does. The evidence task then reads the run's records from AWS and writes
 the acceptance report (``accept``) with every check of ``scripts.lakehouse.layer_acceptance``.
 
 Every file lives in a folder of the Airflow container that only its user reads (``<directory>/<layer>/<run>/``, mode 0700, files 0600), never on the job scratch
@@ -238,8 +239,8 @@ def contract_from_archive(archive: Path, deadline: float) -> acceptance.StagedCo
         raise ReportError(str(error)) from None
 
 
-def launch_files(access: ReportAccess, layer: str, run: str, target: Path) -> str:
-    """The claim, started and end records of the run and job, saved as the report reads them. Returns the ARN of the started task."""
+def launch_events(access: ReportAccess, layer: str, run: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The claim record of the run and job and the records of its one launch by event name. The started and end records must exist."""
     store = S3LaunchStore(access.s3, access.bucket, launch_record_prefix())
     try:
         claim = store.run_record(run, layer, "claim")
@@ -252,6 +253,12 @@ def launch_files(access: ReportAccess, layer: str, run: str, target: Path) -> st
         raise ReportError(f"the launch records cannot be read ({type(error).__name__})") from None
     if "started" not in events or "end" not in events:
         raise ReportError("the started or end record of the launch is missing")
+    return claim, events
+
+
+def launch_files(access: ReportAccess, layer: str, run: str, target: Path) -> str:
+    """The claim, started and end records of the run and job, saved as the report reads them. Returns the ARN of the started task."""
+    claim, events = launch_events(access, layer, run)
     folder = target / "launch" / f"{claim['attempt']:02d}"
     folder.mkdir(parents=True, mode=0o700)
     (target / "launch" / "claim.json").write_text(json.dumps(claim, sort_keys=True))
@@ -260,7 +267,8 @@ def launch_files(access: ReportAccess, layer: str, run: str, target: Path) -> st
     return str(events["started"]["task_arn"])
 
 
-def describe_file(access: ReportAccess, task_arn: str, target: Path) -> None:
+def task_description(access: ReportAccess, task_arn: str) -> dict[str, Any]:
+    """The description of the one task, in the form the report reads: the fields the checks use and the exit state of each container."""
     try:
         reply = access.ecs.describe_tasks(cluster=access.cluster, tasks=[task_arn])
     except (ClientError, BotoCoreError) as error:
@@ -271,7 +279,7 @@ def describe_file(access: ReportAccess, task_arn: str, target: Path) -> None:
     task = tasks[0]
     kept = {name: task.get(name) for name in ("taskArn", "taskDefinitionArn", "lastStatus", "overrides")}
     kept["containers"] = [{name: item.get(name) for name in ("name", "lastStatus", "exitCode")} for item in task.get("containers") or []]
-    (target / "describe.json").write_text(json.dumps({"failures": [], "tasks": [kept]}, sort_keys=True))
+    return {"failures": [], "tasks": [kept]}
 
 
 def running_facts(access: ReportAccess, layer: str, deadline: float) -> dict[str, Any]:
@@ -334,19 +342,22 @@ def host_facts(access: ReportAccess) -> dict[str, Any]:
 
 
 def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int = LISTING_LIMIT) -> Path:
-    """Save the evidence that closes the job's window once for the run: the listing of ``lakehouse/`` after the launch, the host family's running tasks and the
-    host facts. The job task calls it right after the launch, while it still holds the pool slot. A record that exists is kept (and checked)."""
+    """Save the evidence that closes the job's window once for the run: the listing of ``lakehouse/`` after the launch, the description of the stopped task, the
+    host family's running tasks and the host facts. The job task calls it right after the launch, while it still holds the pool slot. A record that exists is
+    kept (and checked)."""
     folder = folder_of(access, layer, run)
     path = folder / "closing.json"
     if path.exists() or path.is_symlink():
         checked_closing(path, layer, run)
         return path
     deadline = time.monotonic() + DEADLINE_SECONDS
+    _, events = launch_events(access, layer, run)
     document = {
         "schema": 1,
         "run_id": run,
         "layer": layer,
         "after": listing_document(layer, run, list_versions(access.s3, access.bucket, limit, deadline)),
+        "task": task_description(access, str(events["started"]["task_arn"])),
         "running": running_facts(access, layer, deadline),
         "host": host_facts(access),
     }
@@ -358,7 +369,7 @@ def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int
 
 
 def checked_closing(path: Path, layer: str, run: str) -> dict[str, Any]:
-    """The closing evidence of the job task: it exists, is private, belongs to this layer and run and has its three parts."""
+    """The closing evidence of the job task: it exists, is private, belongs to this layer and run and has its four parts."""
     try:
         document = json.loads(private_bytes(path, "closing evidence", 2 * LISTING_LIMIT))
     except ValueError:
@@ -368,6 +379,9 @@ def checked_closing(path: Path, layer: str, run: str) -> dict[str, Any]:
     after, running, host = (document.get(name) for name in ("after", "running", "host"))
     if not (isinstance(after, dict) and isinstance(running, dict) and isinstance(host, dict)):
         raise ReportError("the closing evidence is damaged (a part is missing)")
+    task = document.get("task")
+    if not (isinstance(task, dict) and isinstance(task.get("tasks"), list) and len(task["tasks"]) == 1 and isinstance(task["tasks"][0], dict)):
+        raise ReportError("the closing evidence holds no task description of exactly one task")
     return document
 
 
@@ -451,7 +465,9 @@ def collected_report(access: ReportAccess, layer: str, run: str, folder: Path, a
         contract = contract_from_archive(work / "code.tar.gz", deadline)
         (work / "code.tar.gz").unlink()
         task_arn = launch_files(access, layer, run, work)
-        describe_file(access, task_arn, work)
+        if closing["task"]["tasks"][0].get("taskArn") != task_arn:
+            raise ReportError("the task description saved at the stop is of another task than the one the launch started")
+        (work / "describe.json").write_text(json.dumps(closing["task"], sort_keys=True))
         pin = evidence_files(access, layer, run, work)
         for name, part in (("after", "after"), ("running", "running"), ("host", "host")):
             (work / f"{name}.json").write_text(json.dumps(closing[part], sort_keys=True))
