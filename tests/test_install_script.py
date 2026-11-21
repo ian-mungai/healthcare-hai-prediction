@@ -85,7 +85,10 @@ class Checkout:
         (self.bin / name).chmod(0o755)
 
     def remove_tool(self, name: str) -> None:
+        """Take the stand-in away; a system copy on the run's PATH (hosted Ubuntu has /usr/bin/python3.12) is shadowed by one that fails."""
         (self.bin / name).unlink()
+        if any((Path(folder) / name).exists() for folder in ("/usr/bin", "/bin")):
+            self.tool(name, "#!/bin/sh\nexit 127\n")
 
     def run(self, fail_on: str = "", terraform: str = "1.16.1", node: str = "22.3.0") -> CompletedProcess[str]:
         environment = {
