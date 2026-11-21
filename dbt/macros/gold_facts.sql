@@ -74,8 +74,9 @@ having count(*) <> 1
 {% test unknown_member_natural_key(model, column_name, natural_key, expected="'<unknown>'") %}
 {#-
     Fails for an unknown member row (key md5('<unknown>')) whose natural key is not the expected value: the text '<unknown>' for every
-    dimension. Amendment A40 item 1 allows one exception: dim_date, whose natural key is a DATE, passes expected="null" and holds a null
-    calendar_date on its unknown row [824].
+    natural key part. The gold contract's unknown_member rule names the null parts, which pass expected="null": dim_date's calendar_date
+    (a DATE, so it cannot hold the text), dim_measure's fact, measure_key, value_column and edition_start, and dim_hospital_owner_history's
+    valid_from [824].
 -#}
 select *
 from {{ model }}

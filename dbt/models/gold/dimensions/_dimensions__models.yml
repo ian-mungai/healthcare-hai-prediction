@@ -362,8 +362,7 @@ models:
               arguments:
                 natural_key: calendar_date
       - name: calendar_date
-        description: 'The day. Null on the unknown member: the one exception to the ''<unknown>'' natural key because the
-          key is a DATE.'
+        description: 'The day. Null on the unknown member, because the key is a DATE and cannot hold the text ''<unknown>''.'
         data_tests:
           - unique
       - name: iso_year
