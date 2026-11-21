@@ -1924,6 +1924,7 @@
     "scripts/lakehouse/namespace_binding.py",
     "scripts/lakehouse/ownership_release_periods.py",
     "scripts/lakehouse/package_fixture.py",
+    "scripts/lakehouse/period_receipts.py",
     "scripts/lakehouse/person_fields.py",
     "scripts/lakehouse/pins.py",
     "scripts/lakehouse/pipeline_build.py",
