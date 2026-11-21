@@ -399,8 +399,8 @@ class HoldoutOnly(Dataset):
         """Skip the extract validation."""
 
     def split(self) -> tuple[Dataset, Dataset]:
-        """Return the rows as the holdout."""
-        return self, self
+        """Return the rows as the holdout and an empty training split, so a writer that reads training rows finds none."""
+        return HoldoutOnly((), self.features, self.hai_type, self.excluded_controls), self
 
 
 def self_check_suite(rows: tuple[Mapping[str, Any], ...], predictions: tuple[float, ...], positions: tuple[int, ...]) -> suite.ModelSuite:
