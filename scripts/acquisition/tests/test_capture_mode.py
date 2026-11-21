@@ -837,6 +837,45 @@ def test_a_refused_unit_names_its_refusal_as_detail(tmp_path: Path) -> None:
     check(entry["detail"] == entry["reason"] and 0 < len(entry["detail"]) <= 300, str(entry))
 
 
+def test_the_log_line_of_a_failed_unit_carries_its_reason_and_its_detail(tmp_path: Path) -> None:
+    message = "HUD response scope differs: input expected 'All', received <unexpected value>"
+    world, _ = api_world(tmp_path)
+    messages: list[dict] = []
+    result = world.run(adapters={"hud_api": raising_adapter(RegistryError(message))}, log=messages.append)
+    (entry,) = result["units"]["failed"]
+    lines = [item for item in messages if item["snapshot_id"] == entry["snapshot_id"]]
+    check(len(lines) == 1 and lines[0]["status"] == "failed", f"one line for the failed unit: {lines}")
+    check(lines[0]["reason"] == entry["reason"] and lines[0]["detail"] == entry["detail"] == message, f"the line says why: {lines[0]}")
+
+
+def test_the_log_line_of_a_failed_unit_holds_only_the_detail_that_the_run_record_stores(tmp_path: Path) -> None:
+    world, _ = api_world(tmp_path)
+    messages: list[dict] = []
+    world.run(adapters={"hud_api": raising_adapter(KeyError("synthetic-secret-token-value"))}, log=messages.append)
+    check("synthetic-secret-token-value" not in json.dumps(messages), f"no exception text reaches the log: {messages}")
+    check([item["detail"] for item in messages if item["status"] == "failed"] == ["KeyError"], f"only the type name: {messages}")
+
+
+def test_the_log_line_of_a_refused_unit_carries_its_reason_and_its_detail(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    key, body = next(iter(world.records().items()))
+    body["data_objects"][0]["sha256"] = "f" * 64
+    version, _, fields = world.bucket.objects[key]
+    world.bucket.objects[key] = (version, encoded_json(body), fields)
+    messages: list[dict] = []
+    (entry,) = world.run(log=messages.append)["units"]["refused"]
+    lines = [item for item in messages if item["status"] == "refused"]
+    check(len(lines) == 1 and lines[0]["reason"] == entry["reason"] and lines[0]["detail"] == entry["detail"], f"the refused unit says why: {messages}")
+
+
+def test_the_log_line_of_a_completed_unit_has_no_reason_and_no_detail(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    messages: list[dict] = []
+    world.run(log=messages.append)
+    check(messages and all("reason" not in item and "detail" not in item for item in messages), f"{messages}")
+
+
 class SlowClock:
     """The transport's time module with a monotonic clock that jumps ``step`` seconds at every reading, so a download looks as slow as that."""
 

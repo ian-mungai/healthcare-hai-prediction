@@ -1203,8 +1203,9 @@ def failure_reason(error: Exception) -> str:
 def failure_detail(error: Exception) -> str:
     """What the run record says about a failed unit besides its code: the message of the project's own contract exceptions (``CaptureError``,
     ``RegistryError`` and ``ContractFailure`` with their subclasses), cut to ``DETAIL_LIMIT`` characters, and only the type name of any other exception. The
-    messages are fixed text: a response, a request detail and a credential are never put in one. A ``StorageError`` names its type only, because its text
-    carries the storage service's own error code, which no record may hold."""
+    messages are fixed text, except that a contract may name a value of a response after it checked the value against its public form (the HUD period and scope
+    check does, and shows a fixed placeholder for any other text); a response body, a request detail and a credential are never put in one. A
+    ``StorageError`` names its type only, because its text carries the storage service's own error code, which no record may hold."""
     if isinstance(error, (CaptureError, RegistryError, ContractFailure)) and not isinstance(error, StorageError):
         return " ".join(str(error).split())[:DETAIL_LIMIT]
     return type(error).__name__
@@ -1243,6 +1244,17 @@ def save_cooldown(run: CaptureRun, source: str, seconds: int, form: str) -> date
     until = source_cooldown.resume_time(observed, seconds)
     put_once(run, source_cooldown.key(run.root, source, until, run.run_id), source_cooldown.body(source, run.run_id, observed, seconds, form, until))
     return until
+
+
+def log_unit(run: CaptureRun, item: Mapping[str, Any], status: str, **more: Any) -> None:
+    """The log line of a unit: its snapshot ID, source and status. A failed or refused unit adds its reason and the same bounded detail that the run record
+    keeps (``failure_detail``), so the job log says why without the run record."""
+    if run.log is not None:
+        run.log(
+            {"snapshot_id": item["snapshot_id"], "source_id": item["source_id"], "status": status}
+            | ({"reason": item["reason"], "detail": item["detail"]} if "detail" in item else {})
+            | more
+        )
 
 
 def entry(result: Result) -> dict[str, Any]:
@@ -1322,6 +1334,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 done["failed"].append(
                     {"unit_key": None, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete", "detail": "SpecError"}
                 )
+                log_unit(run, done["failed"][-1], "failed")
                 if first:
                     paused.add(source)
                 continue
@@ -1333,6 +1346,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 done["failed"].append(
                     {"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": failure_reason(error), "detail": failure_detail(error)}
                 )
+                log_unit(run, done["failed"][-1], "failed")
                 paused.add(source)
                 continue
             if journal.faults != decided:
@@ -1346,6 +1360,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                     done["refused"].append(
                         {"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why, "detail": str(why)[:DETAIL_LIMIT]}
                     )
+                    log_unit(run, done["refused"][-1], "refused")
                 continue
             if source not in checked:
                 checked.add(source)
@@ -1378,11 +1393,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             if result.status in {"unchanged", "changed"}:
                 counters[result.status] += 1
             done[result.status].append(entry(result))
-            if run.log is not None:
-                run.log(
-                    {"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status}
-                    | ({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds})
-                )
+            log_unit(run, done[result.status][-1], result.status, **({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds}))
     return finish(run, started, observer, journal, state, done, outside, paused | set(cooling), counters, queue_sha256, cooling)
 
 
