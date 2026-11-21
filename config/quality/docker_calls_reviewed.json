@@ -320,7 +320,7 @@
       "occurrences": 1,
       "file_sha256": "1ceac717778d9b6cf288c55c43c0b80abf37948751e366a1ac3140d2a99df073",
       "dependencies": {
-        "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b",
+        "scripts/infrastructure/stack_settings.py": "sha256:a9580b9774651199e32bf6e988e13507fe43fea3ac1ce072a50a2b28c5acc0bd",
         "scripts/infrastructure/synthetic_workspace.py": "sha256:93c9515c41876390eb0685ed9709a2f1a88fcae39358456f4f2e33236a9e3db5",
         "scripts/infrastructure/systemd_model.py": "sha256:243c2005d72cbc71203b570d16c75c4324fd80524a6959b27abcb0ea9fb23ec2",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1584,7 +1584,7 @@
         "scripts/infrastructure/host_session.py": "sha256:d890702ccdbccb5626c83e68a1cd4eb2e9f65ebcb549f67ccd04713c5370d6d2",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7b3526a3ea78ffb4bc77e11c8ef67784396524e0cba1bbb072d7d673c5ed2893",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde",
-        "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b"
+        "scripts/infrastructure/stack_settings.py": "sha256:a9580b9774651199e32bf6e988e13507fe43fea3ac1ce072a50a2b28c5acc0bd"
       },
       "reason": "tolerant_runner (imported from host_session) is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",
       "lines": [

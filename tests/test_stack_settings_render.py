@@ -629,13 +629,17 @@ def test_an_overrides_file_that_is_a_symbolic_link_is_refused(
 
 
 def link_layout(tmp_path: Path) -> Path:
-    """The synthetic repository (it ignores overrides/) and a tracked link tracked_dir to a folder beside it, as ../<repository>_outside/child."""
+    """The synthetic repository (it ignores overrides/), a tracked link tracked_dir to a folder beside it, as ../<repository>_outside/child, a tracked
+    file and a link in overrides/ to the same folder."""
     git(tmp_path, "init", "-q")
     (tmp_path / ".gitignore").write_text("overrides/\n", encoding="utf-8")
     outside = tmp_path.with_name(f"{tmp_path.name}_outside")
     (outside / "child").mkdir(parents=True)
     (tmp_path / "tracked_dir").symlink_to(Path("..") / outside.name / "child", target_is_directory=True)
-    git(tmp_path, "add", "-f", "tracked_dir")
+    (tmp_path / "tracked_file.json").write_text("{}", encoding="utf-8")
+    git(tmp_path, "add", "-f", "tracked_dir", "tracked_file.json")
+    (tmp_path / "overrides").mkdir()
+    (tmp_path / "overrides" / "linked").symlink_to(outside / "child", target_is_directory=True)
     return outside
 
 
@@ -648,6 +652,10 @@ def override_path(tmp_path: Path, outside: Path, where: str) -> Path:
         "dotted": Path(f"{tmp_path}/./overrides//reviewed.json"),
         "linked_dot": Path(f"{tmp_path}/tracked_dir/./reviewed.json"),
         "linked_double": Path(f"{tmp_path}//tracked_dir//reviewed.json"),
+        "leading_double_linked": Path(f"/{tmp_path}/tracked_dir/reviewed.json"),
+        "leading_double_linked_in_ignored": Path(f"/{tmp_path}/overrides/linked/reviewed.json"),
+        "leading_double_tracked": Path(f"/{tmp_path}/tracked_file.json"),
+        "leading_double_ignored": Path(f"/{tmp_path}/overrides/reviewed.json"),
         "external": outside / "reviewed.json",
     }[where]
 
@@ -661,6 +669,10 @@ def override_path(tmp_path: Path, outside: Path, where: str) -> Path:
         ("external_dotdot", "dot dot"),
         ("linked_dot", "symbolic link"),
         ("linked_double", "symbolic link"),
+        ("leading_double_linked", "symbolic link"),
+        ("leading_double_linked_in_ignored", "symbolic link"),
+        ("leading_double_tracked", "untracked"),
+        ("leading_double_ignored", "accepted"),
         ("dotted", "accepted"),
         ("external", "accepted"),
     ],
@@ -678,4 +690,5 @@ def test_an_overrides_path_is_checked_as_given_before_any_normalization(
     with pytest.raises(SystemExit):
         render(tmp_path, monkeypatch, *flags)
     error = capsys.readouterr().err
-    check("'..' component" in error if outcome == "dot dot" else "symbolic link" in error, f"the refusal names its reason: {error}")
+    reasons = {"dot dot": "'..' component", "symbolic link": "symbolic link", "untracked": "untracked and Git-ignored"}
+    check(reasons[outcome] in error, f"the refusal names its reason: {error}")

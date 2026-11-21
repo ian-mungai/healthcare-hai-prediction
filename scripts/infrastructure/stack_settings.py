@@ -162,7 +162,8 @@ def require_local_override(path: Path, root: Path = REPO_ROOT) -> None:
     """Refuse an overrides file that is a symbolic link, and one inside the repository unless Git tracks no part of it and ignores it.
 
     The path is checked as given, before any normalization: a ``..`` component is refused, because removing it would make the Git checks look at another
-    file than the one that opens after a link. A link inside the repository cannot lead the check outside it. A file outside the repository
+    file than the one that opens after a link. Exactly two leading slashes count as one, as the system reads them.
+    A link inside the repository cannot lead the check outside it. A file outside the repository
     cannot enter it.
     """
     refusal = ConfigurationError(
@@ -177,6 +178,9 @@ def require_local_override(path: Path, root: Path = REPO_ROOT) -> None:
             "A preparation file path may not contain a '..' component, because after a link it names another file than the one the Git checks see. "
             "Give the path without it. No Terraform action was run."
         )
+    if path.parts[:1] == ("//",):
+        # POSIX keeps exactly two leading slashes as a root of its own, so ``is_relative_to`` would find no repository base; the system reads them as one.
+        path = Path("/", *path.parts[1:])
     lexical = path.absolute()
     if lexical.is_symlink():
         raise link_refusal
