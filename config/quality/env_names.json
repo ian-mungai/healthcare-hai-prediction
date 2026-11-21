@@ -144,6 +144,7 @@
     "HAI_LAUNCH_PROJECT_TAG": {"category": "container", "reason": "Set by every Airflow task definition on AWS for the launch library."},
     "HAI_LAUNCH_SCRATCH_PATH": {"category": "container", "reason": "Set by every Airflow task definition on AWS for the launch library."},
     "HAI_PHASE_DEADLINE_EPOCH": {"category": "container", "set_by": "alias", "set_in": "scripts/lakehouse/layer_run.py", "reason": "Set by the layer driver for the features build through a constant the check does not follow: the time by which the phase must end."},
+    "HAI_READ_RAW_ROOT": {"category": "container", "set_by": "alias", "set_in": "scripts/acquisition/raw_root.py", "reason": "The bronze switch that adds the raw/ root to the roots bronze lists (record mode, code default off). Terraform sets it to true in the bronze job containers from the read_environment that the bronze writer contract of infra/iam returns, a map key the check does not follow; the code reads it through READ_RAW_VARIABLE."},
     "HAI_SPARK_LOCAL_DIRECTORY": {"category": "container", "reason": "Set by the ECS task definition."},
     "INPUT_RUN_ID": {"category": "container", "reason": "Passed by the launch to the containers of an AWS task."},
     "JOB_MEMORY_LIMIT": {"category": "container", "set_by": "alias", "set_in": "orchestration/launcher.py", "reason": "Computed per launch and passed by the launcher through a tuple of names that the check does not follow, or derived inside an ECS task from its capacity."},
