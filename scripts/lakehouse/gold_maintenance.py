@@ -5,10 +5,16 @@ Two protection sources exist, and the caller names one (``--protection``):
 - ``registry`` (local runs, the default): the launcher registry's fenced protected file described below.
 - ``chain`` (the last container of the AWS gold job): no reader record at all. The AWS DAGs run as one chain, and the features job pins only the gold run
   its chain has just published, which is the newest committed set (``scripts/features/features_input.py``, ``--newest-only``). The newest ``retain_sets``
-  sets are always kept, so the chain rule protects every set a reader of the chain can name. The source is empty by rule and bound to this run; it is
-  not a missing file, and a protected file beside it is refused. Chain mode therefore protects no registration: a reader registered on an older set
-  loses it once ``retain_sets`` newer sets exist and its snapshots pass the cutoff (owner rule). To keep an older set, tag each table's snapshot of
-  that set (``ALTER TABLE ... CREATE TAG ... AS OF VERSION ...``); maintenance keeps every tag head.
+  sets are always kept, so the chain rule protects every set a reader of the chain can name. The source is bound to this run and holds no fence attempt; it is
+  not a missing file, and a protected file beside it is refused. It holds no reader registration or reservation: a reader registered on an older set
+  loses it once ``retain_sets`` newer sets exist and its snapshots pass the cutoff (owner rule). What it holds instead is the list of gold runs behind
+  trained models, ``config/lakehouse/gold_model_runs.json`` (``load_model_runs``: ``{"schema": 1, "runs": [{"run_id": ..., "model": ...}]}``, the run
+  being the ``gold_run_id`` tag of the model's MLflow run). Each listed run is kept exactly as a registered set is kept, so a model can be rebuilt
+  from the gold snapshots it was trained on. It differs from a reader registration in its source and its life: a committed file the owner edits, not
+  the launcher registry, so it needs no fence and no reservation, and a run stays kept until the owner removes it from the file. A listed run that is
+  not a committed set stops maintenance before any expiry; a listed run that an earlier maintenance already expired is reported as
+  ``model_runs_expired`` in the record and on standard error. To keep any other
+  older set, tag each table's snapshot of that set (``ALTER TABLE ... CREATE TAG ... AS OF VERSION ...``); maintenance keeps every tag head.
 
 In registry mode, a reader that wants a published set takes a reservation first, then reads the newest ``publish_runs`` row, then pins the set (a
 registration). Maintenance never expires a snapshot of a set that a reservation or a registration names.
@@ -80,7 +86,8 @@ PROTECTIONS = ("registry", "chain")
 class Protected:
     """The registry's protected file: the items and the fence (the maintenance run and the attempt that holds it) they were written under.
 
-    ``rule`` names the source: ``registry`` for the file, ``chain`` for the empty set of the AWS chain (``chain_protection``)."""
+    ``rule`` names the source: ``registry`` for the file, ``chain`` for the AWS chain (``chain_protection``), whose
+    items are the model runs of ``load_model_runs`` and never a reader registration or reservation."""
 
     items: tuple[Item, ...] = ()
     fence_run: str | None = None
