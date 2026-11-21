@@ -1,12 +1,12 @@
 """Generate the Provider of Services (POS) file periods that staging reads (failure modes 280 and 281).
 
-Run from the repository root with read-only S3 access and the local acquisition records:
+Run from the repository root with read-only S3 access (no local acquisition record is read):
 
     .venv/bin/python -m scripts.lakehouse.pos_file_periods           # rewrite the seed
     .venv/bin/python -m scripts.lakehouse.pos_file_periods --check   # rebuild and compare with the committed seed
 
-Each loaded POS file's period is the temporal coverage the data.cms.gov catalog gave its distribution, as the
-acquisition job plan recorded it; file names are never parsed. A loaded file whose release has no recorded coverage
+Each loaded POS file's period is the temporal coverage the data.cms.gov catalog gave its distribution, as its
+capture receipt, read from S3 by key and version, recorded it; file names are never parsed. A loaded file whose release has no recorded coverage
 stops the run. Failure modes: plans/hospital_spine_20261005/failure_modes.md.
 """
 
@@ -15,18 +15,16 @@ from __future__ import annotations
 import argparse
 import csv
 import io
-import json
-import os
 import re
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
-from scripts.lakehouse import run_lock
+from scripts.lakehouse import period_receipts
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEED = REPO_ROOT / "dbt/seeds/pos_file_periods.csv"
-JOBS = REPO_ROOT / "data/datasets/acquisition_batches"
 TABLE = "cms_provider_of_services"
 COLUMNS = ("member_sha256", "release_id", "file_name", "period_start", "period_end")
 TEMPORAL = re.compile(r'"catalog_temporal": "(\d{4}-\d{2}-\d{2})/(\d{4}-\d{2}-\d{2})"')
@@ -36,21 +34,20 @@ class PeriodError(ValueError):
     """A loaded POS file has no recorded catalog coverage, or two."""
 
 
-def job_periods(jobs: Path = JOBS) -> dict[str, tuple[str, str]]:
-    """Return each POS capture's catalog coverage from the acquisition job plans, keyed by release ID."""
+def receipt_periods(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[str, str]]:
+    """Return each POS capture's catalog coverage from its receipt, keyed by release ID."""
     periods: dict[str, tuple[str, str]] = {}
-    for job in sorted(jobs.glob("*/jobs/CMS_POS_file_*/job.json")):
-        plan = json.loads(job.read_text())["plan"]
-        labels = [period.get("label") or "" for period in plan.get("measurement_periods", [])]
+    for receipt in receipts:
+        labels = [period.get("label") or "" for period in receipt.get("measurement_periods", [])]
         found = {match.groups() for label in labels if (match := TEMPORAL.search(label))}
         if not found:
             continue
+        release = str(receipt["snapshot_id"])
         if len(found) > 1:
-            raise PeriodError(f"job {job.parent.name} records more than one catalog coverage")
-        start, end = found.pop()
-        for capture in sorted((job.parent / "captures/CMS_POS").glob("*")):
-            if periods.setdefault(capture.name, (start, end)) != (start, end):
-                raise PeriodError(f"release {capture.name} has two catalog coverages")
+            raise PeriodError(f"release {release} records more than one catalog coverage")
+        coverage = found.pop()
+        if periods.setdefault(release, coverage) != coverage:
+            raise PeriodError(f"release {release} has two catalog coverages")
     return periods
 
 
@@ -67,21 +64,10 @@ def rows_for(loaded: Iterable[Mapping[str, str]], periods: Mapping[str, tuple[st
     return sorted(rows, key=lambda row: (row["period_end"], row["member_sha256"]))
 
 
-def loaded_files() -> list[dict[str, str]]:
-    """Read the loaded POS files from the S3 manifests, read-only, as bronze discovers them."""
-    from scripts.lakehouse import bronze
-    from scripts.lakehouse.catalog import deployment
-
-    settings = deployment()
-    os.environ.setdefault("AWS_PROFILE", settings["aws_profile"])
-    os.environ.setdefault("AWS_REGION", settings["aws_region"])
-    inputs, _ = bronze.discover(bronze.S3Storage(), settings["data_bucket_name"], bronze.load_table_map(), (TABLE,), bronze.load_retired())
-    return [{"sha256": item["sha256"], "release_id": item["release_id"], "file_name": item["file_name"]} for item in inputs]
-
-
 def build() -> list[dict[str, str]]:
-    """Return the seed rows from storage and the job plans, read from the main checkout, which a worktree has no copy of."""
-    return rows_for(loaded_files(), job_periods(run_lock.main_checkout(REPO_ROOT) / "data/datasets/acquisition_batches"))
+    """Return the seed rows from the loaded files and the receipts that their S3 manifests list."""
+    files, receipts = period_receipts.loaded((TABLE,))
+    return rows_for(files, receipt_periods(receipts.get(TABLE, [])))
 
 
 def as_csv(rows: Iterable[Mapping[str, str]]) -> str:

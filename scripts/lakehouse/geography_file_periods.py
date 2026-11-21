@@ -1,14 +1,15 @@
 """Generate the vintages and periods of the county-context files that staging reads (failure modes 403, 410, 416 and 427).
 
-Run from the repository root with read-only S3 access and the local acquisition records:
+Run from the repository root with read-only S3 access (no local acquisition record is read):
 
     .venv/bin/python -m scripts.lakehouse.geography_file_periods           # rewrite the seed
     .venv/bin/python -m scripts.lakehouse.geography_file_periods --check   # rebuild and compare with the committed seed
 
 A HUD ZIP-to-county file takes the one publisher-stated USPS quarter its capture receipt records. A hospital service
-area file takes the one catalog coverage its acquisition job plan records. RUCC, RUCA and county adjacency captures
-record no period, so each of their files takes the vintage reviewed below for its exact published file name; the
-vintage is the publisher's reference year, not a publication date. An ACS file takes the year in its publisher file name
+area file takes the one catalog coverage its capture receipt records. Every receipt is read from S3 by the key and version that the
+file's manifest lists. RUCC, RUCA and county adjacency captures record no period, so each of their files takes the vintage reviewed
+below for its exact published file name; the vintage is the publisher's reference year, not a publication date. An ACS file takes the year in
+its publisher file name
 (ACSDP5Y2023..., acsdt5y2023-...), with the five-year period ending that year. An SVI file takes the edition year its
 capture receipt's release label names, as does a PLACES file; a WONDER file takes its database name and publisher-stated period
 from its receipt. SAIPE, SAHIE and MMD files take the year in their publisher file names (est23all.txt,
@@ -23,25 +24,19 @@ from __future__ import annotations
 import argparse
 import csv
 import io
-import json
-import os
 import re
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
-from scripts.lakehouse import run_lock
+from scripts.lakehouse import period_receipts
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEED = REPO_ROOT / "dbt/seeds/geography_file_periods.csv"
-DATASETS = REPO_ROOT / "data/datasets"
-QUARTER_RECEIPTS = "historical_acquisition/hud_usps_crosswalk/*/batches/*/capture/receipt.json"
-COVERAGE_JOBS = "acquisition_batches/*/jobs/HSA_file_*/job.json"
 QUARTER_TABLE = "hud_zip_county"
 COVERAGE_TABLE = "cms_hsa_csv"
-EDITION_RECEIPTS = ("*/*/jobs/SVI_*/captures/SVI/*/receipt.json", "*/*/jobs/PLACES_*/captures/PLACES/*/receipt.json")
 EDITION_TABLES = ("svi", "places")
-DATABASE_RECEIPTS = "historical_acquisition/wonder_county_mortality/batches/*/capture/receipt.json"
 DATABASE_TABLE = "wonder_county_mortality"
 EDITION = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 ACS_FILE = re.compile(r"ACS(?:DP|ST|DT)5Y(\d{4})\.(?:DP\d{2}|[BCS]\d{4,5})-Data\.csv|acsdt5y(\d{4})-[bc]\d{5}\.dat")
@@ -127,22 +122,20 @@ def receipt_quarter(receipt: Mapping[str, object]) -> tuple[str, str, str] | Non
     return label, start, end
 
 
-def receipt_quarters(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
+def receipt_quarters(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[str, str, str]]:
     """Return each HUD capture's quarter label and period from its receipt, keyed by release ID."""
     quarters: dict[str, tuple[str, str, str]] = {}
-    for path in sorted(root.glob(QUARTER_RECEIPTS)):
-        receipt = json.loads(path.read_text())
+    for receipt in receipts:
         found = receipt_quarter(receipt)
         if found is not None and quarters.setdefault(str(receipt["snapshot_id"]), found) != found:
             raise PeriodError(f"release {receipt['snapshot_id']} has two recorded quarters")
     return quarters
 
 
-def receipt_editions(root: Path = DATASETS) -> dict[str, str]:
+def receipt_editions(receipts: Iterable[Mapping[str, Any]]) -> dict[str, str]:
     """Return each SVI or PLACES capture's edition year from its receipt's release label, keyed by release ID [427] [453]."""
     editions: dict[str, str] = {}
-    for path in sorted(path for pattern in EDITION_RECEIPTS for path in root.glob(pattern)):
-        receipt = json.loads(path.read_text())
+    for receipt in receipts:
         release = receipt.get("release")
         label = str(release.get("publisher_release_label") or "") if isinstance(release, dict) else ""
         years = set(EDITION.findall(label))
@@ -153,32 +146,30 @@ def receipt_editions(root: Path = DATASETS) -> dict[str, str]:
     return editions
 
 
-def receipt_databases(root: Path = DATASETS) -> dict[str, tuple[str, str, str]]:
+def receipt_databases(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[str, str, str]]:
     """Return each WONDER capture's database (its publisher release label) and publisher-stated period, keyed by release ID [453]."""
     databases: dict[str, tuple[str, str, str]] = {}
-    for path in sorted(root.glob(DATABASE_RECEIPTS)):
-        receipt = json.loads(path.read_text())
+    for receipt in receipts:
         found = receipt_quarter(receipt)
         if found is not None:
             databases[str(receipt["snapshot_id"])] = found
     return databases
 
 
-def job_coverage(root: Path = DATASETS) -> dict[str, tuple[str, str]]:
-    """Return each hospital service area capture's catalog coverage from its job plan, keyed by release ID."""
+def receipt_coverage(receipts: Iterable[Mapping[str, Any]]) -> dict[str, tuple[str, str]]:
+    """Return each hospital service area capture's catalog coverage from its receipt, keyed by release ID."""
     coverage: dict[str, tuple[str, str]] = {}
-    for job in sorted(root.glob(COVERAGE_JOBS)):
-        plan = json.loads(job.read_text())["plan"]
-        labels = [period.get("label") or "" for period in plan.get("measurement_periods", [])]
+    for receipt in receipts:
+        labels = [period.get("label") or "" for period in receipt.get("measurement_periods", [])]
         found = {match.groups() for label in labels if (match := TEMPORAL.search(label))}
         if not found:
             continue
+        release = str(receipt["snapshot_id"])
         if len(found) > 1:
-            raise PeriodError(f"job {job.parent.name} records more than one catalog coverage")
-        start, end = found.pop()
-        for capture in sorted((job.parent / "captures/HSA").glob("*")):
-            if coverage.setdefault(capture.name, (start, end)) != (start, end):
-                raise PeriodError(f"release {capture.name} has two catalog coverages")
+            raise PeriodError(f"release {release} records more than one catalog coverage")
+        start_end = found.pop()
+        if coverage.setdefault(release, start_end) != start_end:
+            raise PeriodError(f"release {release} has two catalog coverages")
     return coverage
 
 
@@ -253,22 +244,16 @@ def rows_for(
     return sorted(rows.values(), key=lambda row: (row["bronze_table"], row["vintage"], row["member_sha256"]))
 
 
-def loaded_files() -> list[dict[str, str]]:
-    """Read the loaded geography files from the S3 manifests, read-only, as bronze discovers them."""
-    from scripts.lakehouse import bronze
-    from scripts.lakehouse.catalog import deployment
-
-    settings = deployment()
-    os.environ.setdefault("AWS_PROFILE", settings["aws_profile"])
-    os.environ.setdefault("AWS_REGION", settings["aws_region"])
-    inputs, _ = bronze.discover(bronze.S3Storage(), settings["data_bucket_name"], bronze.load_table_map(), TABLES, bronze.load_retired())
-    return [{"table": item["table"], "sha256": item["sha256"], "release_id": item["release_id"], "file_name": item["file_name"]} for item in inputs]
-
-
 def build() -> list[dict[str, str]]:
-    """Return the seed rows from storage, the receipts and the job plans, read from the main checkout, which a worktree has no copy of."""
-    root = run_lock.main_checkout(REPO_ROOT) / "data/datasets"
-    return rows_for(loaded_files(), receipt_quarters(root), job_coverage(root), receipt_editions(root), receipt_databases(root))
+    """Return the seed rows from the loaded files and the receipts that their S3 manifests list."""
+    files, receipts = period_receipts.loaded(TABLES)
+    return rows_for(
+        files,
+        receipt_quarters(receipts.get(QUARTER_TABLE, [])),
+        receipt_coverage(receipts.get(COVERAGE_TABLE, [])),
+        receipt_editions([receipt for table in EDITION_TABLES for receipt in receipts.get(table, [])]),
+        receipt_databases(receipts.get(DATABASE_TABLE, [])),
+    )
 
 
 def as_csv(rows: Iterable[Mapping[str, str]]) -> str:

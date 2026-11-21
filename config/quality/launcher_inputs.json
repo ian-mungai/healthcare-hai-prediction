@@ -258,11 +258,6 @@
       "why": "reviewed: scripts/lakehouse/feature_sources.py:202 lists *.sql in dbt/models/features, dbt/macros/features and dbt/tests/features (FOLDERS :61); :174 lists every file of the filter folder dbt/models/features/bridge; names() (:109) lists the .sql of dbt/models/gold (:209) and dbt/models/silver (:210) and the .csv of dbt/seeds/gold (:125) and dbt/seeds (:211)"
     },
     {
-      "module": "scripts/lakehouse/geography_file_periods.py",
-      "pattern": null,
-      "why": "reviewed: the receipt readers glob below DATASETS = REPO_ROOT / \"data/datasets\" (scripts/lakehouse/geography_file_periods.py:131, :142, :157, :168, :177; DATASETS :35), called only with that default (:268); Git ignores data/ (.gitignore:42), so no tracked path is below it"
-    },
-    {
       "module": "scripts/lakehouse/gold_checks.py",
       "pattern": "^dbt/(models|macros|tests)/.*\\.sql$|^dbt/models/.*\\.yml$|^data_contracts/great_expectations/gold/[^/]+\\.json$",
       "why": "reviewed: model_problems lists *.sql in dbt/models/silver, dbt/models/gold, dbt/macros and dbt/tests and *.yml in dbt/models with rglob (scripts/lakehouse/gold_checks.py:732-737; DBT :36), and suites_problems globs *.json in the gold suites folder (:1015; SUITES :35 = data_contracts/great_expectations/gold, the folder run_gold_e2e.py:324 and run_silver_e2e.py:217 pass)"
@@ -273,11 +268,6 @@
       "why": "reviewed: remove_tree lists the folder it deletes (scripts/lakehouse/gold_publish.py:253); its callers pass run output folders (scripts/features/features_input.py:106 partial extract, orchestration/launcher.py:10046 copy folder)"
     },
     {
-      "module": "scripts/lakehouse/ownership_release_periods.py",
-      "pattern": null,
-      "why": "reviewed: receipt_periods globs the RECEIPTS patterns (scripts/lakehouse/ownership_release_periods.py:28) below DATASETS = REPO_ROOT / \"data/datasets\" (:27, glob :63), called only with that default (:108); Git ignores data/ (.gitignore:42)"
-    },
-    {
       "module": "scripts/lakehouse/package_fixture.py",
       "pattern": null,
       "why": "reviewed: the fixture writer globs earlier case folders in OUT = ROOT / \"data\" / \"package_fixture\" (scripts/lakehouse/package_fixture.py:237, OUT :47); Git ignores data/ (.gitignore:42); the \"ls\" at :480 is a dbt command word"
@@ -286,11 +276,6 @@
       "module": "scripts/lakehouse/pipeline_build.py",
       "pattern": null,
       "why": "reviewed: the spill check lists the DuckDB temp_directory with rglob (scripts/lakehouse/pipeline_build.py:64; spill = Path(settings[\"temp_directory\"]), :60), a run-time scratch folder"
-    },
-    {
-      "module": "scripts/lakehouse/pos_file_periods.py",
-      "pattern": null,
-      "why": "reviewed: job_periods globs job plans below JOBS = REPO_ROOT / \"data/datasets/acquisition_batches\" (scripts/lakehouse/pos_file_periods.py:27, glob :40, captures :49), called only with that default (:82); Git ignores data/ (.gitignore:42)"
     },
     {
       "module": "scripts/lakehouse/provenance.py",
@@ -484,13 +469,10 @@
     "scripts/lakehouse/feature_allowlist.py": 2,
     "scripts/lakehouse/feature_columns.py": 5,
     "scripts/lakehouse/feature_sources.py": 3,
-    "scripts/lakehouse/geography_file_periods.py": 5,
     "scripts/lakehouse/gold_checks.py": 6,
     "scripts/lakehouse/gold_publish.py": 1,
-    "scripts/lakehouse/ownership_release_periods.py": 1,
     "scripts/lakehouse/package_fixture.py": 2,
     "scripts/lakehouse/pipeline_build.py": 1,
-    "scripts/lakehouse/pos_file_periods.py": 2,
     "scripts/lakehouse/provenance.py": 3,
     "scripts/lakehouse/run_bronze_e2e.py": 1,
     "scripts/lakehouse/run_duckdb_spill_cases.py": 1,

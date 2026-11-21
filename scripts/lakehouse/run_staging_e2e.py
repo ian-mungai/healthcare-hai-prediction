@@ -40,7 +40,6 @@ import re
 import secrets
 import shutil
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator
@@ -61,9 +60,9 @@ from scripts.lakehouse import (
     ipps_file_labels,
     mmd_conditions,
     ownership_release_periods,
+    period_receipts,
     pos_file_periods,
     provenance,
-    run_lock,
 )
 
 REPO_ROOT = catalog.REPO_ROOT
@@ -5270,42 +5269,92 @@ def query_coverage_checks() -> dict[str, bool]:
     }
 
 
-def period_folder_checks() -> dict[str, bool]:
-    """Each period generator, run from a worktree that holds no ``data/datasets``, finds its coverage in the main checkout's folder."""
-    plan = json.dumps({"plan": {"measurement_periods": [{"label": '{"catalog_temporal": "2020-01-01/2020-12-31"}'}]}})
-    receipt = json.dumps(
-        {
-            "snapshot_id": "rel_own",
-            "release": {"publisher_release_label": "2020"},
-            "measurement_periods": [{"source_basis": "publisher_stated", "start_date": "2020-01-01", "end_date": "2020-12-31"}],
-        }
-    )
-    with tempfile.TemporaryDirectory() as scratch:
-        main, worktree = Path(scratch) / "main", Path(scratch) / "worktree"
-        jobs = main / "data/datasets/acquisition_batches/b1/jobs"
-        for folder, text in (("CMS_POS_file_1/job.json", plan), ("HSA_file_1/job.json", plan), ("ENROLL_file_1/captures/ENROLL/rel_own/receipt.json", receipt)):
-            (jobs / folder).parent.mkdir(parents=True)
-            (jobs / folder).write_text(text)
-        (jobs / "CMS_POS_file_1/captures/CMS_POS/rel_pos").mkdir(parents=True)
-        (jobs / "HSA_file_1/captures/HSA/rel_hsa").mkdir(parents=True)
-        worktree.mkdir()
-        loaded = {
-            pos_file_periods: [{"sha256": "a" * 64, "release_id": "rel_pos", "file_name": "pos.csv"}],
-            geography_file_periods: [{"table": "cms_hsa_csv", "sha256": "b" * 64, "release_id": "rel_hsa", "file_name": "hsa.csv"}],
-            ownership_release_periods: [{"table": "cms_hospital_enrollments", "sha256": "c" * 64, "release_id": "rel_own", "file_name": "enroll.csv"}],
-        }
-        checks = {}
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(run_lock, "main_checkout", lambda cwd: main if cwd == worktree else cwd))
-            for module, items in loaded.items():
-                stack.enter_context(mock.patch.object(module, "REPO_ROOT", worktree))
-                stack.enter_context(mock.patch.object(module, "loaded_files", lambda items=items: items))
-            for module in loaded:
-                name = module.__name__.rsplit(".", 1)[-1]
-                try:
-                    checks[f"{name}_found_from_a_worktree_without_datasets"] = len(module.build()) == 1
-                except module.PeriodError:
-                    checks[f"{name}_found_from_a_worktree_without_datasets"] = False
+class ReceiptStorage:
+    """Versioned objects in memory, standing in for S3: list the current version of each key, get one exact version."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.current: dict[str, str] = {}
+
+    def put(self, key: str, data: bytes) -> str:
+        version = f"v-{hashlib.sha256(key.encode() + data).hexdigest()[:12]}"
+        self.objects[(key, version)] = data
+        self.current[key] = version
+        return version
+
+    def list_keys(self, bucket: str, prefix: str) -> list[tuple[str, str]]:
+        return sorted((key, version) for key, version in self.current.items() if key.startswith(prefix))
+
+    def get(self, bucket: str, key: str, version_id: str) -> bytes:
+        return self.objects[(key, version_id)]
+
+
+def period_receipt_checks() -> dict[str, bool]:
+    """Each period generator rebuilds its seed rows from S3 alone, from the receipt its manifest lists, read by key and exact version."""
+    from scripts.lakehouse import bronze
+
+    bucket = "synthetic-bucket"
+    storage = ReceiptStorage()
+    tables = {
+        "cms_provider_of_services": ("cms/provider_of_services", "pos"),
+        "cms_hsa_csv": ("cms/hospital_service_area", "hsa"),
+        "cms_hospital_enrollments": ("cms/hospital_ownership", "enroll"),
+    }
+
+    def store(table: str, release: str, period: tuple[str, str], tamper: bool = False) -> tuple[str, str]:
+        """Store a capture's receipt, then its manifest, which lists the receipt by key, version, SHA-256 and length; return the receipt's key and version."""
+        collection, dataset = tables[table]
+        label = json.dumps({"catalog_temporal": f"{period[0]}/{period[1]}"}) if table != "cms_hospital_enrollments" else "Release 2020"
+        body = json.dumps(
+            {
+                "snapshot_id": release,
+                "release": {"publisher_release_label": "2020"},
+                "measurement_periods": [
+                    {"label": label, "source_basis": "publisher_stated", "start_date": period[0], "end_date": period[1]},
+                ],
+            }
+        ).encode()
+        base = f"{collection}/manifests/release_date=2026-01-01/{release}/{dataset}"
+        version = storage.put(f"{base}/receipt.json", body)
+        listed = hashlib.sha256(body + b"x" if tamper else body).hexdigest()
+        data = f"{collection}/datasets/{dataset}/{release}/{dataset}.csv"
+        entries = [
+            {"role": "data", "dataset_id": dataset, "object": {"bucket": bucket, "key": data, "version_id": "dv", "sha256": "d" * 64, "byte_count": 1}},
+            {
+                "role": "capture_receipt",
+                "dataset_id": dataset,
+                "object": {"bucket": bucket, "key": f"{base}/receipt.json", "version_id": version, "sha256": listed, "byte_count": len(body)},
+            },
+        ]
+        manifest = {"snapshot_id": release, "source_id": dataset.upper(), "dataset_id": dataset, "release_id": release, "objects": entries}
+        storage.put(f"{base}/manifest.json", json.dumps(manifest).encode())
+        return f"{base}/receipt.json", version
+
+    for table in tables:
+        store(table, f"rel_{table}", ("2020-01-01", "2020-12-31"))
+    # A later version of the enrollment receipt states another period; the manifest lists the earlier version, so that one must be read.
+    key, version = store("cms_hospital_enrollments", "rel_cms_hospital_enrollments", ("2020-01-01", "2020-12-31"))
+    storage.put(key, storage.objects[(key, version)].replace(b"2020-12-31", b"2021-12-31"))
+    generators = (pos_file_periods, geography_file_periods, ownership_release_periods)
+    checks: dict[str, bool] = {}
+    with mock.patch.object(period_receipts, "source", return_value=(storage, bucket, bronze.load_table_map(), bronze.RetiredObjects())):
+        for module in generators:
+            name = module.__name__.rsplit(".", 1)[-1]
+            try:
+                rows = module.build()
+            except Exception:
+                rows = []
+            checks[f"{name}_rebuilt_from_s3_receipts"] = len(rows) == 1 and (rows[0]["period_start"], rows[0].get("period_end", "2020-12-31")) == (
+                "2020-01-01",
+                "2020-12-31",
+            )
+        # A receipt whose stored bytes differ from the manifest's SHA-256 stops the run.
+        store("cms_hospital_enrollments", "rel_cms_hospital_enrollments", ("2020-01-01", "2020-12-31"), tamper=True)
+        try:
+            ownership_release_periods.build()
+            checks["a_receipt_that_differs_from_its_manifest_stops_the_run"] = False
+        except (period_receipts.ReceiptError, ownership_release_periods.PeriodError):
+            checks["a_receipt_that_differs_from_its_manifest_stops_the_run"] = True
     return checks
 
 
@@ -6418,7 +6467,7 @@ OWNER_BRIDGE = tuple(
 
 def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
     """Build every fixture case (in parallel when asked), then run each check in order and return its outcome."""
-    checks: dict[str, bool] = dict(query_coverage_checks()) | period_folder_checks()
+    checks: dict[str, bool] = dict(query_coverage_checks()) | period_receipt_checks()
     want = expected(BASE)
     jobs: list[tuple[str, tuple[Stored, ...], frozenset[str]]] = [
         ("base", BASE, frozenset()),
@@ -7734,11 +7783,11 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=4, help="fixture cases built at once; 1 is serial; capped by memory and cores [687] [688]")
     parser.add_argument("--test-registry", help="a test registry folder (for tests of this runner only)")
     parser.add_argument(
-        "--check-queries", action="store_true", help="only the host checks (reader query table coverage, period generator folders); no container, no build"
+        "--check-queries", action="store_true", help="only the host checks (reader query table coverage, period generator receipts); no container, no build"
     )
     args = parser.parse_args()
     if args.check_queries:
-        outcome = query_coverage_checks() | period_folder_checks()
+        outcome = query_coverage_checks() | period_receipt_checks()
         for name, ok in outcome.items():
             sys.stdout.write(f"{'PASS' if ok else 'FAIL'} {name}\n")
         sys.stdout.write(f"staging e2e query coverage: {sum(outcome.values())} of {len(outcome)} passed\n")
