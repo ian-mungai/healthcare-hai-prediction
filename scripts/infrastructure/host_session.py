@@ -435,6 +435,8 @@ class Session:
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
         self.environment = "dev"
         self.cleanup_outcome: str | None = None  # how the last ``stop_after_failure`` ended: kept_on, host_off_verified or host_off_failed: <reason>
+        self.host_requested = False  # a host-on request was made or may have been made: a development session then owes a capacity-zero request
+        self.output_errors = 0  # the reports that a closed output refused during a development session
 
     def step(self, name: str, detail: str = "ok") -> None:
         """Report one finished step."""
@@ -534,6 +536,7 @@ class Session:
         An instance can be ACTIVE before ECS lists it in its capacity provider, and RunTask on the provider then fails with "contains no container
         instances"; ``capacityProviderName`` of ``describe-container-instances`` shows the membership.
         """
+        self.host_requested = True
         self.call("autoscaling", "set-desired-capacity", ["--auto-scaling-group-name", self.names.group, "--desired-capacity", "1", "--no-honor-cooldown"])
         self.step("host_on_requested")
         seen = [""]
@@ -890,21 +893,22 @@ class Session:
 
         It never checks for running job tasks, unlike ``stop``: it is the cleanup of a command that already failed, and a refusal or a wait here would leave a
         failed host running and billed with nobody present. ``--keep-on`` is the way to keep the host; a job that a half-started host loses is resumed by
-        its DAG retry, as for a job launched between the check of ``stop`` and its host-off call.
+        its DAG retry, as for a job launched between the check of ``stop`` and its host-off call. Every shutdown signal is held from the first report to the
+        verified host-off, so a second signal cannot cut the cleanup short.
         """
-        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
-        if keep_on:
-            self.cleanup_outcome = "kept_on"
-            self.step("host_kept_on", "left on for diagnosis; run stop when done")
-            return
-        try:
-            with deferred_signals(self.step):
+        with deferred_signals(self.step):
+            self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
+            if keep_on:
+                self.cleanup_outcome = "kept_on"
+                self.step("host_kept_on", "left on for diagnosis; run stop when done")
+                return
+            try:
                 self.host_off()
-        except HostSessionError as error:
-            self.cleanup_outcome = f"host_off_failed: {error}"
-            self.step("host_off_failed", f"the host may still be on; run stop ({error})")
-            return
-        self.cleanup_outcome = "host_off_verified"
+            except HostSessionError as error:
+                self.cleanup_outcome = f"host_off_failed: {error}"
+                self.step("host_off_failed", f"the host may still be on; run stop ({error})")
+                return
+            self.cleanup_outcome = "host_off_verified"
 
     def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
         """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of
@@ -1448,18 +1452,42 @@ class Session:
             return False
         return True
 
+    def safe_report(self) -> Callable[[], None]:
+        """Route every line through a writer that cannot raise: a closed output (a broken pipe, a closed stream) is counted and the session carries on. The
+        answer puts the earlier writer back."""
+        earlier = self.report
+
+        def write(line: str) -> None:
+            try:
+                earlier(line)
+            except (OSError, ValueError):
+                self.output_errors += 1
+
+        self.report = write
+
+        def restore() -> None:
+            self.report = earlier
+
+        return restore
+
     def dev_session(self, hold_seconds: int, stop_wait_seconds: int, record_folder: Path, code: tuple[str, str] | None = None) -> None:
         """A development session in one command: ``start``, a hold, ``stop`` and a record of the status at each end.
 
         The hold lasts ``hold_seconds`` and ends early on Ctrl+C or SIGTERM; the host work happens through the host's own services meanwhile (the owner opens
         a web interface or triggers a DAG). At the end of the hold the session tries ``stop`` with ``stop_wait_seconds``: it waits that long for a running job
-        task and then refuses, which leaves the host on and says so; a later ``stop`` is then needed. A failed start stops the host as ``start`` does, and the
-        record keeps the start error with the outcome of that cleanup and the status the host shows then. An interruption, SIGTERM or output error after the
-        start (while the status is read, in the report or in the hold setup) stops the host as a failed start does, without the job task check, and the record
-        names the error and the cleanup. The record is one JSON file in ``record_folder`` with the phases, the times, the host address, the serial of the
-        services state and the ``status`` document after the start and after the stop; it names no ARN. It is written before the host turns on (a record that
-        cannot be written refuses the session) and again after each phase. The production host is always on:
-        in production this refuses before any AWS call.
+        task and then refuses, which leaves the host on and says so; a later ``stop`` is then needed.
+
+        One rule covers every other path: once the host was asked to turn on, the session ends with a capacity-zero request and a record, whatever fails. A
+        failed start stops the host as ``start`` does. Any other failure after the host was asked to turn on (an interruption, SIGTERM or any error while the
+        status is read, in the hold or in the setup) stops the host as a failed start does, without the job task check. That cleanup and the closing of the
+        record run with every shutdown signal held, so a second signal cannot cut them short. Output goes through a writer that cannot raise: a closed
+        output is counted in the record and never skips the stop. The error the caller sees is always the first one; the outcome of a denied cleanup, a host
+        that may still be on and a record that could not be written are added to it as notes, which the command line prints.
+
+        The record is one JSON file in ``record_folder`` with the phases, the times, the host address, the serial of the services state, the number of output
+        errors and the ``status`` document after the start and after the stop or the cleanup; it names no ARN. It is written before the host turns on (a record
+        that cannot be written refuses the session) and again after each phase. The production host is always on: in production this refuses before any AWS
+        call.
         """
         if self.environment == PRODUCTION:
             raise HostSessionError("session refused: the production host is always on, so nobody starts or stops it by hand; this command is for development")
@@ -1480,74 +1508,69 @@ class Session:
             raise HostSessionError(f"the session record folder {record_folder} could not be made ({type(error).__name__}); nothing was started") from None
         if not self.save_record(path, record):
             raise HostSessionError(f"the session record could not be written in {record_folder}; nothing was started")
-        self.step("session_record", path.name)
-        self.cleanup_outcome = None
+        self.host_requested, self.cleanup_outcome, self.output_errors = False, None, 0
+        restore = self.safe_report()
         try:
-            self.start(code=code)
-        except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
-            record |= {"start": "failed", "start_error": str(error) or type(error).__name__, "start_cleanup": self.cleanup_outcome or "nothing was started"}
-            self.close_record(path, record)
-            raise
-        record |= {"start": "started", "host_address": self.names.host_address}
-        try:
-            record["after_start"] = self.status_record()
-            self.save_record(path, record)
-            self.step("host_address", self.names.host_address)
-            self.step(
-                "session_ready",
-                f"the host is on and its services are stable; at the end of the hold ({hold_seconds} s) it tries to stop the host and waits up to "
-                f"{stop_wait_seconds} s for running job tasks; when a job task still runs, the host stays on and needs a later stop; "
-                "press Ctrl+C to end the hold sooner",
-            )
-            record["hold_ended"] = self.hold(hold_seconds)
-            self.step("hold_ended", str(record["hold_ended"]))
-        except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError) as error:
-            self.abandon(path, record, error)
-            raise
-        try:
-            self.stop(stop_wait_seconds)
-        except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError) as error:
-            reason = str(error) or type(error).__name__
-            if isinstance(error, OSError):
-                self.mute_report()
-                reason = f"{type(error).__name__}: {reason}"
-            record |= {"stop": "refused" if reason.startswith("stop refused") else "failed", "stop_error": reason}
-            self.step("session_host_left_on", "the host may still be on; run stop when the job tasks are done")
-            record |= {"after_stop": self.status_record(), "ended_at": self.utc_text()}
-            self.save_record(path, record)
-            raise
-        record |= {"stop": "stopped", "after_stop": self.status_record(), "ended_at": self.utc_text()}
-        if not self.save_record(path, record):
+            self.step("session_record", path.name)
+            try:
+                saved = self.run_dev_session(path, record, hold_seconds, stop_wait_seconds, code)
+            except BaseException as error:
+                self.close_failed_session(path, record, error)
+                raise
+        finally:
+            restore()
+        if not saved:
             raise HostSessionError("the host is off, but the session record could not be written")
 
-    def mute_report(self) -> None:
-        """Make the report ignore a write error, so a closed output cannot cut a cleanup short."""
-        report = self.report
-
-        def quiet(line: str) -> None:
-            with contextlib.suppress(OSError):
-                report(line)
-
-        self.report = quiet
-
-    def close_record(self, path: Path, record: dict[str, Any]) -> None:
-        """Add the status the host shows now and the end time to a record of a failed session, tell the owner when the host may still be on and save it."""
-        status = self.status_record()
-        record |= {"after_cleanup": status, "ended_at": self.utc_text()}
-        if status.get("desired_capacity") != 0:
-            self.step("session_host_left_on", "the host may still be on; run stop")
+    def run_dev_session(self, path: Path, record: dict[str, Any], hold_seconds: int, stop_wait_seconds: int, code: tuple[str, str] | None) -> bool:
+        """The phases of a development session; True when the closing record was written. Any exception goes to ``close_failed_session``."""
+        self.start(code=code)
+        record |= {"start": "started", "host_address": self.names.host_address}
+        record["after_start"] = self.status_record()
         self.save_record(path, record)
+        self.step("host_address", self.names.host_address)
+        self.step(
+            "session_ready",
+            f"the host is on and its services are stable; at the end of the hold ({hold_seconds} s) it tries to stop the host and waits up to "
+            f"{stop_wait_seconds} s for running job tasks; when a job task still runs, the host stays on and needs a later stop; "
+            "press Ctrl+C to end the hold sooner",
+        )
+        record["hold_ended"] = self.hold(hold_seconds)
+        self.step("hold_ended", str(record["hold_ended"]))
+        record["stop"] = "attempted"
+        self.stop(stop_wait_seconds)
+        with deferred_signals(self.step):
+            record |= {"stop": "stopped", "after_stop": self.status_record(), "ended_at": self.utc_text(), "output_errors": self.output_errors}
+            return self.save_record(path, record)
 
-    def abandon(self, path: Path, record: dict[str, Any], error: BaseException) -> None:
-        """An abnormal end after the start (an interruption, SIGTERM or a closed output): stop the host as a failed start does, record what happened and
-        make the error the caller sees a session error when it is an output error. An interruption or SIGTERM is raised again as it came."""
-        self.mute_report()
-        record |= {"session_error": f"{type(error).__name__}: {error}" if str(error) else type(error).__name__}
-        self.stop_after_failure("session", False)
-        record["cleanup"] = self.cleanup_outcome
-        self.close_record(path, record)
-        if isinstance(error, OSError):
-            raise HostSessionError(f"session failed after the start ({type(error).__name__}); the host cleanup ended as {self.cleanup_outcome}") from None
+    def close_failed_session(self, path: Path, record: dict[str, Any], error: BaseException) -> None:
+        """End a development session that failed: stop the host when it was asked to turn on and no cleanup ran yet (never while the job wait of ``stop``
+        refused, which leaves the host on), read the status, close and save the record and add what the caller must know to ``error`` as notes.
+
+        Every shutdown signal is held from here to the end. The function raises nothing of its own: a status that cannot be read is recorded as an error, a
+        record that cannot be written is noted on ``error`` and the first error stays the one the caller sees."""
+        reason = str(error) or type(error).__name__
+        with deferred_signals(self.step):
+            stopping = record.get("stop") == "attempted"
+            if not stopping and self.host_requested and self.cleanup_outcome is None:
+                self.stop_after_failure("session", False)
+            status = self.status_record()
+            off = status.get("desired_capacity") == 0 and not status.get("active_container_instances")
+            if stopping:
+                outcome = "refused" if reason.startswith("stop refused") else ("stopped" if off else "failed")
+                record |= {"stop": outcome, "stop_error": reason, "after_stop": status}
+            elif record.get("start") == "started":
+                record |= {"session_error": f"{type(error).__name__}: {reason}", "cleanup": self.cleanup_outcome, "after_cleanup": status}
+            else:
+                record |= {"start": "failed", "start_error": reason, "start_cleanup": self.cleanup_outcome or "nothing was started", "after_cleanup": status}
+            record |= {"ended_at": self.utc_text(), "output_errors": self.output_errors}
+            if not off:
+                self.step("session_host_left_on", "the host may still be on; run stop when the job tasks are done")
+                error.add_note("the host may still be on; run stop")
+            if self.cleanup_outcome is not None and self.cleanup_outcome.startswith("host_off_failed"):
+                error.add_note(f"host cleanup: {self.cleanup_outcome}")
+            if not self.save_record(path, record):
+                error.add_note(f"session record not written: {path.name}")
 
     def hold(self, seconds: int) -> str:
         """Wait ``seconds`` with the host on, in steps of ``POLL_SECONDS``; the answer is ``time``, ``interrupted`` (Ctrl+C) or ``terminated`` (SIGTERM)."""
@@ -1703,6 +1726,12 @@ def open_session(reload: bool = False) -> Session:
     return session
 
 
+def write_error(text: str) -> None:
+    """Write to standard error; a closed stream is ignored, because the exit code carries the failure."""
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(text)
+
+
 def check_hold(seconds: int) -> None:
     """Refuse a hold outside 1 to ``DEV_MAX_HOLD_SECONDS`` seconds."""
     if not 1 <= seconds <= DEV_MAX_HOLD_SECONDS:
@@ -1819,7 +1848,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sys.stdout.write(json.dumps(session.status(), indent=2, sort_keys=True) + "\n")
     except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
-        sys.stderr.write(f"{arguments.command} failed: {type(error).__name__} {error}\n")
+        write_error(f"{arguments.command} failed: {type(error).__name__} {error}\n")
+        for note in getattr(error, "__notes__", []):
+            write_error(f"{arguments.command} note: {note}\n")
         return 1
     finally:
         restore()

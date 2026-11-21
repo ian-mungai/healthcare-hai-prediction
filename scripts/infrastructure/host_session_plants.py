@@ -74,8 +74,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     "compares only the run ID": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_MODE")'),
     "compares only the digest": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_SHA256", "CODE_MODE")'),
     "leaves the host on after a failure": (
-        "        try:\n            with deferred_signals(self.step):\n                self.host_off()\n        except HostSessionError",
-        "        try:\n            pass\n        except HostSessionError",
+        "            try:\n                self.host_off()\n            except HostSessionError",
+        "            try:\n                pass\n            except HostSessionError",
     ),
     "lets a second signal cut the cleanup short": (
         "            with deferred_signals(self.step):\n                self.host_off()",
@@ -119,8 +119,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     "does not force the deployment": ('"--force-new-deployment"]', '"--no-force-new-deployment"]'),
     "refresh ignores a running job task": ("        if tasks:\n            shown", "        if False:\n            shown"),
     "refresh stops the host after a failure": (
-        "            raise\n\n    def bootstrap(self, again",
-        "            self.host_off()\n            raise\n\n    def bootstrap(self, again",
+        "            raise\n\n    def utc_text",
+        "            self.host_off()\n            raise\n\n    def utc_text",
     ),
     "refresh accepts an instance outside the capacity provider": (
         '        if active[0].get("capacityProviderName") != self.names.provider:\n            raise HostSessionError("refresh refused',
@@ -142,7 +142,29 @@ PLANTS: dict[str, tuple[str, str]] = {
         "import TaskCleanup\n\n        if code is not None and CODE_FETCH not in self.names.one_shot:\n            raise",
         "import TaskCleanup\n\n        if False:\n            raise",
     ),
-    "refresh drops its code option": ('arguments.command in {"start", "refresh"} and', 'arguments.command == "start" and'),
+    "refresh drops its code option": ('arguments.command in {"start", "refresh", "session"} and', 'arguments.command in {"start", "session"} and'),
+    "session runs in production": (
+        '        if self.environment == PRODUCTION:\n            raise HostSessionError("session refused',
+        '        if False:\n            raise HostSessionError("session refused',
+    ),
+    "session skips the cleanup after an abnormal end": ('self.stop_after_failure("session", False)', "pass"),
+    "session lets a closed output raise": (
+        "            except (OSError, ValueError):\n                self.output_errors += 1",
+        "            except ValueError:\n                self.output_errors += 1",
+    ),
+    "session closes a failed session without holding signals": (
+        "        with deferred_signals(self.step):\n            stopping = record.get",
+        "        if True:\n            stopping = record.get",
+    ),
+    "session does not save the record of a failed session": (
+        "            if not self.save_record(path, record):\n                error.add_note",
+        "            if False:\n                error.add_note",
+    ),
+    "session does not stop the host after the hold": ("        self.stop(stop_wait_seconds)\n        with deferred_signals", "        with deferred_signals"),
+    "session stops the host after a job wait refused": (
+        "            if not stopping and self.host_requested and self.cleanup_outcome is None:",
+        "            if self.host_requested and self.cleanup_outcome is None:",
+    ),
     "stop skips the job task check": ("        else:\n            self.check_no_job_tasks(wait_seconds)\n", "        else:\n            pass\n"),
     "stop still checks after --force-stop": (
         '        if force_stop:\n            self.step("stop_forced"',
@@ -169,8 +191,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "stop prints the task ARN": ('shown = f"{task.family} {task.suffix}"', 'shown = f"{task.family} {task.arn}"'),
     "stop after a failure waits for job tasks": (
-        '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")',
-        '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")\n        self.check_no_job_tasks(0)',
+        '            self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")',
+        '            self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")\n            self.check_no_job_tasks(0)',
     ),
     "the command line runs a second copy of the module": ("    raise SystemExit(packaged_main())", "    raise SystemExit(main())"),
     "names carry no state serial": ("state_serial=services_state_serial(SERVICES_DIRECTORY),", "state_serial=None,"),

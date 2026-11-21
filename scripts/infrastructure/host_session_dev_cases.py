@@ -246,29 +246,6 @@ def an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host() -> di
     return checks
 
 
-def a_broken_output_pipe_at_the_ready_line_stops_the_host() -> dict[str, bool]:
-    host, session, lines = build(checkout=OLD_SHA)
-    directory = folder()
-    seen: list[str] = []
-
-    def report(line: str) -> None:
-        if ready(seen):
-            raise BrokenPipeError(32, "Broken pipe")
-        seen.append(line)
-        lines.append(line)
-
-    session.report = report
-    message = failure(lambda: session.dev_session(HOLD_SECONDS, 0, directory))
-    record = (records(directory) or [{}])[0]
-    return {
-        "the session fails by name, not by a traceback": message is not None and "BrokenPipeError" in message,
-        "the host is off": host.desired == 0,
-        "the record names the started phase and the cleanup": record.get("start") == "started" and record.get("cleanup") == "host_off_verified",
-        "the record keeps the error": "BrokenPipeError" in str(record.get("session_error")),
-        "the record has an end time": str(record.get("ended_at", "")).endswith("Z"),
-    }
-
-
 def a_failed_start_with_a_failed_cleanup_records_both() -> dict[str, bool]:
     host, session, lines = build({"never_stable", "deny_host_off"}, checkout=OLD_SHA)
     directory = folder()
@@ -296,6 +273,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "the_hold_is_bounded": the_hold_is_bounded,
     "session_command_line": session_command_line,
     "an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host": an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host,
-    "a_broken_output_pipe_at_the_ready_line_stops_the_host": a_broken_output_pipe_at_the_ready_line_stops_the_host,
     "a_failed_start_with_a_failed_cleanup_records_both": a_failed_start_with_a_failed_cleanup_records_both,
 }
