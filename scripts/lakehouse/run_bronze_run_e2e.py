@@ -1273,8 +1273,10 @@ LOCAL_PACKAGES = ("scripts", "orchestration", "services", "features", "config")
 
 # Functions that run only on the owner's host and never in the Spark image, so the imports inside them are not part of the image's closure. The by-hand bronze
 # register of the Glue mirror reads the run records through ``bronze_unsourced`` (``orchestration.raw_lineage``, which needs jsonschema); the image imports
-# ``glue_mirror`` (the gold publish and the bronze hook do) and never calls it. A module-level import of the same module is still followed.
-HOST_ONLY_FUNCTIONS = {"scripts.lakehouse.glue_mirror": {"bronze_register_tables"}}
+# ``glue_mirror`` (the gold publish and the bronze hook do) and never calls it. The command line of ``bronze_consumer_columns`` imports the declaration module,
+# which parses the models with DuckDB, for the host drift check; the image imports the module for its readers and never runs ``main``. A module-level import
+# of the same module is still followed.
+HOST_ONLY_FUNCTIONS = {"scripts.lakehouse.glue_mirror": {"bronze_register_tables"}, "scripts.lakehouse.bronze_consumer_columns": {"main"}}
 
 
 def host_only_nodes(module: str, tree: ast.AST) -> set[int]:
