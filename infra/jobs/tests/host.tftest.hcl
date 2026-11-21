@@ -1030,8 +1030,8 @@ run "model_sets_reserve_their_own_size_and_every_other_family_the_job_room" {
   }
 
   assert {
-    condition     = sum([for set in ["m1", "m2", "m3", "m5"] : tonumber(aws_ecs_task_definition.host["features_${set}"].cpu)]) <= 3072 && sum([for set in ["m1", "m2", "m3", "m5"] : tonumber(aws_ecs_task_definition.host["features_${set}"].memory)]) <= 26816
-    error_message = "A first wave of one large set and three small ones must fit the 3072 CPU units and the 26816 MiB job cap of the services default."
+    condition     = sum([for set in ["m1", "m2", "m3"] : tonumber(aws_ecs_task_definition.host["features_${set}"].cpu)]) <= 3072 && sum([for set in ["m1", "m2", "m3"] : tonumber(aws_ecs_task_definition.host["features_${set}"].memory)]) <= 22128
+    error_message = "A first wave of one large set and two small ones must fit the 3072 CPU units and the 22128 MiB job cap of the services default (one large set and three small ones need 25600 MiB and no longer fit)."
   }
 
   assert {
@@ -1075,8 +1075,8 @@ run "the_smaller_jobs_keep_their_own_size_and_binding" {
   }
 
   assert {
-    condition     = tonumber(aws_ecs_task_definition.host["drift"].cpu) + tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 3072 && tonumber(aws_ecs_task_definition.host["drift"].memory) + tonumber(aws_ecs_task_definition.host["metadata"].memory) + tonumber(aws_ecs_task_definition.host["features_m2"].memory) <= 26816
-    error_message = "Drift and metadata fit the 3072 CPU units together, and with a large model set they fit the 26816 MiB job cap, so different tests can share the host."
+    condition     = tonumber(aws_ecs_task_definition.host["drift"].cpu) + tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 3072 && tonumber(aws_ecs_task_definition.host["drift"].memory) + tonumber(aws_ecs_task_definition.host["metadata"].memory) + tonumber(aws_ecs_task_definition.host["features_m1"].memory) <= 22128
+    error_message = "Drift and metadata fit the 3072 CPU units together, and with a small model set they fit the 22128 MiB job cap of the services default, so different tests can share the host (with a large set they need 23552 MiB and no longer fit)."
   }
 }
 
