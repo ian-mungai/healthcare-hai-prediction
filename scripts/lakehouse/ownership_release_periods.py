@@ -22,6 +22,8 @@ import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
+from scripts.lakehouse import run_lock
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SEED = REPO_ROOT / "dbt/seeds/ownership_release_periods.csv"
 DATASETS = REPO_ROOT / "data/datasets"
@@ -104,8 +106,8 @@ def loaded_files() -> list[dict[str, str]]:
 
 
 def build() -> list[dict[str, str]]:
-    """Return the seed rows from storage and the receipts."""
-    return rows_for(loaded_files(), receipt_periods())
+    """Return the seed rows from storage and the receipts, read from the main checkout, which a worktree has no copy of."""
+    return rows_for(loaded_files(), receipt_periods(run_lock.main_checkout(REPO_ROOT) / "data/datasets"))
 
 
 def as_csv(rows: Iterable[Mapping[str, str]]) -> str:
