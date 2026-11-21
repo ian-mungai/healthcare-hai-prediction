@@ -434,6 +434,7 @@ class Session:
         self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
         self.environment = "dev"
+        self.cleanup_outcome: str | None = None  # how the last ``stop_after_failure`` ended: kept_on, host_off_verified or host_off_failed: <reason>
 
     def step(self, name: str, detail: str = "ok") -> None:
         """Report one finished step."""
@@ -893,13 +894,17 @@ class Session:
         """
         self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
         if keep_on:
+            self.cleanup_outcome = "kept_on"
             self.step("host_kept_on", "left on for diagnosis; run stop when done")
             return
         try:
             with deferred_signals(self.step):
                 self.host_off()
         except HostSessionError as error:
+            self.cleanup_outcome = f"host_off_failed: {error}"
             self.step("host_off_failed", f"the host may still be on; run stop ({error})")
+            return
+        self.cleanup_outcome = "host_off_verified"
 
     def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
         """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of
@@ -1447,10 +1452,13 @@ class Session:
         """A development session in one command: ``start``, a hold, ``stop`` and a record of the status at each end.
 
         The hold lasts ``hold_seconds`` and ends early on Ctrl+C or SIGTERM; the host work happens through the host's own services meanwhile (the owner opens
-        a web interface or triggers a DAG). The stop is ``stop`` with ``stop_wait_seconds``: it waits that long for a running job task and then refuses, which
-        leaves the host on and says so. A failed start stops the host as ``start`` does. The record is one JSON file in ``record_folder`` with the phases, the
-        times, the host address, the serial of the services state and the ``status`` document after the start and after the stop; it names no ARN. It is
-        written before the host turns on (a record that cannot be written refuses the session) and again after each phase. The production host is always on:
+        a web interface or triggers a DAG). At the end of the hold the session tries ``stop`` with ``stop_wait_seconds``: it waits that long for a running job
+        task and then refuses, which leaves the host on and says so; a later ``stop`` is then needed. A failed start stops the host as ``start`` does, and the
+        record keeps the start error with the outcome of that cleanup and the status the host shows then. An interruption, SIGTERM or output error after the
+        start (while the status is read, in the report or in the hold setup) stops the host as a failed start does, without the job task check, and the record
+        names the error and the cleanup. The record is one JSON file in ``record_folder`` with the phases, the times, the host address, the serial of the
+        services state and the ``status`` document after the start and after the stop; it names no ARN. It is written before the host turns on (a record that
+        cannot be written refuses the session) and again after each phase. The production host is always on:
         in production this refuses before any AWS call.
         """
         if self.environment == PRODUCTION:
@@ -1473,22 +1481,36 @@ class Session:
         if not self.save_record(path, record):
             raise HostSessionError(f"the session record could not be written in {record_folder}; nothing was started")
         self.step("session_record", path.name)
+        self.cleanup_outcome = None
         try:
             self.start(code=code)
         except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
-            record |= {"start": "failed", "start_error": str(error) or type(error).__name__, "ended_at": self.utc_text()}
-            self.save_record(path, record)
+            record |= {"start": "failed", "start_error": str(error) or type(error).__name__, "start_cleanup": self.cleanup_outcome or "nothing was started"}
+            self.close_record(path, record)
             raise
-        record |= {"start": "started", "host_address": self.names.host_address, "after_start": self.status_record()}
-        self.save_record(path, record)
-        self.step("host_address", self.names.host_address)
-        self.step("session_ready", f"the host is on and its services are stable; it stops by itself in {hold_seconds} s; press Ctrl+C to stop it sooner")
-        record["hold_ended"] = self.hold(hold_seconds)
-        self.step("hold_ended", str(record["hold_ended"]))
+        record |= {"start": "started", "host_address": self.names.host_address}
+        try:
+            record["after_start"] = self.status_record()
+            self.save_record(path, record)
+            self.step("host_address", self.names.host_address)
+            self.step(
+                "session_ready",
+                f"the host is on and its services are stable; at the end of the hold ({hold_seconds} s) it tries to stop the host and waits up to "
+                f"{stop_wait_seconds} s for running job tasks; when a job task still runs, the host stays on and needs a later stop; "
+                "press Ctrl+C to end the hold sooner",
+            )
+            record["hold_ended"] = self.hold(hold_seconds)
+            self.step("hold_ended", str(record["hold_ended"]))
+        except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError) as error:
+            self.abandon(path, record, error)
+            raise
         try:
             self.stop(stop_wait_seconds)
-        except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:
+        except (HostSessionError, TerminationRequested, KeyboardInterrupt, OSError) as error:
             reason = str(error) or type(error).__name__
+            if isinstance(error, OSError):
+                self.mute_report()
+                reason = f"{type(error).__name__}: {reason}"
             record |= {"stop": "refused" if reason.startswith("stop refused") else "failed", "stop_error": reason}
             self.step("session_host_left_on", "the host may still be on; run stop when the job tasks are done")
             record |= {"after_stop": self.status_record(), "ended_at": self.utc_text()}
@@ -1497,6 +1519,35 @@ class Session:
         record |= {"stop": "stopped", "after_stop": self.status_record(), "ended_at": self.utc_text()}
         if not self.save_record(path, record):
             raise HostSessionError("the host is off, but the session record could not be written")
+
+    def mute_report(self) -> None:
+        """Make the report ignore a write error, so a closed output cannot cut a cleanup short."""
+        report = self.report
+
+        def quiet(line: str) -> None:
+            with contextlib.suppress(OSError):
+                report(line)
+
+        self.report = quiet
+
+    def close_record(self, path: Path, record: dict[str, Any]) -> None:
+        """Add the status the host shows now and the end time to a record of a failed session, tell the owner when the host may still be on and save it."""
+        status = self.status_record()
+        record |= {"after_cleanup": status, "ended_at": self.utc_text()}
+        if status.get("desired_capacity") != 0:
+            self.step("session_host_left_on", "the host may still be on; run stop")
+        self.save_record(path, record)
+
+    def abandon(self, path: Path, record: dict[str, Any], error: BaseException) -> None:
+        """An abnormal end after the start (an interruption, SIGTERM or a closed output): stop the host as a failed start does, record what happened and
+        make the error the caller sees a session error when it is an output error. An interruption or SIGTERM is raised again as it came."""
+        self.mute_report()
+        record |= {"session_error": f"{type(error).__name__}: {error}" if str(error) else type(error).__name__}
+        self.stop_after_failure("session", False)
+        record["cleanup"] = self.cleanup_outcome
+        self.close_record(path, record)
+        if isinstance(error, OSError):
+            raise HostSessionError(f"session failed after the start ({type(error).__name__}); the host cleanup ended as {self.cleanup_outcome}") from None
 
     def hold(self, seconds: int) -> str:
         """Wait ``seconds`` with the host on, in steps of ``POLL_SECONDS``; the answer is ``time``, ``interrupted`` (Ctrl+C) or ``terminated`` (SIGTERM)."""

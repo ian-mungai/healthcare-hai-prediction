@@ -58,7 +58,7 @@ Only the listed web interfaces can be opened from your Mac, each through its own
    bash scripts/host.sh start
    ```
 
-   In development, one command can start the host, keep it on for a bounded time, stop it and write a record of its status under `data/host_session/sessions/`. Run it in place of `start` and `stop`, then open the web interface from a second window. In production the host is always on and this command refuses:
+   In development, one command can start the host, keep it on for a bounded time, try to stop it and write a record of its status under `data/host_session/sessions/`. At the end of the hold it waits up to 30 minutes for running job tasks. When a job task still runs, the host stays on and needs a later `bash scripts/host.sh stop`. Run it in place of `start` and `stop`, then open the web interface from a second window. In production the host is always on and this command refuses:
 
    ```sh
    bash scripts/host.sh session --hold-seconds 3600

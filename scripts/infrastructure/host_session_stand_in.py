@@ -89,6 +89,7 @@ class StandInHost:
     ``faults`` may hold: ``never_register``, ``never_terminate``, ``run_task_failure``, ``exit_code:<family key>=<n>``, ``never_stable``, ``pending_stuck``,
     ``late_provider:<n>`` (the instance joins the capacity provider n virtual seconds after it registers), ``never_provider`` (it never joins),
     ``other_provider`` (it reports another capacity provider's name),
+    ``deny_host_off`` (the call that sets the desired capacity to 0 answers AccessDeniedException),
     ``throttle:<n>`` (the next n describe calls fail), ``api_error`` (every describe call fails) and
     ``interrupt_run_task`` (a run-task call raises KeyboardInterrupt), ``signal_run_task`` (a run-task call receives a real SIGTERM),
     ``interrupt_catalog_stop`` (the call that scales the catalog service to zero raises KeyboardInterrupt), ``signal_catalog_stop`` (it receives a real
@@ -283,6 +284,8 @@ class StandInHost:
             raise KeyboardInterrupt
         if scaling_down and "signal_catalog_stop" in self.faults:
             signal.raise_signal(signal.SIGTERM)
+        if "deny_host_off" in self.faults and operation == "set-desired-capacity" and options.get("--desired-capacity") == ["0"]:
+            return CompletedProcess(argv, 254, "", "\nAn error occurred (AccessDeniedException) when calling the SetDesiredCapacity operation\n")
         second = next((fault for fault in self.faults if fault.startswith("second_signal:")), None)
         if second and operation == "set-desired-capacity" and options.get("--desired-capacity") == ["0"]:
             self.faults.discard(second)

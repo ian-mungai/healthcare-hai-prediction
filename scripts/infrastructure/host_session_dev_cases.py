@@ -13,7 +13,9 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
+from scripts.infrastructure.host_session import HostSessionError, Session, TerminationRequested
 from scripts.infrastructure.host_session_entry_cases import clean, entry, host_is_off
 from scripts.infrastructure.host_session_refresh_cases import JOB_PREFIX, OLD_SHA, SERIAL, build, failure
 from scripts.infrastructure.host_session_stand_in import HOST_ADDRESS, StandInHost
@@ -55,6 +57,9 @@ def session_starts_holds_and_stops_the_host_and_records_its_status() -> dict[str
         < ready_at
         < next(index for index, line in enumerate(lines) if line.startswith("job_tasks")),
         "the hold lasts the asked time": host.now >= HOLD_SECONDS,
+        "the ready line says the end of the hold tries the stop and a running job keeps the host on": any(
+            line.startswith("session_ready") and "tries to stop" in line and "stays on" in line and "stops by itself" not in line for line in lines
+        ),
         "the ready line names the host address": any(line.startswith("host_address") and HOST_ADDRESS in line for line in lines),
         "one record is written": len(found) == 1,
         "the record names the phases that ran": record.get("start") == "started" and record.get("hold_ended") == "time" and record.get("stop") == "stopped",
@@ -205,6 +210,81 @@ def session_command_line() -> dict[str, bool]:
     }
 
 
+def raising_once(session: Session, error: BaseException) -> Any:
+    """A patch that makes the first ``status`` call raise ``error``; every later call works as before."""
+    original, calls = session.status, {"count": 0}
+
+    def status() -> dict[str, Any]:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise error
+        return original()
+
+    return mock.patch.object(session, "status", status)
+
+
+def an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for label, error, kind in (("Ctrl+C", KeyboardInterrupt(), KeyboardInterrupt), ("SIGTERM", TerminationRequested("SIGTERM"), TerminationRequested)):
+        host, session, lines = build(checkout=OLD_SHA)
+        directory = folder()
+        raised: BaseException | None = None
+        with raising_once(session, error):
+            try:
+                session.dev_session(HOLD_SECONDS, 0, directory)
+            except (HostSessionError, KeyboardInterrupt, TerminationRequested) as caught:
+                raised = caught
+        record = (records(directory) or [{}])[0]
+        checks |= {
+            f"{label}: the interruption reaches the caller": isinstance(raised, kind),
+            f"{label}: the host is off and verified": host.desired == 0 and any(line.startswith("host_off_verified") for line in lines),
+            f"{label}: the record names the started phase and the cleanup": record.get("start") == "started" and record.get("cleanup") == "host_off_verified",
+            f"{label}: the record has an end time and the status after the cleanup": str(record.get("ended_at", "")).endswith("Z")
+            and record.get("after_cleanup", {}).get("desired_capacity") == 0,
+            f"{label}: no hold ran": not any(line.startswith("hold_ended") for line in lines),
+        }
+    return checks
+
+
+def a_broken_output_pipe_at_the_ready_line_stops_the_host() -> dict[str, bool]:
+    host, session, lines = build(checkout=OLD_SHA)
+    directory = folder()
+    seen: list[str] = []
+
+    def report(line: str) -> None:
+        if ready(seen):
+            raise BrokenPipeError(32, "Broken pipe")
+        seen.append(line)
+        lines.append(line)
+
+    session.report = report
+    message = failure(lambda: session.dev_session(HOLD_SECONDS, 0, directory))
+    record = (records(directory) or [{}])[0]
+    return {
+        "the session fails by name, not by a traceback": message is not None and "BrokenPipeError" in message,
+        "the host is off": host.desired == 0,
+        "the record names the started phase and the cleanup": record.get("start") == "started" and record.get("cleanup") == "host_off_verified",
+        "the record keeps the error": "BrokenPipeError" in str(record.get("session_error")),
+        "the record has an end time": str(record.get("ended_at", "")).endswith("Z"),
+    }
+
+
+def a_failed_start_with_a_failed_cleanup_records_both() -> dict[str, bool]:
+    host, session, lines = build({"never_stable", "deny_host_off"}, checkout=OLD_SHA)
+    directory = folder()
+    message = failure(lambda: session.dev_session(HOLD_SECONDS, 0, directory))
+    record = (records(directory) or [{}])[0]
+    return {
+        "the start error is still the one raised": message is not None and "stable" in message and "AccessDenied" not in message,
+        "the host is still on": host.desired == 1,
+        "the record keeps the start error": record.get("start") == "failed" and "stable" in str(record.get("start_error")),
+        "the record names the failed cleanup and its reason": str(record.get("start_cleanup", "")).startswith("host_off_failed")
+        and "AccessDenied" in str(record.get("start_cleanup")),
+        "the record holds the status after the cleanup, with the host on": record.get("after_cleanup", {}).get("desired_capacity") == 1,
+        "the output says the host may still be on": any(line.startswith("session_host_left_on") for line in lines),
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "session_starts_holds_and_stops_the_host_and_records_its_status": session_starts_holds_and_stops_the_host_and_records_its_status,
     "session_refuses_in_production_before_any_call": session_refuses_in_production_before_any_call,
@@ -215,4 +295,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "a_record_that_cannot_be_written_refuses_before_the_host_turns_on": a_record_that_cannot_be_written_refuses_before_the_host_turns_on,
     "the_hold_is_bounded": the_hold_is_bounded,
     "session_command_line": session_command_line,
+    "an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host": an_interrupt_or_signal_while_the_start_status_is_read_stops_the_host,
+    "a_broken_output_pipe_at_the_ready_line_stops_the_host": a_broken_output_pipe_at_the_ready_line_stops_the_host,
+    "a_failed_start_with_a_failed_cleanup_records_both": a_failed_start_with_a_failed_cleanup_records_both,
 }
