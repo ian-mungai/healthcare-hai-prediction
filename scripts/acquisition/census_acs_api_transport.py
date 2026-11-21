@@ -14,7 +14,9 @@ from scripts.acquisition.bls_api_transport import RetryableRequest
 from scripts.acquisition.bls_api_transport import collection_lock as collection_lock
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import read_json, require
-from scripts.acquisition.transport import https_connection, require_approved
+from scripts.acquisition.transport import RequestClock, https_connection, require_approved
+
+REQUEST_SECONDS = 120
 
 
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
@@ -31,21 +33,22 @@ def request_json(endpoint: str, parameters: dict, client: AwsCli) -> bytes:
     credential = api_keys.checked_read(client, "census_api_key", "Census")
     require(len(credential) >= 16 and credential.isascii() and credential.isalnum(), "Census credential structure invalid")
     parsed = urlsplit(endpoint)
-    connection = https_connection(parsed.netloc, timeout=120)
+    connection = https_connection(parsed.netloc, timeout=REQUEST_SECONDS)
     try:
-        connection.request("GET", parsed.path + "?" + urlencode(parameters | {"key": credential}), headers={"Accept": "application/json"})
-        response = connection.getresponse()
-        controls.response_status(response)
-        if response.status == 429:
-            raise rate_limit.from_response(response)
-        if response.status in {500, 502, 503, 504}:
-            raise RetryableRequest("Census transient publisher failure")
-        require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")
-        raw = controls.read(response, 64 * 1024**2 + 1)
-        require(0 < len(raw) <= 64 * 1024**2, "Census response size rejected")
-        payload = echo_guard.checked_json(raw, credential, "Census")
-        require(isinstance(payload, list), "Census JSON response shape rejected")
-        return raw
+        with RequestClock(REQUEST_SECONDS):
+            connection.request("GET", parsed.path + "?" + urlencode(parameters | {"key": credential}), headers={"Accept": "application/json"})
+            response = connection.getresponse()
+            controls.response_status(response)
+            if response.status == 429:
+                raise rate_limit.from_response(response)
+            if response.status in {500, 502, 503, 504}:
+                raise RetryableRequest("Census transient publisher failure")
+            require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")
+            raw = controls.read(response, 64 * 1024**2 + 1)
+            require(0 < len(raw) <= 64 * 1024**2, "Census response size rejected")
+            payload = echo_guard.checked_json(raw, credential, "Census")
+            require(isinstance(payload, list), "Census JSON response shape rejected")
+            return raw
     except (OSError, http.client.HTTPException):
         raise RetryableRequest("Census network failure; request details withheld") from None
     finally:

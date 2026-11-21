@@ -1,8 +1,9 @@
 """Bounded Census transport for the ACS table-vintage units: one keyed data request and one unkeyed dictionary request, stored as files.
 
-Both requests share one bounded GET: the host check, one absolute deadline over the name lookup, the connection, the TLS handshake and the reply, no
-redirect, a byte cap and the transient-status rule. The keyed request adds the runtime-only key, a 64 MiB cap and the echo check; the dictionary request has no
-key and an 8 MiB cap. The raw replies are written as files, not as hex copies inside a JSON envelope.
+Both requests share one bounded GET: the host check, one absolute deadline over the name lookup, the connection, the TLS handshake and the reply (a clock
+that shuts the socket at the deadline, so a reply that arrives a byte at a time ends there too), no redirect, a byte cap and the transient-status rule. The
+keyed request adds the runtime-only key, a 64 MiB cap and the echo check; the dictionary request has no key and an 8 MiB cap. The raw replies are written as
+files, not as hex copies inside a JSON envelope.
 """
 
 import http.client
@@ -21,7 +22,7 @@ from scripts.acquisition.bls_api_contract import digest
 from scripts.acquisition.bls_api_transport import RetryableRequest
 from scripts.acquisition.s3_store import AwsCli, encoded_json, write_once
 from scripts.acquisition.source_registry import read_json, require
-from scripts.acquisition.transport import connect_within, https_connection, require_approved
+from scripts.acquisition.transport import RequestClock, connect_within, https_connection, require_approved
 
 DATA_CAP = 64 * 1024**2
 PIECE = 1024**2
@@ -43,21 +44,22 @@ def bounded_get(url: str, target: str, cap: int, label: str) -> bytes:
     require_approved(url)
     connection = https_connection(parsed.netloc, timeout=REQUEST_SECONDS)
     try:
-        connect_within(connection, REQUEST_SECONDS)
-        connection.request("GET", target, headers={"Accept": "application/json"})
-        within(connection)
-        response = connection.getresponse()
-        controls.response_status(response)
-        if response.status == RATE_LIMITED:
-            raise rate_limit.from_response(response)
-        if response.status in TRANSIENT:
-            raise RetryableRequest("Census transient publisher failure")
-        require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")
-        within(connection)
-        raw = controls.read(TimedReply(response, connection), cap + 1)
-        require(0 < len(raw) <= cap, f"Census {label} size rejected")
-        within(connection)
-        return raw
+        with RequestClock(REQUEST_SECONDS):
+            connect_within(connection, REQUEST_SECONDS)
+            connection.request("GET", target, headers={"Accept": "application/json"})
+            within(connection)
+            response = connection.getresponse()
+            controls.response_status(response)
+            if response.status == RATE_LIMITED:
+                raise rate_limit.from_response(response)
+            if response.status in TRANSIENT:
+                raise RetryableRequest("Census transient publisher failure")
+            require(response.status == 200 and "json" in response.getheader("Content-Type", ""), "Census HTTP status/type rejected; no redirect followed")
+            within(connection)
+            raw = controls.read(TimedReply(response, connection), cap + 1)
+            require(0 < len(raw) <= cap, f"Census {label} size rejected")
+            within(connection)
+            return raw
     except (OSError, http.client.HTTPException):
         raise RetryableRequest("Census network failure; request details withheld") from None
     finally:

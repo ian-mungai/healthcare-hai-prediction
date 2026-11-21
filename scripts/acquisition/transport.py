@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
 import ipaddress
@@ -16,10 +17,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from email.message import Message
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 from scripts.acquisition import rate_limit
@@ -242,6 +245,67 @@ def connect_within(connection: Any, seconds: float) -> None:
     connection.connect()
 
 
+class RequestClock:
+    """One absolute deadline over a whole request: the reply headers and every read of the body, not each socket receive.
+
+    A socket timeout bounds one receive, so a publisher that sends a byte a second keeps a ``getresponse`` or a 1 MiB read alive for as long as it likes. The
+    clock starts a timer; at the deadline it shuts down the socket of every ``PublicHTTPSConnection`` that connected while the clock was active, which ends
+    a receive that is blocked on it. A clock that expired is a ``TimeoutError``: ``stop`` returns True and the ``with`` block raises it, whatever the
+    interrupted request raised or returned, so a short body is never taken as a whole one. A connection that is not a ``PublicHTTPSConnection`` (a test's
+    stand-in) holds no socket the clock can reach and keeps its own timeouts."""
+
+    ACTIVE: ContextVar[RequestClock | None] = ContextVar("request_clock", default=None)
+
+    def __init__(self, seconds: float) -> None:
+        self.expired = threading.Event()
+        self.sockets: list[socket.socket] = []
+        self.lock = threading.Lock()
+        self.timer = threading.Timer(seconds, self.expire)
+        self.timer.daemon = True
+        self.token: Any = None
+
+    def start(self) -> RequestClock:
+        self.token = self.ACTIVE.set(self)
+        self.timer.start()
+        return self
+
+    def stop(self) -> bool:
+        """End the clock and return True when it had expired."""
+        self.timer.cancel()
+        if self.token is not None:
+            self.ACTIVE.reset(self.token)
+            self.token = None
+        return self.expired.is_set()
+
+    def watch(self, sock: socket.socket) -> None:
+        """Hold a connected socket to the deadline; a socket that connects after the deadline is shut down at once."""
+        with self.lock:
+            self.sockets.append(sock)
+            late = self.expired.is_set()
+        if late:
+            self.shut(sock)
+
+    def expire(self) -> None:
+        with self.lock:
+            self.expired.set()
+            held = list(self.sockets)
+        for sock in held:
+            self.shut(sock)
+
+    @staticmethod
+    def shut(sock: socket.socket) -> None:
+        # The plain socket method, not the TLS socket's: that one drops the TLS object, and the blocked reader would meet a ValueError, not a closed stream.
+        with contextlib.suppress(OSError):
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+
+    def __enter__(self) -> RequestClock:
+        return self.start()
+
+    def __exit__(self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None) -> None:
+        if self.stop():
+            raise TimeoutError("The request did not finish before its deadline.") from error
+
+
 REAL_HTTPS_CONNECTION = http.client.HTTPSConnection
 
 
@@ -265,6 +329,8 @@ class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
             sock.settimeout(self.time_left())
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)
+        if (clock := RequestClock.ACTIVE.get()) is not None:
+            clock.watch(self.sock)
 
     def time_left(self) -> float:
         left = (self.deadline or 0.0) - time.monotonic()
@@ -543,6 +609,9 @@ def download(url: str, dest: Path, file_name: str, expected_format: str, role: s
         failure, partial, count, digest = None, False, 0, hashlib.sha256()
         retrieved = utc_now()
         response = None
+        # One clock over the headers and every read of this attempt, so a slow publisher cannot hold one receive past what is left of max_seconds.
+        clock = RequestClock(max(limits.max_seconds - (time.monotonic() - started), 0.001)).start()
+        timed_out = False
         try:
             try:
                 response = opener.open(request, timeout=limits.timeout_seconds)
@@ -618,9 +687,18 @@ def download(url: str, dest: Path, file_name: str, expected_format: str, role: s
             failure, partial = "incomplete_read", True
         except (OSError, urllib.error.URLError, CaptureError) as error:
             failure, partial = failure_code(error), count > 0
+        except http.client.HTTPException:
+            # A reply cut off at the deadline can end as a bad status line or a short chunk; any other HTTP error is not this module's to hide.
+            if not clock.expired.is_set():
+                raise
+            failure, partial = "TimeoutError", count > 0
         finally:
+            timed_out = clock.stop()
             if response is not None:
                 response.close()
+        if timed_out:
+            # Whatever the cut-off request returned, its bytes are not a whole reply.
+            failure, partial = "TimeoutError", partial or count > 0
         if not path.exists():
             path.touch(exist_ok=False)
         last = Download(
