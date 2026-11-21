@@ -20,6 +20,7 @@ import pytest
 from scripts.acquisition import census_acs_tables_contract, legacy_versions, nber_hc_contract, reference_download_contract
 from scripts.acquisition import source_registry as registry
 from scripts.acquisition.one_off.registry_rev4 import build_rev4 as builder
+from scripts.acquisition.registry_additions import additions_lock, canonical_json
 from scripts.process import run_command
 from tests.support import check
 
@@ -37,9 +38,10 @@ TRACKED = registry.REPO_ROOT / "config/acquisition"
 # The builder never writes the receipt index: source_receipt_index.py builds it from the local capture receipts after every change of the verification
 # log, so the earlier state keeps the index of its own log and the committed index belongs to the current one.
 WRITTEN_ELSEWHERE = {"source_receipt_index.json"}
-# The placement derivation (scripts.acquisition.source_metadata) rewrites the rule and detail text of the stored placements after the builder ran, and the
-# additions lock follows the additions file. The builder reproduces the revision 3 text of them, so these two files are compared without that text.
-REWRITTEN_LATER = {"registry_additions.json", "registry_additions_lock.json"}
+# The committed additions file and its lock carry placement text that the derivation rewrote after the builder ran, so they are not compared with the
+# committed bytes. The builder rebuilds them from the revision 3 archive: the additions must equal that archive with the revision 4 base hash, and the lock
+# the one derived from those additions.
+FROM_THE_ARCHIVE = ("registry_additions.json", "registry_additions_lock.json")
 
 
 def git(*arguments: str) -> str:
@@ -104,25 +106,20 @@ def loaders_accept(root: Path) -> None:
     reference_download_contract.load_plan(config / "reference_downloads_plan.json")
     with patch.object(nber_hc_contract, "gate_sha256", nber_hc_contract.registry_gate_sha256):
         nber_hc_contract.load_plan(config / "nber_hospital_compare_plan.json")
-    skipped = WRITTEN_ELSEWHERE | REWRITTEN_LATER
+    skipped = WRITTEN_ELSEWHERE | set(FROM_THE_ARCHIVE)
     differing = [path.name for path in sorted(config.glob("*.json")) if path.name not in skipped and path.read_bytes() != (TRACKED / path.name).read_bytes()]
     check(not differing, f"these files differ from the committed ones: {differing}")
+    archived = json.loads((builder.REV3_ARCHIVE / FROM_THE_ARCHIVE[0]).read_text(encoding="utf-8"))
+    expected = {**archived, "base_registry_sha256": registry.canonical_hash(current)}
     check(
-        without_rederived_text(config) == without_rederived_text(TRACKED),
-        "the additions and their lock differ from the committed ones beyond the placement text",
+        (config / FROM_THE_ARCHIVE[0]).read_bytes() == builder.dump(expected).encode(),
+        "the additions differ from the revision 3 archive with the revision 4 base hash",
     )
-
-
-def without_rederived_text(config: Path) -> dict[str, Any]:
-    """The additions file without the rule and detail of each stored placement and evidence record, and its lock without the additions hash."""
-    additions = json.loads((config / "registry_additions.json").read_text(encoding="utf-8"))
-    records = [*additions["dataset_id_placements"], *(record for entry in additions["source_metadata"] for record in entry["dataset_ids_evidence"])]
-    for record in records:
-        record.pop("rule", None)
-        record.pop("detail", None)
-    lock = json.loads((config / "registry_additions_lock.json").read_text(encoding="utf-8"))
-    lock.pop("additions_sha256")
-    return {"additions": additions, "lock": lock}
+    expected_lock = canonical_json(additions_lock(expected, current)).encode()
+    check(
+        (config / FROM_THE_ARCHIVE[1]).read_bytes() == expected_lock,
+        "the additions lock differs from the lock of the revision 3 archive additions with the revision 4 base hash",
+    )
 
 
 def sandbox(before: Path, tmp_path: Path) -> Path:
@@ -140,6 +137,57 @@ def test_a_full_run_from_the_earlier_state_reproduces_the_committed_files(before
     root = sandbox(before, tmp_path)
     run(root)
     loaders_accept(root)
+
+
+def plant_placement(additions: dict[str, Any], lock: dict[str, Any], change: str) -> None:
+    """Damage the cms_gv placement record of the builder's additions."""
+    record = next(row for row in additions["dataset_id_placements"] if row["dataset_id"] == "cms_gv")
+    if change == "rule":
+        record["rule"] = ""
+    elif change == "detail":
+        del record["detail"]
+    else:
+        record["source_id"] = "SVI"
+
+
+def plant_evidence(additions: dict[str, Any], lock: dict[str, Any], change: str) -> None:
+    """Damage the cms_gv evidence record of its source in the builder's additions."""
+    entry = next(row for row in additions["source_metadata"] if row["source_id"] == "CMS_GV")
+    record = next(row for row in entry["dataset_ids_evidence"] if row["dataset_id"] == "cms_gv")
+    if change == "rule":
+        record["rule"] = ""
+    else:
+        del record["detail"]
+
+
+def plant_lock_hash(additions: dict[str, Any], lock: dict[str, Any], change: str) -> None:
+    lock["additions_sha256"] = "0" * 64
+
+
+PLANTS = {
+    "placement_rule_empty": (plant_placement, "rule"),
+    "placement_detail_missing": (plant_placement, "detail"),
+    "placement_source_changed": (plant_placement, "source"),
+    "evidence_rule_empty": (plant_evidence, "rule"),
+    "evidence_detail_missing": (plant_evidence, "detail"),
+    "lock_hash_zero": (plant_lock_hash, ""),
+}
+
+
+@pytest.mark.parametrize("plant", PLANTS)
+def test_damaged_additions_or_lock_output_is_refused(before: Path, tmp_path: Path, plant: str) -> None:
+    root = sandbox(before, tmp_path)
+    run(root)
+    loaders_accept(root)
+    config = root / "config/acquisition"
+    additions = json.loads((config / "registry_additions.json").read_text(encoding="utf-8"))
+    lock = json.loads((config / "registry_additions_lock.json").read_text(encoding="utf-8"))
+    damage, change = PLANTS[plant]
+    damage(additions, lock, change)
+    (config / "registry_additions.json").write_text(json.dumps(additions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (config / "registry_additions_lock.json").write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="revision 3 archive"):
+        loaders_accept(root)
 
 
 @pytest.mark.parametrize("step", STEPS)
