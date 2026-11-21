@@ -2,7 +2,8 @@
 
 ``mutated`` makes Python read ``path`` with ``old`` replaced by ``new`` for every import inside the ``with`` block (the cases import the DAG runtime and the DAG
 files afresh, so each import sees the change) and never writes a file. The text to replace must occur exactly once, so a mutant that stops matching its source
-fails at once instead of passing as an unchanged run. The saved bytecode of the file is refused while the change is on, so the changed text is compiled.
+fails at once instead of passing as an unchanged run. The saved bytecode of the file is refused while the change is on, so the changed text is compiled, and
+no bytecode is saved while it is on, so the compiled change is never read as the file.
 """
 
 from __future__ import annotations
@@ -52,7 +53,11 @@ def mutated(path: str, old: str, new: str) -> Iterator[None]:
     parent = sys.modules.get(package) if package else None
     stale = getattr(parent, child, None) if parent is not None and module is None else None
     try:
-        with mock.patch.object(SourceFileLoader, "get_data", get_data), mock.patch.object(io, "open_code", open_code):
+        with (
+            mock.patch.object(SourceFileLoader, "get_data", get_data),
+            mock.patch.object(io, "open_code", open_code),
+            mock.patch.object(sys, "dont_write_bytecode", True),
+        ):
             if module is not None:
                 importlib.reload(module)
             elif stale is not None:

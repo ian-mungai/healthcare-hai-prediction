@@ -7,14 +7,18 @@ return no failure, so that a failing case under a mutant is the mutant's doing.
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from scripts.orchestration import airflow_mode_cases, ecs_chain_cases, ingestion_schedule_cases, pipeline_cases, source_mutants, trigger_dag_cases
+from orchestration.training_contract import PIPELINE_DAG
+from scripts.orchestration import airflow_mode_cases, ecs_chain_cases, ingestion_schedule_cases, pipeline_cases, source_mutants, trigger_dag, trigger_dag_cases
 from scripts.orchestration.ecs_adapter_cases import require
 
+ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = "orchestration/dag_runtime.py"
 PIPELINE = "dags/pipeline_dag.py"
 STAND_IN = "scripts/orchestration/airflow_api_fake.py"
@@ -376,7 +380,19 @@ def every_behaviour_the_suites_claim_has_a_mutant_that_a_case_catches() -> None:
     require(not unchanged(), "a mutant left the real code changed")
 
 
+def a_mutant_leaves_no_saved_bytecode_of_its_change() -> None:
+    """The mutant's text is compiled while it is on and the module is reloaded from the real file after: no bytecode of the change may be saved for a later
+    import, or the next run, in this tree or in the process that runs the cases, reads the change as the real code."""
+    (mutant,) = [item for item in MUTANTS if item.behaviour == "the host command unpauses the children before the first DAG"]
+    cache = Path(importlib.util.cache_from_source(str(ROOT / mutant.path)))
+    cache.unlink(missing_ok=True)
+    with source_mutants.mutated(mutant.path, mutant.old, mutant.new):
+        pass
+    require(trigger_dag.ACTIVATION[PIPELINE_DAG][-1] == PIPELINE_DAG, "the module read after the mutant still holds its change")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "a_mutant_leaves_no_saved_bytecode_of_its_change": a_mutant_leaves_no_saved_bytecode_of_its_change,
     "the_removed_wait_for_a_running_child_is_noticed_and_the_real_code_passes": the_removed_wait_for_a_running_child_is_noticed_and_the_real_code_passes,
     "every_behaviour_the_suites_claim_has_a_mutant_that_a_case_catches": every_behaviour_the_suites_claim_has_a_mutant_that_a_case_catches,
 }
