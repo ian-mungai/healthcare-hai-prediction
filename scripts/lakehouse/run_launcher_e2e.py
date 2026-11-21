@@ -5831,6 +5831,13 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
     (renamed / "unlisted" / "data" / "vault" / "secrets").mkdir(parents=True)
     (renamed / "unlisted" / "data" / "a").symlink_to("vault")
     (renamed / "unlisted" / "data" / "lakehouse").symlink_to("vault")
+    fanout, double = outside / "fanout", outside / "double"  # many links to one folder with files in it, and one link to it
+    for tree, links in ((fanout, 12), (double, 1)):
+        (tree / "target").mkdir(parents=True)
+        for number in range(12):
+            (tree / "target" / f"file{number}.txt").write_text("x")
+        for number in range(links):
+            (tree / f"link{number:02d}").symlink_to("target")
     looped = outside / "looped"
     (looped / "data").mkdir(parents=True)
     (looped / "data" / "a").symlink_to("b")
@@ -5900,11 +5907,26 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
                 return False
             return True
 
+        def too_large(source: Path) -> bool:
+            """True when the search limit refuses the source as a mount (a limit of 30 makes the fan-out tree too large)."""
+            with mock.patch.object(launcher, "MOUNT_SEARCH_LIMIT", 30):
+                try:
+                    renderer.check_mounts([launcher.Mount(str(source), "/workspace/in", True)])
+                except launcher.LauncherError as error:
+                    return error.code == "mount" and "too large" in str(error)
+            return False
+
+        def admitted_under_limit(source: Path) -> bool:
+            with mock.patch.object(launcher, "MOUNT_SEARCH_LIMIT", 30):
+                return admitted(source)
+
         loop_root = launcher.Renderer(replace(env.config, allowed_roots=(source_loop,)), renderer.compose, ROOT, ROOT, b"k" * 32)
         loop_token = launcher.Renderer(replace(env.config, token_root=token_loop), renderer.compose, ROOT, ROOT, b"k" * 32)
         results |= {
             "check_mounts control: a clean source is admitted": admitted(clean),
             "check_mounts: a source that is itself a loop is refused as a mount": check(source_loop),
+            "check_mounts: many links to one folder count toward the search limit": too_large(fanout),
+            "check_mounts: one link to a folder stays within the search limit": admitted_under_limit(double),
             "check_mounts: an earlier alias does not hide the lakehouse link to the same folder": check(renamed),
             "check_mounts: the requested lakehouse alias keeps its name beside its resolved folder": check(renamed / "unlisted" / "data" / "lakehouse"),
             "check_mounts: a loop below the source is refused as a mount": check(looped),

@@ -1610,24 +1610,30 @@ def held_secrets(source: Path) -> Path | None:
     """The first secrets folder (any letter case) at any depth below a source folder, nearest first.
 
     The protected name is recognized before a link is set aside, so a link named ``secrets`` counts as the folder. A directory link that
-    stays inside the source is followed (each real folder once), because a relative link keeps working inside one bind mount; a link out of
-    the source points to a host path the container cannot reach through that mount. A folder that cannot be read refuses the mount.
+    stays inside the source is followed (each real folder once, and once more under each further name that reaches it), because a relative link
+    keeps working inside one bind mount; a link out of the source points to a host path the container cannot reach through that mount. A folder
+    that cannot be read refuses the mount.
     Each entry's name is judged under its folder's lexical name and its folder's resolved name (and a link inside the source by its own
     target), before folder deduplication can set either spelling aside: an alias of ``lakehouse`` reached first cannot hide its ``secrets`` child.
     Deduplication records the names under which each folder was reached; a folder reached again under a new name is scanned once more under
     that name, so a ``lakehouse`` link to a differently named folder that an earlier alias reached first still shows its ``secrets`` child.
+    Every entry of a folder scanned again counts toward ``MOUNT_SEARCH_LIMIT`` like a first visit, so many links to one folder cannot cost more than the limit.
     """
     if not source.is_dir():
         return None
     root = resolved_in(source, source)
-    queue, visited, seen = [source], {identity(root): {folded(source.absolute())[-1], folded(root)[-1]}}, 0
+    queue, visited, seen = [(source, False)], {identity(root): {folded(source.absolute())[-1], folded(root)[-1]}}, 0
     while queue:
-        folder = queue.pop(0)
+        folder, again = queue.pop(0)
         try:
             entries = sorted(os.scandir(folder), key=lambda entry: entry.name)
             parent_names = {folded(folder)[-1:], folded(resolved_in(source, folder))[-1:]}
         except OSError as error:
             raise LauncherError(f"mount source {source}: {folder} cannot be read to check for a secrets folder ({error})", "mount") from error
+        if again:
+            seen += len(entries)
+            if seen > MOUNT_SEARCH_LIMIT:
+                raise LauncherError(f"mount source {source} is too large to check for a secrets folder", "mount")
         for entry in entries:
             child = Path(entry.path)
             if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
@@ -1651,13 +1657,13 @@ def held_secrets(source: Path) -> Path | None:
             if key in visited:
                 if entry.name.casefold() not in visited[key]:  # the same folder under another name: its children are judged under that name too
                     visited[key].add(entry.name.casefold())
-                    queue.append(child)
+                    queue.append((child, True))
                 continue
             visited[key] = {entry.name.casefold()}
             seen += 1
             if seen > MOUNT_SEARCH_LIMIT:
                 raise LauncherError(f"mount source {source} is too large to check for a secrets folder", "mount")
-            queue.append(child)
+            queue.append((child, False))
     return None
 
 
