@@ -205,8 +205,9 @@ stop_workers() {
 finish() {
   # A stop that is not confirmed fails the run, also when everything else passed.
   stop_workers || ci_finished=0
-  # A gate run that failed after a worker failed drops the gate passes of the groups that ran, so a failure is never reused (scripts/quality/ci_main_passes.py drop).
-  if [[ "${gate_reuse_active:-0}" == 1 && "${ci_finished:-0}" != 1 && -n "${failed[*]:-}" ]]; then
+  # A gate run that did not finish (a failed worker, an error of this script, an interrupt or a deadline) drops the gate passes of the groups that ran, so a failure is never
+  # reused (scripts/quality/ci_main_passes.py drop).
+  if [[ "${gate_reuse_active:-0}" == 1 && "${ci_finished:-0}" != 1 ]]; then
     "$python_bin" -m scripts.quality.ci_main_passes drop --groups ${run_groups[@]+"${run_groups[@]}"} || true
   fi
   if [[ -s "$scratch/main.timing" ]]; then
@@ -270,7 +271,7 @@ if [[ ("$reuse_mode" == "main" || "$reuse_mode" == "gate") && "$full_run" == 1 &
       fi
       reused+="$group "
     fi
-  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --mode "$reuse_mode" --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
+  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --mode "$reuse_mode" --identity "$scratch/gate_identity.json" --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
   kept=()
   for group in "${run_groups[@]}"; do
     [[ "$reused" == *" $group "* ]] || kept+=("$group")
@@ -875,7 +876,7 @@ if [[ "$reuse_mode" == "main" && "$full_run" == 1 && "$scope" == "full" && ${#ru
   "$python_bin" -m scripts.quality.ci_main_passes record --groups "${run_groups[@]}" || printf 'Recording the passes failed; the run result stands\n'
 fi
 if ((gate_reuse_active)) && ((${#run_groups[@]})); then
-  "$python_bin" -m scripts.quality.ci_main_passes record --mode gate --groups "${run_groups[@]}" || printf 'Recording the gate passes failed; the run result stands\n'
+  "$python_bin" -m scripts.quality.ci_main_passes record --mode gate --identity "$scratch/gate_identity.json" --groups "${run_groups[@]}" || printf 'Recording the gate passes failed; the run result stands\n'
 fi
 printf '\nAll local CI checks passed without AWS credentials.\n'
 ci_finished=1

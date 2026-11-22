@@ -422,7 +422,8 @@
     ],
     "closed": [
       "launcher"
-    ]
+    ],
+    "closed_note": "The groups the pre-push gate may reuse a pass of (scripts/quality/ci_main_passes.py, gate mode); only the launcher has a closure check. An empty list turns gate reuse off: every group runs. The launcher's Git-ignored inputs were traced on Nov 22 2026 (audit hook on the whole launcher E2E): the dbt package archive and the account's AWS config and credentials files, which IGNORED_INPUTS holds by content, besides the Python environment, git and aws versions, the platform and the worktree root, which the key holds. The E2E starts only git, aws, ps, lsof and Python outside its own stand-ins. A new ignored input of the launcher E2E must be added to IGNORED_INPUTS, or this list emptied."
   },
   "pre_push": {
     "full_paths": [

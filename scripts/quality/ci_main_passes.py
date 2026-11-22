@@ -42,8 +42,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
+import platform
+import pwd
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,60 +135,187 @@ def closure_problem(root: Path, group: str) -> str:
     return "" if result.returncode == 0 else f"the launcher input check failed ({result.returncode})"
 
 
-def gate_keys(root: Path, groups: list[str]) -> dict[str, str]:
-    """The gate key of each group: its input hash with the Python and Bash versions and the tool pins."""
+class KeyUnavailable(Exception):
+    """An input that the key of a group needs cannot be read or does not verify: the group is never reused and never recorded."""
+
+
+def archive_identity(root: Path) -> str:
+    """The dbt package archive that the launcher E2E verifies and reads (it is Git-ignored): its verification must pass, and its identity is the SHA-256 of
+    the archive file that the verification names, which the committed record config/lakehouse/dbt_package_archive.json pins."""
+    try:
+        result = run_command(sys.executable, ["-m", "scripts.lakehouse.dbt_package_archive", "verify", "--root", str(root)], cwd=root, timeout=300)
+    except (OSError, TimeoutExpired, ValueError) as error:
+        raise KeyUnavailable(f"the dbt package archive check could not run ({type(error).__name__})") from error
+    if result.returncode != 0:
+        raise KeyUnavailable("the dbt package archive is missing or fails its verification")
+    try:
+        path = Path(json.loads(result.stdout))
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, ValueError, TypeError) as error:
+        raise KeyUnavailable("the verified dbt package archive cannot be read") from error
+
+
+def account_home() -> Path:
+    """The home folder of the account in the user database (the launcher ignores HOME for the same reason)."""
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def aws_account_identity(root: Path) -> str:
+    """The SHA-256 of the AWS config and credentials files of the account (``absent`` for a missing one): the launcher E2E opens them (traced Nov 22 2026), so a
+    pass under another account state is not reused. Only the digests enter the key."""
+    parts = []
+    for name in ("config", "credentials"):
+        path = account_home() / ".aws" / name
+        try:
+            parts.append(f"{name}={hashlib.sha256(path.read_bytes()).hexdigest()}")
+        except FileNotFoundError:
+            parts.append(f"{name}=absent")
+        except OSError as error:
+            raise KeyUnavailable(f"the AWS {name} file cannot be read ({type(error).__name__})") from error
+    return "\0".join(parts)
+
+
+# The Git-ignored files that a group reads at run time, by content: (label, function that returns the identity or raises KeyUnavailable).
+# A group with an ignored input that is not listed here must not be in reuse.closed.
+IGNORED_INPUTS = {"launcher": (("dbt package archive", archive_identity), ("AWS account files", aws_account_identity))}
+
+
+# The interpreter variables that change what it imports, loads or computes (not PYTHON_BIN of run_ci.sh, nor the bytecode and buffering switches).
+PYTHON_VARIABLES = (
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONUSERBASE",
+    "PYTHONNOUSERSITE",
+    "PYTHONSAFEPATH",
+    "PYTHONPLATLIBDIR",
+    "PYTHONOPTIMIZE",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONHASHSEED",
+    "PYTHONUTF8",
+    "PYTHONIOENCODING",
+    "PYTHONWARNINGS",
+)
+
+
+def environment_identity() -> str:
+    """The effective Python environment of this process as the interpreter sees it: its path, real file and version, the name and version of every installed
+    distribution, the interpreter's PYTHON variables, the search path and every .pth, sitecustomize and usercustomize file on it."""
+    distributions = sorted(
+        (re.sub(r"[-_.]+", "-", str(dist.metadata["Name"])).lower(), dist.version) for dist in importlib.metadata.distributions() if dist.metadata["Name"]
+    )
+    real = Path(os.path.realpath(sys.executable))
+    try:
+        interpreter = hashlib.sha256(real.read_bytes()).hexdigest()
+    except OSError:
+        interpreter = "unreadable"
+    startup: list[str] = []
+    for entry in sys.path:
+        folder = Path(entry or ".")
+        if folder.is_dir():
+            for name in sorted(path.name for path in folder.iterdir() if path.name.endswith(".pth") or path.name in {"sitecustomize.py", "usercustomize.py"}):
+                startup.append(f"{folder / name}={hashlib.sha256((folder / name).read_bytes()).hexdigest()}")
+    variables = sorted((name, value) for name, value in os.environ.items() if name in PYTHON_VARIABLES)
+    parts = [sys.executable, str(real), interpreter, sys.version, sys.prefix, sys.base_prefix, *sys.path, *startup, *(f"{n}={v}" for n, v in variables)]
+    parts += [f"{name}=={version}" for name, version in distributions]
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def tool_versions() -> list[str]:
+    """The versions of the programs outside the repository that the launcher E2E starts: git and the AWS command (``absent`` when a program is missing)."""
+    found = []
+    for program in ("git", "aws"):
+        try:
+            result = run_command(program, ["--version"], timeout=60)
+            found.append(f"{program}: {(result.stdout + result.stderr).strip()[:200]}")
+        except (OSError, TimeoutExpired, ValueError):
+            found.append(f"{program}: absent")
+    return found
+
+
+def gate_keys(root: Path, groups: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """The gate key of each group, and why a group has none. The key is the input hash of the group with the environment identity, the Python and Bash
+    versions, the tool pins, the content of every ignored input the group reads and the worktree root, so another worktree never inherits a pass."""
     hashes = input_hashes(root, groups)
     pins = [path for path in KEY_FILES if (root / path).is_file()]
     blobs = blob_hashes(root, pins) if pins else {}
     bash = run_command("bash", ["--version"], timeout=60).stdout.splitlines()[:1]
-    extras = "\0".join([sys.version, *bash, *(f"{path}={blobs[path]}" for path in pins)])
-    return {group: hashlib.sha256(f"{hashes[group]}\0{extras}".encode()).hexdigest() for group in groups}
+    extras = "\0".join(
+        [
+            sys.version,
+            platform.platform(),
+            platform.machine(),
+            *bash,
+            *tool_versions(),
+            *(f"{path}={blobs[path]}" for path in pins),
+            environment_identity(),
+            str(root.resolve()),
+        ]
+    )
+    keys: dict[str, str] = {}
+    unavailable: dict[str, str] = {}
+    for group in groups:
+        try:
+            ignored = [f"{label}={identity(root)}" for label, identity in IGNORED_INPUTS.get(group, ())]
+        except KeyUnavailable as error:
+            unavailable[group] = str(error)
+            continue
+        keys[group] = hashlib.sha256("\0".join([hashes[group], extras, *ignored]).encode()).hexdigest()
+    return keys, unavailable
 
 
-def gate_reusable(root: Path, groups: list[str]) -> dict[str, str]:
-    """The groups whose gate record has the key of the working tree now and whose closure check passes now, with the commit of the record."""
+def gate_reusable(root: Path, groups: list[str], identity: Path | None = None) -> dict[str, str]:
+    """The groups whose gate record has the key of the working tree now and whose closure check passes now, with the commit of the record. The keys of every
+    closed group are also written to ``identity``: the record at the end of the run certifies that state, and only when it is unchanged."""
     wanted = [group for group in groups if group in closed(root)]
-    folder = passes_folder(root, "gate")
-    records = {group: read_record(folder, group) for group in wanted}
-    candidates = [group for group in wanted if records[group] is not None]
-    if not candidates:
+    if not wanted:
         return {}
-    keys = gate_keys(root, candidates)
+    keys, _ = gate_keys(root, wanted)
+    if identity is not None:
+        identity.write_text(json.dumps(keys, indent=2) + "\n", encoding="utf-8")
+    folder = passes_folder(root, "gate")
     found: dict[str, str] = {}
-    for group in candidates:
-        record = records[group]
+    for group in keys:
+        record = read_record(folder, group)
         if record and record.get("key") == keys[group] and isinstance(record.get("commit"), str) and not closure_problem(root, group):
             found[group] = record["commit"]
     return found
 
 
-def gate_record(root: Path, groups: list[str]) -> tuple[list[str], str]:
-    """Write the gate records of the groups that have a closure check that passes now; return the groups written and the reason when none was."""
+def gate_record(root: Path, groups: list[str], identity: Path | None = None) -> tuple[list[str], str]:
+    """Write the gate records of the groups that have a closure check that passes now and whose inputs are what the run started with; return the groups
+    written and the reason when none was. The key written is the one taken before the run."""
     chosen = [group for group in groups if group in closed(root)]
     if not chosen:
         return [], "no group has a closure check"
+    if identity is None or not identity.is_file():
+        return [], "there is no identity of the inputs from before the run"
+    before = json.loads(identity.read_text(encoding="utf-8"))
     problems = {group: closure_problem(root, group) for group in chosen}
-    chosen = [group for group in chosen if not problems[group]]
-    if not chosen:
-        return [], "; ".join(problem for problem in problems.values() if problem)
-    keys = gate_keys(root, chosen)
+    keys, unavailable = gate_keys(root, [group for group in chosen if not problems[group]])
+    reasons = [problem for problem in problems.values() if problem] + list(unavailable.values())
+    written: list[str] = []
     code, commit = git(root, "rev-parse", "HEAD")
     folder = passes_folder(root, "gate")
-    folder.mkdir(parents=True, exist_ok=True)
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for group in chosen:
+    for group in keys:
+        if before.get(group) != keys[group]:
+            reasons.append(f"the inputs of {group} are not what the run started with (changed during the run, or no identity was taken)")
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
         target = folder / f"{group}.json"
         temporary = folder / f".{group}.{os.getpid()}.tmp"
         body = {
             "group": group,
-            "key": keys[group],
+            "key": before[group],
             "commit": commit if code == 0 else "unknown",
             "closure": "scripts.quality.launcher_inputs",
             "recorded_utc": now,
         }
         temporary.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
         temporary.replace(target)
-    return chosen, ""
+        written.append(group)
+    return written, "; ".join(reasons)
 
 
 def gate_drop(root: Path, groups: list[str]) -> list[str]:
@@ -276,6 +407,9 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--groups", nargs="*", default=[])
         if name != "drop":
             command.add_argument("--mode", choices=MODES, default="main")
+            command.add_argument(
+                "--identity", type=Path, help="gate mode: filter writes the keys of the inputs before the run here, record certifies only that state"
+            )
         if name == "record":
             command.add_argument("--test-any-state", action="store_true", help="skip the main-commit and clean-tree conditions (for tests of this script only)")
     args = parser.parse_args(argv)
@@ -287,11 +421,11 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(f"dropped {' '.join(dropped)}\n" if dropped else "dropped nothing\n")
             return 0
         if args.command == "filter":
-            found = gate_reusable(root, args.groups) if mode == "gate" else reusable(root, args.groups)
+            found = gate_reusable(root, args.groups, args.identity) if mode == "gate" else reusable(root, args.groups)
             for group in args.groups:
                 sys.stdout.write(f"reuse {group} {found[group][:12]}\n" if group in found else f"run {group}\n")
             return 0
-        written, reason = gate_record(root, args.groups) if mode == "gate" else record(root, args.groups, args.test_any_state)
+        written, reason = gate_record(root, args.groups, args.identity) if mode == "gate" else record(root, args.groups, args.test_any_state)
     except (RuntimeError, OSError, ValueError) as error:
         # A failure to read or write records never fails the run: every group then runs, and nothing is recorded.
         sys.stdout.write("".join(f"run {group}\n" for group in args.groups) if args.command == "filter" else f"not recorded: {error}\n")
