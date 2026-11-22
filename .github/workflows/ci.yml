@@ -605,14 +605,18 @@ jobs:
 
       # needs.<job>.result is success for a matrix leg that was cancelled before a runner picked it up (github.com/orgs/community/discussions/211624), so the verdict above is not
       # enough: the next steps list the latest result of every job of this run (filter=latest also holds the jobs that a partial rerun carries forward from earlier attempts) and
-      # fail on any that is not completed, or whose conclusion this run does not allow. Both steps run always(), so the legs are named also when the verdict failed.
+      # fail on any that is not completed, or whose conclusion this run does not allow. Without a verified reuse the listed names must also be exactly the names of
+      # config/quality/ci_jobs.json, each once, so a leg or a job that never started is named. Both steps run always(), so the legs are named also when the verdict failed.
       - name: Check out the gate scripts
         if: ${{ always() }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts/
+            config/quality/ci_jobs.json
+          sparse-checkout-cone-mode: false
           lfs: true
 
       - name: List the jobs of this run and require each to have finished as this run requires
@@ -620,13 +624,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REUSE: ${{ needs.plan.outputs.reuse }}
-          NEEDS: ${{ toJSON(needs) }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          GATE_JOBS_FILE: ${{ runner.temp }}/jobs.tsv
         run: |
           set -euo pipefail
-          gh api --paginate "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" --jq '.jobs[] | [.name, .status, .conclusion] | @tsv' >"$RUNNER_TEMP/jobs.tsv"
-          GATE_JOBS_FILE="$RUNNER_TEMP/jobs.tsv" EXPECTED_JOBS="$(jq 'length' <<<"$NEEDS")" bash .github/scripts/ci_gate_jobs.sh
+          gh api --paginate "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" --jq '.jobs[] | [.name, .status, .conclusion] | @tsv' >"$GATE_JOBS_FILE"
+          bash .github/scripts/ci_gate_jobs.sh
 
   reuse_gate:
     name: CI Reuse and Gate E2E
