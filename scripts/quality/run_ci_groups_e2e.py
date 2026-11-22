@@ -4006,6 +4006,7 @@ def speed_static_cases(scratch: Path) -> list[dict[str, Any]]:
         *core_command_cases(),
         *feature_weight_cases(),
         *sample_weight_cases(),
+        *isolation_filter_cases(),
     ]
 
 
@@ -4990,10 +4991,33 @@ def item_blocks(log: str) -> tuple[str, dict[str, str]]:
     """The text before the first item of a dry run and the text of each item (its log and its seconds row), with seconds, stamps and scratch names replaced."""
     log = re.sub(r"\d{8}T\d{6}Z_\d+", "<stamp>", re.sub(r"hai_ci\.\w+", "hai_ci.X", re.sub(r"^(.*): \d+ s$", r"\1: N s", log, flags=re.MULTILINE)))
     head, *parts = re.split(r"^== (\w+) ==$", log, flags=re.MULTILINE)
-    # Which of several groups that end at once is reported first, and the cores then in use, is scheduling noise (the stand-ins end at once).
-    head = re.sub(r"^Local CI: \w+ (?:ended|admitted) .*\n", "", head, flags=re.MULTILINE)
+    # The scheduler lines of run_ci.sh ("Local CI: admitted <group> (...)", "Local CI: <group> ended (...)") are noise: order and cores in use.
+    head = re.sub(r"^Local CI: (?:admitted \w+|\w+ ended) \(.*\n", "", head, flags=re.MULTILINE)
     blocks = {name: re.split(r"\n(?:All local CI checks passed|Local CI failed)", body)[0] for name, body in zip(parts[::2], parts[1::2], strict=True)}
     return head, blocks
+
+
+def isolation_filter_cases() -> list[dict[str, Any]]:
+    """The scheduler lines of run_ci.sh (Local CI: admitted <group> (...) and Local CI: <group> ended (...)) are left out of the text before the first
+    item, whatever the cores in use or the order, and any other line there still counts."""
+    body = "== python_lint ==\nTIMED python_lint: probe x\n"
+    first = (
+        "Check groups: full\nLocal CI: admitted python_lint (1 cores; 1 of 16 cores in use).\n"
+        "Local CI: terraform_checks ended (2 of 16 cores in use).\nLocal CI: terraform_services_checks ended (0 of 16 cores in use).\n" + body
+    )
+    second = (
+        "Check groups: full\nLocal CI: admitted python_lint (2 cores; 5 of 12 cores in use).\n"
+        "Local CI: terraform_services_checks ended (3 of 12 cores in use).\nLocal CI: terraform_checks ended (1 of 12 cores in use).\n" + body
+    )
+    other = first.replace("Check groups: full", "Check groups: staged")
+    return [
+        {"case": "isolation_comparison_ignores_scheduler_lines_with_other_core_counts_and_order", "passed": item_blocks(first)[0] == item_blocks(second)[0]},
+        {"case": "isolation_comparison_still_sees_other_lines_before_the_groups", "passed": item_blocks(first)[0] != item_blocks(other)[0]},
+        {
+            "case": "isolation_comparison_keeps_the_group_blocks",
+            "passed": item_blocks(first)[1] == item_blocks(second)[1] == {"python_lint": "\nTIMED python_lint: probe x\n"},
+        },
+    ]
 
 
 def isolation_cases(work: Path, out: Path) -> list[dict[str, Any]]:

@@ -420,8 +420,14 @@ def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
         problems.append("CI Checks has no step that lists the jobs of this run attempt with gh api and checks them with .github/scripts/ci_gate_jobs.sh")
     for step in listing:
         text = str(step.get("run", ""))
-        if "/attempts/" not in text or "--jq" not in text:
-            problems.append("the listing step must read the jobs of this run attempt (/attempts/<attempt>/jobs) with --jq")
+        if "filter=latest" not in text or "/attempts/" in text or "--jq" not in text or "--paginate" not in text:
+            problems.append("the listing step must read the latest result of every job of the run (actions/runs/<run>/jobs?filter=latest, paginated) with --jq")
+        if "set -euo pipefail" not in text or re.search(r"\|\s*bash\s+\.github/scripts/ci_gate_jobs\.sh", text) or "GATE_JOBS_FILE" not in text:
+            problems.append("the listing step must write the gh output to a file under set -euo pipefail and check that file, so a failed page fails the step")
+        if str(step.get("if", "")).strip() != "${{ always() }}":
+            problems.append("the listing step must run always(), also when the needs verdict failed")
+        if "toJSON(needs)" not in str(step.get("env", {}).get("NEEDS", "")):
+            problems.append("the listing step must read the needs as NEEDS to count the jobs it expects")
         if (
             str(step.get("env", {}).get("GH_TOKEN", "")) != "${{ github.token }}"
             or str(step.get("env", {}).get("REUSE", "")) != "${{ needs.plan.outputs.reuse }}"
@@ -436,6 +442,9 @@ def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
     ]
     if listing and not checkouts:
         problems.append("CI Checks must check out .github/scripts (sparse) for the listing script")
+    for step in checkouts:
+        if str(step.get("if", "")).strip() != "${{ always() }}":
+            problems.append("the checkout of the gate scripts must run always(), so the listing also runs after a failed needs verdict")
     return problems
 
 
@@ -490,11 +499,17 @@ JOBS_FILE = "data/e2e/ci_reuse/ci_gate_jobs.tsv"
 QUICK_GATES = "Quick Gates of a Reused Result"
 
 
-def ci_listing_verdict(rows: list[tuple[str, str, str]], reuse: str) -> tuple[int, str]:
+def ci_listing_verdict(rows: list[tuple[str, str, str]], reuse: str, expected: int = 0) -> tuple[int, str]:
     """Run the job listing script against a synthetic listing (name, status, conclusion per job); return its exit status and what it printed."""
     (ROOT / JOBS_FILE).parent.mkdir(parents=True, exist_ok=True)
     (ROOT / JOBS_FILE).write_text("".join("\t".join(row) + "\n" for row in rows), encoding="utf-8")
-    environment = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "GATE_JOBS_FILE": str(ROOT / JOBS_FILE), "REUSE": reuse, "GITHUB_STEP_SUMMARY": "/dev/null"}
+    environment = {
+        "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+        "GATE_JOBS_FILE": str(ROOT / JOBS_FILE),
+        "REUSE": reuse,
+        "EXPECTED_JOBS": str(expected),
+        "GITHUB_STEP_SUMMARY": "/dev/null",
+    }
     result = run_command("/bin/bash", [str(ROOT / JOBS_SCRIPT)], env=environment, timeout=60)
     return result.returncode, result.stdout + result.stderr
 
@@ -511,28 +526,39 @@ def ci_listing_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
         rows = [(name, *changes.get(name, ("completed", "success"))) for name in names]
         return [*rows, (QUICK_GATES, *quick), me]
 
+    needs_keys = jobs["ci_gate"]["needs"]
+
+    def check(rows: list[tuple[str, str, str]], reuse: str) -> tuple[int, str]:
+        return ci_listing_verdict(rows, reuse, len(needs_keys))
+
     reused = {name: ("completed", "skipped") for name in names}
     needs_say_success = ci_gate_verdict(jobs, {"reused_gates": "skipped"}, "false")
     results: dict[str, tuple[int, str]] = {
-        "all_green": ci_listing_verdict(listing({}), "false"),
-        "a_cancelled_leg": ci_listing_verdict(listing({leg: ("completed", "cancelled")}), "false"),
-        "a_queued_leg": ci_listing_verdict(listing({leg: ("queued", "")}), "false"),
-        "a_running_leg": ci_listing_verdict(listing({leg: ("in_progress", "")}), "false"),
-        "a_failed_leg": ci_listing_verdict(listing({leg: ("completed", "failure")}), "false"),
-        "a_skipped_leg_without_reuse": ci_listing_verdict(listing({leg: ("completed", "skipped")}), "false"),
-        "two_bad_legs": ci_listing_verdict(listing({leg: ("completed", "cancelled"), names[0]: ("completed", "failure")}), "false"),
-        "quick_gates_that_ran_without_reuse": ci_listing_verdict(listing({}, quick=("completed", "success")), "false"),
-        "a_verified_reuse": ci_listing_verdict(listing(reused, quick=("completed", "success")), "true"),
-        "a_reuse_run_whose_quick_gates_were_skipped": ci_listing_verdict(listing(reused), "true"),
-        "a_reuse_run_with_a_cancelled_job": ci_listing_verdict(listing({**reused, leg: ("completed", "cancelled")}, quick=("completed", "success")), "true"),
-        "an_empty_listing": ci_listing_verdict([], "false"),
+        "all_green": check(listing({}), "false"),
+        "a_cancelled_leg": check(listing({leg: ("completed", "cancelled")}), "false"),
+        "a_queued_leg": check(listing({leg: ("queued", "")}), "false"),
+        "a_running_leg": check(listing({leg: ("in_progress", "")}), "false"),
+        "a_failed_leg": check(listing({leg: ("completed", "failure")}), "false"),
+        "a_skipped_leg_without_reuse": check(listing({leg: ("completed", "skipped")}), "false"),
+        "two_bad_legs": check(listing({leg: ("completed", "cancelled"), names[0]: ("completed", "failure")}), "false"),
+        "quick_gates_that_ran_without_reuse": check(listing({}, quick=("completed", "success")), "false"),
+        "a_verified_reuse": check(listing(reused, quick=("completed", "success")), "true"),
+        "a_reuse_run_whose_quick_gates_were_skipped": check(listing(reused), "true"),
+        "a_reuse_run_with_a_cancelled_job": check(listing({**reused, leg: ("completed", "cancelled")}, quick=("completed", "success")), "true"),
+        "an_empty_listing": check([], "false"),
+        "a_carried_forward_job_with_success": check([*listing({}), ("Core Static Checks (run 1 attempt 1)", "completed", "success")], "false"),
+        "a_missing_expected_job": check(listing({})[: len(needs_keys) // 2], "false"),
+        "one_job_short_of_the_needs": check([row for row in listing({}) if row[0] != "CI Checks"][: len(needs_keys) - 1], "false"),
     }
     named = {"a_cancelled_leg", "a_queued_leg", "a_running_leg", "a_failed_leg", "a_skipped_leg_without_reuse", "a_reuse_run_with_a_cancelled_job"}
-    expected = {name: 0 if name in {"all_green", "a_verified_reuse"} else 1 for name in results}
+    expected = {name: 0 if name in {"all_green", "a_verified_reuse", "a_carried_forward_job_with_success"} else 1 for name in results}
     cases = [
         {
             "case": f"ci_checks_job_listing_{name}",
-            "passed": code == expected[name] and (name not in named or leg in text) and (name != "two_bad_legs" or (leg in text and names[0] in text)),
+            "passed": code == expected[name]
+            and (name not in named or leg in text)
+            and (name != "two_bad_legs" or (leg in text and names[0] in text))
+            and (name not in {"a_missing_expected_job", "one_job_short_of_the_needs"} or "expected" in text),
             "exit": code,
             "output": text[-200:],
         }
@@ -546,6 +572,49 @@ def ci_listing_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
         }
     )
     return cases
+
+
+STEP_FILE = "data/e2e/ci_reuse/ci_gate_listing_step.sh"
+FAKE_BIN = "data/e2e/ci_reuse/bin"
+STEP_GH = '#!/bin/bash\nprintf \'%s\' "${GH_ROWS:-}"\nexit "${GH_EXIT:-0}"\n'
+
+
+def ci_listing_step(jobs: dict[str, Any], rows: list[tuple[str, str, str]], gh_exit: int) -> int:
+    """Run the real command of the listing step with a stand-in gh that prints the rows and then exits with gh_exit; return the exit status of the step."""
+    step = next(item for item in jobs["ci_gate"]["steps"] if "gh api" in str(item.get("run", "")))
+    (ROOT / FAKE_BIN).mkdir(parents=True, exist_ok=True)
+    (ROOT / FAKE_BIN / "gh").write_text(STEP_GH, encoding="utf-8")
+    (ROOT / FAKE_BIN / "gh").chmod(0o755)
+    (ROOT / STEP_FILE).write_text("#!/usr/bin/env bash\n" + str(step["run"]), encoding="utf-8")
+    needs = {key: {"result": "success", "outputs": {}} for key in jobs["ci_gate"]["needs"]}
+    environment = {
+        "PATH": f"{ROOT / FAKE_BIN}:/usr/bin:/bin:/opt/homebrew/bin",
+        "GH_ROWS": "".join("\t".join(row) + "\n" for row in rows),
+        "GH_EXIT": str(gh_exit),
+        "GH_TOKEN": "stand-in",
+        "REUSE": "false",
+        "REPOSITORY": "owner/project",
+        "RUN_ID": "1",
+        "NEEDS": json.dumps(needs),
+        "RUNNER_TEMP": str(ROOT / "data/e2e/ci_reuse"),
+        "GITHUB_STEP_SUMMARY": "/dev/null",
+    }
+    return run_command("/bin/bash", [str(ROOT / STEP_FILE)], cwd=ROOT, env=environment, timeout=60).returncode
+
+
+def ci_listing_step_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The real step command with a stand-in gh: it fails when gh fails after printing rows (a failed later page), when a leg is cancelled and when jobs
+    are missing."""
+    names = [name for name in expanded_names(jobs) if name not in {"CI Checks", QUICK_GATES}]
+    green = [(name, "completed", "success") for name in names] + [(QUICK_GATES, "completed", "skipped"), ("CI Checks", "in_progress", "")]
+    cancelled = [(name, "completed", "cancelled") if name == names[-1] else (name, status, conclusion) for name, status, conclusion in green]
+    return [
+        {"case": "ci_checks_listing_step_passes_when_gh_prints_every_job", "passed": ci_listing_step(jobs, green, 0) == 0},
+        {"case": "ci_checks_listing_step_fails_when_gh_fails_after_printing_rows", "passed": ci_listing_step(jobs, green, 22) != 0},
+        {"case": "ci_checks_listing_step_fails_when_gh_fails_at_once", "passed": ci_listing_step(jobs, [], 1) != 0},
+        {"case": "ci_checks_listing_step_fails_on_a_cancelled_leg", "passed": ci_listing_step(jobs, cancelled, 0) != 0},
+        {"case": "ci_checks_listing_step_fails_when_jobs_are_missing", "passed": ci_listing_step(jobs, green[:3], 0) != 0},
+    ]
 
 
 def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]]:
@@ -566,7 +635,23 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
     no_listing = copy.deepcopy(jobs)
     if "ci_gate" in no_listing:
         no_listing["ci_gate"]["steps"] = [step for step in no_listing["ci_gate"]["steps"] if "gh api" not in str(step.get("run", ""))]
+    piped = copy.deepcopy(jobs)
+    for step in piped.get("ci_gate", {}).get("steps", []):
+        if "gh api" in str(step.get("run", "")):
+            step["run"] = (
+                "gh api --paginate \"repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest\" --jq '.jobs[]' | bash .github/scripts/ci_gate_jobs.sh"
+            )
+    attempts = copy.deepcopy(jobs)
+    for step in attempts.get("ci_gate", {}).get("steps", []):
+        if "gh api" in str(step.get("run", "")):
+            step["run"] = str(step["run"]).replace("jobs?filter=latest", "attempts/$RUN_ATTEMPT/jobs")
+    verdict_only = copy.deepcopy(jobs)
+    for step in verdict_only.get("ci_gate", {}).get("steps", []):
+        step.pop("if", None)
     plants = {
+        "a_listing_piped_into_the_validator": piped,
+        "a_listing_of_one_attempt_only": attempts,
+        "listing_steps_that_do_not_run_after_a_failed_verdict": verdict_only,
         "a_gate_without_permissions_to_list_the_jobs": no_permissions,
         "a_gate_that_never_lists_the_jobs": no_listing,
         "a_missing_need": without_columns,
@@ -583,6 +668,7 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
         },
         *ci_gate_behavior_cases(jobs),
         *ci_listing_cases(jobs),
+        *ci_listing_step_cases(jobs),
         *(
             {"case": f"ci_checks_gate_planted_{name}_is_found", "passed": bool(ci_gate_problems(planted)), "problems": ci_gate_problems(planted)[:2]}
             for name, planted in plants.items()
