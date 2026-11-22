@@ -106,6 +106,42 @@ every_ignored_dockerfile_input_is_generated() {
   [[ $missing -eq 0 ]]
 }
 
+# The installer picks the release of the runner's own platform and fails with a KeyError when the manifest has none, so a job on an arm64 runner broke before its
+# build when uv had no linux_aarch64 release. Each job that runs install_tools.py needs a release of every tool it installs for its own runner platform.
+tools_manifest=config/quality_tools.json
+installed_tool_platforms() { # "runner tool" for each tool each job installs; "ALL" when no --tool names one
+  awk '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { runner = "" }
+    /^    runs-on:/ { runner = $2 }
+    /install_tools\.py/ && runner != "" {
+      count = 0
+      for (i = 1; i <= NF; i++) if ($i == "--tool") { print runner, $(i + 1); count++ }
+      if (count == 0) print runner, "ALL"
+    }
+  ' "$@"
+}
+platform_of_runner() {
+  case "$1" in
+    ubuntu-*-arm) echo linux_aarch64 ;;
+    ubuntu-*) echo linux_amd64 ;;
+    macos-*) echo darwin_arm64 ;;
+    *) return 1 ;;
+  esac
+}
+every_installed_tool_has_a_release_for_its_runner() {
+  local runner tool name platform names missing=0
+  while read -r runner tool; do
+    platform="$(platform_of_runner "$runner")" || { echo "runner $runner has no known platform key" >&2; missing=1; continue; }
+    names="$tool"
+    [[ "$tool" == ALL ]] && names="$(jq -r '.tools | to_entries[] | select(.value.releases != null) | .key' "$tools_manifest")"
+    for name in $names; do
+      jq -e --arg tool "$name" --arg platform "$platform" '.tools[$tool].releases[$platform].sha256 | strings | test("^[0-9a-f]{64}$")' "$tools_manifest" > /dev/null \
+        || { echo "$name has no $platform release in $tools_manifest for runner $runner" >&2; missing=1; }
+    done
+  done < <(installed_tool_platforms .github/workflows/*.yml | sort -u)
+  [[ $missing -eq 0 ]]
+}
+
 check "the build arguments script exists" script_exists
 check "a build with the repository root as context passes its Dockerfile" rooted_names_its_dockerfile
 check "a Dockerfile of a nested context is joined to the context" nested_joins_context_and_dockerfile
@@ -122,6 +158,7 @@ check "the push workflow checks out the LFS lock file" push_checks_out_the_lfs_l
 check "the push workflow pins every action by SHA" push_pins_every_action_by_sha
 check "the push workflow keeps its minimal permissions and the arm64 runner" push_keeps_minimal_permissions_on_arm
 check "every ignored requirement file of a built image is one lock_env images writes" every_ignored_dockerfile_input_is_generated
+check "every tool a workflow installs has a release for the platform of its runner" every_installed_tool_has_a_release_for_its_runner
 
 # --- deployment check ------------------------------------------------------------------------------------------------------------------
 # The synthetic account number is built from parts, so no file of the repository holds a twelve-digit number.
