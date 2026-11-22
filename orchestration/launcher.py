@@ -76,7 +76,7 @@ from orchestration import (
 from scripts.infrastructure import secret_store
 from scripts.lakehouse import dbt_package_archive, gold_publish_record, memory_budget, pins, run_lock
 from scripts.lakehouse import provenance as build_provenance
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
 
 PROTOCOL = 1
 REFUSED_EXIT, ERROR_EXIT, DEGRADED_EXIT = 3, 4, 5
@@ -8702,10 +8702,24 @@ class Launcher:
         """The failure text of one waiting request of a Docker Desktop start: the deadline that caller gave."""
         return f"Docker Desktop did not answer within {record['deadlines'][key]:g} s; open Docker Desktop, answer any dialog, then run the command again"
 
+    @staticmethod
+    def desktop_cutoff_text(ends: float, stopped: bool | None = None, detail: str = "") -> str:
+        """The failure text of a joiner that waited for a start command and is cut off at the time the command was recorded to stop. Only a confirmed
+        stop (``stopped`` true) says the command was stopped; a stop whose cleanup failed (false) says so; before the cleanup ends (None) it says neither."""
+        when = datetime.fromtimestamp(ends, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        what = f"reached its cutoff at {when}"
+        if stopped:
+            what = f"was stopped at {when}"
+        elif stopped is False:
+            what += f" and was not confirmed stopped ({detail})"
+        return f"the Docker Desktop start command {what} before the daemon answered; run the command again"
+
     def advance_desktop(self) -> None:
         """The recorded start: ask whether the daemon answers, run the command if not, then wait for serving.
 
         Each waiting request has its own absolute expiry and fails at it alone; the start runs on for the requests that remain, until the last expiry.
+        Once the command runs, its stop time (``ends``) is also a cutoff: a request whose expiry is later fails at ``ends`` with the cutoff named, whether
+        the command is still stopping, ended or the daemon has not answered, so no reply waits for the command's cleanup.
         """
         with self.tx(write=False) as state:
             if not state["launcher"].get("desktop"):
@@ -8717,11 +8731,19 @@ class Launcher:
             if record is None:
                 return
             now = time.time()
-            for key in [key for key in record["requests"] if record["expiries"][key] <= now]:
-                record["requests"].remove(key)
-                lapsed.append((key, self.desktop_deadline_text(record, key)))
+            ends = record.get("ends")
+            for key in list(record["requests"]):
+                expiry = record["expiries"][key]
+                if ends is not None and expiry > ends:
+                    if ends <= now:
+                        record["requests"].remove(key)
+                        lapsed.append((key, self.desktop_cutoff_text(ends)))
+                elif expiry <= now:
+                    record["requests"].remove(key)
+                    lapsed.append((key, self.desktop_deadline_text(record, key)))
             requests = list(record["requests"])
-            left = max((record["expiries"][key] for key in requests), default=now) - now
+            latest = max((record["expiries"][key] for key in requests), default=now)
+            left = latest - now
             if not requests:
                 state["launcher"]["desktop"] = None
             elif record["phase"] == "probe":
@@ -8731,7 +8753,7 @@ class Launcher:
             elif record["phase"] == "command":
                 command_key = self.operation_key("desktop:cmd", record)
                 if command_key not in self.inflight:
-                    record["ends"] = now + left  # the command is stopped then; a joiner with a later expiry fails then, naming the stopped command
+                    record["ends"] = latest  # the command is stopped then; a joiner with a later expiry fails then, naming the cutoff
                     actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
             elif self.status == "serving" and self.docker_ok:
                 state["launcher"]["desktop"] = None
@@ -8762,7 +8784,7 @@ class Launcher:
 
     def on_desktopcmd(self, key: str, outcome: str, value: Any) -> None:
         """The start command ended: wait for the daemon, or fail the waiting requests (a timeout names each caller's own deadline; a joiner whose deadline
-        reaches past the stop gets the stop time instead)."""
+        reaches past the stop gets the cutoff time instead; a stop that was not confirmed is said in either text)."""
         errors: dict[str, LauncherError] = {}
         with self.tx() as state:
             record = self.desktop_record(state)
@@ -8771,14 +8793,14 @@ class Launcher:
             if outcome == "ok":
                 record.update({"phase": "wait", "ran": True})
             else:
+                ends = record.get("ends")
+                survived = f"{value.detail or value}" if isinstance(value, ProcessGroupSurvived) else ""
                 for request in record["requests"]:
-                    if isinstance(value, TimeoutExpired) and record["expiries"][request] > record.get("ends", 0.0) + 0.001:
-                        stopped = datetime.fromtimestamp(record["ends"], UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        errors[request] = Degraded(
-                            f"the running Docker Desktop start command was stopped at {stopped} before the daemon answered; run the command again"
-                        )
+                    if isinstance(value, TimeoutExpired) and ends is not None and record["expiries"][request] > ends:
+                        errors[request] = Degraded(self.desktop_cutoff_text(ends, not survived, survived))
                     elif isinstance(value, TimeoutExpired):
-                        errors[request] = Degraded(self.desktop_deadline_text(record, request))
+                        note = f" (the command was not confirmed stopped: {survived})" if survived else ""
+                        errors[request] = Degraded(self.desktop_deadline_text(record, request) + note)
                     else:
                         errors[request] = LauncherError(f"docker start failed: {failure_text(value)}", "command_failed")
                 state["launcher"]["desktop"] = None

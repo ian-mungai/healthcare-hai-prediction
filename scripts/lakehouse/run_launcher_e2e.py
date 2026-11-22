@@ -37,7 +37,7 @@ import time
 import traceback
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -53,7 +53,7 @@ from scripts.infrastructure.sts_stand_in import StandInSts
 from scripts.lakehouse import launcher_cleanup, run_lock
 from scripts.lakehouse import pins as pins_module
 from scripts.lakehouse.fake_docker import FakeDocker, Gate
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
 from scripts.training import lane_b_cases
 from scripts.training.step_records import write_done
 
@@ -3432,45 +3432,98 @@ def desktop_start_joined_deadlines(env: Env) -> dict[str, bool]:
     }
 
 
-@case("desktop_start_longer_joiner", timings={"start_wait": 6})
-def desktop_start_longer_joiner(env: Env) -> dict[str, bool]:
-    """A caller that joins a running Docker Desktop start with a deadline beyond the time its command is stopped is not refused: it waits until the command
-    is stopped, then fails with an error that names the stopped command and the time, not its own deadline. The caller that began the start fails at its own."""
-    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
-    env.write_settings()
-    env.start()
+def join_running_start(env: Env, first_deadline: float, joiner_deadline: float) -> dict[str, Any]:
+    """A start whose first caller has a short deadline; once its command runs and the record holds the command's stop time, a second caller joins with a
+    longer deadline. Returns each caller's error and the wall time of its reply, and the recorded stop time."""
     owner = {"kind": "any", "owner": True}
     env.daemon.quit_desktop()
     wait_degraded(env)
-    set_mode(env, "start", "hang")
-    outcomes: dict[str, tuple[BaseException | None, float]] = {}
+    replies: dict[str, tuple[BaseException | None, float]] = {}
 
-    def call_after(name: str, delay: float, deadline: float) -> None:
-        time.sleep(delay)
-        began = time.monotonic()
+    def call(name: str, deadline: float) -> None:
         error = expect_error(lambda: env.client().call("desktop_start", {"owner": True, "deadline": deadline}, owner, timeout=60))
-        outcomes[name] = (error, time.monotonic() - began)
+        replies[name] = (error, time.time())
 
-    threads = [threading.Thread(target=call_after, args=("first", 0.0, 6)), threading.Thread(target=call_after, args=("longer", 1.5, 20))]
-    for thread in threads:
-        thread.start()
-        env.threads.append(thread)
-    for thread in threads:
+    first = threading.Thread(target=call, args=("first", first_deadline))
+    first.start()
+    env.threads.append(first)
+    ends = float(env.wait(lambda: (env.state()["launcher"]["desktop"] or {}).get("ends"), 10, "the start command runs and its stop time is recorded"))
+    joiner = threading.Thread(target=call, args=("joiner", joiner_deadline))
+    joiner.start()
+    env.threads.append(joiner)
+    for thread in (first, joiner):
         thread.join(timeout=40)
-    first, first_seconds = outcomes.get("first", (None, 0.0))
-    longer, longer_seconds = outcomes.get("longer", (None, 0.0))
-    runs = len(command_runs(env, "start"))
+    return {"replies": replies, "ends": ends, "runs": len(command_runs(env, "start"))}
+
+
+def cutoff_text(ends: float) -> str:
+    """The time of a command's cutoff as a failure text names it."""
+    return datetime.fromtimestamp(ends, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@case("desktop_start_longer_joiner", timings={"start_wait": 6})
+def desktop_start_longer_joiner(env: Env) -> dict[str, bool]:
+    """A caller that joins a running Docker Desktop start with a deadline beyond the time its command is stopped joins and waits at most until that time,
+    even when the command's cleanup runs on for 2 s: it fails at the recorded cutoff with an error that names the cutoff, not its own deadline. The caller
+    that began the start fails at its own deadline."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.write_settings()
+    instance = host_launcher(env, "none")
+    instance.stop_delay = 2.0
+    set_mode(env, "start", "hang")
+    result = join_running_start(env, 6, 15)
     set_mode(env, "start", "act")
+    stop_hosted(env, instance)
+    first, first_at = result["replies"].get("first", (None, 0.0))
+    longer, longer_at = result["replies"].get("joiner", (None, 0.0))
+    ends = result["ends"]
     return {
-        "the longer joiner joins and fails when the command is stopped, with an error that names the stopped command and the time": refused(
-            longer, "degraded", "the running Docker Desktop start command was stopped at"
-        )
-        and "Z" in str(longer)
-        and 3.0 <= longer_seconds < 10,
-        "the error does not claim the joiner's own deadline passed": "within 20 s" not in str(longer),
-        "the caller that began the start fails at its own deadline": refused(first, "degraded", "did not answer within 6 s") and first_seconds >= 5,
-        "one start command ran": runs == 1,
-        "no start record is left": env.state()["launcher"]["desktop"] is None,
+        "the longer joiner fails at the recorded cutoff, not after the command's cleanup": refused(longer, "degraded", "cutoff at " + cutoff_text(ends))
+        and ends - 0.05 <= longer_at < ends + 1.0,
+        "the error does not claim the joiner's own deadline passed or a confirmed stop": "within 15 s" not in str(longer) and "was stopped" not in str(longer),
+        "the caller that began the start fails at its own deadline": refused(first, "degraded", "did not answer within 6 s") and first_at >= ends - 0.05,
+        "one start command ran": result["runs"] == 1,
+    }
+
+
+@case("desktop_start_longer_joiner_unconfirmed", timings={"start_wait": 6})
+def desktop_start_longer_joiner_unconfirmed(env: Env) -> dict[str, bool]:
+    """When the cleanup of the command that reached its cutoff ends unconfirmed (a member survived KILL), the joiner that waited past the cutoff is not
+    told that the command was stopped: its error names a cutoff, at the recorded time."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
+    env.write_settings()
+    instance = host_launcher(env, "none")
+    instance.stop_delay = 0.5
+    instance.survive = True
+    set_mode(env, "start", "hang")
+    result = join_running_start(env, 6, 15)
+    set_mode(env, "start", "act")
+    stop_hosted(env, instance)
+    longer, longer_at = result["replies"].get("joiner", (None, 0.0))
+    ends = result["ends"]
+    return {
+        "the joiner fails at the recorded cutoff": refused(longer, "degraded", "cutoff at " + cutoff_text(ends)) and ends - 0.05 <= longer_at < ends + 1.0,
+        "the error does not say the command was stopped": "was stopped" not in str(longer) and "within 15 s" not in str(longer),
+    }
+
+
+@case("desktop_start_joiner_cutoff_in_wait", timings={"start_wait": 6})
+def desktop_start_joiner_cutoff_in_wait(env: Env) -> dict[str, bool]:
+    """A joiner with a deadline beyond the command's cutoff does not succeed after it: the command ends at once, the daemon answers only after the
+    cutoff, and the joiner fails at the cutoff while the first caller fails at its own deadline."""
+    env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=7.0", delay=0.3)
+    env.write_settings()
+    env.start()
+    set_mode(env, "start", "act")
+    result = join_running_start(env, 4, 15)
+    first, _ = result["replies"].get("first", (None, 0.0))
+    longer, longer_at = result["replies"].get("joiner", (None, 0.0))
+    ends = result["ends"]
+    return {
+        "the joiner fails at the cutoff, before the daemon answers": refused(longer, "degraded", "cutoff at " + cutoff_text(ends))
+        and ends - 0.05 <= longer_at < ends + 1.0,
+        "the caller that began the start fails at its own deadline": refused(first, "degraded", "did not answer within 4 s"),
+        "one start command ran": result["runs"] == 1,
     }
 
 
@@ -7879,6 +7932,19 @@ class HookedLauncher(launcher.Launcher):
         if self.mode == "die":
             raise SystemExit
 
+    stop_delay = 0.0
+    survive = False
+
+    def run_desktop_command(self, command: Sequence[str], seconds: float) -> int:
+        """The real command; after its deadline the cleanup takes ``stop_delay`` s more and ends unconfirmed (``ProcessGroupSurvived``) when ``survive``."""
+        try:
+            return super().run_desktop_command(command, seconds)
+        except TimeoutExpired as expired:
+            time.sleep(self.stop_delay)
+            if self.survive:
+                raise ProcessGroupSurvived(expired.cmd, seconds, os.getpid(), detail="a member stayed alive after KILL") from expired
+            raise
+
     def on_copy(self, key: str, outcome: str, value: Any) -> None:
         if self.mode == "stop_before_publish":
             self.running = False
@@ -11345,6 +11411,8 @@ ALL_CASES = (
     desktop_start,
     desktop_start_joined_deadlines,
     desktop_start_longer_joiner,
+    desktop_start_longer_joiner_unconfirmed,
+    desktop_start_joiner_cutoff_in_wait,
     desktop_start_old_record,
     docker_desktop_stale_stop,
     docker_release_skips_and_refusals,
