@@ -41,11 +41,23 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          lfs: true
 
       - name: Check the image entry
         run: |
           [[ "$IMAGE" =~ ^[a-z0-9_]+$ && "$REPOSITORY" =~ ^[a-z0-9_]+$ ]] || { echo "Use lowercase letters, digits and underscores only." >&2; exit 1; }
           jq -e --arg name "$IMAGE" '.images[$name] | select(.kind == "build")' infra/services/images.json > /dev/null || { echo "Only an image of kind build runs here." >&2; exit 1; }
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      # The Dockerfiles copy requirement files that Git ignores. lock_env writes them from the groups of uv.lock with the pinned uv; it needs no installed package.
+      - name: Generate the image requirement files from the lock
+        run: |
+          python scripts/quality/install_tools.py --tool uv
+          python -m scripts.quality.lock_env images
 
       - name: Assume the image push role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0

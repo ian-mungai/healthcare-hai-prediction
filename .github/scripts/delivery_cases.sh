@@ -60,6 +60,52 @@ push_workflow_uses_the_script() {
   grep -q 'bash .github/scripts/image_build_args.sh' "$push" && ! grep -qF -- "$old_form" "$push"
 }
 
+# The Dockerfiles copy requirement files that Git ignores and that lock_env generates from uv.lock (the first run of the workflow failed with
+# "/services/model_api/requirements.txt": not found). So the workflow must write them, from the real lock, before the image build.
+line_of_push() { grep -n -- "$1" "$push" | head -1 | cut -d: -f1; }
+push_generates_the_lock_files_before_the_build() {
+  local generate build
+  generate="$(line_of_push 'scripts.quality.lock_env images')"
+  build="$(line_of_push 'buildx build --platform')"
+  [[ -n "$generate" && -n "$build" && "$generate" -lt "$build" ]]
+}
+push_installs_the_pinned_uv_before_it_generates() {
+  local install generate
+  install="$(line_of_push 'scripts/quality/install_tools.py --tool uv')"
+  generate="$(line_of_push 'scripts.quality.lock_env images')"
+  [[ -n "$install" && -n "$generate" && "$install" -lt "$generate" ]]
+}
+push_sets_up_python_before_it_generates() {
+  local setup generate
+  setup="$(line_of_push 'actions/setup-python@')"
+  generate="$(line_of_push 'scripts.quality.lock_env images')"
+  [[ -n "$setup" && -n "$generate" && "$setup" -lt "$generate" ]] && grep -q 'python-version: "3.12"' "$push"
+}
+push_checks_out_the_lfs_lock() { grep -A6 'actions/checkout@' "$push" | grep -q 'lfs: true'; }
+push_pins_every_action_by_sha() { ! grep -E '^\s*(- )?uses: ' "$push" | grep -Ev '@[0-9a-f]{40}( |$)' | grep -q .; }
+push_keeps_minimal_permissions_on_arm() {
+  grep -q '^permissions: {}' "$push" && grep -q 'runs-on: ubuntu-24.04-arm' "$push" && [[ "$(grep -c 'contents: read' "$push")" -eq 1 && "$(grep -c 'id-token: write' "$push")" -eq 1 ]]
+}
+every_ignored_dockerfile_input_is_generated() {
+  # Each source file a built image's Dockerfile copies (not from another stage) and Git ignores must be one lock_env images writes.
+  local name context dockerfile line token prefix missing=0
+  local -a words
+  while IFS=$'\t' read -r name context dockerfile; do
+    dockerfile="${dockerfile:-$context/Dockerfile}"
+    prefix="$context/"
+    [[ "$context" == . ]] && prefix=""
+    while IFS= read -r line; do
+      read -r -a words <<< "$line"
+      for token in "${words[@]:1:${#words[@]}-2}"; do # the sources: after COPY, before the destination
+        [[ "$token" == --* ]] && continue
+        git check-ignore -q -- "$prefix$token" 2> /dev/null || continue
+        grep -qF "\"$prefix$token\"" scripts/quality/lock_env.py || { echo "$name: $prefix$token is ignored and not written by lock_env images" >&2; missing=1; }
+      done
+    done < <(grep -E '^COPY ' "$dockerfile" | grep -v -- '--from=')
+  done < <(jq -r '.images | to_entries[] | select(.value.kind == "build") | [.key, .value.context, .value.dockerfile // ""] | @tsv' "$images")
+  [[ $missing -eq 0 ]]
+}
+
 check "the build arguments script exists" script_exists
 check "a build with the repository root as context passes its Dockerfile" rooted_names_its_dockerfile
 check "a Dockerfile of a nested context is joined to the context" nested_joins_context_and_dockerfile
@@ -69,6 +115,13 @@ check "a mirror and an unknown image are refused" refuses_a_mirror_and_an_unknow
 check "every dockerfile field of the registry names a file that exists" real_dockerfiles_exist
 check "model_api and streamlit build from their own Dockerfiles" model_api_and_streamlit_name_their_dockerfiles
 check "the push workflow takes its build arguments from the script" push_workflow_uses_the_script
+check "the push workflow generates the lock_env image files before the build" push_generates_the_lock_files_before_the_build
+check "the push workflow installs the pinned uv before it generates them" push_installs_the_pinned_uv_before_it_generates
+check "the push workflow sets up Python 3.12 before it generates them" push_sets_up_python_before_it_generates
+check "the push workflow checks out the LFS lock file" push_checks_out_the_lfs_lock
+check "the push workflow pins every action by SHA" push_pins_every_action_by_sha
+check "the push workflow keeps its minimal permissions and the arm64 runner" push_keeps_minimal_permissions_on_arm
+check "every ignored requirement file of a built image is one lock_env images writes" every_ignored_dockerfile_input_is_generated
 
 # --- deployment check ------------------------------------------------------------------------------------------------------------------
 # The synthetic account number is built from parts, so no file of the repository holds a twelve-digit number.
