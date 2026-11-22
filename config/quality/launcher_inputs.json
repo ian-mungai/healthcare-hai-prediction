@@ -601,6 +601,7 @@
     "config/lakehouse/bronze_silver_readers.json",
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/dbt_package_archive.json",
+    "config/lakehouse/gold_model_runs.json",
     "config/lakehouse/identity_classification.csv",
     "config/lakehouse/ipps_label_overrides.json",
     "config/lakehouse/person_policies.json",

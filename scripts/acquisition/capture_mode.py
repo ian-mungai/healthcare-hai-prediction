@@ -1564,11 +1564,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             if result.status in {"unchanged", "changed"}:
                 counters[result.status] += 1
             done[result.status].append(entry(result))
-            if run.log is not None:
-                run.log(
-                    {"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status}
-                    | ({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds})
-                )
+            log_unit(run, done[result.status][-1], result.status, **({} if limited is None else {"retry_after_seconds": limited.retry_after_seconds}))
     return finish(run, started, observer, journal, state, done, outside, paused | set(cooling), counters, queue_sha256, cooling, manual_report)
 
 
