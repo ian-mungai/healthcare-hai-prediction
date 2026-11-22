@@ -565,6 +565,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  core_gate:
+    name: Core Checks
+    needs: [plan, core]
+    # The one context the owner lists in the required checks for every Core job (the matrix of the job above), so a new or split Core part needs no change to the protection.
+    # Runs after a failed Core job too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict. Like Acquisition Checks it is
+    # skipped only when the plan reuses a passed pull request result.
+    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    runs-on: ubuntu-24.04
+    # A gate with one shell step, about 0.2 minutes (estimate: no hosted run yet).
+    timeout-minutes: 5
+    steps:
+      - name: Require every Core job to have succeeded
+        env:
+          CORE: ${{ needs.core.result }}
+        run: |
+          if [[ "$CORE" != "success" ]]; then
+            echo "The Core jobs finished with result '$CORE', not 'success'; the gate fails." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
   reuse_gate:
     name: CI Reuse and Gate E2E
     needs: plan

@@ -75,7 +75,6 @@
     "\"$python_bin\" -m scripts.quality.run_worker_deadline_e2e",
     "\"$python_bin\" -m scripts.quality.run_worktree_setup_e2e",
     "\"$python_bin\" -m scripts.quality.static_checks --directory \"$source_dir\" --output-directory \"$quality_output/$stack\"; then",
-    "\"$python_bin\" -m scripts.quality.static_checks --directory \"$source_dir\" --output-directory \"$quality_output/$stack\"; then",
     "\"$python_bin\" -m scripts.quality.typecheck --check-untyped-defs --disallow-untyped-defs",
     "\"$python_bin\" -m scripts.training.run_dvc_baseline_e2e",
     "bash .github/scripts/delivery_cases.sh",
@@ -90,11 +89,50 @@
     "python_subprocess_imports",
     "python_suppressions",
     "terraform -chdir=\"$test_dir\" init -backend=false -input=false -lockfile=readonly -no-color",
-    "terraform -chdir=\"$test_dir\" init -backend=false -input=false -lockfile=readonly -no-color",
     "terraform -chdir=\"$test_dir\" test -no-color",
-    "terraform -chdir=\"$test_dir\" test -no-color",
-    "terraform -chdir=\"$test_dir\" validate -no-color",
     "terraform -chdir=\"$test_dir\" validate -no-color",
     "terraform fmt -check -recursive infra"
-  ]
+  ],
+  "repeated": {
+    "\"$python_bin\" -m scripts.quality.static_checks --directory \"$source_dir\" --output-directory \"$quality_output/$stack\"; then": [
+      {
+        "group": "terraform_checks",
+        "stacks": "storage iam platform alerts"
+      },
+      {
+        "group": "terraform_services_checks",
+        "stacks": "services jobs"
+      }
+    ],
+    "terraform -chdir=\"$test_dir\" init -backend=false -input=false -lockfile=readonly -no-color": [
+      {
+        "group": "terraform_checks",
+        "stacks": "storage iam platform alerts"
+      },
+      {
+        "group": "terraform_services_checks",
+        "stacks": "services jobs"
+      }
+    ],
+    "terraform -chdir=\"$test_dir\" test -no-color": [
+      {
+        "group": "terraform_checks",
+        "stacks": "storage iam platform alerts"
+      },
+      {
+        "group": "terraform_services_checks",
+        "stacks": "services jobs"
+      }
+    ],
+    "terraform -chdir=\"$test_dir\" validate -no-color": [
+      {
+        "group": "terraform_checks",
+        "stacks": "storage iam platform alerts"
+      },
+      {
+        "group": "terraform_services_checks",
+        "stacks": "services jobs"
+      }
+    ]
+  }
 }

@@ -7,8 +7,9 @@ moves between group files when a group is split, so a command could be dropped o
 
 * a command of the inventory that no Core group file runs is *dropped*;
 * a command that a Core group file runs and the inventory does not list is *added* (the inventory is updated on purpose with ``--update``, in the same change);
-* a command that more lines run than the inventory lists, in one group file or in two, is *duplicated* (the Terraform stack loop is a line in each of the two
-  stack groups, so the inventory lists each of its commands twice);
+* a command that two lines run, in one group file or in two, is *duplicated*, unless the inventory binds it as *repeated*;
+* a repeated command (the Terraform stack loop is one line in each of the two stack groups) runs once in each group and loop that the inventory records
+  (``"repeated"``: the group and the ``for stack in`` list of its loop), so a line moved to another group or a stack moved to another loop is a *moved* command;
 * a Core group that no part holds, or that two parts hold, is named.
 
 A command is identified by its text after the label, so renaming a group or a label does not change it. Run it from the repository root:
@@ -24,7 +25,6 @@ import argparse
 import json
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -43,16 +43,30 @@ def core_groups(config: dict[str, Any]) -> list[str]:
     return [group for group in config["groups"] if group not in held_elsewhere]
 
 
-def commands_of(path: Path) -> list[str]:
-    """The commands of one body file: the text after the label of each ``timed`` line, in file order."""
-    found = []
+STACK_LOOP = re.compile(r"^(\s*)for stack in ([a-z ]+); do\s*$")
+
+
+def occurrences_of(path: Path) -> list[tuple[str, str]]:
+    """The ``timed`` lines of one body file in file order, each as (command, the stacks of the ``for stack in`` loop around it, or an empty string)."""
+    found: list[tuple[str, str]] = []
+    indent, stacks = "", ""
     for line in path.read_text(encoding="utf-8").splitlines():
+        loop = STACK_LOOP.match(line)
+        if loop:
+            indent, stacks = loop.group(1), " ".join(loop.group(2).split())
+        elif stacks and line == f"{indent}done":
+            stacks = ""
         if line.lstrip().startswith("#"):
             continue
         match = TIMED.search(line)
         if match:
-            found.append(match.group("command").strip())
+            found.append((match.group("command").strip(), stacks))
     return found
+
+
+def commands_of(path: Path) -> list[str]:
+    """The commands of one body file: the text after the label of each ``timed`` line, in file order."""
+    return [command for command, _ in occurrences_of(path)]
 
 
 def inventory(root: Path) -> dict[str, list[str]]:
@@ -61,20 +75,34 @@ def inventory(root: Path) -> dict[str, list[str]]:
     return {group: commands_of(root / GROUPS_DIRECTORY / f"{group}.sh") for group in core_groups(config)}
 
 
+def placements(root: Path) -> dict[str, list[tuple[str, str]]]:
+    """Each command with every place a Core group runs it: (group, stacks of its loop)."""
+    config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
+    found: dict[str, list[tuple[str, str]]] = {}
+    for group in core_groups(config):
+        for command, stacks in occurrences_of(root / GROUPS_DIRECTORY / f"{group}.sh"):
+            found.setdefault(command, []).append((group, stacks))
+    return found
+
+
 def findings(root: Path) -> list[str]:
     """What differs between the Core group files and the committed inventory, and the Core groups that the parts do not hold exactly once."""
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
     problems: list[str] = []
     current = inventory(root)
-    seen = Counter(command for commands in current.values() for command in commands)
-    expected = Counter(json.loads((root / INVENTORY).read_text(encoding="utf-8"))["commands"])
-    problems += [f"duplicated command ({seen[command]} lines run it): {command}" for command in sorted(seen) if seen[command] > max(expected[command], 1)]
-    problems += [
-        f"dropped command (the inventory lists it {expected[command]} times, the Core groups run it {seen[command]}): {command}"
-        for command in sorted(expected)
-        if seen[command] < expected[command]
-    ]
-    problems += [f"added command (a Core group runs it, the inventory lacks it; run --update): {command}" for command in sorted(seen) if not expected[command]]
+    seen = placements(root)
+    committed = json.loads((root / INVENTORY).read_text(encoding="utf-8"))
+    expected = set(committed["commands"])
+    repeated = {command: sorted((entry["group"], entry["stacks"]) for entry in entries) for command, entries in committed.get("repeated", {}).items()}
+    for command, places in sorted(seen.items()):
+        if command in repeated:
+            if sorted(places) != repeated[command]:
+                state = "duplicated command" if len(places) > len(repeated[command]) else "moved command"
+                problems.append(f"{state} (the inventory binds it to {repeated[command]}, the Core groups run it in {sorted(places)}): {command}")
+        elif len(places) > 1:
+            problems.append(f"duplicated command ({len(places)} lines run it): {command}")
+    problems += [f"dropped command (the inventory lists it, no Core group runs it): {command}" for command in sorted(expected - set(seen))]
+    problems += [f"added command (a Core group runs it, the inventory lacks it; run --update): {command}" for command in sorted(set(seen) - expected)]
     parts = config.get("parts", {})
     placed = [group for groups in parts.values() for group in groups]
     problems += [f"group {group} is in no hosted Core part" for group in current if group not in placed]
@@ -90,9 +118,15 @@ def config_parts(root: Path) -> dict[str, list[str]]:
 
 
 def update(root: Path) -> None:
-    """Write the inventory from the current group files (a deliberate change of the Core commands)."""
-    commands = sorted(command for group_commands in inventory(root).values() for command in group_commands)
-    (root / INVENTORY).write_text(json.dumps({"commands": commands}, indent=2) + "\n", encoding="utf-8")
+    """Write the inventory from the current group files (a deliberate change of the Core commands): each command once, and the places of a repeated one."""
+    seen = placements(root)
+    body = {
+        "commands": sorted(seen),
+        "repeated": {
+            command: [{"group": group, "stacks": stacks} for group, stacks in sorted(places)] for command, places in sorted(seen.items()) if len(places) > 1
+        },
+    }
+    (root / INVENTORY).write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

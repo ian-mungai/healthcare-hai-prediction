@@ -53,7 +53,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2398,14 +2398,16 @@ def core_command_cases() -> list[dict[str, Any]]:
             elif value:
                 hosted.append(value)
     hosted = sorted(part for part in hosted if part.startswith("core_"))
-    # The base command list is unchanged except that each Terraform stack command runs in two groups (one loop per group), so the inventory lists it twice.
-    inventory_commands = Counter(json.loads((ROOT / "config/quality/core_commands.json").read_text(encoding="utf-8"))["commands"])
-    stack_commands = sorted(command for command, count in inventory_commands.items() if count == 2)
+    # The base command list is unchanged. Each Terraform stack command is a line in both stack groups; the inventory binds it to those groups and their stacks.
+    repeated = json.loads((ROOT / "config/quality/core_commands.json").read_text(encoding="utf-8")).get("repeated", {})
+    bound = {tuple(sorted((entry["group"], entry["stacks"]) for entry in entries)) for entries in repeated.values()}
     cases.append(
         {
             "case": "only_the_terraform_stack_commands_run_in_two_groups",
-            "passed": len(stack_commands) == 4 and all("terraform" in command or "static_checks" in command for command in stack_commands),
-            "twice": stack_commands,
+            "passed": len(repeated) == 4
+            and bound == {(("terraform_checks", "storage iam platform alerts"), ("terraform_services_checks", "services jobs"))}
+            and all("terraform" in command or "static_checks" in command for command in repeated),
+            "repeated": sorted(repeated),
         }
     )
     cases.append(
@@ -2420,10 +2422,19 @@ def core_command_cases() -> list[dict[str, Any]]:
     plants = {
         "dropped_command_is_found": ("dropped command", lambda root: drop_first_command(root, first_group)),
         "duplicated_command_is_found": ("duplicated command", lambda root: duplicate_first_command(root, first_group)),
-        # A third line of a stack command is a duplicate: the inventory lists it twice, once for each stack group.
+        # A third line of a stack command is a duplicate: the inventory binds it to the two stack groups only.
         "stack_command_over_its_count_is_found": (
             "duplicated command",
             lambda root: duplicate_first_command(root, "terraform_checks", "init -backend=false"),
+        ),
+        # The same number of lines in another group or stack list is a different run (the review moved the services group's init line into terraform_checks).
+        "stack_command_moved_between_groups_is_found": (
+            "moved command",
+            lambda root: move_command(root, "init -backend=false", "terraform_services_checks", "terraform_checks"),
+        ),
+        "stack_list_changed_is_found": (
+            "moved command",
+            lambda root: replace_in_group(root, "terraform_services_checks", "for stack in services jobs; do", "for stack in services; do", 2),
         ),
         "unplaced_group_is_found": ("is in no hosted Core part", lambda root: change_parts(root, remove=first_group)),
         "group_in_two_parts_is_found": ("hosted Core parts", lambda root: change_parts(root, repeat=first_group)),
@@ -2449,6 +2460,27 @@ def duplicate_first_command(root: Path, group: str, needle: str = "") -> None:
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}" and needle in line)
     path.write_text("".join(lines[: index + 1] + [lines[index]] + lines[index + 1 :]), encoding="utf-8")
+
+
+def move_command(root: Path, needle: str, source: str, target: str) -> None:
+    """Move the first ``timed`` line that holds ``needle`` from one group file to the line of the same command in another, so the count stays the same."""
+    source_path = root / "scripts/ci/groups" / f"{source}.sh"
+    lines = source_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    index = next(number for number, line in enumerate(lines) if " timed " in f" {line.lstrip()}" and needle in line)
+    moved = lines.pop(index)
+    source_path.write_text("".join(lines), encoding="utf-8")
+    target_path = root / "scripts/ci/groups" / f"{target}.sh"
+    others = target_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    position = next(number for number, line in enumerate(others) if " timed " in f" {line.lstrip()}" and needle in line)
+    target_path.write_text("".join(others[: position + 1] + [moved] + others[position + 1 :]), encoding="utf-8")
+
+
+def replace_in_group(root: Path, group: str, old: str, new: str, count: int) -> None:
+    path = root / "scripts/ci/groups" / f"{group}.sh"
+    text = path.read_text(encoding="utf-8")
+    if text.count(old) != count:
+        raise ValueError(f"{group}: expected {count} of {old!r}, found {text.count(old)}")
+    path.write_text(text.replace(old, new), encoding="utf-8")
 
 
 def change_parts(root: Path, remove: str = "", repeat: str = "") -> None:
