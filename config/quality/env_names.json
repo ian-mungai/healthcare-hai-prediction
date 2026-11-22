@@ -55,6 +55,7 @@
     "FAKE_SERVER": {"category": "test", "reason": "Set and read only by the Postgres stand-in programs of scripts/infrastructure/postgres_backup_fakes.py and its runner."},
     "FAKE_SHORT_RESTORE": {"category": "test", "reason": "Set and read only by the Postgres stand-in programs of scripts/infrastructure/postgres_backup_fakes.py and its runner."},
     "FAKE_TRUNCATE_DUMP": {"category": "test", "reason": "Set and read only by the Postgres stand-in programs of scripts/infrastructure/postgres_backup_fakes.py and its runner."},
+    "GATE_CLOSURE_EXIT": {"category": "test", "reason": "Set and read only by the stand-in launcher input check of the gate reuse cases of scripts/quality/run_ci_groups_e2e.py (the exit status of the stand-in)."},
     "GRANDCHILD_CODE": {"category": "test", "reason": "Set and read only by the stand-in programs of scripts/quality/run_process_e2e.py and run_worker_deadline_e2e.py"},
     "GRANDCHILD_MODE": {"category": "test", "reason": "Set and read only by the stand-in programs of scripts/quality/run_process_e2e.py and run_worker_deadline_e2e.py"},
     "HAI_ALLOCATION": {"category": "test", "reason": "Set and read only by the kit command stand-ins of the package fixture and silver E2Es"},
