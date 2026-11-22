@@ -571,23 +571,31 @@ jobs:
 
   ci_gate:
     name: CI Checks
-    needs: [plan, hooks, hook_samples, hook_samples_combine, core, reuse_gate, lakehouse, feature_sources, feature_columns, feature_evidence, gold_metadata, launcher, acquisition_shard, acquisition]
-    # The one context the owner lists in the required checks. It waits for the plan and every other job of this workflow (Core parts, feature, lakehouse, launcher, acquisition and
-    # hook jobs), so a new job or a split needs no change to the protection. Runs after a failed job too, so that the failure shows here and a skipped gate never counts as a
-    # pass; a cancelled run needs no verdict. Like Acquisition Checks it is skipped only when the plan reuses a passed pull request result, and the plan apart every job it
-    # needs must have succeeded (a job that was skipped or cancelled fails the gate: no job of a run that does not reuse is skipped).
-    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    needs: [plan, reused_gates, hooks, hook_samples, hook_samples_combine, core, reuse_gate, lakehouse, feature_sources, feature_columns, feature_evidence, gold_metadata, launcher, acquisition_shard, acquisition]
+    # The one context the owner lists in the required checks. It waits for the plan and every other job of this workflow (Core parts, hooks, samples, reuse tests, lakehouse,
+    # feature, gold metadata, launcher and acquisition jobs), so a new job or a split needs no change to the protection. GitHub counts a skipped required job as passing, so it runs
+    # always(): a failed, cancelled or skipped dependency, or a cancelled run, fails it instead of skipping it. The plan must have succeeded. A dependency may be skipped only
+    # when the plan's answer is reuse=true (a verified reuse of a passed pull request result, as Acquisition Checks relies on): then the quick gates of the reused result
+    # must have succeeded and every other job is skipped or succeeded. Without reuse every job succeeded and the quick gates were skipped.
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     # A gate with one shell step, about 0.2 minutes (estimate: no hosted run yet).
     timeout-minutes: 5
     steps:
-      - name: Require every job to have succeeded
+      - name: Require every job to have succeeded, or to have been skipped by a verified reuse
         env:
           NEEDS: ${{ toJSON(needs) }}
+          REUSE: ${{ needs.plan.outputs.reuse }}
         run: |
-          failed="$(jq -r 'to_entries[] | select(.key != "plan" and .value.result != "success") | "\(.key)=\(.value.result)"' <<<"$NEEDS")"
+          failed="$(jq -r --arg reuse "$REUSE" '
+            (if .plan.result != "success" then "plan=\(.plan.result)" else empty end),
+            (to_entries[] | select(.key != "plan") | . as $e
+              | (if $e.key == "reused_gates" then (if $reuse == "true" then ["success"] else ["skipped"] end)
+                 elif $reuse == "true" then ["success", "skipped"] else ["success"] end) as $ok
+              | select(($ok | index($e.value.result)) == null)
+              | "\($e.key)=\($e.value.result)")' <<<"$NEEDS")"
           if [[ -n "$failed" ]]; then
-            echo "These jobs did not succeed, so the gate fails:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "These jobs did not finish as this run requires (reuse answer: '$REUSE'), so the gate fails:" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "$failed" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi

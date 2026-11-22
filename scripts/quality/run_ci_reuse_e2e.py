@@ -374,10 +374,10 @@ def expanded_names(jobs: dict[str, Any]) -> list[str]:
 
 
 def condition_value(condition: str, reuse: str) -> bool:
-    """Evaluate the condition forms the workflow uses: terms joined by ``&&`` of ``!cancelled()`` and a comparison of the plan's answer with 'true'."""
+    """Evaluate the condition forms the workflow uses: terms joined by && of !cancelled() or always() and a comparison of the plan's answer with 'true'."""
     text = re.sub(r"^\$\{\{\s*|\s*\}\}$", "", condition.strip())
     for term in (part.strip() for part in text.split("&&")):
-        if term == "!cancelled()":
+        if term in {"!cancelled()", "always()"}:
             continue
         found = re.fullmatch(r"needs\.plan\.outputs\.reuse (==|!=) 'true'", term)
         if not found:
@@ -387,44 +387,98 @@ def condition_value(condition: str, reuse: str) -> bool:
     return True
 
 
+GATE_SCRIPT = "data/e2e/ci_reuse/ci_gate_verdict.sh"
+EXPECTED_BY_REUSE = {"": "success", "false": "success", "true": "skipped"}
+
+
 def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
-    """What is wrong with the aggregate job ``CI Checks``, the one context the owner lists in the required checks. It waits for the plan and every other
-    job, runs after a failed job, is skipped only when the plan reuses a result (as ``Acquisition Checks`` is) and fails unless every job it needs succeeded."""
+    """What is wrong with the aggregate job CI Checks, the one context the owner lists in the required checks. It waits for every other job of the workflow,
+    runs always (a skipped required job counts as passing, so a cancelled run must not skip it), and its verdict step reads the plan's reuse answer and
+    the results of all the jobs it needs."""
     gate = jobs.get("ci_gate")
     if not isinstance(gate, dict) or gate.get("name") != "CI Checks":
         return ["no job named CI Checks"]
     needs = [gate["needs"]] if isinstance(gate.get("needs"), str) else list(gate.get("needs", []))
-    # The quick gates of a reused result run only when the plan reuses a result, which is when this job is skipped.
-    expected = [key for key in jobs if key not in {"ci_gate", "reused_gates"}]
+    expected = [key for key in jobs if key != "ci_gate"]
     problems = [f"CI Checks does not need {key}" for key in expected if key not in needs]
-    problems += [f"CI Checks needs {key}, which is not a job that it may wait for" for key in needs if key not in expected]
+    problems += [f"CI Checks needs {key}, which is not a job of the workflow" for key in needs if key not in expected]
     condition = str(gate.get("if", ""))
-    if "!cancelled()" not in condition or [condition_value(condition, reuse) for reuse in ("", "false", "true")] != [True, True, False]:
-        problems.append(f"CI Checks must run unless cancelled and unless the plan reuses a result: {condition!r}")
+    if re.sub(r"^\$\{\{\s*|\s*\}\}$", "", condition.strip()) != "always()":
+        problems.append(f"CI Checks must run always() so that a cancelled run cannot leave it skipped: {condition!r}")
     verdicts = [step for step in gate.get("steps", []) if "toJSON(needs)" in str(step.get("env", {})) and "exit 1" in str(step.get("run", ""))]
     if not verdicts:
         problems.append("CI Checks has no step that exits 1 on the results of the jobs it needs")
     for step in verdicts:
-        text = str(step.get("run", ""))
-        if '!= "success"' not in text or "skipped" in text or '"plan"' not in text:
-            problems.append("CI Checks must fail unless every job it needs, the plan apart, succeeded")
+        if str(step.get("env", {}).get("REUSE", "")) != "${{ needs.plan.outputs.reuse }}":
+            problems.append("the verdict step must read the plan's reuse answer as REUSE")
     return problems
 
 
+def ci_gate_script(jobs: dict[str, Any]) -> str:
+    gate = jobs.get("ci_gate", {})
+    steps = [step for step in gate.get("steps", []) if "toJSON(needs)" in str(step.get("env", {}))]
+    return "#!/usr/bin/env bash\nset -euo pipefail\n" + str(steps[0].get("run", "")) if steps else ""
+
+
+def ci_gate_verdict(jobs: dict[str, Any], results: dict[str, str], reuse: str) -> int:
+    """Run the verdict step of the real job against the given job results and plan answer; return its exit status."""
+    needs = jobs["ci_gate"]["needs"]
+    document = {key: {"result": results.get(key, "success"), "outputs": {"reuse": reuse} if key == "plan" else {}} for key in needs}
+    (ROOT / GATE_SCRIPT).parent.mkdir(parents=True, exist_ok=True)
+    (ROOT / GATE_SCRIPT).write_text(ci_gate_script(jobs), encoding="utf-8")
+    environment = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "NEEDS": json.dumps(document), "REUSE": reuse, "GITHUB_STEP_SUMMARY": "/dev/null"}
+    return run_command("/bin/bash", [str(ROOT / GATE_SCRIPT)], env=environment, timeout=60).returncode
+
+
+def ci_gate_behavior_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The verdict of the real step: success when every job succeeded; failure for a failed, cancelled or unexpectedly skipped job or a plan that did not
+    succeed; skipped jobs only when the plan says reuse, and then the quick gates of the reused result must have succeeded."""
+    needs = [key for key in jobs["ci_gate"]["needs"] if key != "plan"]
+    heavy = [key for key in needs if key != "reused_gates"]
+    victim = "feature_columns" if "feature_columns" in heavy else heavy[0]
+    reused = {**{key: "skipped" for key in heavy}, "reused_gates": "success"}
+    not_reused = {key: "success" for key in heavy} | {"reused_gates": "skipped"}
+    cases = {
+        "every_job_succeeded": (not_reused, "false", 0),
+        "an_empty_reuse_answer_with_every_job_succeeded": (not_reused, "", 0),
+        "a_failed_dependency": ({**not_reused, victim: "failure"}, "false", 1),
+        "a_cancelled_dependency": ({**not_reused, victim: "cancelled"}, "false", 1),
+        "an_unexpected_skip": ({**not_reused, victim: "skipped"}, "false", 1),
+        "the_quick_gates_running_without_reuse": ({**not_reused, "reused_gates": "success"}, "false", 1),
+        "a_plan_that_failed": ({**not_reused, "plan": "failure"}, "false", 1),
+        "a_plan_that_was_cancelled": ({**not_reused, "plan": "cancelled"}, "false", 1),
+        "a_verified_reuse_skip": (reused, "true", 0),
+        "a_reuse_run_with_a_failed_dependency": ({**reused, victim: "failure"}, "true", 1),
+        "a_reuse_run_with_a_cancelled_dependency": ({**reused, victim: "cancelled"}, "true", 1),
+        "a_reuse_run_whose_quick_gates_failed": ({**reused, "reused_gates": "failure"}, "true", 1),
+        "a_reuse_run_whose_quick_gates_were_skipped": ({**reused, "reused_gates": "skipped"}, "true", 1),
+        "a_skip_when_the_plan_does_not_reuse_a_result": ({**not_reused, victim: "skipped"}, "", 1),
+    }
+    return [
+        {"case": f"ci_checks_verdict_{name}", "passed": ci_gate_verdict(jobs, results, reuse) == code, "expected_exit": code}
+        for name, (results, reuse, code) in cases.items()
+    ]
+
+
 def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]]:
-    """The real gate job is complete, is a required pull request job, and four planted defects are each found."""
+    """The real gate job is complete, is a required pull request job, behaves as its cases say, and four planted defects are each found."""
     without_columns = copy.deepcopy(jobs)
     if "ci_gate" in without_columns:
         without_columns["ci_gate"]["needs"] = [key for key in without_columns["ci_gate"]["needs"] if key != "feature_columns"]
-    tolerant = copy.deepcopy(jobs)
-    for step in tolerant.get("ci_gate", {}).get("steps", []):
-        step["run"] = str(step.get("run", "")).replace('!= "success"', '== "failure"')
-    always = copy.deepcopy(jobs)
-    if "ci_gate" in always:
-        always["ci_gate"]["if"] = "${{ needs.plan.outputs.reuse != 'true' }}"
+    skipped_on_cancel = copy.deepcopy(jobs)
+    if "ci_gate" in skipped_on_cancel:
+        skipped_on_cancel["ci_gate"]["if"] = "${{ !cancelled() }}"
+    blind = copy.deepcopy(jobs)
+    for step in blind.get("ci_gate", {}).get("steps", []):
+        step.get("env", {}).pop("REUSE", None)
     unlisted = copy.deepcopy(jobs)
     unlisted["new_job"] = {"name": "A new job", "needs": "plan", "if": "${{ needs.plan.outputs.reuse != 'true' }}", "steps": []}
-    plants = {"a_missing_need": without_columns, "a_tolerant_verdict": tolerant, "a_skipped_gate_on_failure": always, "a_new_job_nobody_waits_for": unlisted}
+    plants = {
+        "a_missing_need": without_columns,
+        "a_gate_that_a_cancel_can_skip": skipped_on_cancel,
+        "a_verdict_blind_to_reuse": blind,
+        "a_new_job_nobody_waits_for": unlisted,
+    }
     return [
         {
             "case": "ci_checks_gate_requires_every_job",
@@ -432,6 +486,7 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
             "problems": ci_gate_problems(jobs),
             "needs": sorted(jobs.get("ci_gate", {}).get("needs", [])),
         },
+        *ci_gate_behavior_cases(jobs),
         *(
             {"case": f"ci_checks_gate_planted_{name}_is_found", "passed": bool(ci_gate_problems(planted)), "problems": ci_gate_problems(planted)[:2]}
             for name, planted in plants.items()
@@ -446,7 +501,7 @@ def static_cases() -> list[dict[str, Any]]:
     listed = set(config["required_pull_request_jobs"]) | set(config["skipped_in_pull_request_runs"])
     names = expanded_names(jobs)
     checkouts = [step for definition in jobs.values() for step in definition["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")]
-    heavy = {key: definition for key, definition in jobs.items() if key not in {"plan", "reused_gates"}}
+    heavy = {key: definition for key, definition in jobs.items() if key not in {"plan", "reused_gates", "ci_gate"}}
     needs = {key: [definition["needs"]] if isinstance(definition.get("needs"), str) else definition.get("needs", []) for key, definition in jobs.items()}
     reused = jobs["reused_gates"]
     reused_runs = [str(step.get("run", "")) for step in reused["steps"]]
