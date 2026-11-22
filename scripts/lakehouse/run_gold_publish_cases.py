@@ -25,6 +25,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from orchestration.pipeline_protocol import PipelineError
 from scripts.lakehouse import gold_maintenance as maintenance
 from scripts.lakehouse import gold_publish as publish
 from scripts.lakehouse.gold_publish import Context, Faults, FolderStore, InjectedFault, Plan
@@ -604,7 +605,7 @@ def recovery_snapshot(h: Harness) -> Check:
     checks["a rerun after a later commit writes nothing for the old run"] = "main moved" in str(late["recovery_snapshot"].get("skipped")) and (
         path is None or path.read_bytes() == bytes_before
     )
-    checks["the later run has its own snapshot"] = path is not None and (path.parent / publish.committed_name(ctx2.run_id)).is_file()
+    checks["the later run has its own snapshot"] = isinstance(ctx2.store, FolderStore) and (ctx2.store.root / publish.committed_name(ctx2.run_id)).is_file()
     return checks
 
 
@@ -990,11 +991,11 @@ def refuses(action: Callable[[], Any]) -> bool:
     return False
 
 
-def refusal_of(action: Callable[[], Any]) -> str:
-    """The message of the publish refusal an action raises; empty when it raises nothing; a marker when it raises anything else (a defect, no refusal)."""
+def refusal_of(action: Callable[[], Any], kinds: tuple[type[Exception], ...] = (PublishError,)) -> str:
+    """The message of the refusal of one of these kinds an action raises; empty when it raises nothing; a marker for anything else (a defect)."""
     try:
         action()
-    except PublishError as error:
+    except kinds as error:
         return str(error)
     except Exception as error:
         return f"unexpected {type(error).__name__}"
@@ -1476,7 +1477,7 @@ def base_pin_and_extract(h: Harness) -> Check:
     again = features_input.extract(ctx, folder, pin_sha, base=True)
     checks["a repeated extract leaves the same manifest"] = again["snapshot_set"] == first["snapshot_set"] and again["pins_sha256"] == first["pins_sha256"]
     checks["an extract with another pin digest is refused"] = "changed after launcher acceptance" in refusal_of(
-        lambda: features_input.extract(ctx, folder, "0" * 64, base=True)
+        lambda: features_input.extract(ctx, folder, "0" * 64, base=True), (PipelineError,)
     )
     return checks
 

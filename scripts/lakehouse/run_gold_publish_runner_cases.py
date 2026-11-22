@@ -737,7 +737,14 @@ GOLD_DEFAULT = (
     "schema_evolution",
     "base_pin_and_extract",
 )
-FEATURE_DEFAULT = ("happy_and_types", "retry_and_new_publication", "version_two", "interruption_between_fast_forwards", "tamper")
+FEATURE_DEFAULT = (
+    "happy_and_types",
+    "retry_and_new_publication",
+    "version_two",
+    "interruption_between_fast_forwards",
+    "tamper",
+    "republish_after_retirement",
+)
 
 
 def passing_rows(names: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -980,7 +987,7 @@ def report_consumer_cases(root: Path, boundary: str) -> Check:
     checks = {f"{boundary}: complete positive control has exact inventory, exit 0 and persisted cleanup": complete_control(control, expected, probes)}
     checks[f"{boundary}: positive control reaches the requested transport"] = sum(name == launch for name, _ in transport.requests) == 1
     if feature:
-        checks["feature: default contains exactly five cases and two host controls"] = control.report.get("counts") == {"pass": 7, "fail": 0, "pending": 0}
+        checks["feature: default contains exactly six cases and two host controls"] = control.report.get("counts") == {"pass": 8, "fail": 0, "pending": 0}
     for invalid in report_inputs(names):
         outcome, transport = replay_run(root, mode, filename, invalid.payload, feature=feature)
         label = f"{boundary}: {invalid.label}"
