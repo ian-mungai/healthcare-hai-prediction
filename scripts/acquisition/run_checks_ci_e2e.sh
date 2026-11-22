@@ -8,7 +8,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
-python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 out="$repo_root/data/e2e/acquisition_ci_gate/$(date -u +%Y%m%dT%H%M%SZ)_$$"
 mkdir -p "$out"
 results="$out/results.txt"
@@ -58,18 +57,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP ALRM
 
 GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$work" HEAD
-cp scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py "$work/scripts/acquisition/"
-mkdir -p "$work/scripts/quality" "$work/config/acquisition"
-cp scripts/quality/timing.sh "$work/scripts/quality/timing.sh"
-cp config/acquisition/shard_weights.json config/acquisition/coverage.ini "$work/config/acquisition/"
+cp scripts/acquisition/run_checks_ci.sh "$work/scripts/acquisition/"
 cat >"$work/scripts/acquisition/run_checks.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "stub run" | tee -a "$STUB_MARKER"
 exit "${STUB_EXIT:-0}"
 STUB
 # Staged, so the pre-commit stash of unstaged changes leaves them in place.
-git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py scripts/acquisition/run_checks.sh \
-  scripts/quality/timing.sh config/acquisition/shard_weights.json config/acquisition/coverage.ini
+git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks.sh
 
 failures=0
 # case <name> <expected exit> <expected stub runs> <expected output text> [VAR=value ...]
@@ -78,8 +73,7 @@ case_run() {
   shift 4
   local marker="$scratch/$name.marker" log="$out/$name.log" code=0 runs
   : >"$marker"
-  (cd "$work" && env -u RANGE_START -u RANGE_END PYTHON_BIN="$python_bin" \
-    GITHUB_STEP_SUMMARY="$out/$name.summary" STUB_MARKER="$marker" "$@" bash scripts/acquisition/run_checks_ci.sh) >"$log" 2>&1 || code=$?
+  (cd "$work" && env STUB_MARKER="$marker" "$@" bash scripts/acquisition/run_checks_ci.sh) >"$log" 2>&1 || code=$?
   runs="$(wc -l <"$marker" | tr -d ' ')"
   if [[ "$code" == "$want_exit" && "$runs" == "$want_runs" ]] && grep -q -- "$want_text" "$log"; then
     echo "PASS $name (exit $code, stub runs $runs)" | tee -a "$results"

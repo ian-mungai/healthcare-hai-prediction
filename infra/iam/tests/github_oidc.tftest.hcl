@@ -198,6 +198,23 @@ run "delivery_roles_are_on_by_default_without_the_plan_role" {
     ]) && join(",", sort(keys(output.github_oidc_contract.roles))) == "code_staging,deploy,image_push" && join(",", sort(keys(output.github_oidc_contract.subjects))) == "code_staging,deploy,image_push"
     error_message = "Until the plan role is switched on, nothing trusts the terraform-plan environment."
   }
+
+  assert {
+    condition = alltrue([
+      for key, subject in {
+        image_push   = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:image-push"
+        deploy       = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:model-api-deploy"
+        code_staging = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:code-staging"
+      } :
+      length(jsondecode(aws_iam_role.github[key].assume_role_policy).Statement) == 1 &&
+      keys(jsondecode(aws_iam_role.github[key].assume_role_policy).Statement[0].Condition) == ["StringEquals"] &&
+      jsondecode(aws_iam_role.github[key].assume_role_policy).Statement[0].Condition.StringEquals == {
+        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+        "token.actions.githubusercontent.com:sub" = [subject]
+      }
+    ])
+    error_message = "With the plan role off, each delivery role must trust exactly one environment subject of this repository in one statement, so a widened trust fails here too."
+  }
 }
 
 run "the_plan_role_appears_when_its_variable_and_the_flag_are_on" {

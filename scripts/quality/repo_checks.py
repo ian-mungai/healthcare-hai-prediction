@@ -2715,6 +2715,76 @@ def privacy_scan() -> tuple[list[Finding], list[str]]:
     return findings, unreviewed
 
 
+COMMIT_MARK = "\x01commit "
+HUNK_START = re.compile(r"@@ -\S+ \+(?P<start>\d+)")
+
+
+def pushed_revisions(tips: list[str], remote: str) -> list[str]:
+    """The ``git log`` arguments for the commits a push newly sends: every tip, not what the remote already holds (every remote when ``remote`` is empty)."""
+    return [*tips, "--not", f"--remotes={remote}" if remote else "--remotes"]
+
+
+def pushed_added_lines(tips: list[str], remote: str) -> tuple[list[tuple[str, str, int, str]], list[str]]:
+    """The added lines of every commit a push newly sends, as (commit, path, line number, text), and the binary files it adds.
+
+    A merge is read against its first parent. Each commit is read on its own, so a value added in one commit and removed in the next is seen.
+    """
+    log = git_text(
+        "-c",
+        "core.quotepath=false",
+        "log",
+        "--no-color",
+        "--no-renames",
+        "-p",
+        "-U0",
+        "--inter-hunk-context=0",
+        "--diff-merges=first-parent",
+        "--format=%x01commit %H",
+        *pushed_revisions(tips, remote),
+    )
+    added: list[tuple[str, str, int, str]] = []
+    binary: list[str] = []
+    commit, path, number, in_header = "", "", 0, False
+    for line in log.splitlines():
+        if line.startswith(COMMIT_MARK):
+            commit, path, in_header = line[len(COMMIT_MARK) :], "", False
+        elif line.startswith("diff --git "):
+            path, in_header = "", True
+        elif in_header and (match := BINARY_DIFF.fullmatch(line)):
+            binary.append(f"{commit[:12]}:{match.group('new') or match.group('old') or ''}")
+        elif in_header and line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else ""
+        elif line.startswith("@@"):
+            in_header = False
+            number = int(hunk.group("start")) if (hunk := HUNK_START.match(line)) else 0
+        elif not in_header and line.startswith("+") and path:
+            added.append((commit, path, number, line[1:]))
+            number += 1
+    return added, binary
+
+
+def tag_message(tag: str) -> str:
+    """The message of a tag object: the text after its header, which holds the tagger's own name and address."""
+    return git_text("cat-file", "tag", tag).partition("\n\n")[2]
+
+
+def pushed_privacy_scan(tips: list[str], remote: str, tags: list[str]) -> tuple[list[Finding], list[str]]:
+    """Scan the lines every commit of a push adds, and the message of every pushed tag object, like ``privacy_scan`` scans files; never report the value."""
+    allowed, findings = privacy_allowlist()
+    values = env_values()
+    descriptions = {kind: description for kind, (description, _) in PRIVACY_PATTERNS.items()} | {"env-value": "value declared in .env"}
+    added, binary = pushed_added_lines(tips, remote) if tips else ([], [])
+    for commit, path, number, line in added:
+        for kind in line_privacy(line, values):
+            if not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                findings.append(Finding(f"commit {commit[:12]}:{path}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX))
+    for tag in tags:
+        for number, line in enumerate(tag_message(tag).splitlines(), 1):
+            findings += [Finding(f"tag {tag[:12]}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX) for kind in line_privacy(line, values)]
+    unreviewed = [f"commit {entry}: unreviewed: cannot be read as text. Inspect it before publishing" for entry in binary]
+    return findings, unreviewed
+
+
 def mask_prose(line: str) -> str:
     """Replace code spans, link targets and URLs with a neutral word, so only prose is checked.
 
@@ -3004,6 +3074,11 @@ def main() -> int:
     )
     parser.add_argument("paths", nargs="*")
     parser.add_argument("--all", action="store_true", help="privacy-scan: every file Git does not ignore (the default scope). Ignored files are never scanned")
+    parser.add_argument(
+        "--tip", action="append", default=[], metavar="SHA", help="privacy-scan: scan the lines added by the commits a push sends, up to this tip"
+    )
+    parser.add_argument("--remote", default="", help="privacy-scan with --tip: the remote whose commits a push does not send again (default: every remote)")
+    parser.add_argument("--tag-object", action="append", default=[], metavar="SHA", help="privacy-scan: scan the message of this pushed tag object")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     parser.add_argument(
@@ -3032,7 +3107,7 @@ def run(args: argparse.Namespace) -> int:
         warn(warnings)
         return report(findings)
     if args.check == "privacy-scan":
-        findings, unreviewed = privacy_scan()
+        findings, unreviewed = pushed_privacy_scan(args.tip, args.remote, args.tag_object) if args.tip or args.tag_object else privacy_scan()
         for line in unreviewed:
             sys.stderr.write(f"{line}\n")
         return warn(findings) if args.warn else report(findings)

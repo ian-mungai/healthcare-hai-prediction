@@ -9,8 +9,7 @@ shard with the least weight so far. The plugin writes ``shard_K_of_N.json`` (the
 seconds of each test, the pytest exit status and the CI run it belongs to).
 
 ``seal`` completes the manifest after pytest and pytest-cov have ended: the pytest exit status and the hash and measured-file count of the shard's
-coverage data. It writes a failed manifest when pytest wrote none. ``skip`` writes a ``skipped`` manifest for a job whose range does not reach
-the acquisition checks.
+coverage data. It writes a failed manifest when pytest wrote none.
 
 ``gate`` is the only place that enforces the coverage target. It trusts no field of a manifest that it can recompute. It passes only when every
 shard 1..N has a manifest of this CI run with exactly the fields of a manifest (no other, none missing), the matching count, collected-id hash and
@@ -18,9 +17,8 @@ run; every manifest passed (exit 0, every outcome ``passed`` or ``skipped``, the
 failed or errored test, every assigned test reported once); the union of the assigned ids equals the ids that the gate collects itself, each once,
 and each shard was assigned the tests that the gate's own assignment gives it; each shard's coverage data matches its manifest hash and measures the
 number of files that its manifest says; and the merged coverage reaches ``--fail-under``. One shard's coverage is never judged alone.
-``--expect skip`` accepts only manifests that are all skipped, with exactly the fields of a skipped manifest.
 
-    .venv/bin/python -m scripts.acquisition.shards gate --directory D --count 4 --expect run --fail-under 90 -- <pytest paths>
+    .venv/bin/python -m scripts.acquisition.shards gate --directory D --count 4 --fail-under 90 -- <pytest paths>
 
 E2E: ``.venv/bin/python -m scripts.acquisition.run_shards_e2e``.
 """
@@ -74,7 +72,6 @@ RUN_FIELDS = frozenset(
         "coverage_files",
     }
 )
-SKIPPED_FIELDS = frozenset({"schema", "kind", "status", "shard", "count", "context", "reason"})
 PASSING_OUTCOMES = ("passed", "skipped")
 OUTCOMES = ("passed", "failed", "error", "skipped")
 
@@ -262,14 +259,6 @@ def seal(directory: Path, shard: tuple[int, int], pytest_exit: int, config: Path
         raise ShardError(f"shard {index} of {count} sealed as failed: {cause}")
 
 
-def skip(directory: Path, shard: tuple[int, int], reason: str) -> None:
-    index, count = shard
-    write_json(
-        directory / f"shard_{index}_of_{count}.json",
-        {"schema": SCHEMA, "kind": "shard", "status": "skipped", "shard": index, "count": count, "context": ci_context(), "reason": reason},
-    )
-
-
 def read_manifests(directory: Path, count: int) -> list[dict[str, Any]]:
     manifests: list[dict[str, Any]] = []
     for index in range(1, count + 1):
@@ -418,25 +407,10 @@ def merge_coverage(directory: Path, manifests: list[dict[str, Any]], config: Pat
         return text
 
 
-def check_skipped(manifest: dict[str, Any]) -> None:
-    check_fields(manifest, SKIPPED_FIELDS)
-    if not isinstance(manifest["reason"], str) or not manifest["reason"].strip():
-        raise ShardError(f"shard {manifest['shard']} is skipped without a reason")
-
-
-def gate(directory: Path, count: int, expect: str, fail_under: float, paths: list[str], config: Path, root: Path = ROOT, weights: Path = WEIGHTS) -> str:
+def gate(directory: Path, count: int, fail_under: float, paths: list[str], config: Path, root: Path = ROOT, weights: Path = WEIGHTS) -> str:
     """Return the report of a passing gate; raise ShardError naming the first reason otherwise."""
     manifests = read_manifests(directory, count)
     check_context(manifests)
-    statuses = {manifest.get("status") for manifest in manifests}
-    if expect == "skip":
-        if statuses != {"skipped"}:
-            raise ShardError(f"this gate expects every shard to be skipped, and the statuses are {sorted(map(str, statuses))}")
-        for manifest in manifests:
-            check_skipped(manifest)
-        return f"All {count} shards were skipped: {manifests[0].get('reason')}"
-    if "skipped" in statuses:
-        raise ShardError(f"this gate expects the checks to run, and the statuses are {sorted(map(str, statuses))}")
     check_passed_shards(manifests, paths, root, weights)
     return merge_coverage(directory, manifests, config, fail_under)
 
@@ -462,18 +436,16 @@ def bound_config(config: Path, source: Path, output: Path) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("seal", "skip"):
+    for name in ("seal",):
         sub = commands.add_parser(name)
         sub.add_argument("--directory", type=Path, required=True)
         sub.add_argument("--shard", required=True)
         sub.add_argument("--coverage-config", type=Path, default=COVERAGE_CONFIG)
         sub.add_argument("--coverage-source", type=Path, help="report only the files under this folder (resolved now); see bound_config")
         sub.add_argument("--pytest-exit", type=int, default=1)
-        sub.add_argument("--reason", default="")
     sub = commands.add_parser("gate")
     sub.add_argument("--directory", type=Path, required=True)
     sub.add_argument("--count", type=int, required=True)
-    sub.add_argument("--expect", choices=("run", "skip"), required=True)
     sub.add_argument("--fail-under", type=float, default=90.0)
     sub.add_argument("--coverage-config", type=Path, default=COVERAGE_CONFIG)
     sub.add_argument("--coverage-source", type=Path, help="report only the files under this folder (resolved now); see bound_config")
@@ -488,16 +460,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="coverage_bound_") as folder:
             config = args.coverage_config
-            if args.command != "skip" and args.coverage_source is not None:
+            if args.coverage_source is not None:
                 config = bound_config(args.coverage_config, args.coverage_source, args.output if args.command == "bind" else Path(folder) / "coverage.ini")
             if args.command == "bind":
                 return 0
             if args.command == "gate":
-                sys.stdout.write(gate(args.directory, args.count, args.expect, args.fail_under, args.paths, config, args.root, args.weights) + "\n")
-            elif args.command == "seal":
-                seal(args.directory, parse_shard(args.shard), args.pytest_exit, config)
+                sys.stdout.write(gate(args.directory, args.count, args.fail_under, args.paths, config, args.root, args.weights) + "\n")
             else:
-                skip(args.directory, parse_shard(args.shard), args.reason)
+                seal(args.directory, parse_shard(args.shard), args.pytest_exit, config)
     except (ShardError, OSError, ValueError, KeyError) as error:
         sys.stderr.write(f"acquisition shards: {error}\n")
         return 1

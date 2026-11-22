@@ -4,10 +4,10 @@ Run from the repository root: ``.venv/bin/python -m scripts.acquisition.run_shar
 
 - The real collection: every test that the acquisition run collects belongs to exactly one shard (for one, two and three shards), the committed
   weights name only tests that exist, and the committed weights leave the CI shards (shards.CI_SHARD_COUNT) within 25% of the total apart.
-- A synthetic project built in a scratch folder runs the real pytest plugin, the real ``seal`` and ``skip`` commands and the real ``gate`` command
+- A synthetic project built in a scratch folder runs the real pytest plugin, the real ``seal`` command and the real ``gate`` command
   (the same entry points that scripts/acquisition/run_checks_shard.sh and run_checks_combine.sh start). Its shards cover different code, so neither
   covers the target alone and the merge does, and one module runs only in a child process. Each negative case changes one thing (a missing shard, a
-  failed test, a dropped test, a shard of another run, a swapped coverage file, a mixed skip) and passes only when the gate fails for that cause.
+  failed test, a dropped test, a shard of another run, a swapped coverage file) and passes only when the gate fails for that cause.
 
 Failure modes S1 to S14 (plans, local). The report goes to data/e2e/acquisition_shards_e2e/<UTC>_<pid>/report.json with the revision, the SHA-256 of
 the code under test and the tool versions.
@@ -203,7 +203,7 @@ def run_shard(project: Path, directory: Path, shard: str, extra: list[str] | Non
     return pytest.returncode or sealed.returncode
 
 
-def run_gate(project: Path, directory: Path, expect: str = "run", fail_under: float = TARGET, **env: str) -> tuple[int, str]:
+def run_gate(project: Path, directory: Path, fail_under: float = TARGET, **env: str) -> tuple[int, str]:
     result = run_command(
         sys.executable,
         [
@@ -214,8 +214,6 @@ def run_gate(project: Path, directory: Path, expect: str = "run", fail_under: fl
             str(directory),
             "--count",
             "2",
-            "--expect",
-            expect,
             "--fail-under",
             str(fail_under),
             "--coverage-config",
@@ -541,28 +539,13 @@ def corruption_cases(project: Path, good: Path, scratch: Path) -> list[dict[str,
     save(moved, 2, second)
     code, out = run_gate(project, moved)
     cases.append(negative("test_run_in_another_shard_than_assigned_fails_the_gate", code, out, "other ones"))
+    forged = copy_run(good, scratch, "skipped_status")
+    document = manifest(forged, 1)
+    document["status"] = "skipped"
+    save(forged, 1, document)
+    code, out = run_gate(project, forged)
+    cases.append(negative("manifest_with_the_skipped_status_fails_the_gate", code, out, ""))
 
-    skipped = scratch / "skipped_fields_run"
-    for index in (1, 2):
-        run_command(
-            sys.executable,
-            ["-m", "scripts.acquisition.shards", "skip", "--directory", str(skipped), "--shard", f"{index}/2", "--reason", "no path reached"],
-            cwd=project,
-            env=environment(),
-            timeout=120,
-        )
-    extra = copy_run(skipped, scratch, "skipped_extra_field")
-    document = manifest(extra, 2)
-    document["assigned"] = ["tests/test_pkg.py::test_first"]
-    save(extra, 2, document)
-    code, out = run_gate(project, extra, expect="skip")
-    cases.append(negative("skipped_manifest_with_an_extra_field_fails_the_gate", code, out, "has other fields than a manifest"))
-    reasonless = copy_run(skipped, scratch, "skipped_no_reason")
-    document = manifest(reasonless, 1)
-    document["reason"] = " "
-    save(reasonless, 1, document)
-    code, out = run_gate(project, reasonless, expect="skip")
-    cases.append(negative("skipped_manifest_without_a_reason_fails_the_gate", code, out, "is skipped without a reason"))
     return cases
 
 
@@ -747,41 +730,6 @@ def synthetic_cases(scratch: Path) -> list[dict[str, Any]]:
         negative("failed_shard_fails_the_gate", code, out, "failed", shard_exits=failed_codes) | {"passed": code != 0 and any(failed_codes) and "failed" in out}
     )
 
-    skipped = scratch / "skipped_run"
-    for index in (1, 2):
-        run_command(
-            sys.executable,
-            ["-m", "scripts.acquisition.shards", "skip", "--directory", str(skipped), "--shard", f"{index}/2", "--reason", "no path reached"],
-            cwd=project,
-            env=environment(),
-            timeout=120,
-        )
-    skip_code, skip_out = run_gate(project, skipped, expect="skip")
-    run_code, run_out = run_gate(project, skipped, expect="run")
-    mixed = copy_run(good, scratch, "mixed")
-    run_command(
-        sys.executable,
-        ["-m", "scripts.acquisition.shards", "skip", "--directory", str(mixed), "--shard", "1/2", "--reason", "no path reached"],
-        cwd=project,
-        env=environment(),
-        timeout=120,
-    )
-    mixed_run_code, mixed_run_out = run_gate(project, mixed, expect="run")
-    mixed_skip_code, mixed_skip_out = run_gate(project, mixed, expect="skip")
-    cases.append(
-        {
-            "case": "mixed_skip_and_run_fails_the_gate",
-            "passed": skip_code == 0
-            and "All 2 shards were skipped" in skip_out
-            and run_code != 0
-            and "expects the checks to run" in run_out
-            and mixed_run_code != 0
-            and "expects the checks to run" in mixed_run_out
-            and mixed_skip_code != 0
-            and "expects every shard to be skipped" in mixed_skip_out,
-            "exits": [skip_code, run_code, mixed_run_code, mixed_skip_code],
-        }
-    )
     return cases
 
 

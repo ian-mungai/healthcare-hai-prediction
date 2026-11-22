@@ -8,9 +8,13 @@ The changed-file checks run first (scripts/quality/ci_changed_files.py: Ruff, my
 A failed check stops the run. Then these steps run at once, except the OSV-Scanner hook, which runs through pre-commit (it takes the worktree's index lock):
 
 - ``commit_messages`` and ``removed_names``: the commit-message and removed-name checks of the range (scripts/quality/repo_checks.py);
-- ``secret_scan``: the Gitleaks scan of every source file Git does not ignore (scripts/quality/scan_secrets.py);
-- ``privacy_scan``: the privacy scan of every file Git does not ignore (scripts/quality/repo_checks.py privacy-scan). Both scans stay at the push, so a
-  commit made with its hooks bypassed, or in another clone, never reaches GitHub unchecked;
+- ``secret_scan`` and ``privacy_scan``: the Gitleaks scan (scripts/quality/scan_secrets.py) and the privacy scan (scripts/quality/repo_checks.py privacy-scan)
+  of every file Git does not ignore;
+- ``secret_scan_pushed`` and ``privacy_scan_pushed``: the same scans over the commits the push newly sends, ``git rev-list <tip> --not --remotes=<remote>`` for
+  every updated reference (the privacy scan reads the lines each commit adds), so a value that one commit adds and a later commit removes is found. They need
+  no base, so they also cover a new branch and a force push. A pushed annotated tag has its message scanned by both scans (``secret_scan_tags`` and the
+  privacy step), also when its commit is already on the remote. The scans stay at the push, so a commit made with its hooks bypassed, or in another clone, never
+  reaches GitHub unchecked;
 - ``osv_scanner``: ``pre-commit run osv-scanner --hook-stage pre-push`` over the range, or over all files when there is no range. The hook skips itself
   unless the range changes uv.lock, a requirements file or the allowlist.
 
@@ -82,7 +86,6 @@ EXECUTION_CONTROLS = (
     "ACQUISITION_SHARD",
     "ACQUISITION_SHARD_DIR",
     "ACQUISITION_SHARD_COUNT",
-    "ACQUISITION_EXPECT",
     "GITHUB_ACTIONS",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
@@ -163,23 +166,45 @@ def output_directory(root: Path) -> Path:
     return root / "data/e2e/pre_push" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
 
 
-def plan(root: Path, base: str = "", head: str = "") -> dict[str, Any]:
+def remote_name(root: Path, given: str) -> str:
+    """The remote whose commits a push does not send again: the one Git names (``origin`` without one), or every remote for a URL."""
+    name = given or "origin"
+    return name if name == "origin" or name in git(root, "remote")[1].split() else ""
+
+
+def plan(
+    root: Path, base: str = "", head: str = "", remote: str = "", tips: list[str] | None = None, tags: list[str] | None = None, checkout: bool = True
+) -> dict[str, Any]:
+    """The steps of the gate: ``tips`` are the commits it sends (the head by default), ``tags`` its tag objects, ``checkout`` whether it sends the head."""
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
-    end = resolve_head(root, head)
-    start, unusable = resolve_base(root, base, end)
+    end = resolve_head(root, head) if checkout else ""
+    start, unusable = resolve_base(root, base, end) if checkout else ("", "")
     seconds = int(config["pre_push"]["timeout_seconds"])
+    remote = remote_name(root, remote)
+    tips = [end] if tips is None and end else list(tips or [])
+    tags = list(tags or [])
     steps: list[dict[str, Any]] = []
     if start and end:
         steps += [
             {"name": "commit_messages", "kind": "repo_checks", "arguments": ["commit-range", start, end], "env": {}},
             {"name": "removed_names", "kind": "repo_checks", "arguments": ["removed-names"], "env": {"PRE_COMMIT_FROM_REF": start, "PRE_COMMIT_TO_REF": end}},
         ]
-    scan_files = ["--from-ref", start, "--to-ref", end] if start and end else ["--all-files"]
-    steps += [
-        {"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},
-        {"name": "privacy_scan", "kind": "repo_checks", "arguments": ["privacy-scan"], "env": {}},
-        {"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}},
-    ]
+    if checkout:
+        steps += [
+            {"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},
+            {"name": "privacy_scan", "kind": "repo_checks", "arguments": ["privacy-scan"], "env": {}},
+        ]
+    sent = [part for tip in tips for part in ("--tip", tip)] + ["--remote", remote] * bool(tips)
+    named = [part for tag in tags for part in ("--tag-object", tag)]
+    if tips:
+        steps.append({"name": "secret_scan_pushed", "kind": "secret_scan", "arguments": sent, "env": {}})
+    if tags:
+        steps.append({"name": "secret_scan_tags", "kind": "secret_scan", "arguments": named, "env": {}})
+    if tips or tags:
+        steps.append({"name": "privacy_scan_pushed", "kind": "repo_checks", "arguments": ["privacy-scan", *sent, *named], "env": {}})
+    if checkout:
+        scan_files = ["--from-ref", start, "--to-ref", end] if start and end else ["--all-files"]
+        steps.append({"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}})
     first = (
         {"name": "changed_file_checks", "kind": "changed_files", "arguments": ["--root", str(root), "--from", start, "--to", end], "env": {}}
         if start and end
@@ -188,8 +213,18 @@ def plan(root: Path, base: str = "", head: str = "") -> dict[str, Any]:
     for step in [*steps, *([first] if first else [])]:
         step["timeout_seconds"] = int(config["pre_push"]["changed_file_seconds"]) * 2 if step is first else seconds
         step["argv"] = command(root, step)
-    reason = f"range {start}..{end}" if start and end else f"{unusable}: the checks that read a range are left out and hosted CI runs every group"
+    if not checkout:
+        reason = "the push sends no checked-out commit: only its tag messages are scanned"
+    elif start and end:
+        reason = f"range {start}..{end}"
+    else:
+        reason = f"{unusable}: the checks that read a range are left out and hosted CI runs every group"
     return {"reason": reason, "start": start, "end": end, "output": str(output_directory(root)), "first": first, "steps": steps}
+
+
+def tag_object(root: Path, sha: str) -> bool:
+    """Whether ``sha`` names a tag object (an annotated tag), whose message is text that reaches GitHub."""
+    return sha.strip("0") != "" and git(root, "cat-file", "-t", sha) == (0, "tag")
 
 
 @cache
@@ -321,8 +356,11 @@ def record(output: Path, plan_made: dict[str, Any] | None, results: list[dict[st
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
-def run(root: Path, base: str, head: str, push_input: str | None = None) -> int:
+def run(root: Path, base: str, head: str, push_input: str | None = None, remote: str = "") -> int:
     decisions: list[dict[str, str]] = []
+    tips: list[str] | None = None
+    tags: list[str] = []
+    checkout = True
     if push_input is not None:
         try:
             decisions = decide(root, parse_updates(push_input))
@@ -333,15 +371,21 @@ def run(root: Path, base: str, head: str, push_input: str | None = None) -> int:
             return refuse(problems)
         for row in decisions:
             sys.stdout.write(f"pre-push: {row['ref']}: {row['decision']} ({row['reason']})\n")
-        if not any(row["decision"] == "checked" for row in decisions):
+        sent = [row for row in decisions if row["decision"] != "deleted"]
+        tips = sorted({resolve_commit(root, row["sha"]) for row in sent})
+        tags = sorted({row["sha"] for row in sent if tag_object(root, row["sha"])})
+        checkout = any(row["decision"] == "checked" for row in decisions)
+        if not checkout and not tags:
             sys.stdout.write("pre-push: nothing to check\n")
             if decisions:
                 output = output_directory(root)
                 output.mkdir(parents=True, exist_ok=True)
                 record(output, None, [], decisions)
             return 0
-    chosen = plan(root, base, head)
-    problems = refusals(root, chosen["end"])
+        if not checkout:
+            tips = []
+    chosen = plan(root, base, head, remote, tips, tags, checkout)
+    problems = refusals(root, chosen["end"]) if checkout else []
     if problems:
         return refuse(problems)
     output = Path(chosen["output"])
@@ -408,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if args.command == "plan":
-        sys.stdout.write(json.dumps(plan(root, args.base, args.head), indent=2) + "\n")
+        sys.stdout.write(json.dumps(plan(root, args.base, args.head, args.remote[0] if args.remote else ""), indent=2) + "\n")
         return 0
     if args.command == "check-shim":
         return check_shim(root)
@@ -416,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         return install_shim(root)
     for name in EXECUTION_CONTROLS:
         os.environ.pop(name, None)
-    return run(root, args.base, args.head, sys.stdin.read() if args.hook else None)
+    return run(root, args.base, args.head, sys.stdin.read() if args.hook else None, args.remote[0] if args.remote else "")
 
 
 if __name__ == "__main__":

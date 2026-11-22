@@ -20,17 +20,21 @@ the run fails when a file under test changes while it runs.
 The gate stage and launcher shard cases are the check group gate_stage_checks (hosted job CI Gate Stage E2E): ``--launcher-shards-only`` and
 ``--gate-stage-only`` run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
 
-Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim
-check), and every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is in a hosted
-partition. Push gate cases build small repositories with stand-ins for the commands: the plan holds the changed-file checks, the commit messages, the removed
-names, the secret scan, the privacy scan and OSV over the range and no step of the old gate (no local CI run, no hook partition, no acquisition hook), a failing
-step is named, a step that outlives its deadline fails visibly, and a missing base leaves out the checks that read a range. Pushes through Git, the shim and
-pre-commit in scratch repositories cover a new branch, a lightweight tag and an annotated tag in ``origin/main`` (recorded, nothing checked), an annotated tag
-and a force push at the checked-out commit (checked once), a ref that pre-commit does not dispatch for, several refs, deletions, a tag of a tree, an up-to-date
-push, a tracked change and a missing, disabled or changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a
-step. Planted defects (a heavy hook back in the commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition,
-a scan left out of the plan) are caught by named cases. The workflow cases require the triggers of ``.github/workflows/ci.yml`` (a push to every branch but main
-and a manual run), the concurrency group of one branch, the pushed commit in every checkout and a job list equal to ``config/quality/ci_jobs.json``.
+Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the
+shim check), and every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is in
+a hosted partition. Push gate cases build small repositories with stand-ins for the commands: the plan holds the changed-file checks, the commit
+messages, the removed names, the secret scan and the privacy scan of the files, the same scans of the commits the push sends and of its tag messages
+(real scanners on scratch repositories: a value that one commit adds and the next removes is found, also on a new branch with no merge base) and OSV
+over the range, and no step of the old gate, a failing step is named, a step that outlives its deadline fails visibly, and a missing base leaves out
+the checks that read a range. Pushes through Git, the shim and pre-commit in scratch repositories cover a new branch, a lightweight tag and an
+annotated tag in ``origin/main`` (recorded, its message scanned), an annotated tag and a force push at the checked-out commit (checked once), a ref
+that pre-commit does not dispatch for, several refs, deletions, a tag of a tree, an up-to-date push, a tracked change and a missing, disabled or
+changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a step. Planted defects (a heavy hook back in
+the commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition, a scan left out of the plan) are
+caught by named cases.
+
+The workflow cases require the triggers of ``.github/workflows/ci.yml`` (a push to every branch but main and a manual run), the concurrency group of
+one branch, the pushed commit in every checkout and a job list equal to ``config/quality/ci_jobs.json``.
 ``scripts/run_ci.sh`` releases Docker once after a run on macOS and skips it on hosted CI, off macOS, in a list-only run and in the gates part
 (``release_docker`` runs on its own with a stand-in interpreter).
 """
@@ -5489,7 +5493,7 @@ def pre_push_calls(root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-GATE_STEPS = ["commit_messages", "removed_names", "secret_scan", "privacy_scan", "osv_scanner"]
+GATE_STEPS = ["commit_messages", "removed_names", "secret_scan", "privacy_scan", "secret_scan_pushed", "privacy_scan_pushed", "osv_scanner"]
 
 
 def gate_plan_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
@@ -5507,6 +5511,8 @@ def gate_plan_case(scratch: Path, mutate: Callable[[str], str] | None = None) ->
         "no_step_of_the_removed_gate": not any(name in ("local_ci", "acquisition") or name.startswith("hooks_") for name in names),
         "secret_scan": steps.get("secret_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.scan_secrets"],
         "privacy_scan": steps.get("privacy_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.repo_checks", "privacy-scan"],
+        "pushed_commits_scanned": steps.get("secret_scan_pushed", {}).get("argv", [])[-4:] == ["--tip", head, "--remote", "origin"]
+        and steps.get("privacy_scan_pushed", {}).get("argv", [])[-5:] == ["privacy-scan", "--tip", head, "--remote", "origin"],
         "range": plan["start"] == base and plan["end"] == head,
         "commit_messages": steps.get("commit_messages", {}).get("argv", [])[-3:] == ["commit-range", base, head],
         "removed_names": steps.get("removed_names", {}).get("env") == {"PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head},
@@ -5526,8 +5532,8 @@ def gate_run_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> 
     checks = {
         "exit": code == 0,
         "changed_files_first": first_stub(calls) == "changed_files",
-        "each_step_ran_once": sum(1 for call in calls if call["stub"] == "secret_scan") == 1
-        and repo_checks == ["commit-range", "privacy-scan", "removed-names"],
+        "each_step_ran_once": sum(1 for call in calls if call["stub"] == "secret_scan") == 2
+        and repo_checks == ["commit-range", "privacy-scan", "privacy-scan", "removed-names"],
         "nothing_else_ran": sorted({call["stub"] for call in calls}) == ["changed_files", "repo_checks", "secret_scan"],
         "report_rows": [row["name"] for row in latest_report(root).get("results", [])] == GATE_STEPS,
     }
@@ -5541,33 +5547,134 @@ def gate_run_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> 
 
 
 def gate_scan_failure_case(scratch: Path) -> dict[str, Any]:
-    """A failed secret scan fails the gate by name and does not stop the other steps."""
+    """A failed secret scan of the pushed commits fails the gate by name and does not stop the other steps."""
     root = pre_push_repo(scratch, "gate_scan_failure", "README.md")
     code, out, error = pre_push(root, "run", extra={"STUB_EXIT_SECRET_SCAN": "3"}, timeout=300)
     repo_checks = sorted(call["argv"][0] for call in pre_push_calls(root) if call["stub"] == "repo_checks")
     failed_line = next((line for line in out.splitlines() if line.startswith("pre-push: failed steps:")), "")
     checks = {
         "exit": code != 0,
-        "names_the_step": "FAIL secret_scan" in out and "secret_scan" in failed_line,
-        "other_steps_ran": repo_checks == ["commit-range", "privacy-scan", "removed-names"],
+        "names_the_step": "FAIL secret_scan " in out and "FAIL secret_scan_pushed" in out and "secret_scan_pushed" in failed_line,
+        "other_steps_ran": repo_checks == ["commit-range", "privacy-scan", "privacy-scan", "removed-names"],
     }
     return {"case": "pre_push_secret_scan_failure_is_reported", "passed": all(checks.values()), "checks": checks, "output": (out + error)[-300:]}
 
 
 def gate_no_range_case(scratch: Path) -> dict[str, Any]:
-    """With no merge base there is no range: the checks that read one are left out, and the two scans and OSV run over every file."""
+    """With no merge base there is no range: the checks that read one are left out; the scans and OSV run over every file and every commit."""
     root = pre_push_repo(scratch, "gate_no_range", "README.md", remote=False)
     plan = pre_push_plan(root)
     names = [step["name"] for step in plan["steps"]]
     osv: dict[str, Any] = next((step for step in plan["steps"] if step["name"] == "osv_scanner"), {})
     code, out, error = pre_push(root, "run", timeout=300)
     checks = {
-        "step_names": names == ["secret_scan", "privacy_scan", "osv_scanner"] and plan["first"] is None,
+        "step_names": names == ["secret_scan", "privacy_scan", "secret_scan_pushed", "privacy_scan_pushed", "osv_scanner"] and plan["first"] is None,
         "osv_over_every_file": osv.get("argv", [])[-1:] == ["--all-files"],
         "reason_names_the_base": "origin/main" in plan["reason"],
         "exit": code == 0 and "changed_files" not in [call["stub"] for call in pre_push_calls(root)],
     }
     return {"case": "pre_push_without_a_range_runs_the_scans_over_every_file", "passed": all(checks.values()), "checks": checks, "reason": plan["reason"]}
+
+
+PLANTED_SECRET = "ghp_" + "".join(chr(97 + (index * 7) % 26) if index % 2 else str(index % 10) for index in range(36))
+PLANTED_PERSON = "clinic.manager" + "@" + "riverside-health.org"
+PLANTED_TEXT = f"token = {PLANTED_SECRET}\ncontact = {PLANTED_PERSON}\n"
+
+
+def tools_without_the_new_scans(scratch: Path) -> Path:
+    """The scripts of the commit before the fix, for the red run of the pushed scan cases: the scanners there know no ``--tip``."""
+    folder = scratch / "old_tools"
+    folder.mkdir()
+    archive = scratch / "old_tools.tar"
+    run_command("git", ["-C", str(ROOT), "archive", "--output", str(archive), "backup/ci_speed_r1-b01ccbc", "scripts", "config"], timeout=120, check=True)
+    run_command("tar", ["-x", "-f", str(archive), "-C", str(folder)], timeout=120, check=True)
+    (folder / ".tools").symlink_to(ROOT / ".tools")
+    return folder
+
+
+def push_fixture(scratch: Path, name: str, remote: bool = True, planted: bool = True) -> tuple[Path, list[str]]:
+    """A repository with ``main`` on its remote and a branch of two commits: one adds a planted secret and personal value, the next removes them."""
+    root = scratch / name
+    root.mkdir(parents=True)
+    probe_git(root, "init", "--quiet", "--initial-branch", "main")
+    (root / "README.md").write_text("base\n")
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
+    if remote:
+        probe_git(root, "init", "--bare", "--quiet", str(scratch / f"{name}_remote.git"))
+        probe_git(root, "remote", "add", "origin", str(scratch / f"{name}_remote.git"))
+        probe_git(root, "push", "--quiet", "origin", "main")
+    probe_git(root, "checkout", "--quiet", "-b", "topic")
+    commits = []
+    for step in ("add", "remove"):
+        if step == "add":
+            (root / "notes.txt").write_text(PLANTED_TEXT if planted else "fine\n")
+        else:
+            (root / "notes.txt").unlink()
+        probe_git(root, "add", "--all")
+        probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", f"{step} notes")
+        commits.append(probe_git(root, "rev-parse", "HEAD"))
+    return root, commits
+
+
+def pushed_scans(tools: Path, root: Path, tips: tuple[str, ...], tags: tuple[str, ...] = (), remote: str = "origin") -> dict[str, tuple[int, str]]:
+    """Run the two pushed scans of the push gate from ``tools`` over a fixture repository."""
+    arguments = [part for tip in tips for part in ("--tip", tip)] + ["--remote", remote] * bool(tips) + [part for tag in tags for part in ("--tag-object", tag)]
+    secret = run_command(str(PYTHON), ["-m", "scripts.quality.scan_secrets", "--repository", str(root), *arguments], cwd=tools, timeout=300)
+    privacy = run_command(
+        str(PYTHON),
+        ["-m", "scripts.quality.repo_checks", "privacy-scan", *arguments],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(tools)},
+        timeout=300,
+    )
+    return {"secret": (secret.returncode, secret.stdout + secret.stderr), "privacy": (privacy.returncode, privacy.stdout + privacy.stderr)}
+
+
+def leaks_nothing(*outputs: str) -> bool:
+    return not any(value in text for text in outputs for value in (PLANTED_SECRET, PLANTED_PERSON))
+
+
+def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]:
+    """The scans of a push read the commits it sends and the messages of its tags, so a value that an earlier commit adds and a later one removes is found."""
+    results = []
+    root, (added, removed) = push_fixture(scratch, "scan_two_commits")
+    scans = pushed_scans(tools, root, (removed,))
+    tree = run_command(str(PYTHON), ["-m", "scripts.quality.repo_checks", "privacy-scan"], cwd=root, env={**os.environ, "PYTHONPATH": str(tools)}, timeout=300)
+    checks = {
+        "secret_scan_fails_and_names_the_adding_commit": scans["secret"][0] == 1
+        and added[:12] in scans["secret"][1]
+        and removed[:12] not in scans["secret"][1],
+        "privacy_scan_fails_and_names_the_adding_commit": scans["privacy"][0] == 1 and added[:12] in scans["privacy"][1],
+        "the_checkout_scan_alone_passes": tree.returncode == 0,
+        "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
+    }
+    results.append({"case": "pushed_scans_find_a_value_that_a_later_commit_removes", "passed": all(checks.values()), "checks": checks})
+    root, (_, removed) = push_fixture(scratch, "scan_tag", planted=False)
+    probe_git(root, "tag", "--annotate", "--message", PLANTED_TEXT, "dirty", "main")
+    probe_git(root, "tag", "--annotate", "--message", "a clean tag message", "clean", "main")
+    dirty, clean = probe_git(root, "rev-parse", "dirty"), probe_git(root, "rev-parse", "clean")
+    scans = pushed_scans(tools, root, (), (dirty,))
+    clean_scans = pushed_scans(tools, root, (), (clean,))
+    checks = {
+        "secret_scan_fails": scans["secret"][0] == 1,
+        "privacy_scan_fails_and_names_the_tag": scans["privacy"][0] == 1 and dirty[:12] in scans["privacy"][1],
+        "a_clean_tag_passes": clean_scans["secret"][0] == 0 and clean_scans["privacy"][0] == 0,
+        "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
+    }
+    results.append({"case": "pushed_scans_read_the_message_of_a_tag_on_a_pushed_commit", "passed": all(checks.values()), "checks": checks})
+    root, (added, removed) = push_fixture(scratch, "scan_no_merge_base", remote=False)
+    scans = pushed_scans(tools, root, (removed,))
+    checks = {
+        "secret_scan_fails_and_names_the_adding_commit": scans["secret"][0] == 1 and added[:12] in scans["secret"][1],
+        "privacy_scan_fails_and_names_the_adding_commit": scans["privacy"][0] == 1 and added[:12] in scans["privacy"][1],
+    }
+    results.append({"case": "pushed_scans_cover_a_new_branch_with_no_merge_base", "passed": all(checks.values()), "checks": checks})
+    root, (_, removed) = push_fixture(scratch, "scan_clean", planted=False)
+    scans = pushed_scans(tools, root, (removed,))
+    checks = {"secret_scan_passes": scans["secret"][0] == 0, "privacy_scan_passes": scans["privacy"][0] == 0}
+    results.append({"case": "pushed_scans_pass_a_clean_push", "passed": all(checks.values()), "checks": checks})
+    return results
 
 
 def gate_deadline_case(scratch: Path) -> dict[str, Any]:
@@ -5690,12 +5797,27 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
 def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The push gate plan and run (the two scans, the range checks and OSV, no step of the old gate), its deadlines, and the hook and tree cases."""
     results = [gate_plan_case(scratch), gate_run_case(scratch), gate_scan_failure_case(scratch), gate_no_range_case(scratch), gate_deadline_case(scratch)]
+    results += pushed_scan_cases(scratch)
     results += [
         planted_case(
             "secret_scan_step_left_out",
             gate_run_case,
             scratch,
             mutate=source_edit('{"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},', ""),
+        ),
+        planted_case(
+            "pushed_commit_scans_left_out",
+            gate_plan_case,
+            scratch,
+            mutate=source_edit(
+                '    if tips:\n        steps.append({"name": "secret_scan_pushed"', '    if False:\n        steps.append({"name": "secret_scan_pushed"'
+            ),
+        ),
+        planted_case(
+            "tag_message_scan_skipped",
+            annotated_tag_known_case,
+            scratch,
+            mutate=source_edit('tags = sorted({row["sha"] for row in sent if tag_object(root, row["sha"])})', "tags = []"),
         ),
         planted_case(
             "privacy_scan_step_left_out",
@@ -6003,7 +6125,13 @@ def head_of(root: Path) -> str:
 
 
 def runs_of(root: Path, stub: str = "secret_scan") -> int:
-    return sum(1 for call in pre_push_calls(root) if call["stub"] == stub)
+    """The calls of a stand-in, not counting the scans of pushed commits and tags (they carry ``--tip`` or ``--tag-object``)."""
+    return sum(1 for call in pre_push_calls(root) if call["stub"] == stub and not {"--tip", "--tag-object"} & set(call["argv"]))
+
+
+def tag_scans_of(root: Path) -> int:
+    """The scans of pushed tag objects the stand-ins saw: the secret scan and the privacy scan."""
+    return sum(1 for call in pre_push_calls(root) if call["stub"] in {"secret_scan", "repo_checks"} and "--tag-object" in call["argv"])
 
 
 def remote_of(root: Path) -> Path:
@@ -6139,13 +6267,23 @@ def light_tag_known_case(scratch: Path, mutate: Callable[[str], str] | None = No
 
 
 def annotated_tag_known_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """An annotated tag on a commit that origin/main holds runs no checkout check, but its message is scanned by both scanners."""
+
+    def check(root: Path, code: int, text: str) -> dict[str, bool]:
+        return {
+            "pushed": code == 0 and "refs/tags/ann" in remote_refs(root),
+            "no_checkout_check_ran": runs_of(root) == 0 and runs_of(root, "changed_files") == 0,
+            "the_tag_message_was_scanned_by_both": tag_scans_of(root) == 2,
+            "recorded_as_known": push_decisions(root).get("refs/tags/ann") == "known",
+        }
+
     return push_case(
         scratch,
-        "pre_push_annotated_tag_at_origin_main_is_recorded_without_checks",
+        "pre_push_annotated_tag_at_origin_main_has_its_message_scanned",
         "gate_annotated_known",
         known_annotated_tag,
         ("origin", "refs/tags/ann"),
-        recorded_known("refs/tags/ann"),
+        check,
         mutate,
     )
 
@@ -6155,6 +6293,7 @@ def annotated_tag_head_case(scratch: Path, mutate: Callable[[str], str] | None =
         return {
             "pushed": code == 0 and "refs/tags/ann" in remote_refs(root),
             "checked_once": runs_of(root) == 1,
+            "the_tag_message_was_scanned_by_both": tag_scans_of(root) == 2,
             "recorded_as_checked": push_decisions(root).get("refs/tags/ann") == "checked",
         }
 
@@ -6530,7 +6669,6 @@ EXPECTED_CONTROLS = (
     "ACQUISITION_SHARD",
     "ACQUISITION_SHARD_DIR",
     "ACQUISITION_SHARD_COUNT",
-    "ACQUISITION_EXPECT",
     "GITHUB_ACTIONS",
     "PRE_COMMIT_FROM_REF",
     "PRE_COMMIT_ORIGIN",
@@ -6696,7 +6834,7 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
             "named = temporary(root, ref, local)",
         ),
         ("tag_not_peeled", annotated_tag_head_case, 'f"{name}^{{commit}}"', "name"),
-        ("nothing_to_check_still_checks", up_to_date_case, 'if not any(row["decision"] == "checked" for row in decisions):', "if False:"),
+        ("nothing_to_check_still_checks", up_to_date_case, 'checkout = any(row["decision"] == "checked" for row in decisions)', "checkout = True"),
         ("known_ref_not_recorded", new_branch_known_case, "record(output, None, [], decisions)", "pass"),
         ("tree_not_judged", tracked_change_ref_case, 'problems = refusals(root, chosen["end"])', "problems = []"),
         ("shim_disabled_accepted", shim_presence_case, "active = listed_code == 0 and SHIM_NAME in", "active = True or SHIM_NAME in"),

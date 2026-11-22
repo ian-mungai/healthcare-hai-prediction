@@ -5225,71 +5225,78 @@ def workflow_value(value: str, context: dict[str, str]) -> str:
     return next((context[name.strip()] for name in names if context[name.strip()]), "")
 
 
-def workflow_range_case(repo: Path, label: str, event: str, before: str, head: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
-    """Run the commit message step of the hosted privacy hook job for a synthetic event: a push checks ``before..head``, a manual run has no range to check."""
+FIND_STEP = "Find the merge base of the pushed range"
+RANGE_STEP = "Check commit messages and removed names of the pushed range"
+
+
+def workflow_range_case(repo: Path, label: str, event: str, head: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
+    """Run the two hosted steps that check commit messages and removed names: every run, whatever its event, checks ``merge-base origin/main..sha``."""
     workflow = load_yaml((repo / ".github/workflows/ci.yml").read_text())
     if not isinstance(workflow, dict):
         raise ValueError(".github/workflows/ci.yml is not a mapping")
-    context = {"github.event_name": event, "github.event.before": before if event == "push" else "", "github.sha": head}
-    message_step = next(step for step in workflow["jobs"]["hooks"]["steps"] if step["name"] == "Check commit messages")
-    check_env = {name: workflow_value(value, context) for name, value in message_step["env"].items()}
-    environment = {**os.environ, "RUNNER_TEMP": str(repo / ".git")}
-    check_exit = 0
-    log = ""
-    if event == "push":
+    steps = {item["name"]: item for item in workflow["jobs"]["hooks"]["steps"]}
+    if FIND_STEP not in steps or RANGE_STEP not in steps:
+        return {"case": label, "passed": False, "checks": {"the_steps_exist": False}}
+    context = {"github.event_name": event, "github.sha": head}
+    output = repo / ".git" / "range_output"
+    output.write_text("")
+    log, code = "", 0
+    for name in (FIND_STEP, RANGE_STEP):
+        step = steps[name]
+        env = {key: workflow_value(value, context) for key, value in step.get("env", {}).items()}
         script = repo / ".git" / "range_check.sh"
-        script.write_text("set -eo pipefail\n" + message_step["run"])
-        result = run_command("bash", [str(script)], cwd=repo, env={**environment, **check_env}, timeout=120)
-        check_exit = result.returncode
-        log = result.stdout + result.stderr
+        script.write_text("set -eo pipefail\n" + step["run"])
+        result = run_command(
+            "bash", [str(script)], cwd=repo, env={**os.environ, "RUNNER_TEMP": str(repo / ".git"), "GITHUB_OUTPUT": str(output), **env}, timeout=120
+        )
+        log += result.stdout + result.stderr
+        code = result.returncode
+        if code != 0:
+            break
+        context.update({f"steps.range.outputs.{line.split('=', 1)[0]}": line.split("=", 1)[1] for line in output.read_text().splitlines() if "=" in line})
+    conditions = " ".join(str(steps[name].get("if", "")) for name in (FIND_STEP, RANGE_STEP))
     checks = {
         "no_other_trigger": sorted(workflow.get(True) or workflow.get("on") or {}) == ["push", "workflow_dispatch"],
-        "check_uses_the_pushed_range": check_env == {"RANGE_START": before if event == "push" else "", "RANGE_END": head},
-        "check_has_the_expected_result": check_exit == want_exit and want_marker in log,
+        "runs_for_every_event": "github.event_name" not in conditions and "github.event.before" not in conditions,
+        "check_has_the_expected_result": code == want_exit and want_marker in log,
     }
-    return {"case": label, "passed": all(checks.values()), "checks": checks, "check_exit": check_exit, "log": log}
+    return {"case": label, "passed": all(checks.values()), "checks": checks, "check_exit": code, "log": log}
 
 
 def run_workflow_range_case() -> tuple[bool, str]:
-    """Run the actual workflow shell and selector on divergent branches, pushes and missing history."""
+    """Run the actual workflow shell on a first push, a manual run, a push after a push, a removed name, a clean branch and a branch with no merge base."""
     with tempfile.TemporaryDirectory(prefix="hai_workflow_range_") as scratch:
-        function = "--upstream" + "-added-value"
         removed = "--branch" + "-removed-value"
         api = "scripts/acquisition/range_sample.py"
         original = f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{removed}")\n'
         repo = scratch_repo(
             Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.sh": f"python {api} {removed}\n"})
         )
-        ancestor = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "update-ref", "refs/remotes/origin/main", "main")
         git(repo, "checkout", "-qb", "topic")
-        write(repo, {"README.md": f"# Example\n\n`python {api} {function}` is named in this branch.\n"})
-        git(repo, "add", "--", "README.md")
-        git(repo, "commit", "-qm", "docs: describe the branch")
-        head = git(repo, "rev-parse", "HEAD").strip()
-        git(repo, "checkout", "-q", "main")
-        write(repo, {api: original + f'P.{ADD_ARGUMENT}("{function}")\n'})
-        git(repo, "add", "--", api)
-        git(repo, "commit", "-qm", "feat: add a name on main")
-        base = git(repo, "rev-parse", "HEAD").strip()
-        git(repo, "checkout", "-q", "topic")
+        git(repo, "commit", "--allow-empty", "-qm", "docs: describe the branch")
+        clean = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
+        push_a = git(repo, "rev-parse", "HEAD").strip()
+        git(repo, "commit", "--allow-empty", "-qm", "docs: a later valid commit")
+        push_b = git(repo, "rev-parse", "HEAD").strip()
+        mark = "not a Conventional Commit"
         results = [
-            workflow_range_case(repo, "push_keeps_divergent_before", "push", base, head, 1, f"{function} was removed"),
-            workflow_range_case(repo, "manual_run_has_no_range_to_check", "workflow_dispatch", "", head, 0),
-            workflow_range_case(repo, "missing_start_keeps_history_fallback", "push", "missing-ref", head, 0),
+            workflow_range_case(repo, "first_push_checks_the_whole_branch", "push", push_a, 1, mark),
+            workflow_range_case(repo, "manual_run_checks_the_whole_branch", "workflow_dispatch", push_a, 1, mark),
+            workflow_range_case(repo, "push_b_after_push_a_still_checks_push_a", "push", push_b, 1, mark),
+            workflow_range_case(repo, "clean_branch_passes", "push", clean, 0),
         ]
+        git(repo, "checkout", "-q", "--detach", clean)
         write(repo, {api: "VALUE = 1\n"})
         git(repo, "add", "--", api)
         git(repo, "commit", "-qm", "refactor: remove a branch flag")
         deleted = git(repo, "rev-parse", "HEAD").strip()
-        results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "push", ancestor, deleted, 1, f"{removed} was removed"))
-        reset_hard(repo, head)
-        git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
-        invalid = git(repo, "rev-parse", "HEAD").strip()
-        results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "push", ancestor, invalid, 1, "not a Conventional Commit"))
-        git(repo, "checkout", "-q", "--detach", ancestor)
-        git(repo, "commit", "--amend", "-qm", "Invalid root subject")
-        root = git(repo, "rev-parse", "HEAD").strip()
-        results.append(workflow_range_case(repo, "missing_start_checks_the_root_message", "push", "missing-ref", root, 1, "not a Conventional Commit"))
+        results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "push", deleted, 1, f"{removed} was removed"))
+        git(repo, "checkout", "-q", "--orphan", "unrelated")
+        git(repo, "commit", "--allow-empty", "-qm", "docs: an unrelated history")
+        unrelated = git(repo, "rev-parse", "HEAD").strip()
+        results.append(workflow_range_case(repo, "no_merge_base_fails_with_a_clear_message", "push", unrelated, 1, "merge base"))
         return all(result["passed"] for result in results), json.dumps(results, indent=2) + "\n"
 
 

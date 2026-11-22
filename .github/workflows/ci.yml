@@ -155,20 +155,32 @@ jobs:
           # The AWS ruleset of the tflint hook: TFLint verifies the release checksums and signature of the plugin pinned in .tflint.hcl.
           .tools/bin/tflint --init --config .tflint.hcl
 
-      - name: Check commit messages
-        if: ${{ matrix.group == 'privacy' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
+      # Every run, whatever its event and however many pushes it follows, checks the commits the branch adds to main: merge-base origin/main..sha.
+      - name: Find the merge base of the pushed range
+        id: range
+        if: ${{ matrix.group == 'privacy' }}
         env:
-          RANGE_START: ${{ github.event.before }}
           RANGE_END: ${{ github.sha }}
         run: |
-          if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
-            # A history rewrite removes the previous tip: validate the complete new history.
-            RANGE_START="$(git rev-list --max-parents=0 "$RANGE_END")"
-            git show -s --format=%B "$RANGE_START" > "$RUNNER_TEMP/root_commit_message"
-            .venv/bin/python -m scripts.quality.repo_checks commit-msg "$RUNNER_TEMP/root_commit_message"
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet origin/main > /dev/null; then
+            git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           fi
+          start="$(git merge-base origin/main "$RANGE_END" || true)"
+          if [[ -z "$start" ]]; then
+            echo "The merge base of origin/main and $RANGE_END cannot be found, so the commit messages and removed names cannot be checked." >&2
+            exit 1
+          fi
+          echo "start=$start" >> "$GITHUB_OUTPUT"
+
+      - name: Check commit messages and removed names of the pushed range
+        if: ${{ matrix.group == 'privacy' }}
+        env:
+          RANGE_START: ${{ steps.range.outputs.start }}
+          RANGE_END: ${{ github.sha }}
+        run: |
           .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
-          # The local hook sees only the staged diff; here, names removed anywhere in the pushed range.
+          # The local hook sees only the staged diff; here, names removed anywhere in the range.
           PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names
 
       - name: Run this complete partition of the manual hooks
@@ -633,7 +645,7 @@ jobs:
 
       - *save_env_cache
 
-      - name: Run one feature sources shard with range selection
+      - name: Run one feature sources shard
         env:
           CI_PART: feature_sources
           FEATURE_SHARD: ${{ matrix.shard }}/16
@@ -685,7 +697,7 @@ jobs:
 
       - *save_env_cache
 
-      - name: Run one feature columns shard with range selection
+      - name: Run one feature columns shard
         env:
           CI_PART: feature_columns
           FEATURE_SHARD: ${{ matrix.shard }}/2
@@ -745,34 +757,20 @@ jobs:
 
       - *save_env_cache
 
-      - name: Select feature evidence for the checked range
-        id: selection
-        run: |
-          plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope full --part features --format shell)"
-          printf '%s\n' "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [[ $'\n'"$plan"$'\n' == *$'\nrun lakehouse_features\n'* ]]; then
-            echo 'run=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-          fi
-
       # Re-run failed jobs starts only the shards that failed, so the reports of one run sit in the artifacts of every attempt. Each artifact keeps its own folder
       # (the same shard can have a report in two attempts) and the next step keeps the newest report of each shard.
       - name: Download every feature shard report of every attempt
-        if: ${{ steps.selection.outputs.run == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: feature_*_shard_*_${{ github.run_id }}_*
           path: data/e2e/quality/feature_downloads
 
       - name: Keep the newest report of each shard
-        if: ${{ steps.selection.outputs.run == 'true' }}
         env:
           RUN_ID: ${{ github.run_id }}
         run: .venv/bin/python -m scripts.lakehouse.feature_shards gather --downloads data/e2e/quality/feature_downloads --run-id "$RUN_ID" --directory data/e2e/quality/feature_shards
 
       - name: Combine reports and require complete disjoint case coverage
-        if: ${{ steps.selection.outputs.run == 'true' }}
         run: |
           .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite sources --count 16 --directory data/e2e/quality/feature_shards/sources
           .venv/bin/python -m scripts.lakehouse.feature_shards combine --suite columns --count 2 --directory data/e2e/quality/feature_shards/columns

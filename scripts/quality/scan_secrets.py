@@ -1,4 +1,4 @@
-"""Scan staged changes or outgoing source files with project-pinned Gitleaks."""
+"""Scan staged changes, outgoing source files, the commits of a push or the messages of pushed tags with project-pinned Gitleaks."""
 
 from __future__ import annotations
 
@@ -21,8 +21,11 @@ def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> Compl
     return run_command(command[0], command[1:], cwd=cwd, env=environment, timeout=180)
 
 
-def scan(repository: Path, staged: bool) -> int:
-    """Scan the real index or a temporary tree of nonignored repository source files."""
+def scan(repository: Path, staged: bool, tips: tuple[str, ...] = (), remote: str = "", tags: tuple[str, ...] = ()) -> int:
+    """Scan the real index, a temporary tree of nonignored repository source files, the commits a push newly sends or the messages of pushed tag objects.
+
+    The commits are those reachable from ``tips`` and not from ``remote`` (every remote when it is empty). The log names commits, never a value.
+    """
     git = shutil.which("git")
     if not git:
         raise ValueError("Git is required")
@@ -33,7 +36,7 @@ def scan(repository: Path, staged: bool) -> int:
         config.write_text("[extend]\nuseDefault = true\n", encoding="utf-8")
         command = [
             str(ROOT / ".tools/bin/gitleaks"),
-            "git" if staged else "dir",
+            "git" if staged or tips else "dir",
             "--config",
             str(config),
             "--redact=100",
@@ -49,6 +52,17 @@ def scan(repository: Path, staged: bool) -> int:
         ]
         if staged:
             command.extend(["--pre-commit", "--staged", str(repository)])
+        elif tips:
+            command.extend(["--log-opts", " ".join([*tips, "--not", f"--remotes={remote}" if remote else "--remotes"]), str(repository)])
+        elif tags:
+            tree = scratch / "tags"
+            tree.mkdir()
+            for index, tag in enumerate(tags):
+                message = execute([git, "cat-file", "tag", tag], repository, environment)
+                if message.returncode:
+                    raise ValueError("Could not read a tag object")
+                (tree / f"tag_{index}.txt").write_text(message.stdout.partition("\n\n")[2], encoding="utf-8")
+            command.append(str(tree))
         else:
             listing = execute([git, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], repository, environment)
             if listing.returncode:
@@ -71,7 +85,8 @@ def scan(repository: Path, staged: bool) -> int:
         if result.returncode not in {0, 1} or not isinstance(findings, list):
             raise ValueError("Scanner did not complete")
         # Deliberately omit paths, lines and source fragments from logs.
-        LOGGER.info("event=secret_scan status=%s findings=%s", "passed" if result.returncode == 0 else "failed", len(findings))
+        commits = sorted({str(finding.get("Commit", ""))[:12] for finding in findings if finding.get("Commit")})
+        LOGGER.info("event=secret_scan status=%s findings=%s commits=%s", "passed" if result.returncode == 0 else "failed", len(findings), ",".join(commits))
         return result.returncode
 
 
@@ -80,10 +95,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--staged", action="store_true")
+    parser.add_argument("--tip", action="append", default=[], metavar="SHA", help="scan the commits a push sends, up to this tip")
+    parser.add_argument("--remote", default="", help="with --tip: the remote whose commits a push does not send again (default: every remote)")
+    parser.add_argument("--tag-object", action="append", default=[], metavar="SHA", help="scan the message of this pushed tag object")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
-        status = scan(args.repository.resolve(), args.staged)
+        status = scan(args.repository.resolve(), args.staged, tuple(args.tip), args.remote, tuple(args.tag_object))
     except (OSError, ValueError, TimeoutExpired) as error:
         LOGGER.error("event=secret_scan status=blocked error_type=%s", type(error).__name__)
         raise SystemExit(2) from None
