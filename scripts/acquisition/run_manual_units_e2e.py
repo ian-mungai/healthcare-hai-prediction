@@ -2,7 +2,10 @@
 
 The cases are in ``tests/test_manual_units.py`` (the handler) and ``tests/test_manual_host_run.py`` (the host run: the seed release download and the capture
 of manual units through the normal path). They use a stand-in publisher, a stand-in for the GitHub release, a create-once S3 stand-in and a clock that never
-sleeps, so nothing reaches a network or AWS. Run: ``python -m scripts.acquisition.run_manual_units_e2e --output data/e2e/ingestion_manual_units/<name>``.
+sleeps, so nothing reaches a network or AWS. One host-run case, the loopback trickle case, uses a real connection on the loopback address only: a local
+server answers a release download with quick headers and then one byte every 0.1 s, below the socket timeout. Another case stalls the name lookup past the
+deadline. Each download must stop at its absolute deadline, with no capture request before it.
+Run: ``python -m scripts.acquisition.run_manual_units_e2e --output data/e2e/ingestion_manual_units/<name>``.
 """
 
 from __future__ import annotations

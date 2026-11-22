@@ -1,4 +1,4 @@
-"""The inputs of a host run, built from the code archive and checked before the run sends any request.
+"""The inputs of a host run, built from the code archive and checked before any capture request.
 
 The archive of a commit carries the tracked bundle (``config/acquisition/baseline_run/``, with its lock) and the bootstrap seed folder
 (``config/acquisition/bootstrap_seed/``, files through Git LFS). ``prepare`` checks the bundle against its lock, copies the tracked plan inputs and the

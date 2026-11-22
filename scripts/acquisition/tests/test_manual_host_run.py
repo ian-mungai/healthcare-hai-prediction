@@ -26,7 +26,7 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from scripts.acquisition import capture_mode, collection_layout, host_inputs, manual_content, publisher_run, s3_store, transport
+from scripts.acquisition import capture_mode, collection_layout, host_inputs, manual_content, publisher_run, run_manual_units_e2e, s3_store, transport
 from scripts.acquisition import completion_record as record
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition.tests.test_ahrq_manual_units import BASE, BODIES, XLSX_NAME, plan_of
@@ -60,7 +60,40 @@ def committed_unit() -> tuple[dict, dict]:
     return unit, specs[unit["snapshot_id"]]
 
 
-def archive_of(number: int, padding: int = 0) -> tuple[str, bytes, list[dict]]:
+def nested_zip(inner: dict[str, str | bytes], name: str = "inner.zip", outer: dict[str, str | bytes] | None = None) -> bytes:
+    """A ZIP archive that holds one nested ZIP archive (and any plain members), as the republished annual archive holds its five quarterly archives."""
+    inside = io.BytesIO()
+    with zipfile.ZipFile(inside, "w", zipfile.ZIP_DEFLATED) as archive:
+        for member, body in inner.items():
+            archive.writestr(member, body)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(name, inside.getvalue())
+        for member, body in (outer or {}).items():
+            archive.writestr(member, body)
+    return buffer.getvalue()
+
+
+def zip_of(members: dict[str, str | bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for member, body in members.items():
+            archive.writestr(member, body)
+    return buffer.getvalue()
+
+
+def declaring(body: bytes, size: int) -> bytes:
+    """The same ZIP bytes with every member's declared expanded size in the central directory set to ``size``. The directory is all that a size check reads,
+    so a few bytes stand for an archive of any declared size without writing it."""
+    data = bytearray(body)
+    at = data.find(b"PK\x01\x02")
+    while at != -1:
+        data[at + 24 : at + 28] = size.to_bytes(4, "little")
+        at = data.find(b"PK\x01\x02", at + 4)
+    return bytes(data)
+
+
+def archive_of(number: int, padding: int = 0, nested: bool = False) -> tuple[str, bytes, list[dict]]:
     """A small ZIP archive named like a committed one, the members its specification lists, and the members' reviewed map.
 
     ``padding`` makes the first member that many bytes of one repeated character, which a deflated archive holds in a few bytes: its declared expanded size is
@@ -69,6 +102,10 @@ def archive_of(number: int, padding: int = 0) -> tuple[str, bytes, list[dict]]:
     _, spec = committed_unit()
     members = spec["archive_members"][:MEMBERS]
     name = f"hospitals_2099-01-{number:02}.zip"
+    if nested:
+        first = spec["archive_members"][0]
+        leaf = first["member_chain"][-1].rsplit("/", 1)[-1]
+        return name, nested_zip({leaf: f"id,value\n{number},1\n"}, f"q{number:02}/inner.zip"), [first | {"member_chain": [f"q{number:02}/inner.zip", leaf]}]
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for index, item in enumerate(members):
@@ -77,9 +114,9 @@ def archive_of(number: int, padding: int = 0) -> tuple[str, bytes, list[dict]]:
     return name, buffer.getvalue(), members
 
 
-def unit_and_spec(number: int, padding: int = 0) -> tuple[dict, dict, str, bytes]:
+def unit_and_spec(number: int, padding: int = 0, nested: bool = False) -> tuple[dict, dict, str, bytes]:
     unit, spec = committed_unit()
-    name, body, members = archive_of(number, padding)
+    name, body, members = archive_of(number, padding, nested)
     snapshot = f"main-hai-pdc__20990101T0000{number:02}Z__{number:032x}"
     url = unit["url"].rsplit("/", 1)[0] + "/" + name
     template = spec["receipt_template"] | {"expected_sha256": hashlib.sha256(body).hexdigest()}
@@ -132,8 +169,8 @@ class Release(urllib.request.HTTPSHandler):
 class ManualHost(Host):
     """The host of ``test_publisher_host_run`` with CMS hospital archive units added: their files are in no code archive, only in the stand-in release."""
 
-    def __init__(self, tmp_path: Path, numbers: list[int], padding: int = 0) -> None:
-        self.units = [unit_and_spec(number, padding) for number in numbers]
+    def __init__(self, tmp_path: Path, numbers: list[int], padding: int = 0, nested: bool = False) -> None:
+        self.units = [unit_and_spec(number, padding, nested) for number in numbers]
         super().__init__(tmp_path, ["a.csv"])
         self.release = Release({name: body for _, _, name, body in self.units})
         specs = json.loads((self.bundle / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
@@ -566,3 +603,86 @@ def test_the_preparation_docstring_says_that_it_downloads_the_seed_assets() -> N
     text = " ".join((host_inputs.__doc__ or "").split())
     check("makes no request" not in text, "the module says it makes no request, but it downloads the release assets")
     check("downloads" in text, "the module names its download")
+
+
+REVIEWED_FREE = 1_395_864_371
+THREE_GIB = 3 * 2**30
+
+
+def test_the_declared_sizes_of_nested_archives_are_summed_from_their_central_directories_without_expanding_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*_arguments: Any, **_options: Any) -> None:
+        raise AssertionError("an archive was expanded to read its declared sizes")
+
+    monkeypatch.setattr(zipfile.ZipFile, "extract", refuse)
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", refuse)
+    plain = tmp_path / "plain.zip"
+    plain.write_bytes(declaring(zip_of({"a.csv": "1,2\n"}), 5_000_000))
+    check(manual_content.declared_expansion(plain, "hospital_archive") == 5_000_000, "a plain archive reserves its own declared size")
+    small = tmp_path / "small.zip"
+    small.write_bytes(nested_zip({"a.csv": "1,2\n"}))
+    check(manual_content.declared_expansion(small, "hospital_archive") == manual_content.TREE_BYTES, "a nested archive reserves at least the shared bound")
+    big = tmp_path / "big.zip"
+    big.write_bytes(zip_of({"inner.zip": declaring(zip_of({"a.csv": "1,2\n"}), THREE_GIB)}))
+    check(
+        manual_content.declared_expansion(big, "hospital_archive") >= THREE_GIB, "a nested archive that declares more than the bound reserves what it declares"
+    )
+    twice = tmp_path / "twice.zip"
+    twice.write_bytes(zip_of({"mid.zip": zip_of({"innermost.zip": declaring(zip_of({"a.csv": "1,2\n"}), THREE_GIB)})}))
+    check(manual_content.declared_expansion(twice, "hospital_archive") >= THREE_GIB, "the sizes are summed through two levels of nesting")
+
+
+def test_a_nested_archive_is_refused_before_it_is_copied_when_the_free_space_is_what_the_reviewer_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manual = ManualHost(tmp_path, [1], nested=True)
+    free_space(monkeypatch, REVIEWED_FREE)
+    monkeypatch.setattr(manual_content, "expand_tree", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("the archive was expanded before admission")))
+    with pytest.raises(publisher_run.PublisherError, match="evidence check found"):
+        manual.run(monkeypatch)
+    run = manual.run_record()
+    check([item["reason"] for item in run["missing_units"]] == ["not_enough_disk_space"], f"a stale unit with a fixed reason: {run['missing_units']}")
+
+
+def test_a_nested_archive_with_the_space_the_shared_bound_asks_is_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manual = ManualHost(tmp_path, [1], nested=True)
+    size = len(manual.units[0][3])
+    free_space(monkeypatch, 2 * size + manual_content.TREE_BYTES + manual_content.ADMISSION_HEADROOM + 2**20)
+    manual.run(monkeypatch)
+    check(evidence_problems(capsys) == 0, "the evidence check passed")
+    check(len(manual.run_record()["units"]["completed"]) == 2, "the direct unit and the nested archive completed")
+
+
+def test_the_download_deadline_bounds_the_name_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lookup that stalls for 0.8 s must end the download at its 0.1 s deadline, before any connection is made."""
+    manual = ManualHost(tmp_path, [1])
+    connected: list[object] = []
+
+    def refused(*_arguments: Any, **_options: Any) -> socket.socket:
+        connected.append(1)
+        raise OSError("no network")
+
+    def stalled(*_arguments: Any, **_options: Any) -> list[tuple[Any, ...]]:
+        time.sleep(0.8)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", stalled)
+    monkeypatch.setattr(socket, "create_connection", refused)
+    monkeypatch.setattr(capture_mode, "download_seconds", lambda _bytes: 0.1)
+    monkeypatch.chdir(manual.code)
+    started = time.monotonic()
+    with pytest.raises(host_inputs.InputsError, match="TimeoutError"):
+        host_inputs.fetch_release_assets(manual.code, transport.ReviewedTransport(transport.PublicHTTPSHandler()))
+    elapsed = time.monotonic() - started
+    check(elapsed < 0.5, f"the download ran {elapsed:.2f} s against a 0.1 s deadline")
+    check(connected == [], "no connection was made after the deadline")
+
+
+def test_the_module_texts_say_before_any_capture_request_and_describe_the_trickle_case() -> None:
+    first = " ".join((host_inputs.__doc__ or "").split("\n\n")[0].split())
+    check("before any capture request" in first, f"the first paragraph says: {first}")
+    runner = " ".join((run_manual_units_e2e.__doc__ or "").split())
+    check("trickle" in runner and "loopback" in runner, "the runner's text describes the loopback trickle case")

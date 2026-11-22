@@ -264,7 +264,10 @@ class RequestClock:
 
     ACTIVE: ContextVar[RequestClock | None] = ContextVar("request_clock", default=None)
 
-    def __init__(self, seconds: float) -> None:
+    def __init__(self, seconds: float, deadline: float | None = None) -> None:
+        # ``deadline`` is the absolute ``time.monotonic`` time of the end, for a caller that already knows it. The connection of the request holds the name
+        # lookup, the TCP connection and the TLS handshake to it.
+        self.deadline = time.monotonic() + seconds if deadline is None else deadline
         self.expired = threading.Event()
         self.sockets: list[socket.socket] = []
         self.lock = threading.Lock()
@@ -332,6 +335,18 @@ class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
         super().__init__(*args, context=self.tls_context, source_address=source_address, **kwargs)
 
     def connect(self) -> None:
+        if self.deadline is None and (clock := RequestClock.ACTIVE.get()) is not None:
+            # A request under a clock holds the name lookup, the TCP connection and the TLS handshake to the clock's deadline too.
+            self.deadline = clock.deadline
+        try:
+            self.open_socket()
+        except TimeoutError:
+            # urllib turns an error of the connection into a URLError, so the clock is told that its own deadline ended the request: it is a TimeoutError.
+            if (clock := RequestClock.ACTIVE.get()) is not None and self.deadline == clock.deadline:
+                clock.expire()
+            raise
+
+    def open_socket(self) -> None:
         if self.deadline is None:
             address = public_addresses(self.host, self.port)[0]
             sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
@@ -645,7 +660,7 @@ def download(url: str, dest: Path, file_name: str, expected_format: str, role: s
         retrieved = utc_now()
         response = None
         # One clock over the headers and every read of this attempt, so a slow publisher cannot hold one receive past what is left of max_seconds.
-        clock = RequestClock(max(limits.max_seconds - (time.monotonic() - started), 0.001)).start()
+        clock = RequestClock(max(limits.max_seconds - (time.monotonic() - started), 0.001), started + limits.max_seconds).start()
         timed_out = False
         try:
             try:

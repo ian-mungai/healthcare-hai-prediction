@@ -179,20 +179,48 @@ ADMISSION_HEADROOM = 1024**3
 OS_PACKAGING = ("__MACOSX", ".DS_Store")
 
 
+MAX_NESTING = 5
+MAX_MEMBERS = 10000
+
+
+def declared_tree(archive: zipfile.ZipFile, depth: int, members: list[int]) -> tuple[int, bool]:
+    """The expanded bytes that the central directories of an archive and of every archive nested in it declare, and whether any archive is nested.
+
+    A nested archive is opened as a stream and only its central directory is read, so nothing is expanded or written. A nested archive that cannot be read, one
+    that is nested deeper than the expansion allows and a tree with more members than the expansion allows count as the shared bound of the expansion.
+    """
+    total, nested = 0, False
+    for info in archive.infolist():
+        if info.is_dir() or any(part in OS_PACKAGING for part in Path(info.filename).parts):
+            continue
+        members[0] += 1
+        total += info.file_size
+        if Path(info.filename).suffix.lower() != ".zip":
+            continue
+        nested = True
+        if depth >= MAX_NESTING or members[0] > MAX_MEMBERS:
+            total += TREE_BYTES
+            continue
+        try:
+            with archive.open(info) as stream, zipfile.ZipFile(stream) as inner:
+                total += declared_tree(inner, depth + 1, members)[0]
+        except (zipfile.BadZipFile, OSError, ValueError, NotImplementedError, RuntimeError):
+            total += TREE_BYTES
+    return total, nested
+
+
 def declared_expansion(original: Path, mode: str) -> int:
-    """The expanded bytes that checking a seeded file may write: for an archive, the sizes its directory declares for its members, doubled when it holds
-    nested archives (which expand again) and cut to the shared bound of the expansion, and none for any other file. A file that is no ZIP declares none: the
-    content check refuses it."""
+    """The expanded bytes that checking a seeded file may write: for an archive, the sizes that its central directory and those of the archives nested in it
+    declare, read without expanding anything. An archive with nesting reserves the larger of that total and the shared bound of the expansion, because the
+    nested archives expand into the same budget. Any other file declares none. A file that is no ZIP declares none: the content check refuses it."""
     if mode != "hospital_archive":
         return 0
     try:
         with zipfile.ZipFile(original) as archive:
-            members = [info for info in archive.infolist() if not info.is_dir() and not any(part in OS_PACKAGING for part in Path(info.filename).parts)]
+            total, nested = declared_tree(archive, 0, [0])
     except (zipfile.BadZipFile, OSError):
         return 0
-    declared = sum(info.file_size for info in members)
-    nested = any(Path(info.filename).suffix.lower() == ".zip" for info in members)
-    return min(TREE_BYTES, declared * 2 if nested else declared)
+    return max(total, TREE_BYTES) if nested else min(total, TREE_BYTES)
 
 
 def required_space(size: int, expansion: int) -> int:
