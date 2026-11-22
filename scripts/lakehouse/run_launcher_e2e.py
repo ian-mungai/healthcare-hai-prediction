@@ -3434,8 +3434,8 @@ def desktop_start_joined_deadlines(env: Env) -> dict[str, bool]:
 
 @case("desktop_start_longer_joiner", timings={"start_wait": 6})
 def desktop_start_longer_joiner(env: Env) -> dict[str, bool]:
-    """A caller that joins a running Docker Desktop start with a deadline beyond the time its command is stopped is refused at once with that time named;
-    the caller that began the start is not disturbed and fails at its own deadline."""
+    """A caller that joins a running Docker Desktop start with a deadline beyond the time its command is stopped is not refused: it waits until the command
+    is stopped, then fails with an error that names the stopped command and the time, not its own deadline. The caller that began the start fails at its own."""
     env.settings["start_command"] = desktop_command(env, "start", "/_test/start?after=1.0", delay=0.3)
     env.write_settings()
     env.start()
@@ -3462,9 +3462,12 @@ def desktop_start_longer_joiner(env: Env) -> dict[str, bool]:
     runs = len(command_runs(env, "start"))
     set_mode(env, "start", "act")
     return {
-        "the longer joiner is refused at once and the refusal names the time left": refused(longer, "refused", "its command is stopped in")
-        and longer_seconds < 3,
-        "the refusal does not claim the joiner's own deadline passed": "within 20 s" not in str(longer),
+        "the longer joiner joins and fails when the command is stopped, with an error that names the stopped command and the time": refused(
+            longer, "degraded", "the running Docker Desktop start command was stopped at"
+        )
+        and "Z" in str(longer)
+        and 3.0 <= longer_seconds < 10,
+        "the error does not claim the joiner's own deadline passed": "within 20 s" not in str(longer),
         "the caller that began the start fails at its own deadline": refused(first, "degraded", "did not answer within 6 s") and first_seconds >= 5,
         "one start command ran": runs == 1,
         "no start record is left": env.state()["launcher"]["desktop"] is None,

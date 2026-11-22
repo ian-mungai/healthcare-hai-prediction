@@ -8682,14 +8682,6 @@ class Launcher:
         record = self.desktop_record(ctx.state)
         now = time.time()
         if record:
-            ends = record.get("ends") if record["phase"] == "command" else None
-            if ends is not None and now + deadline > ends:
-                # The running command is stopped at a time fixed when it began; a caller that would wait longer cannot be served by it.
-                left = str(int(max(ends - now, 0)))  # rounded down, so a caller that asks with this deadline is admitted
-                raise LauncherError(
-                    f"a Docker Desktop start is running and its command is stopped in {left} s: ask again after it ends, or with a deadline of at most that",
-                    "refused",
-                )
             record["requests"].append(ctx.key)
             record["expiries"][ctx.key], record["deadlines"][ctx.key] = now + deadline, deadline  # a joining caller keeps its own deadline
         else:
@@ -8739,7 +8731,7 @@ class Launcher:
             elif record["phase"] == "command":
                 command_key = self.operation_key("desktop:cmd", record)
                 if command_key not in self.inflight:
-                    record["ends"] = now + left  # the command is stopped then, so a later caller with a longer deadline is refused
+                    record["ends"] = now + left  # the command is stopped then; a joiner with a later expiry fails then, naming the stopped command
                     actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
             elif self.status == "serving" and self.docker_ok:
                 state["launcher"]["desktop"] = None
@@ -8769,7 +8761,8 @@ class Launcher:
             self.reconnect_now()
 
     def on_desktopcmd(self, key: str, outcome: str, value: Any) -> None:
-        """The start command ended: wait for the daemon, or fail the waiting requests (a timeout names each caller's own deadline)."""
+        """The start command ended: wait for the daemon, or fail the waiting requests (a timeout names each caller's own deadline; a joiner whose deadline
+        reaches past the stop gets the stop time instead)."""
         errors: dict[str, LauncherError] = {}
         with self.tx() as state:
             record = self.desktop_record(state)
@@ -8779,7 +8772,12 @@ class Launcher:
                 record.update({"phase": "wait", "ran": True})
             else:
                 for request in record["requests"]:
-                    if isinstance(value, TimeoutExpired):
+                    if isinstance(value, TimeoutExpired) and record["expiries"][request] > record.get("ends", 0.0) + 0.001:
+                        stopped = datetime.fromtimestamp(record["ends"], UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        errors[request] = Degraded(
+                            f"the running Docker Desktop start command was stopped at {stopped} before the daemon answered; run the command again"
+                        )
+                    elif isinstance(value, TimeoutExpired):
                         errors[request] = Degraded(self.desktop_deadline_text(record, request))
                     else:
                         errors[request] = LauncherError(f"docker start failed: {failure_text(value)}", "command_failed")
