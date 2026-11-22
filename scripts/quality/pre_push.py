@@ -10,25 +10,27 @@ A failed check stops the run. Then these steps run at once, except the OSV-Scann
 - ``commit_messages`` and ``removed_names``: the commit-message and removed-name checks of the range (scripts/quality/repo_checks.py);
 - ``secret_scan`` and ``privacy_scan``: the Gitleaks scan (scripts/quality/scan_secrets.py) and the privacy scan (scripts/quality/repo_checks.py privacy-scan)
   of every file Git does not ignore;
-- ``secret_scan_pushed`` and ``privacy_scan_pushed``: the same scans over the commits the push newly sends, ``git rev-list <tip> --not --remotes=<remote>`` for
-  every updated reference (the privacy scan reads the lines each commit adds), so a value that one commit adds and a later commit removes is found. They need
-  no base, so they also cover a new branch and a force push. A pushed annotated tag has its message scanned by both scans (``secret_scan_tags`` and the
-  privacy step), also when its commit is already on the remote. The scans stay at the push, so a commit made with its hooks bypassed, or in another clone, never
-  reaches GitHub unchecked;
+- ``secret_scan_pushed`` and ``privacy_scan_pushed``: the same scans over what the push newly sends: ``git rev-list <every tip> --not <destination>``, where the
+  destination is every object ID that ``git ls-remote <url>`` lists (one call, with the URL Git passes to the hook) and this repository has. No tracking ref is
+  read, so a stale one, a second remote and a direct URL need no special case, and a branch or tag that sends nothing new passes. Both scans read each
+  commit's message and its patch against its first parent (so what only a merge introduces is seen), and each tag object's message, following a tag that
+  points to a tag. A value that one commit adds and a later commit removes is found, and none is printed: a finding names the commit, the SHA-256 prefix of
+  the path and the line. The scans stay at the push, so a commit made with its hooks bypassed, or in another clone, never reaches GitHub unchecked;
 - ``osv_scanner``: ``pre-commit run osv-scanner --hook-stage pre-push`` over the range, or over all files when there is no range. The hook skips itself
   unless the range changes uv.lock, a requirements file or the allowlist.
 
 Without a usable range (no ``origin/main`` or no merge base) the changed-file, commit-message and removed-name checks have nothing to read and are left out.
-Hosted CI still runs every group.
-Every step has the deadline ``pre_push.timeout_seconds`` (the changed-file checks have twice ``pre_push.changed_file_seconds``) and fails visibly with its
-name when it expires. The run and every step start without the variables that change what pre-commit or the scans run (``EXECUTION_CONTROLS``, ``SKIP``
-included) and without the Git repository variables of the caller.
+Hosted CI still runs every group. A Git call that the scope, the destination listing or a tag lookup needs and that fails or outlives its deadline
+refuses the push and names the command: the gate fails closed.
+Every step has the deadline ``pre_push.timeout_seconds`` (the changed-file checks have twice ``pre_push.changed_file_seconds``) and fails visibly with
+its name when it expires. The run and every step start without the variables that change what pre-commit or the scans run (``EXECUTION_CONTROLS``,
+``SKIP`` included) and without the Git repository variables of the caller.
 
 The checks read the working tree, so ``run`` refuses a head that is not the checked-out commit and tracked files that differ from it (staged or unstaged).
 The hook form, ``run --hook``, is the gate of every push. ``install-shim`` registers it as a Git config hook (Git 2.54 or newer; Git starts it before the
 hooks-directory hook, for every push, with the whole input on standard input), so the gate does not depend on the reference pre-commit hands its hooks. It
 judges each updated reference: a deletion is allowed; a reference that names a ``temp/`` branch (as its remote name, its local name or ``HEAD`` on
-such a branch) is refused whatever its commit, because temporary code never reaches GitHub; a reference whose commit is already in ``origin/main`` is
+such a branch) is refused whatever its commit, because temporary code never reaches GitHub; a reference whose commit the destination already holds is
 allowed with nothing to check and is recorded in ``report.json``; a reference at the checked-out commit is checked; any other reference refuses the push.
 The ``local_ci_pushed`` pre-commit hook runs
 ``check-shim``, which refuses a push when the Git config hook is missing, disabled or changed.
@@ -59,6 +61,7 @@ from scripts.process import CompletedProcess, LaunchesNotStopped, LaunchPool, Pr
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
+MAX_TAG_CHAIN = 50
 SHIM_NAME = "hai-push-input"
 SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
@@ -107,6 +110,51 @@ EXECUTION_CONTROLS = (
     "PRE_COMMIT_RUNNING_LEGACY",
     "_PRE_COMMIT_SKIP_POST_CHECKOUT",
 )
+
+
+class GateError(Exception):
+    """A Git call that the scope, the tag lookup or the destination listing needs failed. The gate refuses the push and names the command."""
+
+
+def must_git(root: Path, *args: str) -> str:
+    """Run Git and return its output; a failed command, or one that outlives its deadline, raises ``GateError`` naming it."""
+    try:
+        result = run_command("git", ["-C", str(root), *args], timeout=GIT_SECONDS)
+    except TimeoutExpired:
+        raise GateError(f"git {args[0]} did not finish within {GIT_SECONDS} seconds") from None
+    if result.returncode != 0:
+        raise GateError(f"git {args[0]} failed (exit {result.returncode}): {(result.stderr or result.stdout).strip()[-200:]}")
+    return result.stdout.strip()
+
+
+def destination_ids(root: Path, url: str) -> list[str]:
+    """The object IDs the destination lists (``git ls-remote``, one call) that exist in this repository: what a push to it does not send again."""
+    listed = must_git(root, "ls-remote", url)
+    identifiers = list(dict.fromkeys(line.split()[0] for line in listed.splitlines() if line.strip()))
+    return [identifier for identifier in identifiers if git(root, "cat-file", "-e", identifier)[0] == 0]
+
+
+def destination_url(root: Path, name: str, url: str) -> str:
+    """The URL a push goes to: the one Git passed, else the push URL of the named remote (``origin`` without one)."""
+    return url or must_git(root, "remote", "get-url", "--push", name or "origin")
+
+
+def sends_nothing(root: Path, commit: str, destination: list[str]) -> bool:
+    """Whether the destination already holds ``commit`` and its whole history."""
+    return not must_git(root, "rev-list", "-n1", commit, *(["--not", *destination] if destination else []), "--")
+
+
+def tag_chain(root: Path, sha: str) -> list[str]:
+    """The tag objects from ``sha`` down: a tag that points to a tag has each message in the chain scanned."""
+    chain: list[str] = []
+    for _ in range(MAX_TAG_CHAIN):
+        if must_git(root, "cat-file", "-t", sha) != "tag":
+            return chain
+        chain.append(sha)
+        sha = next((line.split()[1] for line in must_git(root, "cat-file", "tag", sha).splitlines() if line.startswith("object ")), "")
+        if not sha:
+            raise GateError("git cat-file tag gave a tag object with no target")
+    raise GateError(f"a tag chain of more than {MAX_TAG_CHAIN} tag objects")
 
 
 def git(root: Path, *args: str) -> tuple[int, str]:
@@ -166,23 +214,28 @@ def output_directory(root: Path) -> Path:
     return root / "data/e2e/pre_push" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
 
 
-def remote_name(root: Path, given: str) -> str:
-    """The remote whose commits a push does not send again: the one Git names (``origin`` without one), or every remote for a URL."""
-    name = given or "origin"
-    return name if name == "origin" or name in git(root, "remote")[1].split() else ""
-
-
 def plan(
-    root: Path, base: str = "", head: str = "", remote: str = "", tips: list[str] | None = None, tags: list[str] | None = None, checkout: bool = True
+    root: Path,
+    base: str = "",
+    head: str = "",
+    tips: list[str] | None = None,
+    tags: list[str] | None = None,
+    checkout: bool = True,
+    destination: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The steps of the gate: ``tips`` are the commits it sends (the head by default), ``tags`` its tag objects, ``checkout`` whether it sends the head."""
+    """The steps of the gate: ``tips`` are the commits the push sends (the head by default), ``tags`` its tag objects, ``checkout`` whether it sends the head.
+
+    ``destination`` holds the object IDs the destination already has. The scans of the pushed commits run only when the tips send something it lacks.
+    """
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
     end = resolve_head(root, head) if checkout else ""
     start, unusable = resolve_base(root, base, end) if checkout else ("", "")
     seconds = int(config["pre_push"]["timeout_seconds"])
-    remote = remote_name(root, remote)
+    destination = list(destination or [])
     tips = [end] if tips is None and end else list(tips or [])
-    tags = list(tags or [])
+    tips = [tip for tip in tips if not sends_nothing(root, tip, destination)]
+    tags = [tag for tag in (tags or []) if tag not in destination]
+    output = output_directory(root)
     steps: list[dict[str, Any]] = []
     if start and end:
         steps += [
@@ -194,7 +247,7 @@ def plan(
             {"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},
             {"name": "privacy_scan", "kind": "repo_checks", "arguments": ["privacy-scan"], "env": {}},
         ]
-    sent = [part for tip in tips for part in ("--tip", tip)] + ["--remote", remote] * bool(tips)
+    sent = [part for tip in tips for part in ("--tip", tip)] + ["--exclude-file", str(output / "destination.txt")] * bool(tips)
     named = [part for tag in tags for part in ("--tag-object", tag)]
     if tips:
         steps.append({"name": "secret_scan_pushed", "kind": "secret_scan", "arguments": sent, "env": {}})
@@ -219,12 +272,7 @@ def plan(
         reason = f"range {start}..{end}"
     else:
         reason = f"{unusable}: the checks that read a range are left out and hosted CI runs every group"
-    return {"reason": reason, "start": start, "end": end, "output": str(output_directory(root)), "first": first, "steps": steps}
-
-
-def tag_object(root: Path, sha: str) -> bool:
-    """Whether ``sha`` names a tag object (an annotated tag), whose message is text that reaches GitHub."""
-    return sha.strip("0") != "" and git(root, "cat-file", "-t", sha) == (0, "tag")
+    return {"reason": reason, "start": start, "end": end, "output": str(output), "first": first, "steps": steps, "destination": destination}
 
 
 @cache
@@ -293,18 +341,22 @@ def parse_updates(text: str) -> list[tuple[str, str, str]]:
     return updates
 
 
-def judge(root: Path, sha: str, current: str) -> tuple[str, str]:
-    """The decision for one updated reference and its reason: ``deleted``, ``known``, ``checked`` or ``refused``."""
+def judge(root: Path, sha: str, current: str, destination: list[str]) -> tuple[str, str]:
+    """The decision for one updated reference and its reason: ``deleted``, ``known``, ``checked`` or ``refused``.
+
+    A reference whose commit the destination already holds sends nothing (``known``); otherwise the checks of the checkout can describe it only when
+    its commit is the checked-out one.
+    """
     if not sha.strip("0"):
         return "deleted", "deletion"
     commit = resolve_commit(root, sha)
     if not commit:
         return "refused", "is not a commit in this repository"
-    if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:
-        return "known", "its commit is already in origin/main"
+    if sends_nothing(root, commit, destination):
+        return "known", "its commit is already at the destination"
     if commit == current:
         return "checked", "its commit is the checked-out commit"
-    return "refused", f"is neither in origin/main nor the checked-out commit {current[:12]}"
+    return "refused", f"is neither at the destination nor the checked-out commit {current[:12]}"
 
 
 def temporary(root: Path, remote_ref: str, local_ref: str) -> str:
@@ -318,11 +370,11 @@ def temporary(root: Path, remote_ref: str, local_ref: str) -> str:
     return ""
 
 
-def decide(root: Path, updates: list[tuple[str, str, str]]) -> list[dict[str, str]]:
+def decide(root: Path, updates: list[tuple[str, str, str]], destination: list[str]) -> list[dict[str, str]]:
     current = resolve_commit(root, "HEAD")
     rows = []
     for ref, sha, local in updates:
-        decision, reason = judge(root, sha, current)
+        decision, reason = judge(root, sha, current, destination)
         named = temporary(root, ref, local) if decision != "deleted" else ""
         if named:
             decision, reason = "refused", f"names the temp/ branch {named}; temporary code stays on a local branch and is never pushed"
@@ -356,14 +408,25 @@ def record(output: Path, plan_made: dict[str, Any] | None, results: list[dict[st
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
-def run(root: Path, base: str, head: str, push_input: str | None = None, remote: str = "") -> int:
+def run(root: Path, base: str, head: str, push_input: str | None = None, name: str = "", url: str = "") -> int:
+    """Run the gate; a Git call that the scope needs and that fails refuses the push with the command named."""
+    try:
+        return run_gate(root, base, head, push_input, name, url)
+    except GateError as error:
+        return refuse([str(error)])
+
+
+def run_gate(root: Path, base: str, head: str, push_input: str | None, name: str, url: str) -> int:
     decisions: list[dict[str, str]] = []
     tips: list[str] | None = None
     tags: list[str] = []
     checkout = True
+    listed = time.monotonic()
+    destination = destination_ids(root, destination_url(root, name, url))
+    sys.stdout.write(f"pre-push: the destination lists {len(destination)} objects this repository has ({round(time.monotonic() - listed, 1)} s)\n")
     if push_input is not None:
         try:
-            decisions = decide(root, parse_updates(push_input))
+            decisions = decide(root, parse_updates(push_input), destination)
         except ValueError as error:
             return refuse([str(error)])
         problems = [f"{row['ref']} ({row['sha'][:12]}) {row['reason']}" for row in decisions if row["decision"] == "refused"]
@@ -373,7 +436,7 @@ def run(root: Path, base: str, head: str, push_input: str | None = None, remote:
             sys.stdout.write(f"pre-push: {row['ref']}: {row['decision']} ({row['reason']})\n")
         sent = [row for row in decisions if row["decision"] != "deleted"]
         tips = sorted({resolve_commit(root, row["sha"]) for row in sent})
-        tags = sorted({row["sha"] for row in sent if tag_object(root, row["sha"])})
+        tags = sorted({tag for row in sent for tag in tag_chain(root, row["sha"])} - set(destination))
         checkout = any(row["decision"] == "checked" for row in decisions)
         if not checkout and not tags:
             sys.stdout.write("pre-push: nothing to check\n")
@@ -382,14 +445,13 @@ def run(root: Path, base: str, head: str, push_input: str | None = None, remote:
                 output.mkdir(parents=True, exist_ok=True)
                 record(output, None, [], decisions)
             return 0
-        if not checkout:
-            tips = []
-    chosen = plan(root, base, head, remote, tips, tags, checkout)
+    chosen = plan(root, base, head, tips, tags, checkout, destination)
     problems = refusals(root, chosen["end"]) if checkout else []
     if problems:
         return refuse(problems)
     output = Path(chosen["output"])
     output.mkdir(parents=True, exist_ok=True)
+    (output / "destination.txt").write_text("".join(f"{identifier}\n" for identifier in destination), encoding="utf-8")
     sys.stdout.write(f"pre-push: {chosen['reason']}\n")
     first = chosen["first"]
     if first:
@@ -451,8 +513,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hook", action="store_true", help="read the push input from standard input and judge every updated reference")
     args = parser.parse_args(argv)
     root = args.root.resolve()
+    remote_name, remote_url = (args.remote + ["", ""])[:2]
     if args.command == "plan":
-        sys.stdout.write(json.dumps(plan(root, args.base, args.head, args.remote[0] if args.remote else ""), indent=2) + "\n")
+        try:
+            destination = destination_ids(root, destination_url(root, remote_name, remote_url))
+        except GateError as error:
+            sys.stdout.write(f"pre-push: refused. {error}\n")
+            return 1
+        sys.stdout.write(json.dumps(plan(root, args.base, args.head, destination=destination), indent=2) + "\n")
         return 0
     if args.command == "check-shim":
         return check_shim(root)
@@ -460,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         return install_shim(root)
     for name in EXECUTION_CONTROLS:
         os.environ.pop(name, None)
-    return run(root, args.base, args.head, sys.stdin.read() if args.hook else None, args.remote[0] if args.remote else "")
+    return run(root, args.base, args.head, sys.stdin.read() if args.hook else None, remote_name, remote_url)
 
 
 if __name__ == "__main__":

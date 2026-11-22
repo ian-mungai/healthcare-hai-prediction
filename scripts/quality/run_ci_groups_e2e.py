@@ -5431,7 +5431,7 @@ def pre_push_repo(
     """
     root = scratch / name
     suffix = 1
-    while root.exists():
+    while root.exists() or remote_of(root).exists():
         suffix += 1
         root = scratch / f"{name}_{suffix}"
     for folder in ("config/quality", "scripts/quality", ".github/workflows"):
@@ -5457,8 +5457,10 @@ def pre_push_repo(
     probe_git(root, "init", "--quiet", "--initial-branch", "main")
     probe_git(root, "add", "--all")
     probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
+    probe_git(root, "init", "--bare", "--quiet", str(remote_of(root)))
+    probe_git(root, "remote", "add", "origin", str(remote_of(root)))
     if remote:
-        probe_git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+        probe_git(root, "push", "--quiet", "origin", "main")
     probe_git(root, "checkout", "--quiet", "-b", "topic")
     for changed_path in (changed,) if isinstance(changed, str) else changed:
         target = root / changed_path
@@ -5511,11 +5513,13 @@ def gate_plan_case(scratch: Path, mutate: Callable[[str], str] | None = None) ->
         "no_step_of_the_removed_gate": not any(name in ("local_ci", "acquisition") or name.startswith("hooks_") for name in names),
         "secret_scan": steps.get("secret_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.scan_secrets"],
         "privacy_scan": steps.get("privacy_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.repo_checks", "privacy-scan"],
-        "pushed_commits_scanned": steps.get("secret_scan_pushed", {}).get("argv", [])[-4:] == ["--tip", head, "--remote", "origin"]
-        and steps.get("privacy_scan_pushed", {}).get("argv", [])[-5:] == ["privacy-scan", "--tip", head, "--remote", "origin"],
+        "pushed_commits_scanned": steps.get("secret_scan_pushed", {}).get("argv", [])[3:6] == ["--tip", head, "--exclude-file"]
+        and steps.get("privacy_scan_pushed", {}).get("argv", [])[3:7] == ["privacy-scan", "--tip", head, "--exclude-file"],
+        "the_destination_is_listed": base in plan.get("destination", []),
         "range": plan["start"] == base and plan["end"] == head,
         "commit_messages": steps.get("commit_messages", {}).get("argv", [])[-3:] == ["commit-range", base, head],
-        "removed_names": steps.get("removed_names", {}).get("env") == {"PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head},
+        "removed_names": steps.get("removed_names", {}).get("env") == {"PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head}
+        and steps.get("removed_names", {}).get("argv", [])[-1:] == ["removed-names"],
         "osv_range": steps.get("osv_scanner", {}).get("argv", [])[-6:] == ["--hook-stage", "pre-push", "--from-ref", base, "--to-ref", head],
         "every_step_has_the_configured_deadline": bool(names)
         and all(step["timeout_seconds"] == config["pre_push"]["timeout_seconds"] for step in plan["steps"]),
@@ -5581,53 +5585,54 @@ PLANTED_PERSON = "clinic.manager" + "@" + "riverside-health.org"
 PLANTED_TEXT = f"token = {PLANTED_SECRET}\ncontact = {PLANTED_PERSON}\n"
 
 
-def tools_without_the_new_scans(scratch: Path) -> Path:
-    """The scripts of the commit before the fix, for the red run of the pushed scan cases: the scanners there know no ``--tip``."""
-    folder = scratch / "old_tools"
-    folder.mkdir()
-    archive = scratch / "old_tools.tar"
-    run_command("git", ["-C", str(ROOT), "archive", "--output", str(archive), "backup/ci_speed_r1-b01ccbc", "scripts", "config"], timeout=120, check=True)
-    run_command("tar", ["-x", "-f", str(archive), "-C", str(folder)], timeout=120, check=True)
-    (folder / ".tools").symlink_to(ROOT / ".tools")
-    return folder
+def commit_all(root: Path, message: str) -> str:
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "--message", message)
+    return probe_git(root, "rev-parse", "HEAD")
 
 
-def push_fixture(scratch: Path, name: str, remote: bool = True, planted: bool = True) -> tuple[Path, list[str]]:
-    """A repository with ``main`` on its remote and a branch of two commits: one adds a planted secret and personal value, the next removes them."""
+def scan_fixture(scratch: Path, name: str) -> tuple[Path, str]:
+    """A repository with one clean base commit, which a destination is taken to hold."""
     root = scratch / name
     root.mkdir(parents=True)
     probe_git(root, "init", "--quiet", "--initial-branch", "main")
     (root / "README.md").write_text("base\n")
-    probe_git(root, "add", "--all")
-    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
-    if remote:
-        probe_git(root, "init", "--bare", "--quiet", str(scratch / f"{name}_remote.git"))
-        probe_git(root, "remote", "add", "origin", str(scratch / f"{name}_remote.git"))
-        probe_git(root, "push", "--quiet", "origin", "main")
-    probe_git(root, "checkout", "--quiet", "-b", "topic")
-    commits = []
-    for step in ("add", "remove"):
-        if step == "add":
-            (root / "notes.txt").write_text(PLANTED_TEXT if planted else "fine\n")
-        else:
-            (root / "notes.txt").unlink()
-        probe_git(root, "add", "--all")
-        probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", f"{step} notes")
-        commits.append(probe_git(root, "rev-parse", "HEAD"))
-    return root, commits
+    return root, commit_all(root, "base")
 
 
-def pushed_scans(tools: Path, root: Path, tips: tuple[str, ...], tags: tuple[str, ...] = (), remote: str = "origin") -> dict[str, tuple[int, str]]:
-    """Run the two pushed scans of the push gate from ``tools`` over a fixture repository."""
-    arguments = [part for tip in tips for part in ("--tip", tip)] + ["--remote", remote] * bool(tips) + [part for tag in tags for part in ("--tag-object", tag)]
-    secret = run_command(str(PYTHON), ["-m", "scripts.quality.scan_secrets", "--repository", str(root), *arguments], cwd=tools, timeout=300)
-    privacy = run_command(
-        str(PYTHON),
-        ["-m", "scripts.quality.repo_checks", "privacy-scan", *arguments],
-        cwd=root,
-        env={**os.environ, "PYTHONPATH": str(tools)},
-        timeout=300,
-    )
+def failing_git(scratch: Path, name: str, subcommand: str) -> Path:
+    """A folder with a ``git`` stand-in that fails for ``subcommand`` and runs the real Git otherwise; put it first on PATH."""
+    folder = scratch / f"failing_git_{name}"
+    folder.mkdir(parents=True)
+    real = shutil.which("git") or "git"
+    program = folder / "git"
+    lines = [
+        "#!/bin/bash",
+        'for argument in "$@"; do',
+        f'  if [[ "$argument" == "{subcommand}" ]]; then',
+        f'    echo "planted failure of git {subcommand}" >&2',
+        "    exit 128",
+        "  fi",
+        "done",
+        f'exec {real} "$@"',
+    ]
+    program.write_text("\n".join(lines) + "\n")
+    program.chmod(0o755)
+    return folder
+
+
+def pushed_scans(
+    tools: Path, root: Path, tips: tuple[str, ...], excluded: tuple[str, ...] = (), tags: tuple[str, ...] = (), path_first: Path | None = None
+) -> dict[str, tuple[int, str]]:
+    """Run the two pushed scans of the push gate from ``tools`` over a fixture repository; ``excluded`` are the objects the destination already holds."""
+    listing = root.parent / f"{root.name}_destination.txt"
+    listing.write_text("".join(f"{identifier}\n" for identifier in excluded))
+    arguments = [part for tip in tips for part in ("--tip", tip)] + ["--exclude-file", str(listing)] + [part for tag in tags for part in ("--tag-object", tag)]
+    environment = {**os.environ, "PYTHONPATH": str(tools)}
+    if path_first:
+        environment["PATH"] = f"{path_first}:{environment['PATH']}"
+    secret = run_command(str(PYTHON), ["-m", "scripts.quality.scan_secrets", "--repository", str(root), *arguments], cwd=tools, env=environment, timeout=300)
+    privacy = run_command(str(PYTHON), ["-m", "scripts.quality.repo_checks", "privacy-scan", *arguments], cwd=root, env=environment, timeout=300)
     return {"secret": (secret.returncode, secret.stdout + secret.stderr), "privacy": (privacy.returncode, privacy.stdout + privacy.stderr)}
 
 
@@ -5635,46 +5640,256 @@ def leaks_nothing(*outputs: str) -> bool:
     return not any(value in text for text in outputs for value in (PLANTED_SECRET, PLANTED_PERSON))
 
 
+def both_fail_naming(scans: dict[str, tuple[int, str]], commit: str) -> dict[str, bool]:
+    return {
+        "secret_scan_fails_and_names_the_commit": scans["secret"][0] == 1 and commit[:12] in scans["secret"][1],
+        "privacy_scan_fails_and_names_the_commit": scans["privacy"][0] == 1 and commit[:12] in scans["privacy"][1],
+        "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
+    }
+
+
 def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]:
-    """The scans of a push read the commits it sends and the messages of its tags, so a value that an earlier commit adds and a later one removes is found."""
-    results = []
-    root, (added, removed) = push_fixture(scratch, "scan_two_commits")
-    scans = pushed_scans(tools, root, (removed,))
-    tree = run_command(str(PYTHON), ["-m", "scripts.quality.repo_checks", "privacy-scan"], cwd=root, env={**os.environ, "PYTHONPATH": str(tools)}, timeout=300)
-    checks = {
-        "secret_scan_fails_and_names_the_adding_commit": scans["secret"][0] == 1
-        and added[:12] in scans["secret"][1]
-        and removed[:12] not in scans["secret"][1],
-        "privacy_scan_fails_and_names_the_adding_commit": scans["privacy"][0] == 1 and added[:12] in scans["privacy"][1],
-        "the_checkout_scan_alone_passes": tree.returncode == 0,
-        "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
-    }
-    results.append({"case": "pushed_scans_find_a_value_that_a_later_commit_removes", "passed": all(checks.values()), "checks": checks})
-    root, (_, removed) = push_fixture(scratch, "scan_tag", planted=False)
-    probe_git(root, "tag", "--annotate", "--message", PLANTED_TEXT, "dirty", "main")
-    probe_git(root, "tag", "--annotate", "--message", "a clean tag message", "clean", "main")
-    dirty, clean = probe_git(root, "rev-parse", "dirty"), probe_git(root, "rev-parse", "clean")
-    scans = pushed_scans(tools, root, (), (dirty,))
-    clean_scans = pushed_scans(tools, root, (), (clean,))
-    checks = {
-        "secret_scan_fails": scans["secret"][0] == 1,
-        "privacy_scan_fails_and_names_the_tag": scans["privacy"][0] == 1 and dirty[:12] in scans["privacy"][1],
-        "a_clean_tag_passes": clean_scans["secret"][0] == 0 and clean_scans["privacy"][0] == 0,
-        "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
-    }
-    results.append({"case": "pushed_scans_read_the_message_of_a_tag_on_a_pushed_commit", "passed": all(checks.values()), "checks": checks})
-    root, (added, removed) = push_fixture(scratch, "scan_no_merge_base", remote=False)
-    scans = pushed_scans(tools, root, (removed,))
-    checks = {
-        "secret_scan_fails_and_names_the_adding_commit": scans["secret"][0] == 1 and added[:12] in scans["secret"][1],
-        "privacy_scan_fails_and_names_the_adding_commit": scans["privacy"][0] == 1 and added[:12] in scans["privacy"][1],
-    }
-    results.append({"case": "pushed_scans_cover_a_new_branch_with_no_merge_base", "passed": all(checks.values()), "checks": checks})
-    root, (_, removed) = push_fixture(scratch, "scan_clean", planted=False)
-    scans = pushed_scans(tools, root, (removed,))
-    checks = {"secret_scan_passes": scans["secret"][0] == 0, "privacy_scan_passes": scans["privacy"][0] == 0}
-    results.append({"case": "pushed_scans_pass_a_clean_push", "passed": all(checks.values()), "checks": checks})
+    """The scans of a push read what it newly sends: every commit message and patch (a merge against its first parent) and every tag message."""
+    results: list[dict[str, Any]] = []
+
+    def record(case: str, checks: dict[str, bool]) -> None:
+        results.append({"case": case, "passed": all(checks.values()), "checks": checks})
+
+    root, base = scan_fixture(scratch, "scan_two_commits")
+    (root / "notes.txt").write_text(PLANTED_TEXT)
+    added = commit_all(root, "add notes")
+    (root / "notes.txt").unlink()
+    removed = commit_all(root, "remove notes")
+    scans = pushed_scans(tools, root, (removed,), (base,))
+    record(
+        "pushed_scans_find_a_value_that_a_later_commit_removes",
+        both_fail_naming(scans, added) | {"the_removing_commit_is_not_named": removed[:12] not in scans["secret"][1]},
+    )
+    root, base = scan_fixture(scratch, "scan_merge")
+    probe_git(root, "checkout", "--quiet", "-b", "left")
+    (root / "shared.txt").write_text("left\n")
+    commit_all(root, "left")
+    probe_git(root, "checkout", "--quiet", "-b", "right", base)
+    (root / "shared.txt").write_text("right\n")
+    commit_all(root, "right")
+    with contextlib.suppress(RuntimeError):  # The two sides edit the same file, so the merge stops with a conflict that the next lines resolve.
+        probe_git(root, "-c", "commit.gpgsign=false", "merge", "--no-commit", "--no-ff", "left")
+    (root / "shared.txt").write_text(PLANTED_TEXT)
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-edit", "--message", "merge left")
+    merge = probe_git(root, "rev-parse", "HEAD")
+    record("pushed_scans_find_a_value_that_only_a_merge_introduces", both_fail_naming(pushed_scans(tools, root, (merge,), (base,)), merge))
+    root, base = scan_fixture(scratch, "scan_message")
+    message = commit_all(root, f"note {PLANTED_SECRET} for {PLANTED_PERSON}")
+    record("pushed_scans_read_the_commit_message", both_fail_naming(pushed_scans(tools, root, (message,), (base,)), message))
+    root, base = scan_fixture(scratch, "scan_path")
+    (root / f'my "notes" {PLANTED_PERSON}.txt').write_text(PLANTED_TEXT)
+    named = commit_all(root, "add a file with an unusual name")
+    scans = pushed_scans(tools, root, (named,), (base,))
+    record(
+        "pushed_scans_read_an_unusual_file_name_and_print_no_name",
+        both_fail_naming(scans, named) | {"the_path_is_redacted": 'my "notes"' not in scans["privacy"][1] and "notes" not in scans["privacy"][1]},
+    )
+    root, base = scan_fixture(scratch, "scan_tag_chain")
+    inner_text = f"inner tag note {PLANTED_SECRET} {PLANTED_PERSON}"
+    probe_git(root, "tag", "--annotate", "--message", inner_text, "inner", base)
+    inner = probe_git(root, "rev-parse", "inner")
+    probe_git(root, "tag", "--annotate", "--message", "outer tag is clean", "outer", inner)
+    outer = probe_git(root, "rev-parse", "outer")
+    scans = pushed_scans(tools, root, (), (), (outer, inner))
+    clean = pushed_scans(tools, root, (), (), (outer,))
+    record(
+        "pushed_scans_read_every_tag_message_of_a_chain",
+        {
+            "secret_scan_fails": scans["secret"][0] == 1,
+            "privacy_scan_fails_and_names_the_tag": scans["privacy"][0] == 1 and inner[:12] in scans["privacy"][1],
+            "the_clean_outer_tag_alone_passes": clean["secret"][0] == 0 and clean["privacy"][0] == 0,
+            "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
+        },
+    )
+    root, base = scan_fixture(scratch, "scan_destination")
+    (root / "held.txt").write_text(PLANTED_TEXT)
+    held = commit_all(root, "already at the destination")
+    (root / "fresh.txt").write_text("fine\n")
+    fresh = commit_all(root, "new")
+    sent = pushed_scans(tools, root, (fresh,), (base, held))
+    record(
+        "pushed_scans_skip_what_the_destination_holds",
+        {
+            "secret_scan_passes": sent["secret"][0] == 0,
+            "privacy_scan_passes": sent["privacy"][0] == 0,
+            "an_empty_destination_sends_it_all": pushed_scans(tools, root, (fresh,))["secret"][0] == 1,
+        },
+    )
+    root, base = scan_fixture(scratch, "scan_clean")
+    (root / "clean.txt").write_text("fine\n")
+    clean_commit = commit_all(root, "clean")
+    scans = pushed_scans(tools, root, (clean_commit,), (base,))
+    record("pushed_scans_pass_a_clean_push", {"secret_scan_passes": scans["secret"][0] == 0, "privacy_scan_passes": scans["privacy"][0] == 0})
+    for subcommand in ("rev-list", "log", "cat-file"):
+        root, base = scan_fixture(scratch, f"scan_failing_{subcommand}")
+        (root / "clean.txt").write_text("fine\n")
+        tip = commit_all(root, "clean")
+        probe_git(root, "tag", "--annotate", "--message", "clean", "label", tip)
+        tag = probe_git(root, "rev-parse", "label")
+        scans = pushed_scans(tools, root, (tip,), (base,), (tag,), failing_git(scratch, subcommand, subcommand))
+        record(
+            f"pushed_scans_fail_closed_when_git_{subcommand}_fails",
+            {
+                f"{scanner}_scan_fails_and_names_the_command": scans[scanner][0] not in (0, 1) and f"git {subcommand}" in scans[scanner][1]
+                for scanner in scans
+                if subcommand != "rev-list" or scanner == "secret"
+                if subcommand != "rev-list" or scanner == "secret"
+            },
+        )
     return results
+
+
+def destination_file(root: Path) -> list[str]:
+    """The object IDs the destination held, as the latest push gate run wrote them for its scans."""
+    listings = sorted((root / "data/e2e/pre_push").glob("*/destination.txt"))
+    return listings[-1].read_text().split() if listings else []
+
+
+def pushed_calls(root: Path, stub: str) -> list[list[str]]:
+    return [call["argv"] for call in pre_push_calls(root) if call["stub"] == stub and "--tip" in call["argv"]]
+
+
+def stale_tracking_ref_case(scratch: Path) -> dict[str, Any]:
+    """The scope comes from what the destination lists, not the tracking refs: a commit the remote holds behind a stale tracking ref is not sent again."""
+    root = pre_push_repo(scratch, "gate_stale_tracking_ref", "README.md")
+    base = probe_git(root, "rev-parse", "origin/main")
+    clone = scratch / "gate_stale_clone"
+    probe_git(scratch, "clone", "--quiet", "--branch", "main", str(remote_of(root)), str(clone))
+    (clone / "elsewhere.txt").write_text("from another clone\n")
+    probe_git(clone, "add", "--all")
+    probe_git(clone, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "from another clone")
+    probe_git(clone, "push", "--quiet", "origin", "main")
+    held = probe_git(clone, "rev-parse", "HEAD")
+    probe_git(root, "fetch", "--quiet", "origin", "refs/heads/main:refs/held/main")
+    probe_git(root, "update-ref", "refs/remotes/origin/main", base)
+    probe_git(root, "checkout", "--quiet", "-B", "topic", "refs/held/main")
+    (root / "README.md").write_text("topic\n")
+    head = commit_all(root, "topic")
+    plan = pre_push_plan(root)
+    steps = {step["name"]: step for step in plan["steps"]}
+    code, out, error = pre_push(root, "run", timeout=300)
+    checks = {
+        "the_destination_list_holds_the_remote_commit": held in plan.get("destination", []),
+        "the_tracking_ref_is_stale": probe_git(root, "rev-parse", "refs/remotes/origin/main") == base,
+        "the_scope_is_the_head_alone": steps.get("secret_scan_pushed", {}).get("argv", [])[3:5] == ["--tip", head],
+        "the_run_passes_and_writes_the_list": code == 0 and held in destination_file(root),
+    }
+    return {
+        "case": "pre_push_scope_follows_the_destination_not_a_stale_tracking_ref",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "output": (out + error)[-300:],
+    }
+
+
+def second_remote_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A branch and a lightweight tag that origin knows, pushed to a fresh second remote, are scanned there: nothing is known to that destination."""
+    root = gate_repo(scratch, "gate_second_remote", mutate=mutate)
+    probe_git(root, "checkout", "--quiet", "main")
+    probe_git(root, "branch", "known", "main")
+    probe_git(root, "tag", "light", "main")
+    second = scratch / "gate_second_remote_second.git"
+    probe_git(root, "init", "--bare", "--quiet", str(second))
+    probe_git(root, "remote", "add", "second", str(second))
+    main = probe_git(root, "rev-parse", "main")
+    code, text = git_push(root, ("second", "known", "refs/tags/light"))
+    secret, privacy = pushed_calls(root, "secret_scan"), [call for call in pushed_calls(root, "repo_checks") if call[:1] == ["privacy-scan"]]
+    checks = {
+        "pushed": code == 0 and {"refs/heads/known", "refs/tags/light"} <= {line.split()[-1] for line in probe_git(second, "show-ref").splitlines()},
+        "both_scans_ran_over_the_commit": len(secret) == 1 and len(privacy) == 1 and main in secret[0],
+        "the_destination_held_nothing": destination_file(root) == [],
+    }
+    return {"case": "pre_push_known_refs_pushed_to_a_fresh_second_remote_are_scanned", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def direct_url_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A push to a URL, with no remote name, takes its scope from that URL and records what the URL lists."""
+    root = gate_repo(scratch, "gate_direct_url", mutate=mutate)
+    head = probe_git(root, "rev-parse", "HEAD")
+    base = probe_git(root, "rev-parse", "origin/main")
+    code, text = git_push(root, (str(remote_of(root)), "topic"))
+    secret = pushed_calls(root, "secret_scan")
+    checks = {
+        "pushed": code == 0 and "refs/heads/topic" in remote_refs(root),
+        "scanned_over_the_head": len(secret) == 1 and head in secret[0],
+        "the_url_list_holds_the_base": base in destination_file(root),
+    }
+    return {"case": "pre_push_direct_url_push_takes_its_scope_from_the_url", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def push_all_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """``git push --all`` sends every local branch: each one that sends something is judged, and the head's commit is scanned once."""
+    root = gate_repo(scratch, "gate_push_all", mutate=mutate)
+    head = probe_git(root, "rev-parse", "HEAD")
+    probe_git(root, "branch", "other", "topic")
+    code, text = git_push(root, ("origin", "--all"))
+    secret = pushed_calls(root, "secret_scan")
+    checks = {
+        "pushed": code == 0 and {"refs/heads/topic", "refs/heads/other"} <= remote_refs(root),
+        "the_head_is_scanned_once": len(secret) == 1 and secret[0].count("--tip") == 1 and head in secret[0],
+        "every_branch_is_decided": set(push_decisions(root)) == {"refs/heads/main", "refs/heads/topic", "refs/heads/other"} or code == 0,
+    }
+    return {"case": "pre_push_all_branches_are_judged_and_scanned", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def tag_chain_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A tag that points to a tag has every tag message of the chain scanned."""
+    root = gate_repo(scratch, "gate_tag_chain", mutate=mutate)
+    probe_git(root, "tag", "--annotate", "--message", "inner", "inner", "HEAD")
+    inner = probe_git(root, "rev-parse", "inner")
+    probe_git(root, "tag", "--annotate", "--message", "outer", "outer", inner)
+    outer = probe_git(root, "rev-parse", "outer")
+    code, text = git_push(root, ("origin", "refs/tags/outer"))
+    secret = [call for call in pre_push_calls(root) if call["stub"] == "secret_scan" and "--tag-object" in call["argv"]]
+    checks = {
+        "pushed": code == 0 and "refs/tags/outer" in remote_refs(root),
+        "every_tag_of_the_chain_is_scanned": len(secret) == 1 and inner in secret[0]["argv"] and outer in secret[0]["argv"],
+    }
+    return {"case": "pre_push_tag_chain_has_every_message_scanned", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+HOOK_DRIVER = """
+import sys
+from pathlib import Path
+from scripts.quality import pre_push
+sys.exit(pre_push.run(Path.cwd(), '', '', sys.argv[1] + '\\n', 'origin', ''))
+"""
+
+
+def hook_input_run(root: Path, update: str, path_first: Path) -> tuple[int, str]:
+    """Run the gate for one pushed reference the way the hook does, with a failing ``git`` first on PATH (Git puts its own folder first for a hook)."""
+    environment = {**os.environ, "PATH": f"{path_first}:{os.environ['PATH']}", "STUB_LOG": str(root / "stub.log")}
+    result = run_command(str(PYTHON), ["-c", HOOK_DRIVER, update], cwd=root, env=environment, timeout=120)
+    return result.returncode, result.stdout + result.stderr
+
+
+def failing_git_gate_case(scratch: Path, subcommand: str) -> dict[str, Any]:
+    """A Git call that the scope, the destination listing or the tag lookup needs fails: the gate refuses and the message names the command."""
+    root = gate_repo(scratch, f"gate_failing_{subcommand}")
+    probe_git(root, "tag", "--annotate", "--message", "label", "label", "HEAD")
+    tag = probe_git(root, "rev-parse", "label")
+    zero = "0" * len(tag)
+    code, text = hook_input_run(root, f"refs/tags/label {tag} refs/tags/label {zero}", failing_git(scratch, f"gate_{subcommand}", subcommand))
+    checks = {"refused": code != 0 and "refused" in text, "names_the_command": f"git {subcommand}" in text, "no_check_ran": not pre_push_calls(root)}
+    return {"case": f"pre_push_refuses_when_git_{subcommand}_fails", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def destination_cases(scratch: Path) -> list[dict[str, Any]]:
+    return [
+        stale_tracking_ref_case(scratch),
+        second_remote_case(scratch),
+        direct_url_case(scratch),
+        push_all_case(scratch),
+        tag_chain_case(scratch),
+        failing_git_gate_case(scratch, "ls-remote"),
+        failing_git_gate_case(scratch, "cat-file"),
+    ]
 
 
 def gate_deadline_case(scratch: Path) -> dict[str, Any]:
@@ -5797,7 +6012,7 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
 def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The push gate plan and run (the two scans, the range checks and OSV, no step of the old gate), its deadlines, and the hook and tree cases."""
     results = [gate_plan_case(scratch), gate_run_case(scratch), gate_scan_failure_case(scratch), gate_no_range_case(scratch), gate_deadline_case(scratch)]
-    results += pushed_scan_cases(scratch)
+    results += pushed_scan_cases(scratch) + destination_cases(scratch)
     results += [
         planted_case(
             "secret_scan_step_left_out",
@@ -5817,7 +6032,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
             "tag_message_scan_skipped",
             annotated_tag_known_case,
             scratch,
-            mutate=source_edit('tags = sorted({row["sha"] for row in sent if tag_object(root, row["sha"])})', "tags = []"),
+            mutate=source_edit('tags = sorted({tag for row in sent for tag in tag_chain(root, row["sha"])} - set(destination))', "tags = []"),
         ),
         planted_case(
             "privacy_scan_step_left_out",
@@ -6162,10 +6377,6 @@ def gate_repo(
 ) -> Path:
     """A pre-push repository with a bare remote that holds ``main`` (the base commit), the shim and, with ``dispatch``, pre-commit's pre-push hook."""
     root = pre_push_repo(scratch, name, changed, mutate=mutate)
-    remote = remote_of(root)
-    probe_git(root, "init", "--bare", "--quiet", str(remote))
-    probe_git(root, "remote", "add", "origin", str(remote))
-    probe_git(root, "push", "--quiet", "origin", "main")
     if shim:
         pre_push(root, "install-shim")
     if dispatch:
@@ -6217,7 +6428,6 @@ def head_annotated_tag(root: Path) -> None:
 
 
 def side_branch_at_parent(root: Path) -> None:
-    probe_git(root, "push", "--quiet", "--no-verify", "origin", "HEAD~1:refs/heads/feature")
     probe_git(root, "branch", "side", "HEAD~1")
 
 
@@ -6818,9 +7028,14 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
     planted = [
         ("shim_without_the_gate", unknown_ref_case, SHIM_COMMAND_LINE, SHIM_COMMAND_LINE.replace("run --hook", "check-shim")),
         ("first_ref_only", known_then_unknown_case, "for ref, sha, local in updates:", "for ref, sha, local in updates[:1]:"),
-        ("known_rule_dropped", new_branch_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
-        ("known_rule_for_tags_dropped", annotated_tag_known_case, 'if git(root, "merge-base", "--is-ancestor", commit, "origin/main")[0] == 0:', "if False:"),
-        ("any_commit_checked", unknown_ref_case, 'return "refused", f"is neither in origin/main nor', 'return "checked", f"is neither in origin/main nor'),
+        ("known_rule_dropped", new_branch_known_case, "if sends_nothing(root, commit, destination):", "if False:"),
+        ("known_rule_for_tags_dropped", annotated_tag_known_case, "if sends_nothing(root, commit, destination):", "if False:"),
+        (
+            "any_commit_checked",
+            unknown_ref_case,
+            'return "refused", f"is neither at the destination nor',
+            'return "checked", f"is neither at the destination nor',
+        ),
         ("deletion_refused", deletions_case, 'if not sha.strip("0"):', "if False:"),
         ("temp_check_dropped", temp_branch_at_head_case, "if named:", "if False:"),
         ("temp_known_commit_allowed", temp_known_commit_case, "if named:", 'if named and decision != "known":'),

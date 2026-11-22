@@ -5297,6 +5297,26 @@ def run_workflow_range_case() -> tuple[bool, str]:
         git(repo, "commit", "--allow-empty", "-qm", "docs: an unrelated history")
         unrelated = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "no_merge_base_fails_with_a_clear_message", "push", unrelated, 1, "merge base"))
+        git(repo, "checkout", "-q", "--force", "topic")
+        git(repo, "tag", "origin/main", push_a)
+        results.append(workflow_range_case(repo, "a_tag_named_origin_main_does_not_change_the_range", "push", push_a, 1, mark))
+        git(repo, "tag", "-d", "origin/main")
+        git(repo, "checkout", "-q", "--detach", clean)
+        second = "scripts/acquisition/range_sample_two.py"
+        flag = "--added" + "-then-removed"
+        write(repo, {second: f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{flag}")\n', "caller_two.sh": f"python {second} {flag}\n"})
+        git(repo, "add", "--", second, "caller_two.sh")
+        git(repo, "commit", "-qm", "feat: add a flag and its caller")
+        write(repo, {second: "VALUE = 1\n"})
+        git(repo, "add", "--", second)
+        git(repo, "commit", "-qm", "refactor: drop the flag and keep its caller")
+        dropped = git(repo, "rev-parse", "HEAD").strip()
+        results.append(workflow_range_case(repo, "a_name_added_and_removed_on_the_branch_is_caught", "push", dropped, 1, f"{flag} was removed"))
+        local = {**os.environ, "PRE_COMMIT_FROM_REF": clean, "PRE_COMMIT_TO_REF": dropped}
+        net = run_command(".venv/bin/python", ["-m", "scripts.quality.repo_checks", "removed-names"], cwd=repo, env=local, timeout=120)
+        per_commit = run_command(".venv/bin/python", ["-m", "scripts.quality.repo_checks", "removed-names", "--per-commit"], cwd=repo, env=local, timeout=120)
+        checks = {"the_local_form_reads_the_net_diff": net.returncode == 0, "the_hosted_form_reads_each_commit": per_commit.returncode == 1}
+        results.append({"case": "the_local_gate_form_reads_the_net_diff_and_the_hosted_form_each_commit", "passed": all(checks.values()), "checks": checks})
         return all(result["passed"] for result in results), json.dumps(results, indent=2) + "\n"
 
 

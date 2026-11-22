@@ -30,7 +30,7 @@ Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform
 
 ## Usage
 
-Hosted CI runs every check group in full on each push to a branch other than `main`. `main` moves to a commit only after that run is green. The push gate (`scripts/quality/pre_push.py`) runs a short set before every push: the changed-file checks, the commit messages, the removed names and the OSV scan, plus the secret scan and the privacy scan of the files, every commit the push sends and the messages of pushed tags. Run the full local checks on demand, without AWS credentials. The script sets its own environment. Each run writes its report under `data/e2e/`.
+Hosted CI runs every check group in full on each push to a branch other than `main`. `main` moves to a commit only after that run is green. The push gate (`scripts/quality/pre_push.py`) runs a short set before every push: the changed-file checks, the commit messages, the removed names and the OSV scan, plus the secret scan and the privacy scan of the files, every commit the push sends and the messages of pushed tags. The commit scans do not read the payload of a Git LFS file of an earlier commit or a file that cannot be read as text (it is listed as unreviewed and does not fail), so GitHub push protection is the backstop for secrets there. Run the full local checks on demand, without AWS credentials. The script sets its own environment. Each run writes its report under `data/e2e/`.
 
 ```sh
 bash scripts/run_ci.sh

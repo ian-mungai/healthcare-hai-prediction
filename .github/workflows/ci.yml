@@ -163,12 +163,13 @@ jobs:
           RANGE_END: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if ! git rev-parse --verify --quiet origin/main > /dev/null; then
+          # The full reference name, so that a tag named origin/main cannot change the range.
+          if ! git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
             git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           fi
-          start="$(git merge-base origin/main "$RANGE_END" || true)"
+          start="$(git merge-base refs/remotes/origin/main "$RANGE_END" || true)"
           if [[ -z "$start" ]]; then
-            echo "The merge base of origin/main and $RANGE_END cannot be found, so the commit messages and removed names cannot be checked." >&2
+            echo "The merge base of refs/remotes/origin/main and $RANGE_END cannot be found, so the commit messages and removed names cannot be checked." >&2
             exit 1
           fi
           echo "start=$start" >> "$GITHUB_OUTPUT"
@@ -181,7 +182,7 @@ jobs:
         run: |
           .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
           # The local hook sees only the staged diff; here, names removed anywhere in the range.
-          PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names
+          PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names --per-commit
 
       - name: Run this complete partition of the manual hooks
         run: .venv/bin/python -m scripts.quality.ci_hooks --group '${{ matrix.group }}'

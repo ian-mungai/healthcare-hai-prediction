@@ -14,6 +14,7 @@ import configparser
 import datetime
 import fnmatch
 import functools
+import hashlib
 import importlib
 import io
 import json
@@ -912,20 +913,19 @@ def git_text(*args: str) -> str:
     return run_command("git", args, check=True, errors="surrogateescape").stdout
 
 
+@functools.cache
 def git_blob(spec: str) -> bytes:
     """Return the bytes of the Git object ``spec`` (``<ref>:<path>``, or ``:<path>`` for the staged file)."""
     return git_text("show", spec).encode("utf-8", "surrogateescape")
 
 
-def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
-    """Return removed lines by file and deleted paths, from the staged diff or, in CI, the pushed range.
+def changed_lines_and_deletions(refs: list[str]) -> tuple[dict[str, list[str]], list[str]]:
+    """Return removed lines by file and deleted paths of one diff: the staged one (``["--cached"]``) or the one between two commits.
 
     A removed line that only named an input of a workflow or action (see ``input_line_numbers``) is left out: the input is gone, the name stays free.
     Each file version is read with one codec (see ``text_codec``), also for its removed lines. A changed file whose old or new version holds NUL bytes is
     binary: it is skipped and named in ``SKIPPED``, which the command prints.
     """
-    SKIPPED.clear()
-    refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
     old_ref, new_ref = (refs[0], refs[1]) if len(refs) == 2 else ("HEAD", "")
     deleted = git("diff", *refs, "--name-only", "--diff-filter=D").splitlines()
     removed: dict[str, list[str]] = {}
@@ -1423,6 +1423,12 @@ def declared_names(path: str, lines: list[str]) -> set[str]:
     return {key for line in lines if (key := config_key(line))} if suffix in CONFIG_SUFFIXES else set()
 
 
+@functools.cache
+def declared_in(path: str, text: str) -> frozenset[str]:
+    """``declared_names`` of one file text, kept for the run: a range of commits asks about the same unchanged files once per commit."""
+    return frozenset(declared_names(path, text.split("\n")))
+
+
 def live_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
     """Return the ``names`` that some remaining file declares as its own (``declared_names``).
 
@@ -1433,7 +1439,7 @@ def live_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
         text = "\n".join(lines)
         if not any(name in text for name in names - live) and not ("\\" in text and Path(path).suffix in STRUCTURED_SUFFIXES):
             continue
-        live |= declared_names(path, lines) & names
+        live |= declared_in(path, text) & names
     return live
 
 
@@ -1446,15 +1452,31 @@ def decoded_json_string(raw: str) -> str:
     return decoded if isinstance(decoded, str) else raw
 
 
-def changed_paths() -> list[str]:
-    """Return the paths the staged diff or, in CI, the pushed range modified or deleted, also when it only added lines to them."""
-    refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def diff_steps(per_commit: bool) -> list[list[str]]:
+    """The diffs the check reads: the staged one, or in CI the net diff of the pushed range, or with ``per_commit`` one per commit of it.
+
+    A merge is read against its first parent. One diff per commit sees a name that a branch adds and a later commit removes, which the net diff hides.
+    It costs a pass per commit, so only hosted CI asks.
+    """
+    if "PRE_COMMIT_FROM_REF" not in os.environ:
+        return [["--cached"]]
+    start, end = os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]
+    if not per_commit:
+        return [[start, end]]
+    listing = git("rev-list", "--parents", "--reverse", f"{start}..{end}").splitlines()
+    return [[f"{fields[0]}^" if fields[1:] else EMPTY_TREE, fields[0]] for fields in (line.split() for line in listing)]
+
+
+def changed_paths(refs: list[str]) -> list[str]:
+    """Return the paths one diff modified or deleted, also when it only added lines to them."""
     return git("diff", *refs, "--name-only", "--diff-filter=MD").splitlines()
 
 
-def before_texts(paths: list[str]) -> dict[str, list[str]]:
+def before_texts(paths: list[str], old_ref: str) -> dict[str, list[str]]:
     """Return the lines before the change of each changed or deleted file whose syntax this check reads (structured, Terraform and Python files)."""
-    old_ref = os.environ.get("PRE_COMMIT_FROM_REF", "HEAD")
     before: dict[str, list[str]] = {}
     for path in paths:
         if Path(path).suffix in STRUCTURED_SUFFIXES | {".tf", ".py"}:
@@ -1981,7 +2003,7 @@ def without_deferral_record(lines: list[str]) -> list[str]:
     return kept
 
 
-def removed_names() -> list[Finding]:
+def removed_names(per_commit: bool = False) -> list[Finding]:
     """A name the change removed is no longer referenced in any file that describes current behavior.
 
     Kinds: scripts, command-line flags, environment variables, config keys, Terraform declarations, dbt models and
@@ -1993,20 +2015,29 @@ def removed_names() -> list[Finding]:
     reading are listed in ``python_module_uses``. Unreadable import-root declarations stop the check when a Python file is deleted.
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
-    removed, deleted = changed_lines_and_deletions()
+    SKIPPED.clear()
     files = reference_files(record_skips=True)
-    before = before_texts(changed_paths())
-    kinds = removed_definitions(removed, deleted, files, before)
-    owners = lost_flags(before, files)
-    unchecked = mypy_uncovered_files() if kinds["python"] else set()
-    findings += deleted_modules_left(removed, deleted, files, allowed)
-    for kind, names in kinds.items():
+    kinds: dict[str, dict[tuple[str, str], tuple[str, re.Pattern[str]]]] = {}
+    owners: dict[str, set[str]] = {}
+    for refs in diff_steps(per_commit):
+        # One diff at a time finds what it removed; the text of every file is searched once, for the names of all the diffs.
+        removed, deleted = changed_lines_and_deletions(refs)
+        before = before_texts(changed_paths(refs), refs[0] if len(refs) == 2 else "HEAD")
+        for kind, names in removed_definitions(removed, deleted, files, before).items():
+            for name, pattern in names.items():
+                kinds.setdefault(kind, {})[(name, pattern.pattern)] = (name, pattern)
+        for name, paths in lost_flags(before, files).items():
+            owners.setdefault(name, set()).update(paths)
+        findings += deleted_modules_left(removed, deleted, files, allowed)
+    unchecked = mypy_uncovered_files() if kinds.get("python") else set()
+    for kind, found in kinds.items():
+        ordered = sorted(found.values(), key=lambda entry: entry[0])
         # The text searched in a file depends on the kind and the file, not on the name: read it once for all the names of the kind.
         views: dict[str, list[str] | None] = {}
         blobs: dict[str, str] = {}
-        for name, pattern in sorted(names.items()):
+        for name, pattern in ordered:
             for path, lines in files.items():
-                if kind == "flag" and path in owners[name]:
+                if kind == "flag" and path in owners.get(name, set()):
                     continue
                 if path not in views:
                     view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
@@ -2026,7 +2057,7 @@ def removed_names() -> list[Finding]:
                     if pattern.search(line):
                         fix = f"remove or update the reference, or add '{kind} {path} -- <why the reference stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
                         findings.append(Finding(f"{path}:{number}", f"{name} was removed but is still referenced", CLEANUP_RULE, fix))
-    return findings
+    return list({(finding.location, finding.problem): finding for finding in findings}.values())
 
 
 def json_task_ids(node: Any, where: str = "$") -> list[tuple[str | None, str, str]]:
@@ -2715,73 +2746,124 @@ def privacy_scan() -> tuple[list[Finding], list[str]]:
     return findings, unreviewed
 
 
-COMMIT_MARK = "\x01commit "
 HUNK_START = re.compile(r"@@ -\S+ \+(?P<start>\d+)")
 
 
-def pushed_revisions(tips: list[str], remote: str) -> list[str]:
-    """The ``git log`` arguments for the commits a push newly sends: every tip, not what the remote already holds (every remote when ``remote`` is empty)."""
-    return [*tips, "--not", f"--remotes={remote}" if remote else "--remotes"]
+class ScanFailure(Exception):
+    """A Git command of a pushed scan failed. The scan stops, because what it could not read it cannot call clean."""
 
 
-def pushed_added_lines(tips: list[str], remote: str) -> tuple[list[tuple[str, str, int, str]], list[str]]:
-    """The added lines of every commit a push newly sends, as (commit, path, line number, text), and the binary files it adds.
+@dataclass
+class PushedCommit:
+    sha: str
+    message: str
+    paths: list[str]
+    added: list[tuple[int, int, str]]  # (index of the file in ``paths``, line number, text)
+    binary: list[int]  # indexes of the binary files the commit adds or changes
 
-    A merge is read against its first parent. Each commit is read on its own, so a value added in one commit and removed in the next is seen.
+
+def scan_git(*args: str) -> str:
+    """Run Git for a pushed scan; a failed command raises ``ScanFailure`` naming it."""
+    result = run_command("git", args, errors="surrogateescape")
+    if result.returncode != 0:
+        named = [argument for argument in args if not argument.startswith("-")]
+        raise ScanFailure(f"git {named[0] if named else ''} failed (exit {result.returncode}), so the push cannot be scanned")
+    return result.stdout
+
+
+def pushed_scope(tips: list[str], excluded: list[str]) -> list[str]:
+    """The revision arguments of what a push sends: every tip, and not what the destination already holds."""
+    return [*tips, *(["--not", *excluded] if excluded else [])]
+
+
+def redacted(path: str) -> str:
+    """A path as a finding names it: its SHA-256 prefix and extension, never the name, which can hold the value it was found for."""
+    extension = re.sub(r"[^A-Za-z0-9.]", "", Path(path).suffix)[:8]
+    return hashlib.sha256(path.encode("utf-8", "surrogateescape")).hexdigest()[:12] + extension
+
+
+def pushed_commits(tips: list[str], excluded: list[str]) -> list[PushedCommit]:
+    """Every commit a push newly sends with its message, its paths (read NUL-delimited) and the lines its patch adds.
+
+    A merge is read against its first parent, so what only a merge introduces is seen. Each commit is read on its own, so a value that one commit adds and
+    a later one removes is seen. The patch and the path list come from the same diff, in the same order, and a disagreement between them stops the scan.
     """
-    log = git_text(
-        "-c",
-        "core.quotepath=false",
-        "log",
-        "--no-color",
-        "--no-renames",
-        "-p",
-        "-U0",
-        "--inter-hunk-context=0",
-        "--diff-merges=first-parent",
-        "--format=%x01commit %H",
-        *pushed_revisions(tips, remote),
-    )
-    added: list[tuple[str, str, int, str]] = []
-    binary: list[str] = []
-    commit, path, number, in_header = "", "", 0, False
-    for line in log.splitlines():
-        if line.startswith(COMMIT_MARK):
-            commit, path, in_header = line[len(COMMIT_MARK) :], "", False
+    if not tips:
+        return []
+    scope = pushed_scope(tips, excluded)
+    commits: list[PushedCommit] = []
+    tokens = scan_git("log", "-z", "--raw", "--no-renames", "--diff-merges=first-parent", "--format=%x01%H%x02%B", *scope, "--").split("\0")
+    index = 0
+    while index < len(tokens):
+        token = tokens[index].lstrip("\n")
+        if token.startswith("\x01"):
+            sha, _, message = token[1:].partition("\x02")
+            commits.append(PushedCommit(sha, message.rstrip("\n"), [], [], []))
+            index += 1
+        elif token.startswith(":") and commits and index + 1 < len(tokens):
+            commits[-1].paths.append(tokens[index + 1])
+            index += 2
+        elif token == "":
+            index += 1
+        else:
+            raise ScanFailure("git log gave an output the scan cannot read, so the push cannot be scanned")
+    by_sha = {commit.sha: commit for commit in commits}
+    patch = scan_git("log", "--no-color", "--no-renames", "-p", "-U0", "--inter-hunk-context=0", "--diff-merges=first-parent", "--format=%x01%H", *scope, "--")
+    current: PushedCommit | None = None
+    file_index, number, in_header = -1, 0, False
+    for line in patch.splitlines():
+        if line.startswith("\x01"):
+            current, file_index, in_header = by_sha.get(line[1:]), -1, False
+        elif current is None:
+            continue
         elif line.startswith("diff --git "):
-            path, in_header = "", True
-        elif in_header and (match := BINARY_DIFF.fullmatch(line)):
-            binary.append(f"{commit[:12]}:{match.group('new') or match.group('old') or ''}")
-        elif in_header and line.startswith("+++ "):
-            path = line[6:] if line.startswith("+++ b/") else ""
+            file_index, in_header = file_index + 1, True
+        elif in_header and BINARY_DIFF.fullmatch(line):
+            current.binary.append(file_index)
         elif line.startswith("@@"):
             in_header = False
             number = int(hunk.group("start")) if (hunk := HUNK_START.match(line)) else 0
-        elif not in_header and line.startswith("+") and path:
-            added.append((commit, path, number, line[1:]))
+        elif not in_header and line.startswith("+"):
+            current.added.append((file_index, number, line[1:]))
             number += 1
-    return added, binary
+    for commit in commits:
+        if any(entry[0] >= len(commit.paths) or entry[0] < 0 for entry in commit.added) or any(entry >= len(commit.paths) for entry in commit.binary):
+            raise ScanFailure(f"the patch and the file list of commit {commit.sha[:12]} disagree, so the push cannot be scanned")
+    return commits
 
 
 def tag_message(tag: str) -> str:
     """The message of a tag object: the text after its header, which holds the tagger's own name and address."""
-    return git_text("cat-file", "tag", tag).partition("\n\n")[2]
+    return scan_git("cat-file", "tag", tag).partition("\n\n")[2]
 
 
-def pushed_privacy_scan(tips: list[str], remote: str, tags: list[str]) -> tuple[list[Finding], list[str]]:
-    """Scan the lines every commit of a push adds, and the message of every pushed tag object, like ``privacy_scan`` scans files; never report the value."""
+def pushed_privacy_scan(tips: list[str], excluded: list[str], tags: list[str]) -> tuple[list[Finding], list[str]]:
+    """Scan each commit a push sends (message and added lines) and each pushed tag message like ``privacy_scan`` scans files; never report the value.
+
+    Known limits (owner decision, Nov 22 2026): the payload of a Git LFS file of an earlier commit is not read, and a file that cannot be read as text is
+    listed as unreviewed without failing. GitHub push protection is the backstop for secrets in both.
+    """
     allowed, findings = privacy_allowlist()
     values = env_values()
     descriptions = {kind: description for kind, (description, _) in PRIVACY_PATTERNS.items()} | {"env-value": "value declared in .env"}
-    added, binary = pushed_added_lines(tips, remote) if tips else ([], [])
-    for commit, path, number, line in added:
-        for kind in line_privacy(line, values):
-            if not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
-                findings.append(Finding(f"commit {commit[:12]}:{path}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX))
+    unreviewed: list[str] = []
+    for commit in pushed_commits(tips, excluded):
+        for number, line in enumerate(commit.message.splitlines(), 1):
+            findings += [
+                Finding(f"commit {commit.sha[:12]}:message:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX) for kind in line_privacy(line, values)
+            ]
+        for file_index, number, line in commit.added:
+            path = commit.paths[file_index]
+            for kind in line_privacy(line, values):
+                if not any(kind == entry_kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                    findings.append(Finding(f"commit {commit.sha[:12]}:{redacted(path)}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX))
+        unreviewed += [
+            f"commit {commit.sha[:12]}:{redacted(commit.paths[entry])}: unreviewed: cannot be read as text. Inspect it before publishing"
+            for entry in commit.binary
+        ]
     for tag in tags:
         for number, line in enumerate(tag_message(tag).splitlines(), 1):
             findings += [Finding(f"tag {tag[:12]}:{number}", descriptions[kind], PRIVACY_RULE, PRIVACY_FIX) for kind in line_privacy(line, values)]
-    unreviewed = [f"commit {entry}: unreviewed: cannot be read as text. Inspect it before publishing" for entry in binary]
     return findings, unreviewed
 
 
@@ -3077,8 +3159,9 @@ def main() -> int:
     parser.add_argument(
         "--tip", action="append", default=[], metavar="SHA", help="privacy-scan: scan the lines added by the commits a push sends, up to this tip"
     )
-    parser.add_argument("--remote", default="", help="privacy-scan with --tip: the remote whose commits a push does not send again (default: every remote)")
+    parser.add_argument("--exclude-file", metavar="FILE", help="privacy-scan with --tip: the object IDs the destination holds, one per line")
     parser.add_argument("--tag-object", action="append", default=[], metavar="SHA", help="privacy-scan: scan the message of this pushed tag object")
+    parser.add_argument("--per-commit", action="store_true", help="removed-names: read one diff per commit of the range, not its net diff (hosted CI)")
     parser.add_argument("--warn", action="store_true", help="report findings without failing: a check's warn period before it blocks")
     parser.add_argument("--articles", action="append", default=[], metavar="GLOB", help="writing-check: files that hold article text (em dashes)")
     parser.add_argument(
@@ -3107,7 +3190,12 @@ def run(args: argparse.Namespace) -> int:
         warn(warnings)
         return report(findings)
     if args.check == "privacy-scan":
-        findings, unreviewed = pushed_privacy_scan(args.tip, args.remote, args.tag_object) if args.tip or args.tag_object else privacy_scan()
+        try:
+            excluded = Path(args.exclude_file).read_text(encoding="utf-8").split() if args.exclude_file else []
+            findings, unreviewed = pushed_privacy_scan(args.tip, excluded, args.tag_object) if args.tip or args.tag_object else privacy_scan()
+        except ScanFailure as failure:
+            sys.stderr.write(f"privacy scan: {failure}\n")
+            return 2
         for line in unreviewed:
             sys.stderr.write(f"{line}\n")
         return warn(findings) if args.warn else report(findings)
@@ -3118,7 +3206,7 @@ def run(args: argparse.Namespace) -> int:
         "subprocess-imports": lambda: subprocess_imports(args.paths),
         "lint-settings": lint_settings,
         "env-example": env_example,
-        "removed-names": removed_names,
+        "removed-names": lambda: removed_names(args.per_commit),
         "task-ids": task_ids,
         "command-modules": missing_command_modules,
         "unused-code": unused_code,
