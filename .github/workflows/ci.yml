@@ -427,10 +427,10 @@ jobs:
             timeout: 40  # wall time 23.5 min, estimate: SQL style 1169 s (Terraform 751 s runs beside it)
           - part: core_configuration
             title: Core Configuration Checks
-            timeout: 50  # wall time 22 min, estimate: 21 commands, about 1000 s on the Mac (the owner list and host checks are Core Configuration Host Checks)
+            timeout: 50  # wall time 22 min, estimate: 21 commands, about 1000 s on the Mac (the host checks are Core Configuration Host Checks)
           - part: core_configuration_host
             title: Core Configuration Host Checks
-            timeout: 50  # wall time 22 min, estimate: 10 commands, about 1020 s on the Mac (the IAM preflight about 470 s, the owner list 374 s)
+            timeout: 50  # wall time 22 min, estimate: 10 commands, up to about 1180 s on the Mac (the IAM preflight about 470 s, the owner scripts 340 to 710 s)
           - part: core_terraform_proofs
             title: Core Terraform Proof Checks
             timeout: 30  # wall time 13 min, estimate: jobs host-only proof 157 s and retired definitions proof 374 s on the Mac plus about 4 minutes of setup and gates

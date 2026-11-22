@@ -102,7 +102,7 @@
       "job": "Core Configuration Host Checks",
       "measured_minutes": 21,
       "timeout_minutes": 50,
-      "basis": "estimate, Mac runs Nov 14 2026: 10 commands, about 1020 s (IAM preflight E2E 472 s, owner list E2E 374 s) plus about 4 minutes of setup and gates"
+      "basis": "estimate, Mac runs Nov 14 and Nov 21 2026: 10 commands, up to about 1180 s (IAM preflight E2E 472 s, owner scripts E2E 341 to 714 s) plus about 4 minutes of setup and gates"
     },
     {
       "job": "Core CI Tooling Checks",

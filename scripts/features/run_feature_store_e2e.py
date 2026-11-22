@@ -63,7 +63,7 @@ RUN = "features_00000001"
 RUN_B = "features_00000002"
 RUN_2 = "features_00000003"
 GOLD_RUN = "gold_0000ab01"
-# The values a case puts into an owner command list in place of its placeholders.
+# The values a case puts into the placeholders of a features override command line.
 OWNER_PLACEHOLDERS = {"<RUN_ID>": RUN, "<CODE_SHA256>": "ab" * 32, "<HOST_PRIVATE_IP>": "10.0.1.20", "<GOLD_RUN_ID>": GOLD_RUN}
 SUITE_FOLDER = "data_contracts/great_expectations/features"
 # The launcher jobs the publish_offline mode needs: the mode stays pending until the launcher defines them.
@@ -1966,8 +1966,8 @@ FEATURES_CONTAINER_SETS = {
 
 
 def single_path_value_cases(report: Report, layer_run: Any) -> None:
-    """F14 and F15: the single path's value ``all`` through the callers that give it. The override generator starts a features task with no set argument
-    (the arguments the owner command list gave before the Fargate layer lists were removed), and the layer driver runs every phase module with the task's
+    """F14 and F15: the single path's value ``all`` through the callers that give it. The override generator starts a features task with no set argument,
+    and the layer driver runs every phase module with the task's
     environment, where ``FEATURE_SET`` is ``all``."""
     arguments = (
         "--job features --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog"
