@@ -14,8 +14,7 @@ set -euo pipefail
 # (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
 # HAI_CI_REUSE=main (the local default) skips a group whose input hash matches a pass recorded by a full run on a commit of origin/main; off runs every group. A passed full run on
-# a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate sets HAI_CI_REUSE=gate: it reuses only its own earlier pass of a group that has a closure
-# check (reuse.closed in config/quality/ci_groups.json), on the same key, and drops the passes of a run that failed.
+# a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate never reuses.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. CI_ADMISSION_ONLY=1 runs the gates, checks that every worker has a limit, prints the workers and runs none. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
 # session and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
 # worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops every member
@@ -205,11 +204,6 @@ stop_workers() {
 finish() {
   # A stop that is not confirmed fails the run, also when everything else passed.
   stop_workers || ci_finished=0
-  # A gate run that did not finish (a failed worker, an error of this script, an interrupt or a deadline) drops the gate passes of the groups that ran, so a failure is never
-  # reused (scripts/quality/ci_main_passes.py drop).
-  if [[ "${gate_reuse_active:-0}" == 1 && "${ci_finished:-0}" != 1 ]]; then
-    "$python_bin" -m scripts.quality.ci_main_passes drop --groups ${run_groups[@]+"${run_groups[@]}"} || true
-  fi
   if [[ -s "$scratch/main.timing" ]]; then
     timing_table "${timing_files[@]}" >>"$summary"
   fi
@@ -244,34 +238,28 @@ if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 # Reuse of a group's pass from main (scripts/quality/ci_main_passes.py). HAI_CI_REUSE is "main" (the default for a local run) or "off" (the default on hosted CI). The pre-push
-# gate sets it to gate (its own passes of the groups with a closure check, in a folder of their own); HAI_DOCKER_RELEASE=outer (the gate's marker) forces any other value to off here. Only a full run of part all reuses and records
+# gate sets it to off, and HAI_DOCKER_RELEASE=outer (the gate's marker) forces it off here too: the gate never reuses a local pass. Only a full run of part all reuses and records
 # (no CI_UNITS, LAUNCHER_SHARD or FEATURE_SHARD). A group is reused only when a full run on a commit of origin/main recorded a pass with the same input hash.
 reuse_mode="${HAI_CI_REUSE:-}"
 if [[ -z "$reuse_mode" ]]; then
   if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then reuse_mode=off; else reuse_mode=main; fi
 fi
 case "$reuse_mode" in
-  main | gate | off) ;;
-  *) printf 'HAI_CI_REUSE must be main, gate or off, not %s\n' "$reuse_mode" >&2; exit 2 ;;
+  main | off) ;;
+  *) printf 'HAI_CI_REUSE must be main or off, not %s\n' "$reuse_mode" >&2; exit 2 ;;
 esac
-if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" && "$reuse_mode" != "gate" ]]; then reuse_mode=off; fi
+if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then reuse_mode=off; fi
 full_run=0
 if [[ "$part" == "all" && -z "${CI_UNITS:-}" && -z "${LAUNCHER_SHARD:-}" && -z "${FEATURE_SHARD:-}" ]]; then full_run=1; fi
-gate_reuse_active=0
-if [[ "$reuse_mode" == "gate" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then gate_reuse_active=1; fi
-if [[ ("$reuse_mode" == "main" || "$reuse_mode" == "gate") && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
+if [[ "$reuse_mode" == "main" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
   # Only a group the lookup names as reused leaves the run, so a lookup that fails or prints nothing runs every group.
   reused=" "
   while read -r kind group commit; do
     if [[ "$kind" == reuse ]]; then
-      if [[ "$reuse_mode" == gate ]]; then
-        printf 'reused %s: passed in an earlier gate run (commit %s) with an identical key and a passing closure check\n' "$group" "$commit" | tee -a "$summary"
-      else
-        printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary"
-      fi
+      printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary"
       reused+="$group "
     fi
-  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --mode "$reuse_mode" --identity "$scratch/gate_identity.json" --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
+  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
   kept=()
   for group in "${run_groups[@]}"; do
     [[ "$reused" == *" $group "* ]] || kept+=("$group")
@@ -874,9 +862,6 @@ fi
 
 if [[ "$reuse_mode" == "main" && "$full_run" == 1 && "$scope" == "full" && ${#run_groups[@]} -gt 0 ]]; then
   "$python_bin" -m scripts.quality.ci_main_passes record --groups "${run_groups[@]}" || printf 'Recording the passes failed; the run result stands\n'
-fi
-if ((gate_reuse_active)) && ((${#run_groups[@]})); then
-  "$python_bin" -m scripts.quality.ci_main_passes record --mode gate --identity "$scratch/gate_identity.json" --groups "${run_groups[@]}" || printf 'Recording the gate passes failed; the run result stands\n'
 fi
 printf '\nAll local CI checks passed without AWS credentials.\n'
 ci_finished=1

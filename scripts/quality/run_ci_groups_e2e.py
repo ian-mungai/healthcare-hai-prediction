@@ -53,7 +53,6 @@ import sys
 import tempfile
 import threading
 import time
-from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5780,7 +5779,7 @@ def gate_release_case(
         "since_is_the_run_start": before - 1 <= since <= after,
         "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
         "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
-        "run_ci_reuses_only_through_the_gate_mode": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "gate" for call in ci_calls),
+        "run_ci_never_reuses_under_the_gate": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "off" for call in ci_calls),
         "line_printed": f"pre-push: Docker release: {want_text}" in out,
         "report_entry": released.get("outcome") == want_outcome,
         "within_limit": seconds < seconds_limit,
@@ -6063,7 +6062,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
     matches = {
         "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
         "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
-        "gate_reuses_only_closed_groups_of_its_own_passes": local.get("env", {}).get("HAI_CI_REUSE") == "gate",
+        "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
         # The hosted jobs read the scope from the plan job: range for a pull request, which is the scope of a push range.
         "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
@@ -6087,7 +6086,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
             "case": "pre_push_full_plan_runs_the_full_scope_once",
             "passed": bool(full)
             and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "gate"}
+            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "off"}
             and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
             "steps": list(full_steps),
         }
@@ -6613,15 +6612,13 @@ GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text
 def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
     results = pass_record_cases(scratch)
-    results += gate_pass_cases(scratch)
-    results += gate_dispatch_cases(work, out, scratch)
     results += launcher_shard_cases(work, out)
     results.append(
         planted_case(
             "gate_without_the_reuse_switch",
             failing_step_release_case,
             scratch,
-            mutate=source_edit("**OUTER_RELEASE, **GATE_REUSE}", "**OUTER_RELEASE}"),
+            mutate=source_edit("**OUTER_RELEASE, **NO_REUSE}", "**OUTER_RELEASE}"),
         )
     )
     recordable = [group for group in GROUP_NAMES if group != "repository_hooks"]
@@ -6684,437 +6681,8 @@ def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
         results.append({"case": f"local_run_does_not_reuse_{label}", "passed": "reused " not in log and code == 0, "why": why, "exit": code})
     code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
     results.append(
-        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main, gate or off" in log and "TIMED" not in log}
+        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
     )
-    return results
-
-
-GATE_CLOSED = "launcher"
-GATE_OPEN = "python_lint"
-GATE_STUB = "scripts/quality/launcher_inputs.py"
-GATE_STUB_SOURCE = "import os\nimport sys\n\nsys.exit(int(os.environ.get('GATE_CLOSURE_EXIT', '0')))\n"
-# The launcher E2E verifies and reads the Git-ignored dbt package archive. The stand-in check names the first archive file below the root it is given, or fails.
-ARCHIVE_STUB = "scripts/lakehouse/dbt_package_archive.py"
-ARCHIVE_STUB_SOURCE = (
-    "import json\nimport sys\nfrom pathlib import Path\n\n"
-    "root = Path(sys.argv[sys.argv.index('--root') + 1])\n"
-    "files = sorted((root / 'data/analytics/dbt/package_archive').rglob('*.bin'))\n"
-    "if not files:\n    sys.stderr.write('missing\\n')\n    sys.exit(1)\n"
-    "print(json.dumps(str(files[0])))\n"
-)
-ARCHIVE_FILE = "data/analytics/dbt/package_archive/pin/archive.bin"
-
-
-def write_archive(root: Path, content: str = "archive v1") -> None:
-    (root / ARCHIVE_FILE).parent.mkdir(parents=True, exist_ok=True)
-    (root / ARCHIVE_FILE).write_text(content, encoding="utf-8")
-
-
-def gate_config(root: Path, closed: tuple[str, ...] = ()) -> None:
-    """Switch launcher reuse on in a tree (reuse.closed is empty in the repository) with a stand-in launcher input check (it exits with GATE_CLOSURE_EXIT)."""
-    path = root / "config/quality/ci_groups.json"
-    config = json.loads(path.read_text(encoding="utf-8"))
-    config["reuse"]["closed"] = [GATE_CLOSED, *closed]
-    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    (root / GATE_STUB).write_text(GATE_STUB_SOURCE, encoding="utf-8")
-    (root / ARCHIVE_STUB).write_text(ARCHIVE_STUB_SOURCE, encoding="utf-8")
-    write_archive(root)
-
-
-def gate_passes(
-    root: Path,
-    folder: Path,
-    command: str,
-    groups: list[str],
-    closure_exit: str = "0",
-    identity: Path | None = None,
-    environment: dict[str, str] | None = None,
-) -> tuple[str, dict[str, str]]:
-    """The pass-record module in gate mode: its output and the group lines of ``filter``. ``identity`` is the file of the keys taken before a run."""
-    variables = {
-        **os.environ,
-        "HAI_CI_PASSES_DIR": str(folder),
-        "GATE_CLOSURE_EXIT": closure_exit,
-        **(environment or {}),
-    }  # the PYTHON variables are part of the key
-    arguments = [] if command == "drop" else ["--mode", "gate", *(["--identity", str(identity)] if identity else [])]
-    result = run_command(str(PYTHON), ["-B", "-m", MAIN_PASSES, command, *arguments, "--groups", *groups], cwd=root, env=variables, timeout=300)
-    lines = [line.split() for line in result.stdout.splitlines()]
-    return result.stdout, defaultdict(lambda: "no answer", {line[1]: line[0] for line in lines if line and line[0] in {"reuse", "run"}})
-
-
-def gate_certify(root: Path, folder: Path, groups: list[str], **options: Any) -> str:
-    """What a gate run does around its groups: the lookup takes the identity of the inputs, and the record at the end certifies that identity."""
-    identity = folder.parent / f"{folder.name}_{root.name}_identity.json"
-    gate_passes(root, folder, "filter", groups, identity=identity, **options)
-    written, _ = gate_passes(root, folder, "record", groups, identity=identity, **options)
-    return written
-
-
-def gate_pass_repo(scratch: Path, name: str, closed: tuple[str, ...] = ()) -> Path:
-    root = passes_repo(scratch, name)
-    gate_config(root, closed)
-    (root / "config/quality_tools.json").write_text('{"tools": {}}\n')
-    (root / ".gitignore").write_text("data/\n__pycache__/\n")
-    probe_git(root, "add", "--all")
-    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "gate config")
-    return root
-
-
-def gate_pass_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The gate reuses a pass of a group with a closure check on the same key, never a failed one, and runs every other group."""
-    root = gate_pass_repo(scratch, "gate_passes")
-    folder = scratch / "gate_passes_records"
-    records = folder / "gate"
-    groups = [GATE_CLOSED, GATE_OPEN, "lakehouse_bronze"]
-    probe = "features/example.py"
-    (root / "features/untracked.py").write_text("dirty\n")
-    written = gate_certify(root, folder, groups)
-    _, same = gate_passes(root, folder, "filter", groups)
-    results = [
-        {
-            "case": "gate_pass_is_recorded_on_any_tree_and_reused_on_the_same_key",
-            "passed": sorted(path.stem for path in records.glob("*.json")) == [GATE_CLOSED]
-            and same == {GATE_CLOSED: "reuse", GATE_OPEN: "run", "lakehouse_bronze": "run"},
-            "written": written.strip()[:200],
-            "filter": same,
-        }
-    ]
-    (root / probe).write_text("changed\n")
-    _, changed = gate_passes(root, folder, "filter", groups)
-    results.append(
-        {
-            "case": "gate_pass_is_not_reused_after_an_input_changed",
-            "passed": GATE_CLOSED in affected(probe) and changed[GATE_CLOSED] == "run",
-            "filter": changed,
-        }
-    )
-    (root / probe).write_text("base\n")
-    (root / "features/untracked.py").unlink()
-    (root / "features/untracked.py").write_text("dirty\n")
-    _, back = gate_passes(root, folder, "filter", groups)
-    (root / "config/quality_tools.json").write_text('{"tools": {"uv": "next"}}\n')
-    _, tools = gate_passes(root, folder, "filter", groups)
-    (root / "config/quality_tools.json").write_text('{"tools": {}}\n')
-    results.append(
-        {
-            "case": "gate_pass_key_moves_with_the_tool_pins",
-            "passed": back[GATE_CLOSED] == "reuse" and tools[GATE_CLOSED] == "run",
-            "filter_after_restore": back,
-            "filter_after_the_tool_change": tools,
-        }
-    )
-    _, hidden = gate_passes(root, folder, "filter", groups, closure_exit="1")
-    refused = gate_certify(root, scratch / "gate_hidden_records", groups, closure_exit="1")
-    results.append(
-        {
-            "case": "gate_falls_back_to_running_when_the_closure_check_fails",
-            "passed": hidden[GATE_CLOSED] == "run" and "not recorded" in refused and not (scratch / "gate_hidden_records/gate").exists(),
-            "filter": hidden,
-            "record_output": refused.strip()[:200],
-        }
-    )
-    (records / f"{GATE_OPEN}.json").write_text((records / f"{GATE_CLOSED}.json").read_text(encoding="utf-8").replace(GATE_CLOSED, GATE_OPEN), encoding="utf-8")
-    _, open_group = gate_passes(root, folder, "filter", [GATE_OPEN])
-    listed = gate_pass_repo(scratch, "gate_passes_listed", closed=(GATE_OPEN,))
-    written_open = gate_certify(listed, scratch / "gate_listed_records", [GATE_OPEN])
-    _, listed_open = gate_passes(listed, scratch / "gate_listed_records", "filter", [GATE_OPEN])
-    results.append(
-        {
-            "case": "gate_never_reuses_a_group_without_a_closure_check",
-            "passed": open_group == {GATE_OPEN: "run"}
-            and listed_open == {GATE_OPEN: "run"}
-            and "not recorded" in written_open
-            and not (scratch / "gate_listed_records/gate").exists(),
-            "filter": open_group,
-            "listed_without_a_check": listed_open,
-            "record_output": written_open.strip()[:200],
-        }
-    )
-    main_folder = scratch / "gate_main_records"
-    passes(root, main_folder, "record", groups, extra=("--test-any-state",))
-    _, other_records = gate_passes(root, main_folder, "filter", groups)
-    results.append(
-        {
-            "case": "gate_does_not_read_the_passes_recorded_for_main",
-            "passed": all(mode == "run" for mode in other_records.values()),
-            "filter": other_records,
-        }
-    )
-    _, again = gate_passes(root, folder, "filter", [GATE_CLOSED])
-    dropped, _ = gate_passes(root, folder, "drop", [GATE_CLOSED])
-    _, after = gate_passes(root, folder, "filter", [GATE_CLOSED])
-    results.append(
-        {
-            "case": "gate_pass_of_a_failed_group_is_dropped_and_never_reused",
-            "passed": again == {GATE_CLOSED: "reuse"} and after == {GATE_CLOSED: "run"} and "dropped" in dropped,
-            "before": again,
-            "after": after,
-            "output": dropped.strip()[:200],
-        }
-    )
-    results += gate_environment_cases(scratch)
-    return results
-
-
-def gate_environment_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The key holds what the launcher E2E reads that Git does not track (the dbt package archive), the worktree, the installed packages and the inputs as the
-    run started: a pass is neither reused nor recorded when any of them differs."""
-    root = gate_pass_repo(scratch, "gate_env")
-    folder = scratch / "gate_env_records"
-    groups = [GATE_CLOSED]
-    gate_certify(root, folder, groups)
-    _, same = gate_passes(root, folder, "filter", groups)
-    write_archive(root, "archive v2")
-    _, changed = gate_passes(root, folder, "filter", groups)
-    write_archive(root)
-    _, restored = gate_passes(root, folder, "filter", groups)
-    (root / ARCHIVE_FILE).unlink()
-    _, removed = gate_passes(root, folder, "filter", groups)
-    removed_record = gate_certify(root, scratch / "gate_env_removed_records", groups)
-    write_archive(root)
-    results = [
-        {
-            "case": "gate_pass_is_not_reused_when_the_ignored_archive_is_changed_or_removed",
-            "passed": same == {GATE_CLOSED: "reuse"}
-            and changed == {GATE_CLOSED: "run"}
-            and restored == {GATE_CLOSED: "reuse"}
-            and removed == {GATE_CLOSED: "run"}
-            and "not recorded" in removed_record
-            and not (scratch / "gate_env_removed_records/gate").exists(),
-            "same": same,
-            "changed": changed,
-            "removed": removed,
-            "record_output": removed_record.strip()[:200],
-        }
-    ]
-    other = scratch / "gate_env_other_worktree"
-    probe_git(root, "worktree", "add", "--quiet", "--detach", str(other), "HEAD")
-    _, without_archive = gate_passes(other, folder, "filter", groups)
-    write_archive(other)
-    _, with_archive = gate_passes(other, folder, "filter", groups)
-    results.append(
-        {
-            "case": "gate_pass_is_not_inherited_by_another_worktree",
-            "passed": same == {GATE_CLOSED: "reuse"} and without_archive == {GATE_CLOSED: "run"} and with_archive == {GATE_CLOSED: "run"},
-            "without_the_archive": without_archive,
-            "with_the_archive": with_archive,
-        }
-    )
-    gate_certify(root, scratch / "gate_env_path_records", groups)
-    _, path_variable = gate_passes(root, scratch / "gate_env_path_records", "filter", groups, environment={"PYTHONPATH": str(scratch)})
-    _, startup_file = gate_passes(root, scratch / "gate_env_path_records", "filter", groups, environment={"PYTHONSTARTUP": str(scratch / "startup.py")})
-    _, same_again = gate_passes(root, scratch / "gate_env_path_records", "filter", groups)
-    results.append(
-        {
-            "case": "gate_pass_is_not_reused_when_a_python_variable_differs",
-            "passed": same_again == {GATE_CLOSED: "reuse"} and path_variable == {GATE_CLOSED: "run"} and startup_file == {GATE_CLOSED: "run"},
-            "same": same_again,
-            "python_path_set": path_variable,
-            "python_startup_set": startup_file,
-        }
-    )
-    results.append(environment_identity_case(scratch))
-    results.append(aws_account_identity_case(scratch))
-    started = scratch / "gate_env_started.json"
-    started_folder = scratch / "gate_env_started_records"
-    gate_passes(root, started_folder, "filter", groups, identity=started)
-    (root / "features/mid_run.py").write_text("edited during the run\n")
-    midrun, _ = gate_passes(root, started_folder, "record", groups, identity=started)
-    nothing_after_the_edit = not (started_folder / "gate").exists()
-    (root / "features/mid_run.py").unlink()
-    after_restore, _ = gate_passes(root, started_folder, "record", groups, identity=started)
-    nothing_before, _ = gate_passes(root, scratch / "gate_env_no_identity_records", "record", groups)
-    results.append(
-        {
-            "case": "gate_pass_is_not_recorded_when_an_input_changed_during_the_run",
-            "passed": "not recorded" in midrun and nothing_after_the_edit and "recorded launcher" in after_restore and "not recorded" in nothing_before,
-            "mid_run": midrun.strip()[:200],
-            "restored": after_restore.strip()[:200],
-            "without_an_identity": nothing_before.strip()[:200],
-        }
-    )
-    return results
-
-
-def environment_identity_case(scratch: Path) -> dict[str, Any]:
-    """The environment identity follows an installed package (version, removal), a .pth or sitecustomize file, a PYTHON variable and the interpreter."""
-    from scripts.quality import ci_main_passes
-
-    site = scratch / "identity_site"
-    metadata = site / "gatepkg-1.0.dist-info/METADATA"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text("Metadata-Version: 2.1\nName: gatepkg\nVersion: 1.0\n", encoding="utf-8")
-    seen: dict[str, str] = {}
-    with mock.patch.object(sys, "path", [str(site)]):
-        seen["base"] = ci_main_passes.environment_identity()
-        seen["repeat"] = ci_main_passes.environment_identity()
-        metadata.write_text("Metadata-Version: 2.1\nName: gatepkg\nVersion: 2.0\n", encoding="utf-8")
-        seen["version"] = ci_main_passes.environment_identity()
-        metadata.write_text("Metadata-Version: 2.1\nName: gatepkg\nVersion: 1.0\n", encoding="utf-8")
-        (site / "planted.pth").write_text("import os\n", encoding="utf-8")
-        seen["pth"] = ci_main_passes.environment_identity()
-        (site / "planted.pth").write_text("import sys\n", encoding="utf-8")
-        seen["pth_edited"] = ci_main_passes.environment_identity()
-        (site / "planted.pth").unlink()
-        (site / "sitecustomize.py").write_text("x = 1\n", encoding="utf-8")
-        seen["sitecustomize"] = ci_main_passes.environment_identity()
-        (site / "sitecustomize.py").unlink()
-        shutil.rmtree(metadata.parent)
-        seen["removed"] = ci_main_passes.environment_identity()
-        metadata.parent.mkdir()
-        metadata.write_text("Metadata-Version: 2.1\nName: gatepkg\nVersion: 1.0\n", encoding="utf-8")
-        with mock.patch.dict(os.environ, {"PYTHONPATH": str(scratch)}):
-            seen["python_variable"] = ci_main_passes.environment_identity()
-        with mock.patch.object(sys, "executable", str(scratch / "other_python")):
-            seen["interpreter"] = ci_main_passes.environment_identity()
-    distinct = {name: value for name, value in seen.items() if name != "repeat"}
-    return {
-        "case": "gate_environment_identity_follows_the_packages_startup_files_variables_and_interpreter",
-        "passed": seen["base"] == seen["repeat"] and len(set(distinct.values())) == len(distinct),
-        "same_as_base": sorted(name for name, value in distinct.items() if value == seen["base"] and name != "base"),
-    }
-
-
-def aws_account_identity_case(scratch: Path) -> dict[str, Any]:
-    """The key holds the AWS config and credentials files of the account (the launcher E2E opens them): their content and their absence change the identity."""
-    from scripts.quality import ci_main_passes
-
-    home = scratch / "identity_home"
-    (home / ".aws").mkdir(parents=True)
-    seen: dict[str, str] = {}
-    with mock.patch.object(ci_main_passes, "account_home", lambda: home):
-        seen["absent"] = ci_main_passes.aws_account_identity(scratch)
-        (home / ".aws/config").write_text("[default]\nregion = a\n", encoding="utf-8")
-        seen["config"] = ci_main_passes.aws_account_identity(scratch)
-        seen["config_again"] = ci_main_passes.aws_account_identity(scratch)
-        (home / ".aws/config").write_text("[default]\nregion = b\n", encoding="utf-8")
-        seen["config_edited"] = ci_main_passes.aws_account_identity(scratch)
-        (home / ".aws/credentials").write_text("[default]\n", encoding="utf-8")
-        seen["credentials"] = ci_main_passes.aws_account_identity(scratch)
-    distinct = [seen[name] for name in ("absent", "config", "config_edited", "credentials")]
-    return {
-        "case": "gate_key_holds_the_aws_account_files",
-        "passed": seen["config"] == seen["config_again"] and len(set(distinct)) == 4 and "[default]" not in "".join(seen.values()),
-        "distinct": len(set(distinct)),
-    }
-
-
-def gate_dry_run(
-    work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None, fail_shard: str = ""
-) -> tuple[int, str]:
-    """A dry run of the dispatcher in gate mode after a gate record of python_lint made inside the run's own state."""
-
-    def prepare(tree: Path) -> None:
-        gate_config(tree)
-        if record:
-            gate_certify(tree, folder, [GATE_CLOSED])
-        if edit:
-            edit(tree)
-
-    return dry_run(
-        work,
-        out,
-        label,
-        {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "gate", **env},
-        fail_shard=fail_shard,
-        prepare=prepare,
-    )
-
-
-def gate_dispatch_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
-    """The dispatcher reuses a gate pass only in gate mode, runs every other group, and writes or drops records by the result of the run."""
-    folder = scratch / "gate_dispatch_reuse"
-    code, log = gate_dry_run(work, out, "gate_reuse_on", {}, folder)
-    items = local_plan_of(log)["items"]
-    results = [
-        {
-            "case": "gate_run_reuses_the_recorded_closed_group_and_runs_the_others",
-            "passed": code == 0
-            and f"reused {GATE_CLOSED}:" in log
-            and "TIMED launcher E2E" not in log
-            and GATE_OPEN in items
-            and "lakehouse_bronze" in items
-            and "sql_style" in items,
-            "exit": code,
-            "items": items,
-        }
-    ]
-
-    def add_probe(tree: Path) -> None:
-        (tree / "features").mkdir(exist_ok=True)
-        (tree / "features/gate_probe.py").write_text("EXAMPLE = 1\n")
-
-    code, log = gate_dry_run(work, out, "gate_reuse_changed_input", {}, scratch / "gate_dispatch_changed", edit=add_probe)
-    results.append(
-        {
-            "case": "gate_run_reruns_a_group_whose_input_changed",
-            "passed": code == 0 and f"reused {GATE_CLOSED}:" not in log and "TIMED launcher E2E" in log and GATE_CLOSED in affected("features/gate_probe.py"),
-            "exit": code,
-        }
-    )
-    code, log = gate_dry_run(work, out, "gate_reuse_closure_fails", {"GATE_CLOSURE_EXIT": "1"}, scratch / "gate_dispatch_closure")
-    results.append(
-        {
-            "case": "gate_run_runs_a_group_whose_closure_check_fails",
-            "passed": code == 0 and f"reused {GATE_CLOSED}:" not in log and "TIMED launcher E2E" in log,
-            "exit": code,
-        }
-    )
-
-    def add_failed_probe(tree: Path) -> None:
-        (tree / "features/gate_failed_probe.py").write_text("EXAMPLE = 2\n")
-
-    code, log = gate_dry_run(work, out, "gate_failed_run", {}, scratch / "gate_dispatch_failed", edit=add_failed_probe, fail_shard="2")
-    results.append(
-        {
-            "case": "gate_run_that_fails_leaves_no_record_and_drops_the_stale_one",
-            "passed": code != 0
-            and f"reused {GATE_CLOSED}:" not in log
-            and f"dropped {GATE_CLOSED}" in log
-            and not (scratch / "gate_dispatch_failed/gate" / f"{GATE_CLOSED}.json").exists(),
-            "exit": code,
-        }
-    )
-
-    def edit_during_the_run(tree: Path) -> None:
-        stub = tree / "scripts/acquisition/run_checks.sh"
-        stub.write_text(stub.read_text(encoding="utf-8") + "printf 'edited during the run\\n' >> features/gate_mid_run.py\n", encoding="utf-8")
-
-    code, log = gate_dry_run(work, out, "gate_mid_run_edit", {}, scratch / "gate_dispatch_midrun", record=False, edit=edit_during_the_run)
-    results.append(
-        {
-            "case": "gate_run_does_not_record_a_pass_when_an_input_was_edited_during_the_run",
-            "passed": code == 0 and "TIMED launcher E2E" in log and not (scratch / "gate_dispatch_midrun/gate" / f"{GATE_CLOSED}.json").exists(),
-            "exit": code,
-        }
-    )
-
-    def change_an_input_and_remove_a_body_file(tree: Path) -> None:
-        add_failed_probe(tree)
-        (tree / GROUP_FILES / "lakehouse_silver.sh").unlink()
-
-    code, log = gate_dry_run(work, out, "gate_aborted_run", {}, scratch / "gate_dispatch_aborted", edit=change_an_input_and_remove_a_body_file)
-    results.append(
-        {
-            "case": "gate_run_that_stops_without_a_failed_worker_still_drops_the_stale_record",
-            "passed": code != 0
-            and "missing or not readable" in log
-            and f"dropped {GATE_CLOSED}" in log
-            and not (scratch / "gate_dispatch_aborted/gate" / f"{GATE_CLOSED}.json").exists(),
-            "exit": code,
-        }
-    )
-    code, log = gate_dry_run(work, out, "gate_passed_run", {}, scratch / "gate_dispatch_passed", record=False)
-    results.append(
-        {
-            "case": "gate_run_that_passes_records_the_group",
-            "passed": code == 0 and (scratch / "gate_dispatch_passed/gate" / f"{GATE_CLOSED}.json").is_file() and f"reused {GATE_CLOSED}:" not in log,
-            "exit": code,
-        }
-    )
-    code, log = gate_dry_run(work, out, "gate_mode_with_the_main_default", {"HAI_CI_REUSE": "main"}, scratch / "gate_dispatch_main", record=False)
-    results.append({"case": "gate_marker_with_main_mode_still_runs_everything", "passed": code == 0 and "reused " not in log, "exit": code})
     return results
 
 
