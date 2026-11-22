@@ -53,7 +53,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5721,7 +5721,7 @@ def gate_release_case(
         "since_is_the_run_start": before - 1 <= since <= after,
         "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
         "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
-        "run_ci_never_reuses_under_the_gate": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "off" for call in ci_calls),
+        "run_ci_reuses_only_through_the_gate_mode": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "gate" for call in ci_calls),
         "line_printed": f"pre-push: Docker release: {want_text}" in out,
         "report_entry": released.get("outcome") == want_outcome,
         "within_limit": seconds < seconds_limit,
@@ -6004,7 +6004,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
     matches = {
         "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
         "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
-        "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
+        "gate_reuses_only_closed_groups_of_its_own_passes": local.get("env", {}).get("HAI_CI_REUSE") == "gate",
         "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
         # The hosted jobs read the scope from the plan job: range for a pull request, which is the scope of a push range.
         "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
@@ -6028,7 +6028,7 @@ def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[d
             "case": "pre_push_full_plan_runs_the_full_scope_once",
             "passed": bool(full)
             and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "off"}
+            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "gate"}
             and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
             "steps": list(full_steps),
         }
@@ -6554,13 +6554,15 @@ GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text
 def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
     """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
     results = pass_record_cases(scratch)
+    results += gate_pass_cases(scratch)
+    results += gate_dispatch_cases(work, out, scratch)
     results += launcher_shard_cases(work, out)
     results.append(
         planted_case(
             "gate_without_the_reuse_switch",
             failing_step_release_case,
             scratch,
-            mutate=source_edit("**OUTER_RELEASE, **NO_REUSE}", "**OUTER_RELEASE}"),
+            mutate=source_edit("**OUTER_RELEASE, **GATE_REUSE}", "**OUTER_RELEASE}"),
         )
     )
     recordable = [group for group in GROUP_NAMES if group != "repository_hooks"]
@@ -6623,8 +6625,231 @@ def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
         results.append({"case": f"local_run_does_not_reuse_{label}", "passed": "reused " not in log and code == 0, "why": why, "exit": code})
     code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
     results.append(
-        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
+        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main, gate or off" in log and "TIMED" not in log}
     )
+    return results
+
+
+GATE_CLOSED = "launcher"
+GATE_OPEN = "python_lint"
+GATE_STUB = "scripts/quality/launcher_inputs.py"
+GATE_STUB_SOURCE = "import os\nimport sys\n\nsys.exit(int(os.environ.get('GATE_CLOSURE_EXIT', '0')))\n"
+
+
+def gate_config(root: Path, closed: tuple[str, ...] = ()) -> None:
+    """Put a stand-in launcher input check in a tree (it exits with GATE_CLOSURE_EXIT), and name more groups in reuse.closed when asked."""
+    if closed:
+        path = root / "config/quality/ci_groups.json"
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config["reuse"]["closed"] = [*config["reuse"]["closed"], *closed]
+        path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    (root / GATE_STUB).write_text(GATE_STUB_SOURCE, encoding="utf-8")
+
+
+def gate_passes(root: Path, folder: Path, command: str, groups: list[str], closure_exit: str = "0") -> tuple[str, dict[str, str]]:
+    """The pass-record module in gate mode: its output and the group lines of ``filter``."""
+    environment = {**os.environ, "HAI_CI_PASSES_DIR": str(folder), "GATE_CLOSURE_EXIT": closure_exit, "PYTHONDONTWRITEBYTECODE": "1"}
+    result = run_command(
+        str(PYTHON),
+        ["-B", "-m", MAIN_PASSES, command, *([] if command == "drop" else ["--mode", "gate"]), "--groups", *groups],
+        cwd=root,
+        env=environment,
+        timeout=300,
+    )
+    lines = [line.split() for line in result.stdout.splitlines()]
+    return result.stdout, defaultdict(lambda: "no answer", {line[1]: line[0] for line in lines if line and line[0] in {"reuse", "run"}})
+
+
+def gate_pass_repo(scratch: Path, name: str, closed: tuple[str, ...] = ()) -> Path:
+    root = passes_repo(scratch, name)
+    gate_config(root, closed)
+    (root / "config/quality_tools.json").write_text('{"tools": {}}\n')
+    probe_git(root, "add", "--all")
+    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "gate config")
+    return root
+
+
+def gate_pass_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The gate reuses a pass of a group with a closure check on the same key, never a failed one, and runs every other group."""
+    root = gate_pass_repo(scratch, "gate_passes")
+    folder = scratch / "gate_passes_records"
+    records = folder / "gate"
+    groups = [GATE_CLOSED, GATE_OPEN, "lakehouse_bronze"]
+    probe = "features/example.py"
+    (root / "features/untracked.py").write_text("dirty\n")
+    written, _ = gate_passes(root, folder, "record", groups)
+    _, same = gate_passes(root, folder, "filter", groups)
+    results = [
+        {
+            "case": "gate_pass_is_recorded_on_any_tree_and_reused_on_the_same_key",
+            "passed": sorted(path.stem for path in records.glob("*.json")) == [GATE_CLOSED]
+            and same == {GATE_CLOSED: "reuse", GATE_OPEN: "run", "lakehouse_bronze": "run"},
+            "written": written.strip()[:200],
+            "filter": same,
+        }
+    ]
+    (root / probe).write_text("changed\n")
+    _, changed = gate_passes(root, folder, "filter", groups)
+    results.append(
+        {
+            "case": "gate_pass_is_not_reused_after_an_input_changed",
+            "passed": GATE_CLOSED in affected(probe) and changed[GATE_CLOSED] == "run",
+            "filter": changed,
+        }
+    )
+    (root / probe).write_text("base\n")
+    (root / "features/untracked.py").unlink()
+    (root / "features/untracked.py").write_text("dirty\n")
+    _, back = gate_passes(root, folder, "filter", groups)
+    (root / "config/quality_tools.json").write_text('{"tools": {"uv": "next"}}\n')
+    _, tools = gate_passes(root, folder, "filter", groups)
+    (root / "config/quality_tools.json").write_text('{"tools": {}}\n')
+    results.append(
+        {
+            "case": "gate_pass_key_moves_with_the_tool_pins",
+            "passed": back[GATE_CLOSED] == "reuse" and tools[GATE_CLOSED] == "run",
+            "filter_after_restore": back,
+            "filter_after_the_tool_change": tools,
+        }
+    )
+    _, hidden = gate_passes(root, folder, "filter", groups, closure_exit="1")
+    refused, _ = gate_passes(root, scratch / "gate_hidden_records", "record", groups, closure_exit="1")
+    results.append(
+        {
+            "case": "gate_falls_back_to_running_when_the_closure_check_fails",
+            "passed": hidden[GATE_CLOSED] == "run" and "not recorded" in refused and not (scratch / "gate_hidden_records/gate").exists(),
+            "filter": hidden,
+            "record_output": refused.strip()[:200],
+        }
+    )
+    (records / f"{GATE_OPEN}.json").write_text((records / f"{GATE_CLOSED}.json").read_text(encoding="utf-8").replace(GATE_CLOSED, GATE_OPEN), encoding="utf-8")
+    _, open_group = gate_passes(root, folder, "filter", [GATE_OPEN])
+    listed = gate_pass_repo(scratch, "gate_passes_listed", closed=(GATE_OPEN,))
+    written_open, _ = gate_passes(listed, scratch / "gate_listed_records", "record", [GATE_OPEN])
+    _, listed_open = gate_passes(listed, scratch / "gate_listed_records", "filter", [GATE_OPEN])
+    results.append(
+        {
+            "case": "gate_never_reuses_a_group_without_a_closure_check",
+            "passed": open_group == {GATE_OPEN: "run"}
+            and listed_open == {GATE_OPEN: "run"}
+            and "not recorded" in written_open
+            and not (scratch / "gate_listed_records/gate").exists(),
+            "filter": open_group,
+            "listed_without_a_check": listed_open,
+            "record_output": written_open.strip()[:200],
+        }
+    )
+    main_folder = scratch / "gate_main_records"
+    passes(root, main_folder, "record", groups, extra=("--test-any-state",))
+    _, other_records = gate_passes(root, main_folder, "filter", groups)
+    results.append(
+        {
+            "case": "gate_does_not_read_the_passes_recorded_for_main",
+            "passed": all(mode == "run" for mode in other_records.values()),
+            "filter": other_records,
+        }
+    )
+    _, again = gate_passes(root, folder, "filter", [GATE_CLOSED])
+    dropped, _ = gate_passes(root, folder, "drop", [GATE_CLOSED])
+    _, after = gate_passes(root, folder, "filter", [GATE_CLOSED])
+    results.append(
+        {
+            "case": "gate_pass_of_a_failed_group_is_dropped_and_never_reused",
+            "passed": again == {GATE_CLOSED: "reuse"} and after == {GATE_CLOSED: "run"} and "dropped" in dropped,
+            "before": again,
+            "after": after,
+            "output": dropped.strip()[:200],
+        }
+    )
+    return results
+
+
+def gate_dry_run(
+    work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None, fail_shard: str = ""
+) -> tuple[int, str]:
+    """A dry run of the dispatcher in gate mode after a gate record of python_lint made inside the run's own state."""
+
+    def prepare(tree: Path) -> None:
+        gate_config(tree)
+        if record:
+            gate_passes(tree, folder, "record", [GATE_CLOSED])
+        if edit:
+            edit(tree)
+
+    return dry_run(
+        work,
+        out,
+        label,
+        {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "gate", **env},
+        fail_shard=fail_shard,
+        prepare=prepare,
+    )
+
+
+def gate_dispatch_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
+    """The dispatcher reuses a gate pass only in gate mode, runs every other group, and writes or drops records by the result of the run."""
+    folder = scratch / "gate_dispatch_reuse"
+    code, log = gate_dry_run(work, out, "gate_reuse_on", {}, folder)
+    items = local_plan_of(log)["items"]
+    results = [
+        {
+            "case": "gate_run_reuses_the_recorded_closed_group_and_runs_the_others",
+            "passed": code == 0
+            and f"reused {GATE_CLOSED}:" in log
+            and "TIMED launcher E2E" not in log
+            and GATE_OPEN in items
+            and "lakehouse_bronze" in items
+            and "sql_style" in items,
+            "exit": code,
+            "items": items,
+        }
+    ]
+
+    def add_probe(tree: Path) -> None:
+        (tree / "features").mkdir(exist_ok=True)
+        (tree / "features/gate_probe.py").write_text("EXAMPLE = 1\n")
+
+    code, log = gate_dry_run(work, out, "gate_reuse_changed_input", {}, scratch / "gate_dispatch_changed", edit=add_probe)
+    results.append(
+        {
+            "case": "gate_run_reruns_a_group_whose_input_changed",
+            "passed": code == 0 and f"reused {GATE_CLOSED}:" not in log and "TIMED launcher E2E" in log and GATE_CLOSED in affected("features/gate_probe.py"),
+            "exit": code,
+        }
+    )
+    code, log = gate_dry_run(work, out, "gate_reuse_closure_fails", {"GATE_CLOSURE_EXIT": "1"}, scratch / "gate_dispatch_closure")
+    results.append(
+        {
+            "case": "gate_run_runs_a_group_whose_closure_check_fails",
+            "passed": code == 0 and f"reused {GATE_CLOSED}:" not in log and "TIMED launcher E2E" in log,
+            "exit": code,
+        }
+    )
+
+    def add_failed_probe(tree: Path) -> None:
+        (tree / "features/gate_failed_probe.py").write_text("EXAMPLE = 2\n")
+
+    code, log = gate_dry_run(work, out, "gate_failed_run", {}, scratch / "gate_dispatch_failed", edit=add_failed_probe, fail_shard="2")
+    results.append(
+        {
+            "case": "gate_run_that_fails_leaves_no_record_and_drops_the_stale_one",
+            "passed": code != 0
+            and f"reused {GATE_CLOSED}:" not in log
+            and f"dropped {GATE_CLOSED}" in log
+            and not (scratch / "gate_dispatch_failed/gate" / f"{GATE_CLOSED}.json").exists(),
+            "exit": code,
+        }
+    )
+    code, log = gate_dry_run(work, out, "gate_passed_run", {}, scratch / "gate_dispatch_passed", record=False)
+    results.append(
+        {
+            "case": "gate_run_that_passes_records_the_group",
+            "passed": code == 0 and (scratch / "gate_dispatch_passed/gate" / f"{GATE_CLOSED}.json").is_file() and f"reused {GATE_CLOSED}:" not in log,
+            "exit": code,
+        }
+    )
+    code, log = gate_dry_run(work, out, "gate_mode_with_the_main_default", {"HAI_CI_REUSE": "main"}, scratch / "gate_dispatch_main", record=False)
+    results.append({"case": "gate_marker_with_main_mode_still_runs_everything", "passed": code == 0 and "reused " not in log, "exit": code})
     return results
 
 

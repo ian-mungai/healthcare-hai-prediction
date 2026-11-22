@@ -419,6 +419,9 @@
   "reuse": {
     "never": [
       "repository_hooks"
+    ],
+    "closed": [
+      "launcher"
     ]
   },
   "pre_push": {

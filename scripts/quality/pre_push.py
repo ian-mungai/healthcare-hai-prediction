@@ -74,8 +74,8 @@ TEMP_PREFIX = "refs/heads/temp/"
 SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
 # The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
 OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
-# The gate never reuses a local pass of a check group (scripts/quality/ci_main_passes.py).
-NO_REUSE = {"HAI_CI_REUSE": "off"}
+# The gate reuses only its own pass of a group with a closure check, on the same key, never one recorded for main or a failed one (ci_main_passes.py).
+GATE_REUSE = {"HAI_CI_REUSE": "gate"}
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
     "CI_TIMING_FILE",
@@ -250,7 +250,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
                 "name": "local_ci",
                 "kind": "run_ci",
                 "arguments": [],
-                "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE, **NO_REUSE},
+                "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE, **GATE_REUSE},
             }
         )
         if not small:
@@ -272,7 +272,7 @@ def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict
                 for group in config["hook_groups"]
             ]
     else:
-        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE, **NO_REUSE}})
+        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE, **GATE_REUSE}})
     scan_files = ["--from-ref", start, "--to-ref", end] if start and end else ["--all-files"]
     steps.append({"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}})
     first = (
