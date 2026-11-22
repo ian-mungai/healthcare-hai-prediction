@@ -411,6 +411,31 @@ def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
     for step in verdicts:
         if str(step.get("env", {}).get("REUSE", "")) != "${{ needs.plan.outputs.reuse }}":
             problems.append("the verdict step must read the plan's reuse answer as REUSE")
+    # needs.<job>.result is success for a matrix leg that was cancelled before a runner picked it up, so the job also lists the jobs of this run attempt.
+    if gate.get("permissions") != {"actions": "read", "contents": "read"}:
+        problems.append(f"CI Checks needs read access to the jobs of the run (and to the script it checks out), and nothing more: {gate.get('permissions')!r}")
+    steps = gate.get("steps", [])
+    listing = [step for step in steps if "gh api --paginate" in str(step.get("run", "")) and "ci_gate_jobs.sh" in str(step.get("run", ""))]
+    if not listing:
+        problems.append("CI Checks has no step that lists the jobs of this run attempt with gh api and checks them with .github/scripts/ci_gate_jobs.sh")
+    for step in listing:
+        text = str(step.get("run", ""))
+        if "/attempts/" not in text or "--jq" not in text:
+            problems.append("the listing step must read the jobs of this run attempt (/attempts/<attempt>/jobs) with --jq")
+        if (
+            str(step.get("env", {}).get("GH_TOKEN", "")) != "${{ github.token }}"
+            or str(step.get("env", {}).get("REUSE", "")) != "${{ needs.plan.outputs.reuse }}"
+        ):
+            problems.append("the listing step must get GH_TOKEN from github.token and the plan's reuse answer as REUSE")
+        if steps.index(step) < max((steps.index(item) for item in verdicts), default=0):
+            problems.append("the listing step must come after the needs verdict")
+    checkouts = [
+        step
+        for step in steps
+        if str(step.get("uses", "")).startswith("actions/checkout@") and ".github/scripts" in str(step.get("with", {}).get("sparse-checkout", ""))
+    ]
+    if listing and not checkouts:
+        problems.append("CI Checks must check out .github/scripts (sparse) for the listing script")
     return problems
 
 
@@ -460,6 +485,69 @@ def ci_gate_behavior_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+JOBS_SCRIPT = ".github/scripts/ci_gate_jobs.sh"
+JOBS_FILE = "data/e2e/ci_reuse/ci_gate_jobs.tsv"
+QUICK_GATES = "Quick Gates of a Reused Result"
+
+
+def ci_listing_verdict(rows: list[tuple[str, str, str]], reuse: str) -> tuple[int, str]:
+    """Run the job listing script against a synthetic listing (name, status, conclusion per job); return its exit status and what it printed."""
+    (ROOT / JOBS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (ROOT / JOBS_FILE).write_text("".join("\t".join(row) + "\n" for row in rows), encoding="utf-8")
+    environment = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "GATE_JOBS_FILE": str(ROOT / JOBS_FILE), "REUSE": reuse, "GITHUB_STEP_SUMMARY": "/dev/null"}
+    result = run_command("/bin/bash", [str(ROOT / JOBS_SCRIPT)], env=environment, timeout=60)
+    return result.returncode, result.stdout + result.stderr
+
+
+def ci_listing_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The listing script of CI Checks against synthetic listings of the real job names: all green passes; a leg that was cancelled (the needs verdict then
+    still says success), queued, running or failed fails and is named; a skip is allowed only when the plan reuses a result, and then the quick gates
+    must have succeeded."""
+    names = [name for name in expanded_names(jobs) if name not in {"CI Checks", QUICK_GATES}]
+    leg = "Feature Sources (Shard 7 of 16)" if "Feature Sources (Shard 7 of 16)" in names else names[-1]
+    me = ("CI Checks", "in_progress", "")
+
+    def listing(changes: dict[str, tuple[str, str]], quick: tuple[str, str] = ("completed", "skipped")) -> list[tuple[str, str, str]]:
+        rows = [(name, *changes.get(name, ("completed", "success"))) for name in names]
+        return [*rows, (QUICK_GATES, *quick), me]
+
+    reused = {name: ("completed", "skipped") for name in names}
+    needs_say_success = ci_gate_verdict(jobs, {"reused_gates": "skipped"}, "false")
+    results: dict[str, tuple[int, str]] = {
+        "all_green": ci_listing_verdict(listing({}), "false"),
+        "a_cancelled_leg": ci_listing_verdict(listing({leg: ("completed", "cancelled")}), "false"),
+        "a_queued_leg": ci_listing_verdict(listing({leg: ("queued", "")}), "false"),
+        "a_running_leg": ci_listing_verdict(listing({leg: ("in_progress", "")}), "false"),
+        "a_failed_leg": ci_listing_verdict(listing({leg: ("completed", "failure")}), "false"),
+        "a_skipped_leg_without_reuse": ci_listing_verdict(listing({leg: ("completed", "skipped")}), "false"),
+        "two_bad_legs": ci_listing_verdict(listing({leg: ("completed", "cancelled"), names[0]: ("completed", "failure")}), "false"),
+        "quick_gates_that_ran_without_reuse": ci_listing_verdict(listing({}, quick=("completed", "success")), "false"),
+        "a_verified_reuse": ci_listing_verdict(listing(reused, quick=("completed", "success")), "true"),
+        "a_reuse_run_whose_quick_gates_were_skipped": ci_listing_verdict(listing(reused), "true"),
+        "a_reuse_run_with_a_cancelled_job": ci_listing_verdict(listing({**reused, leg: ("completed", "cancelled")}, quick=("completed", "success")), "true"),
+        "an_empty_listing": ci_listing_verdict([], "false"),
+    }
+    named = {"a_cancelled_leg", "a_queued_leg", "a_running_leg", "a_failed_leg", "a_skipped_leg_without_reuse", "a_reuse_run_with_a_cancelled_job"}
+    expected = {name: 0 if name in {"all_green", "a_verified_reuse"} else 1 for name in results}
+    cases = [
+        {
+            "case": f"ci_checks_job_listing_{name}",
+            "passed": code == expected[name] and (name not in named or leg in text) and (name != "two_bad_legs" or (leg in text and names[0] in text)),
+            "exit": code,
+            "output": text[-200:],
+        }
+        for name, (code, text) in results.items()
+    ]
+    cases.append(
+        {
+            "case": "ci_checks_job_listing_catches_a_cancelled_leg_that_the_needs_verdict_passes",
+            "passed": needs_say_success == 0 and results["a_cancelled_leg"][0] == 1,
+            "needs_verdict_exit": needs_say_success,
+        }
+    )
+    return cases
+
+
 def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]]:
     """The real gate job is complete, is a required pull request job, behaves as its cases say, and four planted defects are each found."""
     without_columns = copy.deepcopy(jobs)
@@ -473,7 +561,14 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
         step.get("env", {}).pop("REUSE", None)
     unlisted = copy.deepcopy(jobs)
     unlisted["new_job"] = {"name": "A new job", "needs": "plan", "if": "${{ needs.plan.outputs.reuse != 'true' }}", "steps": []}
+    no_permissions = copy.deepcopy(jobs)
+    no_permissions.get("ci_gate", {}).pop("permissions", None)
+    no_listing = copy.deepcopy(jobs)
+    if "ci_gate" in no_listing:
+        no_listing["ci_gate"]["steps"] = [step for step in no_listing["ci_gate"]["steps"] if "gh api" not in str(step.get("run", ""))]
     plants = {
+        "a_gate_without_permissions_to_list_the_jobs": no_permissions,
+        "a_gate_that_never_lists_the_jobs": no_listing,
         "a_missing_need": without_columns,
         "a_gate_that_a_cancel_can_skip": skipped_on_cancel,
         "a_verdict_blind_to_reuse": blind,
@@ -487,6 +582,7 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
             "needs": sorted(jobs.get("ci_gate", {}).get("needs", [])),
         },
         *ci_gate_behavior_cases(jobs),
+        *ci_listing_cases(jobs),
         *(
             {"case": f"ci_checks_gate_planted_{name}_is_found", "passed": bool(ci_gate_problems(planted)), "problems": ci_gate_problems(planted)[:2]}
             for name, planted in plants.items()
