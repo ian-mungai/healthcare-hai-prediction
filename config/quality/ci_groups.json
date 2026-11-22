@@ -427,6 +427,7 @@
       "^scripts/ci/",
       "^scripts/quality/(ci_[a-z0-9_]+|run_ci_[a-z0-9_]+|pre_push)\\.py$",
       "^scripts/quality/timing\\.sh$",
+      "^scripts/quality/hosted_python_env\\.sh$",
       "^scripts/acquisition/(run_checks_[a-z0-9_]+\\.sh|shards\\.py)$",
       "^config/quality/(ci_groups|ci_jobs)\\.json$",
       "^\\.github/workflows/",

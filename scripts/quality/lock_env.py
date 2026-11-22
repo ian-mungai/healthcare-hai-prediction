@@ -254,11 +254,15 @@ def pinned_versions(group: str, root: Path = ROOT) -> dict[str, str]:
 def installed_packages(environment: Path) -> list[tuple[str, str, list[str]]]:
     """Every distribution below the site-packages of a virtual environment, as ``(name, version, files that differ from their RECORD hash)``. The environment's
     interpreter never runs: the metadata is read from its files."""
-    sites = sorted((environment / "lib").glob("python*/site-packages"))
-    if not sites:
-        raise LockError(f"{environment}: no lib/python*/site-packages folder, so it is not a virtual environment")
+    configuration = environment / "pyvenv.cfg"
+    version = re.search(r"(?m)^version\s*=\s*(\d+\.\d+)", configuration.read_text(encoding="utf-8")) if configuration.is_file() else None
+    if version is None:
+        raise LockError(f"{environment}: no pyvenv.cfg with a version, so it is not a virtual environment")
+    site = environment / "lib" / f"python{version.group(1)}" / "site-packages"
+    if not site.is_dir():
+        raise LockError(f"{site}: the site-packages folder of the environment is missing")
     found: list[tuple[str, str, list[str]]] = []
-    for dist in importlib.metadata.distributions(path=[str(site) for site in sites]):
+    for dist in importlib.metadata.distributions(path=[str(site)]):
         changed: list[str] = []
         for entry in dist.files or []:
             if entry.hash is None:
