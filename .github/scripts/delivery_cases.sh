@@ -111,11 +111,11 @@ every_ignored_dockerfile_input_is_generated() {
 tools_manifest=config/quality_tools.json
 installed_tool_platforms() { # "runner tool" for each tool each job installs; "ALL" when no --tool names one
   # Lines that end in a backslash are joined first. A call is the script form (install_tools.py) or the module form (scripts.quality.install_tools); it ends at the
-  # next && || ; or |. It names tools as --tool X or --tool=X. Comment lines are skipped.
+  # next && || ; or |. The script path may be quoted. It names tools as --tool X or --tool=X. Comment lines are skipped.
   awk -v sq="'" '
     function scan(line,    call, n, parts, i, count) {
       if (line ~ /^[[:space:]]*#/) return
-      while (match(line, /[\/.]install_tools(\.py)?([[:space:]]|$)/)) {
+      while (match(line, "[/.]install_tools(\\.py)?[\"" sq "]?([[:space:]]|$)")) {
         call = substr(line, RSTART + RLENGTH - 1)
         line = call
         sub(/(&&|\|\||;|\|).*/, "", call)
@@ -196,6 +196,10 @@ install_workflow complete_continued "python scripts/quality/install_tools.py \\"
 install_workflow complete_continued_equals "python scripts/quality/install_tools.py \\" "  --tool=beta"
 install_workflow complete_module "python -m scripts.quality.install_tools --tool beta"
 install_workflow complete_module_equals "python -m scripts.quality.install_tools --tool=beta"
+install_workflow double_quoted_path "python \"scripts/quality/install_tools.py\" --tool alpha"
+install_workflow single_quoted_path "python 'scripts/quality/install_tools.py' --tool alpha"
+install_workflow complete_double_quoted_path "python \"scripts/quality/install_tools.py\" --tool beta"
+install_workflow complete_single_quoted_path "python 'scripts/quality/install_tools.py' --tool beta"
 install_workflow unrelated "python scripts/quality/install_lint_tools.py --tool alpha" "# python scripts/quality/install_tools.py --tool alpha"
 refused_for() { ! releases_missing_for_runners "$tool_scratch/manifest.json" "$tool_scratch/$1.yml" > /dev/null 2>&1; }
 accepted_for() { releases_missing_for_runners "$tool_scratch/manifest.json" "$tool_scratch/$1.yml" > /dev/null 2>&1; }
@@ -227,12 +231,16 @@ check "a module call with no --tool installs every tool, so a missing release is
 check "a script call with no --tool installs every tool, so a missing release is found" refused_for script_all
 check "a missing release is found in the second call of one line" refused_for second_call
 check "a missing release is found for a quoted tool name" refused_for quoted
+check "a missing release is found when the script path is in double quotes" refused_for double_quoted_path
+check "a missing release is found when the script path is in single quotes" refused_for single_quoted_path
 check "an installed tool that has its release passes for --tool value" accepted_for complete_separate
 check "an installed tool that has its release passes for --tool=value" accepted_for complete_equals
 check "an installed tool that has its release passes in a continued call" accepted_for complete_continued
 check "an installed tool that has its release passes in a continued call with --tool=value" accepted_for complete_continued_equals
 check "an installed tool that has its release passes in the module form" accepted_for complete_module
 check "an installed tool that has its release passes in the module form with --tool=value" accepted_for complete_module_equals
+check "an installed tool that has its release passes when the script path is in double quotes" accepted_for complete_double_quoted_path
+check "an installed tool that has its release passes when the script path is in single quotes" accepted_for complete_single_quoted_path
 check "another installer script and a comment are not the tool installer" accepted_for unrelated
 
 # --- deployment check ------------------------------------------------------------------------------------------------------------------
