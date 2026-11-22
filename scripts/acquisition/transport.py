@@ -351,14 +351,22 @@ class PublicHTTPSConnection(REAL_HTTPS_CONNECTION):
             address = public_addresses(self.host, self.port)[0]
             sock = socket.create_connection((address, self.port), self.timeout, self.bound_source)
         else:
+            # The name lookup is held to the absolute deadline. Each socket operation after it waits at most the configured socket timeout, and never past the
+            # deadline, so a silent publisher costs one socket timeout for an attempt and not the whole budget of the download.
             address = addresses_within(self.host, self.port, self.time_left())[0]
-            sock = socket.create_connection((address, self.port), self.time_left(), self.bound_source)
-            # Python applies one socket timeout across the whole TLS handshake, so this bounds it too.
-            sock.settimeout(self.time_left())
+            sock = socket.create_connection((address, self.port), self.socket_timeout(), self.bound_source)
+            # Python applies one socket timeout across the whole TLS handshake, so this bounds it too, and it is the timeout of every later receive.
+            sock.settimeout(self.socket_timeout())
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)
         if (clock := RequestClock.ACTIVE.get()) is not None:
             clock.watch(self.sock)
+
+    def socket_timeout(self) -> float:
+        """The timeout of one socket operation under a deadline: the configured socket timeout cut to the time left, or the time left alone."""
+        left = self.time_left()
+        configured = self.timeout
+        return min(float(configured), left) if isinstance(configured, int | float) and configured > 0 else left
 
     def time_left(self) -> float:
         left = (self.deadline or 0.0) - time.monotonic()

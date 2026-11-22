@@ -45,6 +45,9 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, "placeholder")
         monkeypatch.delenv(name)
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
+    # The disk admission reads the free space of the real disk. A case that is not about disk space reports a roomy one, so the host's own free space
+    # does not decide it.
+    free_space(monkeypatch, 2**40)
 
 
 TAG = "seed-test-20261121"
@@ -686,3 +689,68 @@ def test_the_module_texts_say_before_any_capture_request_and_describe_the_trickl
     check("before any capture request" in first, f"the first paragraph says: {first}")
     runner = " ".join((run_manual_units_e2e.__doc__ or "").split())
     check("trickle" in runner and "loopback" in runner, "the runner's text describes the loopback trickle case")
+
+
+class Silent:
+    """A publisher on a real local connection that accepts every connection and never answers. ``accepted`` counts the connections."""
+
+    def __init__(self) -> None:
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.listener.settimeout(0.2)
+        self.port = self.listener.getsockname()[1]
+        self.accepted = 0
+        self.held: list[socket.socket] = []
+        self.running = True
+        self.thread = threading.Thread(target=self.serve, name="silent_publisher", daemon=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while self.running:
+            try:
+                connection, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            self.accepted += 1
+            self.held.append(connection)
+
+    def close(self) -> None:
+        self.running = False
+        self.thread.join(timeout=5)
+        for connection in self.held:
+            connection.close()
+        self.listener.close()
+
+
+def test_a_silent_publisher_costs_one_socket_timeout_for_each_attempt_and_not_the_whole_download_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 0.1 s socket timeout inside a 0.8 s download budget and two attempts: each attempt ends at the socket timeout, so both run in about 0.2 s."""
+    publisher = Silent()
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+
+    def to_the_publisher(address: tuple[str, int], timeout: float | None = None, source_address: Any = None) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(("127.0.0.1", publisher.port))
+        return sock
+
+    class PassThrough:
+        def wrap_socket(self, sock: socket.socket, **_options: Any) -> socket.socket:
+            return sock
+
+    monkeypatch.setattr(socket, "create_connection", to_the_publisher)
+    monkeypatch.setattr(ssl, "create_default_context", PassThrough)
+    monkeypatch.delenv(transport.APPROVED_HOSTS_VARIABLE, raising=False)
+    monkeypatch.delenv(transport.CAPTURE_ROOT_VARIABLE, raising=False)
+    limits = transport.Limits(attempts=2, timeout_seconds=0.1, max_seconds=0.8, max_retry_delay=0)
+    started = time.monotonic()
+    try:
+        result = transport.download("https://data.example.gov/file.json", tmp_path, "file.json", "json", "data", limits)
+    finally:
+        publisher.close()
+    elapsed = time.monotonic() - started
+    check(result.attempt == 2 and not result.complete and result.failure == "TimeoutError", f"attempt {result.attempt}, failure {result.failure}")
+    check(elapsed < 0.6, f"the two attempts ran {elapsed:.2f} s, not the 0.8 s budget")
+    check(publisher.accepted == 2, f"the publisher saw {publisher.accepted} connections")
