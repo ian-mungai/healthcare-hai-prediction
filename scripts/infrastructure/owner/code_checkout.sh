@@ -45,10 +45,12 @@ PLAN_DIGEST="$(sed -n 's/^Plan digest: //p' "$RECORD_DIR/policy_plan.txt")"
 CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies .venv/bin/python -m infra.iam.scripts.manage_policies apply --admin-profile "$ADMIN_PROFILE" --digest "$PLAN_DIGEST"
 
 # Step 2: images (project profile). The code one-shot runs the training image, which carries the fetch script of the training task. Its digest must be in the services image
-# digests. When it is not, the command prints the build and push commands and stops the script: run them, record the digests as the plan says, then run this script again. On
-# the rerun the command finds the recorded digest and the script goes on.
+# digests. When it is not, the first command prints the build and push commands and stops the script: run them, record the digests as the plan says, then run this script again.
+# The second command asks ECR once (read only, with a time limit) whether it still holds the recorded digest: a push from another checkout can make the lifecycle policy
+# expire it. When it does not, the command prints the plan again and stops; when ECR cannot be asked, it stops and changes nothing.
 terraform -chdir=infra/platform output -json ecr_repository_urls > "$RECORD_DIR/repository_urls.json"
 .venv/bin/python -m scripts.infrastructure.push_images require --repository-urls "$RECORD_DIR/repository_urls.json" --profile "$PROJECT_PROFILE" --region "$REGION" --only training
+.venv/bin/python -m scripts.infrastructure.image_digest_check --repository-urls "$RECORD_DIR/repository_urls.json" --profile "$PROJECT_PROFILE" --region "$REGION" --only training
 
 # Step 3: stage the code (project profile). The first command makes a new run ID. The archive comes from scripts.lakehouse.code_archive, which adds the verified dbt packages.
 # The code digest is the content of code.sha256.

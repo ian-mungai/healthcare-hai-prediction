@@ -58,42 +58,16 @@ Wrapper = Callable[[list[str]], tuple[int, str]]
 
 def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[str, str]:
     """The synthetic value of every shell variable a script may read. A variable without a value fails the check."""
-    task = "0123456789abcdef0123456789abcdef"
     return {
         **(overrides or {}),
         "RECORD_DIR": str(record_dir),
         "PROJECT_PROFILE": "example_project_dev",
         "ADMIN_PROFILE": "example_admin",
         "REGION": "us-west-2",
-        "PROJECT_NAME": "example_project",
-        "ENVIRONMENT": "dev",
-        "PROJECT_TAG": "example_project",
-        "CLUSTER_NAME": "example_project_cluster_dev",
-        "JOBS_GROUP": "example_project_jobs_dev",
         "DATA_BUCKET": "example-project-data-dev",
-        "HOST_INSTANCE_ID": "i-0123456789abcdef0",
         "RUN_ID": "20261031T120000Z-abcdef12",
-        "SILVER_RUN_ID": "20261031T080000Z-12345678",
-        "GOLD_RUN_ID": "20261031T100000Z-23456789",
-        "HOLD_RUN_ID": "20261031T130000Z-fedcba98",
-        "DAG_ID": "gold_transform_dag",
-        "JOB": "gold",
-        "STATEMENT": "aws_tasks list names no job task and ECS shows the gold task STOPPED",
         "CODE_SHA256": "a" * 64,
-        "SHA256": "b" * 64,
         "PLAN_DIGEST": "c" * 64,
-        "TASK_ARN": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/example_project_cluster_dev/{task}",
-        "TASK_ID": task,
-        "TRAINING_SUBNET_ID": "subnet-0123456789abcdef1",
-        "TRAINING_SECURITY_GROUP": "sg-0123456789abcdef1",
-        "FEATURES_RUN_ID": "20261031T110000Z-3456789a",
-        "HAI_TYPE": "HAI_1",
-        "MODEL_VERSION": "1",
-        "APPROVED_ON": "2026-10-31",
-        "MANIFEST_PREFIX": "serving/deployments",
-        "CODE_REVISION": "0123456789abcdef0123456789abcdef01234567",
-        "PLAN": "silver_step.tfplan",
-        "TOKEN": "example-host:4242:20261031T120000Z:0123abcd",
     }
 
 
@@ -302,7 +276,7 @@ def check_shell_line(line: str, folder: Path, wrapper: Wrapper) -> list[str]:
 
 
 def check_shell_section(body: str, folder: Path, wrapper: Wrapper, overrides: dict[str, str] | None = None) -> dict[str, list[str]]:
-    """``check_section`` for a section whose commands read shell variables that earlier commands set: the line as printed, mapped to its problems."""
+    """Every command of a script, whose commands read shell variables that earlier commands set: the line as printed, mapped to its problems."""
     table = shell_values(folder / "record", overrides)
     (folder / "record").mkdir(parents=True, exist_ok=True)
     problems: dict[str, list[str]] = {}

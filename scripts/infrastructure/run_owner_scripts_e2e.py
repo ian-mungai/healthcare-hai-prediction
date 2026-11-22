@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -101,6 +102,9 @@ def structure_checks(code: str) -> dict[str, bool]:
     """The folder holds exactly the scripts the procedures need, each one a runnable bash script, and the code checkout holds every one of its steps."""
     present = {path.name for path in OWNER_FOLDER.iterdir()}
     numbers = step_numbers(code)
+    read = {name for text in (code, script_text(RESOLVE)) for line in owner_commands.commands(text) for name in owner_commands.REFERENCE.findall(line)}
+    known = set(owner_commands.shell_values(Path("record")))
+    unused, unset = known - read - {"PWD"}, read - known
     return {
         f"the owner folder holds exactly the expected scripts (missing {sorted(EXPECTED_SCRIPTS - present)}, extra {sorted(present - EXPECTED_SCRIPTS)})": (
             present == EXPECTED_SCRIPTS
@@ -109,6 +113,9 @@ def structure_checks(code: str) -> dict[str, bool]:
             os.access(OWNER_FOLDER / name, os.X_OK) and script_text(name).startswith("#!/usr/bin/env bash\n") for name in sorted(present & EXPECTED_SCRIPTS)
         ),
         f"the code checkout holds steps 0 to {CODE_STEPS[-1]} in order ({numbers})": numbers == list(CODE_STEPS),
+        f"every synthetic value is read by a code script and every variable they read has one (unused {sorted(unused)}, missing {sorted(unset)})": (
+            not unused and not unset
+        ),
     }
 
 
@@ -496,6 +503,19 @@ case "$2" in
       echo "Record the digest, then run the script again." >&2
       exit 1
     fi ;;
+  scripts.infrastructure.image_digest_check)
+    case "$(cat "$SEQUENCE_STATE/ecr" 2>/dev/null)" in
+      missing)
+        echo "docker push example_project_training"
+        echo "ECR does not hold the recorded digest of training. Run the commands above, record the new digests, then run the script again." >&2
+        exit 1 ;;
+      failed)
+        echo "ECR could not be checked. Nothing was changed." >&2
+        exit 2 ;;
+      timeout)
+        echo "ECR did not answer within 30 s. Nothing was changed." >&2
+        exit 2 ;;
+    esac ;;
   scripts.lakehouse.code_archive)
     mkdir -p "$5"
     echo archive > "$5/code.tar.gz"
@@ -528,9 +548,13 @@ def sequence_run(root: Path, state: Path, log: Path) -> tuple[int, str, list[str
     return result.returncode, result.stdout + result.stderr, log.read_text(encoding="utf-8").splitlines()
 
 
+GENERATED_FOLDER = re.compile(r"code_archive build --output (/tmp/code_\d{8}T\d{6}Z-[0-9a-f]{8})$")
+
+
 def sequence_checks(folder: Path) -> dict[str, bool]:
-    """The code checkout as a whole, against stand-ins: while the training image has no recorded digest it prints the image plan and stops before the code is
-    staged or the host started, and once the digest is recorded the rerun goes on through the code stage, the host start and the services apply in order."""
+    """The code checkout as a whole, against stand-ins: it stops before the code is staged or the host started while the training image has no recorded
+    digest, while ECR lacks the recorded digest and while ECR cannot be asked (an error or a time limit). Once ECR holds it the rerun goes on through the
+    code stage, the host start and the services apply in order. The code folders that the runs generate are removed at the end."""
     root = folder / "sequence"
     for name, body in SEQUENCE_SHIMS.items():
         path = root / name
@@ -541,39 +565,67 @@ def sequence_checks(folder: Path) -> dict[str, bool]:
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(script_text(CODE), encoding="utf-8")
     script.chmod(0o755)
-    (root / "answers.txt").write_text(SEQUENCE_ANSWERS.replace("\\n", "\n"), encoding="utf-8")
+    (root / "answers.txt").write_text(SEQUENCE_ANSWERS, encoding="utf-8")
     state = root / "state"
     state.mkdir()
     log = root / "calls.log"
-    first_code, first_text, first = sequence_run(root, state, log)
-    (state / "training_recorded").write_text("recorded\n", encoding="utf-8")
-    second_code, second_text, second = sequence_run(root, state, log)
+    runs: dict[str, tuple[int, str, list[str]]] = {}
+    generated: list[str] = []
+    try:
+        runs["unrecorded"] = sequence_run(root, state, log)
+        (state / "training_recorded").write_text("recorded\n", encoding="utf-8")
+        for mode in ("missing", "failed", "timeout"):
+            (state / "ecr").write_text(mode + "\n", encoding="utf-8")
+            runs[mode] = sequence_run(root, state, log)
+        (state / "ecr").write_text("present\n", encoding="utf-8")
+        runs["present"] = sequence_run(root, state, log)
+    finally:
+        generated = [match[1] for _, _, calls in runs.values() for call in calls if (match := GENERATED_FOLDER.search(call))]
+        for leftover in generated:
+            shutil.rmtree(leftover, ignore_errors=True)
 
     def position(calls: list[str], *needles: str) -> int:
         return next((index for index, call in enumerate(calls) if all(needle in call for needle in needles)), -1)
 
-    order = [
-        position(second, "wrapper --iam", "apply"),
-        position(second, "manage_policies", "apply"),
-        position(second, "push_images", "require"),
-        position(second, "code_archive", "build"),
-        position(second, "aws s3 cp", "code.tar.gz"),
-        position(second, "host_session", "start"),
-        position(second, "wrapper --services", "plan"),
-        position(second, "wrapper --services", "apply"),
-    ]
-    return {
-        "the first run asks the image tool for the training digest": position(first, "push_images", "require", "--only training") >= 0,
-        "the first run stops with a failing exit status": first_code != 0,
-        "the first run prints the image commands and says to run the script again": "docker push" in first_text and "run the script again" in first_text,
-        "the first run stages no code": position(first, "code_archive") < 0 and position(first, "aws s3 cp") < 0,
-        "the first run starts no host": position(first, "host_session") < 0,
-        "the first run plans and applies no services stack": position(first, "wrapper --services") < 0,
-        f"the rerun ends with exit status 0 ({second_code}): {second_text[-200:]}": second_code == 0,
-        f"the rerun goes through the IAM apply, the digest check, the code stage, the host start and the services plan and apply in order ({order})": (
-            all(index >= 0 for index in order) and order == sorted(order)
-        ),
+    checks: dict[str, bool] = {}
+    messages = {
+        "unrecorded": "run the script again",
+        "missing": "ECR does not hold the recorded digest",
+        "failed": "ECR could not be checked",
+        "timeout": "ECR did not answer",
     }
+    for mode, message in messages.items():
+        code, text, calls = runs[mode]
+        checks[f"the {mode} run stops with a failing exit status and says why ({message})"] = code != 0 and message in text
+        checks[f"the {mode} run asks the image tool for the training digest"] = position(calls, "push_images", "require", "--only training") >= 0
+        checks[f"the {mode} run stages no code, starts no host and applies no services stack"] = all(
+            position(calls, word) < 0 for word in ("code_archive", "aws s3 cp", "host_session", "wrapper --services")
+        )
+        if mode != "unrecorded":
+            checks[f"the {mode} run asks ECR for the training digest before it stops"] = (
+                position(calls, "image_digest_check", "--only training", "--profile") >= 0
+            )
+    checks["the missing run prints the image commands"] = "docker push" in runs["missing"][1]
+    code, text, calls = runs["present"]
+    order = [
+        position(calls, "wrapper --iam", "apply"),
+        position(calls, "manage_policies", "apply"),
+        position(calls, "push_images", "require"),
+        position(calls, "image_digest_check"),
+        position(calls, "code_archive", "build"),
+        position(calls, "aws s3 cp", "code.tar.gz"),
+        position(calls, "host_session", "start"),
+        position(calls, "wrapper --services", "plan"),
+        position(calls, "wrapper --services", "apply"),
+    ]
+    checks[f"the rerun ends with exit status 0 ({code}): {text[-200:]}"] = code == 0
+    checks[f"the rerun goes through the IAM apply, the digest checks, the code stage, the host start and the services plan and apply in order ({order})"] = all(
+        index >= 0 for index in order
+    ) and order == sorted(order)
+    checks[f"the runs generated code folders and none is left ({len(generated)} generated)"] = bool(generated) and not any(
+        Path(leftover).exists() for leftover in generated
+    )
+    return checks
 
 
 def step_mutant_checks(code_body: str, folder: Path) -> dict[str, bool]:

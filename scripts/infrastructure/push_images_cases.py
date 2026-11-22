@@ -26,6 +26,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
+from unittest import mock
 
 from scripts.infrastructure import push_images
 from scripts.infrastructure import push_images_fake_cloud as fake_cloud
@@ -668,6 +669,78 @@ def require_recorded() -> dict[str, bool]:
     }
 
 
+ECR_SHIM = """#!/bin/sh
+echo "aws $*" >> "$SHIM_LOG"
+case "$SHIM_MODE" in
+  present) echo "{\\"imageDetails\\": [{\\"imageDigest\\": \\"$SHIM_DIGEST\\"}]}" ;;
+  other) echo '{"imageDetails": [{"imageDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}]}' ;;
+  missing) echo "An error occurred (ImageNotFoundException) when calling the DescribeImages operation: The image does not exist" >&2; exit 254 ;;
+  no_repository) echo "An error occurred (RepositoryNotFoundException) when calling the DescribeImages operation: no repository" >&2; exit 254 ;;
+  denied) echo "An error occurred (AccessDeniedException) when calling the DescribeImages operation: not authorized" >&2; exit 254 ;;
+  failed) echo "Could not connect to the endpoint URL" >&2; exit 255 ;;
+  hang) sleep 30 ;;
+esac
+"""
+
+
+def digest_check() -> dict[str, bool]:
+    """``image_digest_check`` asks ECR once, within a time limit and read-only, whether it holds the recorded digest of each named image. It stops with the plan
+    of the missing ones, or refuses to guess when ECR cannot be asked. A stand-in ``aws`` answers: the module starts ``aws`` through the process runner, so the
+    PATH of the case holds only the stand-in and the system tools."""
+    from scripts.infrastructure import image_digest_check
+
+    def attempt(mode: str, record: bool = True, seconds: str = "20") -> tuple[tuple[int, str, str], list[str]]:
+        with tempfile.TemporaryDirectory(prefix="digest_check_") as directory:
+            work = Path(directory)
+            (work / "root").mkdir()
+            root = scratch_root(work / "root")
+            if record:
+                run(root, "record", "training=" + OTHER)
+            (work / "bin").mkdir()
+            shim = work / "bin" / "aws"
+            shim.write_text(ECR_SHIM, encoding="utf-8")
+            shim.chmod(0o755)
+            log = work / "calls.log"
+            log.write_text("", encoding="utf-8")
+            environment = {"PATH": f"{work / 'bin'}:/usr/bin:/bin", "SHIM_MODE": mode, "SHIM_LOG": str(log), "SHIM_DIGEST": OTHER}
+            urls = repository_urls(work)
+            arguments = ["--root", str(root), "--repository-urls", str(urls), "--profile", "example_project_dev", "--region", "us-west-2", "--only", "training"]
+            out, err = io.StringIO(), io.StringIO()
+            started = time.monotonic()
+            with mock.patch.dict("os.environ", environment), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = image_digest_check.main([*arguments, "--seconds", seconds])
+            took = time.monotonic() - started
+            return (code, out.getvalue(), err.getvalue() + f"[{took:.1f} s]"), log.read_text(encoding="utf-8").splitlines()
+
+    present, present_calls = attempt("present")
+    other, _ = attempt("other")
+    missing, _ = attempt("missing")
+    no_repository, _ = attempt("no_repository")
+    unrecorded, unrecorded_calls = attempt("present", record=False)
+    denied, _ = attempt("denied")
+    failed, _ = attempt("failed")
+    hung, _ = attempt("hang", seconds="1")
+    return {
+        "a digest that ECR holds passes with exit zero and prints no plan": present[0] == 0 and "docker push" not in said(present),
+        "the check is one read-only describe-images call by digest with the profile and region named": len(present_calls) == 1
+        and present_calls[0].startswith("aws ecr describe-images ")
+        and f"--image-ids imageDigest={OTHER}" in present_calls[0]
+        and "--repository-name example_project_training_dev" in present_calls[0]
+        and "--profile example_project_dev --region us-west-2" in present_calls[0],
+        "an answer that names another digest counts as missing": other[0] == 1,
+        "a missing image stops with exit one, prints the build and push commands and says to record and run the script again": missing[0] == 1
+        and "docker push" in missing[1]
+        and "run the script again" in said(missing),
+        "a missing repository stops the same way": no_repository[0] == 1 and "docker push" in no_repository[1],
+        "a digest that is not recorded is missing and makes no ECR call": unrecorded[0] == 1 and len(unrecorded_calls) == 0,
+        "a refused call is not guessed: exit two, no plan, a message that nothing was changed": denied[0] == 2
+        and "docker push" not in denied[1]
+        and "could not be checked" in said(denied),
+        "a failed call (exit 255) stops with exit two": failed[0] == 2 and "could not be checked" in said(failed),
+        "a call that does not answer within its limit stops with exit two near the limit": hung[0] == 2 and "did not answer" in said(hung) and "[1." in hung[2],
+    }
+
+
 def record_refusals() -> dict[str, bool]:
     """An ECR digest that differs from the upstream digest, the database image, an unknown name and a malformed digest change nothing and say why."""
     with tempfile.TemporaryDirectory(prefix="push_images_refuse_") as directory:
@@ -952,6 +1025,7 @@ CASES: dict[str, Case] = {
     "registry_file": registry_file,
     "record_flow": record_flow,
     "require_recorded": require_recorded,
+    "digest_check": digest_check,
     "record_refusals": record_refusals,
     "require_resolved": require_resolved,
     "no_program": no_program,
