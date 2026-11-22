@@ -250,7 +250,10 @@ ANY_SEPARATOR = re.compile(r"[/\\]")
 # the path of a local file address), so a route such as /v1/users/login is no home. The Linux root is exact.
 HOME_ROOT = re.compile(r"(?P<linux>/home/)|(?P<mac>(?:/Users|(?<![\w/.})\]-])/(?i:users))/)|(?P<windows>(?<!\w)[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))")
 FILE_URL_ROOT = re.compile(r"(?P<mac>/(?i:users)/)")
-FILE_URL = re.compile(r"(?<![\w+.-])file:\S*", re.IGNORECASE)
+# A local file address runs to white space or a quote. A shell separator inside it (; ( ) & |) stays in it.
+# One at its end, or a closing bracket, is the text around it.
+FILE_URL = re.compile(r"(?<![\w+.-])file:[^\s\"'`]*", re.IGNORECASE)
+FILE_URL_TRAIL = ";()&|,}]"
 HOME_HINT = re.compile(r"home|users|~|file:", re.IGNORECASE)
 TILDE_NAME = re.compile(r"(?<![\w~/])~[^\W\d]" + HOME_NAME_CHAR + r"*/")  # A named tilde. A bare ~/ and a tilde inside an address name no user.
 FOLDER_KEPT = 16  # The longest folder whose own text still matters to the home path rules.
@@ -2591,7 +2594,7 @@ def file_url_found(text: str, position: int = 0) -> bool:
     """Whether a local file address from ``position``, with any host (localhost, an IP address or another name), has a home path with a user name."""
     for url in FILE_URL.finditer(text, position):
         try:
-            path = urllib.parse.urlsplit(url.group()).path
+            path = urllib.parse.urlsplit(url.group().rstrip(FILE_URL_TRAIL)).path
         except ValueError:
             continue
         root = FILE_URL_ROOT.match(path)

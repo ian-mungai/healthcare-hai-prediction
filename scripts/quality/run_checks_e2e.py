@@ -1647,6 +1647,7 @@ def home_path_cases() -> list[Case]:
         "local file address with a parenthesis in its path before a parent": f"file://{mac_users}Shared(one)/../jdoe/private.txt",
         "local file address with an ampersand in its path before a parent": f"file://{mac_users}Shared&one/../jdoe/private.txt",
         "local file address with a semicolon after the shared folder": f"file://{mac_users}Shared/team;one/../../jdoe/private.txt",
+        "quoted local file address with a semicolon in its path before a parent": f"open 'file://{mac_users}Shared;one/../jdoe/private.txt'",
         # Decoding a JSON or YAML string reads its own text, not the quotes around it.
         "JSON string with a literal apostrophe and a double quote around a parent name": (
             f'{{"command": "cat {mac_users}Shared/\\"\'\\"/../../jdoe/private.txt"}}'
@@ -1707,6 +1708,9 @@ def home_path_cases() -> list[Case]:
         "JSON string with apostrophes around a parent name": f"""{{"command": "cat {mac_users}Shared/\\"'..'\\"/private.txt"}}""",
         "YAML double-quoted string with apostrophes around a parent name": f"""command: "cat {mac_users}Shared/\\"'..'\\"/private.txt\"""",
         "YAML list item with apostrophes around a parent name": f"""- "cat {mac_users}Shared/\\"'..'\\"/private.txt\"""",
+        "single-quoted local file address to the shared folder": f"open 'file://{mac_users}Shared'",
+        "double-quoted local file address to the shared folder": f'open "file://{mac_users}Shared"',
+        "parenthesized local file address to the shared folder": f"open (file://{mac_users}Shared)",
     }
     cases += [Case(name, "privacy-scan", True, {"notes.md": f"Log at {text}\n"}) for name, text in passing.items()]
     return cases
