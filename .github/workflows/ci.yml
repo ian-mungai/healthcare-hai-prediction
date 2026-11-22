@@ -1,113 +1,65 @@
 name: CI
 
+# Check first: a push to any branch except main runs every group in full on the pushed commit, and main moves to that commit only after the run is green.
+# There are no pull requests. A newer push to the same branch cancels the run in progress.
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches-ignore: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A pull request run checks the whole merge-base..head range, so a newer push may cancel it. A push run checks only its
-# pushed range, so each push gets its own group and is never cancelled: a cancelled range would go unchecked.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Every run is a full run: scripts/run_ci.sh runs every check group.
+env:
+  CI_SCOPE: full
 
-# Every checkout uses the head commit of a pull request (not GitHub's merge of the head into the base), so a pull request run checks the tree that
-# a later push to main can compare with byte for byte. The plan job lets the run after a merge reuse a passed pull request result (see
-# scripts/quality/ci_reuse.py); every other job waits for it and runs unless it answers reuse=true.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every checkout uses the pushed commit (github.sha). Every run is a full run: no job selects groups from a range.
 # Timeouts are about twice the measured time of each job (config/quality/job_durations.json); scripts/quality/run_ci_groups_e2e.py compares them.
 jobs:
-  plan:
-    name: CI Plan
+  hooks:
+    name: Repository Hooks (${{ matrix.group }})
+    # Pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19 2026; move deliberately after a green test run on the new image.
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 0.2 min.
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-      pull-requests: read
-    outputs:
-      reuse: ${{ steps.reuse.outputs.reuse }}
-      range_start: ${{ steps.range.outputs.start }}
-      range_end: ${{ steps.range.outputs.end }}
-      scope: ${{ steps.scope.outputs.scope }}
-      check_start: ${{ steps.checkrange.outputs.start }}
-      check_end: ${{ steps.checkrange.outputs.end }}
+    # Measured job wall time on main (3 runs, Oct 28 2026), per matrix entry: beside each timeout below.
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: privacy
+            timeout: 12  # max 2.5 min
+          - group: documentation
+            timeout: 30  # max 1.9 min
+          - group: code
+            timeout: 30  # max 22 min with orphan-files; the other hooks are about 4.5 min on the Mac (Nov 14 2026) plus setup and the seven linters
+          - group: orphans
+            timeout: 45  # the orphan-files hook alone, 18 min on the Mac (Nov 14 2026)
+          - group: lock
+            timeout: 12  # estimate: the lock export and its planted defects
     steps:
+      - name: Record hook job start
+        run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          # Every checkout fetches the Git LFS files (.gitattributes), so no step reads a pointer file in place of uv.lock or a large config.
+          # The two acquisition config files over 5 MB are stored with Git LFS (.gitattributes).
           lfs: true
 
-      - name: Choose the comparison range
-        id: range
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          RANGE_START: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RANGE_END: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [[ "$EVENT_NAME" == "pull_request" ]] && git cat-file -e "$RANGE_START^{commit}" 2>/dev/null && git cat-file -e "$RANGE_END^{commit}" 2>/dev/null; then
-            RANGE_START="$(git merge-base "$RANGE_START" "$RANGE_END")"
-          fi
-          printf 'start=%s\nend=%s\n' "$RANGE_START" "$RANGE_END" >> "$GITHUB_OUTPUT"
-
-      # A pull request is path selected: its range of changed paths selects the check groups. A push to main and a manual run are full runs, and
-      # no run is scheduled.
-      - name: Choose the scope
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then scope=range; else scope=full; fi
-          printf 'scope=%s\n' "$scope" >> "$GITHUB_OUTPUT"
-
-      # The hook partitions and the acquisition tests are file based: given a range they check the files it changed, given none they check every file. A pull request gives
-      # them its range and every other event gives none. The commit message checks keep the real range (range_start and range_end), because they read commits.
-      - name: Choose the range that the file based checks read
-        id: checkrange
-        env:
-          SCOPE: ${{ steps.scope.outputs.scope }}
-          RANGE_START: ${{ steps.range.outputs.start }}
-          RANGE_END: ${{ steps.range.outputs.end }}
-        run: |
-          if [[ "$SCOPE" == "range" ]]; then start="$RANGE_START"; end="$RANGE_END"; else start=""; end=""; fi
-          printf 'start=%s\nend=%s\n' "$start" "$end" >> "$GITHUB_OUTPUT"
-
-      - name: Decide whether the merged pull request result is reused
-        id: reuse
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 -m scripts.quality.ci_reuse
-
-  reused_gates:
-    name: Quick Gates of a Reused Result
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse == 'true' }}
-    runs-on: ubuntu-24.04
-    # Job wall time not measured: the job runs only when a passed result is reused.
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          lfs: true
-
-      # The setup steps below (setup_tf to setup_deps) are written once here and reused by an alias in every later job (a YAML anchor must come before its
-      # aliases, so this first job holds them). They replace a local composite action, which zizmor reports as a self-repository reference. Edit them here only.
+      # The setup steps below (setup_tf to setup_deps) are written once here and used by an alias in every later job (a YAML anchor must come before its
+      # aliases, so the first job, hooks, holds them). They replace a local composite action, which zizmor reports as a self-repository reference. Edit them here only.
       # The host Python environment (.venv) is always built fresh with the interpreter of the job (scripts/quality/hosted_python_env.sh) and installed from the hash-pinned host group
       # of uv.lock with --require-hashes --only-binary=:all:, so pip checks every wheel against the lock hashes itself. Only the downloaded wheel files are cached (~/hai_wheelhouse,
       # keyed on the Python version and the lock): a hit is the only install source (--no-index), a miss downloads the wheels, and no environment is ever restored. The cache is
-      # saved only on a push to main or a pull request from this repository (a fork cannot write it), right after the install. SQLFluff, import-linter and check-jsonschema have
+      # saved on every push run (a cache is readable only from the branch that saved it and from the default branch), right after the install. SQLFluff, import-linter and check-jsonschema have
       # their own groups and are not cached.
       # The native tools (gitleaks, TFLint, trivy, OSV-Scanner, zizmor, typos, uv and the rest) are downloaded from the pins of config/quality_tools.json on
       # every run and checked by SHA-256 before they are written to .tools/bin; nothing restored from a cache is trusted without that check.
@@ -186,88 +138,11 @@ jobs:
 
       - &save_env_cache
         name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
-
-      - name: Check commit messages and removed names of the pushed range
-        if: ${{ github.event.before != '0000000000000000000000000000000000000000' }}
-        env:
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
-        run: |
-          if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
-            # A history rewrite removes the previous tip: validate the complete new history.
-            RANGE_START="$(git rev-list --max-parents=0 "$RANGE_END")"
-            git show -s --format=%B "$RANGE_START" > "$RUNNER_TEMP/root_commit_message"
-            .venv/bin/python -m scripts.quality.repo_checks commit-msg "$RUNNER_TEMP/root_commit_message"
-          fi
-          .venv/bin/python -m scripts.quality.repo_checks commit-range "$RANGE_START" "$RANGE_END"
-          # The local hook sees only the staged diff; here, names removed anywhere in the pushed range.
-          PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names
-
-      - name: Run the quick gates (privacy, secrets, documentation, writing, Markdown and source gates)
-        env:
-          CI_PART: gates
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
-        run: bash scripts/run_ci.sh
-
-  hooks:
-    name: Repository Hooks (${{ matrix.group }})
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
-    # Pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19 2026; move deliberately after a green test run on the new image.
-    runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026), per matrix entry: beside each timeout below.
-    timeout-minutes: ${{ matrix.timeout }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - group: privacy
-            timeout: 12  # max 2.5 min
-          - group: documentation
-            timeout: 30  # max 1.9 min
-          - group: code
-            timeout: 30  # max 22 min with orphan-files; the other hooks are about 4.5 min on the Mac (Nov 14 2026) plus setup and the seven linters
-          - group: orphans
-            timeout: 45  # the orphan-files hook alone, 18 min on the Mac (Nov 14 2026)
-          - group: lock
-            timeout: 12  # estimate: the lock export and its planted defects
-    steps:
-      - name: Record hook job start
-        run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
-
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          # The two acquisition config files over 5 MB are stored with Git LFS (.gitattributes).
-          lfs: true
-
-      - *setup_tf
-
-      - *setup_py
-
-      - *setup_node
-
-      - *setup_go
-
-      - *setup_dbt_cache
-
-      - *setup_tf_cache
-
-      - *setup_env_cache
-
-      - *setup_deps
-
-      - *save_env_cache
 
       - name: Install the lint tools
         if: ${{ matrix.group == 'code' }}
@@ -281,10 +156,10 @@ jobs:
           .tools/bin/tflint --init --config .tflint.hcl
 
       - name: Check commit messages
-        if: ${{ matrix.group == 'privacy' && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000')) }}
+        if: ${{ matrix.group == 'privacy' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' }}
         env:
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
+          RANGE_START: ${{ github.event.before }}
+          RANGE_END: ${{ github.sha }}
         run: |
           if ! git cat-file -e "$RANGE_START^{commit}" 2>/dev/null; then
             # A history rewrite removes the previous tip: validate the complete new history.
@@ -297,10 +172,7 @@ jobs:
           PRE_COMMIT_FROM_REF="$RANGE_START" PRE_COMMIT_TO_REF="$RANGE_END" .venv/bin/python -m scripts.quality.repo_checks removed-names
 
       - name: Run this complete partition of the manual hooks
-        env:
-          RANGE_START: ${{ needs.plan.outputs.check_start }}
-          RANGE_END: ${{ needs.plan.outputs.check_end }}
-        run: .venv/bin/python -m scripts.quality.ci_hooks --group '${{ matrix.group }}' --from "$RANGE_START" --to "$RANGE_END"
+        run: .venv/bin/python -m scripts.quality.ci_hooks --group '${{ matrix.group }}'
 
       - name: Retain hook evidence
         if: ${{ always() }}
@@ -316,8 +188,6 @@ jobs:
   # below is the "Repository Hooks (samples)" gate: it fails when a shard job did not succeed, a case ran in no shard or in two, or a case failed.
   hook_samples:
     name: Repository Hooks (samples, shard ${{ matrix.shard }} of 4)
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Hosted run 44930295246 (Nov 21 2026) took 22.6, 15.4, 15.8 and 16.2 minutes per shard. Its per-case seconds balance the shards at about 955 s of cases (18 minutes with setup).
     timeout-minutes: 30
@@ -333,7 +203,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           # The two acquisition config files over 5 MB are stored with Git LFS (.gitattributes).
           lfs: true
@@ -361,10 +231,7 @@ jobs:
         run: .venv/bin/python -m scripts.quality.install_lint_tools --tool import-linter
 
       - name: Run this shard of the test-checks hook
-        env:
-          RANGE_START: ${{ needs.plan.outputs.check_start }}
-          RANGE_END: ${{ needs.plan.outputs.check_end }}
-        run: .venv/bin/python -m scripts.quality.ci_hooks --group 'samples' --shard '${{ matrix.shard }}/4' --from "$RANGE_START" --to "$RANGE_END"
+        run: .venv/bin/python -m scripts.quality.ci_hooks --group 'samples' --shard '${{ matrix.shard }}/4'
 
       - name: Retain the shard manifest and hook evidence
         if: ${{ always() }}
@@ -377,9 +244,9 @@ jobs:
 
   hook_samples_combine:
     name: Repository Hooks (samples)
-    needs: [plan, hook_samples]
+    needs: hook_samples
     # Runs after a failed shard too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict.
-    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # Hosted run 43730985805 (Nov 15 2026): 0.8 minutes, of which the checkout with Git LFS took 11 seconds.
     timeout-minutes: 5
@@ -397,7 +264,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           # uv.lock is stored with Git LFS (.gitattributes); the dependency export below reads it.
           lfs: true
@@ -420,7 +287,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -447,8 +314,6 @@ jobs:
 
   core:
     name: ${{ matrix.title }}
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # The former Local CI Core job is fourteen jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
     # suites of its groups and splits no command and no scenario; config/quality/core_commands.json lists every command and the CI groups E2E fails on a dropped or a
@@ -466,7 +331,7 @@ jobs:
             timeout: 12  # wall time 7.5 min, estimate: typecheck 203 s
           - part: core_sql_terraform
             title: Core SQL and Terraform Checks
-            timeout: 30  # wall time 17 min, estimate: SQL style 851 s hosted (Nov 21 2026) beside the storage, iam, platform and alerts stacks and the services proofs (684 s)
+            timeout: 30  # wall time 17 min, estimate: SQL style 851 s hosted (Nov 21 2026) beside the storage, iam and platform roots, the alert topic root and the services proofs (684 s)
           - part: core_terraform_services
             title: Core Terraform Services and Jobs Checks
             timeout: 30  # wall time 17 min, estimate: services stack 352 s and jobs stack 435 s hosted (Nov 21 2026) plus their static checks and about 3 minutes of setup and gates
@@ -508,7 +373,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -548,9 +413,6 @@ jobs:
       - name: Run this part of local CI without the launcher E2E
         env:
           CI_PART: ${{ matrix.part }}
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/configuration
           POLICY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/policies
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
@@ -571,12 +433,10 @@ jobs:
 
   ci_gate:
     name: CI Checks
-    needs: [plan, reused_gates, hooks, hook_samples, hook_samples_combine, core, reuse_gate, lakehouse, feature_sources, feature_columns, feature_evidence, gold_metadata, launcher, acquisition_shard, acquisition]
-    # The one context the owner lists in the required checks. It waits for the plan and every other job of this workflow (Core parts, hooks, samples, reuse tests, lakehouse,
+    needs: [hooks, hook_samples, hook_samples_combine, core, gate_stage, lakehouse, feature_sources, feature_columns, feature_evidence, gold_metadata, launcher, acquisition_shard, acquisition]
+    # The one context the owner lists in the required checks. It waits for every other job of this workflow (Core parts, hooks, samples, gate stage tests, lakehouse,
     # feature, gold metadata, launcher and acquisition jobs), so a new job or a split needs no change to the protection. GitHub counts a skipped required job as passing, so it runs
-    # always(): a failed, cancelled or skipped dependency, or a cancelled run, fails it instead of skipping it. The plan must have succeeded. A dependency may be skipped only
-    # when the plan's answer is reuse=true (a verified reuse of a passed pull request result, as Acquisition Checks relies on): then the quick gates of the reused result
-    # must have succeeded and every other job is skipped or succeeded. Without reuse every job succeeded and the quick gates were skipped.
+    # always(): a failed, cancelled or skipped dependency, or a cancelled run, fails it instead of skipping it. Every run is a full run, so every job must have succeeded.
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     # Only this job reads the jobs of the run (actions: read) and checks out the scripts (contents: read). A gate with three short steps, about 0.5 minutes (estimate: no hosted run yet).
@@ -585,30 +445,23 @@ jobs:
       contents: read
     timeout-minutes: 5
     steps:
-      - name: Require every job to have succeeded, or to have been skipped by a verified reuse
+      - name: Require every job to have succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          REUSE: ${{ needs.plan.outputs.reuse }}
         run: |
-          failed="$(jq -r --arg reuse "$REUSE" '
-            (if .plan.result != "success" then "plan=\(.plan.result)" else empty end),
-            (to_entries[] | select(.key != "plan") | . as $e
-              | (if $e.key == "reused_gates" then (if $reuse == "true" then ["success"] else ["skipped"] end)
-                 elif $reuse == "true" then ["success", "skipped"] else ["success"] end) as $ok
-              | select(($ok | index($e.value.result)) == null)
-              | "\($e.key)=\($e.value.result)")' <<<"$NEEDS")"
+          failed="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' <<<"$NEEDS")"
           if [[ -n "$failed" ]]; then
-            echo "These jobs did not finish as this run requires (reuse answer: '$REUSE'), so the gate fails:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "These jobs did not finish as this run requires, so the gate fails:" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "$failed" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
       # needs.<job>.result is success for a matrix leg that was cancelled before a runner picked it up (github.com/orgs/community/discussions/211624), so the verdict above is not
       # enough: the next steps list the latest result of every job of this run (filter=latest also holds the jobs that a partial rerun carries forward from earlier attempts) and
-      # fail on any that is not completed, or whose conclusion this run does not allow. Without a verified reuse the listed names must also be exactly the names of
+      # fail on any that is not completed or whose conclusion is not success. The listed names must also be exactly the names of
       # config/quality/ci_jobs.json, each once, so a leg or a job that never started is named. Both steps run always(), so the legs are named also when the verdict failed.
-      # The gate files come from github.workflow_sha, the revision this workflow runs from (the merge commit of a pull request), not from the head: an older head would bring an older
-      # validator and registry that could pass a leg the current ones require. In a reuse run only CI Plan and the quick gates of the reused result must be listed and have succeeded.
+      # The gate files come from github.workflow_sha, the revision this workflow runs from, not from a checkout of another commit: an older
+      # validator and registry could pass a leg the current ones require.
       - name: Check out the gate scripts
         if: ${{ always() }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -625,7 +478,6 @@ jobs:
         if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
-          REUSE: ${{ needs.plan.outputs.reuse }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           GATE_JOBS_FILE: ${{ runner.temp }}/jobs.tsv
@@ -634,12 +486,10 @@ jobs:
           gh api --paginate "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" --jq '.jobs[] | [.name, .status, .conclusion] | @tsv' >"$GATE_JOBS_FILE"
           bash .github/scripts/ci_gate_jobs.sh
 
-  reuse_gate:
-    name: CI Reuse and Gate E2E
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
+  gate_stage:
+    name: CI Gate Stage E2E
     runs-on: ubuntu-24.04
-    # Estimate (no hosted run yet): the reuse, shard and gate stage cases of the CI groups E2E took 88 s and 10 s on the Mac (Oct 30 2026, load 8; about 3 minutes
+    # Estimate (no hosted run yet): the shard and gate stage cases of the CI groups E2E took 88 s and 10 s on the Mac (Oct 30 2026, load 8; about 3 minutes
     # hosted), and the setup and the gates add about 4. They moved out of the former Core job, which took 25.9 of its 30 minutes. Resize from the first complete hosted run.
     timeout-minutes: 12
     steps:
@@ -647,7 +497,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -669,18 +519,13 @@ jobs:
 
       - *save_env_cache
 
-      - name: Run the CI groups reuse and gate stage E2Es
+      - name: Run the CI groups gate stage and launcher shard E2Es
         env:
-          CI_PART: reuse_gate
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
+          CI_PART: gate_stage
         run: bash scripts/run_ci.sh
 
   lakehouse:
     name: Lakehouse ${{ matrix.layer }} Checks
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Measured job wall time on main (3 runs, Oct 28 2026), per matrix entry: beside each timeout below.
     timeout-minutes: ${{ matrix.timeout }}
@@ -708,7 +553,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -734,9 +579,6 @@ jobs:
         env:
           CI_PART: ${{ matrix.part }}
           CI_UNITS: ${{ matrix.units }}
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -754,8 +596,6 @@ jobs:
 
   feature_sources:
     name: Feature Sources (Shard ${{ matrix.shard }} of 16)
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Measured job wall time with eight shards on main (3 runs, Oct 28 2026): max 22.7 min (shard 1, 1037 s of cases), shards 16.6 to 22.7 min, so about 325 s of setup
     # and gates. The sixteen shards are packed by the saved case costs (config/quality/feature_case_costs.json): at most 440 s of cases in a shard.
@@ -771,7 +611,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -797,9 +637,6 @@ jobs:
         env:
           CI_PART: feature_sources
           FEATURE_SHARD: ${{ matrix.shard }}/16
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -814,8 +651,6 @@ jobs:
 
   feature_columns:
     name: Feature Columns (Shard ${{ matrix.shard }} of 2)
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Hosted run 44930295246 (Nov 21 2026): four shards took 3.9 to 4.7 min, about 230 s of that setup. Two shards hold about 105 s of cases each (209 s in all): estimate 6 min.
     timeout-minutes: 12
@@ -828,7 +663,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -854,9 +689,6 @@ jobs:
         env:
           CI_PART: feature_columns
           FEATURE_SHARD: ${{ matrix.shard }}/2
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
           QUALITY_ARTIFACT_DIR: ${{ github.workspace }}/data/e2e/quality
         run: bash scripts/run_ci.sh
 
@@ -871,8 +703,8 @@ jobs:
 
   feature_evidence:
     name: Feature Combined Evidence
-    needs: [plan, feature_sources, feature_columns]
-    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    needs: [feature_sources, feature_columns]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # Measured job wall time on main (3 runs, Oct 28 2026): max 1.5 min.
     timeout-minutes: 10
@@ -891,7 +723,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -915,12 +747,8 @@ jobs:
 
       - name: Select feature evidence for the checked range
         id: selection
-        env:
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: |
-          plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope "$CI_SCOPE" --part features --from "$RANGE_START" --to "$RANGE_END" --format shell)"
+          plan="$(.venv/bin/python -m scripts.quality.ci_groups plan --scope full --part features --format shell)"
           printf '%s\n' "$plan" | tee -a "$GITHUB_STEP_SUMMARY"
           if [[ $'\n'"$plan"$'\n' == *$'\nrun lakehouse_features\n'* ]]; then
             echo 'run=true' >> "$GITHUB_OUTPUT"
@@ -960,8 +788,6 @@ jobs:
 
   gold_metadata:
     name: Lakehouse Gold Model Metadata E2E
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Measured job wall time on main (3 runs, Oct 28 2026): max 19.3 min, mean 15.1 min.
     timeout-minutes: 30
@@ -970,7 +796,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -998,9 +824,6 @@ jobs:
           CI_PART: gold
           CI_UNITS: model_metadata_e2e
           MODEL_METADATA_WORKERS: auto
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
 
       - name: Retain the model metadata evidence
@@ -1014,8 +837,6 @@ jobs:
 
   launcher:
     name: Launcher E2E (Shard ${{ matrix.shard }} of 2)
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Hosted run 43730985805 (Nov 15 2026): shard 1 took 15.5 minutes and shard 2 16.7 minutes, after the env-example gate dropped to seconds.
     timeout-minutes: 30
@@ -1028,7 +849,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -1053,10 +874,7 @@ jobs:
       - name: Run one launcher E2E shard
         env:
           CI_PART: launcher
-          CI_SCOPE: ${{ needs.plan.outputs.scope }}
           LAUNCHER_SHARD: ${{ matrix.shard }}/2
-          RANGE_START: ${{ needs.plan.outputs.range_start }}
-          RANGE_END: ${{ needs.plan.outputs.range_end }}
         run: bash scripts/run_ci.sh
 
       - name: Retain launcher E2E evidence
@@ -1074,8 +892,6 @@ jobs:
   # exactly one shard or the merged coverage is under the target.
   acquisition_shard:
     name: Acquisition Checks (Shard ${{ matrix.shard }} of 4)
-    needs: plan
-    if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # Hosted run 43284615034 (Nov 12 2026), shard wall time: 14.9, 19.4, 20.5 and 24.4 minutes, its offline suites 12.4 to 21.7 minutes by shard. The balance of
     # config/acquisition/shard_weights.json now follows those measured suite seconds (17.5 minutes of suites in each shard). Hosted run 43685924350 ran the
@@ -1090,7 +906,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           # Both ends of the pushed range must be in the clone.
           fetch-depth: 0
           lfs: true
@@ -1125,7 +941,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -1141,13 +957,10 @@ jobs:
             .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
           fi
 
-      # Same paths as the local acquisition-checks hook; a manual run, a push with no earlier commit or rewritten history runs every check.
       - name: Run this shard of the acquisition tests without AWS credentials or collected data
         env:
           ACQUISITION_PART: shard
           ACQUISITION_SHARD: ${{ matrix.shard }}/4
-          RANGE_START: ${{ needs.plan.outputs.check_start }}
-          RANGE_END: ${{ needs.plan.outputs.check_end }}
         run: bash scripts/acquisition/run_checks_ci.sh
 
       - name: Retain the shard manifest and coverage data
@@ -1170,9 +983,9 @@ jobs:
 
   acquisition:
     name: Acquisition Checks
-    needs: [plan, acquisition_shard]
+    needs: [acquisition_shard]
     # Runs after a failed shard too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict.
-    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     # Measured job wall time on main (3 runs, Oct 28 2026): max 1.8 min.
     timeout-minutes: 10
@@ -1190,7 +1003,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -1222,7 +1035,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -1239,6 +1052,4 @@ jobs:
         env:
           ACQUISITION_PART: combine
           ACQUISITION_SHARD_COUNT: "4"
-          RANGE_START: ${{ needs.plan.outputs.check_start }}
-          RANGE_END: ${{ needs.plan.outputs.check_end }}
         run: bash scripts/acquisition/run_checks_ci.sh

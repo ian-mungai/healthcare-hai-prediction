@@ -18,7 +18,7 @@ variable "github_repository" {
 }
 
 variable "github_oidc_subject_prefix" {
-  description = "The subject prefix GitHub sends for this repository since its immutable subject setting is on: repo:<owner>@<owner id>/<name>@<repository id>. Every role trusts <prefix>:environment:<name> and the plan role also <prefix>:pull_request. Read it from the repository's sub_claim_prefix. The name form repo:<owner>/<name> never matches an immutable-subject token."
+  description = "The subject prefix GitHub sends for this repository since its immutable subject setting is on: repo:<owner>@<owner id>/<name>@<repository id>. Every role trusts <prefix>:environment:<name>. Read it from the repository's sub_claim_prefix. The name form repo:<owner>/<name> never matches an immutable-subject token."
   type        = string
   default     = "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206"
   nullable    = false
@@ -51,7 +51,7 @@ variable "github_oidc_provider_arn" {
 }
 
 variable "github_oidc_plan_role_enabled" {
-  description = "Create the read-only Terraform plan role, its policy and its trust of pull requests and the terraform-plan environment. Off until the remote state protection and the state move to the project bucket are done: the role reads state there. Needs github_oidc_enabled."
+  description = "Create the read-only Terraform plan role, its policy and its trust of the terraform-plan environment. Off until the remote state protection and the state move to the project bucket are done: the role reads state there. Needs github_oidc_enabled."
   type        = bool
   default     = false
   nullable    = false

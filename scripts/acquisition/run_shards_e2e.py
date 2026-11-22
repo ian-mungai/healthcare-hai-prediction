@@ -268,7 +268,7 @@ def step_environment(job: dict[str, Any], key: str, value: str) -> dict[str, Any
     return None
 
 
-def shard_count_problems(count: int, workflow: dict[str, Any], combine: str, jobs: dict[str, Any], texts: dict[str, str]) -> list[str]:
+def shard_count_problems(count: int, workflow: dict[str, Any], combine: str, jobs: list[str], texts: dict[str, str]) -> list[str]:
     """Every place that states the number of acquisition shards must state ``count`` (shards.CI_SHARD_COUNT); the problems found, empty when they agree."""
     problems: list[str] = []
     definitions = workflow.get("jobs", {})
@@ -293,7 +293,7 @@ def shard_count_problems(count: int, workflow: dict[str, Any], combine: str, job
     if not default or int(default.group(1)) != count:
         problems.append(f"the default of ACQUISITION_SHARD_COUNT in {COMBINE} is {default.group(1) if default else None}, not {count}")
     wanted = {f"Acquisition Checks (Shard {index} of {count})" for index in range(1, count + 1)}
-    listed = {name for name in jobs.get("required_pull_request_jobs", []) if str(name).startswith("Acquisition Checks (Shard ")}
+    listed = {name for name in jobs if str(name).startswith("Acquisition Checks (Shard ")}
     if listed != wanted:
         problems.append(f"{JOBS} lists the shard jobs {sorted(listed)}, not {sorted(wanted)}")
     if "ACQUISITION_E2E_MODE" in texts[WORKFLOW]:

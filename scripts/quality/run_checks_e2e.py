@@ -3911,7 +3911,6 @@ CASES = [
         {
             "docs/guide.md": "---\ntitle: Guide\ndescription: What the guide covers.\nlast_updated: 2026-10-02\n---\n\n# Guide\n",
             "README.md": "# Project\n",
-            ".github/pull_request_template.md": "# Pull Request\n",
         },
     ),
     Case("missing front matter blocked", "front-matter", False, {"docs/guide.md": "# Guide\n"}),
@@ -5226,133 +5225,29 @@ def workflow_value(value: str, context: dict[str, str]) -> str:
     return next((context[name.strip()] for name in names if context[name.strip()]), "")
 
 
-def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str, want_start: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
+def workflow_range_case(repo: Path, label: str, event: str, before: str, head: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
+    """Run the commit message step of the hosted privacy hook job for a synthetic event: a push checks ``before..head``, a manual run has no range to check."""
     workflow = load_yaml((repo / ".github/workflows/ci.yml").read_text())
     if not isinstance(workflow, dict):
         raise ValueError(".github/workflows/ci.yml is not a mapping")
-    context = {
-        "github.event_name": event,
-        "github.event.pull_request.base.sha": base if event == "pull_request" else "",
-        "github.event.pull_request.head.sha": head if event == "pull_request" else "",
-        "github.event.before": base if event == "push" else "",
-        "github.sha": head,
-    }
-    output = repo / ".git" / f"{label}_output"
-    environment = {**os.environ, "GITHUB_OUTPUT": str(output), "RUNNER_TEMP": str(repo / ".git")}
-    steps = workflow["jobs"]["plan"]["steps"]
-    resolution = next((step for step in steps if step.get("id") == "range"), None)
-    plan_exit = 0
-    log = ""
-    if resolution:
-        env = {name: workflow_value(value, context) for name, value in resolution.get("env", {}).items()}
-        script = repo / ".git" / "range_plan.sh"
-        script.write_text("set -eo pipefail\n" + resolution["run"])
-        result = run_command("bash", [str(script)], cwd=repo, env={**environment, **env}, timeout=120)
-        plan_exit, log = result.returncode, result.stdout + result.stderr
-        if output.exists():
-            context.update({f"steps.range.outputs.{key}": value for line in output.read_text().splitlines() for key, value in [line.split("=", 1)]})
-    if plan_exit != 0:
-        return {"case": label, "passed": False, "checks": {"plan_passes": False}, "plan_exit": plan_exit, "log": log}
-    for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
-        if "steps.range.outputs." in value:
-            context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
-    # The scope step and the check range step of the plan job run for real: the scope is range for a pull request and full for every other event, and the
-    # file based checks get an empty range outside a pull request.
-    scope_exits = {}
-    for step_id in ("scope", "checkrange"):
-        plan_step = next((step for step in steps if step.get("id") == step_id), None)
-        scope_exits[step_id] = 1
-        if plan_step:
-            step_env = {name: workflow_value(value, context) for name, value in plan_step.get("env", {}).items()}
-            step_output = repo / ".git" / f"{label}_{step_id}_output"
-            script = repo / ".git" / "plan_step.sh"
-            script.write_text("set -eo pipefail\n" + plan_step["run"])
-            result = run_command("bash", [str(script)], cwd=repo, env={**environment, "GITHUB_OUTPUT": str(step_output), **step_env}, timeout=120)
-            scope_exits[step_id] = result.returncode
-            if step_output.exists():
-                context.update(
-                    {f"steps.{step_id}.outputs.{key}": value for line in step_output.read_text().splitlines() for key, value in [line.split("=", 1)]}
-                )
-    for name, value in workflow["jobs"]["plan"].get("outputs", {}).items():
-        if "steps.scope.outputs." in value or "steps.checkrange.outputs." in value:
-            context[f"needs.plan.outputs.{name}"] = workflow_value(value, context)
-    file_based = {
-        f"{job}.{index}"
-        for job, definition in workflow["jobs"].items()
-        if job != "plan"
-        for index, step in enumerate(definition.get("steps", []))
-        if "check_start" in str(step.get("env", {}).get("RANGE_START", ""))
-    }
-    scopes = {
-        f"{job}.{index}": workflow_value(str(step["env"]["CI_SCOPE"]), context)
-        for job, definition in workflow["jobs"].items()
-        if job != "plan"
-        for index, step in enumerate(definition.get("steps", []))
-        if "CI_SCOPE" in step.get("env", {})
-    }
-    wanted_scope = "range" if event == "pull_request" else "full"
-    consumers = {
-        f"{job}.{index}": {name: workflow_value(step["env"][name], context) for name in ("RANGE_START", "RANGE_END")}
-        for job, definition in workflow["jobs"].items()
-        if job != "plan"
-        for index, step in enumerate(definition.get("steps", []))
-        if "RANGE_START" in step.get("env", {})
-    }
+    context = {"github.event_name": event, "github.event.before": before if event == "push" else "", "github.sha": head}
     message_step = next(step for step in workflow["jobs"]["hooks"]["steps"] if step["name"] == "Check commit messages")
     check_env = {name: workflow_value(value, context) for name, value in message_step["env"].items()}
+    environment = {**os.environ, "RUNNER_TEMP": str(repo / ".git")}
     check_exit = 0
-    if event != "workflow_dispatch":
+    log = ""
+    if event == "push":
         script = repo / ".git" / "range_check.sh"
         script.write_text("set -eo pipefail\n" + message_step["run"])
         result = run_command("bash", [str(script)], cwd=repo, env={**environment, **check_env}, timeout=120)
         check_exit = result.returncode
-        log += result.stdout + result.stderr
-    result = run_command(
-        str(ROOT / ".venv/bin/python"),
-        ["-m", "scripts.quality.ci_groups", "plan", "--scope", "range", "--part", "core", "--from", check_env["RANGE_START"], "--to", head],
-        cwd=repo,
-        timeout=120,
-    )
-    selected = json.loads(result.stdout) if result.returncode == 0 else {}
+        log = result.stdout + result.stderr
     checks = {
-        "plan_passes": plan_exit == 0,
-        "scope_and_check_range_steps_pass": all(code == 0 for code in scope_exits.values()),
-        "commit_checks_use_the_real_range": bool(consumers)
-        and all(env == {"RANGE_START": want_start, "RANGE_END": head} for name, env in consumers.items() if name not in file_based),
-        # The hook partitions (the groups and the samples shards) and the acquisition tests (the shards and the combine) read the files of the range in a pull
-        # request and every file in a full run.
-        "file_based_checks_use_the_check_range": sorted(name.split(".")[0] for name in file_based)
-        == ["acquisition", "acquisition_shard", "hook_samples", "hooks"]
-        and all(
-            consumers[name] == ({"RANGE_START": want_start, "RANGE_END": head} if event == "pull_request" else {"RANGE_START": "", "RANGE_END": ""})
-            for name in file_based
-        ),
-        # Pull requests are path selected; a push to main and a manual run are full runs, and no run is scheduled.
-        "every_group_job_runs_the_scope_of_the_event": len(scopes) >= 8 and all(value == wanted_scope for value in scopes.values()),
-        "no_scheduled_trigger": "schedule" not in (workflow.get(True) or workflow.get("on") or {}),
+        "no_other_trigger": sorted(workflow.get(True) or workflow.get("on") or {}) == ["push", "workflow_dispatch"],
+        "check_uses_the_pushed_range": check_env == {"RANGE_START": before if event == "push" else "", "RANGE_END": head},
         "check_has_the_expected_result": check_exit == want_exit and want_marker in log,
-        "selector_passes": result.returncode == 0,
     }
-    if label == "branch_behind_main":
-        checks["main_only_paths_do_not_select_groups"] = selected.get("changed") == 1 and selected.get("run") == [
-            "repository_code_checks",
-            "ci_tooling_checks",
-            "ci_tooling_runtime",
-            "sql_style",
-        ]
-        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
-        checks["plan_fetches_full_history"] = checkout.get("with", {}).get("fetch-depth") == 0
-    if not want_start or want_start == "missing-ref":
-        checks["unusable_range_selects_all_groups"] = selected.get("changed") is None and selected.get("run") == selected.get("groups")
-    return {
-        "case": label,
-        "passed": all(checks.values()),
-        "checks": checks,
-        "check_exit": check_exit,
-        "consumers": consumers,
-        "selection": selected,
-        "log": log,
-    }
+    return {"case": label, "passed": all(checks.values()), "checks": checks, "check_exit": check_exit, "log": log}
 
 
 def run_workflow_range_case() -> tuple[bool, str]:
@@ -5378,26 +5273,23 @@ def run_workflow_range_case() -> tuple[bool, str]:
         base = git(repo, "rev-parse", "HEAD").strip()
         git(repo, "checkout", "-q", "topic")
         results = [
-            workflow_range_case(repo, "branch_behind_main", "pull_request", base, head, ancestor, 0),
-            workflow_range_case(repo, "push_keeps_divergent_before", "push", base, head, base, 1, f"{function} was removed"),
-            workflow_range_case(repo, "manual_run_keeps_full_selection", "workflow_dispatch", "", head, "", 0),
-            workflow_range_case(repo, "missing_start_keeps_history_fallback", "pull_request", "missing-ref", head, "missing-ref", 0),
+            workflow_range_case(repo, "push_keeps_divergent_before", "push", base, head, 1, f"{function} was removed"),
+            workflow_range_case(repo, "manual_run_has_no_range_to_check", "workflow_dispatch", "", head, 0),
+            workflow_range_case(repo, "missing_start_keeps_history_fallback", "push", "missing-ref", head, 0),
         ]
         write(repo, {api: "VALUE = 1\n"})
         git(repo, "add", "--", api)
         git(repo, "commit", "-qm", "refactor: remove a branch flag")
         deleted = git(repo, "rev-parse", "HEAD").strip()
-        results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "pull_request", base, deleted, ancestor, 1, f"{removed} was removed"))
+        results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "push", ancestor, deleted, 1, f"{removed} was removed"))
         reset_hard(repo, head)
         git(repo, "commit", "--allow-empty", "-qm", "Invalid subject")
         invalid = git(repo, "rev-parse", "HEAD").strip()
-        results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "pull_request", base, invalid, ancestor, 1, "not a Conventional Commit"))
+        results.append(workflow_range_case(repo, "branch_commit_message_is_rejected", "push", ancestor, invalid, 1, "not a Conventional Commit"))
         git(repo, "checkout", "-q", "--detach", ancestor)
         git(repo, "commit", "--amend", "-qm", "Invalid root subject")
         root = git(repo, "rev-parse", "HEAD").strip()
-        results.append(
-            workflow_range_case(repo, "missing_start_checks_the_root_message", "push", "missing-ref", root, "missing-ref", 1, "not a Conventional Commit")
-        )
+        results.append(workflow_range_case(repo, "missing_start_checks_the_root_message", "push", "missing-ref", root, 1, "not a Conventional Commit"))
         return all(result["passed"] for result in results), json.dumps(results, indent=2) + "\n"
 
 

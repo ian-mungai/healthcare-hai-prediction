@@ -1104,7 +1104,7 @@ def hook_document() -> dict[str, Any]:
 def run_hook_items(sandbox: Sandbox, fail_shard: bool) -> tuple[dict[str, Any], dict[str, tuple[float, float]]]:
     """The hook items of part all (the shards, the lock group, the combining step) with the real config; each stand-in item runs 1 s."""
     queue_settings(sandbox, seconds={f"hook_samples_{index}": 1.0 for index in range(1, 5)}, exit={"hook_samples_2": 3} if fail_shard else {})
-    run = sandbox.run(groups="repository_hooks", CI_PART="all", HAI_CI_REUSE="off", CI_WORKER_LIMIT_SECONDS="60")
+    run = sandbox.run(groups="repository_hooks", CI_PART="all", CI_WORKER_LIMIT_SECONDS="60")
     return run, queue_spans(sandbox)
 
 
@@ -1144,7 +1144,7 @@ def queue_that_waits_for_itself(base: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
         old = "'%s' \"${hook_shard_items[*]}\""
         path.write_text(text.replace(old, "'%s' \"$combine_item\""), encoding="utf-8")
-        run = sandbox.run(groups="repository_hooks", CI_PART="all", HAI_CI_REUSE="off", CI_WORKER_LIMIT_SECONDS="60", timeout=30)
+        run = sandbox.run(groups="repository_hooks", CI_PART="all", CI_WORKER_LIMIT_SECONDS="60", timeout=30)
         return {
             "plan_was_changed": old in text and old not in path.read_text(encoding="utf-8"),
             "run_did_not_hang": not run["timed_out"],

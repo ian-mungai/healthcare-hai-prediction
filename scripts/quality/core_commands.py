@@ -32,8 +32,8 @@ ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = "config/quality/core_commands.json"
 CONFIG = "config/quality/ci_groups.json"
 GROUPS_DIRECTORY = "scripts/ci/groups"
-# The groups that run in another part than the Core part: the launcher, the lakehouse layers, the full-only groups and the reuse gate stage cases.
-NOT_CORE = ("launcher", "reuse_gate_checks")
+# The groups that run in another part than the Core part: the launcher, the lakehouse layers, the full-only groups and the gate stage cases.
+NOT_CORE = ("launcher", "gate_stage_checks")
 TIMED = re.compile(r'\btimed "(?P<label>[^"]+)" (?P<command>.+?)\s*(?:\|\| .*)?$')
 
 

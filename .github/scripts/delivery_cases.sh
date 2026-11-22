@@ -314,7 +314,6 @@ deploy_workflow_updates_the_registered_revision() { [[ -n "$(lines_of 'aws ecs r
 deploy_workflow_takes_a_digest_not_a_revision() { sed -n '/^on:/,/^permissions:/p' "$deploy" | grep -q 'image_digest:' && ! sed -n '/^on:/,/^permissions:/p' "$deploy" | grep -q 'task_definition:'; }
 deploy_workflow_limits_the_service_choice() { grep -A6 '      service:' "$deploy" | grep -q 'type: choice' && grep -A9 '      service:' "$deploy" | grep -q -- '- model_api' && grep -A10 '      service:' "$deploy" | grep -q -- '- streamlit'; }
 deploy_workflow_passes_no_input_to_the_shell_unquoted() { [[ "$(grep -c 'inputs\.' "$deploy")" -ge 1 && "$(grep -c 'inputs\.' "$deploy")" -eq "$(grep -cE '^[[:space:]]+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}$' "$deploy")" ]]; }
-plan_workflow_assumes_only_the_plan_role() { grep -q 'AWS_ROLE_TERRAFORM_PLAN' .github/workflows/terraform_plan.yml && ! grep -h 'role-to-assume' "${workflows[@]}" | grep -Eq 'APPLY'; }
 
 check "no workflow applies Terraform or names an apply environment or role" no_workflow_applies_terraform
 check "there is no apply workflow file" no_apply_workflow_file
@@ -327,6 +326,5 @@ check "the deploy workflow updates the service to the revision it registered" de
 check "the deploy workflow takes an image digest, not a task definition revision" deploy_workflow_takes_a_digest_not_a_revision
 check "the deploy workflow offers the two serving services only" deploy_workflow_limits_the_service_choice
 check "the deploy workflow reads its inputs through the environment" deploy_workflow_passes_no_input_to_the_shell_unquoted
-check "the plan workflow assumes the plan role and no workflow assumes an apply role" plan_workflow_assumes_only_the_plan_role
 
 [[ $failures -eq 0 ]]

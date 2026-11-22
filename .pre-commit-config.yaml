@@ -4,8 +4,9 @@
 # Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for
 # every push with the whole push input, whatever reference pre-commit hands its own hooks. The local_ci_pushed hook below only refuses a push without it.
 # Stages: the commit stage holds only fast checks (a typical commit takes about two minutes); every hook marked `stages: [manual]` below is what the hosted
-# hooks job runs (scripts/quality/ci_hooks.py) and is covered before a push by the pre-push run (scripts/quality/pre_push.py), which also runs the check groups
-# of the pushed range. `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
+# hooks job runs (scripts/quality/ci_hooks.py, in full on every pushed commit). The pre-push run (scripts/quality/pre_push.py) runs the changed-file checks, the commit
+# messages, the removed names, the secret and privacy scans and the osv-scanner hook over the pushed range, in about two minutes.
+# `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify. The pre-push run clears SKIP and the other pre-commit variables that change which hooks run.
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit, manual]
@@ -365,24 +366,6 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-      - id: acquisition-checks
-        # 12-14 minutes, so the pre-push run starts it only when the pushed range changes acquisition code, configuration or their dependencies (this files pattern); the native hook of a push skips
-        # GitHub CI runs it in its own job, so it stays out of the full set; that job reads this files pattern through
-        # scripts/acquisition/run_checks_ci.sh, so it runs for the same paths, plus the CI workflow that runs it. Run it directly
-        # before a release: bash scripts/acquisition/run_checks.sh
-        name: Acquisition lint, types, registry and offline E2E suites with the 90% coverage gate
-        entry: bash scripts/acquisition/run_checks_pushed.sh
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-        files: ^(scripts/acquisition/|config/acquisition/|config/lakehouse/bronze_tables\.json$|tests/test_source_registry\.py$|tests/fixtures/registry_additions_bronze_lineage\.csv$|scripts/process\.py$|scripts/quality/typecheck\.py$|scripts/quality/timing\.sh$|config/quality/mypy_runtimes\.json$|scripts/infrastructure/render_project_config\.py$|uv\.lock$|pyproject\.toml$|\.github/workflows/ci\.yml$)
-      - id: local_ci
-        name: Run the full local CI
-        entry: bash scripts/run_ci.sh
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [manual]
       - id: commit-msg
         name: Conventional Commits and no AI attribution
         entry: .venv/bin/python -m scripts.quality.repo_checks commit-msg

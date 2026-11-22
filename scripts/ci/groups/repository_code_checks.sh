@@ -23,5 +23,4 @@ repository_code_checks() {
   timed "repository_code_checks: scratch worktree E2E" "$python_bin" -m scripts.quality.run_scratch_worktree_e2e
   timed "repository_code_checks: worktree setup E2E" "$python_bin" -m scripts.quality.run_worktree_setup_e2e
   timed "repository_code_checks: Core command inventory" "$python_bin" -m scripts.quality.core_commands
-  timed "repository_code_checks: CI reuse E2E" "$python_bin" -m scripts.quality.run_ci_reuse_e2e
 }

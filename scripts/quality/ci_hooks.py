@@ -40,7 +40,7 @@ def groups(root: Path) -> dict[str, list[str]]:
         hook["id"]
         for repo in document["repos"]
         for hook in repo["hooks"]
-        if "manual" in hook.get("stages", document.get("default_stages", ["pre-commit", "manual"])) and hook["id"] != "local_ci"
+        if "manual" in hook.get("stages", document.get("default_stages", ["pre-commit", "manual"]))
     ]
     partitions: dict[str, list[str]] = config["hook_groups"]
     # A hook that a check group runs as the identical complete check is in no partition (``delegation_findings`` proves the group runs it).

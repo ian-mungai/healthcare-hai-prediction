@@ -6,8 +6,6 @@
 
 terraform_checks() {
   timed "terraform_checks: format" terraform fmt -check -recursive infra
-  timed "terraform_checks: plan digest cases" bash .github/scripts/plan_digest_cases.sh
-  timed "terraform_checks: saved plan cases" bash .github/scripts/saved_plan_cases.sh
   timed "terraform_checks: serving release cases" bash .github/scripts/serving_release_cases.sh
   timed "terraform_checks: serving services cases" bash .github/scripts/serving_services_cases.sh
   timed "terraform_checks: stage code cases" bash .github/scripts/stage_code_cases.sh

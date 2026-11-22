@@ -15,7 +15,6 @@ timing_entry
 shard="${1:?usage: run_checks_shard.sh K/N}"
 index="${shard%%/*}"
 directory="${ACQUISITION_SHARD_DIR:-$repo_root/data/e2e/acquisition_shards}"
-printf 'ran\n' >>"${ACQUISITION_RAN_MARKER:-/dev/null}"
 mkdir -p "$directory/coverage"
 export COVERAGE_FILE="$directory/coverage/shard${index}.coverage"
 rm -f "$COVERAGE_FILE" "$COVERAGE_FILE".* "$directory/shard_${index}_of_${shard#*/}.json"

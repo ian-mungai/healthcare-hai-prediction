@@ -14,7 +14,6 @@ source "$repo_root/scripts/quality/timing.sh"
 timing_entry
 directory="${ACQUISITION_SHARD_DIR:-$repo_root/data/e2e/acquisition_shards}"
 expect="${ACQUISITION_EXPECT:-run}"
-printf 'ran\n' >>"${ACQUISITION_RAN_MARKER:-/dev/null}"
 if [[ "$expect" == "run" ]]; then
   timed "acquisition combine: ruff" "$python_bin" -m ruff check --no-respect-gitignore scripts/acquisition tests/test_source_registry.py
   timed "acquisition combine: mypy" "$python_bin" -m scripts.quality.typecheck --runtime acquisition --check-untyped-defs --disallow-untyped-defs

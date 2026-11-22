@@ -164,9 +164,9 @@ run "trust_binds_this_repository_and_named_environments" {
   assert {
     condition = (
       jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] ==
-      ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request", "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"]
+      ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"]
     )
-    error_message = "Only the read-only plan role may trust pull requests."
+    error_message = "The read-only plan role must trust only the terraform-plan environment of this repository."
   }
 
   assert {
@@ -175,23 +175,6 @@ run "trust_binds_this_repository_and_named_environments" {
       !strcontains(role.assume_role_policy, "*") && !strcontains(role.assume_role_policy, "pull_request_target") && !strcontains(role.assume_role_policy, "refs/heads")
     ])
     error_message = "No trust policy may hold a wildcard, a target-event subject or a branch subject that a fork could not be told apart from."
-  }
-}
-
-run "only_the_plan_role_trusts_pull_requests" {
-  command = plan
-
-  variables {
-    github_oidc_enabled           = true
-    github_oidc_plan_role_enabled = true
-  }
-
-  assert {
-    condition = alltrue([
-      for key, role in aws_iam_role.github :
-      key == "terraform_plan" || !strcontains(role.assume_role_policy, ":pull_request")
-    ])
-    error_message = "Pull request tokens must reach only the read-only plan role."
   }
 }
 
@@ -211,9 +194,9 @@ run "delivery_roles_are_on_by_default_without_the_plan_role" {
   assert {
     condition = alltrue([
       for key, role in aws_iam_role.github :
-      !strcontains(role.assume_role_policy, ":pull_request") && !strcontains(role.assume_role_policy, "terraform-plan")
+      !strcontains(role.assume_role_policy, "terraform-plan")
     ]) && join(",", sort(keys(output.github_oidc_contract.roles))) == "code_staging,deploy,image_push" && join(",", sort(keys(output.github_oidc_contract.subjects))) == "code_staging,deploy,image_push"
-    error_message = "Until the plan role is switched on, nothing trusts a pull request or the terraform-plan environment."
+    error_message = "Until the plan role is switched on, nothing trusts the terraform-plan environment."
   }
 }
 
@@ -230,7 +213,6 @@ run "the_plan_role_appears_when_its_variable_and_the_flag_are_on" {
       join(",", sort(keys(aws_iam_role.github))) == "code_staging,deploy,image_push,terraform_plan" &&
       join(",", sort(keys(aws_iam_role_policy.github))) == "code_staging,deploy,image_push,terraform_plan" &&
       jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == [
-        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request",
         "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"
       ] &&
       aws_iam_role.github["terraform_plan"].name == "example_project_gh_terraform_plan_dev"
@@ -266,11 +248,10 @@ run "the_trusted_subjects_are_exactly_the_immutable_id_form" {
       jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:model-api-deploy"] &&
       jsondecode(aws_iam_role.github["code_staging"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:code-staging"] &&
       jsondecode(aws_iam_role.github["terraform_plan"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == [
-        "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:pull_request",
         "repo:ian-mungai@29179213/healthcare-hai-prediction@1376048206:environment:terraform-plan"
       ]
     )
-    error_message = "Each role must trust exactly the ID-form subjects of its purpose, and the plan role also the pull request subject."
+    error_message = "Each role must trust exactly the ID-form subjects of its purpose."
   }
 
   assert {
@@ -624,7 +605,7 @@ run "plan_role_is_denied_every_object_read_except_its_state_keys" {
         "arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate"
       ]))
     ])
-    error_message = "The plan role needs an explicit Deny of every object read except its three exact state keys. Any pull request job can use it."
+    error_message = "The plan role needs an explicit Deny of every object read except its three exact state keys. Any job that reaches the terraform-plan environment can use it."
   }
 
   assert {

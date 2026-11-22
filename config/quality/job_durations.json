@@ -3,18 +3,6 @@
   "schema_version": 1,
   "jobs": [
     {
-      "job": "CI Plan",
-      "measured_minutes": 1,
-      "timeout_minutes": 5,
-      "basis": "estimate"
-    },
-    {
-      "job": "Quick Gates of a Reused Result",
-      "measured_minutes": 4,
-      "timeout_minutes": 10,
-      "basis": "estimate"
-    },
-    {
       "job": "Repository Hooks (privacy)",
       "measured_minutes": 5,
       "timeout_minutes": 12,
@@ -165,7 +153,7 @@
       "basis": "estimate, one shell step that reads the results of every job it needs (no hosted run yet)"
     },
     {
-      "job": "CI Reuse and Gate E2E",
+      "job": "CI Gate Stage E2E",
       "measured_minutes": 7,
       "timeout_minutes": 12,
       "basis": "estimate, 98 seconds on the Mac (88 and 10) plus the setup and the gates"

@@ -1,28 +1,24 @@
-"""The pre-push run: the check groups of the pushed range, once, the way GitHub CI selects them (config/quality/ci_groups.json).
+"""The push gate: the checks before every push to any branch, over the pushed range (the merge base of the pushed head with ``origin/main`` to the head).
 
-The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push this run covers the rest:
+Hosted CI runs every check group in full on the pushed commit (.github/workflows/ci.yml), and main moves to a commit only after that run is green. The gate
+therefore runs only what hosted CI cannot do for a commit that is already public, in about two minutes. The commit stage holds the fast hooks
+(.pre-commit-config.yaml).
 
-- ``range`` scope (the default): ``scripts/run_ci.sh`` with ``CI_SCOPE=range`` from the merge base of the pushed head with ``origin/main`` to the head, the
-  commit-message and removed-name checks of the hosted hooks job, the hosted hook partitions (scripts/quality/ci_hooks.py; the samples partition runs its
-  shards at once and combines them) and the acquisition gate (the ``acquisition-checks`` hook with its own path filter, as
-  scripts/acquisition/run_checks_ci.sh runs it), all over the same range.
-- ``full`` scope: ``scripts/run_ci.sh`` with ``CI_SCOPE=full`` (it holds the hook partitions and the acquisition suite) when the range changes a path in
-  ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
-  pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
-- Every scope also runs the ``osv-scanner`` hook (``pre-commit run osv-scanner --hook-stage pre-push``) over the range, or over all files when there is no
-  range. Hosted CI runs it in the code hook partition, which a small change leaves out, so a small change runs it here only. The hook skips itself
+The changed-file checks run first (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the check group files).
+A failed check stops the run. Then these steps run at once, except the OSV-Scanner hook, which runs through pre-commit (it takes the worktree's index lock):
+
+- ``commit_messages`` and ``removed_names``: the commit-message and removed-name checks of the range (scripts/quality/repo_checks.py);
+- ``secret_scan``: the Gitleaks scan of every source file Git does not ignore (scripts/quality/scan_secrets.py);
+- ``privacy_scan``: the privacy scan of every file Git does not ignore (scripts/quality/repo_checks.py privacy-scan). Both scans stay at the push, so a
+  commit made with its hooks bypassed, or in another clone, never reaches GitHub unchecked;
+- ``osv_scanner``: ``pre-commit run osv-scanner --hook-stage pre-push`` over the range, or over all files when there is no range. The hook skips itself
   unless the range changes uv.lock, a requirements file or the allowlist.
-- A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
-  list, none a CI file) leaves out the acquisition hook and the hook partitions. Hosted CI runs them.
 
-Before any of these steps the changed-file checks run (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the
-check group files). A failed check stops the run before the long groups.
-
-The steps run at once, except the acquisition hook, the OSV-Scanner hook and the hook partitions: pre-commit takes the worktree's index lock,
-so they run one after the other in one worker.
-Every step has a deadline from ``pre_push.timeout_seconds``, except the ``local_ci`` step, which has the longer one of ``pre_push.local_ci_seconds``
-(90 minutes in the full scope, owner decision Nov 21 2026), and fails visibly with its name when it expires. The run and every step start without the
-variables that change what the CI scripts or pre-commit run (``EXECUTION_CONTROLS``, ``SKIP`` included) and without the Git repository variables of the caller.
+Without a usable range (no ``origin/main`` or no merge base) the changed-file, commit-message and removed-name checks have nothing to read and are left out.
+Hosted CI still runs every group.
+Every step has the deadline ``pre_push.timeout_seconds`` (the changed-file checks have twice ``pre_push.changed_file_seconds``) and fails visibly with its
+name when it expires. The run and every step start without the variables that change what pre-commit or the scans run (``EXECUTION_CONTROLS``, ``SKIP``
+included) and without the Git repository variables of the caller.
 
 The checks read the working tree, so ``run`` refuses a head that is not the checked-out commit and tracked files that differ from it (staged or unstaged).
 The hook form, ``run --hook``, is the gate of every push. ``install-shim`` registers it as a Git config hook (Git 2.54 or newer; Git starts it before the
@@ -34,16 +30,11 @@ The ``local_ci_pushed`` pre-commit hook runs
 ``check-shim``, which refuses a push when the Git config hook is missing, disabled or changed.
 
     .venv/bin/python -m scripts.quality.pre_push install-shim
-    .venv/bin/python -m scripts.quality.pre_push plan [--root DIR] [--base SHA] [--head SHA] [--full]
+    .venv/bin/python -m scripts.quality.pre_push plan [--root DIR] [--base SHA] [--head SHA]
     .venv/bin/python -m scripts.quality.pre_push run [same options] [--hook]
     .venv/bin/python -m scripts.quality.pre_push check-shim
 
 The head is ``--head``, else ``HEAD``.
-After the steps, in a ``finally`` path (also after a failed step or Ctrl-C), the run asks the launcher to quit Docker Desktop
-(``python -m orchestration.launcher docker-release --owner --since <start of the run>``, one ``RELEASE_SECONDS`` deadline). The launcher skips it unless
-a container was created since the start and refuses it while any other container or registry work runs. A skipped, refused or failed release never changes the
-exit code: the run prints one line and records ``docker_release`` in ``report.json`` (after Ctrl-C it prints the line but writes no report).
-``--release-registry DIR`` (for tests of this script only) passes ``--test-registry`` to the launcher.
 E2E: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e --selection-only``.
 """
 
@@ -64,18 +55,13 @@ from scripts.process import CompletedProcess, LaunchesNotStopped, LaunchPool, Pr
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
-RELEASE_SECONDS = 600
 SHIM_NAME = "hai-push-input"
 SHIM_COMMAND = ".venv/bin/python -m scripts.quality.pre_push run --hook"
 MINIMUM_GIT = (2, 54)
 INSTALL_HINT = ".venv/bin/python -m scripts.quality.pre_push install-shim"
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 TEMP_PREFIX = "refs/heads/temp/"
-SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})
-# The gate releases Docker once after all its steps, so the run_ci.sh it starts skips its own release (failure mode R22).
-OUTER_RELEASE = {"HAI_DOCKER_RELEASE": "outer"}
-# The gate never reuses a local pass of a check group.
-NO_REUSE = {"HAI_CI_REUSE": "off"}
+SERIAL_KINDS = frozenset({"pre_commit"})
 EXECUTION_CONTROLS = (
     "CI_SCOPE",
     "CI_TIMING_FILE",
@@ -97,10 +83,7 @@ EXECUTION_CONTROLS = (
     "ACQUISITION_SHARD_DIR",
     "ACQUISITION_SHARD_COUNT",
     "ACQUISITION_EXPECT",
-    "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
-    "HAI_DOCKER_RELEASE",
-    "HAI_CI_REUSE",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
     "PRE_COMMIT_FROM_REF",
@@ -151,143 +134,62 @@ def resolve_base(root: Path, base: str, head: str) -> tuple[str, str]:
     return (sha, "") if code == 0 and sha else ("", "no merge base with origin/main (origin/main is missing or unrelated)")
 
 
-def escalating_path(root: Path, config: dict[str, Any], start: str, end: str) -> str:
-    code, listing = git(root, "diff", "--name-only", "--no-renames", start, end)
-    if code != 0:
-        return "<git diff failed>"
-    patterns = [re.compile(pattern) for pattern in config["pre_push"]["full_paths"]]
-    return next((path for path in listing.splitlines() if any(pattern.search(path) for pattern in patterns)), "")
-
-
 def command(root: Path, step: dict[str, Any]) -> list[str]:
     """The command line of a step, for the plan and for ``launch``."""
     python = str(root / ".venv/bin/python")
     modules = {
         "repo_checks": "scripts.quality.repo_checks",
-        "ci_hooks": "scripts.quality.ci_hooks",
+        "secret_scan": "scripts.quality.scan_secrets",
         "pre_commit": "pre_commit",
         "changed_files": "scripts.quality.ci_changed_files",
     }
-    return ["bash", "scripts/run_ci.sh"] if step["kind"] == "run_ci" else [python, "-m", modules[step["kind"]], *step["arguments"]]
+    return [python, "-m", modules[step["kind"]], *step["arguments"]]
 
 
 def launch(root: Path, step: dict[str, Any], environment: dict[str, str]) -> CompletedProcess[str]:
-    """Start the step's command (the one ``command`` gives, written out with literal programs and modules for the Docker-call guard)."""
+    """Start the step's command (the one ``command`` gives, written out with literal modules for the Docker-call guard)."""
     arguments, timeout = step["arguments"], step["timeout_seconds"]
     python = str(root / ".venv/bin/python")
     if step["kind"] == "repo_checks":
         return run_command(python, ["-m", "scripts.quality.repo_checks", *arguments], cwd=root, env=environment, timeout=timeout)
-    if step["kind"] == "ci_hooks":
-        return run_command(python, ["-m", "scripts.quality.ci_hooks", *arguments], cwd=root, env=environment, timeout=timeout)
+    if step["kind"] == "secret_scan":
+        return run_command(python, ["-m", "scripts.quality.scan_secrets", *arguments], cwd=root, env=environment, timeout=timeout)
     if step["kind"] == "pre_commit":
         return run_command(python, ["-m", "pre_commit", *arguments], cwd=root, env=environment, timeout=timeout)
-    if step["kind"] == "changed_files":
-        return run_command(python, ["-m", "scripts.quality.ci_changed_files", *arguments], cwd=root, env=environment, timeout=timeout)
-    return run_command("bash", ["scripts/run_ci.sh"], cwd=root, env=environment, timeout=timeout)
-
-
-def range_paths(root: Path, start: str, end: str) -> list[str]:
-    code, listing = git(root, "diff", "--name-only", "--no-renames", start, end)
-    return listing.splitlines() if code == 0 else []
-
-
-def matching(patterns: list[str], paths: list[str]) -> list[str]:
-    compiled = [re.compile(pattern) for pattern in patterns]
-    return [path for path in paths if any(pattern.search(path) for pattern in compiled)]
-
-
-def changed_lines(root: Path, start: str, end: str) -> int:
-    """Added and removed lines of the range; a binary file counts as unbounded."""
-    code, listing = git(root, "diff", "--numstat", "--no-renames", start, end)
-    if code != 0:
-        return 10**9
-    total = 0
-    for line in listing.splitlines():
-        added, removed = line.split("\t")[:2]
-        total += 10**9 if "-" in (added, removed) else int(added) + int(removed)
-    return total
-
-
-def small_change(root: Path, config: dict[str, Any], start: str, end: str, paths: list[str]) -> bool:
-    """Whether the range is small: few files and lines, no infrastructure and no CI file (thresholds in ``pre_push.small_change``)."""
-    small = config["pre_push"]["small_change"]
-    if not paths or len(paths) > small["max_files"]:
-        return False
-    if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):
-        return False
-    return changed_lines(root, start, end) <= small["max_changed_lines"]
+    return run_command(python, ["-m", "scripts.quality.ci_changed_files", *arguments], cwd=root, env=environment, timeout=timeout)
 
 
 def output_directory(root: Path) -> Path:
     return root / "data/e2e/pre_push" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
 
 
-def plan(root: Path, base: str = "", head: str = "", full: bool = False) -> dict[str, Any]:
+def plan(root: Path, base: str = "", head: str = "") -> dict[str, Any]:
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
     end = resolve_head(root, head)
     start, unusable = resolve_base(root, base, end)
-    if full:
-        scope, reason = "full", "requested with --full"
-    elif unusable:
-        scope, reason = "full", f"{unusable}: every group runs"
-    else:
-        trigger = escalating_path(root, config, start, end)
-        scope, reason = ("full", f"{trigger} changes the group selector or the CI scripts: every group runs") if trigger else ("range", f"range {start}..{end}")
-    output = output_directory(root)
-    seconds = int(config["pre_push"]["timeout_seconds"][scope])
-    local_ci_seconds = int(config["pre_push"]["local_ci_seconds"][scope])
-    paths = range_paths(root, start, end) if start and end else []
-    small = scope == "range" and small_change(root, config, start, end, paths)
+    seconds = int(config["pre_push"]["timeout_seconds"])
     steps: list[dict[str, Any]] = []
     if start and end:
         steps += [
             {"name": "commit_messages", "kind": "repo_checks", "arguments": ["commit-range", start, end], "env": {}},
             {"name": "removed_names", "kind": "repo_checks", "arguments": ["removed-names"], "env": {"PRE_COMMIT_FROM_REF": start, "PRE_COMMIT_TO_REF": end}},
         ]
-    if scope == "range":
-        steps.append(
-            {
-                "name": "local_ci",
-                "kind": "run_ci",
-                "arguments": [],
-                "env": {"CI_SCOPE": "range", "RANGE_START": start, "RANGE_END": end, **OUTER_RELEASE, **NO_REUSE},
-            }
-        )
-        if not small:
-            steps.append(
-                {
-                    "name": "acquisition",
-                    "kind": "pre_commit",
-                    "arguments": ["run", "acquisition-checks", "--hook-stage", "pre-push", "--from-ref", start, "--to-ref", end],
-                    "env": {},
-                }
-            )
-            steps += [
-                {
-                    "name": f"hooks_{group}",
-                    "kind": "ci_hooks",
-                    "arguments": ["--group", group, "--from", start, "--to", end, "--output-directory", str(output / "hooks" / group)],
-                    "env": {},
-                }
-                for group in config["hook_groups"]
-            ]
-    else:
-        steps.append({"name": "local_ci", "kind": "run_ci", "arguments": [], "env": {"CI_SCOPE": "full", **OUTER_RELEASE, **NO_REUSE}})
     scan_files = ["--from-ref", start, "--to-ref", end] if start and end else ["--all-files"]
-    steps.append({"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}})
+    steps += [
+        {"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},
+        {"name": "privacy_scan", "kind": "repo_checks", "arguments": ["privacy-scan"], "env": {}},
+        {"name": "osv_scanner", "kind": "pre_commit", "arguments": ["run", "osv-scanner", "--hook-stage", "pre-push", *scan_files], "env": {}},
+    ]
     first = (
         {"name": "changed_file_checks", "kind": "changed_files", "arguments": ["--root", str(root), "--from", start, "--to", end], "env": {}}
         if start and end
         else None
     )
     for step in [*steps, *([first] if first else [])]:
-        step["timeout_seconds"] = (
-            int(config["pre_push"]["changed_file_seconds"]) * 2 if step is first else local_ci_seconds if step["name"] == "local_ci" else seconds
-        )
+        step["timeout_seconds"] = int(config["pre_push"]["changed_file_seconds"]) * 2 if step is first else seconds
         step["argv"] = command(root, step)
-    if small:
-        reason += ". This is a small change. The hook partitions and the acquisition hook stay with hosted CI"
-    return {"scope": scope, "reason": reason, "start": start, "end": end, "output": str(output), "first": first, "steps": steps}
+    reason = f"range {start}..{end}" if start and end else f"{unusable}: the checks that read a range are left out and hosted CI runs every group"
+    return {"reason": reason, "start": start, "end": end, "output": str(output_directory(root)), "first": first, "steps": steps}
 
 
 @cache
@@ -322,16 +224,7 @@ def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Run local CI exclusively, then parallel peers with one serialized pre-commit worker."""
-    planned = steps
-    completed = []
-    for step in steps:
-        if step["kind"] == "run_ci":
-            result = run_step(root, output, step)
-            completed.append(result)
-            if result["exit"] != 0:
-                return completed
-    steps = [step for step in steps if step["kind"] != "run_ci"]
+    """Run the steps at once, with the pre-commit steps serialized in one worker (pre-commit takes the worktree's index lock)."""
     serial = [step for step in steps if step["kind"] in SERIAL_KINDS]
     jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])
     finished: list[list[dict[str, Any]]] | None = None
@@ -345,60 +238,11 @@ def run_steps(root: Path, output: Path, steps: list[dict[str, Any]]) -> list[dic
             if finished is None:
                 raise
             unstopped = str(failure)
-    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in [completed, *(finished or [])] for row in job}
-    results = [rows[step["name"]] for step in planned]
+    rows: dict[str, dict[str, Any]] = {row["name"]: row for job in finished or [] for row in job}
+    results = [rows[step["name"]] for step in steps]
     if unstopped:
         results.append({"name": "stop_confirmation", "exit": 1, "seconds": 0.0, "output": "", "error": unstopped})
     return results
-
-
-def release(root: Path, started: float, registry: str = "") -> dict[str, Any]:
-    """Ask the launcher to quit Docker Desktop after a run that began at ``started``; never raises (owner answer 1, failure modes P3 to P5).
-
-    The result holds ``outcome`` (``quit``, ``skipped``, ``refused`` or ``failed``), ``detail`` and ``seconds``.
-    """
-    python = str(root / ".venv/bin/python")
-    registry_arguments = ["--test-registry", registry] if registry else []
-    begun = time.monotonic()
-    try:
-        result = run_command(
-            python,
-            ["-m", "orchestration.launcher", *registry_arguments, "docker-release", "--owner", "--since", f"{started:.3f}"],
-            cwd=root,
-            env=step_environment({"env": {}}),
-            timeout=RELEASE_SECONDS,
-        )
-    except TimeoutExpired:
-        return {"outcome": "failed", "detail": f"exceeded {RELEASE_SECONDS} s and was stopped", "seconds": round(time.monotonic() - begun, 1)}
-    except OSError as error:
-        return {"outcome": "failed", "detail": f"could not start: {error}", "seconds": round(time.monotonic() - begun, 1)}
-    seconds = round(time.monotonic() - begun, 1)
-    message = (result.stderr.strip() or result.stdout.strip()).splitlines()
-    if result.returncode == 3:
-        return {"outcome": "refused", "detail": message[0] if message else "refused", "seconds": seconds}
-    if result.returncode != 0:
-        return {"outcome": "failed", "detail": f"exit {result.returncode}: {message[-1] if message else 'no output'}", "seconds": seconds}
-    try:
-        answer = json.loads(result.stdout)
-        outcome, detail = str(answer["outcome"]), str(answer.get("reason") or answer.get("seconds") or "")
-    except (ValueError, KeyError, TypeError):
-        return {"outcome": "failed", "detail": f"unreadable answer: {result.stdout.strip()[-200:]}", "seconds": seconds}
-    return {"outcome": outcome, "detail": detail, "seconds": seconds}
-
-
-def release_line(released: dict[str, Any]) -> str:
-    """The one line the gate prints for the release."""
-    outcome, detail = released["outcome"], released["detail"]
-    if outcome == "quit":
-        return f"pre-push: Docker release: Docker Desktop quit in {released['seconds']} s (VM memory freed)\n"
-    if outcome == "skipped":
-        return f"pre-push: Docker release: skipped ({detail})\n"
-    if outcome == "refused":
-        return f"pre-push: Docker release: refused ({detail}). Docker is left running\n"
-    return (
-        f"pre-push: Docker release: failed ({detail}). The gate result stands. "
-        "Run .venv/bin/python -m orchestration.launcher docker-start --owner before the next heavy run\n"
-    )
 
 
 def parse_updates(text: str) -> list[tuple[str, str, str]]:
@@ -472,14 +316,12 @@ def refuse(problems: list[str]) -> int:
     return 1
 
 
-def record(
-    output: Path, plan_made: dict[str, Any] | None, results: list[dict[str, Any]], decisions: list[dict[str, str]], released: dict[str, Any] | None = None
-) -> None:
-    report = {"plan": plan_made, "results": results, "refs": decisions, "docker_release": released}
+def record(output: Path, plan_made: dict[str, Any] | None, results: list[dict[str, Any]], decisions: list[dict[str, str]]) -> None:
+    report = {"plan": plan_made, "results": results, "refs": decisions}
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
-def run(root: Path, base: str, head: str, full: bool, push_input: str | None = None, release_registry: str = "") -> int:
+def run(root: Path, base: str, head: str, push_input: str | None = None) -> int:
     decisions: list[dict[str, str]] = []
     if push_input is not None:
         try:
@@ -498,13 +340,13 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
                 output.mkdir(parents=True, exist_ok=True)
                 record(output, None, [], decisions)
             return 0
-    chosen = plan(root, base, head, full)
+    chosen = plan(root, base, head)
     problems = refusals(root, chosen["end"])
     if problems:
         return refuse(problems)
     output = Path(chosen["output"])
     output.mkdir(parents=True, exist_ok=True)
-    sys.stdout.write(f"pre-push: scope {chosen['scope']}: {chosen['reason']}\n")
+    sys.stdout.write(f"pre-push: {chosen['reason']}\n")
     first = chosen["first"]
     if first:
         first_result = run_step(root, output, first)
@@ -512,21 +354,15 @@ def run(root: Path, base: str, head: str, full: bool, push_input: str | None = N
         if first_result["exit"] != 0:
             sys.stdout.write("\n".join(first_result["output"].splitlines()[-80:]) + "\n" + first_result["error"] + "\n")
             record(output, chosen, [{k: v for k, v in first_result.items() if k != "output"}], decisions)
-            sys.stdout.write(f"pre-push: failed steps: {first['name']}. The long groups did not start. Logs are in {output}\n")
+            sys.stdout.write(f"pre-push: failed steps: {first['name']}. The other steps did not start. Logs are in {output}\n")
             return 1
-    started = time.time()
-    try:
-        results = run_steps(root, output, chosen["steps"])
-    finally:
-        released = release(root, started, release_registry)
-        sys.stdout.write(release_line(released))
-        sys.stdout.flush()
+    results = run_steps(root, output, chosen["steps"])
     for result in results:
         sys.stdout.write(f"pre-push: {'PASS' if result['exit'] == 0 else 'FAIL'} {result['name']} ({result['seconds']} s)\n")
         if result["exit"] != 0:
             sys.stdout.write("\n".join(result["output"].splitlines()[-80:]) + "\n" + result["error"] + "\n")
     failed = [result["name"] for result in results if result["exit"] != 0]
-    record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions, released)
+    record(output, chosen, [{k: v for k, v in result.items() if k != "output"} for result in results], decisions)
     if failed:
         sys.stdout.write(f"pre-push: failed steps: {', '.join(failed)}. Logs are in {output}\n")
         return 1
@@ -568,13 +404,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--base", default="")
     parser.add_argument("--head", default="")
-    parser.add_argument("--full", action="store_true")
     parser.add_argument("--hook", action="store_true", help="read the push input from standard input and judge every updated reference")
-    parser.add_argument("--release-registry", default="", help="a launcher test registry folder for the Docker release (for tests of this script only)")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if args.command == "plan":
-        sys.stdout.write(json.dumps(plan(root, args.base, args.head, args.full), indent=2) + "\n")
+        sys.stdout.write(json.dumps(plan(root, args.base, args.head), indent=2) + "\n")
         return 0
     if args.command == "check-shim":
         return check_shim(root)
@@ -582,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         return install_shim(root)
     for name in EXECUTION_CONTROLS:
         os.environ.pop(name, None)
-    return run(root, args.base, args.head, args.full, sys.stdin.read() if args.hook else None, args.release_registry)
+    return run(root, args.base, args.head, sys.stdin.read() if args.hook else None)
 
 
 if __name__ == "__main__":

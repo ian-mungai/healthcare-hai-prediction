@@ -189,8 +189,6 @@ def test_no_ci_path_plans_the_alerts_root() -> None:
         if path.is_file():
             text = path.read_text(encoding="utf-8")
             check(not re.search(r"infra/alerts|\balerts\b.*stack|stack.*\balerts\b", text), f"{path.relative_to(ROOT)} names the alerts root")
-    workflow = (ROOT / ".github/workflows/terraform_plan.yml").read_text(encoding="utf-8")
-    check(re.search(r"stack: \[platform, services, jobs\]", workflow) is not None, "the plan matrix keeps its three stacks")
     oidc = (ROOT / "infra/iam/github_oidc.tf").read_text(encoding="utf-8")
     check('github_state_stacks = ["platform", "services", "jobs"]' in oidc, "the plan role's stack list keeps its three stacks")
     check("sns:GetSubscriptionAttributes" in oidc.split("github_plan_unreadable")[1].split("\n")[0], "the plan role never reads a subscription")

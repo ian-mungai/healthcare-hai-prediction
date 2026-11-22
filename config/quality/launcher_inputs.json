@@ -1675,7 +1675,6 @@
     "scripts/acquisition/run_checks_ci.sh",
     "scripts/acquisition/run_checks_ci_e2e.sh",
     "scripts/acquisition/run_checks_combine.sh",
-    "scripts/acquisition/run_checks_pushed.sh",
     "scripts/acquisition/run_checks_shard.sh",
     "scripts/acquisition/run_cms_owners_e2e.py",
     "scripts/acquisition/run_code_versions_e2e.py",

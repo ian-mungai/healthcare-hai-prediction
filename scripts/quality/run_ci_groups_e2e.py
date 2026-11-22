@@ -8,7 +8,7 @@ and before the launcher E2E, that a failing gate fails every part, that the full
 and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing.
 A static case requires the group functions in scripts/ci/groups/ to start the secret store E2E, the gold writer set-up mode and the scratch worktree E2E.
 Body-file cases: a staged edit to each body file selects its group (and the layers downstream of it) and the repository group, never another group;
-the pull request template selects none and the dispatcher and the workflow select every group; planted drift for each rule of the guard
+the dispatcher and the workflow select every group; planted drift for each rule of the guard
 scripts/quality/ci_group_files.py fails with the file and group named. Dry-run cases run the dispatcher with a stand-in ``timed`` that only prints the
 command: a missing or unreadable body file stops the run with its name, the full local run names the same groups, gold units and acquisition shards as
 the GitHub jobs (a planted workflow with three shards differs), a failed shard stops the run before the combining step and a missing shard fails it.
@@ -17,24 +17,22 @@ the caller's index, staged diff and working files survive. The report goes to
 data/e2e/ci_groups/<UTC>_<pid>/report.json with the revision, the SHA-256 of the files under test and the tool versions;
 the run fails when a file under test changes while it runs.
 
-The reuse, shard and gate stage cases are the check group reuse_gate_checks (hosted job CI Reuse and Gate E2E): ``--reuse-only`` and ``--gate-stage-only``
-run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
+The gate stage and launcher shard cases are the check group gate_stage_checks (hosted job CI Gate Stage E2E): ``--launcher-shards-only`` and
+``--gate-stage-only`` run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
 
-Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim check)
-and ``acquisition-checks``, every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is
-in a hosted partition that the pre-push plan runs. Pre-push cases build small repositories with stand-ins for the commands: the plan selects the range with
-the hosted environment and escalates to the full scope for selector, CI script and workflow paths, an unusable base runs the full scope, a failing step is
-named, a step that outlives its deadline fails visibly, and the acquisition hook runs once over the computed range when the range reaches its path list (the
-native hook of the push skips, the full scope runs it in its shards). Pushes through Git, the shim and pre-commit in scratch repositories cover a new branch,
-a lightweight tag and an annotated tag in ``origin/main`` (recorded, nothing checked), an annotated tag and a force push at the checked-out commit (checked
-once), a ref that pre-commit does not dispatch for, several refs, deletions, a tag of a tree, an up-to-date push, a tracked change and a missing, disabled or
-changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a step. Planted defects (a heavy hook back in the
-commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition, an escalation gap) are caught by named cases.
-
-The Docker release cases run the gate against a stand-in launcher (``orchestration/launcher.py`` in the scratch repository). A failing step, a raising step
-runner and a passing gate each release once with ``--since`` the start of the run. A refused, failed, unreadable or too slow release never changes the exit
-code and is recorded as ``docker_release`` in ``report.json``. ``scripts/run_ci.sh`` skips its own release under the gate, on hosted CI, off macOS, in a
-list-only run and in the gates part (``release_docker`` runs on its own with a stand-in interpreter).
+Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the shim
+check), and every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is in a hosted
+partition. Push gate cases build small repositories with stand-ins for the commands: the plan holds the changed-file checks, the commit messages, the removed
+names, the secret scan, the privacy scan and OSV over the range and no step of the old gate (no local CI run, no hook partition, no acquisition hook), a failing
+step is named, a step that outlives its deadline fails visibly, and a missing base leaves out the checks that read a range. Pushes through Git, the shim and
+pre-commit in scratch repositories cover a new branch, a lightweight tag and an annotated tag in ``origin/main`` (recorded, nothing checked), an annotated tag
+and a force push at the checked-out commit (checked once), a ref that pre-commit does not dispatch for, several refs, deletions, a tag of a tree, an up-to-date
+push, a tracked change and a missing, disabled or changed shim; an inherited ``SKIP`` and the other pre-commit selection variables never reach the gate or a
+step. Planted defects (a heavy hook back in the commit stage, a dropped privacy hook, a missing install type, an edited manual entry, a hook in no partition,
+a scan left out of the plan) are caught by named cases. The workflow cases require the triggers of ``.github/workflows/ci.yml`` (a push to every branch but main
+and a manual run), the concurrency group of one branch, the pushed commit in every checkout and a job list equal to ``config/quality/ci_jobs.json``.
+``scripts/run_ci.sh`` releases Docker once after a run on macOS and skips it on hosted CI, off macOS, in a list-only run and in the gates part
+(``release_docker`` runs on its own with a stand-in interpreter).
 """
 
 from __future__ import annotations
@@ -152,7 +150,6 @@ COPIED = (
     "config/quality_tools.json",
     "dbt/models/silver/intermediate/_intermediate__models.yml",
     "scripts/acquisition/run_checks.sh",
-    "scripts/acquisition/run_checks_pushed.sh",
     "scripts/quality/pre_push.py",
     "scripts/lakehouse/archive_saved_models.py",
     "scripts/lakehouse/run_bronze_e2e.py",
@@ -169,7 +166,6 @@ COPIED = (
     "scripts/quality/core_commands.py",
     "config/quality/core_commands.json",
     "config/quality/feature_case_costs.json",
-    "scripts/quality/ci_main_passes.py",
     "scripts/quality/launcher_inputs.py",
     "scripts/quality/source_reads.py",
     "scripts/quality/lint_sources.py",
@@ -204,9 +200,7 @@ COPIED = (
     *BODY_FILES,
     "scripts/quality/ci_group_files.py",
     "scripts/quality/timing.sh",
-    "scripts/quality/ci_reuse.py",
     "config/quality/ci_jobs.json",
-    "scripts/quality/run_ci_reuse_e2e.py",
     "scripts/quality/run_model_metadata_e2e.py",
     "scripts/quality/dbt_manifest_labels.py",
     "scripts/quality/label_guard_fixtures.py",
@@ -266,7 +260,7 @@ WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
 PART_GROUPS = {
     "core": CORE,
     "launcher": ["launcher"],
-    "reuse_gate": ["reuse_gate_checks"],
+    "gate_stage": ["gate_stage_checks"],
     "bronze": LAYERS[:1],
     "silver": LAYERS[1:2],
     "gold": LAYERS[2:3],
@@ -275,7 +269,7 @@ PART_GROUPS = {
     "feature_columns": LAYERS[3:],
     "feature_store": LAYERS[3:],
     "core+layers": WITH_LAYERS,
-    "all": [*WITH_LAYERS, "launcher", "reuse_gate_checks", "acquisition", "repository_hooks"],
+    "all": [*WITH_LAYERS, "launcher", "gate_stage_checks", "acquisition", "repository_hooks"],
 }
 PASS_LINES = {part: "All local CI checks passed" for part in PART_GROUPS} | {"launcher": "The launcher part passed."}
 LAKEHOUSE_SCRIPT = ["python_lint", *LAYERS, "orchestration_checks", "repository_code_checks"]
@@ -701,7 +695,7 @@ def hosted_part_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     config = json.loads((work / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
     cases = []
     for part, groups in config["parts"].items():
-        code, log, _ = run_entry(work, out, f"hosted_part_{part}", {"CI_LIST_ONLY": "1", "CI_SCOPE": "full", "CI_PART": part, "HAI_CI_REUSE": "off"})
+        code, log, _ = run_entry(work, out, f"hosted_part_{part}", {"CI_LIST_ONLY": "1", "CI_SCOPE": "full", "CI_PART": part})
         planned = re.findall(r"^run (\w+)$", log, re.MULTILINE)
         cases.append(
             {"case": f"dispatcher_accepts_hosted_part_{part}", "passed": code == 0 and planned == groups, "exit": code, "planned": planned, "wanted": groups}
@@ -880,26 +874,6 @@ def code_identity(work: Path) -> dict[str, Any]:
         "sha256": {path: sha256_of(ROOT / path) for path in files},
         "tools": versions,
     }
-
-
-def acquisition_selection_case(work: Path, path: str, wanted: bool) -> dict[str, Any]:
-    entry = work / "scripts/acquisition/run_checks.sh"
-    original = entry.read_bytes()
-    marker = "acquisition-selection-probe"
-    try:
-        entry.write_text(f"#!/usr/bin/env bash\nprintf '%s\\n' {marker}\n")
-        result = run_command(
-            str(PYTHON),
-            ["-m", "pre_commit", "run", "acquisition-checks", "--hook-stage", "pre-push", "--verbose", "--files", path],
-            cwd=work,
-            env={**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools/pre_commit_cache")},
-            timeout=180,
-        )
-    finally:
-        entry.write_bytes(original)
-    output = result.stdout + result.stderr
-    passed = result.returncode == 0 and ((marker in output) if wanted else ("no files to check" in output and marker not in output))
-    return {"case": f"acquisition_selection_{path}", "passed": passed, "exit": result.returncode, "wanted": wanted, "output": output}
 
 
 def layer_cases(work: Path) -> list[dict[str, Any]]:
@@ -1143,7 +1117,6 @@ LAUNCHER_IMPORTED = (
 LAUNCHER_OUTSIDE = (
     "config/quality/shard_costs.json",
     "config/quality/temporary_code.json",
-    ".github/pull_request_template.md",
 )
 # Paths no file of the committed list names but one reviewed inventory_reads pattern matches (a new file in a folder the suite lists) still select it.
 LAUNCHER_INSIDE_PATTERNS = (
@@ -1685,7 +1658,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             work,
             "unclassified_path_runs_all_in_part_all",
             ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
-            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
+            [*WITH_LAYERS, "launcher", "gate_stage_checks"],
             "Unclassified",
         ),
         selection_case(
@@ -1949,14 +1922,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
     cases.append({"case": "invalid_scope_refused", "passed": code == 2, "exit": code})
     code, _, _ = select(work, "--scope", "full", "--part", "bogus")
     cases.append({"case": "invalid_part_refused", "passed": code == 2, "exit": code})
-    cases += [
-        acquisition_selection_case(work, "scripts/quality/typecheck.py", True),
-        acquisition_selection_case(work, "config/quality/mypy_runtimes.json", True),
-        acquisition_selection_case(work, "config/lakehouse/bronze_tables.json", True),
-        acquisition_selection_case(work, "uv.lock", True),
-        acquisition_selection_case(work, "pyproject.toml", True),
-        acquisition_selection_case(work, "docs/restore_after_teardown.md", False),
-    ]
+    cases += []
     return cases
 
 
@@ -2037,6 +2003,59 @@ def workflow_document() -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(".github/workflows/ci.yml is not a mapping")
     return loaded
+
+
+def expanded_job_names(jobs: dict[str, Any]) -> list[str]:
+    """The job names of the workflow with matrix values filled in (a list under ``include``, or one list-valued key)."""
+    names: list[str] = []
+    for definition in jobs.values():
+        matrix = definition.get("strategy", {}).get("matrix")
+        if not matrix:
+            names.append(str(definition["name"]))
+            continue
+        combinations = matrix["include"] if "include" in matrix else [{key: value} for key, values in matrix.items() for value in values]
+        names += [fill_matrix(str(definition["name"]), combination) for combination in combinations]
+    return names
+
+
+def workflow_trigger_problems(text: str) -> list[str]:
+    """What is wrong with the triggers, the concurrency, the checkouts and the job list of ``.github/workflows/ci.yml`` (check first, every run full)."""
+    document = load_yaml(text)
+    if not isinstance(document, dict):
+        return ["the workflow is not a mapping"]
+    triggers = document.get("on", document.get(True)) or {}
+    jobs = document.get("jobs", {})
+    problems = []
+    if triggers.get("push") != {"branches-ignore": ["main"]} or "workflow_dispatch" not in triggers or set(triggers) != {"push", "workflow_dispatch"}:
+        problems.append(f"the triggers must be a push to every branch but main and workflow_dispatch: {triggers!r}")
+    concurrency = document.get("concurrency") or {}
+    if concurrency.get("group") != "${{ github.workflow }}-${{ github.ref }}" or concurrency.get("cancel-in-progress") is not True:
+        problems.append(f"one concurrency group per branch that cancels the run in progress: {concurrency!r}")
+    refs = {
+        str(step["with"]["ref"])
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).startswith("actions/checkout@") and "ref" in step.get("with", {})
+    }
+    if refs != {"${{ github.sha }}", "${{ github.workflow_sha }}"}:
+        problems.append(f"every checkout uses the pushed commit (the gate scripts use the workflow revision): {sorted(refs)}")
+    registry = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))
+    names = expanded_job_names(jobs)
+    if not isinstance(registry, list) or sorted(registry) != sorted(names):
+        problems.append("config/quality/ci_jobs.json is not the plain list of the expanded job names of the workflow")
+    gate = jobs.get("ci_gate", {})
+    needs = [gate["needs"]] if isinstance(gate.get("needs"), str) else list(gate.get("needs", []))
+    if sorted(needs) != sorted(key for key in jobs if key != "ci_gate"):
+        problems.append("CI Checks must need every other job of the workflow")
+    if str(gate.get("if", "")).strip() != "${{ always() }}":
+        problems.append("CI Checks must run always()")
+    return problems
+
+
+def workflow_trigger_cases() -> list[dict[str, Any]]:
+    """The workflow runs on a push to any branch but main, in full, with CI Checks and its job list matching it."""
+    problems = workflow_trigger_problems((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    return [{"case": "ci_workflow_triggers_are_push_to_branches_but_main_and_dispatch", "passed": not problems, "problems": problems}]
 
 
 def ci_script() -> str:
@@ -2247,22 +2266,17 @@ def feature_split_cases() -> list[dict[str, Any]]:
                 "error": error,
             }
         )
-    plan_outputs = workflow_document()["jobs"]["plan"].get("outputs", {})
     for suite in ("sources", "columns"):
         definition = workflow_document()["jobs"][f"feature_{suite}"]
         steps = [step for step in definition["steps"] if step.get("run") == "bash scripts/run_ci.sh"]
         cases.append(
             {
-                "case": f"feature_{suite}_job_uses_range_selection_and_the_plan_reuse_condition",
-                "passed": definition.get("needs") == "plan"
-                and definition.get("if") == "${{ needs.plan.outputs.reuse != 'true' }}"
+                "case": f"feature_{suite}_job_runs_in_full_on_the_pushed_commit",
+                "passed": "needs" not in definition
+                and "if" not in definition
                 and len(steps) == 1
                 and steps[0].get("env", {}).get("CI_PART") == f"feature_{suite}"
-                and steps[0].get("env", {}).get("CI_SCOPE") == "${{ needs.plan.outputs.scope }}"
-                and steps[0].get("env", {}).get("RANGE_START") == "${{ needs.plan.outputs.range_start }}"
-                and steps[0].get("env", {}).get("RANGE_END") == "${{ needs.plan.outputs.range_end }}"
-                and plan_outputs.get("range_start") == "${{ steps.range.outputs.start }}"
-                and plan_outputs.get("range_end") == "${{ steps.range.outputs.end }}",
+                and not {"CI_SCOPE", "RANGE_START", "RANGE_END"} & set(steps[0].get("env", {})),
             }
         )
         for path in sources:
@@ -3960,9 +3974,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
         raise ValueError(".pre-commit-config.yaml must contain a mapping")
     hooks = hook_document["repos"][0]["hooks"]
     delegated = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")).get("hooks_run_by_groups", {})
-    expected = sorted(
-        hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] != "local_ci" and hook["id"] not in delegated
-    )
+    expected = sorted(hook["id"] for hook in hooks if "manual" in hook.get("stages", ["pre-commit", "manual"]) and hook["id"] not in delegated)
     actual: list[str] = []
     exits = []
     for group in HOOK_GROUPS:
@@ -4096,7 +4108,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     quality = out / f"{name}_quality"
     timing = (ROOT / TIMING).read_text().replace("timed() {", "scheduling_timed() {", 1)
     timing += '\ntimed() { local label="$1"; shift; scheduling_timed "$label" "$python_bin" "$SCHEDULING_PROBE" "$label" "$@"; }\n'
-    entries = (*CORE[:1], *CORE[2:], "lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")
+    entries = (*CORE[:1], *CORE[2:], "lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "gate_stage_checks")
 
     def prepare(tree: Path) -> None:
         bodies = {entry: f'  timed "probe: {entry}" /usr/bin/true' for entry in entries}
@@ -4168,7 +4180,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
         )
     ]
     if part == "all":
-        expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
+        expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "gate_stage_checks")]
         expected += ["probe: lakehouse_features_store", "lakehouse_features: feature sources check", "lakehouse_features: feature columns check"]
         # A failed shard of the hooks stops the combining steps of the run, as a failed acquisition shard does, while the other workers still run.
         expected += [] if fail_samples else [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
@@ -4432,7 +4444,7 @@ BODY_SELECTION = {
     "terraform_proofs": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_proofs"],
     "terraform_replace_proofs": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_replace_proofs"],
     "launcher": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher"],
-    "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher", "reuse_gate_checks"],
+    "gate_stage_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher", "gate_stage_checks"],
 }
 
 
@@ -4461,17 +4473,15 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         }
     ]
     for group, wanted in BODY_SELECTION.items():
-        part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
+        part = "all" if group in {"launcher", "gate_stage_checks"} else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part, split=False))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
         staged_edit_case(
             work,
             "dispatcher_edit_selects_every_group_in_part_all",
             "scripts/run_ci.sh",
-            [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
+            [*WITH_LAYERS, "launcher", "gate_stage_checks"],
             "all",
             "selects every group",
         )
@@ -5091,7 +5101,7 @@ def stand_in_run(work: Path, out: Path, name: str, extra: dict[str, str], expect
             "bash",
             ["scripts/run_ci.sh"],
             cwd=work,
-            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), "HAI_CI_REUSE": "off", **extra},
+            env={**environment, "GITHUB_STEP_SUMMARY": str(out / f"{name}_summary.md"), "PYTHON_BIN": str(filter_path), **extra},
             timeout=600,
         )
     finally:
@@ -5115,7 +5125,7 @@ def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     core = [
         entry
         for entry in everything
-        if entry not in {"launcher_e2e", "reuse_gate_checks", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
+        if entry not in {"launcher_e2e", "gate_stage_checks", *STAND_IN_ENTRIES["lakehouse_gold"], *STAND_IN_ENTRIES["lakehouse_features"], *LAYERS}
     ]
     layers = {
         "bronze": ["lakehouse_bronze"],
@@ -5186,7 +5196,7 @@ FAST_COMMIT_HOOKS = frozenset(
         "zizmor",
     }
 )
-PUSH_HOOKS = frozenset({"local_ci_pushed", "acquisition-checks"})
+PUSH_HOOKS = frozenset({"local_ci_pushed"})
 INSTALL_TYPES = ("pre-commit", "commit-msg", "pre-push")
 FINGERPRINT_KEYS = ("entry", "language", "files", "exclude", "types", "types_or", "always_run", "pass_filenames", "verbose", "args")
 # What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced, and the seven linters of lint_tools.
@@ -5248,13 +5258,11 @@ def stage_set(document: dict[str, Any], hook: dict[str, Any]) -> set[str]:
     return set(hook.get("stages", document.get("default_stages", [])))
 
 
-def hook_config_problems(
-    document: dict[str, Any], push_plan_groups: list[str], partitions: dict[str, list[str]], delegated: dict[str, str] | None = None
-) -> dict[str, Any]:
+def hook_config_problems(document: dict[str, Any], partitions: dict[str, list[str]], delegated: dict[str, str] | None = None) -> dict[str, Any]:
     """Every way the hook configuration can leave the fast commit stage, the pre-push run or the hosted manual stage wrong."""
     hooks = hook_table(document)
     commit = {name for name, hook in hooks.items() if "pre-commit" in stage_set(document, hook)}
-    manual = {name for name, hook in hooks.items() if "manual" in stage_set(document, hook) and name != "local_ci"}
+    manual = {name for name, hook in hooks.items() if "manual" in stage_set(document, hook)}
     fingerprints = {
         name: hashlib.sha256(json.dumps({key: hooks[name].get(key) for key in FINGERPRINT_KEYS}, sort_keys=True).encode()).hexdigest()[:12] for name in manual
     }
@@ -5267,7 +5275,7 @@ def hook_config_problems(
         "push_hooks_not_in_push_stage": sorted(name for name in PUSH_HOOKS if stage_set(document, hooks.get(name, {})) != {"pre-push"}),
         "manual_changed": sorted(name for name in MANUAL_FINGERPRINTS if fingerprints.get(name) != MANUAL_FINGERPRINTS[name])
         + sorted(manual - set(MANUAL_FINGERPRINTS)),
-        "moved_not_run_before_push": sorted(name for name in moved if name not in partitioned) + sorted(set(partitions) - set(push_plan_groups)),
+        "moved_not_in_a_partition": sorted(name for name in moved if name not in partitioned),
         "local_ci_affected_present": ["local_ci_affected"] if "local_ci_affected" in hooks else [],
     }
 
@@ -5278,7 +5286,7 @@ ROOT_MANIFESTS = ("uv.lock", "pyproject.toml")
 def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
     """The root dependency manifest and lock select every hook that depends on the locked environment."""
     hooks = hook_table(document)
-    wanted = ("acquisition-checks", "model-metadata", "dependency-lock", "test-lock", "osv-scanner")
+    wanted = ("model-metadata", "dependency-lock", "test-lock", "osv-scanner")
     cases = []
     for name in wanted:
         pattern = re.compile(str(hooks[name]["files"])) if name in hooks and hooks[name].get("files") else None
@@ -5290,20 +5298,18 @@ def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The commit stage holds only the fast hooks, the push stage holds the pre-push run, the manual stage is what hosted CI ran before."""
+    """The commit stage holds only the fast hooks, the push stage holds the shim check, the manual stage is what hosted CI runs."""
     document = load_yaml((ROOT / ".pre-commit-config.yaml").read_text())
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if not isinstance(document, dict):
         raise ValueError(".pre-commit-config.yaml must contain a mapping")
     partitions = config["hook_groups"]
-    plan = pre_push_plan(pre_push_repo(scratch, "fast_hook_plan"))
-    groups = [step["name"].removeprefix("hooks_") for step in plan["steps"] if step["name"].startswith("hooks_")]
-    real = hook_config_problems(document, groups, partitions, config.get("hooks_run_by_groups", {}))
+    real = hook_config_problems(document, partitions, config.get("hooks_run_by_groups", {}))
     names = {
         "commit_stage_holds_only_fast_hooks": ("heavy_in_commit_stage", "fast_missing_from_commit_stage", "local_ci_affected_present"),
         "pre_push_hooks_declared": ("install_types", "push_hooks_not_in_push_stage"),
         "manual_stage_unchanged": ("manual_changed",),
-        "moved_hooks_run_before_push": ("moved_not_run_before_push",),
+        "moved_hooks_are_in_a_hosted_partition": ("moved_not_in_a_partition",),
     }
     results = [{"case": case, "passed": not any(real[key] for key in keys), **{key: real[key] for key in keys}} for case, keys in names.items()]
     results += hook_path_cases(document)
@@ -5312,7 +5318,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
         damaged = copy.deepcopy(document)
         damaged_partitions = copy.deepcopy(partitions)
         mutate(damaged, damaged_partitions)
-        found = hook_config_problems(damaged, groups, damaged_partitions, config.get("hooks_run_by_groups", {}))
+        found = hook_config_problems(damaged, damaged_partitions, config.get("hooks_run_by_groups", {}))
         return {"case": f"planted_{label}_caught_by_{case}", "passed": bool(found[key]), "caught": found[key]}
 
     def add_stage(name: str, stage: str) -> Callable[[dict[str, Any], dict[str, list[str]]], None]:
@@ -5347,45 +5353,14 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
             "commit_stage_holds_only_fast_hooks",
         ),
         planted("pre_push_install_type_missing", drop_install_type, "install_types", "pre_push_hooks_declared"),
-        planted(
-            "acquisition_hook_back_in_commit_stage", add_stage("acquisition-checks", "pre-commit"), "push_hooks_not_in_push_stage", "pre_push_hooks_declared"
-        ),
         planted("moved_hook_loses_manual_stage", drop_stage("orphan-files", "manual"), "manual_changed", "manual_stage_unchanged"),
         planted("manual_hook_entry_edited", edit_entry, "manual_changed", "manual_stage_unchanged"),
-        planted("moved_hook_in_no_partition", unpartition, "moved_not_run_before_push", "moved_hooks_run_before_push"),
+        planted("moved_hook_in_no_partition", unpartition, "moved_not_in_a_partition", "moved_hooks_are_in_a_hosted_partition"),
     ]
     return results
 
 
-# The paths of a pre-push range that select the full scope, and ordinary paths that stay in the range scope.
-ESCALATING_PATHS = (
-    "scripts/run_ci.sh",
-    "scripts/quality/ci_groups.py",
-    "scripts/quality/ci_hooks.py",
-    "scripts/quality/run_ci_groups_e2e.py",
-    "scripts/quality/timing.sh",
-    "config/quality/ci_groups.json",
-    "scripts/ci/groups/launcher.sh",
-    ".github/workflows/ci.yml",
-    ".pre-commit-config.yaml",
-    "scripts/acquisition/run_checks_ci.sh",
-    "scripts/acquisition/run_checks_ci_e2e.sh",
-    "scripts/acquisition/run_checks_pushed.sh",
-    "scripts/acquisition/run_checks_combine.sh",
-    "scripts/acquisition/run_checks_shard.sh",
-    "scripts/acquisition/shards.py",
-)
-ORDINARY_PATHS = (
-    "README.md",
-    "scripts/lakehouse/silver.py",
-    "dbt/models/gold/fact_example.sql",
-    "scripts/acquisition/s3_store.py",
-    "scripts/acquisition/run_checks.sh",
-)
-INHERITED_PATTERN = (
-    "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|HAI_DOCKER_RELEASE$|HAI_CI_REUSE$|"
-    "GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
-)
+INHERITED_PATTERN = "^(CI_|RANGE_|LAUNCHER_|FEATURE_|ACQUISITION_|_?PRE_COMMIT_|SKIP$|GITHUB_ACTIONS$|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$)"
 NOT_CONTROLS = frozenset(
     {
         "BASH",
@@ -5417,81 +5392,14 @@ STUB_LOG_PROGRAM = (
     "    log.write(json.dumps({'stub': %r, 'argv': sys.argv[1:], 'env': {k: os.environ.get(k) for k in keys}, 'seen': seen}) + '\\n')\n"
     "sys.exit(int(os.environ.get('STUB_EXIT_%s', '0')))\n"
 )
-STUB_HOOK_PROGRAM = (
-    "import json, os, re, sys, time\n"
-    "keys = ('PRE_COMMIT_FROM_REF', 'PRE_COMMIT_TO_REF')\n"
-    "seen = ','.join(sorted(name for name in os.environ if re.match(%r, name)))\n"
-    "lock, collided = os.environ.get('STUB_INDEX_LOCK', ''), False\n"
-    "if lock:\n"
-    "    try:\n"
-    "        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))\n"
-    "    except FileExistsError:\n"
-    "        collided = True\n"
-    "        sys.stderr.write('fatal: Unable to create index.lock: File exists.\\n')\n"
-    "if not collided:\n"
-    "    time.sleep(float(os.environ.get('STUB_HOLD', '0')))\n"
-    "    if lock:\n"
-    "        os.remove(lock)\n"
-    "row = {'stub': 'ci_hooks', 'argv': sys.argv[1:], 'env': {k: os.environ.get(k) for k in keys}, 'seen': seen, 'collided': collided}\n"
-    "with open(os.environ['STUB_LOG'], 'a') as log:\n"
-    "    log.write(json.dumps(row) + '\\n')\n"
-    "sys.exit(128 if collided else int(os.environ.get('STUB_EXIT_CI_HOOKS', '0')))\n"
-)
-STUB_RUN_CI = """#!/usr/bin/env bash
-seen="$(env | cut -d= -f1 | grep -E '@PATTERN@' | sort | paste -sd, - || true)"
-overlap=unchecked
-if [[ -n "${STUB_WAIT_FOR_LOCK:-}" ]]; then
-  overlap=false
-  for _ in $(seq 100); do
-    if [[ -e "$STUB_WAIT_FOR_LOCK" ]]; then overlap=true; break; fi
-    sleep 0.1
-  done
-fi
-# One append per row: the hook partitions write to this log at the same time, and two appends could interleave another stub's row.
-row="$(printf '{"stub": "run_ci", "env": {"CI_SCOPE": "%s", "RANGE_START": "%s", "RANGE_END": "%s", "HAI_DOCKER_RELEASE": "%s", ' \\
-  "${CI_SCOPE-}" "${RANGE_START-unset}" "${RANGE_END-unset}" "${HAI_DOCKER_RELEASE-unset}")"
-row+="$(printf '"HAI_CI_REUSE": "%s"}, "seen": "%s", "overlap": "%s"}' "${HAI_CI_REUSE-unset}" "$seen" "$overlap")"
-printf '%s\\n' "$row" >>"$STUB_LOG"
-if [[ -n "${STUB_SLEEP:-}" ]]; then exec sleep "$STUB_SLEEP"; fi
-exit "${STUB_EXIT_RUN_CI:-0}"
-""".replace("@PATTERN@", INHERITED_PATTERN)
-# The stand-in launcher of the release: it logs its arguments and answers as STUB_RELEASE says (quit, skipped, refused, error, garbage or sleep).
-STUB_LAUNCHER = (
+STUB_SCAN_PROGRAM = (
     "import json, os, re, sys, time\n"
     "seen = ','.join(sorted(name for name in os.environ if re.match(%r, name)))\n"
+    "time.sleep(float(os.environ.get('STUB_SLEEP', '0')))\n"
     "with open(os.environ['STUB_LOG'], 'a') as log:\n"
-    "    log.write(json.dumps({'stub': 'launcher', 'argv': sys.argv[1:], 'seen': seen}) + '\\n')\n"
-    "mode = os.environ.get('STUB_RELEASE', 'quit')\n"
-    "if mode == 'quit':\n"
-    "    print(json.dumps({'outcome': 'quit', 'catalog': 'down', 'seconds': 1.5}))\n"
-    "elif mode == 'skipped':\n"
-    "    print(json.dumps({'outcome': 'skipped', 'reason': 'no container ran since T'}))\n"
-    "elif mode == 'refused':\n"
-    "    sys.stderr.write('launcher: refused: docker_release is refused: running containers not created by this launcher: other_db, other_cache\\n')\n"
-    "    sys.exit(3)\n"
-    "elif mode == 'error':\n"
-    "    sys.stderr.write('launcher: docker quit failed: boom [command_failed]\\n')\n"
-    "    sys.exit(4)\n"
-    "elif mode == 'garbage':\n"
-    "    print('not json')\n"
-    "elif mode == 'sleep':\n"
-    "    time.sleep(60)\n"
+    "    log.write(json.dumps({'stub': 'secret_scan', 'argv': sys.argv[1:], 'env': {}, 'seen': seen}) + '\\n')\n"
+    "sys.exit(int(os.environ.get('STUB_EXIT_SECRET_SCAN', '0')))\n"
 )
-STUB_ACQUISITION = """#!/usr/bin/env bash
-collided=false
-if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then
-  if ( set -o noclobber; : >"$STUB_INDEX_LOCK" ) 2>/dev/null; then :; else
-    collided=true
-    echo 'fatal: Unable to create index.lock: File exists.' >&2
-  fi
-fi
-if [[ "$collided" == false ]]; then
-  sleep "${STUB_HOLD:-0}"
-  if [[ -n "${STUB_INDEX_LOCK:-}" ]]; then rm -f "$STUB_INDEX_LOCK"; fi
-fi
-printf '{"stub": "acquisition", "argv": [], "collided": %s}\\n' "$collided" >>"$STUB_LOG"
-if [[ "$collided" == true ]]; then exit 128; fi
-"""
 GIT_IDENTITY = {"GIT_AUTHOR_NAME": "Probe", "GIT_COMMITTER_NAME": "Probe", "GIT_AUTHOR_EMAIL": "", "GIT_COMMITTER_EMAIL": ""}
 SHIM_NAME = "hai-push-input"
 SHIM_COMMAND_LINE_VALUE = ".venv/bin/python -m scripts.quality.pre_push run --hook"
@@ -5512,45 +5420,35 @@ def pre_push_repo(
     remote: bool = True,
     timeout: int | None = None,
     mutate: Callable[[str], str] | None = None,
-    config_edit: Callable[[str], str] | None = None,
-    small: dict[str, Any] | None = None,
 ) -> Path:
-    """A small repository with the real selector configuration, a copy of the pre-push run and stand-ins for the commands a push runs.
+    """A small repository with the real selector configuration, a copy of the push gate and stand-ins for the commands a push runs.
 
     One topic commit per path in ``changed`` follows the base commit; ``mutate`` rewrites the copy of ``scripts/quality/pre_push.py`` to plant a defect.
-    No range is a small change unless ``small`` overrides the thresholds of ``pre_push.small_change``.
     """
     root = scratch / name
     suffix = 1
     while root.exists():
         suffix += 1
         root = scratch / f"{name}_{suffix}"
-    for folder in ("config/quality", "scripts/quality", "scripts/acquisition", ".github/workflows", "orchestration"):
+    for folder in ("config/quality", "scripts/quality", ".github/workflows"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     (root / ".venv").symlink_to(PYTHON.parent.parent)
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if timeout is not None:
-        config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
-        config["pre_push"]["local_ci_seconds"] = {"range": timeout, "full": timeout}
-    config["pre_push"]["small_change"] = {**config["pre_push"]["small_change"], **({"max_files": 0} if small is None else small)}
+        config["pre_push"]["timeout_seconds"] = timeout
     (root / "config/quality/ci_groups.json").write_text(json.dumps(config))
-    (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
     (root / "scripts/quality/ci_changed_files.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "changed_files", "CHANGED_FILES"))
-    (root / "scripts/quality/ci_hooks.py").write_text(STUB_HOOK_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/repo_checks.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "repo_checks", "REPO_CHECKS"))
+    (root / "scripts/quality/scan_secrets.py").write_text(STUB_SCAN_PROGRAM % INHERITED_PATTERN)
     (root / "scripts/quality/lint_tools.py").write_text(STUB_LOG_PROGRAM % (INHERITED_PATTERN, "osv_scanner", "OSV_SCANNER"))
     for checked in ("check_head", "check_tools"):  # The worktree checks have their own E2E; the push gate cases only need them to pass.
         (root / f"scripts/quality/{checked}.py").write_text("raise SystemExit(0)\n")
-    for package in ("scripts", "scripts/quality", "orchestration"):
+    for package in ("scripts", "scripts/quality"):
         (root / package / "__init__.py").write_text("")
-    (root / "orchestration/launcher.py").write_text(STUB_LAUNCHER % INHERITED_PATTERN)
     shutil.copy2(ROOT / "scripts/process.py", root / "scripts/process.py")
     source = (ROOT / "scripts/quality/pre_push.py").read_text()
     (root / "scripts/quality/pre_push.py").write_text(mutate(source) if mutate else source)
-    shutil.copy2(ROOT / "scripts/acquisition/run_checks_pushed.sh", root / "scripts/acquisition/run_checks_pushed.sh")
-    hook_config = (ROOT / ".pre-commit-config.yaml").read_text()
-    (root / ".pre-commit-config.yaml").write_text(config_edit(hook_config) if config_edit else hook_config)
-    (root / "scripts/acquisition/run_checks.sh").write_text(STUB_ACQUISITION)
+    (root / ".pre-commit-config.yaml").write_text((ROOT / ".pre-commit-config.yaml").read_text())
     (root / "README.md").write_text("base\n")
     probe_git(root, "init", "--quiet", "--initial-branch", "main")
     probe_git(root, "add", "--all")
@@ -5591,152 +5489,96 @@ def pre_push_calls(root: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-PRE_PUSH_SCHEDULING_OBSERVER = """
-from scheduling_probe import observe as scheduling_observe
-scheduling_original_run_step = run_step
-def run_step(root: Path, output: Path, step: dict[str, Any]) -> dict[str, Any]:
-    return scheduling_observe(step["name"], step["argv"], lambda: scheduling_original_run_step(root, output, step))
-"""
+GATE_STEPS = ["commit_messages", "removed_names", "secret_scan", "privacy_scan", "osv_scanner"]
 
 
-def pre_push_scheduling_case(scratch: Path, scope: str, fail_local: bool = False, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """Measure complete step-worker intervals through the CLI, including the serial hook worker and native command stand-ins."""
-    name = f"pre_push_scheduling_{scope}_{'local_failure' if fail_local else 'success'}"
-
-    def observed(source: str) -> str:
-        source = mutate(source) if mutate else source
-        return source.replace('\nif __name__ == "__main__":', PRE_PUSH_SCHEDULING_OBSERVER + '\nif __name__ == "__main__":', 1)
-
-    root = pre_push_repo(scratch, name, ("scripts/acquisition/example.py", "README.md"), mutate=observed)
-    events = root / "events"
-    scheduling_probe(root, events, ["local_ci"], ["commit_messages", "removed_names"])
-    arguments = ("--full",) if scope == "full" else ()
-    planned = pre_push_plan(root, arguments)
-    code, out, error = pre_push(
-        root,
-        "run",
-        extra={
-            "SCHEDULING_EVENTS": str(events),
-            "STUB_EXIT_RUN_CI": "3" if fail_local else "0",
-            "STUB_INDEX_LOCK": str(root / "index.lock"),
-            "STUB_HOLD": "0.2",
-        },
-        arguments=arguments,
-    )
-    report = latest_report(root)
-    rows = scheduling_rows(events)
-    executed_plan = report.get("plan") or {}
-    steps = executed_plan.get("steps", [])
-    names = [step["name"] for step in steps]
-    local = [row for row in rows if row["label"] == "local_ci"]
-    peers = [row for row in rows if row["label"] in names and row["label"] != "local_ci"]
-    pair = [row for row in peers if row["label"] in {"commit_messages", "removed_names"}]
-    serial = [row for row in peers if row["label"] == "acquisition" or row["label"].startswith("hooks_") or row["label"] == "osv_scanner"]
-    reported = report.get("results", [])
-    wanted_names = ["local_ci"] if fail_local else names
-    commands = {step["name"]: step["argv"] for step in steps}
-    calls = pre_push_calls(root)
-    hook_calls = [call for call in calls if call["stub"] == "ci_hooks"]
-    acquisition = [call for call in calls if call["stub"] == "acquisition"]
-    expected_serial = [step["name"] for step in steps if step["kind"] in {"pre_commit", "ci_hooks"}]
+def gate_plan_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """The push gate plan: changed-file checks first, then commit messages, removed names, both scans and OSV over the range, no step of the old gate."""
+    root = pre_push_repo(scratch, "gate_plan", "README.md", mutate=mutate)
+    plan = pre_push_plan(root)
+    config = json.loads((root / "config/quality/ci_groups.json").read_text())
+    names = [step["name"] for step in plan["steps"]]
+    steps = {step["name"]: step for step in plan["steps"]}
+    base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
+    first = plan.get("first") or {}
     checks = {
-        "real_scope_and_non_small_plan": planned["scope"] == scope
-        and executed_plan.get("scope") == scope
-        and (scope == "full" or "acquisition" in names and len(hook_calls) == (0 if fail_local else len(HOOK_GROUPS))),
-        "executed_plan_matches_cli_plan": json.dumps(steps, sort_keys=True).replace(executed_plan.get("output", "<missing>"), "<output>")
-        == json.dumps(planned["steps"], sort_keys=True).replace(planned.get("output", "<missing>"), "<output>"),
-        "intended_exit": code != 0 if fail_local else code == 0,
-        "local_ci_has_no_peer_worker_overlap": len(local) == 1 and all(not intervals_overlap(local[0], peer) for peer in peers),
-        "local_ci_runs_before_every_peer": len(local) == 1 and all(local[0]["end"] <= peer["start"] for peer in peers),
-        "planned_commands_run_once": sorted(row["label"] for row in rows if row["label"] in names) == sorted(wanted_names)
-        and all(row["argv"] == commands[row["label"]] for row in [*local, *peers]),
-        "reported_rows_preserve_plan_order": [row["name"] for row in reported] == wanted_names,
-        "remaining_nonlocal_workers_overlap": fail_local or len(pair) == 2 and all(row["barrier_met"] for row in pair) and intervals_overlap(*pair),
-        "hook_worker_preserves_serial_order": [row["label"] for row in serial] == ([] if fail_local else expected_serial)
-        and all(left["end"] <= right["start"] for left, right in zip(serial, serial[1:], strict=False)),
-        "acquisition_and_hook_results_preserved": fail_local
-        or scope == "full"
-        or len(acquisition) == 1
-        and acquisition[0]["collided"] is False
-        and all(call["collided"] is False for call in hook_calls),
-        "early_local_failure_stops_admission_and_stays_failed": not fail_local
-        or not peers
-        and len(reported) == 1
-        and reported[0]["exit"] == 3
-        and "FAIL local_ci" in out
-        and "pre-push: all steps passed" not in out,
+        "step_names": names == GATE_STEPS,
+        "changed_file_checks_first": first.get("name") == "changed_file_checks" and first.get("argv", [])[-4:] == ["--from", base, "--to", head],
+        "no_step_of_the_removed_gate": not any(name in ("local_ci", "acquisition") or name.startswith("hooks_") for name in names),
+        "secret_scan": steps.get("secret_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.scan_secrets"],
+        "privacy_scan": steps.get("privacy_scan", {}).get("argv", [])[1:] == ["-m", "scripts.quality.repo_checks", "privacy-scan"],
+        "range": plan["start"] == base and plan["end"] == head,
+        "commit_messages": steps.get("commit_messages", {}).get("argv", [])[-3:] == ["commit-range", base, head],
+        "removed_names": steps.get("removed_names", {}).get("env") == {"PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head},
+        "osv_range": steps.get("osv_scanner", {}).get("argv", [])[-6:] == ["--hook-stage", "pre-push", "--from-ref", base, "--to-ref", head],
+        "every_step_has_the_configured_deadline": bool(names)
+        and all(step["timeout_seconds"] == config["pre_push"]["timeout_seconds"] for step in plan["steps"]),
+    }
+    return {"case": "pre_push_plan_runs_the_two_scans_and_the_range_checks", "passed": all(checks.values()), "checks": checks, "steps": names}
+
+
+def gate_run_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """A run starts the changed-file checks first, then runs each step once, and calls nothing else."""
+    root = pre_push_repo(scratch, "gate_run", "README.md", mutate=mutate)
+    code, out, error = pre_push(root, "run", timeout=300)
+    calls = pre_push_calls(root)
+    repo_checks = sorted(call["argv"][0] for call in calls if call["stub"] == "repo_checks")
+    checks = {
+        "exit": code == 0,
+        "changed_files_first": first_stub(calls) == "changed_files",
+        "each_step_ran_once": sum(1 for call in calls if call["stub"] == "secret_scan") == 1
+        and repo_checks == ["commit-range", "privacy-scan", "removed-names"],
+        "nothing_else_ran": sorted({call["stub"] for call in calls}) == ["changed_files", "repo_checks", "secret_scan"],
+        "report_rows": [row["name"] for row in latest_report(root).get("results", [])] == GATE_STEPS,
     }
     return {
-        "case": name,
+        "case": "pre_push_run_calls_each_gate_step_once",
         "passed": all(checks.values()),
         "checks": checks,
-        "exit": code,
-        "events": rows,
-        "planned": steps,
-        "reported": reported,
-        "output": (out + error)[-500:],
+        "calls": [call["stub"] for call in calls],
+        "output": (out + error)[-300:],
     }
 
 
-def pre_push_no_peer_case(scratch: Path) -> dict[str, Any]:
-    """Run the real step executor with the plan's sole local step, an edge the full CLI always adds OSV beside."""
-    root = pre_push_repo(scratch, "pre_push_no_peer")
-    output = root / "single_step_output"
-    output.mkdir()
-    program = (
-        "import json,sys\nfrom pathlib import Path\nfrom scripts.quality.pre_push import plan,run_steps\n"
-        "root=Path.cwd()\nchosen=plan(root,full=True)\nlocal=[step for step in chosen['steps'] if step['kind']=='run_ci']\n"
-        "rows=run_steps(root,root/'single_step_output',local)\nsys.stdout.write(json.dumps(rows)+'\\n')\n"
-    )
-    run = run_command(str(PYTHON), ["-B", "-c", program], cwd=root, env={**os.environ, "STUB_LOG": str(root / "stub.log")}, timeout=30)
-    rows = json.loads(run.stdout.splitlines()[-1]) if run.returncode == 0 and run.stdout.splitlines() else []
-    return {
-        "case": "pre_push_local_ci_without_peers",
-        "passed": run.returncode == 0 and len(rows) == 1 and rows[0]["name"] == "local_ci" and rows[0]["exit"] == 0,
-        "exit": run.returncode,
-        "output": run.stderr[-500:],
-    }
-
-
-def escalation_case(scratch: Path, name: str, path: str, want_scope: str, timeout: int | None = None) -> dict[str, Any]:
-    root = pre_push_repo(scratch, name, path)
-    plan = pre_push_plan(root)
-    return {"case": name, "passed": plan["scope"] == want_scope, "scope": plan["scope"], "want": want_scope, "path": path}
-
-
-def hook_partition_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    result = pre_push_scheduling_case(scratch, "range", mutate=mutate)
-    result["case"] = "pre_push_hook_partitions_run_one_after_the_other"
-    return result
-
-
-def hook_failure_case(scratch: Path) -> dict[str, Any]:
-    """A failed hook partition does not stop the later ones, and the failure report names every failed partition."""
-    root = pre_push_repo(scratch, "pre_push_hook_failures")
-    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_CI_HOOKS": "3"})
-    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
-    hook_calls = [call for call in pre_push_calls(root) if call["stub"] == "ci_hooks"]
-    names = [f"hooks_{group}" for group in groups]
+def gate_scan_failure_case(scratch: Path) -> dict[str, Any]:
+    """A failed secret scan fails the gate by name and does not stop the other steps."""
+    root = pre_push_repo(scratch, "gate_scan_failure", "README.md")
+    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_SECRET_SCAN": "3"}, timeout=300)
+    repo_checks = sorted(call["argv"][0] for call in pre_push_calls(root) if call["stub"] == "repo_checks")
     failed_line = next((line for line in out.splitlines() if line.startswith("pre-push: failed steps:")), "")
-    return {
-        "case": "pre_push_hook_failures_are_all_reported",
-        "passed": code != 0 and len(hook_calls) == len(groups) and all(f"FAIL {name}" in out and name in failed_line for name in names),
-        "exit": code,
-        "partitions": len(hook_calls),
-        "failed_line": failed_line,
+    checks = {
+        "exit": code != 0,
+        "names_the_step": "FAIL secret_scan" in out and "secret_scan" in failed_line,
+        "other_steps_ran": repo_checks == ["commit-range", "privacy-scan", "removed-names"],
     }
+    return {"case": "pre_push_secret_scan_failure_is_reported", "passed": all(checks.values()), "checks": checks, "output": (out + error)[-300:]}
 
 
-def hook_deadline_case(scratch: Path) -> dict[str, Any]:
-    """Every hook partition keeps its own deadline when they run one after the other."""
-    root = pre_push_repo(scratch, "pre_push_hook_deadlines", timeout=2)
+def gate_no_range_case(scratch: Path) -> dict[str, Any]:
+    """With no merge base there is no range: the checks that read one are left out, and the two scans and OSV run over every file."""
+    root = pre_push_repo(scratch, "gate_no_range", "README.md", remote=False)
+    plan = pre_push_plan(root)
+    names = [step["name"] for step in plan["steps"]]
+    osv: dict[str, Any] = next((step for step in plan["steps"] if step["name"] == "osv_scanner"), {})
+    code, out, error = pre_push(root, "run", timeout=300)
+    checks = {
+        "step_names": names == ["secret_scan", "privacy_scan", "osv_scanner"] and plan["first"] is None,
+        "osv_over_every_file": osv.get("argv", [])[-1:] == ["--all-files"],
+        "reason_names_the_base": "origin/main" in plan["reason"],
+        "exit": code == 0 and "changed_files" not in [call["stub"] for call in pre_push_calls(root)],
+    }
+    return {"case": "pre_push_without_a_range_runs_the_scans_over_every_file", "passed": all(checks.values()), "checks": checks, "reason": plan["reason"]}
+
+
+def gate_deadline_case(scratch: Path) -> dict[str, Any]:
+    """A step that passes its deadline fails visibly with its name, and the run does not wait for it."""
+    root = pre_push_repo(scratch, "gate_deadline", "README.md", timeout=2)
     started = time.monotonic()
-    code, out, error = pre_push(root, "run", extra={"STUB_HOLD": "60"}, timeout=120)
+    code, out, error = pre_push(root, "run", extra={"STUB_SLEEP": "60"}, timeout=90)
     seconds = time.monotonic() - started
-    groups = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["hook_groups"])
     return {
-        "case": "pre_push_hook_deadlines_fail_visibly",
-        "passed": code != 0 and all(f"step hooks_{group} exceeded its deadline of 2 seconds" in out for group in groups) and seconds < 60,
+        "case": "pre_push_step_deadline_fails_visibly",
+        "passed": code != 0 and "FAIL secret_scan" in out and "exceeded its deadline of 2 seconds" in out + error and seconds < 30,
         "exit": code,
         "seconds": round(seconds, 1),
         "output": (out + error)[-300:],
@@ -5746,145 +5588,6 @@ def hook_deadline_case(scratch: Path) -> dict[str, Any]:
 def latest_report(root: Path) -> dict[str, Any]:
     reports = sorted((root / "data/e2e/pre_push").glob("*/report.json"))
     return json.loads(reports[-1].read_text()) if reports else {}
-
-
-def gate_release_case(
-    scratch: Path,
-    case: str,
-    mode: str,
-    want_exit: int,
-    want_outcome: str,
-    want_text: str,
-    step_exit: str = "0",
-    mutate: Callable[[str], str] | None = None,
-    seconds_limit: float = 60.0,
-) -> dict[str, Any]:
-    """The gate asks a stand-in launcher (it answers as ``mode`` says) to quit Docker after its steps; the gate's exit stays the steps' result."""
-    root = pre_push_repo(scratch, case, "README.md", mutate=mutate)
-    before = time.time()
-    began = time.monotonic()
-    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": mode, "STUB_EXIT_RUN_CI": step_exit}, timeout=180)
-    seconds = time.monotonic() - began
-    after = time.time()
-    calls = pre_push_calls(root)
-    launcher_calls = [call for call in calls if call["stub"] == "launcher"]
-    ci_calls = [call for call in calls if call["stub"] == "run_ci"]
-    argv = launcher_calls[0]["argv"] if launcher_calls else []
-    since = float(argv[argv.index("--since") + 1]) if "--since" in argv else -1.0
-    released = latest_report(root).get("docker_release") or {}
-    checks = {
-        "exit": code == want_exit,
-        "launcher_called_once": len(launcher_calls) == 1,
-        "release_arguments": argv[:3] == ["docker-release", "--owner", "--since"],
-        "since_is_the_run_start": before - 1 <= since <= after,
-        "release_environment_clean": launcher_calls[0]["seen"] == "" if launcher_calls else False,
-        "run_ci_defers_to_the_gate": bool(ci_calls) and all(call["env"]["HAI_DOCKER_RELEASE"] == "outer" for call in ci_calls),
-        "run_ci_never_reuses_under_the_gate": bool(ci_calls) and all(call["env"]["HAI_CI_REUSE"] == "off" for call in ci_calls),
-        "line_printed": f"pre-push: Docker release: {want_text}" in out,
-        "report_entry": released.get("outcome") == want_outcome,
-        "within_limit": seconds < seconds_limit,
-    }
-    return {"case": case, "passed": all(checks.values()), "checks": checks, "exit": code, "output": (out + error)[-500:]}
-
-
-def failing_step_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    return gate_release_case(scratch, "pre_push_failing_step_still_releases", "quit", 1, "quit", "Docker Desktop quit in", step_exit="3", mutate=mutate)
-
-
-def refused_release_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    return gate_release_case(
-        scratch, "pre_push_refused_release_keeps_the_exit_zero", "refused", 0, "refused", "refused (launcher: refused: docker_release is refused", mutate=mutate
-    )
-
-
-def exception_release_case(scratch: Path) -> dict[str, Any]:
-    """A step runner that raises (the Ctrl-C path) still releases, and the error reaches the caller."""
-    raising = source_edit('    serial = [step for step in steps if step["kind"] in SERIAL_KINDS]', '    raise RuntimeError("planted step failure")')
-    root = pre_push_repo(scratch, "pre_push_exception_still_releases", "README.md", mutate=raising)
-    code, out, error = pre_push(root, "run", extra={"STUB_RELEASE": "quit"}, timeout=120)
-    launcher_calls = [call for call in pre_push_calls(root) if call["stub"] == "launcher"]
-    checks = {
-        "error_reaches_the_caller": code != 0 and "planted step failure" in error,
-        "launcher_called_once": len(launcher_calls) == 1,
-        "line_printed": "pre-push: Docker release: Docker Desktop quit in" in out,
-    }
-    return {
-        "case": "pre_push_exception_in_the_steps_still_releases",
-        "passed": all(checks.values()),
-        "checks": checks,
-        "exit": code,
-        "output": (out + error)[-400:],
-    }
-
-
-def direct_release_cases(scratch: Path) -> list[dict[str, Any]]:
-    """``pre_push.release`` on its own: a program that cannot start and a launcher that never answers are reported, never raised."""
-    missing = pre_push_module.release(scratch / "no_such_root", time.time())
-    root = pre_push_repo(scratch, "pre_push_release_direct", "README.md")
-    os.environ["STUB_LOG"] = str(root / "stub.log")
-    try:
-        registry = pre_push_module.release(root, time.time(), str(scratch / "registry"))
-    finally:
-        del os.environ["STUB_LOG"]
-    registry_argv: list[str] = next((call["argv"] for call in pre_push_calls(root) if call["stub"] == "launcher"), [])
-    return [
-        {
-            "case": "pre_push_release_reports_a_program_that_cannot_start",
-            "passed": missing["outcome"] == "failed" and "could not start" in missing["detail"],
-            "result": missing,
-        },
-        {
-            "case": "pre_push_release_passes_the_test_registry_before_the_command",
-            "passed": registry["outcome"] == "quit"
-            and registry_argv[:2] == ["--test-registry", str(scratch / "registry")]
-            and registry_argv[2] == "docker-release",
-            "argv": registry_argv,
-        },
-    ]
-
-
-def gate_release_cases(scratch: Path) -> list[dict[str, Any]]:
-    """Gate cases 6 to 8 of the Docker release design, and the cases for every other answer of the launcher."""
-    deadline = source_edit("RELEASE_SECONDS = 600", "RELEASE_SECONDS = 2")
-    results = [
-        failing_step_release_case(scratch),
-        refused_release_case(scratch),
-        gate_release_case(
-            scratch,
-            "pre_push_release_deadline_is_killed_and_reported",
-            "sleep",
-            0,
-            "failed",
-            "failed (exceeded 2 s and was stopped)",
-            mutate=deadline,
-            seconds_limit=45,
-        ),
-        gate_release_case(scratch, "pre_push_passing_gate_quits_docker", "quit", 0, "quit", "Docker Desktop quit in"),
-        gate_release_case(scratch, "pre_push_skipped_release_is_reported", "skipped", 0, "skipped", "skipped (no container ran since T)"),
-        gate_release_case(
-            scratch,
-            "pre_push_failed_release_keeps_the_exit_zero",
-            "error",
-            0,
-            "failed",
-            "failed (exit 4: launcher: docker quit failed: boom [command_failed]). The gate result stands",
-        ),
-        gate_release_case(scratch, "pre_push_unreadable_release_answer_keeps_the_exit_zero", "garbage", 0, "failed", "failed (unreadable answer: not json)"),
-        exception_release_case(scratch),
-        *direct_release_cases(scratch),
-    ]
-    dropped = source_edit(
-        "        released = release(root, started, release_registry)", '        released = {"outcome": "skipped", "detail": "planted", "seconds": 0.0}'
-    )
-    blocking = source_edit(
-        '    sys.stdout.write(f"pre-push: all steps passed. Logs are in {output}\\n")\n    return 0',
-        '    sys.stdout.write(f"pre-push: all steps passed. Logs are in {output}\\n")\n    return 0 if released["outcome"] != "refused" else 1',
-    )
-    results += [
-        planted_case("dropped_release", failing_step_release_case, scratch, mutate=dropped),
-        planted_case("refused_release_blocks_the_push", refused_release_case, scratch, mutate=blocking),
-    ]
-    return results
 
 
 def release_docker_run(
@@ -5909,7 +5612,7 @@ def release_docker_run(
     (folder / "python_bin").write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >>"$STUB_LOG"\nexit "${STUB_EXIT:-0}"\n')
     (folder / "python_bin").chmod(0o755)
     (folder / "release_function.sh").write_text(transform(text) if transform else text)
-    environment = {key: value for key, value in os.environ.items() if key not in ("HAI_DOCKER_RELEASE", "GITHUB_ACTIONS", "CI_LIST_ONLY")}
+    environment = {key: value for key, value in os.environ.items() if key not in ("GITHUB_ACTIONS", "CI_LIST_ONLY")}
     result = run_command(
         "/bin/bash",
         [
@@ -5934,8 +5637,7 @@ def release_docker_run(
 
 
 def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
-    """Gate case 9: ``run_ci.sh`` releases Docker once after a run on macOS, never changes its exit status, and skips under the gate, on hosted CI, off macOS,
-    in a list-only run and in the gates part."""
+    """``run_ci.sh`` releases Docker once after a run on macOS, never changes its exit status, and skips on hosted CI, off macOS, in list-only and gates."""
     ci = (ROOT / "scripts/run_ci.sh").read_text()
     finish = function_text(ci, "finish") or ""
     wanted = "-m orchestration.launcher docker-release --owner --since 1700000000 --deadline 600"
@@ -5949,7 +5651,6 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
         }
     )
     skipped: dict[str, tuple[dict[str, str], dict[str, Any], str]] = {
-        "outer": ({"HAI_DOCKER_RELEASE": "outer"}, {}, "the pre-push gate releases Docker"),
         "github": ({"GITHUB_ACTIONS": "true"}, {}, "hosted CI has no Docker Desktop"),
         "linux": ({}, {"system": "Linux"}, "this is not macOS"),
         "list_only": ({"CI_LIST_ONLY": "1"}, {}, "no group ran Docker"),
@@ -5983,175 +5684,29 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
             and "trap 'finish; end_unconfirmed; [[ \"${ci_finished:-0}\" == 1 ]] || exit 1' EXIT" in ci,
         }
     )
-    planted = release_docker_run(
-        scratch,
-        "release_planted",
-        {"HAI_DOCKER_RELEASE": "outer"},
-        transform=lambda text: text.replace('"${HAI_DOCKER_RELEASE:-}" == "outer"', '"${HAI_DOCKER_RELEASE:-}" == "never"'),
-    )
-    results.append(
-        {"case": "planted_release_under_the_gate_caught_by_run_ci_skips_its_docker_release_outer", "passed": planted["calls"] == [wanted], "run": planted}
-    )
-    return results
-
-
-def deadline_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The local_ci step has 2700 s (range) and 5400 s (full, 90 minutes); every other step keeps its scope's deadline (2700 and 3600 s)."""
-    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
-    results = []
-    for scope, arguments, local_ci, others in (("range", (), 2700, 2700), ("full", ("--full",), 5400, 3600)):
-        plan = pre_push_plan(pre_push_repo(scratch, f"pre_push_deadlines_{scope}"), arguments)
-        by_name = {step["name"]: step["timeout_seconds"] for step in plan["steps"]}
-        other_steps = {name: seconds for name, seconds in by_name.items() if name != "local_ci"}
-        results.append(
-            {
-                "case": f"pre_push_local_ci_deadline_in_the_{scope}_scope",
-                "passed": plan["scope"] == scope and by_name.get("local_ci") == local_ci and bool(other_steps) and set(other_steps.values()) == {others},
-                "local_ci": by_name.get("local_ci"),
-                "others": sorted(set(other_steps.values())),
-            }
-        )
-    results.append(
-        {
-            "case": "core_budget_and_local_ci_deadline_are_the_owner_decisions",
-            "passed": config["core_budget"] == 12 and config["pre_push"]["local_ci_seconds"] == {"range": 2700, "full": 5400},
-            "core_budget": config["core_budget"],
-            "local_ci_seconds": config["pre_push"]["local_ci_seconds"],
-        }
-    )
     return results
 
 
 def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
-    """The pre-push run selects the groups of the pushed range as hosted CI does, escalates to the full scope for selector and CI script changes, and
-    every step has a deadline that fails visibly."""
-    results = [escalation_case(scratch, f"pre_push_escalates_{index}", path, "full") for index, path in enumerate(ESCALATING_PATHS)]
-    results += [escalation_case(scratch, f"pre_push_no_escalation_for_ordinary_path_{index}", path, "range") for index, path in enumerate(ORDINARY_PATHS)]
-    results += deadline_cases(scratch)
-    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
-    root = pre_push_repo(scratch, "planted_escalation_gap", "scripts/ci/groups/launcher.sh")
-    damaged = copy.deepcopy(config)
-    damaged["pre_push"]["full_paths"] = [pattern for pattern in damaged["pre_push"]["full_paths"] if "scripts/ci" not in pattern]
-    (root / "config/quality/ci_groups.json").write_text(json.dumps(damaged))
-    plan = pre_push_plan(root)
-    results.append(
-        {
-            "case": f"planted_escalation_gap_caught_by_pre_push_escalates_{ESCALATING_PATHS.index('scripts/ci/groups/launcher.sh')}",
-            "passed": plan["scope"] == "range",
-            "scope": plan["scope"],
-        }
-    )
-    root = pre_push_repo(scratch, "pre_push_unusable_base_runs_full", "README.md", remote=False)
-    plan = pre_push_plan(root)
-    results.append(
-        {
-            "case": "pre_push_unusable_base_runs_full",
-            "passed": plan["scope"] == "full" and "origin/main" in plan["reason"],
-            "reason": plan["reason"],
-        }
-    )
-    root = pre_push_repo(scratch, "pre_push_range_matches_hosted", "README.md")
-    plan = pre_push_plan(root)
-    hosted = workflow_document()["jobs"]["core"]["steps"]
-    hosted_env = next(step["env"] for step in hosted if isinstance(step.get("env"), dict) and "CI_SCOPE" in step["env"])
-    base = probe_git(root, "rev-parse", "origin/main")
-    head = probe_git(root, "rev-parse", "HEAD")
-    steps = {step["name"]: step for step in plan["steps"]}
-    local = steps.get("local_ci", {})
-    hooks = [steps.get(f"hooks_{group}", {}).get("argv", []) for group in config["hook_groups"]]
-    matches = {
-        "scope": plan["scope"] == "range" and plan["start"] == base and plan["end"] == head,
-        "env_names": set(local.get("env", {})) == {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
-        "gate_never_reuses_a_local_pass": local.get("env", {}).get("HAI_CI_REUSE") == "off",
-        "gate_releases_docker_itself": local.get("env", {}).get("HAI_DOCKER_RELEASE") == "outer",
-        # The hosted jobs read the scope from the plan job: range for a pull request, which is the scope of a push range.
-        "env_values": local.get("env", {}).get("CI_SCOPE") == "range"
-        and hosted_env["CI_SCOPE"] == "${{ needs.plan.outputs.scope }}"
-        and local.get("env", {}).get("RANGE_START") == base
-        and local.get("env", {}).get("RANGE_END") == head,
-        "no_part": "CI_PART" not in local.get("env", {}),
-        "hook_groups": all(argv[argv.index("--from") + 1] == base and argv[argv.index("--to") + 1] == head for argv in hooks if argv) and all(hooks),
-        "commit_messages": steps.get("commit_messages", {}).get("argv", [])[-3:] == ["commit-range", base, head],
-        "acquisition_range": steps.get("acquisition", {}).get("argv", [])[-4:] == ["--from-ref", base, "--to-ref", head],
-        "removed_names": steps.get("removed_names", {}).get("env", {}) == {"PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head},
-        "every_step_has_a_deadline": bool(plan)
-        and all(isinstance(step["timeout_seconds"], int) and 0 < step["timeout_seconds"] <= 7200 for step in plan["steps"]),
-    }
-    results.append({"case": "pre_push_range_matches_hosted", "passed": all(matches.values()), "checks": matches})
-    full_root = pre_push_repo(scratch, "pre_push_full_plan", "scripts/run_ci.sh")
-    full = pre_push_plan(full_root)
-    full_steps = {step["name"]: step for step in full["steps"]}
-    results.append(
-        {
-            "case": "pre_push_full_plan_runs_the_full_scope_once",
-            "passed": bool(full)
-            and full["scope"] == "full"
-            and full_steps.get("local_ci", {}).get("env") == {"CI_SCOPE": "full", "HAI_DOCKER_RELEASE": "outer", "HAI_CI_REUSE": "off"}
-            and not any(name.startswith("hooks_") or name == "acquisition" for name in full_steps),
-            "steps": list(full_steps),
-        }
-    )
-    root = pre_push_repo(scratch, "pre_push_run", "README.md")
-    code, out, error = pre_push(root, "run")
-    calls = pre_push_calls(root)
-    ci = [call for call in calls if call["stub"] == "run_ci"]
-    hook_calls = sorted(call["argv"][call["argv"].index("--group") + 1] for call in calls if call["stub"] == "ci_hooks")
-    results.append(
-        {
-            "case": "pre_push_run_calls_hosted_commands",
-            "passed": code == 0 and len(ci) == 1 and ci[0]["env"]["CI_SCOPE"] == "range" and hook_calls == sorted(config["hook_groups"]),
-            "exit": code,
-            "calls": [call["stub"] for call in calls],
-            "error": error[-300:],
-        }
-    )
-    root = pre_push_repo(scratch, "pre_push_failure")
-    code, out, error = pre_push(root, "run", extra={"STUB_EXIT_RUN_CI": "3"})
-    hook_calls = [call for call in pre_push_calls(root) if call["stub"] == "ci_hooks"]
-    results.append(
-        {
-            "case": "pre_push_failure_is_reported",
-            "passed": code != 0
-            and "FAIL local_ci" in out
-            and not hook_calls
-            and [row["name"] for row in latest_report(root).get("results", [])] == ["local_ci"],
-            "exit": code,
-            "output": (out + error)[-400:],
-        }
-    )
-    root = pre_push_repo(scratch, "pre_push_step_deadline_fails_visibly", "README.md", timeout=2)
-    started = time.monotonic()
-    code, out, error = pre_push(root, "run", extra={"STUB_SLEEP": "60"}, timeout=90)
-    seconds = time.monotonic() - started
-    results.append(
-        {
-            "case": "pre_push_step_deadline_fails_visibly",
-            "passed": code != 0 and "local_ci" in out + error and "exceeded" in out + error and seconds < 30,
-            "exit": code,
-            "seconds": round(seconds, 1),
-            "output": (out + error)[-300:],
-        }
-    )
-    results += [hook_partition_case(scratch), hook_failure_case(scratch), hook_deadline_case(scratch)]
+    """The push gate plan and run (the two scans, the range checks and OSV, no step of the old gate), its deadlines, and the hook and tree cases."""
+    results = [gate_plan_case(scratch), gate_run_case(scratch), gate_scan_failure_case(scratch), gate_no_range_case(scratch), gate_deadline_case(scratch)]
     results += [
-        pre_push_scheduling_case(scratch, "full"),
-        pre_push_scheduling_case(scratch, "range", fail_local=True),
-        pre_push_scheduling_case(scratch, "full", fail_local=True),
-        pre_push_no_peer_case(scratch),
-    ]
-    results += gate_release_cases(scratch) + run_ci_release_cases(scratch)
-    serial_jobs = 'jobs = [[step] for step in steps if step["kind"] not in SERIAL_KINDS] + ([serial] if serial else [])'
-    serial_kinds = 'SERIAL_KINDS = frozenset({"pre_commit", "ci_hooks"})'
-    results += [
-        planted_case("hook_partitions_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [[step] for step in steps]")),
-        planted_case("acquisition_in_parallel", hook_partition_case, scratch, mutate=source_edit(serial_kinds, 'SERIAL_KINDS = frozenset({"ci_hooks"})')),
-        planted_case("every_step_in_sequence", hook_partition_case, scratch, mutate=source_edit(serial_jobs, "jobs = [steps]")),
+        planted_case(
+            "secret_scan_step_left_out",
+            gate_run_case,
+            scratch,
+            mutate=source_edit('{"name": "secret_scan", "kind": "secret_scan", "arguments": [], "env": {}},', ""),
+        ),
+        planted_case(
+            "privacy_scan_step_left_out",
+            gate_plan_case,
+            scratch,
+            mutate=source_edit('{"name": "privacy_scan", "kind": "repo_checks", "arguments": ["privacy-scan"], "env": {}},', ""),
+        ),
     ]
     if gate_stage:
         results += gate_stage_cases(scratch)
-    return (
-        results + hook_and_tree_cases(scratch) + acquisition_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + entry_cases() + docs_cases()
-    )
+    return results + hook_and_tree_cases(scratch) + control_scan_cases() + pre_commit_control_cases() + workflow_trigger_cases()
 
 
 def source_edit(old: str, new: str) -> Callable[[str], str]:
@@ -6177,7 +5732,7 @@ def first_stub(calls: list[dict[str, Any]]) -> str:
 
 
 def changed_files_first_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """The changed-file checks run first, over the pushed range, and the long steps start after they passed."""
+    """The changed-file checks run first, over the pushed range, and the other steps start after they passed."""
     root = pre_push_repo(scratch, "gate_changed_files_first", "README.md", mutate=mutate)
     code, out, error = pre_push(root, "run", timeout=300)
     calls = pre_push_calls(root)
@@ -6191,7 +5746,7 @@ def changed_files_first_case(scratch: Path, mutate: Callable[[str], str] | None 
         and order.count("changed_files") == 1
         and argv[argv.index("--from") + 1 : argv.index("--from") + 2] == [base]
         and argv[argv.index("--to") + 1 : argv.index("--to") + 2] == [head]
-        and "run_ci" in order,
+        and "secret_scan" in order,
         "exit": code,
         "order": order,
         "output": (out + error)[-300:],
@@ -6199,25 +5754,17 @@ def changed_files_first_case(scratch: Path, mutate: Callable[[str], str] | None 
 
 
 def changed_files_failure_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """A failed changed-file check stops the gate before the long groups, the hook partitions and the acquisition hook, and names itself."""
+    """A failed changed-file check stops the gate before the other steps, and names itself."""
     root = pre_push_repo(scratch, "gate_changed_files_failure", ("README.md",), mutate=mutate)
     code, out, error = pre_push(root, "run", extra={"STUB_EXIT_CHANGED_FILES": "1"}, timeout=300)
     order = [call["stub"] for call in pre_push_calls(root)]
     return {
-        "case": "pre_push_changed_file_failure_stops_before_the_long_groups",
+        "case": "pre_push_changed_file_failure_stops_before_the_other_steps",
         "passed": code != 0 and order == ["changed_files"] and "changed_file_checks" in out + error,
         "exit": code,
         "order": order,
         "output": (out + error)[-300:],
     }
-
-
-def changed_files_without_a_range_case(scratch: Path) -> dict[str, Any]:
-    """With no merge base there is no range to read, so the checks are left out and the full scope runs."""
-    root = pre_push_repo(scratch, "gate_changed_files_no_range", "README.md", remote=False)
-    code, out, error = pre_push(root, "run", timeout=300)
-    order = [call["stub"] for call in pre_push_calls(root)]
-    return {"case": "pre_push_changed_file_checks_need_a_range", "passed": code == 0 and "changed_files" not in order and "run_ci" in order, "order": order}
 
 
 def unreadable_status_case(scratch: Path) -> dict[str, Any]:
@@ -6227,34 +5774,13 @@ def unreadable_status_case(scratch: Path) -> dict[str, Any]:
     code, out, error = pre_push(root, "run", timeout=120)
     return {
         "case": "pre_push_refuses_a_tree_whose_state_cannot_be_read",
-        "passed": code != 0 and not [call for call in pre_push_calls(root) if call["stub"] == "run_ci"] and "No check ran" in out and "cannot be read" in out,
+        "passed": code != 0
+        and not [call for call in pre_push_calls(root) if call["stub"] == "secret_scan"]
+        and "No check ran" in out
+        and "cannot be read" in out,
         "exit": code,
         "output": (out + error)[-300:],
     }
-
-
-def small_case(
-    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_small: bool, mutate: Callable[[str], str] | None = None
-) -> dict[str, Any]:
-    """A small change runs the commit checks and the affected groups; the hosted partitions and the acquisition hook stay with hosted CI."""
-    root = pre_push_repo(scratch, f"gate_small_{name}", changed, small=small, mutate=mutate)
-    code, out, error = pre_push(root, "run", timeout=300)
-    calls = pre_push_calls(root)
-    stubs = [call["stub"] for call in calls]
-    hosted = "ci_hooks" in stubs or "acquisition" in stubs
-    ran_ci = [call["env"]["CI_SCOPE"] for call in calls if call["stub"] == "run_ci"]
-    passed = (
-        code == 0
-        and ran_ci == ["range"]
-        and "changed_files" in stubs
-        and (not hosted if want_small else "ci_hooks" in stubs)
-        and (("small change" in out) == want_small)
-        and "small change:" not in out
-    )
-    return {"case": f"pre_push_small_change_{name}", "passed": passed, "exit": code, "calls": stubs, "output": (out + error)[-300:]}
-
-
-SMALL = {"max_files": 6, "max_changed_lines": 250}
 
 
 def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -6313,11 +5839,9 @@ def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
-def osv_scanner_case(
-    scratch: Path, name: str, changed: tuple[str, ...], small: dict[str, Any] | None, want_run: bool, mutate: Callable[[str], str] | None = None
-) -> dict[str, Any]:
+def osv_scanner_case(scratch: Path, name: str, changed: tuple[str, ...], want_run: bool, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
     """The OSV-Scanner hook runs over the pushed range in its own step, also for a small change, and skips a range without a requirements file."""
-    root = pre_push_repo(scratch, f"gate_osv_{name}", changed, small=small, mutate=mutate)
+    root = pre_push_repo(scratch, f"gate_osv_{name}", changed, mutate=mutate)
     plan = pre_push_plan(root)
     step: dict[str, Any] = next((item for item in plan["steps"] if item["name"] == "osv_scanner"), {})
     base, head = probe_git(root, "rev-parse", "origin/main"), probe_git(root, "rev-parse", "HEAD")
@@ -6340,22 +5864,12 @@ def osv_scanner_case(
 
 
 def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The changed-file checks, the OSV-Scanner step and the small-change rule of the pre-push run."""
-    results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), changed_files_without_a_range_case(scratch)]
-    results.append(unreadable_status_case(scratch))
+    """The changed-file checks and the OSV-Scanner step of the push gate."""
+    results = [changed_files_first_case(scratch), changed_files_failure_case(scratch), unreadable_status_case(scratch)]
     results += changed_file_check_cases(scratch)
     results += [
-        osv_scanner_case(scratch, "runs_for_a_requirements_change", ("requirements.txt",), None, True),
-        osv_scanner_case(scratch, "runs_for_a_small_change", ("requirements.txt",), SMALL, True),
-        osv_scanner_case(scratch, "skips_a_range_without_requirements", ("README.md",), None, False),
-    ]
-    results += [
-        small_case(scratch, "runs_only_checks_and_groups", ("features/example.py", "README.md"), SMALL, True),
-        small_case(scratch, "too_many_files_runs_everything", tuple(f"features/example_{index}.py" for index in range(7)), SMALL, False),
-        small_case(scratch, "too_many_lines_runs_everything", ("features/example.py",), {**SMALL, "max_changed_lines": 1}, False),
-        small_case(scratch, "infrastructure_runs_everything", ("infra/example.tf",), SMALL, False),
-        small_case(scratch, "shell_script_runs_everything", ("scripts/lakehouse/example.sh",), SMALL, False),
-        small_case(scratch, "disabled_by_the_threshold", ("features/example.py",), None, False),
+        osv_scanner_case(scratch, "runs_for_a_requirements_change", ("requirements.txt",), True),
+        osv_scanner_case(scratch, "skips_a_range_without_requirements", ("README.md",), False),
     ]
     results += [
         planted_case("changed_file_checks_last", changed_files_first_case, scratch, mutate=source_edit('    first = chosen["first"]\n', "    first = None\n")),
@@ -6365,144 +5879,11 @@ def gate_stage_cases(scratch: Path) -> list[dict[str, Any]]:
             scratch,
             name="runs_for_a_requirements_change",
             changed=("requirements.txt",),
-            small=None,
             want_run=True,
-            mutate=source_edit('steps.append({"name": "osv_scanner"', '[].append({"name": "osv_scanner"'),
+            mutate=source_edit('{"name": "osv_scanner", "kind": "pre_commit"', '{"name": "osv_scanner_left_out", "kind": "pre_commit"'),
         ),
         planted_case("changed_file_failure_ignored", changed_files_failure_case, scratch, mutate=source_edit('if first_result["exit"] != 0:', "if False:")),
-        planted_case(
-            "every_change_small",
-            small_case,
-            scratch,
-            name="infrastructure_runs_everything",
-            changed=("infra/example.tf",),
-            small=SMALL,
-            want_small=False,
-            mutate=source_edit('if matching([*small["not_paths"], *config["pre_push"]["full_paths"]], paths):', "if False:"),
-        ),
     ]
-    return results
-
-
-MAIN_PASSES = "scripts.quality.ci_main_passes"
-PASS_FILES = (
-    "config/quality/ci_groups.json",
-    "config/quality/launcher_inputs.json",
-    "scripts/process.py",
-    "scripts/quality/ci_groups.py",
-    "scripts/quality/ci_main_passes.py",
-)
-
-
-def passes(root: Path, folder: Path, command: str, groups: list[str], main_ref: str = "HEAD", extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str]]:
-    """Run the pass-record module in ``root`` and return its output and the group lines of ``filter`` (reuse or run)."""
-    environment = {**os.environ, "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": main_ref, "PYTHONDONTWRITEBYTECODE": "1"}
-    result = run_command(str(PYTHON), ["-B", "-m", MAIN_PASSES, command, "--groups", *groups, *extra], cwd=root, env=environment, timeout=300)
-    lines = [line.split() for line in result.stdout.splitlines()]
-    return result.stdout, {line[1]: line[0] for line in lines if line and line[0] in {"reuse", "run"}}
-
-
-def passes_repo(scratch: Path, name: str) -> Path:
-    root = scratch / name
-    for path in PASS_FILES:
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / path, root / path)
-    for package in ("scripts", "scripts/quality"):
-        (root / package / "__init__.py").write_text("")
-    for path in ("README.md", "features/example.py", "dbt/models/silver/example.sql", "scripts/lakehouse/example.py"):
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text("base\n")
-    probe_git(root, "init", "--quiet", "--initial-branch", "main")
-    probe_git(root, "add", "--all")
-    probe_git(root, "-c", "commit.gpgsign=false", "commit", "--quiet", "--message", "base")
-    return root
-
-
-def affected(path: str) -> set[str]:
-    return set(ci_groups.plan("paths", "all", paths=[path])["run"])
-
-
-def reuse_hit(path: str) -> set[str]:
-    """The groups whose main-reuse input hash a change to ``path`` moves: those it selects, and each full-only group, whose input is every file."""
-    return affected(path) | set(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"])
-
-
-def pass_record_cases(scratch: Path) -> list[dict[str, Any]]:
-    """A group's pass is recorded only on a clean commit of main and reused only for identical inputs."""
-    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
-    groups = [*config["groups"], *config["full_only"]]
-    recordable = [group for group in groups if group not in config["reuse"]["never"]]
-    root = passes_repo(scratch, "passes_clean")
-    folder = scratch / "passes_clean_records"
-    written, _ = passes(root, folder, "record", groups)
-    _, clean = passes(root, folder, "filter", groups)
-    results = [
-        {
-            "case": "pass_records_are_written_on_a_clean_commit_of_main_and_reused",
-            "passed": "recorded" in written
-            and sorted(path.stem for path in folder.glob("*.json")) == sorted(recordable)
-            and all(clean[group] == "reuse" for group in recordable)
-            and clean["repository_hooks"] == "run",
-            "written": written.strip()[:200],
-            "filter": clean,
-        }
-    ]
-    probe = "dbt/models/silver/example.sql"
-    (root / probe).write_text("changed\n")
-    _, changed = passes(root, folder, "filter", groups)
-    hit = reuse_hit(probe)
-    results.append(
-        {
-            "case": "pass_reuse_stops_for_the_groups_a_changed_file_selects",
-            "passed": all(changed[group] == ("run" if group in hit else "reuse") for group in recordable) and hit and hit != set(recordable),
-            "run": sorted(group for group in groups if changed[group] == "run"),
-            "selected_by_the_file": sorted(hit),
-        }
-    )
-    written_dirty, _ = passes(root, scratch / "passes_dirty_records", "record", groups)
-    results.append(
-        {
-            "case": "pass_record_refused_for_a_changed_tree",
-            "passed": "not recorded" in written_dirty and "changes" in written_dirty and not (scratch / "passes_dirty_records").exists(),
-            "output": written_dirty.strip()[:200],
-        }
-    )
-    (root / probe).write_text("base\n")
-    (root / "features/new_file.py").write_text("new\n")
-    _, untracked = passes(root, folder, "filter", groups)
-    results.append(
-        {
-            "case": "pass_reuse_stops_for_a_new_untracked_file",
-            "passed": all(untracked[group] == ("run" if group in reuse_hit("features/new_file.py") else "reuse") for group in recordable)
-            and bool(reuse_hit("features/new_file.py")),
-            "run": sorted(group for group in groups if untracked[group] == "run"),
-        }
-    )
-    (root / "features/new_file.py").unlink()
-    (root / "README.md").write_text("docs change\n")
-    _, documentation = passes(root, folder, "filter", groups)
-    expected = reuse_hit("README.md")
-    results.append(
-        {
-            "case": "pass_reuse_follows_the_selector_for_a_documentation_change",
-            "passed": all(documentation[group] == ("run" if group in expected else "reuse") for group in recordable) and expected != set(recordable),
-            "run": sorted(group for group in groups if documentation[group] == "run"),
-            "selected_by_the_file": sorted(expected),
-        }
-    )
-    (root / "README.md").write_text("base\n")
-    unrelated = probe_git(root, "commit-tree", "HEAD^{tree}", "-m", "unrelated")
-    probe_git(root, "branch", "elsewhere", unrelated)
-    written_topic, _ = passes(root, scratch / "passes_topic_records", "record", groups, main_ref="elsewhere")
-    _, away = passes(root, folder, "filter", groups, main_ref="elsewhere")
-    results.append(
-        {
-            "case": "pass_record_and_reuse_need_the_commit_to_be_in_main",
-            "passed": "not recorded" in written_topic and "not in" in written_topic and all(away[group] == "run" for group in groups),
-            "output": written_topic.strip()[:200],
-            "filter": away,
-        }
-    )
     return results
 
 
@@ -6530,9 +5911,7 @@ def launcher_shard_run(work: Path, out: Path, label: str, env: dict[str, str]) -
         (tree / GROUP_FILES / "launcher.sh").write_text(LAUNCHER_STUB_BODY, encoding="utf-8")
 
     started = time.monotonic()
-    code, log = dry_run(
-        work, out, label, {"CI_SCOPE": "full", "CI_PART": "launcher", "HAI_CI_REUSE": "off", **env}, prepare=stub_body, timing=LAUNCHER_STUB_TIMING
-    )
+    code, log = dry_run(work, out, label, {"CI_SCOPE": "full", "CI_PART": "launcher", **env}, prepare=stub_body, timing=LAUNCHER_STUB_TIMING)
     return code, log, time.monotonic() - started
 
 
@@ -6583,141 +5962,37 @@ def launcher_shard_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     return results
 
 
-def reuse_dry_run(
-    work: Path, out: Path, label: str, env: dict[str, str], folder: Path, record: bool = True, edit: Callable[[Path], None] | None = None
-) -> tuple[int, str]:
-    """A dry run of the dispatcher after a record of every group made inside the run's own state (the stand-ins change the inputs)."""
-
-    def prepare(tree: Path) -> None:
-        if record:
-            passes(tree, folder, "record", GROUP_NAMES, extra=("--test-any-state",))
-        if edit:
-            edit(tree)
-
-    return dry_run(
-        work,
-        out,
-        label,
-        # The case's own gate marker counts, not the one of a gate that runs this suite.
-        {"CI_SCOPE": "full", "CI_PART": "all", "HAI_CI_PASSES_DIR": str(folder), "HAI_CI_MAIN_REF": "HEAD", "HAI_DOCKER_RELEASE": "", **env},
-        prepare=prepare,
-    )
+GATE_GROUP_CASES = ("--launcher-shards-only", "--gate-stage-only")
 
 
-GROUP_NAMES = list(json.loads((ROOT / "config/quality/ci_groups.json").read_text())["groups"]) + list(
-    json.loads((ROOT / "config/quality/ci_groups.json").read_text())["full_only"]
-)
-
-
-def reuse_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]:
-    """The dispatcher skips the groups whose pass was recorded on main, only in a full local run, and never under the gate."""
-    results = pass_record_cases(scratch)
-    results += launcher_shard_cases(work, out)
-    results.append(
-        planted_case(
-            "gate_without_the_reuse_switch",
-            failing_step_release_case,
-            scratch,
-            mutate=source_edit("**OUTER_RELEASE, **NO_REUSE}", "**OUTER_RELEASE}"),
-        )
-    )
-    recordable = [group for group in GROUP_NAMES if group != "repository_hooks"]
-    code, log = reuse_dry_run(work, out, "reuse_on", {"HAI_CI_REUSE": "main"}, scratch / "reuse_on_records")
-    items = local_plan_of(log)["items"]
-    checks = {
-        "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "every_recorded_group_is_reused": all(f"reused {group}:" in log for group in recordable),
-        "no_reused_group_ran": "TIMED launcher E2E" not in log and not any(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
-        "the_hook_partitions_still_ran": any(item.startswith("hook_") for item in items),
-        "no_acquisition_shard_ran": not any(item.startswith("acquisition_") for item in items),
-        "nothing_recorded_from_a_changed_tree": "not recorded" in log,
-    }
-    results.append({"case": "local_run_reuses_the_groups_recorded_on_main", "passed": all(checks.values()), "checks": checks, "items": items})
-    probe = "dbt/models/silver/example_probe.sql"
-
-    def add_probe(tree: Path) -> None:
-        (tree / probe).parent.mkdir(parents=True, exist_ok=True)
-        (tree / probe).write_text("select 1\n")
-
-    code, log = reuse_dry_run(work, out, "reuse_changed_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_changed_records", edit=add_probe)
-    hit = reuse_hit(probe)
-    checks = {
-        "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "selected_groups_ran": all(f"reused {group}:" not in log for group in hit),
-        "other_groups_reused": all(f"reused {group}:" in log for group in recordable if group not in hit),
-    }
-    results.append(
-        {"case": "local_run_reuse_stops_for_a_changed_input", "passed": all(checks.values()) and bool(hit), "checks": checks, "selected": sorted(hit)}
-    )
-    acquisition_probe = "scripts/acquisition/example_probe.py"
-
-    def add_acquisition_probe(tree: Path) -> None:
-        (tree / acquisition_probe).write_text("EXAMPLE = 1\n")
-
-    code, log = reuse_dry_run(
-        work, out, "reuse_changed_full_only_input", {"HAI_CI_REUSE": "main"}, scratch / "reuse_full_only_records", edit=add_acquisition_probe
-    )
-    results.append({"case": "local_run_reuse_stops_for_a_changed_full_only_input", "passed": code == 0 and "reused acquisition:" not in log, "exit": code})
-
-    def break_the_lookup(tree: Path) -> None:
-        (tree / "scripts/quality/ci_main_passes.py").write_text("raise SystemExit(7)\n")
-
-    code, log = reuse_dry_run(work, out, "reuse_lookup_fails", {"HAI_CI_REUSE": "main"}, scratch / "reuse_lookup_records", edit=break_the_lookup)
-    items = local_plan_of(log)["items"]
-    checks = {
-        "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "nothing_reused": "reused " not in log,
-        "the_groups_still_ran": all(item in items for item in ("python_lint", "lakehouse_bronze", "sql_style")),
-    }
-    results.append({"case": "local_run_runs_every_group_when_the_reuse_lookup_fails", "passed": all(checks.values()), "checks": checks, "items": items})
-    for label, env, why in (
-        ("off", {"HAI_CI_REUSE": "off"}, "off by request"),
-        ("under_the_gate", {"HAI_CI_REUSE": "main", "HAI_DOCKER_RELEASE": "outer"}, "the gate marker"),
-        ("hosted_default", {}, "hosted default"),
-        ("part_core", {"HAI_CI_REUSE": "main", "CI_PART": "core"}, "a partial run"),
-        ("unit_subset", {"HAI_CI_REUSE": "main", "CI_UNITS": "checks"}, "a unit subset"),
-    ):
-        code, log = reuse_dry_run(work, out, f"reuse_{label}", env, scratch / f"reuse_{label}_records")
-        results.append({"case": f"local_run_does_not_reuse_{label}", "passed": "reused " not in log and code == 0, "why": why, "exit": code})
-    code, log = reuse_dry_run(work, out, "reuse_bad_value", {"HAI_CI_REUSE": "sometimes"}, scratch / "reuse_bad_records", record=False)
-    results.append(
-        {"case": "local_run_refuses_an_unknown_reuse_mode", "passed": code != 0 and "HAI_CI_REUSE must be main or off" in log and "TIMED" not in log}
-    )
-    return results
-
-
-REUSE_GATE_CASES = ("--reuse-only", "--gate-stage-only")
-
-
-def reuse_group_cases(work: Path) -> list[dict[str, Any]]:
-    """The reuse, shard and gate stage cases are the check group reuse_gate_checks: their own part and hosted job, not a command of the Core part."""
-    path = "scripts/quality/ci_reuse.py"
+def gate_group_cases(work: Path) -> list[dict[str, Any]]:
+    """The gate stage and launcher shard cases are the check group gate_stage_checks: their own part and hosted job, not a command of the Core part."""
+    path = "scripts/quality/pre_push.py"
     results = [
         selection_case(
-            work, "reuse_gate_part_selects_only_the_reuse_gate_group", ["--scope", "paths", "--path", path, "--part", "reuse_gate"], ["reuse_gate_checks"]
+            work, "gate_stage_part_selects_only_the_gate_stage_group", ["--scope", "paths", "--path", path, "--part", "gate_stage"], ["gate_stage_checks"]
         ),
         selection_case(
             work,
-            "core_part_leaves_the_reuse_gate_group_out",
+            "core_part_leaves_the_gate_stage_group_out",
             ["--scope", "paths", "--path", path, "--part", "core"],
             ["python_lint", "repository_code_checks", "configuration_checks"],
         ),
     ]
-    body = (ROOT / GROUP_FILES / "reuse_gate_checks.sh").read_text(encoding="utf-8")
+    body = (ROOT / GROUP_FILES / "gate_stage_checks.sh").read_text(encoding="utf-8")
     core = (ROOT / GROUP_FILES / "repository_code_checks.sh").read_text(encoding="utf-8")
     tooling = (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8")
     jobs = workflow_document()["jobs"]
-    steps = [step.get("env", {}) for step in jobs["reuse_gate"]["steps"] if step.get("env", {}).get("CI_PART") == "reuse_gate"]
-    required = json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8"))["required_pull_request_jobs"]
+    steps = [step.get("env", {}) for step in jobs["gate_stage"]["steps"] if step.get("env", {}).get("CI_PART") == "gate_stage"]
     results.append(
         {
-            "case": "reuse_and_gate_stage_cases_run_in_their_own_group_and_hosted_job",
-            "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in REUSE_GATE_CASES)
+            "case": "gate_stage_and_launcher_shard_cases_run_in_their_own_group_and_hosted_job",
+            "passed": all(f"run_ci_groups_e2e {flag}" in body and f"run_ci_groups_e2e {flag}" not in core for flag in GATE_GROUP_CASES)
             and "run_ci_groups_e2e --selection-only" in tooling
             and "run_ci_groups_e2e" not in core
             and len(steps) == 1
-            and jobs["reuse_gate"]["name"] == "CI Reuse and Gate E2E"
-            and "CI Reuse and Gate E2E" in required,
+            and jobs["gate_stage"]["name"] == "CI Gate Stage E2E"
+            and "CI Gate Stage E2E" in json.loads((ROOT / "config/quality/ci_jobs.json").read_text(encoding="utf-8")),
         }
     )
     return results
@@ -6727,7 +6002,7 @@ def head_of(root: Path) -> str:
     return probe_git(root, "rev-parse", "HEAD")
 
 
-def runs_of(root: Path, stub: str = "run_ci") -> int:
+def runs_of(root: Path, stub: str = "secret_scan") -> int:
     return sum(1 for call in pre_push_calls(root) if call["stub"] == stub)
 
 
@@ -7152,7 +6427,7 @@ def shim_presence_case(scratch: Path, mutate: Callable[[str], str] | None = None
 
 def skip_in_push_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
     def check(root: Path, code: int, text: str) -> dict[str, bool]:
-        return {"pushed": code == 0, "gate_ran": runs_of(root) == 1, "acquisition_ran_once": runs_of(root, "acquisition") == 1}
+        return {"pushed": code == 0, "gate_ran": runs_of(root) == 1, "osv_ran_once": runs_of(root, "osv_scanner") == 1}
 
     return push_case(
         scratch,
@@ -7162,19 +6437,20 @@ def skip_in_push_case(scratch: Path, mutate: Callable[[str], str] | None = None)
         ("origin", "topic"),
         check,
         mutate,
-        extra={"SKIP": "local_ci_pushed,acquisition-checks"},
-        changed=("scripts/acquisition/example.py", "README.md"),
+        extra={"SKIP": "local_ci_pushed,osv-scanner"},
+        changed=("requirements.txt", "README.md"),
     )
 
 
-def skip_acquisition_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    root = pre_push_repo(scratch, "gate_skip_acquisition", ("scripts/acquisition/example.py", "README.md"), mutate=mutate)
-    code, out, error = pre_push(root, "run", extra={"SKIP": "acquisition-checks,model-metadata"}, timeout=300)
+def skip_osv_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """``SKIP`` in the environment of the gate does not suppress the OSV-Scanner hook, which pre-commit would otherwise skip."""
+    root = pre_push_repo(scratch, "gate_skip_osv", ("requirements.txt", "README.md"), mutate=mutate)
+    code, out, error = pre_push(root, "run", extra={"SKIP": "osv-scanner"}, timeout=300)
     return {
-        "case": "pre_push_skip_does_not_suppress_the_acquisition_hook_in_pre_commit",
-        "passed": code == 0 and runs_of(root, "acquisition") == 1,
+        "case": "pre_push_skip_does_not_suppress_the_osv_hook_in_pre_commit",
+        "passed": code == 0 and runs_of(root, "osv_scanner") == 1,
         "exit": code,
-        "acquisition_runs": runs_of(root, "acquisition"),
+        "osv_runs": runs_of(root, "osv_scanner"),
         "output": (out + error)[-300:],
     }
 
@@ -7255,10 +6531,7 @@ EXPECTED_CONTROLS = (
     "ACQUISITION_SHARD_DIR",
     "ACQUISITION_SHARD_COUNT",
     "ACQUISITION_EXPECT",
-    "ACQUISITION_RAN_MARKER",
     "GITHUB_ACTIONS",
-    "HAI_DOCKER_RELEASE",
-    "HAI_CI_REUSE",
     "PRE_COMMIT_FROM_REF",
     "PRE_COMMIT_ORIGIN",
     "PRE_COMMIT_SOURCE",
@@ -7272,7 +6545,6 @@ EXPECTED_CONTROLS = (
     "_PRE_COMMIT_SKIP_POST_CHECKOUT",
 )
 STEP_SETS = {
-    "run_ci": {"CI_SCOPE", "RANGE_START", "RANGE_END", "HAI_DOCKER_RELEASE", "HAI_CI_REUSE"},
     "removed-names": {"PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF"},
 }
 
@@ -7284,7 +6556,7 @@ def inherited_controls_case(scratch: Path, mutate: Callable[[str], str] | None =
     code, out, error = pre_push(root, "run", extra=poison)
     leaks: dict[str, list[str]] = {}
     for call in pre_push_calls(root):
-        key = "run_ci" if call["stub"] == "run_ci" else "removed-names" if call["argv"][:1] == ["removed-names"] else call["stub"]
+        key = "removed-names" if call["argv"][:1] == ["removed-names"] else call["stub"]
         extra_names = set(filter(None, call["seen"].split(","))) - STEP_SETS.get(key, set()) - NOT_CONTROLS
         if extra_names:
             leaks[key] = sorted(extra_names)
@@ -7371,97 +6643,6 @@ def pre_commit_control_cases() -> list[dict[str, Any]]:
     ]
 
 
-def entry_scripts() -> list[str]:
-    text = (ROOT / ".github/workflows/ci.yml").read_text()
-    modules = sorted(set(re.findall(r"-m scripts\.quality\.(ci_\w+)", text)))
-    return sorted(set(re.findall(r"bash (scripts/[\w./]+\.sh)", text))) + [f"scripts/quality/{module}.py" for module in modules]
-
-
-def uncovered_entries(patterns: list[str], entries: list[str]) -> list[str]:
-    return [entry for entry in entries if not any(re.search(pattern, entry) for pattern in patterns)]
-
-
-def entry_cases() -> list[dict[str, Any]]:
-    patterns = json.loads((ROOT / "config/quality/ci_groups.json").read_text())["pre_push"]["full_paths"]
-    entries = entry_scripts()
-    damaged = [pattern for pattern in patterns if "run_checks_" not in pattern]
-    return [
-        {
-            "case": "full_paths_cover_ci_entry_scripts",
-            "passed": bool(entries) and not uncovered_entries(patterns, entries),
-            "uncovered": uncovered_entries(patterns, entries),
-        },
-        {
-            "case": "planted_entry_gap_caught_by_full_paths_cover_ci_entry_scripts",
-            "passed": uncovered_entries(damaged, entries) == ["scripts/acquisition/run_checks_ci.sh"],
-            "caught": uncovered_entries(damaged, entries),
-        },
-    ]
-
-
-def acquisition_plan_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    root = pre_push_repo(scratch, "acq_plan", mutate=mutate)
-    plan = pre_push_plan(root)
-    argv = {step["name"]: step["argv"] for step in plan["steps"]}.get("acquisition", [])
-    want = ["run", "acquisition-checks", "--hook-stage", "pre-push", "--from-ref", plan["start"], "--to-ref", plan["end"]]
-    return {"case": "pre_push_acquisition_step_uses_the_computed_range", "passed": bool(plan["start"]) and argv[-len(want) :] == want, "argv": argv}
-
-
-def acquisition_run_case(
-    scratch: Path, reaches: bool, mutate: Callable[[str], str] | None = None, config_edit: Callable[[str], str] | None = None
-) -> dict[str, Any]:
-    changed = ("scripts/acquisition/example.py", "README.md") if reaches else ("README.md",)
-    root = pre_push_repo(scratch, "acq_reaches" if reaches else "acq_misses", changed, mutate=mutate, config_edit=config_edit)
-    code, out, error = pre_push(root, "run", timeout=300)
-    runs = sum(1 for call in pre_push_calls(root) if call["stub"] == "acquisition")
-    name = "pre_push_acquisition_runs_once_for_the_computed_range" if reaches else "pre_push_acquisition_skipped_when_range_misses_it"
-    return {"case": name, "passed": code == 0 and runs == (1 if reaches else 0), "exit": code, "runs": runs, "output": (out + error)[-300:]}
-
-
-def acquisition_reaches_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    return acquisition_run_case(scratch, True, mutate)
-
-
-def acquisition_misses_case(scratch: Path, config_edit: Callable[[str], str] | None = None) -> dict[str, Any]:
-    return acquisition_run_case(scratch, False, config_edit=config_edit)
-
-
-def drop_files_filter(text: str) -> str:
-    edited, count = re.subn(r"(id: acquisition-checks.*?)\n\s+files: [^\n]*", r"\1", text, count=1, flags=re.S)
-    if not count:
-        raise ValueError("planted edit does not apply: acquisition-checks files filter")
-    return edited
-
-
-def wrapper_case(scratch: Path, mutate: Callable[[str], str] | None = None) -> dict[str, Any]:
-    root = pre_push_repo(scratch, "acq_wrapper")
-    wrapper = root / "scripts/acquisition/run_checks_pushed.sh"
-    wrapper.write_text(mutate(wrapper.read_text()) if mutate else wrapper.read_text())
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("PRE_COMMIT_")}
-    ran: list[bool] = []
-    for remote in ("origin", ""):
-        log = root / f"acquisition_{remote or 'direct'}.log"
-        extra = {"PRE_COMMIT_REMOTE_NAME": remote} if remote else {}
-        result = run_command("bash", ["scripts/acquisition/run_checks_pushed.sh"], cwd=root, env={**environment, **extra, "STUB_LOG": str(log)}, timeout=60)
-        ran.append(log.exists() and result.returncode == 0)
-    return {"case": "acquisition_wrapper_skips_the_native_push", "passed": ran == [False, True], "ran": ran}
-
-
-def runner_doc_describes_range(text: str) -> bool:
-    flat = " ".join(text.split())
-    return "skips once after a passing full run" not in flat and "runs once over the computed range" in flat
-
-
-def docs_cases() -> list[dict[str, Any]]:
-    return [
-        {"case": "runner_describes_the_computed_range", "passed": runner_doc_describes_range(__doc__ or "")},
-        {
-            "case": "planted_marker_description_caught_by_runner_describes_the_computed_range",
-            "passed": not runner_doc_describes_range((__doc__ or "") + " The acquisition hook skips once after a passing full run."),
-        },
-    ]
-
-
 def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
     """The hook run judges every pushed ref against the checked-out commit and tree; an inherited control never reaches a step."""
     real = [
@@ -7487,7 +6668,7 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         tracked_change_ref_case,
         shim_presence_case,
         skip_in_push_case,
-        skip_acquisition_case,
+        skip_osv_case,
         shim_case,
         head_not_checked_out_case,
         staged_change_case,
@@ -7526,7 +6707,7 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         ("staged_change_accepted", staged_change_case, "if dirty:", "if False:"),
         ("unstaged_change_accepted", unstaged_change_case, "if dirty:", "if False:"),
         ("untracked_file_blocks", untracked_file_case, '"--untracked-files=no"', '"--untracked-files=normal"'),
-        ("skip_kept_for_the_acquisition_hook", skip_acquisition_case, '    "SKIP",\n', ""),
+        ("skip_kept_for_the_osv_hook", skip_osv_case, '    "SKIP",\n', ""),
         ("skip_kept_in_the_push", skip_in_push_case, '    "SKIP",\n', ""),
         ("skip_kept_in_a_step", inherited_controls_case, '    "SKIP",\n', ""),
         ("allow_no_config_kept", inherited_controls_case, '    "PRE_COMMIT_ALLOW_NO_CONFIG",\n', ""),
@@ -7538,31 +6719,6 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         ("hosted_marker_variable_kept", inherited_controls_case, '"GITHUB_ACTIONS",', ""),
     ]
     results += [planted_case(label, case, scratch, mutate=source_edit(old, new)) for label, case, old, new in planted]
-    return results
-
-
-def acquisition_cases(scratch: Path) -> list[dict[str, Any]]:
-    """The acquisition gate runs once, from the computed range, with the path filter of the hook; the native push hook leaves it to that run."""
-    native = '"--from-ref", start'
-    results = [
-        acquisition_plan_case(scratch),
-        acquisition_reaches_case(scratch),
-        acquisition_misses_case(scratch),
-        wrapper_case(scratch),
-        planted_case("acquisition_native_range", acquisition_plan_case, scratch, mutate=source_edit(native, '"--from-ref", end')),
-        planted_case("acquisition_from_previous_push", acquisition_reaches_case, scratch, mutate=source_edit(native, '"--from-ref", end')),
-        planted_case("acquisition_path_filter_dropped", acquisition_misses_case, scratch, config_edit=drop_files_filter),
-        planted_case(
-            "native_push_runs_acquisition_again",
-            wrapper_case,
-            scratch,
-            mutate=source_edit('if [[ -n "${PRE_COMMIT_REMOTE_NAME:-}" ]]; then', "if false; then"),
-        ),
-    ]
-    script = (ROOT / "scripts/acquisition/run_checks_ci.sh").read_text()
-    results.append(
-        {"case": "hosted_acquisition_job_uses_the_push_stage", "passed": "--hook-stage pre-push" in script and "--hook-stage pre-commit" not in script}
-    )
     return results
 
 
@@ -7638,7 +6794,7 @@ def main() -> int:
         return int(bool(shard_report["failed"]))
     selection_only = "--selection-only" in sys.argv[1:]
     speed_only = "--speed-only" in sys.argv[1:]
-    reuse_only = "--reuse-only" in sys.argv[1:]
+    launcher_shards_only = "--launcher-shards-only" in sys.argv[1:]
     out = ROOT / "data" / "e2e" / "ci_groups" / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     out.mkdir(parents=True)
     scratch = Path(tempfile.mkdtemp(prefix="ci_groups_e2e."))
@@ -7653,17 +6809,17 @@ def main() -> int:
         identity = code_identity(work)
         if speed_only:
             results += speed_static_cases(scratch) + speed_real_cases(work, out)
-        elif reuse_only:
-            results += reuse_cases(work, out, scratch)
+        elif launcher_shards_only:
+            results += launcher_shard_cases(work, out)
         else:
             results.append(scratch_cleanup_interrupt_case(scratch))
             results += restore_cases(work, scratch)
             results += selection_cases(work)
             results += fast_hook_cases(scratch)
             results += pre_push_cases(work, scratch, gate_stage=not selection_only)
-            results += reuse_group_cases(work)
+            results += gate_group_cases(work)
             if not selection_only:
-                results += reuse_cases(work, out, scratch)
+                results += launcher_shard_cases(work, out)
             results += runner_stage_cases(scratch)
             results += speed_static_cases(scratch)
             if not selection_only:
@@ -7703,10 +6859,11 @@ def main() -> int:
         "body_file_unreadable_*",
         "staged_body_edit_runs_only_its_group_items",
         "real_run_*",
-        "reuse_*",
         "gate_stage_*",
     ]
-    mode = {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only or reuse_only else {"mode": "full"}
+    mode = (
+        {"mode": "iteration", "skipped": skipped, "note": "not commit evidence"} if selection_only or speed_only or launcher_shards_only else {"mode": "full"}
+    )
     report = {"started": out.name, **mode, "code": identity, "cases": results, "passed": len(results) - len(failed), "total": len(results), "failed": failed}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     sys.stdout.write(f"Bash used by the group-file guard cases: {identity.get('tools', {}).get('bash (the group-file guard)', 'unknown')}\n")

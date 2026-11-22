@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # E2E for scripts/acquisition/run_checks_ci.sh, the GitHub CI entry for the acquisition checks. Run from any folder:
 #   bash scripts/acquisition/run_checks_ci_e2e.sh
-# It copies the working versions of the CI entry and .pre-commit-config.yaml into a scratch Git worktree at HEAD,
-# replaces run_checks.sh there with a stub that records each run, then runs the CI entry over committed ranges and
-# synthetic cases (failure modes in data/conformance/20261005/ci_path_filter_failure_modes.md). The stub keeps each case
+# It copies the working version of the CI entry into a scratch Git worktree at HEAD, replaces run_checks.sh there with a stub that
+# records each run, then runs the CI entry and checks that it starts run_checks.sh once and passes its exit status on. The stub keeps each case
 # under a few seconds; the real checks are not run. Results go to data/e2e/acquisition_ci_gate/<UTC>/results.txt.
 set -euo pipefail
 
@@ -59,20 +58,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP ALRM
 
 GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$work" HEAD
-cp scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/run_checks_pushed.sh scripts/acquisition/shards.py "$work/scripts/acquisition/"
+cp scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py "$work/scripts/acquisition/"
 mkdir -p "$work/scripts/quality" "$work/config/acquisition"
 cp scripts/quality/timing.sh "$work/scripts/quality/timing.sh"
 cp config/acquisition/shard_weights.json config/acquisition/coverage.ini "$work/config/acquisition/"
-cp .pre-commit-config.yaml "$work/.pre-commit-config.yaml"
 cat >"$work/scripts/acquisition/run_checks.sh" <<'STUB'
 #!/usr/bin/env bash
-echo "stub run" >>"$STUB_MARKER"
-printf 'ran\n' >>"${ACQUISITION_RAN_MARKER:-/dev/null}"
+echo "stub run" | tee -a "$STUB_MARKER"
 exit "${STUB_EXIT:-0}"
 STUB
 # Staged, so the pre-commit stash of unstaged changes leaves them in place.
-git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/run_checks_pushed.sh scripts/acquisition/shards.py scripts/acquisition/run_checks.sh \
-  scripts/quality/timing.sh config/acquisition/shard_weights.json config/acquisition/coverage.ini .pre-commit-config.yaml
+git -C "$work" add scripts/acquisition/run_checks_ci.sh scripts/acquisition/run_checks_combine.sh scripts/acquisition/shards.py scripts/acquisition/run_checks.sh \
+  scripts/quality/timing.sh config/acquisition/shard_weights.json config/acquisition/coverage.ini
 
 failures=0
 # case <name> <expected exit> <expected stub runs> <expected output text> [VAR=value ...]
@@ -81,7 +78,7 @@ case_run() {
   shift 4
   local marker="$scratch/$name.marker" log="$out/$name.log" code=0 runs
   : >"$marker"
-  (cd "$work" && env -u RANGE_START -u RANGE_END PYTHON_BIN="$python_bin" PRE_COMMIT_HOME="$repo_root/.tools/pre_commit_cache" \
+  (cd "$work" && env -u RANGE_START -u RANGE_END PYTHON_BIN="$python_bin" \
     GITHUB_STEP_SUMMARY="$out/$name.summary" STUB_MARKER="$marker" "$@" bash scripts/acquisition/run_checks_ci.sh) >"$log" 2>&1 || code=$?
   runs="$(wc -l <"$marker" | tr -d ' ')"
   if [[ "$code" == "$want_exit" && "$runs" == "$want_runs" ]] && grep -q -- "$want_text" "$log"; then
@@ -92,47 +89,7 @@ case_run() {
   fi
 }
 
-docs_only=9c22c1e      # README, .gitignore and the architecture files only
-acquisition=7a967b2    # requirements.txt and config/acquisition/runtime_dependencies.json
-ci_only=f9ef312        # ci.yml with quality scripts, no acquisition path before this change
-missing=0123456789abcdef0123456789abcdef01234567
-
-case_run docs_only_range_skips 0 0 "Skipped" RANGE_START="$docs_only^" RANGE_END="$docs_only"
-case_run acquisition_range_runs 0 1 "Passed" RANGE_START="$acquisition^" RANGE_END="$acquisition"
-case_run ci_workflow_range_runs 0 1 "Passed" RANGE_START="$ci_only^" RANGE_END="$ci_only"
-case_run acquisition_failure_fails 1 1 "Failed" RANGE_START="$acquisition^" RANGE_END="$acquisition" STUB_EXIT=3
-case_run first_push_runs_all 0 1 "no usable range" RANGE_START=0000000000000000000000000000000000000000 RANGE_END="$acquisition"
-case_run rewritten_history_runs_all 0 1 "no usable range" RANGE_START="$missing" RANGE_END="$acquisition"
-case_run manual_run_runs_all 0 1 "no usable range"
-case_run full_run_failure_fails 3 1 "no usable range" STUB_EXIT=3
-# Shards and the combining job: a range that does not reach the checks gives a skipped manifest per shard and a combining job that accepts only that.
-# The shard count is the count of the CI jobs (shards.CI_SHARD_COUNT), not a number written here.
-count="$("$python_bin" -c 'from scripts.acquisition import shards; print(shards.CI_SHARD_COUNT)')"
-if ! [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
-  echo "FAIL shard_count_known: shards.CI_SHARD_COUNT gave '$count'" | tee -a "$results"
-  exit 1
-fi
-shards_ok="$scratch/shards_ok"
-shards_mixed="$scratch/shards_mixed"
-for ((index = 1; index <= count; index++)); do
-  case_run "shard_${index}_skips_with_a_manifest" 0 0 "does not reach the acquisition checks" RANGE_START="$docs_only^" RANGE_END="$docs_only" \
-    ACQUISITION_PART=shard ACQUISITION_SHARD="$index/$count" ACQUISITION_SHARD_DIR="$shards_ok"
-done
-case_run combine_accepts_all_shards_skipped 0 0 "All $count shards were skipped" RANGE_START="$docs_only^" RANGE_END="$docs_only" ACQUISITION_PART=combine ACQUISITION_SHARD_DIR="$shards_ok"
-case_run mixed_shard_1_skips 0 0 "does not reach the acquisition checks" RANGE_START="$docs_only^" RANGE_END="$docs_only" \
-  ACQUISITION_PART=shard ACQUISITION_SHARD="1/$count" ACQUISITION_SHARD_DIR="$shards_mixed"
-case_run combine_rejects_a_missing_shard 1 0 "shard 2 of $count is missing" RANGE_START="$docs_only^" RANGE_END="$docs_only" ACQUISITION_PART=combine ACQUISITION_SHARD_DIR="$shards_mixed"
-case_run combine_rejects_a_count_other_than_the_shards 1 0 "shard 1 of $((count + 1)) is missing" RANGE_START="$docs_only^" RANGE_END="$docs_only" \
-  ACQUISITION_PART=combine ACQUISITION_SHARD_COUNT="$((count + 1))" ACQUISITION_SHARD_DIR="$shards_ok"
-case_run shard_runs_when_the_range_reaches_the_checks 0 1 "Passed" RANGE_START="$acquisition^" RANGE_END="$acquisition" \
-  ACQUISITION_PART=shard ACQUISITION_SHARD="1/$count" ACQUISITION_SHARD_DIR="$scratch/shards_run"
-case_run combine_runs_when_the_range_reaches_the_checks 0 1 "Passed" RANGE_START="$acquisition^" RANGE_END="$acquisition" ACQUISITION_PART=combine ACQUISITION_SHARD_DIR="$scratch/shards_run"
-if grep -q "range" "$out/docs_only_range_skips.summary" 2>/dev/null; then
-  echo "PASS job_summary_names_range" | tee -a "$results"
-else
-  echo "FAIL job_summary_names_range: the job summary does not name the range" | tee -a "$results"
-  failures=$((failures + 1))
-fi
-
+case_run whole_run_runs_the_checks 0 1 "stub run"
+case_run whole_run_failure_fails 3 1 "stub run" STUB_EXIT=3
 echo "$failures failed; results $results"
 [[ "$failures" == 0 ]]

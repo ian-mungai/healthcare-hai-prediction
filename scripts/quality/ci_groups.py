@@ -60,7 +60,7 @@ LAYER_PARTS = {
     "feature_sources": "lakehouse_features",
     "feature_columns": "lakehouse_features",
     "feature_store": "lakehouse_features",
-    "reuse_gate": "reuse_gate_checks",
+    "gate_stage": "gate_stage_checks",
 }
 BASE_PARTS = {"all", "core", "launcher", "gates", *LAYER_PARTS}
 # The inventory_reads pattern of a module whose reads are not reviewed (no entry carries it now). It selects the launcher group for every changed path,

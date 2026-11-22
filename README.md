@@ -30,7 +30,7 @@ Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform
 
 ## Usage
 
-Run the full local checks without AWS credentials. The script sets its own environment. Each run writes its report under `data/e2e/`.
+Hosted CI runs every check group in full on each push to a branch other than `main`. `main` moves to a commit only after that run is green. The push gate (`scripts/quality/pre_push.py`) runs a short set before every push: the changed-file checks, the commit messages, the removed names, the secret scan, the privacy scan and the OSV scan. Run the full local checks on demand, without AWS credentials. The script sets its own environment. Each run writes its report under `data/e2e/`.
 
 ```sh
 bash scripts/run_ci.sh

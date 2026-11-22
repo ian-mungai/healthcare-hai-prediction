@@ -5,12 +5,12 @@
 # Four roles, one per purpose. Each trusts exact web identity subjects of the one repository in the ID form of its immutable subject (var.github_oidc_subject_prefix), with no pattern:
 #   image_push       environment image-push           pushes images to the project repositories
 #   deploy           environment model-api-deploy     registers the next serving task definition revision and updates the named serving services
-#   terraform_plan   pull requests, environment terraform-plan   read-only, plans without a lock
+#   terraform_plan   environment terraform-plan   read-only, plans without a lock
 #   code_staging     environment code-staging              creates the code files of a run once and puts the parameter that names the current code run
 # No role applies Terraform (owner decision D18): GitHub plans with the read-only plan role and the owner applies the saved plan. Each role
 # holds one inline policy and no attached policy, so the coverage checks (scripts/infrastructure/run_policy_e2e.py) see all it can do.
-# A pull request subject reaches only the plan role. The environments carry the owner's approval and the main-only branch rule
-# on the GitHub side; GitHub also issues no web identity token to a workflow that a fork pull request starts.
+# Every role trusts environment subjects only, never a branch or a pull request subject. The environments carry the owner's approval and the main-only branch rule
+# on the GitHub side.
 #
 # The permissions stay inside the project profile's approved list (policies/*.json): every action of the roles is checked against the
 # actions of the same files.
@@ -108,8 +108,8 @@ locals {
       description = "GitHub Actions code staging: stages the code archive of each commit on main as a code run and names it in one parameter. The code-staging environment has no approval step and runs from main only."
     }
     terraform_plan = {
-      subjects    = ["${local.github_subject_base}:pull_request", "${local.github_subject_base}:environment:terraform-plan"]
-      description = "GitHub Actions Terraform plan: read-only, for pull requests of this repository. The owner applies the saved plan."
+      subjects    = ["${local.github_subject_base}:environment:terraform-plan"]
+      description = "GitHub Actions Terraform plan: read-only, from the terraform-plan environment of this repository. The owner applies the saved plan."
     }
   } : {}
 
@@ -307,10 +307,10 @@ locals {
       }
     ]
 
-    # Any pull request job of this repository can use the plan role, and the data bucket holds Confidential tables. The explicit Deny
+    # Any job that reaches the terraform-plan environment can use the plan role, and the data bucket holds Confidential tables. The explicit Deny
     # covers every object read except the three exact state keys the plan reads, and holds even if an allow above is widened later.
     # The role saves each plan with its digest under terraform_plans/ (owner decision D18) and writes nothing else: the second Deny keeps every
-    # write and delete under that prefix. It reads, lists and deletes no saved plan, so one pull request cannot read another job's plan.
+    # write and delete under that prefix. It reads, lists and deletes no saved plan, so one job cannot read another job's plan.
     terraform_plan = concat(
       [
         {

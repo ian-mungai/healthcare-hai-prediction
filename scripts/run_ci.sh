@@ -2,19 +2,17 @@
 set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the CI groups
-# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), one of the fourteen hosted parts of "core" ("core_static", "core_sql_terraform", "core_terraform_services", "core_terraform_proofs", "core_terraform_replace_proofs", "core_configuration",
-# "core_configuration_policy", "core_configuration_host", "core_configuration_owner", "core_ci_tooling", "core_ci_tooling_runtime", "core_code_rules", "core_orchestration_engine" or "core_orchestration_offline": the hosted Core jobs run these, see parts in config/quality/ci_groups.json), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# gate stage cases, the acquisition gate and the four lakehouse layers), one of the fourteen hosted parts of "core" ("core_static", "core_sql_terraform", "core_terraform_services", "core_terraform_proofs", "core_terraform_replace_proofs", "core_configuration",
+# "core_configuration_policy", "core_configuration_host", "core_configuration_owner", "core_ci_tooling", "core_ci_tooling_runtime", "core_code_rules", "core_orchestration_engine" or "core_orchestration_offline": the hosted Core jobs run these, see parts in config/quality/ci_groups.json), "gate_stage" (those gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
 # if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), "feature_store" (the feature store's own light checks) or "gates" (the gates only).
 # FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
-# the fourteen parts of "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
+# the fourteen parts of "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick gates alone.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
-# every group: the pre-push run escalates to it when the selector or the CI scripts change; run it on demand or when hosted CI is unavailable), "staged"
-# (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches: GitHub CI and the pre-push hook). The privacy, secret,
+# every group: hosted CI runs it on every pushed commit; run it on demand or when hosted CI is unavailable), "staged"
+# (the groups the staged paths touch, on demand) or "range" (the groups RANGE_START..RANGE_END touches, on demand). The privacy, secret,
 # credential, data-file, writing, Markdown lint and documentation gates run in every scope and in every part, also when no group is selected.
-# HAI_CI_REUSE=main (the local default) skips a group whose input hash matches a pass recorded by a full run on a commit of origin/main; off runs every group. A passed full run on
-# a clean commit of origin/main records its groups (scripts/quality/ci_main_passes.py). The pre-push gate never reuses.
 # CI_LIST_ONLY=1 prints the plan and runs nothing. CI_ADMISSION_ONLY=1 runs the gates, checks that every worker has a limit, prints the workers and runs none. Each worker (a group, a gold unit, a feature shard, a hook partition, an acquisition shard or a combining step) runs in its own
 # session and has a deadline: the timeout of the hosted job that runs the same work (worker_limits in config/quality/ci_groups.json), or CI_WORKER_LIMIT_SECONDS for every
 # worker. A worker is overdue only when the whole seconds since its start exceed its limit, so it is never stopped before its limit. At the deadline the dispatcher stops every member
@@ -46,8 +44,8 @@ if [[ -z "${TF_PLUGIN_CACHE_DIR:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
 fi
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | core_static | core_sql_terraform | core_terraform_services | core_terraform_proofs | core_terraform_replace_proofs | core_configuration | core_configuration_policy | core_configuration_host | core_configuration_owner | core_ci_tooling | core_ci_tooling_runtime | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
-  *) printf 'CI_PART must be all, core, core_static, core_sql_terraform, core_terraform_services, core_terraform_proofs, core_terraform_replace_proofs, core_configuration, core_configuration_policy, core_configuration_host, core_configuration_owner, core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine, core_orchestration_offline, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | core_static | core_sql_terraform | core_terraform_services | core_terraform_proofs | core_terraform_replace_proofs | core_configuration | core_configuration_policy | core_configuration_host | core_configuration_owner | core_ci_tooling | core_ci_tooling_runtime | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | gate_stage | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
+  *) printf 'CI_PART must be all, core, core_static, core_sql_terraform, core_terraform_services, core_terraform_proofs, core_terraform_replace_proofs, core_configuration, core_configuration_policy, core_configuration_host, core_configuration_owner, core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine, core_orchestration_offline, launcher, gate_stage, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
@@ -69,14 +67,11 @@ scratch="$(mktemp -d "${TMPDIR:-/tmp}/hai_ci.XXXXXX")"
 export CI_TIMING_FILE="$scratch/main.timing"
 timing_files=("$CI_TIMING_FILE")
 # release_docker: after the run, ask the launcher to quit Docker Desktop. The launcher skips it unless a group created a container since ci_started and refuses
-# it while any other container or registry work runs. Nothing here changes the exit status of the run (failure mode R25). It is skipped under the pre-push gate
-# (HAI_DOCKER_RELEASE=outer, the gate releases once after all its steps), on hosted CI, off macOS, in a list-only run and in the gates part.
+# it while any other container or registry work runs. Nothing here changes the exit status of the run (failure mode R25). It is skipped on hosted CI, off macOS, in a list-only run and in the gates part.
 ci_started="$(date +%s)"
 release_docker() {
   local skip=""
-  if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then
-    skip="the pre-push gate releases Docker"
-  elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
     skip="hosted CI has no Docker Desktop"
   elif [[ "$(uname)" != "Darwin" ]]; then
     skip="this is not macOS"
@@ -236,36 +231,6 @@ done <<<"$plan"
 if [[ "${CI_LIST_ONLY:-0}" == "1" ]]; then
   ci_finished=1
   exit 0
-fi
-# Reuse of a group's pass from main (scripts/quality/ci_main_passes.py). HAI_CI_REUSE is "main" (the default for a local run) or "off" (the default on hosted CI). The pre-push
-# gate sets it to off, and HAI_DOCKER_RELEASE=outer (the gate's marker) forces it off here too: the gate never reuses a local pass. Only a full run of part all reuses and records
-# (no CI_UNITS, LAUNCHER_SHARD or FEATURE_SHARD). A group is reused only when a full run on a commit of origin/main recorded a pass with the same input hash.
-reuse_mode="${HAI_CI_REUSE:-}"
-if [[ -z "$reuse_mode" ]]; then
-  if [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then reuse_mode=off; else reuse_mode=main; fi
-fi
-case "$reuse_mode" in
-  main | off) ;;
-  *) printf 'HAI_CI_REUSE must be main or off, not %s\n' "$reuse_mode" >&2; exit 2 ;;
-esac
-if [[ "${HAI_DOCKER_RELEASE:-}" == "outer" ]]; then reuse_mode=off; fi
-full_run=0
-if [[ "$part" == "all" && -z "${CI_UNITS:-}" && -z "${LAUNCHER_SHARD:-}" && -z "${FEATURE_SHARD:-}" ]]; then full_run=1; fi
-if [[ "$reuse_mode" == "main" && "$full_run" == 1 && ${#run_groups[@]} -gt 0 ]]; then
-  # Only a group the lookup names as reused leaves the run, so a lookup that fails or prints nothing runs every group.
-  reused=" "
-  while read -r kind group commit; do
-    if [[ "$kind" == reuse ]]; then
-      printf 'reused %s: passed in a full run on main commit %s with identical inputs\n' "$group" "$commit" | tee -a "$summary"
-      reused+="$group "
-    fi
-  done < <("$python_bin" -m scripts.quality.ci_main_passes filter --groups "${run_groups[@]}" || printf 'The reuse lookup failed: every group runs\n' >&2)
-  kept=()
-  for group in "${run_groups[@]}"; do
-    [[ "$reused" == *" $group "* ]] || kept+=("$group")
-  done
-  run_groups=(${kept[@]+"${kept[@]}"})
-  selected=" ${run_groups[*]:-} "
 fi
 is_selected() { [[ "$selected" == *" $1 "* ]]; }
 # require_group_file <group>: a missing or unreadable body file of a check group fails the run with its name.
@@ -860,8 +825,5 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
   fi
 fi
 
-if [[ "$reuse_mode" == "main" && "$full_run" == 1 && "$scope" == "full" && ${#run_groups[@]} -gt 0 ]]; then
-  "$python_bin" -m scripts.quality.ci_main_passes record --groups "${run_groups[@]}" || printf 'Recording the passes failed; the run result stands\n'
-fi
 printf '\nAll local CI checks passed without AWS credentials.\n'
 ci_finished=1
