@@ -110,13 +110,33 @@ every_ignored_dockerfile_input_is_generated() {
 # build when uv had no linux_aarch64 release. Each job that runs install_tools.py needs a release of every tool it installs for its own runner platform.
 tools_manifest=config/quality_tools.json
 installed_tool_platforms() { # "runner tool" for each tool each job installs; "ALL" when no --tool names one
-  awk '
-    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { runner = "" }
-    /^    runs-on:/ { runner = $2 }
-    /install_tools\.py/ && runner != "" {
-      count = 0
-      for (i = 1; i <= NF; i++) if ($i == "--tool") { print runner, $(i + 1); count++ }
-      if (count == 0) print runner, "ALL"
+  # Lines that end in a backslash are joined first. A call is the script form (install_tools.py) or the module form (scripts.quality.install_tools); it ends at the
+  # next && || ; or |. It names tools as --tool X or --tool=X. Comment lines are skipped.
+  awk -v sq="'" '
+    function scan(line,    call, n, parts, i, count) {
+      if (line ~ /^[[:space:]]*#/) return
+      while (match(line, /[\/.]install_tools(\.py)?([[:space:]]|$)/)) {
+        call = substr(line, RSTART + RLENGTH - 1)
+        line = call
+        sub(/(&&|\|\||;|\|).*/, "", call)
+        n = split(call, parts, /[[:space:]]+/)
+        count = 0
+        for (i = 1; i <= n; i++) {
+          if (parts[i] == "--tool" && i < n) { print runner, unquote(parts[i + 1]); count++ }
+          else if (parts[i] ~ /^--tool=./) { print runner, unquote(substr(parts[i], 8)); count++ }
+        }
+        if (count == 0) print runner, "ALL"
+        sub(/^[^&;|]*/, "", line)
+      }
+    }
+    function unquote(word) { gsub("[\"" sq "]", "", word); return word }
+    {
+      logical = logical $0
+      if (logical ~ /\\[[:space:]]*$/) { sub(/\\[[:space:]]*$/, " ", logical); next }
+      if (logical ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/) runner = ""
+      if (logical ~ /^    runs-on:/) { split(logical, head, /[[:space:]]+/); runner = head[3] }
+      if (runner != "") scan(logical)
+      logical = ""
     }
   ' "$@"
 }
@@ -128,19 +148,57 @@ platform_of_runner() {
     *) return 1 ;;
   esac
 }
-every_installed_tool_has_a_release_for_its_runner() {
-  local runner tool name platform names missing=0
+releases_missing_for_runners() { # manifest, then workflow files; prints each missing release and fails when there is one
+  local manifest="$1" runner tool name platform names missing=0
+  shift
   while read -r runner tool; do
     platform="$(platform_of_runner "$runner")" || { echo "runner $runner has no known platform key" >&2; missing=1; continue; }
     names="$tool"
-    [[ "$tool" == ALL ]] && names="$(jq -r '.tools | to_entries[] | select(.value.releases != null) | .key' "$tools_manifest")"
+    [[ "$tool" == ALL ]] && names="$(jq -r '.tools | to_entries[] | select(.value.releases != null) | .key' "$manifest")"
     for name in $names; do
-      jq -e --arg tool "$name" --arg platform "$platform" '.tools[$tool].releases[$platform].sha256 | strings | test("^[0-9a-f]{64}$")' "$tools_manifest" > /dev/null \
-        || { echo "$name has no $platform release in $tools_manifest for runner $runner" >&2; missing=1; }
+      jq -e --arg tool "$name" --arg platform "$platform" '.tools[$tool].releases[$platform].sha256 | strings | test("^[0-9a-f]{64}$")' "$manifest" > /dev/null \
+        || { echo "$name has no $platform release in $manifest for runner $runner" >&2; missing=1; }
     done
-  done < <(installed_tool_platforms .github/workflows/*.yml | sort -u)
+  done < <(installed_tool_platforms "$@" | sort -u)
   [[ $missing -eq 0 ]]
 }
+every_installed_tool_has_a_release_for_its_runner() { releases_missing_for_runners "$tools_manifest" .github/workflows/*.yml; }
+
+# Synthetic workflows on an arm64 runner and a manifest whose tool alpha has no arm64 release: every way to call the installer must still be found.
+tool_scratch="$scratch/tools"
+mkdir -p "$tool_scratch"
+cat > "$tool_scratch/manifest.json" << 'JSON'
+{"tools": {
+  "alpha": {"releases": {"linux_amd64": {"sha256": "1111111111111111111111111111111111111111111111111111111111111111"}}},
+  "beta": {"releases": {"linux_amd64": {"sha256": "2222222222222222222222222222222222222222222222222222222222222222"},
+                        "linux_aarch64": {"sha256": "3333333333333333333333333333333333333333333333333333333333333333"}}}
+}}
+JSON
+install_workflow() { # file name, then the lines of the run block
+  local file="$tool_scratch/$1.yml"
+  shift
+  printf 'jobs:\n  one:\n    runs-on: ubuntu-24.04-arm\n    steps:\n      - name: Install\n        run: |\n' > "$file"
+  printf '          %s\n' "$@" >> "$file"
+}
+install_workflow separate "python scripts/quality/install_tools.py --tool alpha"
+install_workflow equals "python scripts/quality/install_tools.py --tool=alpha"
+install_workflow continued "python scripts/quality/install_tools.py \\" "  --tool beta \\" "  --tool alpha"
+install_workflow continued_equals "python scripts/quality/install_tools.py \\" "  --tool=alpha"
+install_workflow module "python -m scripts.quality.install_tools --tool alpha"
+install_workflow module_equals "python -m scripts.quality.install_tools --tool=alpha"
+install_workflow module_all "python -m scripts.quality.install_tools"
+install_workflow script_all "python scripts/quality/install_tools.py"
+install_workflow quoted "python scripts/quality/install_tools.py --tool=\"alpha\""
+install_workflow second_call "echo ready && python scripts/quality/install_tools.py --tool=beta; python -m scripts.quality.install_tools --tool=alpha"
+install_workflow complete_separate "python scripts/quality/install_tools.py --tool beta"
+install_workflow complete_equals "python scripts/quality/install_tools.py --tool=beta"
+install_workflow complete_continued "python scripts/quality/install_tools.py \\" "  --tool beta"
+install_workflow complete_continued_equals "python scripts/quality/install_tools.py \\" "  --tool=beta"
+install_workflow complete_module "python -m scripts.quality.install_tools --tool beta"
+install_workflow complete_module_equals "python -m scripts.quality.install_tools --tool=beta"
+install_workflow unrelated "python scripts/quality/install_lint_tools.py --tool alpha" "# python scripts/quality/install_tools.py --tool alpha"
+refused_for() { ! releases_missing_for_runners "$tool_scratch/manifest.json" "$tool_scratch/$1.yml" > /dev/null 2>&1; }
+accepted_for() { releases_missing_for_runners "$tool_scratch/manifest.json" "$tool_scratch/$1.yml" > /dev/null 2>&1; }
 
 check "the build arguments script exists" script_exists
 check "a build with the repository root as context passes its Dockerfile" rooted_names_its_dockerfile
@@ -159,6 +217,23 @@ check "the push workflow pins every action by SHA" push_pins_every_action_by_sha
 check "the push workflow keeps its minimal permissions and the arm64 runner" push_keeps_minimal_permissions_on_arm
 check "every ignored requirement file of a built image is one lock_env images writes" every_ignored_dockerfile_input_is_generated
 check "every tool a workflow installs has a release for the platform of its runner" every_installed_tool_has_a_release_for_its_runner
+check "a missing release is found for --tool value" refused_for separate
+check "a missing release is found for --tool=value" refused_for equals
+check "a missing release is found in a call continued over lines" refused_for continued
+check "a missing release is found in a continued call with --tool=value" refused_for continued_equals
+check "a missing release is found in the module form with --tool value" refused_for module
+check "a missing release is found in the module form with --tool=value" refused_for module_equals
+check "a module call with no --tool installs every tool, so a missing release is found" refused_for module_all
+check "a script call with no --tool installs every tool, so a missing release is found" refused_for script_all
+check "a missing release is found in the second call of one line" refused_for second_call
+check "a missing release is found for a quoted tool name" refused_for quoted
+check "an installed tool that has its release passes for --tool value" accepted_for complete_separate
+check "an installed tool that has its release passes for --tool=value" accepted_for complete_equals
+check "an installed tool that has its release passes in a continued call" accepted_for complete_continued
+check "an installed tool that has its release passes in a continued call with --tool=value" accepted_for complete_continued_equals
+check "an installed tool that has its release passes in the module form" accepted_for complete_module
+check "an installed tool that has its release passes in the module form with --tool=value" accepted_for complete_module_equals
+check "another installer script and a comment are not the tool installer" accepted_for unrelated
 
 # --- deployment check ------------------------------------------------------------------------------------------------------------------
 # The synthetic account number is built from parts, so no file of the repository holds a twelve-digit number.
