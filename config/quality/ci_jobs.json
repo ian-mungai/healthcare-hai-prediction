@@ -26,7 +26,7 @@
     "Core Code Rules",
     "Core Orchestration Engine Tests",
     "Core Orchestration Offline Checks",
-    "Core Checks",
+    "CI Checks",
     "CI Reuse and Gate E2E",
     "Lakehouse Bronze Checks",
     "Lakehouse Silver Checks",

@@ -387,65 +387,53 @@ def condition_value(condition: str, reuse: str) -> bool:
     return True
 
 
-def core_job_keys(jobs: dict[str, Any]) -> list[str]:
-    """The jobs that run a hosted Core part: a CI_PART of ``core_...`` or a matrix part that starts with ``core_``."""
-    keys = []
-    for key, definition in jobs.items():
-        parts = [str(entry.get("part", "")) for entry in definition.get("strategy", {}).get("matrix", {}).get("include", [])]
-        values = [str(step.get("env", {}).get("CI_PART", "")) for step in definition.get("steps", [])]
-        if any(part.startswith("core_") for part in parts) or any(value.startswith("core_") for value in values):
-            keys.append(key)
-    return keys
-
-
-def core_gate_problems(jobs: dict[str, Any]) -> list[str]:
-    """What is wrong with the aggregate job ``Core Checks``, which the owner lists once in the required checks. It waits for the plan and every Core job, runs
-    after a failed Core job, is skipped only when the plan reuses a result (as ``Acquisition Checks`` is) and fails unless every Core job succeeded."""
-    gate = jobs.get("core_gate")
-    if not isinstance(gate, dict) or gate.get("name") != "Core Checks":
-        return ["no job named Core Checks"]
+def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
+    """What is wrong with the aggregate job ``CI Checks``, the one context the owner lists in the required checks. It waits for the plan and every other
+    job, runs after a failed job, is skipped only when the plan reuses a result (as ``Acquisition Checks`` is) and fails unless every job it needs succeeded."""
+    gate = jobs.get("ci_gate")
+    if not isinstance(gate, dict) or gate.get("name") != "CI Checks":
+        return ["no job named CI Checks"]
     needs = [gate["needs"]] if isinstance(gate.get("needs"), str) else list(gate.get("needs", []))
-    problems = [f"Core Checks does not need {key}" for key in ["plan", *core_job_keys(jobs)] if key not in needs]
+    # The quick gates of a reused result run only when the plan reuses a result, which is when this job is skipped.
+    expected = [key for key in jobs if key not in {"ci_gate", "reused_gates"}]
+    problems = [f"CI Checks does not need {key}" for key in expected if key not in needs]
+    problems += [f"CI Checks needs {key}, which is not a job that it may wait for" for key in needs if key not in expected]
     condition = str(gate.get("if", ""))
     if "!cancelled()" not in condition or [condition_value(condition, reuse) for reuse in ("", "false", "true")] != [True, True, False]:
-        problems.append(f"Core Checks must run unless cancelled and unless the plan reuses a result: {condition!r}")
-    verdicts = [
-        step
-        for step in gate.get("steps", [])
-        if any(f"needs.{key}.result" in str(value) for key in core_job_keys(jobs) for value in step.get("env", {}).values())
-        and "exit 1" in str(step.get("run", ""))
-    ]
+        problems.append(f"CI Checks must run unless cancelled and unless the plan reuses a result: {condition!r}")
+    verdicts = [step for step in gate.get("steps", []) if "toJSON(needs)" in str(step.get("env", {})) and "exit 1" in str(step.get("run", ""))]
     if not verdicts:
-        problems.append("Core Checks has no step that exits 1 on the result of a Core job")
+        problems.append("CI Checks has no step that exits 1 on the results of the jobs it needs")
     for step in verdicts:
         text = str(step.get("run", ""))
-        wanted = [name for name, value in step.get("env", {}).items() if any(f"needs.{key}.result" in str(value) for key in core_job_keys(jobs))]
-        if not wanted or not all(f'"${name}" != "success"' in text for name in wanted) or "skipped" in text:
-            problems.append("Core Checks must fail unless every Core job result is success")
+        if '!= "success"' not in text or "skipped" in text or '"plan"' not in text:
+            problems.append("CI Checks must fail unless every job it needs, the plan apart, succeeded")
     return problems
 
 
-def core_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]]:
-    """The real gate job is complete, is a required pull request job, and three planted defects are each found."""
-    without_core = copy.deepcopy(jobs)
-    if "core_gate" in without_core:
-        without_core["core_gate"]["needs"] = [key for key in without_core["core_gate"]["needs"] if key != "core"]
+def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]]:
+    """The real gate job is complete, is a required pull request job, and four planted defects are each found."""
+    without_columns = copy.deepcopy(jobs)
+    if "ci_gate" in without_columns:
+        without_columns["ci_gate"]["needs"] = [key for key in without_columns["ci_gate"]["needs"] if key != "feature_columns"]
     tolerant = copy.deepcopy(jobs)
-    for step in tolerant.get("core_gate", {}).get("steps", []):
-        step["run"] = str(step.get("run", "")).replace('!= "success"', '!= "failure"')
+    for step in tolerant.get("ci_gate", {}).get("steps", []):
+        step["run"] = str(step.get("run", "")).replace('!= "success"', '== "failure"')
     always = copy.deepcopy(jobs)
-    if "core_gate" in always:
-        always["core_gate"]["if"] = "${{ needs.plan.outputs.reuse != 'true' }}"
-    plants = {"a_missing_need": without_core, "a_tolerant_verdict": tolerant, "a_skipped_gate_on_failure": always}
+    if "ci_gate" in always:
+        always["ci_gate"]["if"] = "${{ needs.plan.outputs.reuse != 'true' }}"
+    unlisted = copy.deepcopy(jobs)
+    unlisted["new_job"] = {"name": "A new job", "needs": "plan", "if": "${{ needs.plan.outputs.reuse != 'true' }}", "steps": []}
+    plants = {"a_missing_need": without_columns, "a_tolerant_verdict": tolerant, "a_skipped_gate_on_failure": always, "a_new_job_nobody_waits_for": unlisted}
     return [
         {
-            "case": "core_checks_gate_requires_every_core_job",
-            "passed": not core_gate_problems(jobs) and "Core Checks" in listed and bool(core_job_keys(jobs)),
-            "problems": core_gate_problems(jobs),
-            "core_jobs": core_job_keys(jobs),
+            "case": "ci_checks_gate_requires_every_job",
+            "passed": not ci_gate_problems(jobs) and "CI Checks" in listed,
+            "problems": ci_gate_problems(jobs),
+            "needs": sorted(jobs.get("ci_gate", {}).get("needs", [])),
         },
         *(
-            {"case": f"core_checks_gate_planted_{name}_is_found", "passed": bool(core_gate_problems(planted)), "problems": core_gate_problems(planted)[:2]}
+            {"case": f"ci_checks_gate_planted_{name}_is_found", "passed": bool(ci_gate_problems(planted)), "problems": ci_gate_problems(planted)[:2]}
             for name, planted in plants.items()
         ),
     ]
@@ -513,7 +501,7 @@ def static_cases() -> list[dict[str, Any]]:
             and jobs["plan"]["outputs"]["reuse"] == "${{ steps.reuse.outputs.reuse }}",
             "permissions": jobs["plan"]["permissions"],
         },
-        *core_gate_cases(jobs, set(config["required_pull_request_jobs"])),
+        *ci_gate_cases(jobs, set(config["required_pull_request_jobs"])),
         {
             "case": "combine_job_checks_shard_results",
             "passed": "acquisition_shard" in needs["acquisition"]

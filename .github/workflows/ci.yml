@@ -569,23 +569,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  core_gate:
-    name: Core Checks
-    needs: [plan, core]
-    # The one context the owner lists in the required checks for every Core job (the matrix of the job above), so a new or split Core part needs no change to the protection.
-    # Runs after a failed Core job too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict. Like Acquisition Checks it is
-    # skipped only when the plan reuses a passed pull request result.
+  ci_gate:
+    name: CI Checks
+    needs: [plan, hooks, hook_samples, hook_samples_combine, core, reuse_gate, lakehouse, feature_sources, feature_columns, feature_evidence, gold_metadata, launcher, acquisition_shard, acquisition]
+    # The one context the owner lists in the required checks. It waits for the plan and every other job of this workflow (Core parts, feature, lakehouse, launcher, acquisition and
+    # hook jobs), so a new job or a split needs no change to the protection. Runs after a failed job too, so that the failure shows here and a skipped gate never counts as a
+    # pass; a cancelled run needs no verdict. Like Acquisition Checks it is skipped only when the plan reuses a passed pull request result, and the plan apart every job it
+    # needs must have succeeded (a job that was skipped or cancelled fails the gate: no job of a run that does not reuse is skipped).
     if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     # A gate with one shell step, about 0.2 minutes (estimate: no hosted run yet).
     timeout-minutes: 5
     steps:
-      - name: Require every Core job to have succeeded
+      - name: Require every job to have succeeded
         env:
-          CORE: ${{ needs.core.result }}
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          if [[ "$CORE" != "success" ]]; then
-            echo "The Core jobs finished with result '$CORE', not 'success'; the gate fails." | tee -a "$GITHUB_STEP_SUMMARY"
+          failed="$(jq -r 'to_entries[] | select(.key != "plan" and .value.result != "success") | "\(.key)=\(.value.result)"' <<<"$NEEDS")"
+          if [[ -n "$failed" ]]; then
+            echo "These jobs did not succeed, so the gate fails:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$failed" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 

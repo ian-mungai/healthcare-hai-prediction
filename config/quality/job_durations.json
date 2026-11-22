@@ -159,10 +159,10 @@
       "basis": "estimate, 483 s measured in the hosted run 41521618599 (the SDK runtime cases alone 197 s) plus about 350 s for the offline checks that run was cut short before, and about 4 minutes of setup and gates; local Mac run Nov 3 2026 stopped at 340 s in the layer driver E2E (see the pending process fix), so its later commands have no local time yet"
     },
     {
-      "job": "Core Checks",
+      "job": "CI Checks",
       "measured_minutes": 1,
       "timeout_minutes": 5,
-      "basis": "estimate, one shell step that reads the result of the Core jobs (no hosted run yet)"
+      "basis": "estimate, one shell step that reads the results of every job it needs (no hosted run yet)"
     },
     {
       "job": "CI Reuse and Gate E2E",
