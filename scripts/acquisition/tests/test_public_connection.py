@@ -197,3 +197,36 @@ def test_the_census_api_request_ends_at_its_deadline(publisher_for: Any, monkeyp
         census.request_json("https://api.census.gov/data/2009/acs/acs5/profile", {"get": "NAME"}, cast(AwsCli, KeyClient()))
     elapsed = time.monotonic() - started
     check(elapsed < ALLOWED_SECONDS, f"the request ran {elapsed:.1f} s past a {DEADLINE} s deadline")
+
+
+def test_stop_waits_for_a_timer_callback_that_is_already_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The callback is held inside its socket shutdown, as a callback past Timer.cancel is: stop must not return before it ends."""
+    entered, release, order = threading.Event(), threading.Event(), list[str]()
+
+    def held(_sock: object) -> None:
+        order.append("shutdown began")
+        entered.set()
+        release.wait(5)
+        order.append("shutdown ended")
+
+    monkeypatch.setattr(transport.RequestClock, "shut", staticmethod(held))
+    clock = transport.RequestClock(0.01).start()
+    clock.watch(socket.socket())
+    check(entered.wait(5), "the timer callback never reached its shutdown")
+    threading.Timer(0.3, release.set).start()
+    started = time.monotonic()
+    expired = clock.stop()
+    order.append("stop returned")
+    check(time.monotonic() - started >= 0.2, "stop returned while the callback was still shutting a socket")
+    check(order == ["shutdown began", "shutdown ended", "stop returned"] and expired, f"the order was {order}, expired {expired}")
+
+
+def test_a_clock_that_stopped_first_shuts_no_socket_afterwards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A callback that starts after stop has returned finds the clock stopped and leaves every socket alone."""
+    shut: list[object] = []
+    monkeypatch.setattr(transport.RequestClock, "shut", staticmethod(shut.append))
+    clock = transport.RequestClock(60).start()
+    clock.watch(socket.socket())
+    check(clock.stop() is False, "a clock that did not expire said it had")
+    clock.expire()
+    check(shut == [] and not clock.expired.is_set(), "a stopped clock shut a socket or marked itself expired")

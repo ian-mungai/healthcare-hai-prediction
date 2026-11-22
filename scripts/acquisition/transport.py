@@ -255,11 +255,12 @@ def connect_within(connection: Any, seconds: float) -> None:
 class RequestClock:
     """One absolute deadline over a whole request: the reply headers and every read of the body, not each socket receive.
 
-    A socket timeout bounds one receive, so a publisher that sends a byte a second keeps a ``getresponse`` or a 1 MiB read alive for as long as it likes. The
-    clock starts a timer; at the deadline it shuts down the socket of every ``PublicHTTPSConnection`` that connected while the clock was active, which ends
-    a receive that is blocked on it. A clock that expired is a ``TimeoutError``: ``stop`` returns True and the ``with`` block raises it, whatever the
-    interrupted request raised or returned, so a short body is never taken as a whole one. A connection that is not a ``PublicHTTPSConnection`` (a test's
-    stand-in) holds no socket the clock can reach and keeps its own timeouts."""
+    A socket timeout bounds one receive, so a publisher that sends a byte a second keeps a ``getresponse`` or a 1 MiB read alive for as long as it likes.
+    The clock starts a timer; at the deadline it shuts down the socket of every ``PublicHTTPSConnection`` that connected while the clock was active, which
+    ends a receive that is blocked on it. ``stop`` returns only after a timer callback that is already running has ended, and a callback that starts after
+    ``stop`` does nothing, so no socket is shut down once the request has been handed back. A clock that expired is a ``TimeoutError``: ``stop`` returns
+    True and the ``with`` block raises it, whatever the interrupted request raised or returned, so a short body is never taken as a whole one. A connection
+    that is not a ``PublicHTTPSConnection`` (a test's stand-in) holds no socket the clock can reach and keeps its own timeouts."""
 
     ACTIVE: ContextVar[RequestClock | None] = ContextVar("request_clock", default=None)
 
@@ -267,6 +268,7 @@ class RequestClock:
         self.expired = threading.Event()
         self.sockets: list[socket.socket] = []
         self.lock = threading.Lock()
+        self.stopped = False
         self.timer = threading.Timer(seconds, self.expire)
         self.timer.daemon = True
         self.token: Any = None
@@ -277,8 +279,11 @@ class RequestClock:
         return self
 
     def stop(self) -> bool:
-        """End the clock and return True when it had expired."""
+        """End the clock and return True when it had expired. A callback already past ``Timer.cancel`` holds the lock while it shuts the sockets, so taking
+        the lock here waits for it, and the flag set under the lock stops one that has not taken the lock yet."""
         self.timer.cancel()
+        with self.lock:
+            self.stopped = True
         if self.token is not None:
             self.ACTIVE.reset(self.token)
             self.token = None
@@ -294,10 +299,11 @@ class RequestClock:
 
     def expire(self) -> None:
         with self.lock:
+            if self.stopped:
+                return
             self.expired.set()
-            held = list(self.sockets)
-        for sock in held:
-            self.shut(sock)
+            for sock in self.sockets:
+                self.shut(sock)
 
     @staticmethod
     def shut(sock: socket.socket) -> None:
