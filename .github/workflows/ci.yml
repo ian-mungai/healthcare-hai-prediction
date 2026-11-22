@@ -104,10 +104,11 @@ jobs:
 
       # The setup steps below (setup_tf to setup_deps) are written once here and reused by an alias in every later job (a YAML anchor must come before its
       # aliases, so this first job holds them). They replace a local composite action, which zizmor reports as a self-repository reference. Edit them here only.
-      # The host Python environment (.venv) is restored from a cache keyed on the Python version and the lock, and used only after scripts/quality/hosted_python_env.sh has
-      # run `lock_env verify host` on it: exactly the pinned packages with every installed file at its recorded hash. pip accepts a package found in a restored environment as already
-      # satisfied without a hash check, so a miss or a failed verification builds the environment fresh from the hash-pinned host group of uv.lock (--require-hashes, wheels only;
-      # SQLFluff, import-linter and check-jsonschema have their own groups and are not cached). The cache is saved right after that install, so a later step cannot add to it.
+      # The host Python environment (.venv) is always built fresh with the interpreter of the job (scripts/quality/hosted_python_env.sh) and installed from the hash-pinned host group
+      # of uv.lock with --require-hashes --only-binary=:all:, so pip checks every wheel against the lock hashes itself. Only the downloaded wheel files are cached (~/hai_wheelhouse,
+      # keyed on the Python version and the lock): a hit is the only install source (--no-index), a miss downloads the wheels, and no environment is ever restored. The cache is
+      # saved only on a push to main or a pull request from this repository (a fork cannot write it), right after the install. SQLFluff, import-linter and check-jsonschema have
+      # their own groups and are not cached.
       # The native tools (gitleaks, TFLint, trivy, OSV-Scanner, zizmor, typos, uv and the rest) are downloaded from the pins of config/quality_tools.json on
       # every run and checked by SHA-256 before they are written to .tools/bin; nothing restored from a cache is trusted without that check.
       - &setup_tf
@@ -158,11 +159,11 @@ jobs:
           key: terraform-providers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('infra/.terraform.lock.hcl', 'infra/iam/.terraform.lock.hcl') }}
 
       - &setup_env_cache
-        name: Restore the Python environment
+        name: Restore the wheel cache
         id: python_env
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - &setup_deps
@@ -171,7 +172,8 @@ jobs:
         env:
           ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
         run: |
-          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}"
+          python scripts/quality/install_tools.py
+          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
           .venv/bin/python -m pip check
           .venv/bin/python -m scripts.quality.install_markdownlint
           .venv/bin/python -m scripts.quality.install_sqlfluff
@@ -183,11 +185,11 @@ jobs:
           echo "TF_PLUGIN_CACHE_DIR=$HOME/.terraform.d/plugin-cache" >> "$GITHUB_ENV"
 
       - &save_env_cache
-        name: Save the Python environment
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        name: Save the wheel cache
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Check commit messages and removed names of the pushed range
@@ -402,24 +404,26 @@ jobs:
 
       - *setup_py
 
-      - name: Restore the Python environment
+      - name: Restore the wheel cache
         id: python_env
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Install shared dependencies
         shell: bash
         env:
           ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
-        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv
+        run: |
+          python scripts/quality/install_tools.py --tool uv
+          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
-      - name: Save the Python environment
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+      - name: Save the wheel cache
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Download the shard manifests of this run
@@ -1060,24 +1064,26 @@ jobs:
           python-version: "3.12"
 
       # The capture specification test runs the real outgoing secret scan (scripts/quality/scan_secrets.py), which reads .tools/bin/gitleaks.
-      - name: Restore the Python environment
+      - name: Restore the wheel cache
         id: python_env
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Install shared dependencies
         shell: bash
         env:
           ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
-        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv --tool gitleaks
+        run: |
+          python scripts/quality/install_tools.py --tool uv --tool gitleaks
+          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
-      - name: Save the Python environment
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+      - name: Save the wheel cache
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - *setup_dbt_cache
@@ -1155,24 +1161,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Restore the Python environment
+      - name: Restore the wheel cache
         id: python_env
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Install shared dependencies
         shell: bash
         env:
           ENV_CACHE_HIT: ${{ steps.python_env.outputs.cache-hit }}
-        run: bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" --tool uv
+        run: |
+          python scripts/quality/install_tools.py --tool uv
+          bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
-      - name: Save the Python environment
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+      - name: Save the wheel cache
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .venv
+          path: ~/hai_wheelhouse
           key: python-env-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock', 'pyproject.toml', 'scripts/quality/lock_env.py', 'scripts/quality/hosted_python_env.sh') }}
 
       - name: Download the shard manifests and coverage data of this run

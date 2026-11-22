@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
-# Build or restore the host Python environment (.venv) of a hosted CI job. Run from the repository root by the "Install shared dependencies" steps of .github/workflows/ci.yml:
-#   bash scripts/quality/hosted_python_env.sh <true|false: the environment cache hit> [scripts/quality/install_tools.py arguments...]
-# The native tools (uv, gitleaks and the rest) are downloaded from the pins of config/quality_tools.json and checked by SHA-256 on every run; nothing restored from a cache replaces that check.
-# A restored .venv is used only after `lock_env verify host` (scripts/quality/lock_env.py) finds exactly the pinned packages with every installed file at its recorded hash. pip accepts a package
-# that a restored environment already holds without looking at its hashes, so any other state (a miss, no restored folder, a failed verification) builds the environment fresh with the
-# hash-pinned install (--require-hashes, wheels only). Every command runs with the interpreter of the job (setup-python), and the verification reads the restored files without running the restored interpreter. E2E: scripts/quality/run_lock_e2e.py.
+# Build the host Python environment (.venv) of a hosted CI job from the lock, using a cache of the downloaded wheel files. Run from the repository root by the "Install shared
+# dependencies" steps of .github/workflows/ci.yml, after scripts/quality/install_tools.py has installed uv:
+#   bash scripts/quality/hosted_python_env.sh <true|false: the wheel cache hit> <wheel folder>
+# The environment is always built fresh with the interpreter of the job (setup-python): nothing of an earlier or restored environment is kept, so a cache can hold no code that runs.
+# pip installs the host group of uv.lock with --require-hashes --only-binary=:all: and checks every wheel against the lock hashes itself. On a hit the wheel folder is the only
+# source (--no-index --find-links), so the install makes no network call (the job's own pip drives the install into the new environment, pip --python); if pip rejects it (a wheel is missing or fails its hash) the folder is cleared and the wheels are
+# downloaded again. On a miss, or with no folder, pip downloads the wheels into the folder (hash-checked) and the install then reads them from it, so the workflow saves exactly
+# the locked wheels. HOSTED_ENV_GROUP (default host), HOSTED_ENV_VENV (default .venv) and HOSTED_ENV_WHEELS (the wheel folder when no second argument is given) are for scripts/quality/run_lock_e2e.py. E2E: scripts/quality/run_lock_e2e.py.
 set -euo pipefail
 
-restored="${1:?the first argument is true when the environment cache was restored, else false}"
-shift
+hit="${1:?the first argument is true when the wheel cache was restored, else false}"
+wheelhouse="${2:-${HOSTED_ENV_WHEELS:?the second argument (or HOSTED_ENV_WHEELS) is the wheel folder}}"
+group="${HOSTED_ENV_GROUP:-host}"
+venv="${HOSTED_ENV_VENV:-.venv}"
+temp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+flags=(--no-cache-dir --require-hashes --only-binary=:all:)
 
-if [[ "$restored" == true && ! -x .venv/bin/python ]]; then
-  restored=false
-fi
-if [[ "$restored" != true ]]; then
-  python -m venv .venv
-fi
-python scripts/quality/install_tools.py "$@"
-if [[ "$restored" == true ]]; then
-  if python -m scripts.quality.lock_env verify host --environment .venv; then
-    echo "The restored Python environment matches the lock: no install."
+fresh_environment() {
+  rm -rf "$venv"
+  python -m venv "$venv"
+}
+fresh_environment
+python -m scripts.quality.lock_env export "$group" --output "$temp/${group}_lock"
+requirements="$temp/${group}_lock/requirements.txt"
+install_from_wheels() {
+  python -m pip --python "$venv/bin/python" install "${flags[@]}" --no-index --find-links "$wheelhouse" -r "$requirements"
+}
+if [[ "$hit" == true && -d "$wheelhouse" ]]; then
+  if install_from_wheels; then
+    echo "Installed the locked packages offline from the cached wheels."
     exit 0
   fi
-  echo "The restored Python environment differs from the lock: it is rebuilt from the hash-pinned requirements."
-  rm -rf .venv
-  python -m venv .venv
+  echo "::warning::pip rejected the cached wheels; they are downloaded again."
+  rm -rf "$wheelhouse"
+  fresh_environment
 fi
-python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
-.venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+mkdir -p "$wheelhouse"
+python -m pip download "${flags[@]}" --dest "$wheelhouse" -r "$requirements"
+install_from_wheels

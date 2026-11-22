@@ -24,6 +24,7 @@ from typing import Any
 
 from scripts.process import SubprocessError, TimeoutExpired, run_command
 from scripts.quality import lock_env
+from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_GROUPS = {
@@ -332,137 +333,185 @@ def acquisition_formats_enforced() -> Problems:
     return problems
 
 
-def environment_verdict(python: Path, group: str = "import_linter") -> tuple[int, str]:
-    """The exit code and text of ``lock_env verify`` on one environment."""
-    result = run_command(sys.executable, ["-m", "scripts.quality.lock_env", "verify", group, "--environment", str(python.parents[1])], cwd=ROOT, timeout=300)
-    return result.returncode, result.stdout + result.stderr
-
-
-def planted_environment(site: Path, name: str, plant: Callable[[Path], tuple[Path, str]]) -> tuple[int, str]:
-    """Apply one change to an installed environment, verify it, and put the changed file back."""
-    path, original = plant(site)
-    python = site.parents[2] / "bin/python"
-    try:
-        return environment_verdict(python)
-    finally:
-        if original:
-            path.write_text(original, encoding="utf-8")
-        else:
-            shutil.rmtree(path, ignore_errors=True)
-
-
-def verified_environment() -> Problems:
-    """A restored environment passes ``lock_env verify`` only with exactly the pinned packages and every installed file at its recorded hash."""
-    problems: Problems = []
-    with tempfile.TemporaryDirectory(prefix="lock_verify_") as folder:
-        top = Path(folder)
-        run_command(sys.executable, ["-m", "venv", str(top / "env")], timeout=300, check=True)
-        requirements = lock_env.write_files("import_linter", top / "export")[0]
-        code, error = pip_install(top / "env", requirements)
-        if code:
-            return [f"the import_linter group did not install: {error[-300:]}"]
-        site = next((top / "env/lib").glob("python*/site-packages"))
-        code, text = environment_verdict(top / "env/bin/python")
-        if code:
-            problems.append(f"the installed group failed its verification: {text[-300:]}")
-
-        def changed_file(root: Path) -> tuple[Path, str]:
-            record = next(root.glob("import_linter-*.dist-info/RECORD"))
-            rows = [line.split(",") for line in record.read_text(encoding="utf-8").splitlines()]
-            target = root / next(row[0] for row in rows if row[0].endswith(".py") and row[1])
-            original = target.read_text(encoding="utf-8")
-            target.write_text(original + "\n# planted\n", encoding="utf-8")
-            return target, original
-
-        def extra_package(root: Path) -> tuple[Path, str]:
-            target = root / "planted_extra-1.0.dist-info"
-            target.mkdir()
-            (target / "METADATA").write_text("Metadata-Version: 2.1\nName: planted-extra\nVersion: 1.0\n", encoding="utf-8")
-            return target, ""
-
-        def wrong_version(root: Path) -> tuple[Path, str]:
-            target = next(root.glob("import_linter-*.dist-info/METADATA"))
-            original = target.read_text(encoding="utf-8")
-            target.write_text(re.sub(r"(?m)^Version: .*$", "Version: 0.0.1", original, count=1), encoding="utf-8")
-            return target, original
-
-        def missing_package(root: Path) -> tuple[Path, str]:
-            target = next(root.glob("grimp-*.dist-info/METADATA"))
-            original = target.read_text(encoding="utf-8")
-            target.write_text(original.replace("Name: grimp", "Name: grimp_gone", 1), encoding="utf-8")
-            return target, original
-
-        for label, plant, wanted in (
-            ("a changed installed file", changed_file, "changed"),
-            ("an installed package the lock does not pin", extra_package, "not in the lock"),
-            ("a different installed version", wrong_version, "0.0.1"),
-            ("a pinned package that is not installed", missing_package, "grimp"),
-        ):
-            code, text = planted_environment(site, label, plant)
-            if code == 0 or wanted not in text:
-                problems.append(f"{label}: verify did not fail with {wanted!r}: exit {code}, {text.strip()[-200:]}")
-        code, text = environment_verdict(top / "env/bin/python")
-        if code:
-            problems.append(f"the restored files still fail after the plants were undone: {text[-300:]}")
-    return problems
-
-
 HOSTED_ENV_SCRIPT = "scripts/quality/hosted_python_env.sh"
+# A stand-in for python: it logs its arguments, makes a folder for ``-m venv <folder>`` and can fail the first offline install (SHIM_FAIL_OFFLINE).
 SHIM = """#!/bin/bash
 echo "$(basename "$0")|$*" >> "$SHIM_LOG"
-if [[ "$1 $2 $3" == "-m venv .venv" ]]; then
-  mkdir -p .venv/bin
-  cp "$0" .venv/bin/python
+if [[ "$1 $2" == "-m venv" ]]; then
+  mkdir -p "$3/bin"
+  cp "$0" "$3/bin/python"
 fi
-if [[ "$1 $2 $3" == "-m scripts.quality.lock_env verify" ]]; then
-  exit "${SHIM_VERIFY_EXIT:-0}"
+if [[ "$*" == *"--no-index"* && "${SHIM_FAIL_OFFLINE:-0}" == 1 && ! -f "$SHIM_LOG.failed" ]]; then
+  touch "$SHIM_LOG.failed"
+  exit 1
 fi
 exit 0
 """
 
 
-def hosted_env_run(top: Path, restored: str, verify_exit: int, existing: bool) -> list[str]:
-    """Run the hosted environment script against stand-ins for python and the venv python; return the commands it started."""
-    work = top / f"work_{restored}_{verify_exit}_{int(existing)}"
+def hosted_env_run(top: Path, name: str, hit: str, wheels: bool, planted_venv: bool = False, fail_offline: bool = False) -> tuple[list[str], Path]:
+    """Run the hosted environment script against stand-ins for python; return the commands it started and the work folder."""
+    work = top / name
     (work / "bin").mkdir(parents=True)
     shim = work / "bin/python"
     shim.write_text(SHIM, encoding="utf-8")
     shim.chmod(0o755)
-    if existing:
-        (work / ".venv/bin").mkdir(parents=True)
-        (work / ".venv/bin/python").write_text(SHIM, encoding="utf-8")
-        (work / ".venv/bin/python").chmod(0o755)
+    wheelhouse = work / "wheelhouse"
+    if wheels:
+        wheelhouse.mkdir()
+        (wheelhouse / "pkg-1.0-py3-none-any.whl").write_text("wheel", encoding="utf-8")
+    if planted_venv:
+        (work / ".venv/lib").mkdir(parents=True)
+        (work / ".venv/lib/planted.pth").write_text("import os\n", encoding="utf-8")
     log = work / "calls.log"
-    environment = {"PATH": f"{work / 'bin'}:/usr/bin:/bin", "SHIM_LOG": str(log), "SHIM_VERIFY_EXIT": str(verify_exit), "RUNNER_TEMP": str(work / "temp")}
-    result = run_command("/bin/bash", [str(ROOT / HOSTED_ENV_SCRIPT), restored, "--tool", "uv"], cwd=work, env=environment, timeout=60)
+    environment = {
+        "PATH": f"{work / 'bin'}:/usr/bin:/bin",
+        "SHIM_LOG": str(log),
+        "SHIM_FAIL_OFFLINE": str(int(fail_offline)),
+        "RUNNER_TEMP": str(work / "temp"),
+        "HOSTED_ENV_WHEELS": str(wheelhouse),
+    }
+    result = run_command("/bin/bash", [str(ROOT / HOSTED_ENV_SCRIPT), hit], cwd=work, env=environment, timeout=60)
     calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    return [f"exit {result.returncode}", *calls]
+    return [f"exit {result.returncode}", *calls], work
+
+
+def pip_downloads(calls: list[str]) -> list[str]:
+    return [call for call in calls if "-m pip download" in call]
+
+
+def pip_offline_installs(calls: list[str]) -> list[str]:
+    return [call for call in calls if "-m pip" in call and " install " in call and "--no-index" in call and "--find-links" in call]
 
 
 def hosted_environment_script() -> Problems:
-    """The hosted environment script installs from the hash-pinned lock on a miss, keeps a restored environment that verifies and rebuilds one that does not."""
+    """The script builds a fresh environment with the job's interpreter and installs with pip's own hash check: offline from the cached wheels on a hit, after
+    a hash-checked download on a miss. It keeps nothing of a restored or earlier environment."""
     problems: Problems = []
     with tempfile.TemporaryDirectory(prefix="lock_hosted_env_") as folder:
         top = Path(folder)
-        miss = hosted_env_run(top, "false", 0, existing=False)
-        hit = hosted_env_run(top, "true", 0, existing=True)
-        drift = hosted_env_run(top, "true", 1, existing=True)
-        for label, calls in (("miss", miss), ("hit", hit), ("drift", drift)):
+        miss, _ = hosted_env_run(top, "miss", "false", wheels=False)
+        hit, _ = hosted_env_run(top, "hit", "true", wheels=True)
+        planted, work = hosted_env_run(top, "planted", "true", wheels=True, planted_venv=True)
+        tampered, _ = hosted_env_run(top, "tampered", "true", wheels=True, fail_offline=True)
+        folderless, _ = hosted_env_run(top, "folderless", "true", wheels=False)
+        for label, calls in (("miss", miss), ("hit", hit), ("planted", planted), ("tampered", tampered), ("folderless", folderless)):
             if calls[0] != "exit 0":
                 problems.append(f"{label}: the script failed: {calls}")
-        if not any("-m venv .venv" in call for call in miss) or not any("pip install" in call and "--require-hashes" in call for call in miss):
-            problems.append(f"a miss must create the environment and install with --require-hashes: {miss}")
-        if any("lock_env verify" in call for call in miss):
-            problems.append(f"a miss has nothing to verify: {miss}")
-        if not any("lock_env verify host --environment .venv" in call for call in hit) or any("pip install" in call or "-m venv" in call for call in hit):
-            problems.append(f"a restored environment must be verified and not reinstalled: {hit}")
-        if not any("--tool uv" in call and "install_tools.py" in call for call in hit):
-            problems.append(f"the native tools are checked and installed on every run: {hit}")
-        if not any("-m venv .venv" in call for call in drift) or not any("pip install" in call and "--require-hashes" in call for call in drift):
-            problems.append(f"a restored environment that fails its verification must be rebuilt from the hashes: {drift}")
-        absent = hosted_env_run(top, "true", 0, existing=False)
-        if not any("-m venv .venv" in call for call in absent):
-            problems.append(f"a cache hit without a restored folder must build the environment: {absent}")
+            if not any("-m venv" in call for call in calls):
+                problems.append(f"{label}: the environment was not built fresh with python -m venv: {calls}")
+            if any("lock_env verify" in call for call in calls):
+                problems.append(f"{label}: nothing is verified in place of pip's own hash check: {calls}")
+        every_check = ("--require-hashes", "--only-binary=:all:")
+        if len(pip_downloads(miss)) != 1 or not all(flag in pip_downloads(miss)[0] for flag in every_check) or len(pip_offline_installs(miss)) != 1:
+            problems.append(f"a miss downloads once with hash checking and then installs from the downloaded wheels: {miss}")
+        if pip_downloads(hit) or len(pip_offline_installs(hit)) != 1 or not all(flag in pip_offline_installs(hit)[0] for flag in every_check):
+            problems.append(f"a hit installs offline from the cached wheels with hash checking and downloads nothing: {hit}")
+        if (work / ".venv/lib/planted.pth").exists():
+            problems.append("a planted .pth of an earlier .venv survived the build")
+        if len(pip_downloads(tampered)) != 1 or len(pip_offline_installs(tampered)) != 2:
+            problems.append(f"a cache hit whose offline install fails must download the wheels again and install them offline: {tampered}")
+        if len(pip_downloads(folderless)) != 1:
+            problems.append(f"a hit with no wheel folder must download: {folderless}")
+    return problems
+
+
+def wheelhouse_script_run(top: Path, name: str, hit: str, wheelhouse: Path, offline_guard: bool) -> tuple[int, str]:
+    """Run the real script for the import_linter group in a scratch environment folder; with ``offline_guard`` the package index is unreachable."""
+    work = top / name
+    (work / "bin").mkdir(parents=True)
+    (work / "bin/python").symlink_to(sys.executable)
+    environment = {
+        "PATH": f"{work / 'bin'}:{ROOT / '.tools/bin'}:/usr/bin:/bin",
+        "HOSTED_ENV_GROUP": "import_linter",
+        "HOSTED_ENV_VENV": str(work / "venv"),
+        "RUNNER_TEMP": str(work / "temp"),
+        "HOME": str(work),
+        "HOSTED_ENV_WHEELS": str(wheelhouse),
+    }
+    if offline_guard:
+        environment |= {"PIP_INDEX_URL": "http://127.0.0.1:9/simple", "PIP_RETRIES": "0", "PIP_TIMEOUT": "2"}
+    result = run_command("/bin/bash", [str(ROOT / HOSTED_ENV_SCRIPT), hit], cwd=ROOT, env=environment, timeout=PIP_DEADLINE)
+    return result.returncode, result.stdout + result.stderr
+
+
+def wheelhouse_install() -> Problems:
+    """With real pip: a miss downloads the pinned wheels and installs them, a hit installs offline from them, a tampered cached wheel fails the hash check."""
+    problems: Problems = []
+    pinned = json.loads((ROOT / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]["import-linter"]["version"]
+    with tempfile.TemporaryDirectory(prefix="lock_wheelhouse_") as folder:
+        top = Path(folder)
+        wheelhouse = top / "wheelhouse"
+        code, text = wheelhouse_script_run(top, "miss", "false", wheelhouse, offline_guard=False)
+        wheels = sorted(wheelhouse.glob("*.whl"))
+        if code or len(wheels) < 2:
+            return [f"the miss did not download and install the wheels (exit {code}, {len(wheels)} wheels): {text[-300:]}"]
+        shown = run_command(str(top / "miss/venv/bin/python"), ["-m", "pip", "show", "import-linter"], timeout=60)
+        if f"Version: {pinned}" not in shown.stdout:
+            problems.append(f"the miss installed the wrong import-linter: {shown.stdout.strip()[:100]}")
+        code, text = wheelhouse_script_run(top, "hit", "true", wheelhouse, offline_guard=True)
+        shown = run_command(str(top / "hit/venv/bin/python"), ["-m", "pip", "show", "import-linter"], timeout=60)
+        if code or f"Version: {pinned}" not in shown.stdout or "Downloading" in text:
+            problems.append(f"the hit did not install offline from the cached wheels (exit {code}): {text[-300:]}")
+        victim = wheels[0]
+        victim.write_bytes(victim.read_bytes() + b"tampered")
+        requirements = lock_env.write_files("import_linter", top / "export")[0]
+        direct = run_command(
+            sys.executable,
+            [
+                "-m",
+                "pip",
+                "--python",
+                str(top / "hit/venv/bin/python"),
+                "install",
+                "--no-index",
+                "--find-links",
+                str(wheelhouse),
+                "--require-hashes",
+                "--only-binary=:all:",
+                "--force-reinstall",
+                "-r",
+                str(requirements),
+            ],
+            timeout=PIP_DEADLINE,
+        )
+        if direct.returncode == 0 or WRONG_HASH_DIAGNOSTIC not in direct.stderr:
+            problems.append(f"a tampered cached wheel must fail pip's hash check: exit {direct.returncode}, {direct.stderr.strip()[-200:]}")
+        code, text = wheelhouse_script_run(top, "tampered", "true", wheelhouse, offline_guard=False)
+        shown = run_command(str(top / "tampered/venv/bin/python"), ["-m", "pip", "show", "import-linter"], timeout=60)
+        if code or WRONG_HASH_DIAGNOSTIC not in text or f"Version: {pinned}" not in shown.stdout:
+            problems.append(f"the script must report pip's hash failure and then rebuild from fresh downloads (exit {code}): {text[-300:]}")
+    return problems
+
+
+def workflow_cache_problems(text: str) -> Problems:
+    """The Python caches of the workflow hold only the wheel folder and are saved only on a push to main or a pull request from this repository."""
+    document = load_yaml(text)
+    if not isinstance(document, dict):
+        return ["the workflow is not a mapping"]
+    problems: Problems = []
+    steps = [(name, step) for name, job in document["jobs"].items() for step in job.get("steps", []) if str(step.get("uses", "")).startswith("actions/cache")]
+    python_steps = [(name, step) for name, step in steps if step.get("id") == "python_env" or "python-env" in str(step.get("with", {}).get("key", ""))]
+    if len(python_steps) < 20:
+        problems.append(f"expected a restore and a save step in each of the jobs that install the shared dependencies, found {len(python_steps)}")
+    for name, step in python_steps:
+        if step["with"].get("path") != "~/hai_wheelhouse":
+            problems.append(f"{name}: a Python cache must hold only ~/hai_wheelhouse, not {step['with'].get('path')!r}")
+        if str(step["uses"]).startswith("actions/cache/save"):
+            condition = str(step.get("if", ""))
+            if "refs/heads/main" not in condition or "head.repo.full_name == github.repository" not in condition or "cache-hit" not in condition:
+                problems.append(f"{name}: the save must be limited to a push to main and a same-repository pull request on a miss: {condition!r}")
+        elif str(step["uses"]).startswith("actions/cache@"):
+            problems.append(f"{name}: a cache that is restored and saved in one step cannot be limited to trusted events")
+    return problems
+
+
+def workflow_caches_only_wheels() -> Problems:
+    """The workflow passes the cache checks, and the workflow of the commit before this design (a restored .venv, saved on every run) fails them."""
+    problems = workflow_cache_problems((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    earlier = run_command("git", ["show", "913917f:.github/workflows/ci.yml"], cwd=ROOT, timeout=60)
+    if earlier.returncode == 0 and not workflow_cache_problems(earlier.stdout):
+        problems.append("the checks accept the earlier workflow that cached .venv")
     return problems
 
 
@@ -478,8 +527,9 @@ CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("image requirement files", image_files_written),
     ("acquisition formats are enforced in the locked host environment", acquisition_formats_enforced),
     ("hash-checked install", hashed_install),
-    ("a restored environment is verified against the lock", verified_environment),
-    ("the hosted environment script restores, verifies and rebuilds", hosted_environment_script),
+    ("the hosted environment script builds fresh and installs from the cached wheels", hosted_environment_script),
+    ("cached wheels: a miss downloads, a hit installs offline, a tampered wheel fails the hash check", wheelhouse_install),
+    ("the workflow caches only wheels and saves only on trusted events", workflow_caches_only_wheels),
 )
 
 

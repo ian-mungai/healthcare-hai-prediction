@@ -3,7 +3,6 @@
 Run from the repository root:
 
     .venv/bin/python -m scripts.quality.lock_env export <group> --output <folder>
-    .venv/bin/python -m scripts.quality.lock_env verify <group> [--environment <virtual environment folder>]
     .venv/bin/python -m scripts.quality.lock_env images [--check]
     .venv/bin/python -m scripts.quality.lock_env check
 
@@ -20,9 +19,6 @@ training group disagree on a model library.
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import importlib.metadata
 import json
 import re
 import sys
@@ -60,7 +56,6 @@ PIN_FILES = {
 PLATFORM_FILE = "config/orchestration/platform.json"
 EXPORT_DEADLINE = 120
 LOCK_DEADLINE = 300
-SEED_PACKAGES = ("pip",)  # Installed by ``python -m venv``, not by the lock.
 REQUIREMENT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;]+)")
 
 
@@ -241,63 +236,6 @@ def model_library_problems(training: str, serving: str) -> list[str]:
     ]
 
 
-def pinned_versions(group: str, root: Path = ROOT) -> dict[str, str]:
-    """The package and version of every pin of one group."""
-    versions: dict[str, str] = {}
-    for name, block in blocks(export(group, root)):
-        match = REQUIREMENT.match(block)
-        if match:
-            versions[name] = match.group(2)
-    return versions
-
-
-def installed_packages(environment: Path) -> list[tuple[str, str, list[str]]]:
-    """Every distribution below the site-packages of a virtual environment, as ``(name, version, files that differ from their RECORD hash)``. The environment's
-    interpreter never runs: the metadata is read from its files."""
-    configuration = environment / "pyvenv.cfg"
-    version = re.search(r"(?m)^version\s*=\s*(\d+\.\d+)", configuration.read_text(encoding="utf-8")) if configuration.is_file() else None
-    if version is None:
-        raise LockError(f"{environment}: no pyvenv.cfg with a version, so it is not a virtual environment")
-    site = environment / "lib" / f"python{version.group(1)}" / "site-packages"
-    if not site.is_dir():
-        raise LockError(f"{site}: the site-packages folder of the environment is missing")
-    found: list[tuple[str, str, list[str]]] = []
-    for dist in importlib.metadata.distributions(path=[str(site)]):
-        changed: list[str] = []
-        for entry in dist.files or []:
-            if entry.hash is None:
-                continue
-            try:
-                digest = hashlib.new(entry.hash.mode, Path(str(dist.locate_file(entry))).read_bytes()).digest()
-            except OSError:
-                changed.append(str(entry))
-                continue
-            if base64.urlsafe_b64encode(digest).rstrip(b"=").decode() != entry.hash.value:
-                changed.append(str(entry))
-        found.append((str(dist.metadata["Name"]), dist.version, changed))
-    return found
-
-
-def verify_environment(group: str, environment: Path, root: Path = ROOT) -> list[str]:
-    """What differs between an installed environment and one group of the lock: a missing or extra package, another version, or a changed installed file."""
-    pinned = pinned_versions(group, root)
-    problems: list[str] = []
-    seen: dict[str, str] = {}
-    for name, version, changed in installed_packages(environment):
-        key = normalize(str(name))
-        seen[key] = str(version)
-        if key not in pinned and key not in SEED_PACKAGES:
-            problems.append(f"{name} {version} is installed and not in the lock group {group}")
-        elif key in pinned and pinned[key] != version:
-            problems.append(f"{name}: the lock pins {pinned[key]}, the environment has {version}")
-        problems += [
-            f"{name} {version}: the installed file {entry} no longer matches its recorded hash (changed)"
-            for entry in (changed if isinstance(changed, list) else [])
-        ]
-    problems += [f"{name} {pinned[name]} is pinned by the lock group {group} and not installed" for name in sorted(set(pinned) - set(seen))]
-    return problems
-
-
 def check(root: Path = ROOT) -> list[str]:
     """All lock problems, each as ``path:line: problem``."""
     problems = stale_problems(root)
@@ -317,9 +255,6 @@ def main(argv: list[str] | None = None) -> int:
     export_parser.add_argument("--output", type=Path, required=True)
     images_parser = commands.add_parser("images", help="write the requirement files the Dockerfiles copy, from each image's group")
     images_parser.add_argument("--check", action="store_true", help="write nothing; fail when a file is missing or differs from the lock")
-    verify_parser = commands.add_parser("verify", help="fail when an installed environment differs from one group of the lock")
-    verify_parser.add_argument("group")
-    verify_parser.add_argument("--environment", type=Path, default=Path(".venv"), help="the virtual environment folder to check")
     commands.add_parser("check", help="fail when the lock is stale or breaks a lock rule")
     args = parser.parse_args(argv)
     try:
@@ -333,13 +268,6 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write("".join(f"{path}\n" for path in written) or "image requirement files are current\n")
             for problem in problems:
                 sys.stderr.write(f"{problem}\n")
-            return 1 if problems else 0
-        if args.command == "verify":
-            problems = verify_environment(args.group, args.environment)
-            for problem in problems:
-                sys.stderr.write(f"{problem}\n")
-            if not problems:
-                sys.stdout.write(f"environment {args.environment} matches the lock group {args.group}\n")
             return 1 if problems else 0
         problems = check()
     except (LockError, OSError) as error:
