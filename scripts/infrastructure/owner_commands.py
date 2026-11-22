@@ -1,6 +1,7 @@
-"""Run every command that a document section prints through its real parser, with synthetic values, so that a typo fails before the owner runs it.
+"""Run every command of an owner script through its real parser, with synthetic values, so that a typo fails before the owner runs it.
 
-The commands come from the ``sh`` fences of a section. Each line is filled with synthetic values and sent to the parser of its program:
+The commands come from the script text (``commands`` skips its comments, its frame and the functions it defines). Each line has its shell variables replaced
+by synthetic values and goes to the parser of its program:
 
 - ``aws`` runs the real command line without a profile or credentials, so it parses every option and fails only at the missing credentials;
 - ``terraform`` runs the real command in an empty folder, so it parses the options and fails only at the missing state;
@@ -8,14 +9,13 @@ The commands come from the ``sh`` fences of a section. Each line is filled with 
 - ``bash scripts/infrastructure/terraform.sh`` runs through the caller's stand-in stack;
 - ``docker`` is never run, and the shell tools get a quoting check, because the line has to split into words.
 
-Nothing here calls AWS or Docker. The rule that every ``aws`` line names a profile and a region is checked on the printed text."""
+Nothing here calls AWS or Docker. The rule that every ``aws`` line names a profile and a region is checked on the script text."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import io
-import json
 import os
 import re
 import runpy
@@ -57,7 +57,7 @@ Wrapper = Callable[[list[str]], tuple[int, str]]
 
 
 def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """The synthetic value of every placeholder a section may use. An unknown placeholder fails the check."""
+    """The synthetic value of every shell variable a script may read. A variable without a value fails the check."""
     task = "0123456789abcdef0123456789abcdef"
     return {
         **(overrides or {}),
@@ -98,7 +98,7 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
 
 
 def shell_values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """The synthetic value of every shell variable a section that sets its own variables may read: the placeholder values plus the variables of its blocks."""
+    """The synthetic value of every shell variable a script may read: the settings of its first step plus the variables its later steps set."""
     return {
         **values(record_dir, overrides),
         "IAM_PLAN": "/work/iam.tfplan",
@@ -111,47 +111,30 @@ def shell_values(record_dir: Path, overrides: dict[str, str] | None = None) -> d
     }
 
 
-def section(text: str, heading: str) -> str:
-    found = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.S | re.M)
-    return found.group(1) if found else ""
-
-
 FUNCTION_OPEN = re.compile(r"[a-z_]+\(\) \{")
 SCRIPT_FRAME = ("set -", "trap ", 'cd "$(')
 
 
-def commands(body: str) -> list[str]:
-    """The logical command lines of the ``sh`` fences of a document section, or of a whole script when the text has no fence: a line that ends in a backslash
-    continues on the next one. Of a script, the frame (the strict options, the trap and the change into the root folder) and the functions it defines are not
-    commands to check."""
-    fences = re.findall(r"```sh\n(.*?)```", body, re.S)
-    script = not fences
+def commands(script: str) -> list[str]:
+    """The logical command lines of a script: a line that ends in a backslash continues on the next one. The comments, the frame (the strict options, the trap
+    and the change into the root folder) and the functions the script defines are not commands to check."""
     lines: list[str] = []
-    for fence in fences or [body]:
-        pending = ""
-        inside = False
-        for raw in fence.splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if script and (inside or FUNCTION_OPEN.fullmatch(line)):
-                inside = line != "}"
-                continue
-            if script and not pending and line.startswith(SCRIPT_FRAME):
-                continue
-            pending += line[:-1].rstrip() + " " if line.endswith("\\") else line
-            if not line.endswith("\\"):
-                lines.append(pending)
-                pending = ""
+    pending = ""
+    inside = False
+    for raw in script.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if inside or FUNCTION_OPEN.fullmatch(line):
+            inside = line != "}"
+            continue
+        if not pending and line.startswith(SCRIPT_FRAME):
+            continue
+        pending += line[:-1].rstrip() + " " if line.endswith("\\") else line
+        if not line.endswith("\\"):
+            lines.append(pending)
+            pending = ""
     return lines
-
-
-def filled(line: str, table: dict[str, str]) -> str:
-    """The line with every ``<NAME>`` replaced by its synthetic value. A name without a value raises."""
-    unknown = sorted(set(re.findall(r"<([A-Z0-9_]+)>", line)) - table.keys())
-    if unknown:
-        raise KeyError(f"no synthetic value for {unknown}")
-    return re.sub(r"<([A-Z0-9_]+)>", lambda match: table[match.group(1)], line)
 
 
 def environment(folder: Path) -> dict[str, str]:
@@ -288,19 +271,6 @@ def check_line(line: str, folder: Path, wrapper: Wrapper) -> list[str]:
     return [f"no parser is known for {program}"]
 
 
-def check_section(body: str, folder: Path, wrapper: Wrapper, overrides: dict[str, str] | None = None) -> dict[str, list[str]]:
-    """Every command of the section against its parser: the line as printed, mapped to its problems."""
-    table = values(folder / "record", overrides)
-    (folder / "record").mkdir(parents=True, exist_ok=True)
-    problems: dict[str, list[str]] = {}
-    for line in commands(body):
-        try:
-            problems[line] = check_line(filled(line, table), folder, wrapper)
-        except (KeyError, ValueError) as error:
-            problems[line] = [str(error)]
-    return problems
-
-
 SUBSTITUTION = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)")
 REFERENCE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\}?")
 
@@ -342,19 +312,3 @@ def check_shell_section(body: str, folder: Path, wrapper: Wrapper, overrides: di
         except (KeyError, ValueError) as error:
             problems[line] = [str(error)]
     return problems
-
-
-def example_json(body: str) -> dict[str, Any] | None:
-    """The reviewed file of the section: the first ``json`` fence with its placeholders filled."""
-    found = re.search(r"```json\n(.*?)```", body, re.S)
-    if not found:
-        return None
-    table = values(Path("record")) | {
-        "TRAINING_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev@sha256:{'c' * 64}",
-        "TRAIN_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_train_task_dev",
-        "CODE_FETCH_ROLE_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_host_code_fetch_task_dev",
-    }
-    try:
-        return json.loads(filled(found.group(1), table))
-    except (KeyError, ValueError):
-        return None

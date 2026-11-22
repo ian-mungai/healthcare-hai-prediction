@@ -320,8 +320,7 @@ def command_checks(code_body: str, resolve_body: str, folder: Path) -> dict[str,
         and "--existing infra/services/deployment.auto.tfvars.json" in tool_lines[0]
         and '--role-file "$RECORD_DIR/host_code_fetch_role.json"' in tool_lines[0]
         and '--bucket-file "$RECORD_DIR/data_bucket.txt"' in tool_lines[0]
-        and '--output "$RECORD_DIR/services_code.json"' in tool_lines[0]
-        and owner_commands.example_json(code_body) is None,
+        and '--output "$RECORD_DIR/services_code.json"' in tool_lines[0],
         "the code checkout saves the code one-shot role for the tool": any(
             line.startswith("terraform -chdir=infra/iam output -json host_code_fetch_role") and line.endswith('> "$RECORD_DIR/host_code_fetch_role.json"')
             for line in code_lines
@@ -441,11 +440,10 @@ def mutant_checks(code_body: str, resolve_body: str, folder: Path) -> dict[str, 
         if line is None:
             checks[f"mutant {label}: the command exists in the scripts"] = False
             continue
-        table = owner_commands.values(folder / "mutant" / "record", {"ADMIN_PROFILE": ADMIN})
-        (folder / "mutant" / "record").mkdir(parents=True, exist_ok=True)
+        (folder / "mutant").mkdir(parents=True, exist_ok=True)
         try:
-            found = owner_commands.check_line(owner_commands.filled(line.replace(old, new, 1), table), folder / "mutant", wrapper)
-        except (KeyError, ValueError) as error:
+            found = owner_commands.check_line(line.replace(old, new, 1), folder / "mutant", wrapper)
+        except ValueError as error:
             found = [str(error)]
         checks[f"mutant {label} is refused"] = bool(found)
     return checks
@@ -466,6 +464,118 @@ def alert_call_checks(calls: list[str], folder: Path) -> dict[str, bool]:
     return checks
 
 
+SEQUENCE_SHIMS = {
+    "bin/terraform": """#!/bin/sh
+echo "terraform $*" >> "$SEQUENCE_LOG"
+case "$*" in
+  *"output -raw bucket_name"*) echo example-project-data-dev ;;
+  *"output -json host_code_fetch_role"*) echo '{"arn": "role"}' ;;
+  *"output -json ecr_repository_urls"*) echo '{"training": "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev"}' ;;
+esac
+""",
+    "bin/aws": """#!/bin/sh
+echo "aws $*" >> "$SEQUENCE_LOG"
+""",
+    "scripts/infrastructure/terraform.sh": """#!/bin/sh
+echo "wrapper $*" >> "$SEQUENCE_LOG"
+while [ $# -gt 0 ]; do
+  if [ "$1" = -out ]; then : > "$2"; fi
+  shift
+done
+""",
+    ".venv/bin/python": """#!/bin/sh
+echo "python $*" >> "$SEQUENCE_LOG"
+case "$2" in
+  scripts.infrastructure.project_setting)
+    if [ "$3" = aws_profile ]; then echo example_project_dev; else echo us-west-2; fi ;;
+  infra.iam.scripts.manage_policies)
+    if [ "$3" = plan ]; then echo "Plan digest: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; fi ;;
+  scripts.infrastructure.push_images)
+    if [ "$3" = require ] && [ ! -f "$SEQUENCE_STATE/training_recorded" ]; then
+      echo "docker push example_project_training"
+      echo "Record the digest, then run the script again." >&2
+      exit 1
+    fi ;;
+  scripts.lakehouse.code_archive)
+    mkdir -p "$5"
+    echo archive > "$5/code.tar.gz"
+    echo 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef > "$5/code.sha256" ;;
+  scripts.infrastructure.services_code_inputs)
+    echo "{}" > "${10}" ;;
+esac
+""",
+}
+SEQUENCE_ANSWERS = "example_admin\napply\napply\napply\n"
+
+
+def sequence_run(root: Path, state: Path, log: Path) -> tuple[int, str, list[str]]:
+    """Run the whole code checkout script in the scratch root against the stand-ins, answering its prompts, and return the exit code, its text and the calls."""
+    environment = {
+        "PATH": f"{root / 'bin'}:/usr/bin:/bin",
+        "HOME": str(root),
+        "SEQUENCE_LOG": str(log),
+        "SEQUENCE_STATE": str(state),
+    }
+    log.write_text("", encoding="utf-8")
+    result = run_command(
+        "bash",
+        ["-c", "bash scripts/infrastructure/owner/code_checkout.sh < answers.txt"],
+        cwd=root,
+        env=environment,
+        timeout=120,
+        own_session=True,
+    )
+    return result.returncode, result.stdout + result.stderr, log.read_text(encoding="utf-8").splitlines()
+
+
+def sequence_checks(folder: Path) -> dict[str, bool]:
+    """The code checkout as a whole, against stand-ins: while the training image has no recorded digest it prints the image plan and stops before the code is
+    staged or the host started, and once the digest is recorded the rerun goes on through the code stage, the host start and the services apply in order."""
+    root = folder / "sequence"
+    for name, body in SEQUENCE_SHIMS.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+    script = root / "scripts/infrastructure/owner/code_checkout.sh"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(script_text(CODE), encoding="utf-8")
+    script.chmod(0o755)
+    (root / "answers.txt").write_text(SEQUENCE_ANSWERS.replace("\\n", "\n"), encoding="utf-8")
+    state = root / "state"
+    state.mkdir()
+    log = root / "calls.log"
+    first_code, first_text, first = sequence_run(root, state, log)
+    (state / "training_recorded").write_text("recorded\n", encoding="utf-8")
+    second_code, second_text, second = sequence_run(root, state, log)
+
+    def position(calls: list[str], *needles: str) -> int:
+        return next((index for index, call in enumerate(calls) if all(needle in call for needle in needles)), -1)
+
+    order = [
+        position(second, "wrapper --iam", "apply"),
+        position(second, "manage_policies", "apply"),
+        position(second, "push_images", "require"),
+        position(second, "code_archive", "build"),
+        position(second, "aws s3 cp", "code.tar.gz"),
+        position(second, "host_session", "start"),
+        position(second, "wrapper --services", "plan"),
+        position(second, "wrapper --services", "apply"),
+    ]
+    return {
+        "the first run asks the image tool for the training digest": position(first, "push_images", "require", "--only training") >= 0,
+        "the first run stops with a failing exit status": first_code != 0,
+        "the first run prints the image commands and says to run the script again": "docker push" in first_text and "run the script again" in first_text,
+        "the first run stages no code": position(first, "code_archive") < 0 and position(first, "aws s3 cp") < 0,
+        "the first run starts no host": position(first, "host_session") < 0,
+        "the first run plans and applies no services stack": position(first, "wrapper --services") < 0,
+        f"the rerun ends with exit status 0 ({second_code}): {second_text[-200:]}": second_code == 0,
+        f"the rerun goes through the IAM apply, the digest check, the code stage, the host start and the services plan and apply in order ({order})": (
+            all(index >= 0 for index in order) and order == sorted(order)
+        ),
+    }
+
+
 def step_mutant_checks(code_body: str, folder: Path) -> dict[str, bool]:
     """A script without one of its steps, or one that reads a variable no earlier command set, fails its own check instead of passing with fewer steps."""
     checks: dict[str, bool] = {}
@@ -484,6 +594,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
     with tempfile.TemporaryDirectory(prefix="owner_scripts_") as folder:
         results = {
             "structure": structure_checks(code) | variable_flow_checks() | step_mutant_checks(code, Path(folder)),
+            "sequence": sequence_checks(Path(folder)),
             "alert_email": alert_email_checks(),
             "alert_blocks": block_checks | alert_call_checks(block_calls, Path(folder)) | alert_email_block_cases.mutant_checks(),
             "commands": command_checks(code, resolve, Path(folder)),

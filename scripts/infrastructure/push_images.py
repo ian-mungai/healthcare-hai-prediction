@@ -389,6 +389,27 @@ def plan(config: dict[str, Any], urls: dict[str, str], profile: str, region: str
     return lines
 
 
+def require(config: dict[str, Any], args: argparse.Namespace, root: Path) -> int:
+    """Exit zero when every named image has a recorded digest. Otherwise print the plan of the images without one and tell the owner to publish and record them
+    and run the script again: a script that needs the images stops here instead of going on without them."""
+    problems = check(config, root)
+    if problems:
+        sys.stderr.write("\n".join(problems) + "\n")
+        return 1
+    unknown = [name for name in args.only if name not in config["images"]]
+    if unknown:
+        raise ImagesError(f"unknown image: {', '.join(unknown)}")
+    path = root / DIGESTS_FILE
+    recorded = dict(json.loads(path.read_text(encoding="utf-8")).get("image_digests", {})) if path.exists() else {}
+    missing = [name for name in args.only if name not in recorded]
+    if not missing:
+        sys.stdout.write(f"Recorded digests found for: {', '.join(args.only)}.\n")
+        return 0
+    sys.stdout.write("\n".join(plan(config, repository_urls(args.repository_urls), args.profile, args.region, missing)) + "\n")
+    sys.stderr.write(f"No digest is recorded for {', '.join(missing)}. Run the commands above, record the digests, then run the script again.\n")
+    return 1
+
+
 def write_atomically(path: Path, text: str) -> None:
     """Replace a file with the text through a temporary file in its folder."""
     handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=".images_", suffix=".tmp")
@@ -442,6 +463,11 @@ def main(argv: list[str] | None = None) -> int:
     planner.add_argument("--profile", required=True)
     planner.add_argument("--region", required=True)
     planner.add_argument("--only", nargs="+", default=[])
+    requirer = commands.add_parser("require", help="pass when every named image has a recorded digest, else print its plan and stop")
+    requirer.add_argument("--repository-urls", type=Path, required=True)
+    requirer.add_argument("--profile", required=True)
+    requirer.add_argument("--region", required=True)
+    requirer.add_argument("--only", nargs="+", required=True)
     recorder = commands.add_parser("record", help="merge pushed digests into the services variable file")
     recorder.add_argument("assignments", nargs="+")
     args = cli.parse_args(argv)
@@ -461,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             sys.stdout.write("\n".join(plan(config, repository_urls(args.repository_urls), args.profile, args.region, args.only)) + "\n")
             return 0
+        if args.command == "require":
+            return require(config, args, root)
         digests = record(config, args.assignments, root / DIGESTS_FILE, root / METADATA_FILE)
         sys.stdout.write(f"Recorded {len(digests)} digests in {DIGESTS_FILE}.\n")
         return 0

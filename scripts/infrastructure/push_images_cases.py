@@ -642,6 +642,32 @@ def record_flow() -> dict[str, bool]:
     }
 
 
+def require_recorded() -> dict[str, bool]:
+    """``require`` passes only when every named image has a recorded digest; otherwise it prints the plan of the missing ones and exits one."""
+    with tempfile.TemporaryDirectory(prefix="push_images_require_") as directory:
+        root = scratch_root(Path(directory))
+        urls = str(repository_urls(Path(directory)))
+        arguments = ("require", "--repository-urls", urls, "--profile", "example_project_dev", "--region", "us-west-2")
+        missing = run(root, *arguments, "--only", "training")
+        before = {relative: (root / relative).read_bytes() for relative in (METADATA_FILE, SERVICES_FILE) if (root / relative).exists()}
+        recorded_code, _, _ = run(root, "record", "training=" + OTHER)
+        present = run(root, *arguments, "--only", "training")
+        other_missing = run(root, *arguments, "--only", "training", "analytics")
+        unknown = run(root, *arguments, "--only", "no_such_image")
+        after = {relative: (root / relative).read_bytes() for relative in before}
+    return {
+        "a missing digest stops the command with exit one": missing[0] == 1,
+        "the stop prints the build and push commands of the missing image": "docker push" in missing[1] and "training" in missing[1],
+        "the stop tells the owner to record the digest and run the script again": "run the script again" in said(missing),
+        "a recorded digest passes with exit zero and prints no plan": recorded_code == 0 and present[0] == 0 and "docker push" not in said(present),
+        "one image of two missing still stops, and the plan names only the missing one": other_missing[0] == 1
+        and "analytics" in other_missing[1]
+        and "docker push" in other_missing[1],
+        "an unknown image is refused": unknown[0] == 1 and "unknown image" in said(unknown),
+        "require writes no file": before == after,
+    }
+
+
 def record_refusals() -> dict[str, bool]:
     """An ECR digest that differs from the upstream digest, the database image, an unknown name and a malformed digest change nothing and say why."""
     with tempfile.TemporaryDirectory(prefix="push_images_refuse_") as directory:
@@ -925,6 +951,7 @@ CASES: dict[str, Case] = {
     "plan_execution": plan_execution,
     "registry_file": registry_file,
     "record_flow": record_flow,
+    "require_recorded": require_recorded,
     "record_refusals": record_refusals,
     "require_resolved": require_resolved,
     "no_program": no_program,
