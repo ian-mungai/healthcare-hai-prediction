@@ -607,12 +607,14 @@ jobs:
       # enough: the next steps list the latest result of every job of this run (filter=latest also holds the jobs that a partial rerun carries forward from earlier attempts) and
       # fail on any that is not completed, or whose conclusion this run does not allow. Without a verified reuse the listed names must also be exactly the names of
       # config/quality/ci_jobs.json, each once, so a leg or a job that never started is named. Both steps run always(), so the legs are named also when the verdict failed.
+      # The gate files come from github.workflow_sha, the revision this workflow runs from (the merge commit of a pull request), not from the head: an older head would bring an older
+      # validator and registry that could pass a leg the current ones require. In a reuse run only CI Plan and the quick gates of the reused result must be listed and have succeeded.
       - name: Check out the gate scripts
         if: ${{ always() }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.workflow_sha }}
           sparse-checkout: |
             .github/scripts/
             config/quality/ci_jobs.json

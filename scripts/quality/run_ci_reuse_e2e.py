@@ -44,6 +44,7 @@ RUN = 555
 PULL = 7
 BRANCH = "fix/topic"
 HEAD_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
+WORKFLOW_REF = "${{ github.workflow_sha }}"
 FAKE_GH = f"""#!{PYTHON}
 import json
 import os
@@ -448,6 +449,10 @@ def ci_gate_problems(jobs: dict[str, Any]) -> list[str]:
     if listing and not checkouts:
         problems.append("CI Checks must check out .github/scripts and config/quality/ci_jobs.json (sparse, not cone mode) for the listing script")
     for step in checkouts:
+        if step.get("with", {}).get("ref") != WORKFLOW_REF:
+            problems.append(
+                "the gate files must come from the revision the workflow runs from (github.workflow_sha), not the head: the head can hold an older validator"
+            )
         if str(step.get("if", "")).strip() != "${{ always() }}":
             problems.append("the checkout of the gate scripts must run always(), so the listing also runs after a failed needs verdict")
     return problems
@@ -537,7 +542,9 @@ def ci_listing_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
         rows = [(name, *changes.get(name, ("completed", "success"))) for name in names]
         return [*rows, (quick_name, *quick), me]
 
-    reused = {name: ("completed", "skipped") for name in names}
+    plan_name = "CI Plan"
+    reused = {**{name: ("completed", "skipped") for name in names}, plan_name: ("completed", "success")}
+    reuse_rows = listing(reused, quick=("completed", "success"))
     needs_say_success = ci_gate_verdict(jobs, {"reused_gates": "skipped"}, "false")
     results: dict[str, tuple[int, str]] = {
         "all_green": ci_listing_verdict(listing({}), "false"),
@@ -548,17 +555,38 @@ def ci_listing_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
         "a_skipped_leg_without_reuse": ci_listing_verdict(listing({leg: ("completed", "skipped")}), "false"),
         "two_bad_legs": ci_listing_verdict(listing({leg: ("completed", "cancelled"), names[0]: ("completed", "failure")}), "false"),
         "quick_gates_that_ran_without_reuse": ci_listing_verdict(listing({}, quick=("completed", "success")), "false"),
-        "a_verified_reuse": ci_listing_verdict(listing(reused, quick=("completed", "success")), "true"),
+        "a_verified_reuse": ci_listing_verdict(reuse_rows, "true"),
         "a_reuse_run_whose_quick_gates_were_skipped": ci_listing_verdict(listing(reused), "true"),
         "a_reuse_run_with_a_cancelled_job": ci_listing_verdict(listing({**reused, leg: ("completed", "cancelled")}, quick=("completed", "success")), "true"),
+        "a_reuse_run_without_the_quick_gates_row": ci_listing_verdict([row for row in reuse_rows if row[0] != quick_name], "true"),
+        "a_reuse_run_without_the_ci_plan_row": ci_listing_verdict([row for row in reuse_rows if row[0] != plan_name], "true"),
+        "a_reuse_run_whose_ci_plan_was_skipped": ci_listing_verdict(
+            listing({**reused, plan_name: ("completed", "skipped")}, quick=("completed", "success")), "true"
+        ),
         "an_empty_listing": ci_listing_verdict([], "false"),
+        "a_listing_of_only_ci_checks": ci_listing_verdict([me], "false"),
+        "an_empty_reuse_listing": ci_listing_verdict([], "true"),
     }
-    named = {"a_cancelled_leg", "a_queued_leg", "a_running_leg", "a_failed_leg", "a_skipped_leg_without_reuse", "a_reuse_run_with_a_cancelled_job"}
+    mentioned = {
+        "a_cancelled_leg": [leg],
+        "a_queued_leg": [leg],
+        "a_running_leg": [leg],
+        "a_failed_leg": [leg],
+        "a_skipped_leg_without_reuse": [leg],
+        "two_bad_legs": [leg, names[0]],
+        "a_reuse_run_with_a_cancelled_job": [leg],
+        "a_reuse_run_without_the_quick_gates_row": [quick_name],
+        "a_reuse_run_without_the_ci_plan_row": [plan_name],
+        "a_reuse_run_whose_ci_plan_was_skipped": [plan_name],
+        "an_empty_listing": [*names, quick_name],
+        "a_listing_of_only_ci_checks": [*names, quick_name],
+        "an_empty_reuse_listing": [plan_name, quick_name],
+    }
     expected = {name: 0 if name in {"all_green", "a_verified_reuse"} else 1 for name in results}
     cases = [
         {
             "case": f"ci_checks_job_listing_{name}",
-            "passed": code == expected[name] and (name not in named or leg in text) and (name != "two_bad_legs" or (leg in text and names[0] in text)),
+            "passed": code == expected[name] and all(item in text for item in mentioned.get(name, [])),
             "exit": code,
             "output": text[-200:],
         }
@@ -612,7 +640,8 @@ def ci_listing_step_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
     me = ("CI Checks", "in_progress", "")
     green = [(name, "completed", "success") for name in names] + [(quick_name, "completed", "skipped"), me]
     cancelled = [(name, "completed", "cancelled") if name == leg else (name, status, conclusion) for name, status, conclusion in green]
-    reused = [(name, "completed", "skipped") for name in names] + [(quick_name, "completed", "success"), me]
+    plan_name = "CI Plan"
+    reused = [(name, "completed", "success" if name == plan_name else "skipped") for name in names] + [(quick_name, "completed", "success"), me]
     outcomes = {
         "passes_when_gh_prints_every_job": (ci_listing_step(jobs, green, 0), 0, ""),
         "fails_when_gh_fails_after_printing_rows": (ci_listing_step(jobs, green, 22), 1, ""),
@@ -627,6 +656,16 @@ def ci_listing_step_cases(jobs: dict[str, Any]) -> list[dict[str, Any]]:
             "A job nobody registered",
         ),
         "passes_a_verified_reuse_listing": (ci_listing_step(jobs, reused, 0, reuse="true"), 0, ""),
+        "fails_and_names_a_reuse_listing_without_the_quick_gates_row": (
+            ci_listing_step(jobs, [row for row in reused if row[0] != quick_name], 0, reuse="true"),
+            1,
+            quick_name,
+        ),
+        "fails_and_names_a_reuse_listing_without_the_ci_plan_row": (
+            ci_listing_step(jobs, [row for row in reused if row[0] != plan_name], 0, reuse="true"),
+            1,
+            plan_name,
+        ),
     }
     return [
         {
@@ -670,7 +709,15 @@ def ci_gate_cases(jobs: dict[str, Any], listed: set[str]) -> list[dict[str, Any]
     verdict_only = copy.deepcopy(jobs)
     for step in verdict_only.get("ci_gate", {}).get("steps", []):
         step.pop("if", None)
+    head_gate = copy.deepcopy(jobs)
+    no_ref_gate = copy.deepcopy(jobs)
+    for planted_jobs, ref in ((head_gate, HEAD_REF), (no_ref_gate, None)):
+        for step in planted_jobs.get("ci_gate", {}).get("steps", []):
+            if str(step.get("uses", "")).startswith("actions/checkout@"):
+                step["with"] = {key: value for key, value in step["with"].items() if key != "ref"} | ({"ref": ref} if ref else {})
     plants = {
+        "gate_files_from_the_pull_request_head": head_gate,
+        "gate_files_from_no_named_revision": no_ref_gate,
         "a_listing_piped_into_the_validator": piped,
         "a_listing_of_one_attempt_only": attempts,
         "listing_steps_that_do_not_run_after_a_failed_verdict": verdict_only,
@@ -705,6 +752,8 @@ def static_cases() -> list[dict[str, Any]]:
     listed = set(config["required_pull_request_jobs"]) | set(config["skipped_in_pull_request_runs"])
     names = expanded_names(jobs)
     checkouts = [step for definition in jobs.values() for step in definition["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")]
+    gate_checkouts = [step for step in jobs["ci_gate"]["steps"] if str(step.get("uses", "")).startswith("actions/checkout@")]
+    head_checkouts = [step for step in checkouts if step not in gate_checkouts]
     heavy = {key: definition for key, definition in jobs.items() if key not in {"plan", "reused_gates", "ci_gate"}}
     needs = {key: [definition["needs"]] if isinstance(definition.get("needs"), str) else definition.get("needs", []) for key, definition in jobs.items()}
     reused = jobs["reused_gates"]
@@ -725,9 +774,14 @@ def static_cases() -> list[dict[str, Any]]:
         },
         {
             "case": "pull_request_checkouts_use_the_head",
-            "passed": len(checkouts) >= 9 and all(step.get("with", {}).get("ref") == HEAD_REF for step in checkouts),
-            "checkouts": len(checkouts),
-            "without_the_head": [index for index, step in enumerate(checkouts) if step.get("with", {}).get("ref") != HEAD_REF],
+            "passed": len(head_checkouts) >= 9 and all(step.get("with", {}).get("ref") == HEAD_REF for step in head_checkouts),
+            "checkouts": len(head_checkouts),
+            "without_the_head": [index for index, step in enumerate(head_checkouts) if step.get("with", {}).get("ref") != HEAD_REF],
+        },
+        {
+            "case": "ci_checks_checkout_uses_the_revision_the_workflow_runs_from",
+            "passed": len(gate_checkouts) == 1 and gate_checkouts[0].get("with", {}).get("ref") == WORKFLOW_REF,
+            "refs": [step.get("with", {}).get("ref") for step in gate_checkouts],
         },
         {
             "case": "every_checkout_fetches_the_lfs_files",
