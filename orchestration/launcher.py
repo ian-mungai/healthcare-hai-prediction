@@ -3422,6 +3422,7 @@ class Launcher:
         self.registry_id = ""
         self.key = b""
         self.status = "starting"
+        self.serving_at = 0.0  # wall time the launcher last began serving, so a late pass can tell an in-time success from a late one
         self.degraded_reason = ""
         self.docker_ok = False
         self.epoch = 0
@@ -4192,6 +4193,7 @@ class Launcher:
         self.dirty.update(self.open_attempt_ids())
         if self.status != "serving":
             self.status = "serving"
+            self.serving_at = time.time()
             self.backoff = self.timings.backoff_start
             with self.tx() as state:
                 state["launcher"].update({"status": "serving", "docker_state": "ok", "degraded_reason": ""})
@@ -8731,36 +8733,52 @@ class Launcher:
             if record is None:
                 return
             now = time.time()
-            ends = record.get("ends")
-            for key in list(record["requests"]):
-                expiry = record["expiries"][key]
-                if ends is not None and expiry > ends:
-                    if ends <= now:
+            if record["phase"] == "wait" and self.status == "serving" and self.docker_ok:
+                # The daemon serves: success is judged at the time serving began, not at this pass, so a pass that comes late does not turn an
+                # in-time success into a failure. A request whose deadline (or the cutoff, for a later expiry) passed before serving began still fails.
+                state["launcher"]["desktop"] = None
+                ends = record.get("ends")
+                waiting = []
+                for key in record["requests"]:
+                    expiry = record["expiries"][key]
+                    if ends is not None and expiry > ends:
+                        if self.serving_at <= ends:
+                            waiting.append(key)
+                        else:
+                            lapsed.append((key, self.desktop_cutoff_text(ends)))
+                    elif self.serving_at <= expiry:
+                        waiting.append(key)
+                    else:
+                        lapsed.append((key, self.desktop_deadline_text(record, key)))
+                result = {"started": bool(record["ran"]), "seconds": round(self.serving_at - record["began"], 1)}
+                actions.append(lambda: self.finish_requests(waiting, result))
+            else:
+                ends = record.get("ends")
+                for key in list(record["requests"]):
+                    expiry = record["expiries"][key]
+                    if ends is not None and expiry > ends:
+                        if ends <= now:
+                            record["requests"].remove(key)
+                            lapsed.append((key, self.desktop_cutoff_text(ends)))
+                    elif expiry <= now:
                         record["requests"].remove(key)
-                        lapsed.append((key, self.desktop_cutoff_text(ends)))
-                elif expiry <= now:
-                    record["requests"].remove(key)
-                    lapsed.append((key, self.desktop_deadline_text(record, key)))
-            requests = list(record["requests"])
-            latest = max((record["expiries"][key] for key in requests), default=now)
-            left = latest - now
-            if not requests:
-                state["launcher"]["desktop"] = None
-            elif record["phase"] == "probe":
-                ping_key = self.operation_key("desktop:ping", record)
-                if ping_key not in self.inflight:
-                    actions.append(lambda: self.spawn(ping_key, "desktopping", self.docker.ping))
-            elif record["phase"] == "command":
-                command_key = self.operation_key("desktop:cmd", record)
-                if command_key not in self.inflight:
-                    record["ends"] = latest  # the command is stopped then; a joiner with a later expiry fails then, naming the cutoff
-                    actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
-            elif self.status == "serving" and self.docker_ok:
-                state["launcher"]["desktop"] = None
-                result = {"started": bool(record["ran"]), "seconds": round(time.time() - record["began"], 1)}
-                actions.append(lambda: self.finish_requests(requests, result))
-            elif self.status == "degraded" and time.monotonic() - self.desktop_poked >= 1.0:
-                self.reconnect_now()
+                        lapsed.append((key, self.desktop_deadline_text(record, key)))
+                requests = list(record["requests"])
+                latest = max((record["expiries"][key] for key in requests), default=now)
+                left = latest - now
+                if not requests:
+                    state["launcher"]["desktop"] = None
+                elif record["phase"] == "probe":
+                    ping_key = self.operation_key("desktop:ping", record)
+                    if ping_key not in self.inflight:
+                        actions.append(lambda: self.spawn(ping_key, "desktopping", self.docker.ping))
+                elif record["phase"] == "command":
+                    command_key = self.operation_key("desktop:cmd", record)
+                    if command_key not in self.inflight:
+                        record["ends"] = latest  # the command is stopped then; a joiner with a later expiry fails then, naming the cutoff
+                        actions.append(lambda: self.spawn(command_key, "desktopcmd", self.run_desktop_command, self.cfg.start_command, left))
+                elif self.status == "degraded" and time.monotonic() - self.desktop_poked >= 1.0:
+                    self.reconnect_now()
         for key, message in lapsed:
             self.finish_requests([key], {}, Degraded(message))
         for action in actions:
