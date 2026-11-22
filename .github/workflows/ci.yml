@@ -312,7 +312,7 @@ jobs:
           retention-days: 14
 
   # The test-checks hook runs as four shards that split the cases of scripts/quality/run_checks_e2e.py by their saved costs (config/quality/shard_costs.json): the
-  # cases took 7,662 seconds in total on hosted runners (run 43730985805). Each shard writes the manifest of the cases it ran. The combining job
+  # cases took 3,818 seconds in total on hosted runners (run 44930295246, 845 cases). Each shard writes the manifest of the cases it ran. The combining job
   # below is the "Repository Hooks (samples)" gate: it fails when a shard job did not succeed, a case ran in no shard or in two, or a case failed.
   hook_samples:
     name: Repository Hooks (samples, shard ${{ matrix.shard }} of 4)

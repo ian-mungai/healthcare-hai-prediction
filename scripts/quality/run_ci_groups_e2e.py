@@ -2888,9 +2888,9 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         ("bronze", "bronze", "", False),
         ("silver", "silver", "", False),
         ("gold", "gold", "", False),
-        ("source_shard", "feature_sources", "2/16", False),
-        ("column_shard", "feature_columns", "2/4", False),
-        ("failed_shard", "feature_sources", "2/16", True),
+        ("source_shard", "feature_sources", f"2/{FEATURE_COUNTS['sources']}", False),
+        ("column_shard", "feature_columns", f"2/{FEATURE_COUNTS['columns']}", False),
+        ("failed_shard", "feature_sources", f"2/{FEATURE_COUNTS['sources']}", True),
         ("parallel", "features", "", False),
     ):
         tree = scratch / f"output_{label}"
@@ -3144,8 +3144,8 @@ HOOK_SHARD_LABELS = [f"repository hooks: samples shard {index}/{HOOK_SAMPLE_SHAR
 HOOK_COMBINE_LABEL = f"repository hooks: samples combine/{HOOK_SAMPLE_SHARDS}"
 HOOK_EXCLUSIVE_LABELS = [*HOOK_SHARD_LABELS, "repository hooks: lock"]
 CHECKS_SUITE = "run_checks_e2e"
-# The saved costs are hosted seconds from run 43730985805 (about 1916 s per shard of 4); 2100 s is about 1.1 times that load.
-CHECKS_SHARD_BUDGET_SECONDS = 2100
+# The saved costs are hosted seconds from run 44930295246 (3,818 s in all, about 955 s per shard of 4); 1050 s is about 1.1 times that load.
+CHECKS_SHARD_BUDGET_SECONDS = 1050
 
 # A pre-commit stand-in for the sharded samples group: it records each call with the shard environment that the hook entry reads, takes a second, and then
 # behaves as the real test-checks entry does for its shard (a manifest of every selected case), except as the files in its folder say.
@@ -3871,6 +3871,7 @@ def feature_count_drifts(workflow: dict[str, Any]) -> dict[str, list[str]]:
 COUNT_LITERALS = (
     re.compile(r"features_combine (?:sources|columns)" + r"/\d+"),
     re.compile(r"\(\"(?:sources|columns)\"" + r", \d+\)"),
+    re.compile(r"\"feature_(?:sources|columns)\", \"\d+" + r"/\d+\""),
 )
 # The workflow cannot read the configuration; feature_workflow_counts_equal_the_configuration compares its counts with it.
 COUNT_LITERAL_FILES = ("scripts/run_ci.sh", "scripts/quality/*.py", "scripts/ci/**/*.sh", "scripts/lakehouse/feature_shards.py")
