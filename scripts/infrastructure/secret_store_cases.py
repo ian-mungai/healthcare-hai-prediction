@@ -98,10 +98,13 @@ def files_holding(values: Iterable[str], roots: Iterable[Path], since: float, se
     scanned = [Path(root) for root in roots]
     resolved = [root.resolve() for root in scanned]
     deadline = time.monotonic() + seconds
+    unfinished = f"{', '.join(str(root) for root in scanned)}: not finished: the scan passed its deadline"
     for root in scanned:
         for folder, names, files in os.walk(root):
             names[:] = [name for name in names if name not in SKIPPED_FOLDERS]
             for name in [*names, *files]:
+                if time.monotonic() > deadline:
+                    return [*found, unfinished]
                 path = Path(folder) / name
                 try:
                     info = path.lstat()
@@ -122,7 +125,7 @@ def files_holding(values: Iterable[str], roots: Iterable[Path], since: float, se
                     found.append(f"{path}: {status if status == 'changed' else 'not finished'}: the read did not complete")
                 if status == "unfinished":
                     return found
-    return found
+    return [*found, unfinished] if time.monotonic() > deadline else found
 
 
 def refusal(call: Callable[[], Any]) -> str | None:
@@ -1279,6 +1282,10 @@ def scan_coverage(root: Path) -> dict[str, bool]:
             grown = files_holding([needle], [growing], began)
         late = files_holding([needle], [folder], time.time() + 1)
         unbounded = files_holding([needle], [folder], began, seconds=0.0)
+        skipped_only = files_holding([needle], [folder], time.time() + 1, seconds=0.0)
+        empty = Path(scratch) / "empty"
+        empty.mkdir()
+        nothing = files_holding([needle], [empty], began, seconds=0.0)
         pipe_tree = Path(scratch) / "tf_tree"
         (pipe_tree / "infra").mkdir(parents=True)
         os.mkfifo(pipe_tree / "infra" / "main.tf")
@@ -1301,6 +1308,8 @@ def scan_coverage(root: Path) -> dict[str, bool]:
         "a file that grew past the size it had at its look is reported as changed": any("grows.bin" in item and "changed" in item for item in grown),
         "a scan past its deadline reports itself unfinished": any("not finished" in item for item in unbounded),
         "a scan inside its deadline reports nothing unfinished": not any("not finished" in item for item in found),
+        "a scan past its deadline over entries that are all skipped reports itself unfinished": any("not finished" in item for item in skipped_only),
+        "a scan past its deadline over an empty folder reports itself unfinished": any("not finished" in item for item in nothing),
         "a Terraform input that is a named pipe ends the source check at its deadline": reader_ended,
         "a Terraform input that is a named pipe is an offender, not skipped": listed == ["infra/main.tf (not a regular file)"],
     }
