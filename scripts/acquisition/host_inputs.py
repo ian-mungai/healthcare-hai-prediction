@@ -2,8 +2,9 @@
 
 The archive of a commit carries the tracked bundle (``config/acquisition/baseline_run/``, with its lock) and the bootstrap seed folder
 (``config/acquisition/bootstrap_seed/``, files through Git LFS). ``prepare`` checks the bundle against its lock, copies the tracked plan inputs and the
-seed files that the collector plans read into the code root as real files, and checks that every expected plan input is there. It reads no bucket and
-makes no request. A problem stops the run and names the files, never a digest or a value.
+seed files that the collector plans read into the code root as real files, and checks that every expected plan input is there. It reads no bucket. Its one
+network use is the download of the seed's release assets (below), which comes before any capture request. A problem stops the run and names the files, never
+a digest or a value.
 
 The seed also names files that are public assets of one GitHub release of this repository (``release_assets.json``: name, size, SHA-256 and address). The
 code archive does not carry them. ``prepare`` downloads each one that the seed folder lacks through the project's reviewed transport, within its size bound,
@@ -18,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -246,9 +248,16 @@ def approved_hosts(code_root: Path) -> Iterator[None]:
                 os.environ[name] = value
 
 
-def download_asset(item: dict[str, Any], folder: Path, opener: transport.ReviewedTransport) -> tuple[Path | None, str | None]:
-    """Download one asset into its own folder. Returns the file, or no file with the problem: the transport's fixed failure code, a size or a digest."""
-    limits = transport.Limits(attempts=2, max_seconds=capture_mode.download_seconds(item["bytes"]), max_bytes=min(ASSET_LIMIT, item["bytes"] + 1))
+def download_asset(item: dict[str, Any], folder: Path, opener: transport.ReviewedTransport, deadline: float) -> tuple[Path | None, str | None]:
+    """Download one asset into its own folder, within the time its size allows and before ``deadline`` (a ``time.monotonic`` time for all the downloads).
+
+    The transport holds the request to that absolute time, headers and every read of the body, so a publisher that sends a byte at a time cannot outlast it.
+    Returns the file, or no file with the problem: the transport's fixed failure code, a size or a digest.
+    """
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return None, f"{item['name']} was not downloaded: the time for all the release downloads ran out"
+    limits = transport.Limits(attempts=2, max_seconds=min(capture_mode.download_seconds(item["bytes"]), left), max_bytes=min(ASSET_LIMIT, item["bytes"] + 1))
     try:
         result = transport.download(item["url"], folder, item["name"], ASSET_FORMATS[Path(item["name"]).suffix.lower()], "data", limits, opener=opener)
     except transport.CaptureError as refusal:
@@ -280,10 +289,12 @@ def fetch_release_assets(code_root: Path, opener: transport.ReviewedTransport | 
     shutil.rmtree(work, ignore_errors=True)
     found: dict[str, Path] = {}
     problems: list[str] = []
+    # One bound for all the downloads: the time each asset's size allows, added up.
+    deadline = time.monotonic() + sum(capture_mode.download_seconds(item["bytes"]) for item in pending)
     try:
         with approved_hosts(code_root):
             for number, item in enumerate(pending):
-                path, problem = download_asset(item, work / f"{number:03}", base)
+                path, problem = download_asset(item, work / f"{number:03}", base, deadline)
                 if path is None:
                     problems.append(problem or f"{item['name']} was not downloaded")
                 else:

@@ -19,6 +19,7 @@ generic agent header of the reviewed transport.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import shutil
@@ -555,6 +556,11 @@ def seed_only_unit(unit: dict, spec: dict, mode: str, name: str, context: Contex
     if not original.is_file():
         return None, "seed_missing"
     folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
+    # The space is admitted before the file is copied or expanded: its copy, the copy the capture path links, the expansion its directory declares and the
+    # headroom.
+    needed = manual_content.required_space(original.stat().st_size, manual_content.declared_expansion(original, mode))
+    if shutil.disk_usage(folder).free <= needed:
+        return None, "not_enough_disk_space"
     staged_original = folder / name
     shutil.copyfile(original, staged_original)
     binding = manual_content.archive_binding(unit, spec) | {"workspace": folder} if mode == "hospital_archive" else None
@@ -602,12 +608,16 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
         if newest is not None and context.clock.now() - datetime.strptime(newest["attempted_at_utc"], TIME_FORMAT).replace(tzinfo=UTC) < RETRY_INTERVAL:
             return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"], newest)
         files, status = None, None
-        if mode in manual_content.SEED_ONLY_MODES:
-            files, reason = seed_only_unit(unit, spec, mode, name, context)
-        elif is_seeded(mode, context):
-            files, reason = seed_unit(unit, spec, mode, name, context)
-        elif (reason := context.gate.admit(unit["url"])) is None:
-            files, reason, status = download_unit(unit, spec, mode, name, context)
+        try:
+            if mode in manual_content.SEED_ONLY_MODES:
+                files, reason = seed_only_unit(unit, spec, mode, name, context)
+            elif is_seeded(mode, context):
+                files, reason = seed_unit(unit, spec, mode, name, context)
+            elif (reason := context.gate.admit(unit["url"])) is None:
+                files, reason, status = download_unit(unit, spec, mode, name, context)
+        except OSError as error:
+            # A disk that fills or a file that cannot be written while a unit is staged ends only that unit, with a fixed reason.
+            files, reason, status = None, "not_enough_disk_space" if error.errno == errno.ENOSPC else "stage_failed", None
         if files is not None:
             context.capture(unit, spec, files)
             return Outcome(unit["snapshot_id"], unit["source_id"], "captured", None, status)

@@ -57,7 +57,7 @@ from scripts.acquisition import completion_record as records
 from scripts.acquisition import ingestion_intent as intents
 from scripts.acquisition.capture import capture, receipt_validator
 from scripts.acquisition.collection_layout import capture_root, load_routes
-from scripts.acquisition.mapped_archives import expand_tree, stored_member_names
+from scripts.acquisition.mapped_archives import TREE_BYTES, expand_tree, stored_member_names
 from scripts.acquisition.s3_store import StorageError, encoded_json, upload_snapshot
 from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.transport import CaptureError, StopAtRateLimit, canonical_url
@@ -929,13 +929,19 @@ def skip_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> lis
 
 
 def manual_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> list[str]:
-    """Problems with the manual units the run lists as stale or missing: each keeps its last capture and has a stale record, so the owner's list is complete."""
+    """Problems with the manual units the run lists as stale or missing.
+
+    A stale unit keeps a verified earlier capture and has a stale record, so the owner's list is complete. A missing unit has no verified capture to fall
+    back on (its file is not in the seed and no stored capture verifies), so the run does not have the data: it is a problem, as a paused unit is.
+    """
+    problems = [f"unit {item['unit_key']} has no seed file and no verified earlier capture ({item['reason']})" for item in run_record.get("missing_units", [])]
     listed = [*run_record.get("stale_units", []), *run_record.get("missing_units", [])]
-    return [
+    problems.extend(
         f"unit {item['unit_key']} is listed as stale but has no stale record"
         for item in listed
         if not list_objects(storage, records.stale_prefix(root, item["unit_key"]))
-    ]
+    )
+    return problems
 
 
 def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
@@ -1164,7 +1170,9 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, stat
         handler = redownload.handler_mode(unit)
         if state["bytes_downloaded"] + unit["bytes"] > run.byte_cap:
             raise ContractFailure("byte_cap_exceeded")
-        if shutil.disk_usage(run.scratch).free <= 2 * unit["bytes"] + 2**30:
+        # An archive that is stored member by member is expanded beside its stored copy, within the shared bound of the expansion.
+        expansion = TREE_BYTES if spec.get("archive_members") else 0
+        if shutil.disk_usage(run.scratch).free <= 2 * unit["bytes"] + expansion + 2**30:
             raise ContractFailure("not_enough_disk_space")
         registry = registry_of(run, unit)
         adapter = {**ADAPTERS, **run.adapters}.get(handler)

@@ -8,15 +8,21 @@ machine and the real archives are never downloaded.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
+import shutil
+import socket
+import ssl
+import threading
+import time
 import urllib.request
 import urllib.response
 import zipfile
 from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -54,21 +60,26 @@ def committed_unit() -> tuple[dict, dict]:
     return unit, specs[unit["snapshot_id"]]
 
 
-def archive_of(number: int) -> tuple[str, bytes, list[dict]]:
-    """A small ZIP archive named like a committed one, the members its specification lists, and the members' reviewed map."""
+def archive_of(number: int, padding: int = 0) -> tuple[str, bytes, list[dict]]:
+    """A small ZIP archive named like a committed one, the members its specification lists, and the members' reviewed map.
+
+    ``padding`` makes the first member that many bytes of one repeated character, which a deflated archive holds in a few bytes: its declared expanded size is
+    large while the archive stays small, as the republished annual archive's is.
+    """
     _, spec = committed_unit()
     members = spec["archive_members"][:MEMBERS]
     name = f"hospitals_2099-01-{number:02}.zip"
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        for item in members:
-            archive.writestr("/".join(item["member_chain"]), f"id,value\n{number},{len(item['dataset_id'])}\n")
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for index, item in enumerate(members):
+            text = f"id,value\n{number},{len(item['dataset_id'])}\n"
+            archive.writestr("/".join(item["member_chain"]), "0" * padding if padding and index == 0 else text)
     return name, buffer.getvalue(), members
 
 
-def unit_and_spec(number: int) -> tuple[dict, dict, str, bytes]:
+def unit_and_spec(number: int, padding: int = 0) -> tuple[dict, dict, str, bytes]:
     unit, spec = committed_unit()
-    name, body, members = archive_of(number)
+    name, body, members = archive_of(number, padding)
     snapshot = f"main-hai-pdc__20990101T0000{number:02}Z__{number:032x}"
     url = unit["url"].rsplit("/", 1)[0] + "/" + name
     template = spec["receipt_template"] | {"expected_sha256": hashlib.sha256(body).hexdigest()}
@@ -121,8 +132,8 @@ class Release(urllib.request.HTTPSHandler):
 class ManualHost(Host):
     """The host of ``test_publisher_host_run`` with CMS hospital archive units added: their files are in no code archive, only in the stand-in release."""
 
-    def __init__(self, tmp_path: Path, numbers: list[int]) -> None:
-        self.units = [unit_and_spec(number) for number in numbers]
+    def __init__(self, tmp_path: Path, numbers: list[int], padding: int = 0) -> None:
+        self.units = [unit_and_spec(number, padding) for number in numbers]
         super().__init__(tmp_path, ["a.csv"])
         self.release = Release({name: body for _, _, name, body in self.units})
         specs = json.loads((self.bundle / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
@@ -299,25 +310,46 @@ def test_a_release_manifest_that_names_another_address_or_a_digest_the_seed_mani
     check(manual.release.asked == [] and manual.untouched(), "nothing was requested")
 
 
-def test_a_manual_unit_whose_seed_file_the_host_lacks_is_marked_stale_listed_and_does_not_fail_the_run(
-    manual: ManualHost, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The release manifest lists the first archive only: the second unit has no seed file, so it keeps its last capture, gets a stale record and is listed."""
-    unit, spec, name, body = manual.units[1]
-    first = manual.units[0][2]
+def withhold(manual: ManualHost, index: int) -> dict:
+    """Take the seed file of one archive away: it leaves the release manifest and the seed folder, so the host neither downloads nor finds it."""
+    unit, _, name, _ = manual.units[index]
     document = json.loads((manual.seed / host_inputs.RELEASE_MANIFEST).read_text(encoding="utf-8"))
-    document["assets"] = [item for item in document["assets"] if item["name"] == first]
+    document["assets"] = [item for item in document["assets"] if item["name"] != name]
     (manual.seed / host_inputs.RELEASE_MANIFEST).write_text(json.dumps(document))
-    manual.run(monkeypatch)
-    check(evidence_problems(capsys) == 0, "the evidence check passed on a run with a stale manual unit")
+    (manual.seed / "manual_units" / unit["snapshot_id"] / name).unlink(missing_ok=True)
+    return unit
+
+
+def bootstrap_marker(manual: ManualHost) -> list[str]:
+    return sorted(manual.world.bucket.names("raw/ingestion_runs/"))
+
+
+def test_a_bootstrap_fails_when_a_manual_unit_has_no_seed_file_and_no_verified_capture_and_leaves_no_bootstrap_marker(
+    manual: ManualHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unit has no earlier capture to fall back on: it is stale and missing. A bootstrap that lists it must fail like one with a paused or keyed unit."""
+    unit = withhold(manual, 1)
+    with pytest.raises(publisher_run.PublisherError, match="evidence check found"):
+        manual.run(monkeypatch)
     run = manual.run_record()
+    check([item["snapshot_id"] for item in run["missing_units"]] == [unit["snapshot_id"]], f"the unit is listed as missing: {run['missing_units']}")
+    check(run["units"]["failed"] == [] and run["units"]["refused"] == [], "no unit failed or was refused: only the missing capture fails the run")
+    check(not any(key.endswith("/bootstrap.json") for key in bootstrap_marker(manual)), "no bootstrap success marker was written")
+
+
+def test_a_run_stays_successful_when_a_manual_unit_without_a_seed_file_has_a_verified_earlier_capture(
+    manual: ManualHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bootstrap captured both archives. A later monthly run lacks one seed file: the unit keeps its verified capture, is marked stale and listed."""
+    manual.run(monkeypatch)
+    unit = withhold(manual, 1)
+    manual.run(monkeypatch, RUN_ID="ingestion_0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
+    run = manual.run_record("ingestion_0a1b2c3e")
     check(
-        [item["snapshot_id"] for item in run["stale_units"] + run["missing_units"]] == [unit["snapshot_id"]], f"the unit without a seed file is listed: {run}"
+        [item["snapshot_id"] for item in run["stale_units"]] == [unit["snapshot_id"]] and run["missing_units"] == [],
+        f"a verified stale unit: {run['stale_units']}",
     )
-    check(all(item["reason"] == "seed_missing" for item in run["stale_units"] + run["missing_units"]), "the reason is the missing seed file")
-    check(len(run["units"]["completed"]) == 2, "the direct unit and the seeded archive still completed")
-    stale = [key for key in manual.world.bucket.names("raw/ingestion_stale/")]
-    check(len(stale) == 1, f"one stale record: {stale}")
+    check(run["stale_units"][0]["reason"] == "seed_missing", "the reason is the missing seed file")
 
 
 def test_the_release_route_follows_one_redirect_to_the_asset_host_and_saves_no_signed_query(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -391,3 +423,146 @@ def test_a_seeded_ahrq_original_bound_to_its_plan_is_captured_through_the_normal
         f"the file is stored as it is: {data}",
     )
     check(not any("ahrq.gov" in asked for asked in manual.world.site.asked), "no request went to the publisher")
+
+
+def free_space(monkeypatch: pytest.MonkeyPatch, free: int) -> list[str]:
+    """Report ``free`` bytes of disk space to every admission check. Returns the paths asked about."""
+    asked: list[str] = []
+
+    class Usage(NamedTuple):
+        total: int
+        used: int
+        free: int
+
+    def usage(path: Any) -> Usage:
+        asked.append(str(path))
+        return Usage(10 * 2**40, 0, free)
+
+    monkeypatch.setattr(shutil, "disk_usage", usage)
+    return asked
+
+
+def admission_of_one_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[ManualHost, int, int]:
+    """A host with one archive that is small and declares a large expanded size, and the free space that the old admission (twice the file and 1 GiB) allows."""
+    manual = ManualHost(tmp_path, [1], padding=PADDING)
+    size = len(manual.units[0][3])
+    return manual, size, 2 * size + 2**30
+
+
+PADDING = 8_000_000
+
+
+def test_the_host_admits_the_expanded_size_of_an_archive_before_it_copies_or_expands_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manual, _, old_threshold = admission_of_one_archive(monkeypatch, tmp_path)
+    free_space(monkeypatch, old_threshold + 2**20)
+    monkeypatch.setattr(manual_content, "expand_tree", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("the archive was expanded before admission")))
+    copied: list[tuple[Any, ...]] = []
+    real_copy = shutil.copyfile
+
+    def noting_copy(*arguments: Any, **options: Any) -> Any:
+        copied.append(arguments)
+        return real_copy(*arguments, **options)
+
+    monkeypatch.setattr(shutil, "copyfile", noting_copy)
+    with pytest.raises(publisher_run.PublisherError, match="evidence check found"):
+        manual.run(monkeypatch)
+    run = manual.run_record()
+    check([item["reason"] for item in run["missing_units"]] == ["not_enough_disk_space"], f"a recorded unit outcome, not an escape: {run['missing_units']}")
+    check(not [pair for pair in copied if str(manual.units[0][2]) in str(pair)], f"the seed file was not copied: {copied}")
+
+
+def test_the_capture_path_admits_the_expansion_of_an_archive_it_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enough room for the staged copy and its expansion, not for the expansion that the capture path makes again beside the stored files."""
+    manual, size, _ = admission_of_one_archive(monkeypatch, tmp_path)
+    free_space(monkeypatch, 2 * size + PADDING + 2**30 + 2**20)
+    with pytest.raises(publisher_run.PublisherError, match="evidence check found"):
+        manual.run(monkeypatch)
+    run = manual.run_record()
+    check([item["reason"] for item in run["units"]["failed"]] == ["not_enough_disk_space"], f"the unit failed with a fixed reason: {run['units']['failed']}")
+
+
+def test_a_disk_that_fills_while_a_seed_file_is_staged_is_a_recorded_unit_outcome_and_not_an_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manual = ManualHost(tmp_path, [1, 2])
+
+    def full(*_arguments: Any, **_options: Any) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(shutil, "copyfile", full)
+    with pytest.raises(publisher_run.PublisherError, match="evidence check found"):
+        manual.run(monkeypatch)
+    run = manual.run_record()
+    check({item["reason"] for item in run["missing_units"]} == {"not_enough_disk_space"} and len(run["missing_units"]) == 2, f"both units are recorded: {run}")
+    check(not any(key.endswith("/bootstrap.json") for key in bootstrap_marker(manual)), "no bootstrap marker")
+
+
+TRICKLE_HEADERS = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 1000000\r\n\r\n"
+TRICKLE_DEADLINE = 1.0
+TRICKLE_ALLOWED = 4.0
+TRICKLE_SENDER = 9.0
+
+
+class Trickle:
+    """A publisher on a real local connection that answers with quick headers and then sends one byte every 0.1 s, below any socket timeout. It stops after
+    ``TRICKLE_SENDER`` seconds, so a download with no total bound ends the case instead of hanging it."""
+
+    def __init__(self) -> None:
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.port = self.listener.getsockname()[1]
+        self.thread = threading.Thread(target=self.serve, name="trickle_publisher", daemon=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        try:
+            connection, _ = self.listener.accept()
+        except OSError:
+            return
+        with connection:
+            try:
+                connection.recv(65536)
+                connection.sendall(TRICKLE_HEADERS)
+                end = time.monotonic() + TRICKLE_SENDER
+                while time.monotonic() < end:
+                    connection.sendall(b"0")
+                    time.sleep(0.1)
+            except OSError:
+                return
+
+    def close(self) -> None:
+        self.listener.close()
+        self.thread.join(timeout=TRICKLE_SENDER + 5)
+
+
+def test_a_release_download_that_trickles_below_the_socket_timeout_stops_at_the_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manual = ManualHost(tmp_path, [1])
+    publisher = Trickle()
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+
+    def to_the_publisher(address: tuple[str, int], timeout: float | None = None, source_address: Any = None) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(("127.0.0.1", publisher.port))
+        return sock
+
+    class PassThrough:
+        def wrap_socket(self, sock: socket.socket, **_options: Any) -> socket.socket:
+            return sock
+
+    monkeypatch.setattr(socket, "create_connection", to_the_publisher)
+    monkeypatch.setattr(ssl, "create_default_context", PassThrough)
+    monkeypatch.setattr(capture_mode, "download_seconds", lambda _bytes: TRICKLE_DEADLINE)
+    monkeypatch.chdir(manual.code)
+    started = time.monotonic()
+    try:
+        with pytest.raises(host_inputs.InputsError, match="TimeoutError"):
+            host_inputs.fetch_release_assets(manual.code, transport.ReviewedTransport(transport.PublicHTTPSHandler()))
+    finally:
+        publisher.close()
+    elapsed = time.monotonic() - started
+    check(elapsed < TRICKLE_ALLOWED, f"the download ran {elapsed:.1f} s past a {TRICKLE_DEADLINE} s deadline")
+    check(manual.seeded() == [] and not (manual.seed / host_inputs.DOWNLOAD_FOLDER).exists(), "no asset was placed and the download folder is gone")
+
+
+def test_the_preparation_docstring_says_that_it_downloads_the_seed_assets() -> None:
+    text = " ".join((host_inputs.__doc__ or "").split())
+    check("makes no request" not in text, "the module says it makes no request, but it downloads the release assets")
+    check("downloads" in text, "the module names its download")

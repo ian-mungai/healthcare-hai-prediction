@@ -27,6 +27,8 @@ REASONS = (
     "network",
     "seed_missing",
     "seed_required",
+    "not_enough_disk_space",
+    "stage_failed",
 )
 READ_ROOTS = ("", "raw/")
 DIGEST = re.compile(r"[a-f0-9]{64}")

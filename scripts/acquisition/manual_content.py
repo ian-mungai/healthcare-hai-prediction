@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scripts.acquisition import ahrq_compendium_contract, hud_xlsx_contract, redownload_route, transport, wonder_export_contract
-from scripts.acquisition.mapped_archives import expand_tree
+from scripts.acquisition.mapped_archives import TREE_BYTES, expand_tree
 from scripts.acquisition.source_registry import canonical_hash, read_json
 
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
@@ -172,6 +172,32 @@ def ahrq(original: Path, name: str, plan: dict) -> dict[str, bytes]:
     if form == "xlsx" and WORKBOOK_PART not in zipfile.ZipFile(original).namelist():
         raise ContentRefusal("contract_failed")
     return {}
+
+
+# Free disk space kept beyond a unit's own needs while it is staged and stored, as the capture path keeps it.
+ADMISSION_HEADROOM = 1024**3
+OS_PACKAGING = ("__MACOSX", ".DS_Store")
+
+
+def declared_expansion(original: Path, mode: str) -> int:
+    """The expanded bytes that checking a seeded file may write: for an archive, the sizes its directory declares for its members, doubled when it holds
+    nested archives (which expand again) and cut to the shared bound of the expansion, and none for any other file. A file that is no ZIP declares none: the
+    content check refuses it."""
+    if mode != "hospital_archive":
+        return 0
+    try:
+        with zipfile.ZipFile(original) as archive:
+            members = [info for info in archive.infolist() if not info.is_dir() and not any(part in OS_PACKAGING for part in Path(info.filename).parts)]
+    except (zipfile.BadZipFile, OSError):
+        return 0
+    declared = sum(info.file_size for info in members)
+    nested = any(Path(info.filename).suffix.lower() == ".zip" for info in members)
+    return min(TREE_BYTES, declared * 2 if nested else declared)
+
+
+def required_space(size: int, expansion: int) -> int:
+    """The free bytes a seeded file needs before it is staged: its own copy and the copy the capture path links beside it, its expansion and the headroom."""
+    return 2 * size + expansion + ADMISSION_HEADROOM
 
 
 def archive_binding(unit: Mapping, spec: Mapping) -> dict:
