@@ -4990,6 +4990,8 @@ def item_blocks(log: str) -> tuple[str, dict[str, str]]:
     """The text before the first item of a dry run and the text of each item (its log and its seconds row), with seconds, stamps and scratch names replaced."""
     log = re.sub(r"\d{8}T\d{6}Z_\d+", "<stamp>", re.sub(r"hai_ci\.\w+", "hai_ci.X", re.sub(r"^(.*): \d+ s$", r"\1: N s", log, flags=re.MULTILINE)))
     head, *parts = re.split(r"^== (\w+) ==$", log, flags=re.MULTILINE)
+    # Which of several groups that end at once is reported first, and the cores then in use, is scheduling noise (the stand-ins end at once).
+    head = re.sub(r"^Local CI: \w+ (?:ended|admitted) .*\n", "", head, flags=re.MULTILINE)
     blocks = {name: re.split(r"\n(?:All local CI checks passed|Local CI failed)", body)[0] for name, body in zip(parts[::2], parts[1::2], strict=True)}
     return head, blocks
 
