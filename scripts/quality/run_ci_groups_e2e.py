@@ -5600,8 +5600,11 @@ def scan_fixture(scratch: Path, name: str) -> tuple[Path, str]:
     return root, commit_all(root, "base")
 
 
-def failing_git(scratch: Path, name: str, subcommand: str) -> Path:
-    """A folder with a ``git`` stand-in that fails for ``subcommand`` and runs the real Git otherwise; put it first on PATH."""
+def failing_git(scratch: Path, name: str, trigger: str, partial: str = "", message: str = "") -> Path:
+    """A folder with a ``git`` stand-in that fails for a call with the argument ``trigger`` and runs the real Git otherwise; put it first on PATH.
+
+    With ``partial`` it prints that text on standard output first, as a Git that dies after some output; ``message`` is what it writes to standard error.
+    """
     folder = scratch / f"failing_git_{name}"
     folder.mkdir(parents=True)
     real = shutil.which("git") or "git"
@@ -5609,8 +5612,9 @@ def failing_git(scratch: Path, name: str, subcommand: str) -> Path:
     lines = [
         "#!/bin/bash",
         'for argument in "$@"; do',
-        f'  if [[ "$argument" == "{subcommand}" ]]; then',
-        f'    echo "planted failure of git {subcommand}" >&2',
+        f'  if [[ "$argument" == "{trigger}" ]]; then',
+        *([f'    echo "{partial}"'] if partial else []),
+        f'    echo "{message or f"planted failure of git {trigger}"}" >&2',
         "    exit 128",
         "  fi",
         "done",
@@ -5726,6 +5730,43 @@ def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]
     clean_commit = commit_all(root, "clean")
     scans = pushed_scans(tools, root, (clean_commit,), (base,))
     record("pushed_scans_pass_a_clean_push", {"secret_scan_passes": scans["secret"][0] == 0, "privacy_scan_passes": scans["privacy"][0] == 0})
+    root, base = scan_fixture(scratch, "scan_partial_patch")
+    (root / "clean.txt").write_text("fine\n")
+    tip = commit_all(root, "clean")
+    partial = failing_git(scratch, "partial_patch", "-p", partial="partial patch text")
+    scans = pushed_scans(tools, root, (tip,), (base,), (), partial)
+    record(
+        "pushed_scans_fail_closed_when_git_dies_after_partial_patch_output",
+        {f"{scanner}_scan_fails_and_names_the_command": scans[scanner][0] not in (0, 1) and "git log" in scans[scanner][1] for scanner in scans},
+    )
+    root = scratch / "scan_root_hidden"
+    root.mkdir()
+    probe_git(root, "init", "--quiet", "--initial-branch", "main")
+    probe_git(root, "config", "log.showRoot", "false")
+    (root / "first.txt").write_text(PLANTED_TEXT)
+    first = commit_all(root, "first commit")
+    (root / "second.txt").write_text("fine\n")
+    second = commit_all(root, "second")
+    record("pushed_scans_read_a_root_commit_that_log_showroot_hides", both_fail_naming(pushed_scans(tools, root, (second,)), first))
+    root, base = scan_fixture(scratch, "scan_separator")
+    (root / "notes.txt").write_text(f"note\u2028{PLANTED_PERSON}\n")
+    separated = commit_all(root, "a line with a separator")
+    scans = pushed_scans(tools, root, (separated,), (base,))
+    record(
+        "pushed_privacy_scan_reads_the_whole_line_after_a_unicode_separator",
+        {
+            "privacy_scan_fails_and_names_the_commit": scans["privacy"][0] == 1 and separated[:12] in scans["privacy"][1],
+            "no_value_is_printed": leaks_nothing(scans["privacy"][1]),
+        },
+    )
+    root, base = scan_fixture(scratch, "scan_extension")
+    (root / f"report.{PLANTED_SECRET}").write_text(PLANTED_TEXT)
+    odd = commit_all(root, "a file whose extension is the value")
+    scans = pushed_scans(tools, root, (odd,), (base,))
+    record(
+        "pushed_scans_keep_no_unknown_extension_in_a_finding",
+        both_fail_naming(scans, odd) | {"no_part_of_the_extension_is_printed": PLANTED_SECRET[4:8] not in scans["privacy"][1] + scans["secret"][1]},
+    )
     for subcommand in ("rev-list", "log", "cat-file"):
         root, base = scan_fixture(scratch, f"scan_failing_{subcommand}")
         (root / "clean.txt").write_text("fine\n")
@@ -5858,26 +5899,74 @@ HOOK_DRIVER = """
 import sys
 from pathlib import Path
 from scripts.quality import pre_push
-sys.exit(pre_push.run(Path.cwd(), '', '', sys.argv[1] + '\\n', 'origin', ''))
+sys.exit(pre_push.run(Path.cwd(), '', '', sys.argv[1] + '\\n' if sys.argv[1] else '', 'origin', sys.argv[2]))
 """
 
 
-def hook_input_run(root: Path, update: str, path_first: Path) -> tuple[int, str]:
+def hook_input_run(root: Path, update: str, path_first: Path | None = None, url: str = "") -> tuple[int, str]:
     """Run the gate for one pushed reference the way the hook does, with a failing ``git`` first on PATH (Git puts its own folder first for a hook)."""
-    environment = {**os.environ, "PATH": f"{path_first}:{os.environ['PATH']}", "STUB_LOG": str(root / "stub.log")}
-    result = run_command(str(PYTHON), ["-c", HOOK_DRIVER, update], cwd=root, env=environment, timeout=120)
+    environment = {**os.environ, "STUB_LOG": str(root / "stub.log")}
+    if path_first:
+        environment["PATH"] = f"{path_first}:{environment['PATH']}"
+    result = run_command(str(PYTHON), ["-c", HOOK_DRIVER, update, url], cwd=root, env=environment, timeout=120)
     return result.returncode, result.stdout + result.stderr
 
 
-def failing_git_gate_case(scratch: Path, subcommand: str) -> dict[str, Any]:
+def failing_git_gate_case(scratch: Path, trigger: str, named: str = "") -> dict[str, Any]:
     """A Git call that the scope, the destination listing or the tag lookup needs fails: the gate refuses and the message names the command."""
-    root = gate_repo(scratch, f"gate_failing_{subcommand}")
+    named = named or trigger
+    label = trigger.lstrip("-")
+    root = gate_repo(scratch, f"gate_failing_{label}")
     probe_git(root, "tag", "--annotate", "--message", "label", "label", "HEAD")
     tag = probe_git(root, "rev-parse", "label")
     zero = "0" * len(tag)
-    code, text = hook_input_run(root, f"refs/tags/label {tag} refs/tags/label {zero}", failing_git(scratch, f"gate_{subcommand}", subcommand))
-    checks = {"refused": code != 0 and "refused" in text, "names_the_command": f"git {subcommand}" in text, "no_check_ran": not pre_push_calls(root)}
-    return {"case": f"pre_push_refuses_when_git_{subcommand}_fails", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+    code, text = hook_input_run(root, f"refs/tags/label {tag} refs/tags/label {zero}", failing_git(scratch, f"gate_{label}", trigger))
+    checks = {"refused": code != 0 and "refused" in text, "names_the_command": f"git {named}" in text, "no_check_ran": not pre_push_calls(root)}
+    return {"case": f"pre_push_refuses_when_git_{label}_fails", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def listing_failure_prints_no_value_case(scratch: Path) -> dict[str, Any]:
+    """A failed Git call is reported as its command and exit status only: a value in its standard error never reaches the output."""
+    root = gate_repo(scratch, "gate_failure_text")
+    head = probe_git(root, "rev-parse", "HEAD")
+    shim = failing_git(scratch, "gate_failure_text", "ls-remote", message=f"fatal: {PLANTED_SECRET} {PLANTED_PERSON}")
+    code, text = hook_input_run(root, f"refs/heads/topic {head} refs/heads/topic {'0' * len(head)}", shim)
+    checks = {"refused": code != 0 and "git ls-remote" in text and "128" in text, "no_value_is_printed": leaks_nothing(text)}
+    return {"case": "pre_push_failed_git_call_prints_its_command_and_status_only", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
+
+
+def delete_only_push_case(scratch: Path) -> dict[str, Any]:
+    """A push that only deletes, or sends nothing, returns before the listing: a failing ``ls-remote`` cannot block it."""
+    root = gate_repo(scratch, "gate_delete_only")
+    head = probe_git(root, "rev-parse", "HEAD")
+    shim = failing_git(scratch, "gate_delete_only", "ls-remote")
+    code, text = hook_input_run(root, f"(delete) {'0' * len(head)} refs/heads/gone {head}", shim)
+    empty_code, empty_text = hook_input_run(root, "", shim)
+    checks = {
+        "the_delete_is_allowed": code == 0 and "nothing to check" in text and "refused" not in text,
+        "an_empty_push_is_allowed": empty_code == 0 and "refused" not in empty_text,
+    }
+    return {"case": "pre_push_delete_only_push_needs_no_listing", "passed": all(checks.values()), "checks": checks, "output": (text + empty_text)[-300:]}
+
+
+def rewritten_url_case(scratch: Path) -> dict[str, Any]:
+    """When ``ls-remote`` would rewrite the hook's URL (insteadOf) to another repository, nothing is excluded: it says nothing about the destination."""
+    root = gate_repo(scratch, "gate_instead_of")
+    head = probe_git(root, "rev-parse", "HEAD")
+    elsewhere = scratch / "gate_instead_of_elsewhere.git"
+    probe_git(root, "init", "--bare", "--quiet", str(elsewhere))
+    probe_git(root, "push", "--quiet", "--no-verify", str(elsewhere), "main", "topic")
+    destination = str(remote_of(root))
+    probe_git(root, "config", f"url.{elsewhere}.insteadOf", destination)
+    code, text = hook_input_run(root, f"refs/heads/topic {head} refs/heads/topic {'0' * len(head)}", None, destination)
+    secret = pushed_calls(root, "secret_scan")
+    checks = {
+        "the_gate_passes": code == 0,
+        "it_says_nothing_is_excluded": "rewritten" in text,
+        "the_tip_is_scanned_although_the_other_repository_holds_it": len(secret) == 1 and head in secret[0],
+        "the_exclusion_list_is_empty": destination_file(root) == [],
+    }
+    return {"case": "pre_push_rewritten_destination_url_excludes_nothing", "passed": all(checks.values()), "checks": checks, "output": text[-300:]}
 
 
 def destination_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -5889,6 +5978,10 @@ def destination_cases(scratch: Path) -> list[dict[str, Any]]:
         tag_chain_case(scratch),
         failing_git_gate_case(scratch, "ls-remote"),
         failing_git_gate_case(scratch, "cat-file"),
+        failing_git_gate_case(scratch, "--batch-all-objects", "cat-file"),
+        listing_failure_prints_no_value_case(scratch),
+        delete_only_push_case(scratch),
+        rewritten_url_case(scratch),
     ]
 
 
@@ -7042,14 +7135,8 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
         ("temp_remote_name_unchecked", temp_remote_name_case, "for name in (remote_ref, local_ref):", "for name in (local_ref,):"),
         ("temp_local_name_unchecked", temp_local_name_case, "for name in (remote_ref, local_ref):", "for name in (remote_ref,):"),
         ("temp_head_alias_unresolved", temp_head_alias_case, 'if local_ref == "HEAD":', "if False:"),
-        (
-            "temp_deletion_refused",
-            temp_deletion_case,
-            'named = temporary(root, ref, local) if decision != "deleted" else ""',
-            "named = temporary(root, ref, local)",
-        ),
         ("tag_not_peeled", annotated_tag_head_case, 'f"{name}^{{commit}}"', "name"),
-        ("nothing_to_check_still_checks", up_to_date_case, 'checkout = any(row["decision"] == "checked" for row in decisions)', "checkout = True"),
+        ("nothing_to_check_still_checks", new_branch_known_case, 'checkout = any(row["decision"] == "checked" for row in decisions)', "checkout = True"),
         ("known_ref_not_recorded", new_branch_known_case, "record(output, None, [], decisions)", "pass"),
         ("tree_not_judged", tracked_change_ref_case, 'problems = refusals(root, chosen["end"])', "problems = []"),
         ("shim_disabled_accepted", shim_presence_case, "active = listed_code == 0 and SHIM_NAME in", "active = True or SHIM_NAME in"),

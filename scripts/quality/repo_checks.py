@@ -2018,7 +2018,7 @@ def removed_names(per_commit: bool = False) -> list[Finding]:
     SKIPPED.clear()
     files = reference_files(record_skips=True)
     kinds: dict[str, dict[tuple[str, str], tuple[str, re.Pattern[str]]]] = {}
-    owners: dict[str, set[str]] = {}
+    declarers: dict[tuple[str, str], str] = {}
     for refs in diff_steps(per_commit):
         # One diff at a time finds what it removed; the text of every file is searched once, for the names of all the diffs.
         removed, deleted = changed_lines_and_deletions(refs)
@@ -2026,8 +2026,14 @@ def removed_names(per_commit: bool = False) -> list[Finding]:
         for kind, names in removed_definitions(removed, deleted, files, before).items():
             for name, pattern in names.items():
                 kinds.setdefault(kind, {})[(name, pattern.pattern)] = (name, pattern)
-        for name, paths in lost_flags(before, files).items():
-            owners.setdefault(name, set()).update(paths)
+        for flag, scripts in lost_flags(before, files).items():
+            # One pattern for each script that lost the flag, so that a script that declared it excuses only its own lines, not a call to another script's flag.
+            for script in scripts:
+                scoped = flag_pattern(flag, {script})
+                kinds.setdefault("flag", {})[(flag, scoped.pattern)] = (flag, scoped)
+                declarers[(flag, scoped.pattern)] = script
+        for key in [key for key in kinds.get("flag", {}) if key not in declarers]:
+            del kinds["flag"][key]
         findings += deleted_modules_left(removed, deleted, files, allowed)
     unchecked = mypy_uncovered_files() if kinds.get("python") else set()
     for kind, found in kinds.items():
@@ -2037,7 +2043,7 @@ def removed_names(per_commit: bool = False) -> list[Finding]:
         blobs: dict[str, str] = {}
         for name, pattern in ordered:
             for path, lines in files.items():
-                if kind == "flag" and path in owners.get(name, set()):
+                if kind == "flag" and path == declarers.get((name, pattern.pattern)):
                     continue
                 if path not in views:
                     view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
@@ -2777,9 +2783,10 @@ def pushed_scope(tips: list[str], excluded: list[str]) -> list[str]:
 
 
 def redacted(path: str) -> str:
-    """A path as a finding names it: its SHA-256 prefix and extension, never the name, which can hold the value it was found for."""
-    extension = re.sub(r"[^A-Za-z0-9.]", "", Path(path).suffix)[:8]
-    return hashlib.sha256(path.encode("utf-8", "surrogateescape")).hexdigest()[:12] + extension
+    """A path as a finding names it: its SHA-256 prefix and, for a known document or data suffix only, that suffix; never the name, which can hold a value."""
+    extension = Path(path).suffix.lower()
+    known = extension in {*STRUCTURED_SUFFIXES, *TERRAFORM_SUFFIXES, *CONFIG_SUFFIXES, *document_paths.DOCUMENT_SUFFIXES}
+    return hashlib.sha256(path.encode("utf-8", "surrogateescape")).hexdigest()[:12] + (extension if known else "")
 
 
 def pushed_commits(tips: list[str], excluded: list[str]) -> list[PushedCommit]:
@@ -2792,7 +2799,7 @@ def pushed_commits(tips: list[str], excluded: list[str]) -> list[PushedCommit]:
         return []
     scope = pushed_scope(tips, excluded)
     commits: list[PushedCommit] = []
-    tokens = scan_git("log", "-z", "--raw", "--no-renames", "--diff-merges=first-parent", "--format=%x01%H%x02%B", *scope, "--").split("\0")
+    tokens = scan_git("log", "-z", "--root", "--raw", "--no-renames", "--diff-merges=first-parent", "--format=%x01%H%x02%B", *scope, "--").split("\0")
     index = 0
     while index < len(tokens):
         token = tokens[index].lstrip("\n")
@@ -2808,10 +2815,12 @@ def pushed_commits(tips: list[str], excluded: list[str]) -> list[PushedCommit]:
         else:
             raise ScanFailure("git log gave an output the scan cannot read, so the push cannot be scanned")
     by_sha = {commit.sha: commit for commit in commits}
-    patch = scan_git("log", "--no-color", "--no-renames", "-p", "-U0", "--inter-hunk-context=0", "--diff-merges=first-parent", "--format=%x01%H", *scope, "--")
+    patch = scan_git(
+        "log", "--no-color", "--root", "--no-renames", "-p", "-U0", "--inter-hunk-context=0", "--diff-merges=first-parent", "--format=%x01%H", *scope, "--"
+    )
     current: PushedCommit | None = None
     file_index, number, in_header = -1, 0, False
-    for line in patch.splitlines():
+    for line in patch.split("\n"):  # Only LF ends a line of the patch: a Unicode line separator inside a line must not cut it.
         if line.startswith("\x01"):
             current, file_index, in_header = by_sha.get(line[1:]), -1, False
         elif current is None:
@@ -2841,7 +2850,8 @@ def pushed_privacy_scan(tips: list[str], excluded: list[str], tags: list[str]) -
     """Scan each commit a push sends (message and added lines) and each pushed tag message like ``privacy_scan`` scans files; never report the value.
 
     Known limits (owner decision, Nov 22 2026): the payload of a Git LFS file of an earlier commit is not read, and a file that cannot be read as text is
-    listed as unreviewed without failing. GitHub push protection is the backstop for secrets in both.
+    listed as unreviewed without failing. GitHub push protection is the backstop for secrets in both. Out of scope: a shallow or partial destination and
+    a ref that is pruned while the gate runs.
     """
     allowed, findings = privacy_allowlist()
     values = env_values()

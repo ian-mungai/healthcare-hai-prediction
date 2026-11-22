@@ -167,8 +167,7 @@ jobs:
           if ! git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null; then
             git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
           fi
-          start="$(git merge-base refs/remotes/origin/main "$RANGE_END" || true)"
-          if [[ -z "$start" ]]; then
+          if ! start="$(git merge-base refs/remotes/origin/main "$RANGE_END")" || [[ -z "$start" ]]; then
             echo "The merge base of refs/remotes/origin/main and $RANGE_END cannot be found, so the commit messages and removed names cannot be checked." >&2
             exit 1
           fi

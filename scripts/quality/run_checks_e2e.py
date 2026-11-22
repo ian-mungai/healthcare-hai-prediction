@@ -5229,7 +5229,21 @@ FIND_STEP = "Find the merge base of the pushed range"
 RANGE_STEP = "Check commit messages and removed names of the pushed range"
 
 
-def workflow_range_case(repo: Path, label: str, event: str, head: str, want_exit: int, want_marker: str = "") -> dict[str, object]:
+def partial_failing_git(folder: Path, trigger: str, printed: str) -> Path:
+    """A folder with a ``git`` stand-in that prints ``printed`` and exits 128 for a call with the argument ``trigger``, and runs the real Git otherwise."""
+    folder.mkdir(parents=True)
+    real = run_command("which", ["git"], timeout=30).stdout.strip()
+    program = folder / "git"
+    program.write_text(
+        f'#!/bin/bash\nfor argument in "$@"; do\n  if [[ "$argument" == "{trigger}" ]]; then echo "{printed}"; exit 128; fi\ndone\nexec {real} "$@"\n'
+    )
+    program.chmod(0o755)
+    return folder
+
+
+def workflow_range_case(
+    repo: Path, label: str, event: str, head: str, want_exit: int, want_marker: str = "", path_first: Path | None = None
+) -> dict[str, object]:
     """Run the two hosted steps that check commit messages and removed names: every run, whatever its event, checks ``merge-base origin/main..sha``."""
     workflow = load_yaml((repo / ".github/workflows/ci.yml").read_text())
     if not isinstance(workflow, dict):
@@ -5246,9 +5260,10 @@ def workflow_range_case(repo: Path, label: str, event: str, head: str, want_exit
         env = {key: workflow_value(value, context) for key, value in step.get("env", {}).items()}
         script = repo / ".git" / "range_check.sh"
         script.write_text("set -eo pipefail\n" + step["run"])
-        result = run_command(
-            "bash", [str(script)], cwd=repo, env={**os.environ, "RUNNER_TEMP": str(repo / ".git"), "GITHUB_OUTPUT": str(output), **env}, timeout=120
-        )
+        environment = {**os.environ, "RUNNER_TEMP": str(repo / ".git"), "GITHUB_OUTPUT": str(output), **env}
+        if path_first:
+            environment["PATH"] = f"{path_first}:{environment['PATH']}"
+        result = run_command("bash", [str(script)], cwd=repo, env=environment, timeout=120)
         log += result.stdout + result.stderr
         code = result.returncode
         if code != 0:
@@ -5312,11 +5327,38 @@ def run_workflow_range_case() -> tuple[bool, str]:
         git(repo, "commit", "-qm", "refactor: drop the flag and keep its caller")
         dropped = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "a_name_added_and_removed_on_the_branch_is_caught", "push", dropped, 1, f"{flag} was removed"))
+        shim = partial_failing_git(Path(scratch) / "failing_merge_base", "merge-base", dropped)
+        results.append(workflow_range_case(repo, "a_failing_merge_base_fails_the_step_although_it_printed_a_commit", "push", dropped, 1, "merge base", shim))
         local = {**os.environ, "PRE_COMMIT_FROM_REF": clean, "PRE_COMMIT_TO_REF": dropped}
         net = run_command(".venv/bin/python", ["-m", "scripts.quality.repo_checks", "removed-names"], cwd=repo, env=local, timeout=120)
         per_commit = run_command(".venv/bin/python", ["-m", "scripts.quality.repo_checks", "removed-names", "--per-commit"], cwd=repo, env=local, timeout=120)
         checks = {"the_local_form_reads_the_net_diff": net.returncode == 0, "the_hosted_form_reads_each_commit": per_commit.returncode == 1}
         results.append({"case": "the_local_gate_form_reads_the_net_diff_and_the_hosted_form_each_commit", "passed": all(checks.values()), "checks": checks})
+        dup = "--dup" + "-flag"
+        first, second_script = "scripts/acquisition/range_dup_a.py", "scripts/acquisition/range_dup_b.py"
+        definition = f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{dup}")\n'
+        write(repo, {first: definition, second_script: definition})
+        git(repo, "add", "--", first, second_script)
+        git(repo, "commit", "-qm", "feat: two scripts with one flag name")
+        both = git(repo, "rev-parse", "HEAD").strip()
+        write(repo, {first: "VALUE = 1\n", second_script: f"VALUE = 2\n# python {first} {dup}\n"})
+        git(repo, "add", "--", first, second_script)
+        git(repo, "commit", "-qm", "refactor: drop the flag from both scripts")
+        dropped_both = git(repo, "rev-parse", "HEAD").strip()
+        scoped = run_command(
+            ".venv/bin/python",
+            ["-m", "scripts.quality.repo_checks", "removed-names"],
+            cwd=repo,
+            env={**os.environ, "PRE_COMMIT_FROM_REF": both, "PRE_COMMIT_TO_REF": dropped_both},
+            timeout=120,
+        )
+        results.append(
+            {
+                "case": "one_script_losing_a_flag_does_not_excuse_a_stale_call_to_another_scripts_flag",
+                "passed": scoped.returncode == 1 and f"{dup} was removed" in scoped.stdout + scoped.stderr,
+                "exit": scoped.returncode,
+            }
+        )
         return all(result["passed"] for result in results), json.dumps(results, indent=2) + "\n"
 
 

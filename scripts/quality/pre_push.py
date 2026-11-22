@@ -123,15 +123,32 @@ def must_git(root: Path, *args: str) -> str:
     except TimeoutExpired:
         raise GateError(f"git {args[0]} did not finish within {GIT_SECONDS} seconds") from None
     if result.returncode != 0:
-        raise GateError(f"git {args[0]} failed (exit {result.returncode}): {(result.stderr or result.stdout).strip()[-200:]}")
+        raise GateError(f"git {args[0]} failed (exit {result.returncode})")
     return result.stdout.strip()
 
 
+def existing_objects(root: Path, identifiers: list[str]) -> list[str]:
+    """The ``identifiers`` this repository has, from one ``git cat-file --batch-all-objects --batch-check`` listing every object; an unreadable line fails."""
+    if not identifiers:
+        return []
+    lines = must_git(root, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)").splitlines()
+    if any(not SHA.fullmatch(line) for line in lines):
+        raise GateError("git cat-file gave an answer the gate cannot read")
+    present = set(lines)
+    return [identifier for identifier in identifiers if identifier in present]
+
+
 def destination_ids(root: Path, url: str) -> list[str]:
-    """The object IDs the destination lists (``git ls-remote``, one call) that exist in this repository: what a push to it does not send again."""
+    """The object IDs the destination lists (``git ls-remote``, one call) that exist in this repository: what a push to it does not send again.
+
+    ``ls-remote`` can rewrite the URL the hook received again (insteadOf) to another repository. That repository says nothing about the destination, so
+    nothing is excluded and every commit of the tips is scanned.
+    """
+    if must_git(root, "ls-remote", "--get-url", url) != url:
+        sys.stdout.write("pre-push: the destination URL is rewritten (insteadOf), so nothing is excluded and every commit of the tips is scanned\n")
+        return []
     listed = must_git(root, "ls-remote", url)
-    identifiers = list(dict.fromkeys(line.split()[0] for line in listed.splitlines() if line.strip()))
-    return [identifier for identifier in identifiers if git(root, "cat-file", "-e", identifier)[0] == 0]
+    return existing_objects(root, list(dict.fromkeys(line.split()[0] for line in listed.splitlines() if line.strip())))
 
 
 def destination_url(root: Path, name: str, url: str) -> str:
@@ -399,7 +416,7 @@ def refusals(root: Path, end: str) -> list[str]:
 def refuse(problems: list[str]) -> int:
     sys.stdout.write("pre-push: refused. No check ran\n")
     sys.stdout.write("".join(f"pre-push:   {problem}\n" for problem in problems))
-    sys.stdout.write("pre-push: push only references of the checked-out commit or of commits in origin/main. Commit or stash tracked changes\n")
+    sys.stdout.write("pre-push: push only references of the checked-out commit or of commits the destination already holds. Commit or stash tracked changes\n")
     return 1
 
 
@@ -421,14 +438,24 @@ def run_gate(root: Path, base: str, head: str, push_input: str | None, name: str
     tips: list[str] | None = None
     tags: list[str] = []
     checkout = True
+    updates: list[tuple[str, str, str]] | None = None
+    if push_input is not None:
+        try:
+            updates = parse_updates(push_input)
+        except ValueError as error:
+            return refuse([str(error)])
+        if not any(sha.strip("0") for _, sha, _ in updates):
+            sys.stdout.write("pre-push: nothing to check\n")
+            if updates:
+                output = output_directory(root)
+                output.mkdir(parents=True, exist_ok=True)
+                record(output, None, [], decide(root, updates, []))
+            return 0
     listed = time.monotonic()
     destination = destination_ids(root, destination_url(root, name, url))
     sys.stdout.write(f"pre-push: the destination lists {len(destination)} objects this repository has ({round(time.monotonic() - listed, 1)} s)\n")
-    if push_input is not None:
-        try:
-            decisions = decide(root, parse_updates(push_input), destination)
-        except ValueError as error:
-            return refuse([str(error)])
+    if updates is not None:
+        decisions = decide(root, updates, destination)
         problems = [f"{row['ref']} ({row['sha'][:12]}) {row['reason']}" for row in decisions if row["decision"] == "refused"]
         if problems:
             return refuse(problems)
