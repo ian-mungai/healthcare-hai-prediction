@@ -182,12 +182,20 @@ def test_missing_or_old_prerequisites_are_all_named_before_any_step(tmp_path: Pa
     check(not (checkout.root / ".env").exists(), "no .env may be made before the prerequisites pass")
 
 
-def test_another_terraform_version_is_refused_and_named(tmp_path: Path) -> None:
+def test_a_later_patch_of_the_pinned_terraform_minor_is_accepted(tmp_path: Path) -> None:
+    """The stacks require ``~> 1.16.1``, which any 1.16 release from 1.16.1 on meets."""
     checkout = Checkout(tmp_path)
-    result = checkout.run(terraform="1.15.0")
-    output = result.stdout + result.stderr
-    check(result.returncode == 1 and "terraform 1.16.1" in output, f"an older Terraform must be named: {result.returncode} {output}")
-    check(checkout.calls() == [], "no step may run with the wrong Terraform")
+    result = checkout.run(terraform="1.16.4")
+    check(result.returncode == 0, f"Terraform 1.16.4 meets ~> 1.16.1: {result.returncode} {result.stdout + result.stderr}")
+
+
+def test_another_terraform_version_is_refused_and_named(tmp_path: Path) -> None:
+    for version in ("1.15.0", "1.16.0", "1.17.0"):
+        checkout = Checkout(tmp_path / version)
+        result = checkout.run(terraform=version)
+        output = result.stdout + result.stderr
+        check(result.returncode == 1 and "terraform 1.16.1" in output, f"Terraform {version} must be named: {result.returncode} {output}")
+        check(checkout.calls() == [], f"no step may run with Terraform {version}")
 
 
 PROBLEMS = {

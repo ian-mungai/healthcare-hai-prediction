@@ -6,7 +6,7 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 ## Install
 
-Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform 1.16.1, AWS CLI v2, the AWS Session Manager plugin (it opens the web interfaces), Node.js 22 or later and Docker Desktop.
+Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform 1.16.1 or a later 1.16 release, AWS CLI v2, the AWS Session Manager plugin (it opens the web interfaces), Node.js 22 or later and Docker Desktop.
 
 1. Create the environment and install the pinned tools, the hash-locked host dependencies, the hooks and the push gate. The script also copies `.env.example` to `.env`. It checks the prerequisites first and names any that is missing. A rerun on an installed checkout changes nothing and never overwrites `.env`. The `check-tools` hook runs before every commit and push. It compares the copy of its lock group that the installer of SQLFluff, DVC, import-linter or check-jsonschema saved in `.tools/<tool>` (DVC saves two) with the export of that group of `uv.lock` now. It does not inspect the installed packages. It fails when a saved copy differs, is missing or cannot be read, when the lock cannot be read or when an export does not finish within its own timeout (120 s). Its message names the command to rerun, for example `.venv/bin/python -m scripts.quality.install_dvc`. To install everything:
 

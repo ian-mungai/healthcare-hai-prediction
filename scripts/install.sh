@@ -18,7 +18,7 @@ done
 repo_root="$(cd -P "$(dirname "$source_path")/.." && pwd)"
 cd "$repo_root"
 python="$repo_root/.venv/bin/python"
-terraform_version="1.16.1"
+terraform_version="1.16.1" # the stacks require "~> 1.16.1": this release or a later 1.16 release
 node_major="22"
 git_minimum="2.54" # the same minimum as MINIMUM_GIT in scripts/quality/pre_push.py (the push gate refuses an older Git)
 
@@ -74,8 +74,13 @@ fi
 probe terraform version
 if [[ "$tool_state" != "ok" ]]; then
   unusable terraform
-elif [[ "$tool_output" != "Terraform v$terraform_version" ]]; then
-  missing+=("terraform $terraform_version (found ${tool_output#Terraform v})")
+else
+  terraform_found="${tool_output#Terraform v}"
+  terraform_minor="${terraform_version%.*}"
+  terraform_patch="${terraform_found#"$terraform_minor".}"
+  if [[ "$terraform_found" != "$terraform_minor".* || ! "$terraform_patch" =~ ^[0-9]+$ ]] || ((terraform_patch < ${terraform_version##*.})); then
+    missing+=("terraform $terraform_version or a later $terraform_minor release (found $terraform_found)")
+  fi
 fi
 
 probe aws --version
