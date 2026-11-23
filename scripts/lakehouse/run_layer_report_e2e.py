@@ -184,9 +184,10 @@ def stage(box: Box, env: fixtures.Env, archive: bytes = ARCHIVE) -> None:
         box.s3.objects[f"lakehouse/launch_records/{run}/{layer}/{path.relative_to(env.root / 'launch')}"] = path.read_bytes()
 
 
-def bind_code(box: Box, env: fixtures.Env, code_run: str, binding: bytes | None = None) -> None:
-    """Stage the code of ``env`` as a pipeline run does: only under the ingestion run ``code_run``, with the binding ``code_run.json`` under the layer run."""
-    run = env.spec.run
+def bind_code(box: Box, env: fixtures.Env, binding: bytes | None = None) -> None:
+    """Stage the code of ``env`` as a pipeline run does: only under the ingestion run that the job recorded (``env.spec.code_run_id``), with the binding
+    ``code_run.json`` under the layer run (the record's own, or ``binding``)."""
+    run, code_run = env.spec.run, env.spec.code_run_id
     for name in ("code.sha256", "code.tar.gz"):
         box.s3.objects[f"lakehouse/run_stage/{code_run}/inputs/{name}"] = box.s3.objects.pop(f"lakehouse/run_stage/{run}/inputs/{name}")
     box.s3.objects[f"lakehouse/run_stage/{run}/inputs/code_run.json"] = binding if binding is not None else json.dumps({"code_run": code_run}).encode()
@@ -197,10 +198,17 @@ def sandbox(work: Path, name: str) -> Box:
 
 
 def make(
-    work: Path, name: str, layer: str, producer: fixtures.Env | None = None, run: str | None = None, tag: str | None = None, code: str = ARCHIVE_SHA256
+    work: Path,
+    name: str,
+    layer: str,
+    producer: fixtures.Env | None = None,
+    run: str | None = None,
+    tag: str | None = None,
+    code: str = ARCHIVE_SHA256,
+    code_run: str = "",
 ) -> fixtures.Env:
     runs = {"silver": (fixtures.SILVER_RUN, "a"), "gold": (fixtures.GOLD_RUN, "c")}
-    env = fixtures.Env(work / name, spec(layer, run or runs[layer][0], tag or runs[layer][1], code), producer)
+    env = fixtures.Env(work / name, replace(spec(layer, run or runs[layer][0], tag or runs[layer][1], code), code_run=code_run), producer)
     fixtures.build_records(env)
     return env
 
@@ -399,23 +407,39 @@ def description_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def set_override(env: fixtures.Env, value: str | None) -> None:
+    """Change the CODE_RUN_ID override of every container in the saved task description, or remove it (``value`` None)."""
+    path = env.root / "describe.json"
+    document = json.loads(path.read_text())
+    for item in document["tasks"][0]["overrides"]["containerOverrides"]:
+        if "environment" in item:
+            item["environment"] = [
+                {**entry, "value": value} if entry["name"] == "CODE_RUN_ID" else entry
+                for entry in item["environment"]
+                if value or entry["name"] != "CODE_RUN_ID"
+            ]
+    path.write_text(json.dumps(document))
+
+
 def bound_code_cases(work: Path) -> dict[str, bool]:
-    """A pipeline run stages code under its ingestion run only and binds every layer run to it with ``code_run.json``. The evidence task reads the bound
-    code. A run without a binding reads its own code. A binding that exists and cannot be used fails by name and never falls back to the run's own code."""
+    """A pipeline run stages code under its ingestion run only. The job records that code run in ``layer_run.json`` and in the CODE_RUN_ID override of its task.
+    The evidence task reads the code of the recorded code run, never a binding read later. A run that recorded itself reads its own code. A record that is
+    damaged, or that the task or the launch claim contradicts, fails by name and never falls back to another run's code."""
     checks: dict[str, bool] = {}
-    code_run = "ingestion_5e1f0a2b"
+    code_run = "20261031T090000Z-5e1f0a2b"
+    other_run = "20261031T090000Z-b1b1b1b1"
     for layer in ("silver", "gold"):
         box = sandbox(work, f"bound_{layer}")
         producer = None
         if layer == "gold":
             producer = make(work, "bound_gold_producer", "silver")
             flow(box, producer)
-        env = make(work, f"bound_{layer}_run", layer, producer)
+        env = make(work, f"bound_{layer}_run", layer, producer, code_run=code_run)
         stage(box, env)
-        bind_code(box, env, code_run)
+        bind_code(box, env)
         job_window(box, env)
         result = accept(box, env)
-        checks[f"{layer}: a run bound to an ingestion run's code passes the evidence task with no code staged under its own run"] = (
+        checks[f"{layer}: a run whose job recorded an ingestion run's code passes the evidence task with no code staged under its own run"] = (
             result[0] == "ok" and result[1]["passed"] is True
         )
         again = accept(box, env)
@@ -423,39 +447,59 @@ def bound_code_cases(work: Path) -> dict[str, bool]:
     box = sandbox(work, "bound_none")
     env = make(work, "bound_none_run", "silver")
     result = flow(box, env)
-    checks["silver: a hand-started run with its own staged code and no binding passes the evidence task"] = result[0] == "ok" and result[1]["passed"] is True
-    reasons = (
-        ("a binding that is not JSON", b"not json", "malformed"),
-        ("a binding with another field", json.dumps({"code_run": code_run, "extra": 1}).encode(), "malformed"),
-        ("a binding that names no code run", json.dumps({"code_run": "../other"}).encode(), "malformed"),
+    checks["silver: a hand-started run that recorded its own code run and staged its own code passes the evidence task"] = (
+        result[0] == "ok" and result[1]["passed"] is True
     )
-    for label, binding, word in reasons:
-        box = sandbox(work, f"bound_bad_{len(checks)}")
-        env = make(work, f"bound_bad_{len(checks)}", "silver")
+    for label, binding in (
+        ("a later binding to another code run that holds no code", json.dumps({"code_run": other_run}).encode()),
+        ("a later binding that is damaged", b"not json"),
+    ):
+        box = sandbox(work, f"bound_later_{len(checks)}")
+        env = make(work, f"bound_later_{len(checks)}", "silver", code_run=code_run)
         stage(box, env)
+        bind_code(box, env, binding)
         job_window(box, env)
-        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code_run.json"] = binding  # the run's own code stays staged: it must not be used
         result = accept(box, env)
-        checks[f"silver: {label} fails the evidence task by name and does not fall back to the run's own code"] = (
-            result[0] == "error" and "code run binding" in str(result[1]) and word in str(result[1])
+        checks[f"silver: {label} does not change the evidence: it follows the code run that the job recorded"] = (
+            result[0] == "ok" and result[1]["passed"] is True
         )
-    box = sandbox(work, "bound_unreadable")
-    env = make(work, "bound_unreadable_run", "silver")
+    box = sandbox(work, "bound_standalone_then_pipeline")
+    env = make(work, "bound_standalone_then_pipeline", "silver")
     stage(box, env)
+    box.s3.objects[f"lakehouse/run_stage/{other_run}/inputs/code.sha256"] = b"0" * 64 + b"\n"
+    box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code_run.json"] = json.dumps({"code_run": other_run}).encode()
     job_window(box, env)
-    bound_key = f"lakehouse/run_stage/{env.spec.run}/inputs/code_run.json"
-    box.s3.objects[bound_key] = json.dumps({"code_run": code_run}).encode()
-    plain = box.s3.get_object
-
-    def denied(Bucket: str, Key: str) -> dict[str, Any]:
-        if Key == bound_key:
-            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
-        return plain(Bucket=Bucket, Key=Key)
-
-    with mock.patch.object(box.s3, "get_object", denied):
+    result = accept(box, env)
+    checks["silver: a standalone run whose run ID is bound to another code run later reads its own recorded code, not the binding's"] = (
+        result[0] == "ok" and result[1]["passed"] is True
+    )
+    contradictions = (
+        ("a task override naming another code run than the record", lambda e: set_override(e, other_run), "CODE_RUN_ID"),
+        ("a task description with no CODE_RUN_ID override", lambda e: set_override(e, None), "CODE_RUN_ID"),
+        ("a record that names no code run", lambda e: fixtures.rewrite(e, "layer_run.json", lambda d: d.update(code_run="../other")), "recorded code run"),
+        ("a record without a code run", lambda e: fixtures.rewrite(e, "layer_run.json", lambda d: d.pop("code_run")), "recorded code run"),
+    )
+    for label, change, word in contradictions:
+        box = sandbox(work, f"bound_bad_{len(checks)}")
+        env = make(work, f"bound_bad_{len(checks)}", "silver", code_run=code_run)
+        change(env)
+        stage(box, env)
+        bind_code(box, env)
+        job_window(box, env)
         result = accept(box, env)
-    checks["silver: a binding that cannot be read fails the evidence task by name, and is not read as a missing binding"] = (
-        result[0] == "error" and "code run binding" in str(result[1]) and "unreadable" in str(result[1])
+        checks[f"silver: {label} fails the evidence task by name"] = result[0] == "error" and word in str(result[1])
+    box = sandbox(work, "bound_claim_digest")
+    env = make(work, "bound_claim_digest", "silver", code_run=code_run)
+    claim = env.root / "launch" / "claim.json"
+    document = json.loads(claim.read_text())
+    document["bound"]["code_digest"] = "1" * 64
+    claim.write_text(json.dumps(document))
+    stage(box, env)
+    bind_code(box, env)
+    job_window(box, env)
+    result = accept(box, env)
+    checks["silver: a launch claim with another code digest than the recorded code run's fails the report's digest check"] = result[0] == "failed" and (
+        fixtures.NAMES["digest"] in failed_names(result)
     )
     return checks
 

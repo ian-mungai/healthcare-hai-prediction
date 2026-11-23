@@ -81,7 +81,7 @@ from orchestration import graph, training_contract
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
-from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
+from orchestration.ecs_preflight import HeldCapProbe, InputNotReady, S3CodeRuns
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import PIPELINE_DAG, compose_run_id, model_param_schema, record_key, research_run_id, run_id_parts
 from orchestration.training_contract import PIPELINE_RUN as PIPELINE_RUN_NAME
@@ -1034,6 +1034,18 @@ def code_run_is_bound_once() -> None:
         require("another run" in str(error), f"a rebind to another code run was not refused: {error}")
         rig.stage.denied.add(RUN_KEY.format(run=silver, name="code_run.json"))
         refuses(LaunchUnavailable, lambda: current.step("bind_code"))
+    binding_key = RUN_KEY.format(run=silver, name="code_run.json")
+    valid = json.dumps({"code_run": BRONZE_RUN}).encode()
+    rig.stage.denied.discard(binding_key)
+    for label, body in (
+        ("padded to 256 bytes and followed by junk", valid + b" " * (256 - len(valid)) + b"junk"),
+        ("padded to 257 bytes", valid + b" " * (257 - len(valid))),
+    ):
+        rig.stage.objects[binding_key] = body
+        error = refuses(LaunchRefused, lambda: S3CodeRuns(rig.stage, BUCKET).stored(silver))
+        require("malformed" in str(error), f"a binding {label} was not refused as malformed: {error}")
+    rig.stage.objects[binding_key] = valid + b" " * (256 - len(valid))
+    require(S3CodeRuns(rig.stage, BUCKET).stored(silver) == BRONZE_RUN, "a valid binding of exactly 256 bytes was refused")
     fresh = Rig()
     with world(fresh, "silver_transform_dag", SILVER) as current:
         fresh.stage.denied.add(RUN_KEY.format(run=SILVER_RUN, name="code_run.json"))

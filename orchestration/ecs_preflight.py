@@ -515,7 +515,7 @@ class S3CodeRuns:
 
     def stored(self, run_id: str) -> str | None:
         try:
-            body = self.client.get_object(Bucket=self.bucket, Key=self.key(run_id))["Body"].read(256)
+            body = self.client.get_object(Bucket=self.bucket, Key=self.key(run_id))["Body"].read(257)
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "NoSuchKey":
                 return None
@@ -523,7 +523,7 @@ class S3CodeRuns:
         except BotoCoreError:
             raise InputNotReady(f"the code run binding of {run_id} is unreadable") from None
         try:
-            document = json.loads(body)
+            document = json.loads(body) if len(body) <= 256 else None
             code_run = document["code_run"] if isinstance(document, dict) and set(document) == {"code_run"} else None
         except ValueError:
             code_run = None

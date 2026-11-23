@@ -52,9 +52,9 @@ ReportChange = Callable[[dict[str, Any]], object]
 
 
 @functools.cache
-def job_overrides_for(layer: str, run: str, code_sha256: str, input_run: str) -> dict[str, Any]:
-    """The container overrides that ``scripts.orchestration.job_overrides`` writes for a real task of the layer."""
-    arguments = ["-m", "scripts.orchestration.job_overrides", "--job", layer, "--run", run, "--code-run", run, "--code-sha256", code_sha256]
+def job_overrides_for(layer: str, run: str, code_run: str, code_sha256: str, input_run: str) -> dict[str, Any]:
+    """The container overrides that ``scripts.orchestration.job_overrides`` writes for a real task of the layer, which runs the code of ``code_run``."""
+    arguments = ["-m", "scripts.orchestration.job_overrides", "--job", layer, "--run", run, "--code-run", code_run, "--code-sha256", code_sha256]
     arguments += ["--polaris-uri", "http://10.0.1.20:8181/api/catalog"] + (["--input-run", input_run] if input_run else [])
     result = run_command(sys.executable, arguments, cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)}, timeout=60)
     if result.returncode != 0:
@@ -123,6 +123,7 @@ class Spec:
     code: str = ""
     revision: str = REVISION
     edited: str = ""
+    code_run: str = ""  # the run whose staged code the job ran: a pipeline run's ingestion run; empty is the run itself (a hand-started run)
 
     @property
     def archive(self) -> bytes:
@@ -131,6 +132,10 @@ class Spec:
     @property
     def code_sha256(self) -> str:
         return self.code or hashlib.sha256(self.archive).hexdigest()
+
+    @property
+    def code_run_id(self) -> str:
+        return self.code_run or self.run
 
     @property
     def sealed(self) -> str:
@@ -222,7 +227,7 @@ def build_records(env: Env) -> None:
             "run_id": run,
             "layer": item.layer,
             "mode": "real",
-            "code_run": run,
+            "code_run": item.code_run_id,
             "code_sha256": item.code_sha256,
             "git_revision": item.revision,
             "source_sha256": h(item.tag, "source"),
@@ -350,7 +355,7 @@ def build_records(env: Env) -> None:
     after = json.loads((root / "before.json").read_text())
     after["versions"] += cli_listing(added)["versions"]
     write(root / "after.json", after)
-    overrides = job_overrides_for(item.layer, run, item.code_sha256, env.producer.spec.run if env.producer else "")
+    overrides = job_overrides_for(item.layer, run, item.code_run_id, item.code_sha256, env.producer.spec.run if env.producer else "")
     # describe-tasks lists every container of the task definition: init and the guard have no override and appear by name only
     write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"], {"name": "guard"}]})
     write_launch_records(env, task_arn(env))
