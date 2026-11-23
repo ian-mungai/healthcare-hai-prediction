@@ -4898,7 +4898,7 @@ PLANTED_REGRESSIONS = [
         [case for case in FLAG_CASES if case.name in ("flag removed, the owning script still mentions it",)],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        'if kind == "flag" and path in owners[name]:',
+        'if kind == "flag" and path == declarers.get((name, pattern.pattern)):',
         "if False:",
         1,
     ),

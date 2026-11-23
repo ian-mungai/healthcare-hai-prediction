@@ -138,7 +138,7 @@ jobs:
 
       - &save_env_cache
         name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && github.event_name == 'push' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -299,7 +299,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && github.event_name == 'push' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -939,7 +939,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && github.event_name == 'push' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse
@@ -1033,7 +1033,7 @@ jobs:
           bash scripts/quality/hosted_python_env.sh "${ENV_CACHE_HIT:-false}" "$HOME/hai_wheelhouse"
 
       - name: Save the wheel cache
-        if: ${{ steps.python_env.outputs.cache-hit != 'true' }}
+        if: ${{ steps.python_env.outputs.cache-hit != 'true' && github.event_name == 'push' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/hai_wheelhouse

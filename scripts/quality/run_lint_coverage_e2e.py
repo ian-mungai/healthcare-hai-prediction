@@ -33,6 +33,7 @@ COPIED = (
     "scripts/quality/repo_checks.py",
     "scripts/quality/document_paths.py",
     "scripts/quality/markdown_links.py",
+    "scripts/quality/scan_secrets.py",
     "scripts/quality/lint_sources.py",
 )
 SNAPSHOT = (*COPIED, "scripts/quality/run_lint_coverage_e2e.py")

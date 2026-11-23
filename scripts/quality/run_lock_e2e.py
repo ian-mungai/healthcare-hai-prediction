@@ -485,11 +485,21 @@ def wheelhouse_install() -> Problems:
 
 
 def workflow_cache_problems(text: str) -> Problems:
-    """The Python caches of the workflow hold only the wheel folder and are saved only on a push to main or a pull request from this repository."""
+    """The Python caches of the workflow hold only the wheel folder and are saved only on a push, and the workflow has no pull request trigger.
+
+    Trusted means a push by someone who can write to this repository: a pull request from a fork never runs this workflow, and a workflow that ran on
+    pull requests would need a same-repository condition on every save.
+    """
     document = load_yaml(text)
     if not isinstance(document, dict):
         return ["the workflow is not a mapping"]
     problems: Problems = []
+    triggers = document.get("on", document.get(True)) or {}
+    pulls = sorted(str(name) for name in triggers if str(name).startswith("pull"))
+    if pulls:
+        problems.append(
+            f"the workflow runs on {', '.join(pulls)}: a cache save on those events must be limited to pull requests from this repository, and none is"
+        )
     steps = [(name, step) for name, job in document["jobs"].items() for step in job.get("steps", []) if str(step.get("uses", "")).startswith("actions/cache")]
     python_steps = [(name, step) for name, step in steps if step.get("id") == "python_env" or "python-env" in str(step.get("with", {}).get("key", ""))]
     if len(python_steps) < 20:
@@ -499,8 +509,8 @@ def workflow_cache_problems(text: str) -> Problems:
             problems.append(f"{name}: a Python cache must hold only ~/hai_wheelhouse, not {step['with'].get('path')!r}")
         if str(step["uses"]).startswith("actions/cache/save"):
             condition = str(step.get("if", ""))
-            if "refs/heads/main" not in condition or "head.repo.full_name == github.repository" not in condition or "cache-hit" not in condition:
-                problems.append(f"{name}: the save must be limited to a push to main and a same-repository pull request on a miss: {condition!r}")
+            if "github.event_name == 'push'" not in condition or "cache-hit" not in condition:
+                problems.append(f"{name}: the save must be limited to a push and to a cache miss: {condition!r}")
         elif str(step["uses"]).startswith("actions/cache@"):
             problems.append(f"{name}: a cache that is restored and saved in one step cannot be limited to trusted events")
     return problems
@@ -508,7 +518,10 @@ def workflow_cache_problems(text: str) -> Problems:
 
 def workflow_caches_only_wheels() -> Problems:
     """The workflow passes the cache checks, and the workflow of the commit before this design (a restored .venv, saved on every run) fails them."""
-    problems = workflow_cache_problems((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    current = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    problems = workflow_cache_problems(current)
+    if not workflow_cache_problems(current.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n  pull_" + "request:\n", 1)):
+        problems.append("the checks accept a workflow with a pull request trigger")
     earlier = run_command("git", ["show", "913917f:.github/workflows/ci.yml"], cwd=ROOT, timeout=60)
     if earlier.returncode == 0 and not workflow_cache_problems(earlier.stdout):
         problems.append("the checks accept the earlier workflow that cached .venv")

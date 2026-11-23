@@ -8409,11 +8409,12 @@ def docker_calls_check(env: Env) -> dict[str, bool]:
         "scripts/lakehouse/run_package_fixture_e2e.py",
         "scripts/quality/docker_calls.py",
     ]
-    cli = run_command(sys.executable, ["-m", "scripts.quality.docker_calls", *owned], cwd=ROOT, timeout=60)
+    # Each call parses every tracked Python file: 23 s on the Mac, more than 60 s on a hosted runner (run 45104293134), so the deadline is about 3 times that.
+    cli = run_command(sys.executable, ["-m", "scripts.quality.docker_calls", *owned], cwd=ROOT, timeout=180)
     # A synthetic unconverted caller: the repository's last one (run_gold_e2e.py) is converted once L1a's proposal is integrated (A80).
     sample = folder / "unconverted_cli.py"
     sample.write_text('import subprocess\n\nsubprocess.run(["docker", "ps"])\n')
-    unconverted = run_command(sys.executable, ["-m", "scripts.quality.docker_calls", str(sample.relative_to(ROOT))], cwd=ROOT, timeout=60)
+    unconverted = run_command(sys.executable, ["-m", "scripts.quality.docker_calls", str(sample.relative_to(ROOT))], cwd=ROOT, timeout=180)
     return {
         "every form of a Docker call outside the launcher is found": flagged >= set(bad),
         "documentation, comments and look-alike words are not findings": not (flagged & set(good)),

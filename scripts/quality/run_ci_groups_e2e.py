@@ -6291,7 +6291,7 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
 def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The push gate plan and run (the two scans, the range checks and OSV, no step of the old gate), its deadlines, and the hook and tree cases."""
     results = [gate_plan_case(scratch), gate_run_case(scratch), gate_scan_failure_case(scratch), gate_no_range_case(scratch), gate_deadline_case(scratch)]
-    results += pushed_scan_cases(scratch) + destination_cases(scratch)
+    results += pushed_scan_cases(scratch) + destination_cases(scratch) + run_ci_release_cases(scratch)
     results += [
         planted_case(
             "secret_scan_step_left_out",
