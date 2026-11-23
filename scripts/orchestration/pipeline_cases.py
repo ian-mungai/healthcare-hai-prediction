@@ -619,6 +619,65 @@ def a_route_run_started_with_other_settings_fails_the_pipeline_naming_it() -> No
         require(summary["run"] == "success", f"{step}: a setting the DAG takes from data stopped the run: {states} {results}")
 
 
+PROVIDER_LINEAGE_CONF = {
+    "parentRunId": "0198f3a2-6b1c-7d4e-9a10-2c5b8e7f4d31",
+    "parentJobName": "features_base_dag.trigger_m1",
+    "parentJobNamespace": "hai-prediction-aws",
+    "rootParentRunId": "0198f3a2-1111-7222-8333-444455556666",
+    "rootParentJobName": "features_base_dag",
+    "rootParentJobNamespace": "hai-prediction-aws",
+}
+
+
+def a_route_run_with_the_lineage_providers_parent_facets_is_followed_and_every_other_setting_stays_checked() -> None:
+    """The Airflow OpenLineage provider adds its parent-run facets under the setting ``openlineage`` to every run that a trigger task starts
+    (apache-airflow-providers-standard 1.21.0, ``TriggerDagRunOperator``: ``openlineage_inject_parent_info`` is on by default). The live pipeline run of
+    Nov 23 failed all six routes on that setting. A route run that carries it is followed to its end, as the same run without it would be. Any other setting
+    the route does not name, and a wrong value of a setting it names, still fail the route naming it, with or without the facets."""
+    base = stage_run("features")
+    model = "m1"
+    keys = {step: route_of(model)[step] for step in ("features", "drift", "training", "research")}
+    for step in keys:
+        fixed, _ = contract.route_run_conf(step, base, model)
+        cluster = Cluster()
+        cluster.create(*keys[step], "earlier", {**fixed, "openlineage": PROVIDER_LINEAGE_CONF})
+        states, results, summary = whole(cluster, start="features")
+        require(summary["run"] == "success", f"{step}: a route run with the provider's lineage setting failed the pipeline: {states} {results}")
+        for name, value, shown in (("extra_setting", "x", "extra_setting"), ("lineage", PROVIDER_LINEAGE_CONF, "lineage")):
+            cluster = Cluster()
+            cluster.create(*keys[step], "earlier", {**fixed, "openlineage": PROVIDER_LINEAGE_CONF, name: value})
+            states, results, summary = whole(cluster, start="features")
+            message = str(results["await_downstream"])
+            require(
+                summary["run"] == "failed" and f"{model} {step}" in message and f"{shown}: expected none" in message and "openlineage" not in message,
+                f"{step}: another setting beside the lineage setting was not refused by name: {states} {message}",
+            )
+        wrong = {"features": "base_snapshot_run", "drift": "mlflow", "training": "trigger", "research": "base_run"}[step]
+        cluster = Cluster()
+        cluster.create(*keys[step], "earlier", {**fixed, "openlineage": PROVIDER_LINEAGE_CONF, wrong: "other-value"})
+        states, results, summary = whole(cluster, start="features")
+        message = str(results["await_downstream"])
+        require(
+            summary["run"] == "failed"
+            and f"{model} {step}" in message
+            and f"{wrong}: expected" in message
+            and "'other-value'" in message
+            and "openlineage" not in message,
+            f"{step}: a wrong value beside the lineage setting was not refused by name: {states} {message}",
+        )
+    runtime = runtime_of(load_dag("pipeline_dag.py"))
+    stage = stage_conf_of("gold")
+    require(
+        runtime.conf_problem(stage, {**stage, "openlineage": PROVIDER_LINEAGE_CONF}) is None,
+        "a stage run with the lineage setting differs from the stage's settings",
+    )
+    require(runtime.conf_problem(stage, {**stage, "openlineage": "x"}) is None, "the content of the lineage setting is compared")
+    require(
+        runtime.conf_problem(stage, {**stage, "Openlineage": "x"}) is not None,
+        "a setting whose name only resembles the lineage setting was left out of the check",
+    )
+
+
 def route_of(model: str = "m1") -> dict[str, tuple[str, str]]:
     """The run of each step of one model's route after the features base of the whole pipeline run: its DAG and its run ID."""
     base = stage_run("features")
@@ -1197,6 +1256,9 @@ CASES: dict[str, Callable[[], None]] = {
     "a_duplicate_trigger_of_a_child_with_other_settings_fails_its_route": a_duplicate_trigger_of_a_child_with_other_settings_fails_its_route,
     "a_research_run_with_another_population_lane_or_attempt_is_refused": a_research_run_with_another_population_lane_or_attempt_is_refused,
     "a_route_run_started_with_other_settings_fails_the_pipeline_naming_it": a_route_run_started_with_other_settings_fails_the_pipeline_naming_it,
+    "a_route_run_with_the_lineage_providers_parent_facets_is_followed_and_every_other_setting_stays_checked": (
+        a_route_run_with_the_lineage_providers_parent_facets_is_followed_and_every_other_setting_stays_checked
+    ),
     "the_defaults_table_is_the_forms_and_every_stage_parameter_is_set": the_defaults_table_is_the_forms_and_every_stage_parameter_is_set,
     "a_child_started_by_hand_with_the_defaults_left_out_is_adopted": a_child_started_by_hand_with_the_defaults_left_out_is_adopted,
     "an_existing_child_started_with_another_configuration_is_refused_by_name": an_existing_child_started_with_another_configuration_is_refused_by_name,

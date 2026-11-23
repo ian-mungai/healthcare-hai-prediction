@@ -166,16 +166,22 @@ def dag_run_state(dag_id: str, run_id: str) -> str | None:
     return None if record is None else str(record["state"])
 
 
+# The Airflow OpenLineage provider adds this setting to the conf of every run that a TriggerDagRunOperator starts (apache-airflow-providers-standard 1.21.0,
+# ``openlineage_inject_parent_info``, on by default): the parent run's lineage facets and nothing else. It is for lineage only and no DAG reads it as a setting.
+LINEAGE_CONF_KEY = "openlineage"
+
+
 def conf_problem(expected: Mapping[str, Any], found: Any, defaults: Mapping[str, Any] | None = None, free: Collection[str] = ()) -> str | None:
     """Every way the settings a run was started with (``found``, as Airflow stores them: only what was named) differ from the settings it would have been
     started with (``expected``), or None when they are the same. A parameter the form defaults takes its default when neither names it, so a run started by
     hand with the defaults left out is the same run. A parameter that is not in ``expected`` and not defaulted, and a parameter that ``expected`` names and the
-    run lacks, are differences too. ``free`` parameters are not compared: their values come from data the caller does not read, and the form checks them."""
+    run lacks, are differences too. ``free`` parameters are not compared: their values come from data the caller does not read, and the form checks them.
+    The provider's lineage setting (``LINEAGE_CONF_KEY``) is not compared either: runs that a trigger task started carry it. Every other one is compared."""
     named = found if isinstance(found, dict) else {}
     wanted, seen = {**(defaults or {}), **expected}, {**(defaults or {}), **named}
     problems = []
     for name in sorted(set(wanted) | set(seen)):
-        if name in free:
+        if name in free or name == LINEAGE_CONF_KEY:
             continue
         if name not in seen:
             problems.append(f"{name}: expected {wanted[name]!r}, found none")

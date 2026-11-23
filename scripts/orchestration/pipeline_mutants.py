@@ -98,6 +98,12 @@ MUTANTS = (
         'problems.append(f"{name}: expected none (the pipeline sets no such parameter), found {seen[name]!r}")',
         "pass",
     ),
+    Mutant(
+        "the lineage setting the provider adds to a triggered run is left out of the settings check",
+        RUNTIME,
+        "        if name in free or name == LINEAGE_CONF_KEY:\n",
+        "        if name in free:\n",
+    ),
     Mutant("a setting the run lacks is refused", RUNTIME, 'problems.append(f"{name}: expected {wanted[name]!r}, found none")', "pass"),
     Mutant("a setting with another value is refused", RUNTIME, "        elif seen[name] != wanted[name]:\n", "        elif False:\n"),
     Mutant(
