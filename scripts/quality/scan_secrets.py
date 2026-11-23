@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,7 +16,20 @@ from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
-HISTORY_OPTIONS = ("--root", "--diff-merges=first-parent")
+GIT_SETTINGS = (
+    ("color.ui", "never"),
+    ("color.diff", "never"),
+    ("diff.renames", "false"),
+    ("log.showRoot", "true"),
+    ("core.quotePath", "false"),
+    ("diff.noprefix", "false"),
+    ("diff.external", ""),
+)
+GIT_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_EXTERNAL_DIFF"})
+GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
+LEAKS_EXIT = 2
+SCANNED = re.compile(r"scanned ~(\d+) bytes")
+LOG_ERROR = re.compile(r"\b(?:ERR|FTL)\b")
 
 
 def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> CompletedProcess[str]:
@@ -60,46 +74,102 @@ def run_gitleaks(scratch: Path, mode: str, target: list[str], environment: dict[
     return result.returncode, findings
 
 
+def scan_environment(environment: dict[str, str]) -> dict[str, str]:
+    """The environment of every process a push scan starts, Gitleaks' own Git included: no user or system Git setting can change what is read."""
+    kept = {key: value for key, value in environment.items() if not key.startswith(("GITLEAKS_", "AWS_", "GIT_CONFIG")) and key not in GIT_VARIABLES}
+    kept |= {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_COUNT": str(len(GIT_SETTINGS)), "GITLEAKS_CONFIG_TOML": GITLEAKS_CONFIG}
+    for index, (key, value) in enumerate(GIT_SETTINGS):
+        kept |= {f"GIT_CONFIG_KEY_{index}": key, f"GIT_CONFIG_VALUE_{index}": value}
+    return kept
+
+
+def added_bytes(patch: str) -> int:
+    """The bytes of the added lines of a patch, which is what Gitleaks reports as scanned in its Git mode."""
+    total, in_header = 0, False
+    for line in patch.split("\n"):
+        if line.startswith("diff --git "):
+            in_header = True
+        elif line.startswith("@@"):
+            in_header = False
+        elif line.startswith("+") and not in_header:
+            total += len(line[1:].encode("utf-8", "surrogateescape")) + 1
+    return total
+
+
+def gitleaks_in_memory(
+    mode: str, target: list[str], environment: dict[str, str], repository: Path, expected: int, text: str | None = None
+) -> tuple[int, list[dict[str, Any]]]:
+    """Run Gitleaks with the report on standard output and its configuration and input in memory, and check what it did.
+
+    Gitleaks reports a clean scan after a Git that failed or wrote to standard error, so its own figure of scanned bytes must reach ``expected``, the bytes
+    this run read for it. A log line of an error, an exit status that is neither clean nor the leaks status, or a report that is not a list fails the scan.
+    """
+    arguments = [
+        mode,
+        "--ignore-gitleaks-allow",
+        "--gitleaks-ignore-path",
+        "/dev/null",
+        "--exit-code",
+        str(LEAKS_EXIT),
+        "--report-format",
+        "json",
+        "--report-path",
+        "-",
+    ]
+    arguments += ["--no-banner", "--no-color", "--redact=100", *target]
+    result = run_command(str(ROOT / ".tools/bin/gitleaks"), arguments, cwd=repository, env=environment, timeout=180, input_text=text)
+    scanned = SCANNED.search(result.stderr)
+    try:
+        findings = json.loads(result.stdout)
+    except ValueError:
+        findings = None
+    if result.returncode not in {0, LEAKS_EXIT} or not isinstance(findings, list) or LOG_ERROR.search(result.stderr) or scanned is None:
+        raise ValueError("Scanner did not complete")
+    if int(scanned.group(1)) < expected:
+        raise ValueError("Scanner read less than Git gave")
+    return int(result.returncode == LEAKS_EXIT), findings
+
+
 def scan_push(repository: Path, tips: tuple[str, ...], excluded: tuple[str, ...], tags: tuple[str, ...]) -> int:
     """Scan every commit a push newly sends (its message and its patch against its first parent) and the message of every tag object.
 
-    The commits are those reachable from ``tips`` and not from ``excluded``, the objects the destination already holds. The log names commits, never a value.
+    The commits are those reachable from ``tips`` and not from ``excluded``, the objects the destination already holds. Nothing is written to disk: the
+    configuration, the messages and the reports pass through the environment, standard input and standard output. The log names commits, never a value.
     """
     git = shutil.which("git")
     if not git:
         raise ValueError("Git is required")
-    environment = {key: value for key, value in os.environ.items() if not key.startswith(("GITLEAKS_", "AWS_"))}
+    environment = scan_environment(dict(os.environ))
     scope = [*tips, *(["--not", *excluded] if excluded else [])]
-    with tempfile.TemporaryDirectory(prefix="push_scan_") as directory:
-        scratch = Path(directory)
-        texts = scratch / "texts"
-        texts.mkdir()
-        commits = git_output(git, repository, environment, "rev-list", *scope, "--").split() if tips else []
-        if commits:
-            for record in git_output(git, repository, environment, "log", "-z", "--format=%H%x02%B", *scope, "--").split("\0"):
-                identifier, _, message = record.strip("\n").partition("\x02")
-                if identifier:
-                    (texts / f"commit_{identifier}.txt").write_text(message, encoding="utf-8", errors="replace")
-        for tag in tags:
-            (texts / f"tag_{tag}.txt").write_text(
-                git_output(git, repository, environment, "cat-file", "tag", tag).partition("\n\n")[2], encoding="utf-8", errors="replace"
-            )
-        findings: list[dict[str, Any]] = []
-        status = 0
-        if commits:
-            # Gitleaks can report a clean scan after a Git that failed, so the same command runs here first, checked, and its output is dropped.
-            git_output(git, repository, environment, "log", "-p", "-U0", *HISTORY_OPTIONS, *scope, "--")
-            options = " ".join([*scope, *HISTORY_OPTIONS])
-            code, found = run_gitleaks(scratch, "git", ["--log-opts", options, str(repository)], environment, repository, "history")
-            status |= code
-            findings += found
-        if any(texts.iterdir()):
-            code, found = run_gitleaks(scratch, "dir", [str(texts)], environment, repository, "messages")
-            status |= code
-            findings += [{"Commit": Path(str(finding.get("File", ""))).stem.split("_", 1)[-1]} for finding in found]
-        named = sorted({str(finding.get("Commit", ""))[:12] for finding in findings if finding.get("Commit")})
-        LOGGER.info("event=secret_scan status=%s findings=%s commits=%s", "passed" if status == 0 else "failed", len(findings), ",".join(named))
-        return status
+    options = [*scope, "--root", "--diff-merges=first-parent", "--"]
+    commits = git_output(git, repository, environment, "rev-list", *scope, "--").split() if tips else []
+    findings: list[dict[str, Any]] = []
+    status = 0
+    if commits:
+        # Gitleaks runs this very command and can call the scan clean after it failed: it runs here first, checked, and sets the figure to meet.
+        patch = git_output(git, repository, environment, "log", "-p", "-U0", *options)
+        code, found = gitleaks_in_memory("git", ["--log-opts", " ".join(options), str(repository)], environment, repository, added_bytes(patch))
+        status |= code
+        findings += found
+    lines: list[str] = []
+    owners: dict[int, str] = {}
+    records = git_output(git, repository, environment, "log", "-z", "--format=%H%x02%B", *options).split("\0") if commits else []
+    for record in records:
+        identifier, _, message = record.strip("\n").partition("\x02")
+        if identifier:
+            owners[len(lines) + 1] = identifier
+            lines += [f"== commit {identifier} ==", *message.split("\n")]
+    for tag in tags:
+        owners[len(lines) + 1] = tag
+        lines += [f"== tag {tag} ==", *git_output(git, repository, environment, "cat-file", "tag", tag).partition("\n\n")[2].split("\n")]
+    if lines:
+        text = "\n".join(lines) + "\n"
+        code, found = gitleaks_in_memory("stdin", [], environment, repository, len(text.encode("utf-8")), text)
+        status |= code
+        findings += [{"Commit": owners[max(number for number in owners if number <= int(finding.get("StartLine", 1)))]} for finding in found]
+    named = sorted({str(finding.get("Commit", ""))[:12] for finding in findings if finding.get("Commit")})
+    LOGGER.info("event=secret_scan status=%s findings=%s commits=%s", "passed" if status == 0 else "failed", len(findings), ",".join(named))
+    return status
 
 
 def scan(repository: Path, staged: bool) -> int:

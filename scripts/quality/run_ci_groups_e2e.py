@@ -5642,13 +5642,19 @@ def failing_git(scratch: Path, name: str, trigger: str, partial: str = "", messa
 
 
 def pushed_scans(
-    tools: Path, root: Path, tips: tuple[str, ...], excluded: tuple[str, ...] = (), tags: tuple[str, ...] = (), path_first: Path | None = None
+    tools: Path,
+    root: Path,
+    tips: tuple[str, ...],
+    excluded: tuple[str, ...] = (),
+    tags: tuple[str, ...] = (),
+    path_first: Path | None = None,
+    extra: dict[str, str] | None = None,
 ) -> dict[str, tuple[int, str]]:
     """Run the two pushed scans of the push gate from ``tools`` over a fixture repository; ``excluded`` are the objects the destination already holds."""
     listing = root.parent / f"{root.name}_destination.txt"
     listing.write_text("".join(f"{identifier}\n" for identifier in excluded))
     arguments = [part for tip in tips for part in ("--tip", tip)] + ["--exclude-file", str(listing)] + [part for tag in tags for part in ("--tag-object", tag)]
-    environment = {**os.environ, "PYTHONPATH": str(tools)}
+    environment = {**os.environ, "PYTHONPATH": str(tools), **(extra or {})}
     if path_first:
         environment["PATH"] = f"{path_first}:{environment['PATH']}"
     secret = run_command(str(PYTHON), ["-m", "scripts.quality.scan_secrets", "--repository", str(root), *arguments], cwd=tools, env=environment, timeout=300)
@@ -5668,9 +5674,9 @@ def both_fail_naming(scans: dict[str, tuple[int, str]], commit: str) -> dict[str
     }
 
 
-def killed_scan_checks(scratch: Path, tools: Path, root: Path, tip: str, base: str) -> dict[str, bool]:
-    """Stop the secret scan while Gitleaks runs (a stand-in that never ends) and look for the pushed text in the temporary folder it used."""
-    fake = scratch / "killed_scan_tools"
+def fake_scan_tools(scratch: Path, name: str, tools: Path, program: str) -> Path:
+    """A copy of ``scan_secrets`` whose Gitleaks is ``program`` (a shell script): an answer or a hang that a real one would not give."""
+    fake = scratch / f"fake_tools_{name}"
     for relative in ("scripts/__init__.py", "scripts/process.py", "scripts/quality/__init__.py", "scripts/quality/scan_secrets.py"):
         (fake / relative).parent.mkdir(parents=True, exist_ok=True)
         if (tools / relative).exists():
@@ -5678,23 +5684,34 @@ def killed_scan_checks(scratch: Path, tools: Path, root: Path, tip: str, base: s
         else:
             (fake / relative).write_text("")
     (fake / ".tools/bin").mkdir(parents=True)
-    (fake / ".tools/bin/gitleaks").write_text("#!/bin/bash\nsleep 300\n")
+    (fake / ".tools/bin/gitleaks").write_text(f"#!/bin/bash\n{program}\n")
     (fake / ".tools/bin/gitleaks").chmod(0o755)
-    temporary = scratch / "killed_scan_tmp"
+    return fake
+
+
+def fake_scan(scratch: Path, name: str, fake: Path, root: Path, tip: str, base: str, timeout: float = 60) -> tuple[int, bool, Path]:
+    """Run the secret scan of a push from ``fake`` with its own temporary folder: its exit status, whether it was stopped, and that folder."""
+    temporary = scratch / f"fake_scan_tmp_{name}"
     temporary.mkdir()
-    listing = scratch / "killed_scan_destination.txt"
+    listing = scratch / f"fake_scan_destination_{name}.txt"
     listing.write_text(f"{base}\n")
-    stopped = False
     try:
-        run_command(
+        result = run_command(
             str(PYTHON),
             ["-m", "scripts.quality.scan_secrets", "--repository", str(root), "--tip", tip, "--exclude-file", str(listing)],
             cwd=fake,
             env={**os.environ, "TMPDIR": str(temporary)},
-            timeout=8,
+            timeout=timeout,
         )
     except TimeoutExpired:
-        stopped = True
+        return -1, True, temporary
+    return result.returncode, False, temporary
+
+
+def killed_scan_checks(scratch: Path, tools: Path, root: Path, tip: str, base: str) -> dict[str, bool]:
+    """Stop the secret scan while Gitleaks runs (a stand-in that never ends) and look for the pushed text in the temporary folder it used."""
+    fake = fake_scan_tools(scratch, "hang", tools, "sleep 300")
+    _, stopped, temporary = fake_scan(scratch, "hang", fake, root, tip, base, timeout=8)
     left = [path for path in temporary.rglob("*") if path.is_file() and PLANTED_SECRET in path.read_text(errors="replace")]
     return {"the_scan_was_stopped_while_gitleaks_ran": stopped, "no_file_holds_the_pushed_text": not left}
 
@@ -5832,7 +5849,7 @@ def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]
     )
     root, base = scan_fixture(scratch, "scan_killed")
     (root / "notes.txt").write_text(PLANTED_TEXT)
-    tip = commit_all(root, "add notes")
+    tip = commit_all(root, f"add notes {PLANTED_SECRET}")
     record("pushed_secret_scan_leaves_no_pushed_text_behind_when_it_is_killed", killed_scan_checks(scratch, tools, root, tip, base))
     root, base = scan_fixture(scratch, "scan_carriage_return")
     (root / "notes.txt").write_bytes(f"note\r{PLANTED_PERSON}\n".encode())
@@ -5844,6 +5861,61 @@ def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]
             "privacy_scan_fails_and_names_the_commit": scans["privacy"][0] == 1 and returned[:12] in scans["privacy"][1],
             "no_value_is_printed": leaks_nothing(scans["privacy"][1]),
         },
+    )
+    home = scratch / "colour_home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[color]\n\tui = always\n")
+    root, base = scan_fixture(scratch, "scan_colour")
+    (root / "notes.txt").write_text(PLANTED_TEXT)
+    coloured = commit_all(root, "add notes")
+    record(
+        "pushed_scans_ignore_a_user_git_config_that_colours_the_output",
+        both_fail_naming(pushed_scans(tools, root, (coloured,), (base,), extra={"HOME": str(home), "XDG_CONFIG_HOME": str(home)}), coloured),
+    )
+    root, base = scan_fixture(scratch, "scan_rename")
+    (root / "notes.txt").write_text(PLANTED_TEXT)
+    held = commit_all(root, "add notes")
+    probe_git(root, "mv", "notes.txt", "moved.txt")
+    renamed = commit_all(root, "rename notes")
+    scans = pushed_scans(tools, root, (renamed,), (held,))
+    record(
+        "pushed_secret_scan_reads_a_pure_rename_as_an_added_file",
+        {"secret_scan_fails_and_names_the_commit": scans["secret"][0] == 1 and renamed[:12] in scans["secret"][1]},
+    )
+    root, base = scan_fixture(scratch, "scan_sha_file")
+    (root / base).write_text("an untracked file named like the excluded commit\n")
+    (root / "notes.txt").write_text(PLANTED_TEXT)
+    shaped = commit_all(root, "add notes")
+    record("pushed_scans_read_the_scope_when_a_file_is_named_like_an_excluded_commit", both_fail_naming(pushed_scans(tools, root, (shaped,), (base,)), shaped))
+    root, base = scan_fixture(scratch, "scan_silent_gitleaks")
+    (root / "notes.txt").write_text("some added text\n")
+    quiet = commit_all(root, "add notes")
+    report = " ".join(
+        [
+            'report=""; while [ $# -gt 0 ]; do if [ "$1" = "--report-path" ]; then report="$2"; fi; shift; done;',
+            'if [ -n "$report" ] && [ "$report" != "-" ]; then echo "[]" > "$report"; else echo "[]"; fi',
+        ]
+    )
+    silent = fake_scan_tools(scratch, "silent", tools, 'echo "INF scanned ~0 bytes (0 bytes) in 1ms" >&2; ' + report)
+    erring = fake_scan_tools(scratch, "erring", tools, 'echo "ERR stderr is not empty" >&2; echo "INF scanned ~999999 bytes (1 MB) in 1ms" >&2; ' + report)
+    short_code, _, _ = fake_scan(scratch, "silent", silent, root, quiet, base)
+    error_code, _, _ = fake_scan(scratch, "erring", erring, root, quiet, base)
+    record(
+        "pushed_secret_scan_fails_when_gitleaks_reads_less_than_git_gave_or_reports_an_error",
+        {"zero_bytes_scanned_fails": short_code not in (0, 1), "an_error_line_fails": error_code not in (0, 1)},
+    )
+    root, base = scan_fixture(scratch, "scan_split_key")
+    half = PEM_BODY.split("\n")
+    (root / "key.txt").write_text("-----BEGIN RSA PRIVATE " + "KEY-----\n" + "\n".join(half[:12]) + "\n")
+    commit_all(root, "first half of a key")
+    (root / "key.txt").write_text("\n".join(half[12:]) + "\n-----END RSA PRIVATE " + "KEY-----\n")
+    tail = commit_all(root, "second half of a key")
+    (root / "key.txt").unlink()
+    dropped_key = commit_all(root, "remove the key")
+    del tail
+    record(
+        "known_limit_a_private_key_added_in_pieces_and_removed_in_the_same_push_is_not_found",
+        {"secret_scan_misses_it_as_documented": pushed_scans(tools, root, (dropped_key,), (base,))["secret"][0] == 0},
     )
     for subcommand in ("rev-list", "log", "cat-file"):
         root, base = scan_fixture(scratch, f"scan_failing_{subcommand}")

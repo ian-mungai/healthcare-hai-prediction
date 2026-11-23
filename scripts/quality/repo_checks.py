@@ -2850,8 +2850,10 @@ def pushed_privacy_scan(tips: list[str], excluded: list[str], tags: list[str]) -
     """Scan each commit a push sends (message and added lines) and each pushed tag message like ``privacy_scan`` scans files; never report the value.
 
     Known limits (owner decision, Nov 22 2026): the payload of a Git LFS file of an earlier commit is not read, and a file that cannot be read as text is
-    listed as unreviewed without failing. GitHub push protection is the backstop for secrets in both. Out of scope: a shallow or partial destination and
-    a ref that is pruned while the gate runs.
+    listed as unreviewed without failing. A private key whose block is split into pieces (by a blank line, or across several commits of the push) and
+    removed again in the same push is in no single patch, so the secret scan misses it; one E2E case documents this. GitHub push protection is the
+    backstop for all three, and the checkout scan for a key still at the tip. Out of scope: a shallow or partial destination and a ref that is pruned
+    while the gate runs.
     """
     allowed, findings = privacy_allowlist()
     values = env_values()

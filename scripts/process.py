@@ -749,18 +749,19 @@ def decoded(stream: Any, errors: str) -> str:
     return stream.decode("utf-8", errors) if isinstance(stream, bytes) else stream
 
 
-def communicate(process: subprocess.Popen[str], timeout: float, cancellation: Cancellation | None) -> tuple[str, str]:
-    """Wait for the program's output. A pool job waits in slices and raises ``LaunchCancelled`` as soon as its pool is cancelled."""
+def communicate(process: subprocess.Popen[Any], timeout: float, cancellation: Cancellation | None, data: str | bytes | None = None) -> tuple[str, str]:
+    """Wait for the output, after sending ``data`` to the standard input once. A pool job waits in slices and raises ``LaunchCancelled`` when cancelled."""
     if cancellation is None:
-        return process.communicate(timeout=timeout)
+        return process.communicate(data, timeout=timeout)
     end = time.monotonic() + timeout
     while True:
         if cancellation.cancelled():
             raise LaunchCancelled(f"{process.args!r} was cancelled by an interrupt")
         remaining = end - time.monotonic()
         try:
-            return process.communicate(timeout=min(SLICE_SECONDS, max(remaining, 0.0)))
+            return process.communicate(data, timeout=min(SLICE_SECONDS, max(remaining, 0.0)))
         except TimeoutExpired as expired:
+            data = None  # Python keeps what it has not sent yet; a retry must not pass it again.
             if remaining <= SLICE_SECONDS:
                 raise TimeoutExpired(process.args, timeout, expired.stdout, expired.stderr) from None
 
@@ -938,6 +939,7 @@ def run_command(
     grace_seconds: float | None = None,
     errors: str = "strict",
     keep_newlines: bool = False,
+    input_text: str | None = None,
 ) -> CompletedProcess[str]:
     """Run ``program`` with ``args`` and return its exit code and captured text output.
 
@@ -965,6 +967,8 @@ def run_command(
         How undecodable bytes in the captured output are decoded: "strict" (the default) raises, "replace" keeps the rest readable.
     keep_newlines : bool
         Read the output as bytes and decode it here, so a bare carriage return stays in the text (text mode turns it into a line end). The default is off.
+    input_text : str or None
+        Text sent once to the program's standard input (UTF-8). The default is none: standard input is closed.
 
     Returns
     -------
@@ -994,8 +998,16 @@ def run_command(
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
-            process = start([executable, *args], cwd, child_environment, new_session=not nested, errors=errors, keep_newlines=keep_newlines)
-        stdout, stderr = communicate(process, timeout, cancellation)
+            process = start(
+                [executable, *args],
+                cwd,
+                child_environment,
+                new_session=not nested,
+                piped_input=input_text is not None,
+                errors=errors,
+                keep_newlines=keep_newlines,
+            )
+        stdout, stderr = communicate(process, timeout, cancellation, input_text.encode("utf-8") if input_text is not None and keep_newlines else input_text)
         if keep_newlines:
             stdout, stderr = decoded(stdout, errors), decoded(stderr, errors)
     except LaunchCancelled:
