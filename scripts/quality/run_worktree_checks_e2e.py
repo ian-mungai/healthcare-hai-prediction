@@ -9,7 +9,11 @@ damaged package archive and a missing push gate. The lock cases compare the requ
 its requirements and its build requirements) with the export of the tool's group of ``uv.lock`` now; no installed package is inspected. They cover copies
 that match (the good cases), a copy that differs (the build copy of DVC alone too), a missing copy and one that cannot be read (each names the installer
 command to rerun), a lock that cannot be read, a receipt that cannot be looked up (its folder cannot be entered)
-and a lint tool whose manifest entry names no group. Each of these ends in a named problem, exit status 1 and no traceback.
+and a lint tool whose manifest entry names no group. The yamllint cases run the one selector of ``scripts.quality.lint_sources`` (the private
+``.tools/yamllint`` python when its path exists, executable or not, else ``.venv``) through both the check and the lint command: a pinned binary in
+``.tools/bin`` that hides a stale ``.venv`` module, a private interpreter without execute permission, a stale private copy (its message names the repair
+of that copy) and a probe whose process cleanup is not confirmed (named, and the process still ends with the cleanup-failure status 70). Each of these ends
+in a named problem, exit status 1 (70 for the unconfirmed cleanup) and no traceback.
 Every blocked case must print its own message, so a failure for another reason cannot pass. The report is the run's output.
 """
 
@@ -62,6 +66,10 @@ def advance_origin(scratch: Path, repo: Path) -> None:
     git(other, "push", "-q", "origin", "main")
 
 
+TOP_LEVEL_CHECK = (
+    "import os, runpy; os.environ.pop('PROCESS_LAUNCH_SESSION', None); runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
+)
+
 SHORT_EXPORT = (
     "import runpy; from scripts.quality import lock_env; lock_env.EXPORT_DEADLINE = 1; "
     "runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
@@ -75,6 +83,13 @@ def run_check(repo: Path, module: str) -> tuple[int, str]:
     elif module == "check_tools_short_export":
         # The real check with a one-second export timeout, set in this child process only, so a stalled export times out without a 120 s wait.
         result = run_command(str(PYTHON), ["-c", SHORT_EXPORT], cwd=repo, env=environment, timeout=240)
+    elif module == "check_tools_ps_blocked":
+        # The fake ps (see ``ps_blocked``) comes first on the check's PATH. The runner's launch names its children as a nested session, and a nested launch
+        # lists no process, so the check drops that name and is a top-level launch.
+        blocked = {**environment, "PATH": f"{repo / '.ps_blocked/bin'}{os.pathsep}{environment['PATH']}"}
+        result = run_command(str(PYTHON), ["-c", TOP_LEVEL_CHECK], cwd=repo, env=blocked, timeout=240)
+    elif module == "lint_yamllint":
+        result = run_command(str(PYTHON), ["-m", "scripts.quality.lint_sources", "yamllint"], cwd=repo, env=environment, timeout=240)
     else:
         result = run_command(str(PYTHON), ["-m", "scripts.quality.check_tools"], cwd=repo, env=environment, timeout=240)
     return result.returncode, result.stdout + result.stderr
@@ -162,6 +177,13 @@ def synthetic_archive(repo: Path) -> None:
     (repo / relative).write_bytes(data)
 
 
+def stand_in_python(path: Path, reports: str | None, mode: int = 0o755) -> None:
+    """A python whose ``-m yamllint --version`` prints ``reports`` (nothing for None) and exits 0."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n[ \"$*\" = '-m yamllint --version' ] && echo '{reports}'\nexit 0\n")
+    path.chmod(mode)
+
+
 def synthetic_tools(repo: Path) -> None:
     """A tools folder of stand-in executables for every pinned tool, with receipts that name the pinned versions, in place of the link to this checkout's
     folder. The cases then test the check and not the tools that the machine running them happens to have installed (a hosted hook job installs only some).
@@ -176,6 +198,9 @@ def synthetic_tools(repo: Path) -> None:
     (repo / ".tools/receipts").mkdir(parents=True)
     for name, entry in tools.items():
         (repo / ".tools/receipts" / f"{name}.json").write_text(json.dumps({"version": entry["version"]}))
+    # The yamllint the lint command runs: the private environment is selected whenever it exists, so the stand-in one reports the pin and the cases
+    # that test the project environment remove it.
+    stand_in_python(repo / ".tools/yamllint/bin/python", f"yamllint {tools['yamllint']['version']}")
     lock_stand_in(repo, tools)
 
 
@@ -216,6 +241,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         setup: Callable[[Path, Path], Path | None] | None = None,
         hook: bool = False,
         module: str = "check_tools",
+        status: int = 1,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="hai_tools_check_") as folder:
             scratch = Path(folder)
@@ -226,7 +252,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
             finally:
                 (repo / ".tools/receipts").chmod(0o755)  # a case may close the folder; the scratch folder cannot be removed while it is closed
             expected = tuple(filter(None, (expect,) if isinstance(expect, str) else expect))
-            ok = (code == 0) if not expected else (code == 1 and all(text in output for text in expected))
+            ok = (code == 0) if not expected else (code == status and all(text in output for text in expected))
             ok = ok and "Traceback" not in output
             if hook:
                 ok = ok and (run_hook(where, "check-tools") == 0) == (not expect)
@@ -261,20 +287,50 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         document["tools"]["phantom_tool"] = {"version": "1.0.0"}
         manifest.write_text(json.dumps(document))
 
-    def project_yamllint(reports: str | None, interpreter: bool = True) -> Callable[[Path, Path], None]:
+    def project_yamllint(reports: str | None, interpreter: bool = True, binary: bool = False) -> Callable[[Path, Path], None]:
         """A fresh install puts yamllint in .venv (the host lock) and nowhere under .tools. The stand-in .venv holds that executable and, unless
-        ``interpreter`` is false, a stand-in python whose ``-m yamllint --version`` prints ``reports`` and exits 0."""
+        ``interpreter`` is false, a stand-in python whose ``-m yamllint --version`` prints ``reports`` and exits 0. With ``binary`` the stand-in
+        ``.tools/bin/yamllint`` and its receipt stay, as in a checkout that also has a release binary."""
 
         def setup(_: Path, repo: Path) -> None:
-            (repo / ".tools/bin/yamllint").unlink()
-            (repo / ".tools/receipts/yamllint.json").unlink()
+            shutil.rmtree(repo / ".tools/yamllint")
+            if not binary:
+                (repo / ".tools/bin/yamllint").unlink()
+                (repo / ".tools/receipts/yamllint.json").unlink()
             (repo / ".venv").unlink()
             (repo / ".venv/bin").mkdir(parents=True)
             (repo / ".venv/bin/yamllint").write_text("#!/bin/sh\nexit 0\n")
             (repo / ".venv/bin/yamllint").chmod(0o755)
             if interpreter:
-                (repo / ".venv/bin/python").write_text(f"#!/bin/sh\n[ \"$*\" = '-m yamllint --version' ] && echo '{reports}'\nexit 0\n")
-                (repo / ".venv/bin/python").chmod(0o755)
+                stand_in_python(repo / ".venv/bin/python", reports)
+
+        return setup
+
+    def ps_blocked(_: Path, repo: Path) -> None:
+        """The yamllint probe ends and then the process list cannot be read once (as when /bin/ps is blocked): the project python leaves a marker and a
+        background process (so the stop of its session must list the processes), and the fake ``ps`` that comes first on the PATH fails once when it
+        finds the marker and runs the real ``ps`` otherwise. The leftover ``sleep`` ends by itself after 30 s."""
+        project_yamllint(f"yamllint {pinned}")(_, repo)
+        (repo / ".ps_blocked/bin").mkdir(parents=True)
+        python = repo / ".venv/bin/python"
+        python.write_text(
+            "#!/bin/sh\n[ \"$*\" = '-m yamllint --version' ] && { echo '"
+            + f"yamllint {pinned}"
+            + '\'; : > "$(dirname "$0")/../../.ps_blocked/once"; sleep 30 >/dev/null 2>&1 & }\nexit 0\n'
+        )
+        fake = repo / ".ps_blocked/bin/ps"
+        fake.write_text(
+            '#!/bin/sh\nmarker="$(dirname "$0")/../once"\nif [ -e "$marker" ]; then rm -f "$marker"; echo "ps: blocked" >&2; exit 1; fi\nexec /bin/ps "$@"\n'
+        )
+        fake.chmod(0o755)
+
+    def private_yamllint(project: str, private: str | None, mode: int = 0o755) -> Callable[[Path, Path], None]:
+        """The project environment reports ``project``; a leftover ``.tools/yamllint`` python reports ``private`` (file mode ``mode``)."""
+        base = project_yamllint(project)
+
+        def setup(scratch: Path, repo: Path) -> None:
+            base(scratch, repo)
+            stand_in_python(repo / ".tools/yamllint/bin/python", private, mode)
 
         return setup
 
@@ -413,6 +469,49 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         "yamllint_without_its_interpreter_is_refused",
         f"yamllint in .venv reports no version, not the pinned {pinned}; {fix}",
         project_yamllint(None, interpreter=False),
+    )
+    leftover = "remove .tools/yamllint and rerun `bash scripts/install.sh`"
+    stale, good = "yamllint 1.0.0", f"yamllint {pinned}"
+    case("yamllint_binary_with_the_pinned_project_module_passes", "", project_yamllint(good, binary=True))
+    case(
+        "yamllint_binary_does_not_hide_a_stale_project_module",
+        f"yamllint in .venv reports yamllint 1.0.0, not the pinned {pinned}; {fix}",
+        project_yamllint(stale, binary=True),
+    )
+    case(
+        "private_yamllint_that_the_lint_command_selects_is_the_one_checked",
+        "",
+        private_yamllint(stale, good),
+    )
+    case("lint_runs_the_private_yamllint_that_the_check_accepts", "", private_yamllint(stale, good), module="lint_yamllint")
+    case(
+        "stale_private_yamllint_is_refused_with_its_own_repair",
+        f"yamllint in .tools/yamllint reports yamllint 1.0.0, not the pinned {pinned}; {leftover}",
+        private_yamllint(good, stale),
+    )
+    case(
+        "lint_refuses_the_stale_private_yamllint_the_check_refuses",
+        f"yamllint {pinned} is required in the project environment, but .tools/yamllint reports yamllint 1.0.0",
+        private_yamllint(good, stale),
+        module="lint_yamllint",
+    )
+    case(
+        "private_yamllint_without_execute_permission_is_refused",
+        f"yamllint in .tools/yamllint reports no version, not the pinned {pinned}; {leftover}",
+        private_yamllint(good, good, mode=0o644),
+    )
+    case(
+        "lint_refuses_the_private_yamllint_without_execute_permission",
+        f"yamllint {pinned} is required in the project environment, but .tools/yamllint reports no version",
+        private_yamllint(good, good, mode=0o644),
+        module="lint_yamllint",
+    )
+    case(
+        "yamllint_probe_with_an_unconfirmed_cleanup_is_named_and_keeps_the_cleanup_status",
+        ("yamllint in .venv was not checked because the stop of its probe is not confirmed", "LaunchesNotStopped"),
+        ps_blocked,
+        module="check_tools_ps_blocked",
+        status=70,
     )
     case("missing_package_archive_is_refused", "the dbt package archive does not verify", no_archive)
     case("damaged_package_archive_is_refused", "the dbt package archive does not verify", damaged_archive)

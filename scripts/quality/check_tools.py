@@ -8,7 +8,8 @@ It checks five things and names each problem with its fix:
 2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin``, its pinned
    executable or, for a tool of installer ``requirements.txt``, ``.venv/bin`` or ``.tools/<tool>/bin/python``), the
    executables the hooks start from ``.tools``, the receipt of each release binary names the pinned version, and the yamllint that the lint command runs
-   reports the pinned version (an executable that only runs is not enough).
+   (``lint_sources.yamllint_environment``, probed even when ``.tools/bin/yamllint`` exists) reports the pinned version (an executable that only runs is
+   not enough).
 3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
    ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
    check compares those saved files with a fresh ``uv`` export. It does not inspect the installed packages. A copy that differs, is missing or cannot be read,
@@ -31,9 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse.dbt_package_archive import ArchiveError, verify
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import LaunchesNotStopped, TimeoutExpired, run_command
 from scripts.quality import lock_env
-from scripts.quality.lint_sources import yamllint_version
+from scripts.quality.lint_sources import yamllint_environment, yamllint_version
 from scripts.quality.lock_env import LockError
 from scripts.quality.pre_push import check_shim
 
@@ -103,20 +104,25 @@ def manifest_executables(root: Path, tools: dict[str, Any]) -> dict[str, list[Pa
 
 
 def yamllint_problems(root: Path, pinned: str) -> list[str]:
-    """The problem when the yamllint that the lint command runs (the private ``.tools/yamllint`` python, else the ``.venv`` python) is not the pinned one.
+    """The problem when the yamllint that the lint command runs (the python that ``lint_sources.yamllint_environment`` selects) is not the pinned one.
 
-    An executable that runs proves nothing, since a stale or stand-in file passes the existence check, so its reported version must equal the pin."""
-    private = root / ".tools/yamllint/bin/python"
-    python = private if executable(private) else root / ".venv/bin/python"
-    label = ".tools/yamllint" if python == private else ".venv"
+    An executable that runs proves nothing, since a stale or stand-in file passes the existence check, so its reported version must equal the pin.
+    The probe runs whatever the selector returns, also when ``.tools/bin/yamllint`` exists. No installer creates ``.tools/yamllint`` (the host lock
+    puts yamllint in ``.venv``), so a stale private copy is a leftover that the repair removes first. A probe whose process cleanup is not confirmed is
+    named; the launcher has recorded it, so the process still ends with its cleanup-failure status (``UNCONFIRMED_EXIT_STATUS``)."""
+    python, label = yamllint_environment(root)
     try:
         result = run_command(str(python), ["-m", "yamllint", "--version"], cwd=root, timeout=30)
         reported, _ = yamllint_version(result.returncode, result.stdout, root)
+    except LaunchesNotStopped as failure:
+        cause = f"{type(failure).__name__}: {failure}"
+        return [f"yamllint in {label} was not checked because the stop of its probe is not confirmed ({cause}); rerun once `ps` runs"]
     except (OSError, TimeoutExpired, ValueError, KeyError):
         reported = None
     if reported == f"yamllint {pinned}":
         return []
-    return [f"yamllint in {label} reports {reported or 'no version'}, not the pinned {pinned}; run `bash scripts/install.sh`"]
+    repair = "remove .tools/yamllint and rerun `bash scripts/install.sh`" if label == ".tools/yamllint" else "run `bash scripts/install.sh`"
+    return [f"yamllint in {label} reports {reported or 'no version'}, not the pinned {pinned}; {repair}"]
 
 
 def tool_problems(root: Path) -> list[str]:
@@ -131,7 +137,7 @@ def tool_problems(root: Path) -> list[str]:
             where = ", ".join(str(place) for place in places)
             found.append(f"pinned tool {name} {tools[name]['version']} has no executable ({where}); run scripts/quality/install_tools.py")
             continue
-        if name == "yamllint" and not executable(root / ".tools/bin" / name):
+        if name == "yamllint":
             found += yamllint_problems(root, tools[name]["version"])
         receipt = root / ".tools/receipts" / f"{name}.json"
         if executable(root / ".tools/bin" / name):
