@@ -16,8 +16,8 @@ from tests.support import check
 
 # The committed defaults in the shape the renderer reads; config/aws/iam_preparation.json is the reviewed file: flags and non-environment values only.
 DEFAULT_PREPARATION = Path(__file__).parent / "fixtures" / "iam_preparation_default.json"
-# The live IAM apply inputs (serial 420), keys and shapes only: the account, region, bucket and project are placeholders. Its publisher secret ARNs hold the
-# wildcard form of the owner IAM apply that follows this change; serial 420 still holds the three fixed ARNs.
+# The live IAM apply inputs, keys and shapes only: the account, region, bucket and project are placeholders. They hold the bronze and bronze_stage launch
+# families and the six prepared flags of the live roles, and the publisher secret ARNs in their wildcard form.
 LIVE_INPUTS = Path(__file__).parent / "fixtures" / "iam_live_inputs_sanitized.json"
 
 TEST_PROJECT_NAME = "example_project"
