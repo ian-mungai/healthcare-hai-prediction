@@ -502,6 +502,13 @@ def code_run_cases() -> list[tuple[Any, ...]]:
         ("list the code run binding of a run", "s3:ListBucket", bucket, True, {"s3:prefix": (CODE_RUN_PREFIX,)}),
         ("list the code digest of a run", "s3:ListBucket", bucket, True, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.sha256",)}),
         ("list the code archive of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.tar.gz",)}),
+        (
+            "list keys that extend the code digest name",
+            "s3:ListBucket",
+            bucket,
+            False,
+            {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.sha256x",)},
+        ),
         ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/",)}),
         ("list the staged runs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
         (
