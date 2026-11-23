@@ -10,8 +10,8 @@ It checks five things and names each problem with its fix:
 3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
    ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
    check compares those saved files with a fresh ``uv`` export. It does not inspect the installed packages. A copy that differs, is missing or cannot be read,
-   a lock that cannot be read and an export that does not finish are each named with the command to run. The exports of one run share one time budget
-   (``LOCK_SECONDS``, or the environment variable ``CHECK_TOOLS_LOCK_SECONDS``) so that one stalled ``uv`` cannot hold a commit.
+   a lock that cannot be read and an export that does not finish within its own timeout (``lock_env.EXPORT_DEADLINE``) are each named with the command
+   to run.
 4. The dbt package archive that the model gates read is present and verifies against its record (``scripts.lakehouse.dbt_package_archive``).
 5. The push gate is installed (``scripts.quality.pre_push check-shim``).
 
@@ -25,7 +25,6 @@ import io
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +35,6 @@ from scripts.quality.lock_env import LockError
 from scripts.quality.pre_push import check_shim
 
 GIT_SECONDS = 60
-LOCK_SECONDS = 30
-BUDGET_VARIABLE = "CHECK_TOOLS_LOCK_SECONDS"
 LOCK_CHECK = "`.venv/bin/python -m scripts.quality.lock_env check`"
 LINKED = (".venv", ".tools")
 # Pinned tools that other installers place under .tools (SQLFluff, markdownlint and DVC have their own pins).
@@ -114,9 +111,14 @@ def tool_problems(root: Path) -> list[str]:
             found.append(f"pinned tool {name} {tools[name]['version']} has no executable ({where}); run scripts/quality/install_tools.py")
             continue
         receipt = root / ".tools/receipts" / f"{name}.json"
-        if executable(root / ".tools/bin" / name) and receipt.is_file():
+        if executable(root / ".tools/bin" / name):
             try:
+                if not receipt.is_file():
+                    continue
                 version = json.loads(receipt.read_text(encoding="utf-8")).get("version")
+            except OSError as error:
+                found.append(f"the receipt of {name} cannot be read ({type(error).__name__}: {error}); run scripts/quality/install_tools.py")
+                continue
             except ValueError:
                 version = None
             if version != tools[name]["version"]:
@@ -139,15 +141,6 @@ def lock_environments(tools: dict[str, Any]) -> dict[str, tuple[str | None, str]
         }
     )
     return found
-
-
-def lock_budget() -> float:
-    """The seconds that all lock exports of one run share: ``CHECK_TOOLS_LOCK_SECONDS`` when it is a positive number, else ``LOCK_SECONDS``."""
-    try:
-        seconds = float(os.environ.get(BUDGET_VARIABLE, LOCK_SECONDS))
-    except ValueError:
-        return LOCK_SECONDS
-    return seconds if seconds > 0 else LOCK_SECONDS
 
 
 def record_problems(root: Path, name: str, group: str, installer: str, expected: dict[str, str]) -> list[str]:
@@ -175,28 +168,18 @@ def lock_problems(root: Path) -> list[str]:
     except (OSError, ValueError, KeyError):
         return []
     found = []
-    budget = lock_budget()
-    deadline = time.monotonic() + budget
-    unchecked: list[str] = []
-    expired = False
     for name, (group, installer) in lock_environments(tools).items():
         if not (root / ".tools" / name).is_dir():
             continue
         if group is None:
             found.append(f'config/quality_tools.json names no lock group for {name}, so installed {name} cannot be checked; add a "group" to its entry')
             continue
-        remaining = deadline - time.monotonic()
-        if expired or remaining <= 0:
-            unchecked.append(name)
-            continue
         try:
-            expected = lock_env.export_files(group, root, remaining)
+            expected = lock_env.export_files(group, root)
         except TimeoutExpired:
             found.append(
-                f"reading the {group} group of uv.lock for {name} did not finish within the {budget:g} s that the lock exports of one run share; "
-                f"run {LOCK_CHECK}, then repeat the check"
+                f"reading the {group} group of uv.lock for {name} did not finish within {lock_env.EXPORT_DEADLINE} s; run {LOCK_CHECK}, then repeat the check"
             )
-            expired = True
             continue
         except (LockError, OSError, ValueError, KeyError) as error:
             found.append(
@@ -205,8 +188,6 @@ def lock_problems(root: Path) -> list[str]:
             )
             continue
         found += record_problems(root, name, group, installer, expected)
-    if unchecked:
-        found.append(f"the lock budget ended before {', '.join(unchecked)} could be checked; repeat the check, and run {LOCK_CHECK} if it repeats")
     return found
 
 

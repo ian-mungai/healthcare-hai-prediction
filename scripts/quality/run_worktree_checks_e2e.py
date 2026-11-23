@@ -8,8 +8,8 @@ They cover a good main checkout and a good linked worktree, links that point els
 damaged package archive and a missing push gate. The lock cases compare the requirements copies that the installers saved in ``.tools/<tool>`` (DVC saves two,
 its requirements and its build requirements) with the export of the tool's group of ``uv.lock`` now; no installed package is inspected. They cover copies
 that match (the good cases), a copy that differs (the build copy of DVC alone too), a missing copy and one that cannot be read (each names the installer
-command to rerun), a lock that cannot be read, an export that stalls past the run's one time budget, and a lint tool whose manifest entry names no group.
-Each of these ends in a named problem, exit status 1 and no traceback.
+command to rerun), a lock that cannot be read, a receipt that cannot be looked up (its folder cannot be entered)
+and a lint tool whose manifest entry names no group. Each of these ends in a named problem, exit status 1 and no traceback.
 Every blocked case must print its own message, so a failure for another reason cannot pass. The report is the run's output.
 """
 
@@ -62,8 +62,8 @@ def advance_origin(scratch: Path, repo: Path) -> None:
     git(other, "push", "-q", "origin", "main")
 
 
-def run_check(repo: Path, module: str, extra: dict[str, str] | None = None) -> tuple[int, str]:
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(extra or {})}
+def run_check(repo: Path, module: str) -> tuple[int, str]:
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     if module == "check_head":
         result = run_command(str(PYTHON), ["-m", "scripts.quality.check_head"], cwd=repo, env=environment, timeout=240)
     else:
@@ -206,13 +206,15 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         expect: str | tuple[str, ...],
         setup: Callable[[Path, Path], Path | None] | None = None,
         hook: bool = False,
-        extra: dict[str, str] | None = None,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="hai_tools_check_") as folder:
             scratch = Path(folder)
             repo = tools_repo(scratch)
-            where = (setup(scratch, repo) if setup else None) or repo
-            code, output = run_check(where, "check_tools", extra)
+            try:
+                where = (setup(scratch, repo) if setup else None) or repo
+                code, output = run_check(where, "check_tools")
+            finally:
+                (repo / ".tools/receipts").chmod(0o755)  # a case may close the folder; the scratch folder cannot be removed while it is closed
             expected = tuple(filter(None, (expect,) if isinstance(expect, str) else expect))
             ok = (code == 0) if not expected else (code == 1 and all(text in output for text in expected))
             ok = ok and "Traceback" not in output
@@ -283,9 +285,8 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     def lock_unreadable(_: Path, repo: Path) -> None:
         (repo / ".tools/lock_stub/dvc.txt").unlink()
 
-    def export_stalls(_: Path, repo: Path) -> None:
-        stub = repo / ".tools/bin/uv"
-        stub.write_text(stub.read_text().replace('cat "$(dirname', '[ "$group" = dvc ] && sleep 60\ncat "$(dirname'))
+    def receipts_closed(_: Path, repo: Path) -> None:
+        (repo / ".tools/receipts").chmod(0)
 
     def group_unnamed(_: Path, repo: Path) -> None:
         manifest = repo / "config/quality_tools.json"
@@ -349,14 +350,9 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         lock_unreadable,
     )
     case(
-        "lock_export_that_stalls_is_refused_within_the_budget",
-        (
-            "reading the dvc group of uv.lock for dvc did not finish within the 3 s that the lock exports of one run share",
-            "the lock budget ended before import-linter, check-jsonschema",
-            "run `.venv/bin/python -m scripts.quality.lock_env check`",
-        ),
-        export_stalls,
-        extra={"CHECK_TOOLS_LOCK_SECONDS": "3"},
+        "receipt_that_cannot_be_looked_up_is_refused",
+        ("the receipt of ", " cannot be read (PermissionError", "run scripts/quality/install_tools.py"),
+        receipts_closed,
     )
     case(
         "lint_tool_without_a_group_in_the_manifest_is_refused",

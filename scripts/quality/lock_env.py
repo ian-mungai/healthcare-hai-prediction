@@ -22,7 +22,6 @@ import argparse
 import json
 import re
 import sys
-import time
 import tomllib
 from pathlib import Path
 
@@ -69,12 +68,12 @@ def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def verify_uv(root: Path = ROOT, deadline: float = 30) -> str:
-    """Check that the pinned uv of ``.tools/bin`` exists and runs at exactly the pinned version within ``deadline`` seconds; return its path."""
+def verify_uv(root: Path = ROOT) -> str:
+    """Check that the pinned uv of ``.tools/bin`` exists and runs at exactly the pinned version; return its path."""
     pinned = json.loads((root / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]["uv"]["version"]
     if not (root / UV).is_file():
         raise LockError(f"config/quality_tools.json:1: uv {pinned} is not installed at {root / UV}. Run scripts/quality/install_tools.py --tool uv.")
-    version = run_command(UV, ["--version"], cwd=root, timeout=deadline)
+    version = run_command(UV, ["--version"], cwd=root, timeout=30)
     if version.returncode or not re.search(rf"(?<![\d.]){re.escape(pinned)}(?![\d.])", version.stdout + version.stderr):
         raise LockError(f"config/quality_tools.json:1: uv must be version {pinned}, found {(version.stdout + version.stderr).strip()[:80]!r}.")
     return str(root / UV)
@@ -99,25 +98,21 @@ def blocks(text: str) -> list[tuple[str, str]]:
     return [(name, "\n".join(lines) + "\n") for name, lines in found]
 
 
-def export(group: str, root: Path = ROOT, deadline: float = EXPORT_DEADLINE) -> str:
-    """Return the hash-pinned requirements of one group, exactly as the lock records them (no network, no resolution).
-
-    ``deadline`` is the seconds the whole export may take (``verify_uv`` and the export itself); the call raises ``TimeoutExpired`` after that.
-    """
+def export(group: str, root: Path = ROOT) -> str:
+    """Return the hash-pinned requirements of one group, exactly as the lock records them (no network, no resolution)."""
     if normalize(group) not in {normalize(name) for name in groups(root)}:
         raise LockError(f"pyproject.toml:1: no dependency group named {group}; the groups are {', '.join(groups(root))}")
     arguments = ["export", "--only-group", group, "--frozen", "--no-emit-project", "--no-header", "--no-annotate", "--format", "requirements-txt", "--quiet"]
-    started = time.monotonic()
-    verify_uv(root, min(30, deadline))
-    result = run_command(UV, [*arguments, "--project", str(root)], cwd=root, timeout=max(deadline - (time.monotonic() - started), 0.1))
+    verify_uv(root)
+    result = run_command(UV, [*arguments, "--project", str(root)], cwd=root, timeout=EXPORT_DEADLINE)
     if result.returncode:
         raise LockError(f"uv.lock:1: uv export failed for group {group} ({result.returncode}): {result.stderr[-1500:]}")
     return result.stdout
 
 
-def export_files(group: str, root: Path = ROOT, deadline: float = EXPORT_DEADLINE) -> dict[str, str]:
+def export_files(group: str, root: Path = ROOT) -> dict[str, str]:
     """The files an install of one group needs: ``requirements.txt`` and, for a group with build tools, ``build_requirements.txt`` first."""
-    text = export(group, root, deadline)
+    text = export(group, root)
     build = BUILD_PACKAGES.get(group, ())
     files = {"requirements.txt": "".join(block for name, block in blocks(text) if name not in build)}
     if build:
