@@ -503,7 +503,7 @@ def code_run_cases() -> list[tuple[Any, ...]]:
         ("list the code digest of a run", "s3:ListBucket", bucket, True, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.sha256",)}),
         ("list the code archive of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.tar.gz",)}),
         (
-            "list keys that extend the code digest name",
+            "reject a list request with an extended digest prefix",
             "s3:ListBucket",
             bucket,
             False,

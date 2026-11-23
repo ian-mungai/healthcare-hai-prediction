@@ -679,7 +679,7 @@ run "every_launch_role_binds_code_runs_once" {
         },
       ]
     )
-    error_message = "Every launch role reads the code run binding of a run, creates it once and lists only that key and the code digest, so a missing binding or digest reads as absent; nothing else of the staged inputs."
+    error_message = "Every launch role reads the code run binding of a run, creates it once and allows list requests only with the binding or code digest key as prefix, so a missing binding or digest reads as absent; nothing else of the staged inputs."
   }
 }
 
