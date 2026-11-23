@@ -69,6 +69,10 @@ def advance_origin(scratch: Path, repo: Path) -> None:
 TOP_LEVEL_CHECK = (
     "import os, runpy; os.environ.pop('PROCESS_LAUNCH_SESSION', None); runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
 )
+TOP_LEVEL_LINT = (
+    "import os, runpy, sys; os.environ.pop('PROCESS_LAUNCH_SESSION', None); sys.argv[1:] = ['yamllint']; "
+    "runpy.run_module('scripts.quality.lint_sources', run_name='__main__', alter_sys=True)"
+)
 
 SHORT_EXPORT = (
     "import runpy; from scripts.quality import lock_env; lock_env.EXPORT_DEADLINE = 1; "
@@ -88,6 +92,10 @@ def run_check(repo: Path, module: str) -> tuple[int, str]:
         # lists no process, so the check drops that name and is a top-level launch.
         blocked = {**environment, "PATH": f"{repo / '.ps_blocked/bin'}{os.pathsep}{environment['PATH']}"}
         result = run_command(str(PYTHON), ["-c", TOP_LEVEL_CHECK], cwd=repo, env=blocked, timeout=240)
+    elif module == "lint_yamllint_ps_blocked":
+        # The same fake ps and top-level launch for the YAML lint command.
+        blocked = {**environment, "PATH": f"{repo / '.ps_blocked/bin'}{os.pathsep}{environment['PATH']}"}
+        result = run_command(str(PYTHON), ["-c", TOP_LEVEL_LINT], cwd=repo, env=blocked, timeout=240)
     elif module == "lint_yamllint":
         result = run_command(str(PYTHON), ["-m", "scripts.quality.lint_sources", "yamllint"], cwd=repo, env=environment, timeout=240)
     else:
@@ -334,6 +342,12 @@ def tools_cases() -> list[tuple[str, bool, str]]:
 
         return setup
 
+    def private_closed_and_no_executable(scratch: Path, repo: Path) -> None:
+        """A private python without execute permission and no yamllint executable anywhere: the yamllint probe still names the repair that works."""
+        private_yamllint(f"yamllint {pinned}", f"yamllint {pinned}", mode=0o644)(scratch, repo)
+        for place in (repo / ".venv/bin/yamllint", repo / ".tools/bin/yamllint"):
+            place.unlink(missing_ok=True)
+
     def no_archive(_: Path, repo: Path) -> None:
         shutil.rmtree(repo / ARCHIVE_FOLDER)
 
@@ -505,6 +519,18 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         f"yamllint {pinned} is required in the project environment, but .tools/yamllint reports no version",
         private_yamllint(good, good, mode=0o644),
         module="lint_yamllint",
+    )
+    case(
+        "private_yamllint_without_execute_permission_and_no_executable_gets_its_own_repair",
+        f"yamllint in .tools/yamllint reports no version, not the pinned {pinned}; {leftover}",
+        private_closed_and_no_executable,
+    )
+    case(
+        "lint_names_a_yamllint_probe_with_an_unconfirmed_cleanup_and_keeps_the_cleanup_status",
+        "yamllint: the stop of a probe is not confirmed",
+        ps_blocked,
+        module="lint_yamllint_ps_blocked",
+        status=70,
     )
     case(
         "yamllint_probe_with_an_unconfirmed_cleanup_is_named_and_keeps_the_cleanup_status",

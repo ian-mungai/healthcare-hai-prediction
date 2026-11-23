@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from scripts.process import TimeoutExpired, find_program, run_command
+from scripts.process import LaunchesNotStopped, TimeoutExpired, find_program, run_command
 from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -831,6 +831,9 @@ def main() -> int:
                 failed |= bool(lint(part))
             except (OSError, ValueError, TimeoutExpired) as error:
                 sys.stderr.write(f"{part}: {error}\n")
+                failed = True
+            except LaunchesNotStopped as error:  # the launcher recorded it, so the process still ends with its cleanup-failure status
+                sys.stderr.write(f"{part}: the stop of a probe is not confirmed ({error}); rerun once `ps` runs\n")
                 failed = True
     return int(failed)
 

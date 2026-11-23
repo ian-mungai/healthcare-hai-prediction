@@ -133,12 +133,13 @@ def tool_problems(root: Path) -> list[str]:
         return [f"{manifest.relative_to(root)} cannot be read, so the pinned tools are unknown"]
     found = []
     for name, places in manifest_executables(root, tools).items():
+        if name == "yamllint":  # the yamllint the lint command selects is probed whatever exists, so its repair is the one that works
+            found += yamllint_problems(root, tools[name]["version"])
+            continue
         if not any(executable(place) for place in places):
             where = ", ".join(str(place) for place in places)
             found.append(f"pinned tool {name} {tools[name]['version']} has no executable ({where}); run scripts/quality/install_tools.py")
             continue
-        if name == "yamllint":
-            found += yamllint_problems(root, tools[name]["version"])
         receipt = root / ".tools/receipts" / f"{name}.json"
         if executable(root / ".tools/bin" / name):
             try:
