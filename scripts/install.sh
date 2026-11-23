@@ -75,11 +75,12 @@ probe terraform version
 if [[ "$tool_state" != "ok" ]]; then
   unusable terraform
 else
-  terraform_found="${tool_output#Terraform v}"
+  # Only the full banner "Terraform v<major>.<minor>.<patch>" counts: a bare version, a prerelease or a longer or shorter version is refused. The patch is
+  # decimal (10#), so 08 is eight and not a bad octal number.
   terraform_minor="${terraform_version%.*}"
-  terraform_patch="${terraform_found#"$terraform_minor".}"
-  if [[ "$terraform_found" != "$terraform_minor".* || ! "$terraform_patch" =~ ^[0-9]+$ ]] || ((terraform_patch < ${terraform_version##*.})); then
-    missing+=("terraform $terraform_version or a later $terraform_minor release (found $terraform_found)")
+  terraform_pattern='^Terraform v([0-9]+\.[0-9]+)\.([0-9]{1,4})$'
+  if [[ ! "$tool_output" =~ $terraform_pattern ]] || [[ "${BASH_REMATCH[1]}" != "$terraform_minor" ]] || ((10#${BASH_REMATCH[2]} < 10#${terraform_version##*.})); then
+    missing+=("terraform $terraform_version or a later $terraform_minor release (found ${tool_output#Terraform v})")
   fi
 fi
 

@@ -31,7 +31,7 @@ if [ "$1 $2" = "-m venv" ]; then
 fi
 exit 0
 """
-TERRAFORM_STAND_IN = '#!/bin/bash\nprintf "Terraform v%s\\non darwin_arm64\\n" "$TERRAFORM_VERSION"\n'
+TERRAFORM_STAND_IN = '#!/bin/bash\nprintf "%s\\non darwin_arm64\\n" "$TERRAFORM_BANNER"\n'
 NODE_STAND_IN = '#!/bin/bash\nprintf "v%s\\n" "$NODE_VERSION"\n'
 
 
@@ -90,14 +90,15 @@ class Checkout:
         if any((Path(folder) / name).exists() for folder in ("/usr/bin", "/bin")):
             self.tool(name, "#!/bin/sh\nexit 127\n")
 
-    def run(self, fail_on: str = "", terraform: str = "1.16.1", node: str = "22.3.0") -> CompletedProcess[str]:
+    def run(self, fail_on: str = "", terraform: str = "1.16.1", node: str = "22.3.0", banner: str | None = None) -> CompletedProcess[str]:
+        """Run the script. The Terraform stand-in prints ``banner`` as its first line, by default the real form ``Terraform v<terraform>``."""
         environment = {
             "PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
             "TMPDIR": str(self.temporary),
             "STAND_IN_LOG": str(self.log),
             "STAND_IN_PYTHON": str(self.python_stand_in),
             "FAIL_ON": fail_on,
-            "TERRAFORM_VERSION": terraform,
+            "TERRAFORM_BANNER": banner if banner is not None else f"Terraform v{terraform}",
             "NODE_VERSION": node,
             "HAI_DOCKER_APP": str(self.docker_app),
         }
@@ -182,20 +183,25 @@ def test_missing_or_old_prerequisites_are_all_named_before_any_step(tmp_path: Pa
     check(not (checkout.root / ".env").exists(), "no .env may be made before the prerequisites pass")
 
 
-def test_a_later_patch_of_the_pinned_terraform_minor_is_accepted(tmp_path: Path) -> None:
-    """The stacks require ``~> 1.16.1``, which any 1.16 release from 1.16.1 on meets."""
-    checkout = Checkout(tmp_path)
-    result = checkout.run(terraform="1.16.4")
-    check(result.returncode == 0, f"Terraform 1.16.4 meets ~> 1.16.1: {result.returncode} {result.stdout + result.stderr}")
+def test_a_release_of_the_pinned_terraform_minor_from_its_pinned_patch_on_is_accepted(tmp_path: Path) -> None:
+    """The stacks require ``~> 1.16.1``, which 1.16.1 and any later 1.16 release meets. The patch is decimal: 08 is eight, not a bad octal."""
+    for banner in ("Terraform v1.16.1", "Terraform v1.16.4", "Terraform v1.16.08", "Terraform v1.16.9", "Terraform v1.16.10"):
+        checkout = Checkout(tmp_path / banner.replace(" ", "_"))
+        result = checkout.run(banner=banner)
+        check(result.returncode == 0, f"{banner} meets ~> 1.16.1: {result.returncode} {result.stdout + result.stderr}")
+        check("value too great" not in result.stderr, f"{banner} must not be read as octal: {result.stderr}")
 
 
-def test_another_terraform_version_is_refused_and_named(tmp_path: Path) -> None:
-    for version in ("1.15.0", "1.16.0", "1.17.0"):
-        checkout = Checkout(tmp_path / version)
-        result = checkout.run(terraform=version)
+def test_another_terraform_release_or_output_is_refused_and_named(tmp_path: Path) -> None:
+    """Only the full ``Terraform v<major>.<minor>.<patch>`` banner counts: a bare version, a prerelease and a partial or longer version are refused."""
+    for banner in ("Terraform v1.15.0", "Terraform v1.16.0", "Terraform v1.17.0", "1.16.4", "Terraform v1.16.5-rc1", "Terraform v1.16", "Terraform v1.16.4.1"):
+        checkout = Checkout(tmp_path / banner.replace(" ", "_"))
+        result = checkout.run(banner=banner)
         output = result.stdout + result.stderr
-        check(result.returncode == 1 and "terraform 1.16.1" in output, f"Terraform {version} must be named: {result.returncode} {output}")
-        check(checkout.calls() == [], f"no step may run with Terraform {version}")
+        check(
+            result.returncode == 1 and "terraform 1.16.1 or a later 1.16 release" in output, f"{banner} must be refused and named: {result.returncode} {output}"
+        )
+        check(checkout.calls() == [], f"no step may run with {banner}")
 
 
 PROBLEMS = {
@@ -309,7 +315,7 @@ def test_the_install_script_reached_through_a_symbolic_link_installs_its_own_che
         "STAND_IN_LOG": str(checkout.log),
         "STAND_IN_PYTHON": str(checkout.python_stand_in),
         "FAIL_ON": "",
-        "TERRAFORM_VERSION": "1.16.1",
+        "TERRAFORM_BANNER": "Terraform v1.16.1",
         "NODE_VERSION": "22.3.0",
         "HAI_DOCKER_APP": str(checkout.docker_app),
     }
