@@ -4,9 +4,12 @@ Run from the repository root: ``.venv/bin/python -m scripts.quality.run_worktree
 setup and scripts (``run_checks_e2e.scratch_repo``), gives it a bare ``origin`` that holds ``main``, and runs the check as its own command and through
 ``pre-commit`` itself, so a hook that is not wired in cannot pass. The head cases cover a good branch, ``main``, a detached head, a rebase, a merge and a
 cherry-pick in progress, a branch behind ``origin/main`` and an unreachable ``origin``. The tools cases use stand-in executables for the pinned tools.
-They cover a good main checkout and a good linked worktree, links that point elsewhere or are folders, a pinned tool without an executable, a tool
-environment that matches its group of ``uv.lock`` (the good cases), one that differs, one without its requirements copy and a lock that cannot be read (each
-names the installer to rerun), a missing and a damaged package archive and a missing push gate.
+They cover a good main checkout and a good linked worktree, links that point elsewhere or are folders, a pinned tool without an executable, a missing and a
+damaged package archive and a missing push gate. The lock cases compare the requirements copies that the installers saved in ``.tools/<tool>`` (DVC saves two,
+its requirements and its build requirements) with the export of the tool's group of ``uv.lock`` now; no installed package is inspected. They cover copies
+that match (the good cases), a copy that differs (the build copy of DVC alone too), a missing copy and one that cannot be read (each names the installer
+command to rerun), a lock that cannot be read, an export that stalls past the run's one time budget, and a lint tool whose manifest entry names no group.
+Each of these ends in a named problem, exit status 1 and no traceback.
 Every blocked case must print its own message, so a failure for another reason cannot pass. The report is the run's output.
 """
 
@@ -59,8 +62,8 @@ def advance_origin(scratch: Path, repo: Path) -> None:
     git(other, "push", "-q", "origin", "main")
 
 
-def run_check(repo: Path, module: str) -> tuple[int, str]:
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+def run_check(repo: Path, module: str, extra: dict[str, str] | None = None) -> tuple[int, str]:
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(extra or {})}
     if module == "check_head":
         result = run_command(str(PYTHON), ["-m", "scripts.quality.check_head"], cwd=repo, env=environment, timeout=240)
     else:
@@ -178,9 +181,12 @@ def lock_stand_in(repo: Path, tools: dict[str, dict[str, str]]) -> None:
     environments.update({name: (name, entry["group"]) for name, entry in tools.items() if entry.get("installer") == "scripts/quality/install_lint_tools.py"})
     for folder, group in environments.values():
         text = f"{group}-package==1.0.0 \\\n    --hash=sha256:{'0' * 64}\n"
-        (repo / ".tools/lock_stub" / f"{group}.txt").write_text(text)
+        build = f"setuptools==70.0.0 \\\n    --hash=sha256:{'2' * 64}\n" if group == "dvc" else ""
+        (repo / ".tools/lock_stub" / f"{group}.txt").write_text(text + build)
         (repo / ".tools" / folder).mkdir(exist_ok=True)
         (repo / ".tools" / folder / "requirements.txt").write_text(text)
+        if build:
+            (repo / ".tools" / folder / "build_requirements.txt").write_text(build)
 
 
 def tools_repo(scratch: Path) -> Path:
@@ -195,13 +201,20 @@ def tools_repo(scratch: Path) -> Path:
 def tools_cases() -> list[tuple[str, bool, str]]:
     rows: list[tuple[str, bool, str]] = []
 
-    def case(name: str, expect: str, setup: Callable[[Path, Path], Path | None] | None = None, hook: bool = False) -> None:
+    def case(
+        name: str,
+        expect: str | tuple[str, ...],
+        setup: Callable[[Path, Path], Path | None] | None = None,
+        hook: bool = False,
+        extra: dict[str, str] | None = None,
+    ) -> None:
         with tempfile.TemporaryDirectory(prefix="hai_tools_check_") as folder:
             scratch = Path(folder)
             repo = tools_repo(scratch)
             where = (setup(scratch, repo) if setup else None) or repo
-            code, output = run_check(where, "check_tools")
-            ok = (code == 0) if not expect else (code == 1 and expect in output)
+            code, output = run_check(where, "check_tools", extra)
+            expected = tuple(filter(None, (expect,) if isinstance(expect, str) else expect))
+            ok = (code == 0) if not expected else (code == 1 and all(text in output for text in expected))
             ok = ok and "Traceback" not in output
             if hook:
                 ok = ok and (run_hook(where, "check-tools") == 0) == (not expect)
@@ -255,36 +268,101 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     def not_recorded(_: Path, repo: Path) -> None:
         (repo / ".tools/import-linter/requirements.txt").unlink()
 
+    def build_changed(_: Path, repo: Path) -> None:
+        (repo / ".tools/dvc/build_requirements.txt").write_text("setuptools==71.0.0 \\\n    --hash=sha256:" + "3" * 64 + "\n")
+
+    def build_not_recorded(_: Path, repo: Path) -> None:
+        (repo / ".tools/dvc/build_requirements.txt").unlink()
+
+    def record_forbidden(_: Path, repo: Path) -> None:
+        (repo / ".tools/dvc/requirements.txt").chmod(0)
+
+    def record_not_text(_: Path, repo: Path) -> None:
+        (repo / ".tools/sqlfluff/requirements.txt").write_bytes(b"\xff\xfe\x00 not text")
+
     def lock_unreadable(_: Path, repo: Path) -> None:
         (repo / ".tools/lock_stub/dvc.txt").unlink()
+
+    def export_stalls(_: Path, repo: Path) -> None:
+        stub = repo / ".tools/bin/uv"
+        stub.write_text(stub.read_text().replace('cat "$(dirname', '[ "$group" = dvc ] && sleep 60\ncat "$(dirname'))
+
+    def group_unnamed(_: Path, repo: Path) -> None:
+        manifest = repo / "config/quality_tools.json"
+        document = json.loads(manifest.read_text())
+        del document["tools"]["check-jsonschema"]["group"]
+        manifest.write_text(json.dumps(document))
 
     case("main_checkout_with_everything_in_place", "", hook=True)
     case("linked_worktree_linked_to_the_main_checkout", "", worktree)
     case("link_to_another_folder_is_refused", ".venv must be a link to", elsewhere)
     case("folder_instead_of_a_link_is_refused", ".tools must be a link to", folder, hook=True)
     case("pinned_tool_without_an_executable_is_refused", "pinned tool phantom_tool", phantom)
+    sqlfluff_command = "`.venv/bin/python -m scripts.quality.install_sqlfluff`"
+    dvc_command = "`.venv/bin/python -m scripts.quality.install_dvc`"
     case(
         "installed_sqlfluff_that_differs_from_the_lock_is_refused",
-        "installed sqlfluff differs from the sqlfluff group of uv.lock; run scripts/quality/install_sqlfluff.py",
+        f"installed sqlfluff: the requirements.txt its installer saved differs from the sqlfluff group of uv.lock now; run {sqlfluff_command}",
         installed("sqlfluff"),
         hook=True,
     )
     case(
         "installed_dvc_that_differs_from_the_lock_is_refused",
-        "installed dvc differs from the dvc group of uv.lock; run scripts/quality/install_dvc.py",
+        f"installed dvc: the requirements.txt its installer saved differs from the dvc group of uv.lock now; run {dvc_command}",
         installed("dvc"),
     )
     case(
+        "installed_dvc_whose_build_requirements_differ_from_the_lock_is_refused",
+        f"installed dvc: the build_requirements.txt its installer saved differs from the dvc group of uv.lock now; run {dvc_command}",
+        build_changed,
+        hook=True,
+    )
+    case(
+        "installed_dvc_without_a_build_requirements_record_is_refused",
+        f"installed dvc: its installer saved no build_requirements.txt; run {dvc_command}",
+        build_not_recorded,
+    )
+    case(
         "installed_lint_tool_that_differs_from_the_lock_is_refused",
-        "installed check-jsonschema differs from the check_jsonschema group of uv.lock; run scripts/quality/install_lint_tools.py --tool check-jsonschema",
+        "installed check-jsonschema: the requirements.txt its installer saved differs from the check_jsonschema group of uv.lock now; "
+        "run `.venv/bin/python -m scripts.quality.install_lint_tools --tool check-jsonschema`",
         installed("check-jsonschema"),
     )
     case(
         "installed_lint_tool_without_a_record_is_refused",
-        "installed import-linter has no requirements record; run scripts/quality/install_lint_tools.py --tool import-linter",
+        "installed import-linter: its installer saved no requirements.txt; run `.venv/bin/python -m scripts.quality.install_lint_tools --tool import-linter`",
         not_recorded,
     )
-    case("lock_that_cannot_be_read_is_refused", "the dvc group of uv.lock cannot be read", lock_unreadable)
+    case(
+        "record_that_cannot_be_opened_is_refused",
+        ("installed dvc: the requirements.txt its installer saved cannot be read (PermissionError", f"run {dvc_command}"),
+        record_forbidden,
+    )
+    case(
+        "record_that_is_not_text_is_refused",
+        ("installed sqlfluff: the requirements.txt its installer saved cannot be read (UnicodeDecodeError", f"run {sqlfluff_command}"),
+        record_not_text,
+    )
+    case(
+        "lock_that_cannot_be_read_is_refused",
+        ("the dvc group of uv.lock cannot be read (LockError", "run `.venv/bin/python -m scripts.quality.lock_env check`"),
+        lock_unreadable,
+    )
+    case(
+        "lock_export_that_stalls_is_refused_within_the_budget",
+        (
+            "reading the dvc group of uv.lock for dvc did not finish within the 3 s that the lock exports of one run share",
+            "the lock budget ended before import-linter, check-jsonschema",
+            "run `.venv/bin/python -m scripts.quality.lock_env check`",
+        ),
+        export_stalls,
+        extra={"CHECK_TOOLS_LOCK_SECONDS": "3"},
+    )
+    case(
+        "lint_tool_without_a_group_in_the_manifest_is_refused",
+        'config/quality_tools.json names no lock group for check-jsonschema, so installed check-jsonschema cannot be checked; add a "group" to its entry',
+        group_unnamed,
+    )
     case("missing_package_archive_is_refused", "the dbt package archive does not verify", no_archive)
     case("damaged_package_archive_is_refused", "the dbt package archive does not verify", damaged_archive)
     case("missing_push_gate_is_refused", "The Git config hook hai-push-input", no_gate)

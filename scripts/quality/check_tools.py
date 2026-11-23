@@ -7,9 +7,11 @@ It checks five things and names each problem with its fix:
 1. In a linked worktree, ``.venv`` and ``.tools`` are links that point at the main checkout's own folders (the main checkout holds real folders).
 2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin`` or its pinned executable), the
    executables the hooks start from ``.tools``, and the receipt of each release binary names the pinned version.
-3. The environment of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) holds the requirements of its group of the
-   lock. Its installer copies them to ``.tools/<tool>/requirements.txt``, so an environment that was installed before the lock changed, or without the lock,
-   is named with its installer.
+3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
+   ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
+   check compares those saved files with a fresh ``uv`` export. It does not inspect the installed packages. A copy that differs, is missing or cannot be read,
+   a lock that cannot be read and an export that does not finish are each named with the command to run. The exports of one run share one time budget
+   (``LOCK_SECONDS``, or the environment variable ``CHECK_TOOLS_LOCK_SECONDS``) so that one stalled ``uv`` cannot hold a commit.
 4. The dbt package archive that the model gates read is present and verifies against its record (``scripts.lakehouse.dbt_package_archive``).
 5. The push gate is installed (``scripts.quality.pre_push check-shim``).
 
@@ -23,15 +25,20 @@ import io
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from scripts.lakehouse.dbt_package_archive import ArchiveError, verify
 from scripts.process import TimeoutExpired, run_command
 from scripts.quality import lock_env
+from scripts.quality.lock_env import LockError
 from scripts.quality.pre_push import check_shim
 
 GIT_SECONDS = 60
+LOCK_SECONDS = 30
+BUDGET_VARIABLE = "CHECK_TOOLS_LOCK_SECONDS"
+LOCK_CHECK = "`.venv/bin/python -m scripts.quality.lock_env check`"
 LINKED = (".venv", ".tools")
 # Pinned tools that other installers place under .tools (SQLFluff, markdownlint and DVC have their own pins).
 OTHER_EXECUTABLES = (".tools/sqlfluff/bin/sqlfluff", ".tools/markdownlint-cli2/node_modules/.bin/markdownlint-cli2", ".tools/dvc/bin/dvc")
@@ -118,15 +125,15 @@ def tool_problems(root: Path) -> list[str]:
     return found
 
 
-def lock_environments(tools: dict[str, Any]) -> dict[str, tuple[str, str]]:
-    """Per tool that installs from ``uv.lock``, its folder under ``.tools``, its group of the lock and its installer command."""
-    found = {
-        "sqlfluff": ("sqlfluff", "scripts/quality/install_sqlfluff.py"),
-        "dvc": ("dvc", "scripts/quality/install_dvc.py"),
+def lock_environments(tools: dict[str, Any]) -> dict[str, tuple[str | None, str]]:
+    """Per tool that installs from ``uv.lock``, its group of the lock (None when the manifest names none) and its installer command."""
+    found: dict[str, tuple[str | None, str]] = {
+        "sqlfluff": ("sqlfluff", ".venv/bin/python -m scripts.quality.install_sqlfluff"),
+        "dvc": ("dvc", ".venv/bin/python -m scripts.quality.install_dvc"),
     }
     found.update(
         {
-            name: (entry["group"], f"scripts/quality/install_lint_tools.py --tool {name}")
+            name: (entry.get("group"), f".venv/bin/python -m scripts.quality.install_lint_tools --tool {name}")
             for name, entry in tools.items()
             if entry.get("installer") == "scripts/quality/install_lint_tools.py"
         }
@@ -134,26 +141,72 @@ def lock_environments(tools: dict[str, Any]) -> dict[str, tuple[str, str]]:
     return found
 
 
+def lock_budget() -> float:
+    """The seconds that all lock exports of one run share: ``CHECK_TOOLS_LOCK_SECONDS`` when it is a positive number, else ``LOCK_SECONDS``."""
+    try:
+        seconds = float(os.environ.get(BUDGET_VARIABLE, LOCK_SECONDS))
+    except ValueError:
+        return LOCK_SECONDS
+    return seconds if seconds > 0 else LOCK_SECONDS
+
+
+def record_problems(root: Path, name: str, group: str, installer: str, expected: dict[str, str]) -> list[str]:
+    """Each file that the installer of ``name`` saved that is missing, cannot be read or differs from the export of ``group`` now."""
+    found = []
+    for filename, text in expected.items():
+        recorded = root / ".tools" / name / filename
+        if not recorded.is_file():
+            found.append(f"installed {name}: its installer saved no {filename}; run `{installer}`")
+            continue
+        try:
+            saved = recorded.read_text(encoding="utf-8")
+        except (OSError, ValueError) as error:
+            found.append(f"installed {name}: the {filename} its installer saved cannot be read ({type(error).__name__}: {error}); run `{installer}`")
+            continue
+        if saved != text:
+            found.append(f"installed {name}: the {filename} its installer saved differs from the {group} group of uv.lock now; run `{installer}`")
+    return found
+
+
 def lock_problems(root: Path) -> list[str]:
-    """Each installed tool environment whose recorded requirements are not the requirements of its group of ``uv.lock``."""
+    """Each lock-installed tool whose saved requirements copies differ from the export of its group of ``uv.lock`` now, and each check that could not finish."""
     try:
         tools = json.loads((root / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]
     except (OSError, ValueError, KeyError):
         return []
     found = []
+    budget = lock_budget()
+    deadline = time.monotonic() + budget
+    unchecked: list[str] = []
+    expired = False
     for name, (group, installer) in lock_environments(tools).items():
         if not (root / ".tools" / name).is_dir():
             continue
-        recorded = root / ".tools" / name / "requirements.txt"
-        try:
-            expected = lock_env.export_files(group, root)["requirements.txt"]
-        except (lock_env.LockError, OSError, ValueError) as error:
-            found.append(f"the {group} group of uv.lock cannot be read ({type(error).__name__}), so installed {name} cannot be checked against it")
+        if group is None:
+            found.append(f'config/quality_tools.json names no lock group for {name}, so installed {name} cannot be checked; add a "group" to its entry')
             continue
-        if not recorded.is_file():
-            found.append(f"installed {name} has no requirements record; run {installer}")
-        elif recorded.read_text(encoding="utf-8") != expected:
-            found.append(f"installed {name} differs from the {group} group of uv.lock; run {installer}")
+        remaining = deadline - time.monotonic()
+        if expired or remaining <= 0:
+            unchecked.append(name)
+            continue
+        try:
+            expected = lock_env.export_files(group, root, remaining)
+        except TimeoutExpired:
+            found.append(
+                f"reading the {group} group of uv.lock for {name} did not finish within the {budget:g} s that the lock exports of one run share; "
+                f"run {LOCK_CHECK}, then repeat the check"
+            )
+            expired = True
+            continue
+        except (LockError, OSError, ValueError, KeyError) as error:
+            found.append(
+                f"the {group} group of uv.lock cannot be read ({type(error).__name__}: {str(error)[:200]}), "
+                f"so installed {name} cannot be checked; run {LOCK_CHECK}"
+            )
+            continue
+        found += record_problems(root, name, group, installer, expected)
+    if unchecked:
+        found.append(f"the lock budget ended before {', '.join(unchecked)} could be checked; repeat the check, and run {LOCK_CHECK} if it repeats")
     return found
 
 

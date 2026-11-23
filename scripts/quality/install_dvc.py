@@ -8,9 +8,10 @@ The versions are pinned with hashes by the ``dvc`` group of ``uv.lock`` (declare
 They go into their own virtual environment, ``.tools/dvc``, so the training image, CI and every developer machine run the same DVC. pip verifies every hash.
 All packages are wheels except one, antlr4-python3-runtime (a dependency of dvc through hydra-core), which is published only as a source archive (the project
 owner accepted this one source build as the only exception to wheels only): the export's build requirements install its hashed build tool first, and the second
-step builds that one archive with ``--no-build-isolation`` so that nothing unpinned is downloaded. A rerun with the same lock changes nothing; a failed install
-removes the copied requirements so the next run retries instead of looking current. A Homebrew patch upgrade that removes the interpreter this environment links
-to makes ``dvc --version`` fail, so the next run rebuilds it.
+step builds that one archive with ``--no-build-isolation`` so that nothing unpinned is downloaded. After a successful install the installer saves both exports
+in ``.tools/dvc`` (``requirements.txt`` and ``build_requirements.txt``); a rerun with the same lock, and the ``check-tools`` hook, compare both saved copies
+with the lock now, so a change to the build tool pin alone is a change too. A failed install removes the saved copies so the next run retries instead of looking
+current. A Homebrew patch upgrade that removes the interpreter this environment links to makes ``dvc --version`` fail, so the next run rebuilds it.
 """
 
 from __future__ import annotations
@@ -48,14 +49,14 @@ def pinned_version(package: str, source: Path | None = None) -> str:
     return next(line.split("==", 1)[1].split()[0] for line in text.splitlines() if line.startswith(f"{package}=="))
 
 
-def current(source: Path | None = None, destination: Path = DESTINATION) -> bool:
-    """Return whether the installed environment matches the lock's dvc group (or ``source``) and runs the pinned version."""
-    if source is None:
-        with exported() as (requirements, _):
-            return current(requirements, destination)
-    installed = destination / "requirements.txt"
+def current(source: Path | None = None, build_source: Path | None = None, destination: Path = DESTINATION) -> bool:
+    """Return whether both saved exports of the environment match the lock's dvc group (or ``source`` and ``build_source``) and it runs the pinned version."""
+    if source is None or build_source is None:
+        with exported() as (requirements, build):
+            return current(requirements, build, destination)
     dvc = destination / "bin/dvc"
-    if not (dvc.exists() and installed.exists() and filecmp.cmp(source, installed, shallow=False)):
+    saved = ((source, destination / "requirements.txt"), (build_source, destination / "build_requirements.txt"))
+    if not (dvc.exists() and all(copy.exists() and filecmp.cmp(export, copy, shallow=False) for export, copy in saved)):
         return False
     try:
         result = run_command(str(dvc), ["--version"], timeout=60)
@@ -70,9 +71,10 @@ def install(source: Path | None = None, build_source: Path | None = None, destin
         with exported() as (requirements, build):
             return install(requirements, build, destination)
     pinned = pinned_version("dvc", source)
-    if current(source, destination):
+    if current(source, build_source, destination):
         return f"unchanged  dvc {pinned}"
-    (destination / "requirements.txt").unlink(missing_ok=True)
+    for name in ("requirements.txt", "build_requirements.txt"):
+        (destination / name).unlink(missing_ok=True)
     if destination.exists():
         shutil.rmtree(destination)
     run_command(sys.executable, ["-m", "venv", str(destination)], timeout=VENV_DEADLINE, check=True)
@@ -84,6 +86,7 @@ def install(source: Path | None = None, build_source: Path | None = None, destin
             shutil.rmtree(destination, ignore_errors=True)
             raise SystemExit(f"pip install failed for dvc {pinned} from {requirements.name}. Nothing usable was installed:\n{result.stderr[-2000:]}")
     shutil.copyfile(source, destination / "requirements.txt")
+    shutil.copyfile(build_source, destination / "build_requirements.txt")
     return f"installed  dvc {pinned} with dvc-s3 {pinned_version('dvc-s3', source)} (hashes verified) in {destination}"
 
 
