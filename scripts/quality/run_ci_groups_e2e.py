@@ -41,6 +41,7 @@ one branch, the pushed commit in every checkout and a job list equal to ``config
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import hashlib
@@ -5583,6 +5584,21 @@ def gate_no_range_case(scratch: Path) -> dict[str, Any]:
 PLANTED_SECRET = "ghp_" + "".join(chr(97 + (index * 7) % 26) if index % 2 else str(index % 10) for index in range(36))
 PLANTED_PERSON = "clinic.manager" + "@" + "riverside-health.org"
 PLANTED_TEXT = f"token = {PLANTED_SECRET}\ncontact = {PLANTED_PERSON}\n"
+# Secrets that the bundled Gitleaks rules catch only by the path or the file kind (a Terraform password, a Kubernetes Secret), and a lock file they allow.
+PATH_SECRETS = {
+    "main.tf": 'resource "azurerm_sql_server" "x" {\n  administrator_login_password = "' + "aaaabbbb" + "ccccdddd" + '"\n}\n',
+    "secret.yaml": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: app\ndata:\n  token: " + base64.b64encode(b"password-password-password").decode() + "\n",
+}
+ALLOWED_LOCK = '{\n  "api_key": "' + "d41d8cd98f00b204e9800998ecf8427e1a2b3c4d5e6f" + '"\n}\n'
+PEM_BODY = "\n".join(base64.b64encode(bytes((index * 7 + offset) % 256 for offset in range(48))).decode() for index in range(25))
+PEM_IN_A_LARGE_FILE = (
+    "\n".join(f"filler line {index}" for index in range(300))
+    + "\n-----BEGIN RSA PRIVATE KEY-----\n"
+    + PEM_BODY
+    + "\n-----END RSA PRIVATE KEY-----\n"
+    + "\n".join(f"tail line {index}" for index in range(300))
+    + "\n"
+)
 
 
 def commit_all(root: Path, message: str) -> str:
@@ -5650,6 +5666,37 @@ def both_fail_naming(scans: dict[str, tuple[int, str]], commit: str) -> dict[str
         "privacy_scan_fails_and_names_the_commit": scans["privacy"][0] == 1 and commit[:12] in scans["privacy"][1],
         "no_value_is_printed": leaks_nothing(scans["secret"][1], scans["privacy"][1]),
     }
+
+
+def killed_scan_checks(scratch: Path, tools: Path, root: Path, tip: str, base: str) -> dict[str, bool]:
+    """Stop the secret scan while Gitleaks runs (a stand-in that never ends) and look for the pushed text in the temporary folder it used."""
+    fake = scratch / "killed_scan_tools"
+    for relative in ("scripts/__init__.py", "scripts/process.py", "scripts/quality/__init__.py", "scripts/quality/scan_secrets.py"):
+        (fake / relative).parent.mkdir(parents=True, exist_ok=True)
+        if (tools / relative).exists():
+            shutil.copy2(tools / relative, fake / relative)
+        else:
+            (fake / relative).write_text("")
+    (fake / ".tools/bin").mkdir(parents=True)
+    (fake / ".tools/bin/gitleaks").write_text("#!/bin/bash\nsleep 300\n")
+    (fake / ".tools/bin/gitleaks").chmod(0o755)
+    temporary = scratch / "killed_scan_tmp"
+    temporary.mkdir()
+    listing = scratch / "killed_scan_destination.txt"
+    listing.write_text(f"{base}\n")
+    stopped = False
+    try:
+        run_command(
+            str(PYTHON),
+            ["-m", "scripts.quality.scan_secrets", "--repository", str(root), "--tip", tip, "--exclude-file", str(listing)],
+            cwd=fake,
+            env={**os.environ, "TMPDIR": str(temporary)},
+            timeout=8,
+        )
+    except TimeoutExpired:
+        stopped = True
+    left = [path for path in temporary.rglob("*") if path.is_file() and PLANTED_SECRET in path.read_text(errors="replace")]
+    return {"the_scan_was_stopped_while_gitleaks_ran": stopped, "no_file_holds_the_pushed_text": not left}
 
 
 def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]:
@@ -5766,6 +5813,37 @@ def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]
     record(
         "pushed_scans_keep_no_unknown_extension_in_a_finding",
         both_fail_naming(scans, odd) | {"no_part_of_the_extension_is_printed": PLANTED_SECRET[4:8] not in scans["privacy"][1] + scans["secret"][1]},
+    )
+    for name, content in {**PATH_SECRETS, "keys/id.txt": PEM_IN_A_LARGE_FILE}.items():
+        root, base = scan_fixture(scratch, f"scan_kind_{Path(name).suffix.strip('.') or 'file'}")
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(content)
+        added_file = commit_all(root, f"add {Path(name).name}")
+        scans = pushed_scans(tools, root, (added_file,), (base,))
+        record(
+            f"pushed_secret_scan_applies_the_bundled_rules_by_path_{Path(name).suffix.strip('.') or 'file'}",
+            {"secret_scan_fails_and_names_the_commit": scans["secret"][0] == 1 and added_file[:12] in scans["secret"][1]},
+        )
+    root, base = scan_fixture(scratch, "scan_lock_file")
+    (root / "package-lock.json").write_text(ALLOWED_LOCK)
+    lock = commit_all(root, "add a lock file")
+    record(
+        "pushed_secret_scan_keeps_the_bundled_allowlist_for_a_lock_file", {"secret_scan_passes": pushed_scans(tools, root, (lock,), (base,))["secret"][0] == 0}
+    )
+    root, base = scan_fixture(scratch, "scan_killed")
+    (root / "notes.txt").write_text(PLANTED_TEXT)
+    tip = commit_all(root, "add notes")
+    record("pushed_secret_scan_leaves_no_pushed_text_behind_when_it_is_killed", killed_scan_checks(scratch, tools, root, tip, base))
+    root, base = scan_fixture(scratch, "scan_carriage_return")
+    (root / "notes.txt").write_bytes(f"note\r{PLANTED_PERSON}\n".encode())
+    returned = commit_all(root, "a line with a bare carriage return")
+    scans = pushed_scans(tools, root, (returned,), (base,))
+    record(
+        "pushed_privacy_scan_reads_the_text_after_a_bare_carriage_return",
+        {
+            "privacy_scan_fails_and_names_the_commit": scans["privacy"][0] == 1 and returned[:12] in scans["privacy"][1],
+            "no_value_is_printed": leaks_nothing(scans["privacy"][1]),
+        },
     )
     for subcommand in ("rev-list", "log", "cat-file"):
         root, base = scan_fixture(scratch, f"scan_failing_{subcommand}")

@@ -2770,7 +2770,7 @@ class PushedCommit:
 
 def scan_git(*args: str) -> str:
     """Run Git for a pushed scan; a failed command raises ``ScanFailure`` naming it."""
-    result = run_command("git", args, errors="surrogateescape")
+    result = run_command("git", args, errors="surrogateescape", keep_newlines=True)
     if result.returncode != 0:
         named = [argument for argument in args if not argument.startswith("-")]
         raise ScanFailure(f"git {named[0] if named else ''} failed (exit {result.returncode}), so the push cannot be scanned")

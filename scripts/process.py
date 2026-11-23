@@ -293,10 +293,17 @@ def close_pipes(process: subprocess.Popen[str]) -> None:
 
 
 def start(
-    argv: Sequence[str], cwd: Path | None, env: Mapping[str, str] | None, new_session: bool, piped_input: bool = False, errors: str = "strict"
-) -> subprocess.Popen[str]:
+    argv: Sequence[str],
+    cwd: Path | None,
+    env: Mapping[str, str] | None,
+    new_session: bool,
+    piped_input: bool = False,
+    errors: str = "strict",
+    keep_newlines: bool = False,
+) -> subprocess.Popen[Any]:
     """Start a resolved program with closed stdin (a pipe from the caller when ``piped_input`` is set: a lister's input) and captured text output, in a
-    new session or in a new process group. ``errors`` is how undecodable output bytes are decoded ("replace" keeps a diagnostic readable)."""
+    new session or in a new process group. ``errors`` is how undecodable output bytes are decoded ("replace" keeps a diagnostic readable). With
+    ``keep_newlines`` the output is read as bytes, so a bare carriage return stays in the text that the caller decodes (text mode turns it into a line end)."""
     return subprocess.Popen(  # noqa: S603 - the only process launcher: full path, list arguments, no shell, stdin closed or piped, own session or group
         list(argv),
         cwd=cwd,
@@ -304,8 +311,8 @@ def start(
         stdin=subprocess.PIPE if piped_input else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        errors=errors,
+        text=not keep_newlines,
+        errors=None if keep_newlines else errors,
         start_new_session=new_session,
         process_group=None if new_session else 0,
     )
@@ -737,6 +744,11 @@ def finalize_session(
     return stop_recorded(process, grace_seconds, False, cancellation)
 
 
+def decoded(stream: Any, errors: str) -> str:
+    """The output of a program that was read as bytes (``keep_newlines``), decoded; text passes through."""
+    return stream.decode("utf-8", errors) if isinstance(stream, bytes) else stream
+
+
 def communicate(process: subprocess.Popen[str], timeout: float, cancellation: Cancellation | None) -> tuple[str, str]:
     """Wait for the program's output. A pool job waits in slices and raises ``LaunchCancelled`` as soon as its pool is cancelled."""
     if cancellation is None:
@@ -925,6 +937,7 @@ def run_command(
     own_session: bool = False,
     grace_seconds: float | None = None,
     errors: str = "strict",
+    keep_newlines: bool = False,
 ) -> CompletedProcess[str]:
     """Run ``program`` with ``args`` and return its exit code and captured text output.
 
@@ -950,6 +963,8 @@ def run_command(
         within a bound shorter than that passes a smaller value.
     errors : str
         How undecodable bytes in the captured output are decoded: "strict" (the default) raises, "replace" keeps the rest readable.
+    keep_newlines : bool
+        Read the output as bytes and decode it here, so a bare carriage return stays in the text (text mode turns it into a line end). The default is off.
 
     Returns
     -------
@@ -979,8 +994,10 @@ def run_command(
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
-            process = start([executable, *args], cwd, child_environment, new_session=not nested, errors=errors)
+            process = start([executable, *args], cwd, child_environment, new_session=not nested, errors=errors, keep_newlines=keep_newlines)
         stdout, stderr = communicate(process, timeout, cancellation)
+        if keep_newlines:
+            stdout, stderr = decoded(stdout, errors), decoded(stderr, errors)
     except LaunchCancelled:
         if process is None or cancellation is None:
             raise

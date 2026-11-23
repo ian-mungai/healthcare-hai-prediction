@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -16,8 +15,7 @@ from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGGER = logging.getLogger(__name__)
-COMMIT_LINE = re.compile(r"commit [0-9a-f]{40}|commit [0-9a-f]{64}")
-HISTORY_OPTIONS = ("--no-color", "--root", "--no-renames", "-p", "-U0", "--diff-merges=first-parent", "--format=commit %H")
+HISTORY_OPTIONS = ("--root", "--diff-merges=first-parent")
 
 
 def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> CompletedProcess[str]:
@@ -89,24 +87,12 @@ def scan_push(repository: Path, tips: tuple[str, ...], excluded: tuple[str, ...]
         findings: list[dict[str, Any]] = []
         status = 0
         if commits:
-            # Git is run here, checked, and not by Gitleaks: a Git that dies after some output must fail the scan, not leave a partial stream to pass.
-            stream = git_output(git, repository, environment, "log", *HISTORY_OPTIONS, *scope, "--")
-            added, owners, current, in_header = [], {}, "", False
-            for number, line in enumerate(stream.split("\n"), 1):
-                if COMMIT_LINE.fullmatch(line):
-                    current, in_header = line.split()[1], False
-                    owners[number] = current
-                elif line.startswith("diff --git "):
-                    in_header = True
-                elif line.startswith("@@"):
-                    in_header = False
-                added.append(line[1:] if line.startswith("+") and not in_header else "")
-            patch = scratch / "patch"
-            patch.mkdir()
-            (patch / "added_lines.txt").write_text("\n".join(added), encoding="utf-8", errors="replace")
-            code, found = run_gitleaks(scratch, "dir", [str(patch)], environment, repository, "history")
+            # Gitleaks can report a clean scan after a Git that failed, so the same command runs here first, checked, and its output is dropped.
+            git_output(git, repository, environment, "log", "-p", "-U0", *HISTORY_OPTIONS, *scope, "--")
+            options = " ".join([*scope, *HISTORY_OPTIONS])
+            code, found = run_gitleaks(scratch, "git", ["--log-opts", options, str(repository)], environment, repository, "history")
             status |= code
-            findings += [{"Commit": owners[max(number for number in owners if number <= int(finding.get("StartLine", 1)))]} for finding in found if owners]
+            findings += found
         if any(texts.iterdir()):
             code, found = run_gitleaks(scratch, "dir", [str(texts)], environment, repository, "messages")
             status |= code
