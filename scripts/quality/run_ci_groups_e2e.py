@@ -5917,6 +5917,42 @@ def pushed_scan_cases(scratch: Path, tools: Path = ROOT) -> list[dict[str, Any]]
         "known_limit_a_private_key_added_in_pieces_and_removed_in_the_same_push_is_not_found",
         {"secret_scan_misses_it_as_documented": pushed_scans(tools, root, (dropped_key,), (base,))["secret"][0] == 0},
     )
+    root, base = scan_fixture(scratch, "scan_big_file_threshold")
+    probe_git(root, "config", "core.bigFileThreshold", "128k")
+    (root / "notes.txt").write_text("filler line\n" * 17000 + PLANTED_TEXT)
+    big = commit_all(root, "add notes")
+    (root / "notes.txt").unlink()
+    gone = commit_all(root, "remove notes")
+    record("pushed_scans_read_a_text_file_that_the_repository_calls_binary_by_size", both_fail_naming(pushed_scans(tools, root, (gone,), (base,)), big))
+    root, base = scan_fixture(scratch, "scan_many_messages")
+    stream = "".join(
+        f"commit refs/heads/main\nmark :{number}\ncommitter A <a@example.org> {1700000000 + number} +0000\ndata {len(text.encode())}\n{text}\n"
+        + (f"from {base}\n" if number == 1 else f"from :{number - 1}\n")
+        for number in range(1, 655)
+        for text in [f"note {number}" + (f" {PLANTED_SECRET}" if number == 327 else "")]
+    )
+    run_command("git", ["fast-import", "--quiet"], cwd=root, input_text=stream, timeout=120)
+    many = probe_git(root, "rev-parse", "refs/heads/main")
+    planted = probe_git(root, "rev-parse", "refs/heads/main~327")
+    scans = pushed_scans(tools, root, (many,), (base,))
+    record(
+        "pushed_secret_scan_finds_one_token_among_654_short_messages",
+        {
+            "secret_scan_fails_and_names_the_commit": scans["secret"][0] == 1 and planted[:12] in scans["secret"][1],
+            "no_value_is_printed": leaks_nothing(scans["secret"][1]),
+        },
+    )
+    root, base = scan_fixture(scratch, "scan_no_final_newline")
+    (root / "short.txt").write_bytes(b"abcde")
+    short = commit_all(root, "a five-byte line without a final newline")
+    record(
+        "pushed_secret_scan_passes_an_added_line_without_a_final_newline",
+        {"secret_scan_passes": pushed_scans(tools, root, (short,), (base,))["secret"][0] == 0},
+    )
+    root, base = scan_fixture(scratch, "scan_not_utf8")
+    (root / "latin.txt").write_bytes(b"line \xe9 one\r\nsecond line\n")
+    latin = commit_all(root, "a file that is not UTF-8")
+    record("pushed_secret_scan_passes_added_lines_that_are_not_utf8", {"secret_scan_passes": pushed_scans(tools, root, (latin,), (base,))["secret"][0] == 0})
     for subcommand in ("rev-list", "log", "cat-file"):
         root, base = scan_fixture(scratch, f"scan_failing_{subcommand}")
         (root / "clean.txt").write_text("fine\n")

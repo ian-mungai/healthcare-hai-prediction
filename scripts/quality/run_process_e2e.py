@@ -1152,6 +1152,29 @@ def threaded_normal_run(base: Path) -> dict[str, Any]:
     return case("threaded_normal_run_unchanged", base, body)
 
 
+def pooled_input_refused(base: Path) -> dict[str, Any]:
+    def body(scratch: Scratch) -> dict[str, Any]:
+        def feeding() -> str:
+            return run_command("cat", [], input_text="piped\n", timeout=30).stdout
+
+        def plainly() -> str:
+            return run_command("echo", ["fine"], timeout=30).stdout.strip()
+
+        with process.LaunchPool(max_workers=1) as pool:
+            error = pool.submit(feeding).exception()
+            plain = pool.submit(plainly).result()
+        outside = run_command("cat", [], input_text="piped\n", timeout=30).stdout
+        return {
+            "input_text_inside_a_pool_is_refused_with_a_clear_error": isinstance(error, ValueError)
+            and "LaunchPool" in str(error)
+            and "input_text" in str(error),
+            "a_pooled_launch_without_input_runs": plain == "fine",
+            "outside_a_pool_the_input_is_sent": outside == "piped\n",
+        }
+
+    return case("input_text_inside_a_launch_pool_is_refused", base, body)
+
+
 def plant_patches(plant: str) -> list[Any]:
     """The patches of a planted defect of fix round 6 or 7 (an empty list for no plant); a runner process embeds this function's source."""
     table: dict[str, list[Any]] = {
@@ -2536,6 +2559,7 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "threaded_interrupt_stops_the_launch": threaded_interrupt,
     "threaded_interrupt_survivor_fails_visibly": threaded_survivor,
     "threaded_normal_run_unchanged": threaded_normal_run,
+    "input_text_inside_a_launch_pool_is_refused": pooled_input_refused,
     "timeout_cleanup_failure_during_interrupt_is_named": timeout_overlap,
     "cancelled_queued_future_is_not_waited_for": cancelled_queued_future,
     "unconfirmed_stop_on_interrupt_is_named": unconfirmed_on_interrupt,

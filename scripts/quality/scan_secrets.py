@@ -24,6 +24,7 @@ GIT_SETTINGS = (
     ("core.quotePath", "false"),
     ("diff.noprefix", "false"),
     ("diff.external", ""),
+    ("core.bigFileThreshold", "2047m"),
 )
 GIT_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_EXTERNAL_DIFF"})
 GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
@@ -39,7 +40,7 @@ def execute(command: list[str], cwd: Path, environment: dict[str, str]) -> Compl
 
 def git_output(git: str, repository: Path, environment: dict[str, str], *arguments: str) -> str:
     """The output of one Git command of the scan; a failed command stops the scan and is named, so a scan never passes over what it could not read."""
-    result = execute([git, "-C", str(repository), *arguments], repository, environment)
+    result = run_command(git, ["-C", str(repository), *arguments], cwd=repository, env=environment, timeout=180, errors="surrogateescape", keep_newlines=True)
     if result.returncode:
         raise ValueError(f"git {arguments[0]} failed (exit {result.returncode}), so the scan cannot read what the push sends")
     return result.stdout
@@ -84,15 +85,20 @@ def scan_environment(environment: dict[str, str]) -> dict[str, str]:
 
 
 def added_bytes(patch: str) -> int:
-    """The bytes of the added lines of a patch, which is what Gitleaks reports as scanned in its Git mode."""
-    total, in_header = 0, False
+    """The bytes of the added lines of a patch as Gitleaks counts them in its Git mode: the raw bytes of each line and its newline, but no newline that
+    the marker ``\\ No newline at end of file`` says is absent."""
+    total, in_header, added = 0, False, False
     for line in patch.split("\n"):
         if line.startswith("diff --git "):
-            in_header = True
+            in_header, added = True, False
         elif line.startswith("@@"):
-            in_header = False
+            in_header, added = False, False
+        elif line.startswith("\\") and added:
+            total, added = total - 1, False
         elif line.startswith("+") and not in_header:
-            total += len(line[1:].encode("utf-8", "surrogateescape")) + 1
+            total, added = total + len(line[1:].encode("utf-8", "surrogateescape")) + 1, True
+        else:
+            added = False
     return total
 
 
@@ -117,7 +123,16 @@ def gitleaks_in_memory(
         "-",
     ]
     arguments += ["--no-banner", "--no-color", "--redact=100", *target]
-    result = run_command(str(ROOT / ".tools/bin/gitleaks"), arguments, cwd=repository, env=environment, timeout=180, input_text=text)
+    result = run_command(
+        str(ROOT / ".tools/bin/gitleaks"),
+        arguments,
+        cwd=repository,
+        env=environment,
+        timeout=180,
+        input_text=text,
+        errors="surrogateescape",
+        keep_newlines=True,
+    )
     scanned = SCANNED.search(result.stderr)
     try:
         findings = json.loads(result.stdout)
@@ -141,7 +156,7 @@ def scan_push(repository: Path, tips: tuple[str, ...], excluded: tuple[str, ...]
         raise ValueError("Git is required")
     environment = scan_environment(dict(os.environ))
     scope = [*tips, *(["--not", *excluded] if excluded else [])]
-    options = [*scope, "--root", "--diff-merges=first-parent", "--"]
+    options = ["--no-textconv", "--no-ext-diff", *scope, "--root", "--diff-merges=first-parent", "--"]
     commits = git_output(git, repository, environment, "rev-list", *scope, "--").split() if tips else []
     findings: list[dict[str, Any]] = []
     status = 0
@@ -154,17 +169,15 @@ def scan_push(repository: Path, tips: tuple[str, ...], excluded: tuple[str, ...]
     lines: list[str] = []
     owners: dict[int, str] = {}
     records = git_output(git, repository, environment, "log", "-z", "--format=%H%x02%B", *options).split("\0") if commits else []
-    for record in records:
-        identifier, _, message = record.strip("\n").partition("\x02")
-        if identifier:
-            owners[len(lines) + 1] = identifier
-            lines += [f"== commit {identifier} ==", *message.split("\n")]
-    for tag in tags:
-        owners[len(lines) + 1] = tag
-        lines += [f"== tag {tag} ==", *git_output(git, repository, environment, "cat-file", "tag", tag).partition("\n\n")[2].split("\n")]
+    messages = [(identifier, "commit", message) for identifier, _, message in (record.strip("\n").partition("\x02") for record in records) if identifier]
+    messages += [(tag, "tag", git_output(git, repository, environment, "cat-file", "tag", tag).partition("\n\n")[2]) for tag in tags]
+    for identifier, kind, message in messages:
+        lines += [""] if lines else []
+        owners[len(lines) + 1] = identifier
+        lines += [f"== {kind} {identifier} ==", *message.split("\n")]
     if lines:
         text = "\n".join(lines) + "\n"
-        code, found = gitleaks_in_memory("stdin", [], environment, repository, len(text.encode("utf-8")), text)
+        code, found = gitleaks_in_memory("stdin", [], environment, repository, len(text.encode("utf-8", "surrogateescape")), text)
         status |= code
         findings += [{"Commit": owners[max(number for number in owners if number <= int(finding.get("StartLine", 1)))]} for finding in found]
     named = sorted({str(finding.get("Commit", ""))[:12] for finding in findings if finding.get("Commit")})

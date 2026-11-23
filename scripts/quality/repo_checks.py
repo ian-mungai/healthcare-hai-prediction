@@ -38,6 +38,7 @@ from typing import Any
 from scripts.process import run_command
 from scripts.quality import document_paths
 from scripts.quality.markdown_links import check_links
+from scripts.quality.scan_secrets import scan_environment
 
 POLICY = "scripts/quality/repo_checks.py"
 ASK = "if the rule seems wrong here, stop and ask the repository owner. There are no bypasses (no SKIP= or --no-verify)"
@@ -2770,7 +2771,7 @@ class PushedCommit:
 
 def scan_git(*args: str) -> str:
     """Run Git for a pushed scan; a failed command raises ``ScanFailure`` naming it."""
-    result = run_command("git", args, errors="surrogateescape", keep_newlines=True)
+    result = run_command("git", args, env=scan_environment(dict(os.environ)), errors="surrogateescape", keep_newlines=True)
     if result.returncode != 0:
         named = [argument for argument in args if not argument.startswith("-")]
         raise ScanFailure(f"git {named[0] if named else ''} failed (exit {result.returncode}), so the push cannot be scanned")
@@ -2816,7 +2817,19 @@ def pushed_commits(tips: list[str], excluded: list[str]) -> list[PushedCommit]:
             raise ScanFailure("git log gave an output the scan cannot read, so the push cannot be scanned")
     by_sha = {commit.sha: commit for commit in commits}
     patch = scan_git(
-        "log", "--no-color", "--root", "--no-renames", "-p", "-U0", "--inter-hunk-context=0", "--diff-merges=first-parent", "--format=%x01%H", *scope, "--"
+        "log",
+        "--no-color",
+        "--no-textconv",
+        "--no-ext-diff",
+        "--root",
+        "--no-renames",
+        "-p",
+        "-U0",
+        "--inter-hunk-context=0",
+        "--diff-merges=first-parent",
+        "--format=%x01%H",
+        *scope,
+        "--",
     )
     current: PushedCommit | None = None
     file_index, number, in_header = -1, 0, False

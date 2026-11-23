@@ -968,7 +968,8 @@ def run_command(
     keep_newlines : bool
         Read the output as bytes and decode it here, so a bare carriage return stays in the text (text mode turns it into a line end). The default is off.
     input_text : str or None
-        Text sent once to the program's standard input (UTF-8). The default is none: standard input is closed.
+        Text sent once to the program's standard input (UTF-8, with ``errors``). The default is none: standard input is closed. A job of a ``LaunchPool``
+        cannot use it: a retry cannot resume the writes, so the call raises ``ValueError``.
 
     Returns
     -------
@@ -977,6 +978,8 @@ def run_command(
 
     Raises
     ------
+    ValueError
+        ``input_text`` is given inside a ``LaunchPool`` job.
     FileNotFoundError
         ``program`` is not on PATH.
     subprocess.CalledProcessError
@@ -995,6 +998,10 @@ def run_command(
     cancellation: Cancellation | None = getattr(JOB, "cancellation", None)
     if cancellation is not None and cancellation.refuses():
         raise LaunchCancelled(f"{program} was not started: the pool was cancelled, or the stop of one of its launches is not confirmed")
+    if cancellation is not None and input_text is not None:
+        raise ValueError(
+            f"run_command({program!r}) was given input_text inside a LaunchPool job: its writes cannot resume after a retry, so start it outside the pool"
+        )
     process: subprocess.Popen[str] | None = None
     try:
         with interrupts_deferred():
@@ -1007,7 +1014,9 @@ def run_command(
                 errors=errors,
                 keep_newlines=keep_newlines,
             )
-        stdout, stderr = communicate(process, timeout, cancellation, input_text.encode("utf-8") if input_text is not None and keep_newlines else input_text)
+        stdout, stderr = communicate(
+            process, timeout, cancellation, input_text.encode("utf-8", errors) if input_text is not None and keep_newlines else input_text
+        )
         if keep_newlines:
             stdout, stderr = decoded(stdout, errors), decoded(stderr, errors)
     except LaunchCancelled:
