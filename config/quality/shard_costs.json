@@ -1,5 +1,5 @@
 {
-  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run (run_checks_e2e: the four hosted samples shards of run 44930295246, Nov 21 2026). scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 44930295246 of Nov 21 2026 (pull request 97, four shard jobs on separate hosted runners, 845 hosted measurements, 3,818 seconds in all); every case has a hosted cost. The costs of the earlier runs (run 43730985805: 7,662 seconds; a Mac validation run: 4,361 seconds) no longer apply.",
+  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run (run_checks_e2e: the four hosted samples shards of run 44930295246, Nov 21 2026). scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 44930295246 of Nov 21 2026 (pull request 97, four shard jobs on separate hosted runners, 845 hosted measurements, 3,818 seconds in all); the other 21 cases (the shared folder and local file address cases of the privacy scan that combine/round2-20261121 added) have no hosted measurement yet and carry 4.014 s, the median of the 65 hosted costs of the cases of that shape, until a hosted run measures them; the 866 costs come to 3,902 seconds in all. The costs of the earlier runs (run 43730985805: 7,662 seconds; a Mac validation run: 4,361 seconds) no longer apply.",
   "suites": {
     "run_checks_e2e": {
       "clean file": 1.016,
@@ -846,7 +846,28 @@
       "clean PDF passes": 3.985,
       "PDF with a placeholder path passes": 4.068,
       "clean workbook passes": 3.965,
-      "workbook with a placeholder path passes": 4.016
+      "workbook with a placeholder path passes": 4.016,
+      "shared folder with an escaped semicolon before a parent": 4.014,
+      "shared folder with an escaped pipe before a parent": 4.014,
+      "shared folder with an escaped ampersand before a parent": 4.014,
+      "shared folder with an escaped opening parenthesis before a parent": 4.014,
+      "shared folder with an escaped closing parenthesis before a parent": 4.014,
+      "shared folder with an escaped tab before a parent": 4.014,
+      "shared folder with an escaped semicolon right before a parent": 4.014,
+      "local file address with a semicolon in its path before a parent": 4.014,
+      "local file address with a parenthesis in its path before a parent": 4.014,
+      "local file address with an ampersand in its path before a parent": 4.014,
+      "local file address with a semicolon after the shared folder": 4.014,
+      "quoted local file address with a semicolon in its path before a parent": 4.014,
+      "JSON string with a literal apostrophe and a double quote around a parent name": 4.014,
+      "shared folder with an escaped semicolon that stays inside": 4.014,
+      "local file address with a semicolon that stays inside the shared folder": 4.014,
+      "JSON string with apostrophes around a parent name": 4.014,
+      "YAML double-quoted string with apostrophes around a parent name": 4.014,
+      "YAML list item with apostrophes around a parent name": 4.014,
+      "single-quoted local file address to the shared folder": 4.014,
+      "double-quoted local file address to the shared folder": 4.014,
+      "parenthesized local file address to the shared folder": 4.014
     }
   }
 }
