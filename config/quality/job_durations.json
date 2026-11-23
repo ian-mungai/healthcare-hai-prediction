@@ -125,8 +125,8 @@
     {
       "job": "Core CI Tooling Runtime Checks",
       "measured_minutes": 24,
-      "timeout_minutes": 45,
-      "basis": "estimate, container import hook 874 s hosted (hosted run 41521618599; 329 s on the Mac), worker deadline E2E 276 s and rebind 18 s plus about 4 minutes"
+      "timeout_minutes": 60,
+      "basis": "estimate, container import hook 874 s hosted (hosted run 41521618599; 329 s on the Mac), worker deadline E2E 276 s and rebind 18 s plus about 4 minutes; a slow runner (run 45143139244, Nov 23 2026) held every hook case to its old 30 s limit and ended the run at 1,122 s, so the hook cases now have 60 s each; the timeout is 2.5 times the measured time, and a slow run of 30 s a hook case, worker deadlines at 1.75 times and the setup come to about 49 minutes"
     },
     {
       "job": "Core Code Rules",

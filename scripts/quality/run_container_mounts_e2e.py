@@ -44,8 +44,11 @@ REPOSITORY_FILE_READS = (r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)",)
 # The run deadline is a hang guard for the whole run, not part of what a case proves: every case has its own hook deadline. A fixed 720 s ran out before the
 # last of the 52 cases on hosted runners (11 to 16 s a case with every group running at once, 3.5 s on an idle machine), and the run then printed
 # "46/52 passed" with no failed case. The limit grows with the number of cases instead.
+# A slow hosted runner on Nov 23 2026 (run 45143139244: the rebind E2E took 7 s against 4 s on the earlier run) held every case to its 30 s hook limit, so the
+# run ended at 1,122 s with three cases never run. The hook limit of a case and the allowance of each case are now twice that pace (60 s), the owner rule of at
+# least twice the measured hosted time.
 RUN_BASE_SECONDS = 120
-CASE_ALLOWANCE_SECONDS = 20
+CASE_ALLOWANCE_SECONDS = 60
 # Runs of a case whose hook the deadline stopped before the checker began: each repeat gets twice the seconds of the run before.
 DEADLINE_ATTEMPTS = 3
 # Written into the Python start-up of the fixture's checker process only, so the case can tell a hook stopped before the checker began from one stopped after.
@@ -65,7 +68,7 @@ class Case:
     files: dict[str, str]
     exit_code: int = 1
     messages: tuple[str, ...] = ()
-    seconds: float = 30
+    seconds: float = 60
     counts: tuple[tuple[str, int], ...] = ()
 
 
@@ -689,7 +692,7 @@ def fixture(files: dict[str, str], folder: Path, workspace: Path, deadline: floa
     return environment
 
 
-def bounded(program: str, arguments: list[str], folder: Path, environment: dict[str, str], deadline: float, seconds: float = 30) -> CompletedProcess[str]:
+def bounded(program: str, arguments: list[str], folder: Path, environment: dict[str, str], deadline: float, seconds: float = 60) -> CompletedProcess[str]:
     """Run a fixture command under the repository's process-group deadline entry point."""
     seconds = min(seconds, deadline - time.monotonic() - 70)
     if seconds < 4:
@@ -962,11 +965,14 @@ def self_check() -> None:
         "STOPPED: TimeoutError: The container import cases exhausted their run deadline",
         "1 of 6 passed in 42 s",
     )
-    slowest_hosted_case = 16.0
-    if default_run_limit(52) - 70 < 52 * slowest_hosted_case * 1.2:
+    slowest_hosted_case = 30.0
+    if default_run_limit(53) - 70 < 53 * slowest_hosted_case * 2:
         raise SystemExit(
-            "The default run limit for 52 cases does not cover the slowest hosted pace seen (16 s a case) with a margin of 20 percent after the 70 s reserve"
+            "The default run limit for 53 cases does not cover twice the slowest hosted pace seen (30 s a case on a slow runner on Nov 23 2026) after the 70 s "
+            "reserve"
         )
+    if Case.seconds < slowest_hosted_case * 2:
+        raise SystemExit("The default hook limit of a case is under twice the slowest hosted pace seen (30 s a case on a slow runner)")
     missing = [line for line in needed if line not in text]
     if missing or "secret sample output" in text or "case_ok" in text:
         raise SystemExit(

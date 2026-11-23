@@ -1223,7 +1223,7 @@ def maintenance_protection(h: Harness) -> Check:
         "a model that is not text": write("model_runs_model", {"schema": 1, "runs": [{"run_id": run_id(1), "model": 7}]}),
     }
     for label, path in bad_files.items():
-        checks[f"a model runs file with {label} is refused"] = refuses(lambda path=path: maintenance.load_model_runs(path))
+        checks[f"a model runs file with {label} is refused"] = refuses(partial(maintenance.load_model_runs, path))
     checks["the model runs file the project commits is valid"] = isinstance(maintenance.load_model_runs(), tuple)
 
     h.restore("four")

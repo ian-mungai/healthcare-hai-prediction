@@ -144,7 +144,7 @@ def the_publisher_task_hands_over_its_run_record(root: Path) -> dict[str, bool]:
     return {
         "the task calls the function after it processed the queue": "publisher_metrics.run_record(" in source,
         "the call comes before the evidence check can stop the run": source.find("publisher_metrics.run_record(")
-        < source.find('raise PublisherError(f"The evidence check'),
+        < source.find('failure = EvidenceCheckFailed(f"The evidence check'),
     }
 
 

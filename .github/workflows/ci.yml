@@ -370,7 +370,7 @@ jobs:
             timeout: 30  # wall time 12 min, estimate: group selection 344 s and process stops 150 s on the Mac (387 s and about 275 s hosted) plus about 4 minutes
           - part: core_ci_tooling_runtime
             title: Core CI Tooling Runtime Checks
-            timeout: 45  # wall time 24 min, estimate: container import hook 874 s hosted (329 s on the Mac), worker deadlines about 276 s and rebind 18 s plus about 4 minutes
+            timeout: 60  # wall time 24 min, estimate: container import hook 874 s hosted (329 s on the Mac), worker deadlines about 276 s and rebind 18 s plus about 4 minutes; 2.5 times the measured time, because a slow runner needed over 1,122 s for the hook cases (Nov 23 2026)
           - part: core_code_rules
             title: Core Code Rules
             timeout: 10  # wall time 5.5 min, estimate: 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, and about 1.5 min of setup

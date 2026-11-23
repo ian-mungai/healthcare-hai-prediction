@@ -953,7 +953,8 @@ def failed_launch_cases(work: Path) -> dict[str, bool]:
 
     def endless(name: str, outcome: str | None) -> tuple[Box, fixtures.Env, SubmissionRequest, list[float], Any]:
         box, env, request = rig(name, outcome)
-        clock, requests = [0.0], []
+        clock: list[float] = [0.0]
+        requests: list[float] = []
         box.access = replace(box.access, ecs=EndlessEcs(box, clock, requests))
         return box, env, request, requests, mock.patch.object(layer_report, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
@@ -979,16 +980,16 @@ def failed_launch_cases(work: Path) -> dict[str, bool]:
         "closing evidence was not saved" in note for note in getattr(failure, "__notes__", [])
     )
     checks["a failed launch whose host facts never end: no closing evidence is saved"] = saved(box, env) is None
-    for label, outcome in (("a failed launch", "failed"), ("a launch that succeeded", None)):
-        box, env, request = rig(f"disk_full_{outcome}", outcome)
-        failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in") if outcome else None
+    for label, launch_outcome in (("a failed launch", "failed"), ("a launch that succeeded", None)):
+        box, env, request = rig(f"disk_full_{launch_outcome}", launch_outcome)
+        launch_failure = JobFailed("silver attempt 1 ended failed (exit 1): stand-in") if launch_outcome else None
         box.s3.entries = entries_of(json.loads((env.root / "before.json").read_text()))
         layer_report.save_before_listing(box.access, "silver", env.spec.run)  # kept by job_step, so only the closing write meets the full disk
         with mock.patch.object(layer_report, "write_private", mock.Mock(side_effect=OSError(28, "No space left on device"))):
-            raised = job_step(box, env, request, failure)
-        if outcome:
-            checks[f"{label}: a full disk while writing the closing evidence keeps the failure and notes it"] = raised is failure and any(
-                "closing evidence was not saved" in note for note in getattr(failure, "__notes__", [])
+            raised = job_step(box, env, request, launch_failure)
+        if launch_outcome:
+            checks[f"{label}: a full disk while writing the closing evidence keeps the failure and notes it"] = raised is launch_failure and any(
+                "closing evidence was not saved" in note for note in getattr(launch_failure, "__notes__", [])
             )
         else:
             checks[f"{label}: a full disk while writing the closing evidence fails the step by name, not with a raw OSError"] = isinstance(

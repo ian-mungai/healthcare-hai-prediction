@@ -598,7 +598,7 @@
     },
     "ci_tooling_runtime": {
       "job": "Core CI Tooling Runtime Checks",
-      "minutes": 45,
+      "minutes": 60,
       "cores": 2
     },
     "orchestration_engine_e2e": {
