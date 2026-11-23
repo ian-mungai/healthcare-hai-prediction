@@ -757,6 +757,15 @@ def copy_modes(selected: list[str]) -> int:
     return int(failed)
 
 
+def yamllint_version(returncode: int, output: str, root: Path) -> tuple[str | None, str]:
+    """What ``python -m yamllint --version`` reported (None when it exited with an error) and the version that ``config/quality_tools.json`` pins.
+
+    The lint command and the pinned-tools check (``scripts.quality.check_tools``) each run that command with the interpreter they use and judge the result here,
+    so both accept the same yamllint."""
+    pinned = json.loads((root / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]["yamllint"]["version"]
+    return (None if returncode else output.strip()), pinned
+
+
 def lint(check: str) -> int:
     if check == "ruff":
         return ruff()
@@ -788,8 +797,8 @@ def lint(check: str) -> int:
         private = ROOT / ".tools/yamllint/bin/python"
         program = str(private) if private.exists() else sys.executable
         version = run_command(program, ["-m", "yamllint", "--version"], cwd=ROOT, timeout=30)
-        pinned = json.loads((ROOT / "config/quality_tools.json").read_text())["tools"]["yamllint"]["version"]
-        if version.returncode or version.stdout.strip() != f"yamllint {pinned}":
+        reported, pinned = yamllint_version(version.returncode, version.stdout, ROOT)
+        if reported != f"yamllint {pinned}":
             raise ValueError(f"pyproject.toml:1: yamllint {pinned} is required in the project environment.")
         return call(program, ["-m", "yamllint", "--strict", "--config-file", str(ROOT / ".yamllint"), "--", *selected])
     program = native(check)

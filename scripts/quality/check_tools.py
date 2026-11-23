@@ -7,7 +7,8 @@ It checks five things and names each problem with its fix:
 1. In a linked worktree, ``.venv`` and ``.tools`` are links that point at the main checkout's own folders (the main checkout holds real folders).
 2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin``, its pinned
    executable or, for a tool of installer ``requirements.txt``, ``.venv/bin`` or ``.tools/<tool>/bin/python``), the
-   executables the hooks start from ``.tools``, and the receipt of each release binary names the pinned version.
+   executables the hooks start from ``.tools``, the receipt of each release binary names the pinned version, and the yamllint that the lint command runs
+   reports the pinned version (an executable that only runs is not enough).
 3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
    ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
    check compares those saved files with a fresh ``uv`` export. It does not inspect the installed packages. A copy that differs, is missing or cannot be read,
@@ -32,6 +33,7 @@ from typing import Any
 from scripts.lakehouse.dbt_package_archive import ArchiveError, verify
 from scripts.process import TimeoutExpired, run_command
 from scripts.quality import lock_env
+from scripts.quality.lint_sources import yamllint_version
 from scripts.quality.lock_env import LockError
 from scripts.quality.pre_push import check_shim
 
@@ -100,6 +102,23 @@ def manifest_executables(root: Path, tools: dict[str, Any]) -> dict[str, list[Pa
     return options
 
 
+def yamllint_problems(root: Path, pinned: str) -> list[str]:
+    """The problem when the yamllint that the lint command runs (the private ``.tools/yamllint`` python, else the ``.venv`` python) is not the pinned one.
+
+    An executable that runs proves nothing, since a stale or stand-in file passes the existence check, so its reported version must equal the pin."""
+    private = root / ".tools/yamllint/bin/python"
+    python = private if executable(private) else root / ".venv/bin/python"
+    label = ".tools/yamllint" if python == private else ".venv"
+    try:
+        result = run_command(str(python), ["-m", "yamllint", "--version"], cwd=root, timeout=30)
+        reported, _ = yamllint_version(result.returncode, result.stdout, root)
+    except (OSError, TimeoutExpired, ValueError, KeyError):
+        reported = None
+    if reported == f"yamllint {pinned}":
+        return []
+    return [f"yamllint in {label} reports {reported or 'no version'}, not the pinned {pinned}; run `bash scripts/install.sh`"]
+
+
 def tool_problems(root: Path) -> list[str]:
     manifest = root / "config/quality_tools.json"
     try:
@@ -112,6 +131,8 @@ def tool_problems(root: Path) -> list[str]:
             where = ", ".join(str(place) for place in places)
             found.append(f"pinned tool {name} {tools[name]['version']} has no executable ({where}); run scripts/quality/install_tools.py")
             continue
+        if name == "yamllint" and not executable(root / ".tools/bin" / name):
+            found += yamllint_problems(root, tools[name]["version"])
         receipt = root / ".tools/receipts" / f"{name}.json"
         if executable(root / ".tools/bin" / name):
             try:
