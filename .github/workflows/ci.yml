@@ -410,8 +410,8 @@ jobs:
       # The Redis cases start a real redis-server and the hosted runner image has none. The exact version of the Ubuntu 24.04 archive (noble and noble-updates,
       # packages.ubuntu.com, published 2026-10-06) is installed with its redis-tools of the same version, and the step fails when that version is no longer in the
       # archive: then look up the new version, record it here and in .github/scripts/workflow_input_cases.sh. Local CI uses the machine's own redis-server.
-      # The step takes at most 108 seconds on a hosted runner. The timeout of 5 minutes is the lowest allowed value and gives 2.8 times that, so a slow runner passes
-      # and a hung apt-get fails the job after 5 minutes, not after the timeout of the whole job.
+      # The step takes at most 108 seconds on a hosted runner. The timeout is at least twice the measured time and never under 5 minutes: 5 minutes gives
+      # 2.8 times that, so a slow runner passes and a hung apt-get fails the job after 5 minutes, not after the timeout of the whole job.
       - name: Install the pinned Redis server
         timeout-minutes: 5
         shell: bash
