@@ -213,15 +213,15 @@ def code_run_of(identity: Mapping[str, Any], task: Mapping[str, Any]) -> str:
     recorded = identity.get("code_run")
     if not isinstance(recorded, str) or not CODE_RUN.fullmatch(recorded):
         raise ReportError("the recorded code run of the job's layer_run.json is missing or malformed")
-    containers = task.get("overrides", {}).get("containerOverrides") if isinstance(task.get("overrides"), dict) else None
-    named = {
-        entry.get("value")
-        for item in containers or []
-        if isinstance(item, dict)
-        for entry in item.get("environment") or []
-        if isinstance(entry, dict) and entry.get("name") == "CODE_RUN_ID"
-    }
-    if named != {recorded}:
+    overrides = task.get("overrides")
+    containers = overrides.get("containerOverrides") if isinstance(overrides, dict) else None
+    named: list[object] = []
+    for item in containers if isinstance(containers, list) else []:
+        environment = item.get("environment") if isinstance(item, dict) else None
+        if environment is not None and not isinstance(environment, list):
+            raise ReportError("the environment overrides of the stopped task are malformed")
+        named += [entry.get("value") for entry in environment or [] if isinstance(entry, dict) and entry.get("name") == "CODE_RUN_ID"]
+    if not named or any(value != recorded for value in named):
         raise ReportError("the CODE_RUN_ID overrides of the stopped task do not all name the code run that the job recorded in its layer_run.json")
     return recorded
 

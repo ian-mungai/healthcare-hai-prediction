@@ -421,6 +421,15 @@ def set_override(env: fixtures.Env, value: str | None) -> None:
     path.write_text(json.dumps(document))
 
 
+def malform_overrides(env: fixtures.Env, environment: object) -> None:
+    """Replace the environment overrides of every container in the saved task description with ``environment``, a malformed value."""
+    path = env.root / "describe.json"
+    document = json.loads(path.read_text())
+    for item in document["tasks"][0]["overrides"]["containerOverrides"]:
+        item["environment"] = environment
+    path.write_text(json.dumps(document))
+
+
 def bound_code_cases(work: Path) -> dict[str, bool]:
     """A pipeline run stages code under its ingestion run only. The job records that code run in ``layer_run.json`` and in the CODE_RUN_ID override of its task.
     The evidence task reads the code of the recorded code run, never a binding read later. A run that recorded itself reads its own code. A record that is
@@ -478,6 +487,8 @@ def bound_code_cases(work: Path) -> dict[str, bool]:
         ("a task description with no CODE_RUN_ID override", lambda e: set_override(e, None), "CODE_RUN_ID"),
         ("a record that names no code run", lambda e: fixtures.rewrite(e, "layer_run.json", lambda d: d.update(code_run="../other")), "recorded code run"),
         ("a record without a code run", lambda e: fixtures.rewrite(e, "layer_run.json", lambda d: d.pop("code_run")), "recorded code run"),
+        ("environment overrides that are not a list", lambda e: malform_overrides(e, 1), "environment overrides"),
+        ("a CODE_RUN_ID override that is not text", lambda e: malform_overrides(e, [{"name": "CODE_RUN_ID", "value": []}]), "CODE_RUN_ID"),
     )
     for label, change, word in contradictions:
         box = sandbox(work, f"bound_bad_{len(checks)}")
