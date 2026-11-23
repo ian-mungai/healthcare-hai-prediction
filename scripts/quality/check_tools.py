@@ -5,7 +5,8 @@ every push.
 It checks five things and names each problem with its fix:
 
 1. In a linked worktree, ``.venv`` and ``.tools`` are links that point at the main checkout's own folders (the main checkout holds real folders).
-2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin`` or its pinned executable), the
+2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin``, its pinned
+   executable or, for a tool of installer ``requirements.txt``, ``.venv/bin`` or ``.tools/<tool>/bin/python``), the
    executables the hooks start from ``.tools``, and the receipt of each release binary names the pinned version.
 3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
    ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
@@ -85,7 +86,8 @@ def executable(path: Path) -> bool:
 
 
 def manifest_executables(root: Path, tools: dict[str, Any]) -> dict[str, list[Path]]:
-    """Per pinned tool, the places its executable can be: the release binary first, then the pinned executable."""
+    """Per pinned tool, the places its executable can be: the release binary first, then the pinned executable, then, for a tool of installer
+    ``requirements.txt``, the project environment (the host lock installs it there) or the older private environment in ``.tools``."""
     options: dict[str, list[Path]] = {}
     for name, entry in tools.items():
         places = [root / ".tools/bin" / name]
@@ -93,7 +95,7 @@ def manifest_executables(root: Path, tools: dict[str, Any]) -> dict[str, list[Pa
             pinned = Path(entry["executable"])
             places.append(pinned if pinned.is_absolute() else root / pinned)
         if entry.get("installer") == "requirements.txt":
-            places.append(root / ".tools" / name / "bin/python")
+            places += [root / ".venv/bin" / name, root / ".tools" / name / "bin/python"]
         options[name] = places
     return options
 

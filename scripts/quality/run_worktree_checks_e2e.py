@@ -261,6 +261,15 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         document["tools"]["phantom_tool"] = {"version": "1.0.0"}
         manifest.write_text(json.dumps(document))
 
+    def yamllint_in_project_environment(_: Path, repo: Path) -> None:
+        """A fresh install puts yamllint in .venv (the host lock) and nowhere under .tools. The stand-in .venv holds only that executable."""
+        (repo / ".tools/bin/yamllint").unlink()
+        (repo / ".tools/receipts/yamllint.json").unlink()
+        (repo / ".venv").unlink()
+        (repo / ".venv/bin").mkdir(parents=True)
+        (repo / ".venv/bin/yamllint").write_text("#!/bin/sh\nexit 0\n")
+        (repo / ".venv/bin/yamllint").chmod(0o755)
+
     def no_archive(_: Path, repo: Path) -> None:
         shutil.rmtree(repo / ARCHIVE_FOLDER)
 
@@ -379,6 +388,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         'config/quality_tools.json names no lock group for check-jsonschema, so installed check-jsonschema cannot be checked; add a "group" to its entry',
         group_unnamed,
     )
+    case("yamllint_from_the_project_environment_passes", "", yamllint_in_project_environment)
     case("missing_package_archive_is_refused", "the dbt package archive does not verify", no_archive)
     case("damaged_package_archive_is_refused", "the dbt package archive does not verify", damaged_archive)
     case("missing_push_gate_is_refused", "The Git config hook hai-push-input", no_gate)
