@@ -184,6 +184,14 @@ def stage(box: Box, env: fixtures.Env, archive: bytes = ARCHIVE) -> None:
         box.s3.objects[f"lakehouse/launch_records/{run}/{layer}/{path.relative_to(env.root / 'launch')}"] = path.read_bytes()
 
 
+def bind_code(box: Box, env: fixtures.Env, code_run: str, binding: bytes | None = None) -> None:
+    """Stage the code of ``env`` as a pipeline run does: only under the ingestion run ``code_run``, with the binding ``code_run.json`` under the layer run."""
+    run = env.spec.run
+    for name in ("code.sha256", "code.tar.gz"):
+        box.s3.objects[f"lakehouse/run_stage/{code_run}/inputs/{name}"] = box.s3.objects.pop(f"lakehouse/run_stage/{run}/inputs/{name}")
+    box.s3.objects[f"lakehouse/run_stage/{run}/inputs/code_run.json"] = binding if binding is not None else json.dumps({"code_run": code_run}).encode()
+
+
 def sandbox(work: Path, name: str) -> Box:
     return Box(work, name)
 
@@ -388,6 +396,67 @@ def description_cases(work: Path) -> dict[str, bool]:
         box.ecs_forgets = True
         result = accept(box, env)
         checks[f"silver: closing evidence with {label} fails the evidence task by name"] = result[0] == "error" and word in str(result[1])
+    return checks
+
+
+def bound_code_cases(work: Path) -> dict[str, bool]:
+    """A pipeline run stages code under its ingestion run only and binds every layer run to it with ``code_run.json``. The evidence task reads the bound
+    code. A run without a binding reads its own code. A binding that exists and cannot be used fails by name and never falls back to the run's own code."""
+    checks: dict[str, bool] = {}
+    code_run = "ingestion_5e1f0a2b"
+    for layer in ("silver", "gold"):
+        box = sandbox(work, f"bound_{layer}")
+        producer = None
+        if layer == "gold":
+            producer = make(work, "bound_gold_producer", "silver")
+            flow(box, producer)
+        env = make(work, f"bound_{layer}_run", layer, producer)
+        stage(box, env)
+        bind_code(box, env, code_run)
+        job_window(box, env)
+        result = accept(box, env)
+        checks[f"{layer}: a run bound to an ingestion run's code passes the evidence task with no code staged under its own run"] = (
+            result[0] == "ok" and result[1]["passed"] is True
+        )
+        again = accept(box, env)
+        checks[f"{layer}: a retry of a bound run returns the same passed report"] = again[0] == "ok" and again[1]["report"] == result[1]["report"]
+    box = sandbox(work, "bound_none")
+    env = make(work, "bound_none_run", "silver")
+    result = flow(box, env)
+    checks["silver: a hand-started run with its own staged code and no binding passes the evidence task"] = result[0] == "ok" and result[1]["passed"] is True
+    reasons = (
+        ("a binding that is not JSON", b"not json", "malformed"),
+        ("a binding with another field", json.dumps({"code_run": code_run, "extra": 1}).encode(), "malformed"),
+        ("a binding that names no code run", json.dumps({"code_run": "../other"}).encode(), "malformed"),
+    )
+    for label, binding, word in reasons:
+        box = sandbox(work, f"bound_bad_{len(checks)}")
+        env = make(work, f"bound_bad_{len(checks)}", "silver")
+        stage(box, env)
+        job_window(box, env)
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code_run.json"] = binding  # the run's own code stays staged: it must not be used
+        result = accept(box, env)
+        checks[f"silver: {label} fails the evidence task by name and does not fall back to the run's own code"] = (
+            result[0] == "error" and "code run binding" in str(result[1]) and word in str(result[1])
+        )
+    box = sandbox(work, "bound_unreadable")
+    env = make(work, "bound_unreadable_run", "silver")
+    stage(box, env)
+    job_window(box, env)
+    bound_key = f"lakehouse/run_stage/{env.spec.run}/inputs/code_run.json"
+    box.s3.objects[bound_key] = json.dumps({"code_run": code_run}).encode()
+    plain = box.s3.get_object
+
+    def denied(Bucket: str, Key: str) -> dict[str, Any]:
+        if Key == bound_key:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject")
+        return plain(Bucket=Bucket, Key=Key)
+
+    with mock.patch.object(box.s3, "get_object", denied):
+        result = accept(box, env)
+    checks["silver: a binding that cannot be read fails the evidence task by name, and is not read as a missing binding"] = (
+        result[0] == "error" and "code run binding" in str(result[1]) and "unreadable" in str(result[1])
+    )
     return checks
 
 
@@ -1030,6 +1099,7 @@ def main() -> int:
             ("window", window_cases),
             ("later", later_job_cases),
             ("description", description_cases),
+            ("bound_code", bound_code_cases),
             ("listing", listing_cases),
             ("cached", cached_cases),
             ("archive", archive_cases),

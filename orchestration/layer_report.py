@@ -11,8 +11,9 @@ Every file lives in a folder of the Airflow container that only its user reads (
 volume. A file is created once. A missing, damaged, readable-by-others or foreign listing or closing record fails the evidence task with its cause, also when a
 report exists already: nothing falls back to a weaker check. A retry with a report on disk reads every input again, the saved records and the AWS records alike,
 through the same functions, and returns the report only when each input has the digest that the report records. The publish contract is read from the run's
-staged ``code.tar.gz`` after the archive matched ``code.sha256``. The archive is bounded, is never unpacked to disk and a file is read only when it is a regular
-member of the expected name.
+staged ``code.tar.gz`` after the archive matched ``code.sha256``. A pipeline run stages code under its ingestion run only and binds the layer run to it with
+``code_run.json``: the evidence reads the bound code run's files, and a binding that exists but cannot be used fails the task (a missing one means the
+run's own code). The archive is bounded, is never unpacked to disk and a file is read only when it is a regular member of the expected name.
 The report of silver is the input of the gold report (a passed report). Every wait has a deadline."""
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration.ecs_launch import S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch import LaunchRefused, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_preflight import InputNotReady, S3CodeRuns
 from scripts.lakehouse import layer_acceptance as acceptance
 
 LAYERS = ("silver", "gold")
@@ -202,6 +204,15 @@ def read_object(access: ReportAccess, key: str, limit: int, what: str) -> bytes:
     if len(data) > limit:
         raise ReportError(f"{what} is larger than its limit")
     return data
+
+
+def code_run_of(access: ReportAccess, run: str) -> str:
+    """The run whose staged code the evidence reads: the code run that ``code_run.json`` binds the run to, else the run itself (a missing binding).
+    A binding that cannot be read or is malformed fails by name and never means the run's own code."""
+    try:
+        return S3CodeRuns(access.s3, access.bucket).resolve(run)
+    except (InputNotReady, LaunchRefused) as error:
+        raise ReportError(str(error)) from None
 
 
 def fetch_archive(access: ReportAccess, run: str, digest: str, target: Path, limit: int, deadline: float) -> None:
@@ -469,11 +480,12 @@ def collected_report(access: ReportAccess, layer: str, run: str, folder: Path, a
     deadline = time.monotonic() + DEADLINE_SECONDS
     with tempfile.TemporaryDirectory(dir=folder, prefix="inputs_") as name:
         work = Path(name)
-        digest = read_object(access, f"lakehouse/run_stage/{run}/inputs/code.sha256", 256, "the staged code.sha256").decode(errors="replace").strip()
+        code_run = code_run_of(access, run)
+        digest = read_object(access, f"lakehouse/run_stage/{code_run}/inputs/code.sha256", 256, "the staged code.sha256").decode(errors="replace").strip()
         if not acceptance.SHA256.fullmatch(digest):
             raise ReportError("the staged code.sha256 is not a SHA-256")
         (work / "code.sha256").write_text(digest + "\n")
-        fetch_archive(access, run, digest, work / "code.tar.gz", archive_limit, deadline)
+        fetch_archive(access, code_run, digest, work / "code.tar.gz", archive_limit, deadline)
         contract = contract_from_archive(work / "code.tar.gz", deadline)
         (work / "code.tar.gz").unlink()
         task_arn = launch_files(access, layer, run, work)
