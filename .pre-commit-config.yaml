@@ -24,7 +24,7 @@ repos:
         always_run: true
         stages: [pre-commit, pre-push]
       - id: check-tools
-        # The bundle's pinned-tools check: the worktree links point at the main checkout, every pinned tool executable is in place, each lock-installed tool environment (SQLFluff, DVC, import-linter, check-jsonschema) holds its group of uv.lock, the dbt package archive is in place and the push gate is installed.
+        # The bundle's pinned-tools check: the worktree links point at the main checkout, every pinned tool executable is in place, the requirements copies each lock-installed tool's installer saved (SQLFluff, DVC, import-linter, check-jsonschema) equal its group of uv.lock now, the dbt package archive is in place and the push gate is installed.
         name: The worktree has its pinned tools, archive and push gate
         entry: .venv/bin/python -m scripts.quality.check_tools
         language: system

@@ -62,10 +62,19 @@ def advance_origin(scratch: Path, repo: Path) -> None:
     git(other, "push", "-q", "origin", "main")
 
 
+SHORT_EXPORT = (
+    "import runpy; from scripts.quality import lock_env; lock_env.EXPORT_DEADLINE = 1; "
+    "runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
+)
+
+
 def run_check(repo: Path, module: str) -> tuple[int, str]:
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     if module == "check_head":
         result = run_command(str(PYTHON), ["-m", "scripts.quality.check_head"], cwd=repo, env=environment, timeout=240)
+    elif module == "check_tools_short_export":
+        # The real check with a one-second export timeout, set in this child process only, so a stalled export times out without a 120 s wait.
+        result = run_command(str(PYTHON), ["-c", SHORT_EXPORT], cwd=repo, env=environment, timeout=240)
     else:
         result = run_command(str(PYTHON), ["-m", "scripts.quality.check_tools"], cwd=repo, env=environment, timeout=240)
     return result.returncode, result.stdout + result.stderr
@@ -206,13 +215,14 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         expect: str | tuple[str, ...],
         setup: Callable[[Path, Path], Path | None] | None = None,
         hook: bool = False,
+        module: str = "check_tools",
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="hai_tools_check_") as folder:
             scratch = Path(folder)
             repo = tools_repo(scratch)
             try:
                 where = (setup(scratch, repo) if setup else None) or repo
-                code, output = run_check(where, "check_tools")
+                code, output = run_check(where, module)
             finally:
                 (repo / ".tools/receipts").chmod(0o755)  # a case may close the folder; the scratch folder cannot be removed while it is closed
             expected = tuple(filter(None, (expect,) if isinstance(expect, str) else expect))
@@ -285,6 +295,10 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     def lock_unreadable(_: Path, repo: Path) -> None:
         (repo / ".tools/lock_stub/dvc.txt").unlink()
 
+    def export_stalls(_: Path, repo: Path) -> None:
+        uv = repo / ".tools/bin/uv"
+        uv.write_text(uv.read_text().replace('cat "$(dirname', '[ "$group" = dvc ] && sleep 30\ncat "$(dirname'))
+
     def receipts_closed(_: Path, repo: Path) -> None:
         (repo / ".tools/receipts").chmod(0)
 
@@ -348,6 +362,12 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         "lock_that_cannot_be_read_is_refused",
         ("the dvc group of uv.lock cannot be read (LockError", "run `.venv/bin/python -m scripts.quality.lock_env check`"),
         lock_unreadable,
+    )
+    case(
+        "lock_export_that_does_not_finish_is_refused",
+        ("uv, reading the dvc group of uv.lock for dvc, did not finish in 1 s", "run `.venv/bin/python -m scripts.quality.lock_env check`"),
+        export_stalls,
+        module="check_tools_short_export",
     )
     case(
         "receipt_that_cannot_be_looked_up_is_refused",

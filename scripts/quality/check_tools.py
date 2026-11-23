@@ -10,7 +10,7 @@ It checks five things and names each problem with its fix:
 3. The requirements copy that the installer of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) saved in
    ``.tools/<tool>`` equals the export of the tool's group of the lock now (``.tools/<tool>/requirements.txt``; DVC also saves ``build_requirements.txt``). The
    check compares those saved files with a fresh ``uv`` export. It does not inspect the installed packages. A copy that differs, is missing or cannot be read,
-   a lock that cannot be read and an export that does not finish within its own timeout (``lock_env.EXPORT_DEADLINE``) are each named with the command
+   a lock that cannot be read and a uv command of the export that does not finish within its own timeout are each named with the command
    to run.
 4. The dbt package archive that the model gates read is present and verifies against its record (``scripts.lakehouse.dbt_package_archive``).
 5. The push gate is installed (``scripts.quality.pre_push check-shim``).
@@ -176,9 +176,10 @@ def lock_problems(root: Path) -> list[str]:
             continue
         try:
             expected = lock_env.export_files(group, root)
-        except TimeoutExpired:
+        except TimeoutExpired as error:
+            program = Path(str(error.cmd[0] if isinstance(error.cmd, (list, tuple)) and error.cmd else error.cmd)).name
             found.append(
-                f"reading the {group} group of uv.lock for {name} did not finish within {lock_env.EXPORT_DEADLINE} s; run {LOCK_CHECK}, then repeat the check"
+                f"{program}, reading the {group} group of uv.lock for {name}, did not finish in {error.timeout:g} s; run {LOCK_CHECK}, then repeat the check"
             )
             continue
         except (LockError, OSError, ValueError, KeyError) as error:
