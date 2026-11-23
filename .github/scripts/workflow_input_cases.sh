@@ -38,6 +38,7 @@ no_other_redis_package() { [[ "$(install_line | tr ' ' '\n' | grep redis | sort 
 step_stops_on_the_first_error() { redis_step | grep -q 'set -euo pipefail'; }
 step_checks_the_installed_version() { redis_step | grep -q "dpkg-query --show" && redis_step | grep -qF "== \"${dollar}REDIS_VERSION\""; }
 step_does_not_ignore_failure() { [[ -n "$(redis_step)" ]] && ! redis_step | grep -qE '\|\| *(true|:)|continue-on-error|2> */dev/null'; }
+step_has_a_timeout() { [[ "$(redis_step | grep -cxF '        timeout-minutes: 5')" -eq 1 && "$(redis_step | grep -c 'timeout-minutes:')" -eq 1 ]]; }
 exactly_one_job_asks_for_the_server() { [[ "$(grep -c 'name: Install the pinned Redis server' "$workflow")" -eq 1 && "$(grep -c 'redis-server=' "$workflow")" -eq 1 ]]; }
 core_job() { awk '/^  core:$/ {on = 1; next} on && /^  [a-z_]+:$/ {exit} on' "$workflow"; }
 part_runs_terraform_checks() { python3 -c 'import json, sys; sys.exit("terraform_checks" not in json.load(open("config/quality/ci_groups.json"))["parts"]["core_sql_terraform"])'; }
@@ -55,6 +56,7 @@ check "the install names no other Redis package" no_other_redis_package
 check "the install step stops on the first error" step_stops_on_the_first_error
 check "the install step checks the installed version against the pin" step_checks_the_installed_version
 check "the install step does not ignore a failure" step_does_not_ignore_failure
+check "the install step stops after 5 minutes, so a hung apt-get fails the job early" step_has_a_timeout
 check "exactly one workflow job installs the server, and no shared step does" exactly_one_job_asks_for_the_server
 check "that job is the one that runs the core part, with terraform_checks" that_job_runs_the_core_part
 check "the terraform_checks group no longer skips the Redis cases on a hosted runner" group_has_no_skip
