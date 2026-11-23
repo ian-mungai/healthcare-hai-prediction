@@ -4,9 +4,10 @@ The role belongs to the Airflow scheduler. It may start, stop and describe the h
 families and the job execution role, read the staged code digest and the job logs, check the cluster's container
 instances, describe task definitions in its own region (the preflight checks the capacity binding of a host revision; the action takes no resource),
 and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
-prefix. It reads every run's code run binding, ``lakehouse/run_stage/<run>/inputs/code_run.json``, creates it once and lists exactly that key, so a missing
-binding answers 404. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the
-job's evidence, and one that may start the drift family reads the records under ``drift/`` for the drift DAG's decision. It holds nothing else.
+prefix. It reads every run's code run binding, ``lakehouse/run_stage/<run>/inputs/code_run.json``, creates it once and lists exactly that key and the
+staged code digest, so a missing binding or digest answers 404. A role that may start the bronze family also reads the run record of each bronze run,
+``lakehouse/bronze_runs/<run>/check.json``, as the job's evidence, and one that may start the drift family reads the records under ``drift/`` for the drift
+DAG's decision. It holds nothing else.
 
 The first check is closed: the permitted (action, resource, required conditions) triples of the role are written below as data, and every Allow statement
 of the policies must be inside them. An action outside the set, a wildcard, a NotAction, a resource outside its triple or a missing required
@@ -499,6 +500,8 @@ def code_run_cases() -> list[tuple[Any, ...]]:
         ("create a code run binding outside the inputs", "s3:PutObject", f"{bucket}/lakehouse/run_stage/silver_abcdef01/code_run.json", False, ONCE),
         ("read a code run binding in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code_run.json", False),
         ("list the code run binding of a run", "s3:ListBucket", bucket, True, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        ("list the code digest of a run", "s3:ListBucket", bucket, True, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.sha256",)}),
+        ("list the code archive of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/code.tar.gz",)}),
         ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/silver_abcdef01/inputs/",)}),
         ("list the staged runs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
         (
@@ -1090,7 +1093,11 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:PutObject", (f"{RECORDS}*/decision.json",), {"Null": {"s3:if-match": ["false"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": [f"{RECORD_PREFIX}*"]}}),
         Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
-        Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
+        Grant(
+            "s3:ListBucket",
+            (f"arn:aws:s3:::{BUCKET}",),
+            {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json", "lakehouse/run_stage/*/inputs/code.sha256"]}},
+        ),
         Grant("s3:ListBucketVersions", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/*"]}}),
         Grant("autoscaling:DescribeAutoScalingGroups", ("*",), {"StringEquals": {"aws:RequestedRegion": [REGION]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),

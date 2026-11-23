@@ -675,11 +675,11 @@ run "every_launch_role_binds_code_runs_once" {
           Effect    = "Allow"
           Action    = "s3:ListBucket"
           Resource  = "arn:aws:s3:::example-project-ci-bucket"
-          Condition = { StringLike = { "s3:prefix" = ["lakehouse/run_stage/*/inputs/code_run.json"] } }
+          Condition = { StringLike = { "s3:prefix" = ["lakehouse/run_stage/*/inputs/code_run.json", "lakehouse/run_stage/*/inputs/code.sha256"] } }
         },
       ]
     )
-    error_message = "Every launch role reads the code run binding of a run, creates it once and lists only that key, so a missing binding reads as absent; nothing else of the staged inputs."
+    error_message = "Every launch role reads the code run binding of a run, creates it once and lists only that key and the code digest, so a missing binding or digest reads as absent; nothing else of the staged inputs."
   }
 }
 
