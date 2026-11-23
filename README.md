@@ -8,7 +8,7 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 Prerequisites: macOS on Apple silicon, Python 3.12, Git 2.54 or later, Terraform 1.16.1, AWS CLI v2, the AWS Session Manager plugin (it opens the web interfaces), Node.js 22 or later and Docker Desktop.
 
-1. Create the environment and install the pinned tools, the hash-locked host dependencies, the hooks and the push gate. The script also copies `.env.example` to `.env`. It checks the prerequisites first and names any that is missing. A rerun on an installed checkout changes nothing and never overwrites `.env`:
+1. Create the environment and install the pinned tools, the hash-locked host dependencies, the hooks and the push gate. The script also copies `.env.example` to `.env`. It checks the prerequisites first and names any that is missing. A rerun on an installed checkout changes nothing and never overwrites `.env`. The `check-tools` hook runs before every commit and push. It fails when the installed SQLFluff, DVC, import-linter or check-jsonschema environment differs from its group of `uv.lock`. Its message names the installer to rerun:
 
    ```sh
    bash scripts/install.sh

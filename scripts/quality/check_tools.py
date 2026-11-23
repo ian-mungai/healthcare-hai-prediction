@@ -2,13 +2,16 @@
 
 Run from the worktree's root: ``.venv/bin/python -m scripts.quality.check_tools``. The ``check-tools`` pre-commit hook runs it before every commit and
 every push.
-It checks four things and names each problem with its fix:
+It checks five things and names each problem with its fix:
 
 1. In a linked worktree, ``.venv`` and ``.tools`` are links that point at the main checkout's own folders (the main checkout holds real folders).
 2. Every pinned tool executable exists: each tool of ``config/quality_tools.json`` (its release binary in ``.tools/bin`` or its pinned executable), the
    executables the hooks start from ``.tools``, and the receipt of each release binary names the pinned version.
-3. The dbt package archive that the model gates read is present and verifies against its record (``scripts.lakehouse.dbt_package_archive``).
-4. The push gate is installed (``scripts.quality.pre_push check-shim``).
+3. The environment of each tool that installs from ``uv.lock`` (SQLFluff, DVC, import-linter and check-jsonschema) holds the requirements of its group of the
+   lock. Its installer copies them to ``.tools/<tool>/requirements.txt``, so an environment that was installed before the lock changed, or without the lock,
+   is named with its installer.
+4. The dbt package archive that the model gates read is present and verifies against its record (``scripts.lakehouse.dbt_package_archive``).
+5. The push gate is installed (``scripts.quality.pre_push check-shim``).
 
 Exit 0 when everything is in place; 1 with each problem named. E2E: ``.venv/bin/python -m scripts.quality.run_checks_e2e`` (the worktree checks).
 """
@@ -25,6 +28,7 @@ from typing import Any
 
 from scripts.lakehouse.dbt_package_archive import ArchiveError, verify
 from scripts.process import TimeoutExpired, run_command
+from scripts.quality import lock_env
 from scripts.quality.pre_push import check_shim
 
 GIT_SECONDS = 60
@@ -114,6 +118,45 @@ def tool_problems(root: Path) -> list[str]:
     return found
 
 
+def lock_environments(tools: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """Per tool that installs from ``uv.lock``, its folder under ``.tools``, its group of the lock and its installer command."""
+    found = {
+        "sqlfluff": ("sqlfluff", "scripts/quality/install_sqlfluff.py"),
+        "dvc": ("dvc", "scripts/quality/install_dvc.py"),
+    }
+    found.update(
+        {
+            name: (entry["group"], f"scripts/quality/install_lint_tools.py --tool {name}")
+            for name, entry in tools.items()
+            if entry.get("installer") == "scripts/quality/install_lint_tools.py"
+        }
+    )
+    return found
+
+
+def lock_problems(root: Path) -> list[str]:
+    """Each installed tool environment whose recorded requirements are not the requirements of its group of ``uv.lock``."""
+    try:
+        tools = json.loads((root / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]
+    except (OSError, ValueError, KeyError):
+        return []
+    found = []
+    for name, (group, installer) in lock_environments(tools).items():
+        if not (root / ".tools" / name).is_dir():
+            continue
+        recorded = root / ".tools" / name / "requirements.txt"
+        try:
+            expected = lock_env.export_files(group, root)["requirements.txt"]
+        except (lock_env.LockError, OSError, ValueError) as error:
+            found.append(f"the {group} group of uv.lock cannot be read ({type(error).__name__}), so installed {name} cannot be checked against it")
+            continue
+        if not recorded.is_file():
+            found.append(f"installed {name} has no requirements record; run {installer}")
+        elif recorded.read_text(encoding="utf-8") != expected:
+            found.append(f"installed {name} differs from the {group} group of uv.lock; run {installer}")
+    return found
+
+
 def archive_problems(root: Path) -> list[str]:
     try:
         verify(root)
@@ -133,7 +176,7 @@ def problems(root: Path) -> list[str]:
     found = link_problems(root)
     if found:
         return found
-    return [*tool_problems(root), *archive_problems(root), *gate_problems(root)]
+    return [*tool_problems(root), *lock_problems(root), *archive_problems(root), *gate_problems(root)]
 
 
 def main() -> int:
@@ -142,7 +185,7 @@ def main() -> int:
         sys.stderr.write(f"FAIL: {problem}\n")
     if found:
         return 1
-    sys.stdout.write("verified   the worktree links, the pinned tools, the dbt package archive and the push gate are in place\n")
+    sys.stdout.write("verified   the worktree links, the pinned tools, the lock environments, the dbt package archive and the push gate are in place\n")
     return 0
 
 
