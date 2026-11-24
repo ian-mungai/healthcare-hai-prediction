@@ -40,7 +40,8 @@ ECS_ARN = r"arn:aws[a-z-]*:ecs:[a-z0-9-]+:[0-9]{12}:"
 CONTAINER_INSTANCE_ARN = re.compile(ECS_ARN + r"container-instance/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)?")
 TASK_ARN = re.compile(ECS_ARN + r"task/(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9_-]+")  # the long form with the cluster name, and the short form of older accounts
 TASK_DEFINITION_ARN = re.compile(ECS_ARN + r"task-definition/([A-Za-z0-9_-]+):[1-9][0-9]*")
-TASK_STATES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING", "RUNNING", "DEACTIVATING", "STOPPING", "DEPROVISIONING", "STOPPED"})
+TASK_STATES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING", "RUNNING", "DEACTIVATING", "STOPPING", "DEPROVISIONING", "STOPPED", "DELETED"})
+ENDED_STATES = frozenset({"STOPPED", "DELETED"})  # a task in either state runs no container
 
 
 def is_int(value: object) -> bool:
@@ -74,7 +75,7 @@ def matches(pattern: re.Pattern[str]) -> Callable[[object], bool]:
 # The shape of every reply the proof reads: field, its check, and whether a reply without it is a mismatch (a field that may be absent is checked when present).
 SHAPES: dict[str, dict[str, tuple[Callable[[object], bool], bool]]] = {
     "groups": {"AutoScalingGroups": (one_group, True)},
-    "group": {"DesiredCapacity": (is_int, True), "Instances": (is_list, True)},
+    "group": {"AutoScalingGroupName": (is_text, True), "DesiredCapacity": (is_int, True), "Instances": (is_list, True)},
     "container_instances": {"containerInstanceArns": (arns_matching(CONTAINER_INSTANCE_ARN), True), "nextToken": (is_token, False)},
     "task_page": {"taskArns": (arns_matching(TASK_ARN), True), "nextToken": (is_token, False)},
     "task_description": {"tasks": (is_list, True), "failures": (is_list, True)},
@@ -172,6 +173,8 @@ class HostLaunchSettle:
         session = self.session
         reply = session.call("autoscaling", "describe-auto-scaling-groups", ["--auto-scaling-group-names", session.names.group])
         group = validated(validated(reply, "groups")["AutoScalingGroups"][0], "group")
+        if group["AutoScalingGroupName"] != session.names.group:
+            raise HostSessionError("the host group reply names another group")
         group_read_at = session.clock.wall()
         if group["DesiredCapacity"] != 0 or group["Instances"]:
             return None
@@ -194,6 +197,7 @@ class HostLaunchSettle:
         if session.job_prefix is None:
             raise HostSessionError("the session has no job task family prefix")
         definitions = {f"{session.job_prefix}{job}{HOST_SUFFIX}": job for job in jobs}
+        service_groups = {f"service:{name}" for name in session.names.services.values()}  # a project service task holds no job family's scratch folder
         arns = self.listed_tasks()
         busy: set[str] = set()
         unknown = False
@@ -207,7 +211,7 @@ class HostLaunchSettle:
                 raise HostSessionError("the task description does not account for the listed tasks")
             unknown = unknown or bool(reply["failures"])
             for task in tasks:
-                if task["lastStatus"] == "STOPPED":
+                if task["lastStatus"] in ENDED_STATES or task["group"] in service_groups:
                     continue
                 family = task["taskDefinitionArn"].rsplit("/", 1)[-1].rsplit(":", 1)[0]  # the shape check has shown that it is a full task definition ARN
                 if family not in definitions or task["group"] != f"family:{family}":

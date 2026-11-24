@@ -508,6 +508,8 @@ ASG = ("AutoScalingGroups", 0)
 TASK = ("tasks", 0)
 MALFORMED: dict[tuple[str, str], dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
     GROUP: {
+        "another group's name": edit((*ASG, "AutoScalingGroupName"), "another-host-group"),
+        "group name omitted": edit((*ASG, "AutoScalingGroupName"), drop=True),
         "Instances omitted": edit((*ASG, "Instances"), drop=True),
         "Instances null": edit((*ASG, "Instances"), None),
         "Instances a string": edit((*ASG, "Instances"), "none"),
@@ -598,6 +600,59 @@ def an_earlier_signal_never_relabels_a_later_failure() -> dict[str, bool]:
     }
 
 
+def first_page_only(change: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """A change of the first reply only; later replies pass unchanged."""
+    calls = [0]
+
+    def once(reply: dict[str, Any]) -> dict[str, Any]:
+        calls[0] += 1
+        return change(reply) if calls[0] == 1 else reply
+
+    return once
+
+
+def a_false_token_once_is_refused_by_its_shape() -> dict[str, bool]:
+    host, session, lines = a_stopped_host_with_a_stopped_task()
+    host.mangle = {LISTING: first_page_only(edit(("nextToken",), False))}
+    rerun(session, "stop")
+    return {
+        "nothing was written": host.store_writes() == 0 and host.end_of(RUN, "gold") is None,
+        "the failure names the invalid token": "invalid nextToken" in line_with(lines, "launch_settle_failed"),
+    }
+
+
+def a_project_service_task_holds_no_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    service = next(iter(session.names.services.values()))
+    arn = host.add_task(f"{service}_task", group=f"service:{service}")
+    host.tasks[arn]["status"] = "DEPROVISIONING"
+    rerun(session, "stop")
+    return {"the launch is settled": host.end_of(RUN, "gold") is not None}
+
+
+def a_task_of_an_unknown_service_holds_every_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    host.add_task("stand_in_dev_other_service", group="service:not-a-project-service")
+    rerun(session, "stop")
+    return {"nothing was written": host.store_writes() == 0 and host.end_of(RUN, "gold") is None}
+
+
+def a_deleted_task_holds_no_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    arn = host.add_task(f"{JOB_PREFIX}gold_host")
+    host.tasks[arn]["status"], host.tasks[arn]["desired"] = "DELETED", "STOPPED"
+    rerun(session, "stop")
+    return {"the launch is settled": host.end_of(RUN, "gold") is not None}
+
+
+def the_reason_names_only_active_container_instances() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    rerun(session, "stop")
+    end = host.end_of(RUN, "gold")
+    reason = str(end.get("reason", "")) if end else ""
+    return {"the end reason says no ACTIVE container instance": "no ACTIVE container instance" in reason}
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_stop_settles_a_launch_whose_saved_task_ecs_forgot": stop_settles_a_launch_whose_saved_task_ecs_forgot,
     "host_stop_after_failure_settles_and_keep_on_does_not": stop_after_failure_settles_and_keep_on_does_not,
@@ -622,4 +677,9 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_stop_signal_during_the_settle_keeps_the_first_error": a_signal_during_the_settle_keeps_the_first_stop_error,
     "host_stop_incomplete_ecs_replies_never_authorize_a_cancel": incomplete_ecs_replies_never_authorize_a_cancel,
     "host_stop_skips_the_settle_without_a_data_bucket": an_unreadable_data_bucket_name_skips_the_settle,
+    "host_stop_refuses_a_false_token_on_the_first_page": a_false_token_once_is_refused_by_its_shape,
+    "host_stop_project_service_task_holds_no_job": a_project_service_task_holds_no_job,
+    "host_stop_unknown_service_task_holds_every_job": a_task_of_an_unknown_service_holds_every_job,
+    "host_stop_deleted_task_holds_no_job": a_deleted_task_holds_no_job,
+    "host_stop_reason_names_active_container_instances": the_reason_names_only_active_container_instances,
 }

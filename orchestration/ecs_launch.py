@@ -119,12 +119,12 @@ FIT_POLL_SECONDS = 15.0
 SETTLE_MARGIN_SECONDS = 600.0  # beyond the send window (FIT_WAIT_SECONDS): a request that passed its guard has had 10 more minutes to land
 PROOF_MAX_AGE_SECONDS = 900.0  # the longest a host proof is used after it was read
 HOST_STOP_REASON = (
-    "host stopped: when read, the host group had no instance, ECS listed no container instance and no unstopped task of the family, and the claim was older "
-    "than the send window plus the margin"
+    "host stopped: when read, the host group had no instance, ECS listed no ACTIVE container instance and no unstopped task of the family, and the claim "
+    "was older than the send window plus the margin"
 )
 HOST_STOP_NOTE = (
-    "a host stop (host_session stop, or the start after it) ends the launch as cancelled when the host group has no instance, ECS lists no container "
-    "instance and no unstopped task of the family, and the claim is older than 20 minutes"
+    "a host stop (host_session stop, or the start after it) ends the launch as cancelled when the host group has no instance, ECS lists no ACTIVE "
+    "container instance and no unstopped task of the family, and the claim is older than 20 minutes"
 )
 POLL_SECONDS = 6.0
 POLL_FAILURES = 5
@@ -883,7 +883,7 @@ class Launcher:
         with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. A claimed launch with no end record is settled
         here (``auto_settle``) and the gate goes on when that ends it, which needs proof about its task; a launch that stays
         unresolved refuses the run with its reason. The gate alone never ends a launch whose task ECS no longer describes or whose RunTask call may have
-        been sent and found no task: a host stop that verifies no instance, no container instance and no unstopped task of the family does
+        been sent and found no task: a host stop that verifies no instance, no ACTIVE container instance and no unstopped task of the family does
         (``HostStopSettler``, rule 11 of the module docstring), and the refusal says so. Two runs that pass this gate at the
         same moment are kept apart by the Airflow pool of host jobs (a full-size job takes all its slots) and, when they both settle the same launch, by the
         write-once end record. The run is not claimed, so it launches once the earlier launch is settled."""
