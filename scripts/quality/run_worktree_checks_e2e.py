@@ -318,16 +318,16 @@ def tools_cases() -> list[tuple[str, bool, str]]:
         return setup
 
     def ps_blocked(_: Path, repo: Path) -> None:
-        """The yamllint probe ends and then the process list cannot be read once (as when /bin/ps is blocked): the project python leaves a marker and a
-        background process (so the stop of its session must list the processes), and the fake ``ps`` that comes first on the PATH fails once when it
-        finds the marker and runs the real ``ps`` otherwise. The leftover ``sleep`` ends by itself after 30 s."""
+        """The yamllint probe ends and then the process list cannot be read once (as when /bin/ps is blocked): the project python leaves a marker (every
+        top-level probe lists the processes after it ends), and the fake ``ps`` that comes first on the PATH fails once when it finds the marker and runs
+        the real ``ps`` otherwise. The probe starts no other process, so nothing outlives the case."""
         project_yamllint(f"yamllint {pinned}")(_, repo)
         (repo / ".ps_blocked/bin").mkdir(parents=True)
         python = repo / ".venv/bin/python"
         python.write_text(
             "#!/bin/sh\n[ \"$*\" = '-m yamllint --version' ] && { echo '"
             + f"yamllint {pinned}"
-            + '\'; : > "$(dirname "$0")/../../.ps_blocked/once"; sleep 30 >/dev/null 2>&1 & }\nexit 0\n'
+            + '\'; : > "$(dirname "$0")/../../.ps_blocked/once"; }\nexit 0\n'
         )
         fake = repo / ".ps_blocked/bin/ps"
         fake.write_text(
@@ -530,7 +530,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     )
     case(
         "lint_names_a_yamllint_probe_with_an_unconfirmed_cleanup_and_keeps_the_cleanup_status",
-        "yamllint: the stop of a probe is not confirmed",
+        ("yamllint: the stop of a probe is not confirmed", "python ended", "ps: blocked"),
         ps_blocked,
         module="lint_yamllint_ps_blocked",
         status=70,
