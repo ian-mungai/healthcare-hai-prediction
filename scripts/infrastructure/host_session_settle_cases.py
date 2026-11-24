@@ -624,10 +624,28 @@ def a_false_token_once_is_refused_by_its_shape() -> dict[str, bool]:
 def a_project_service_task_holds_no_job() -> dict[str, bool]:
     host, session, lines = after_stop()
     service = next(iter(session.names.services.values()))
-    arn = host.add_task(f"{service}_task", group=f"service:{service}")
+    arn = host.add_task(service, group=f"service:{service}")
     host.tasks[arn]["status"] = "DEPROVISIONING"
     rerun(session, "stop")
     return {"the launch is settled": host.end_of(RUN, "gold") is not None}
+
+
+def a_job_task_under_a_service_group_holds_every_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    service = next(iter(session.names.services.values()))
+    arn = host.add_task(f"{JOB_PREFIX}gold_host", group=f"service:{service}")
+    host.tasks[arn]["status"] = "PROVISIONING"
+    rerun(session, "stop")
+    return {"nothing was written": host.store_writes() == 0 and host.end_of(RUN, "gold") is None}
+
+
+def a_service_named_like_a_job_family_holds_every_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    family = f"{JOB_PREFIX}gold_host"
+    session.names = replace(session.names, services={**session.names.services, "lookalike": family})
+    host.add_task(family, group=f"service:{family}")
+    rerun(session, "stop")
+    return {"nothing was written": host.store_writes() == 0 and host.end_of(RUN, "gold") is None}
 
 
 def a_task_of_an_unknown_service_holds_every_job() -> dict[str, bool]:
@@ -680,6 +698,8 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_stop_refuses_a_false_token_on_the_first_page": a_false_token_once_is_refused_by_its_shape,
     "host_stop_project_service_task_holds_no_job": a_project_service_task_holds_no_job,
     "host_stop_unknown_service_task_holds_every_job": a_task_of_an_unknown_service_holds_every_job,
+    "host_stop_job_task_under_a_service_group_holds_every_job": a_job_task_under_a_service_group_holds_every_job,
+    "host_stop_service_named_like_a_job_family_holds_every_job": a_service_named_like_a_job_family_holds_every_job,
     "host_stop_deleted_task_holds_no_job": a_deleted_task_holds_no_job,
     "host_stop_reason_names_active_container_instances": the_reason_names_only_active_container_instances,
 }

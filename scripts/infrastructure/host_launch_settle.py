@@ -197,7 +197,7 @@ class HostLaunchSettle:
         if session.job_prefix is None:
             raise HostSessionError("the session has no job task family prefix")
         definitions = {f"{session.job_prefix}{job}{HOST_SUFFIX}": job for job in jobs}
-        service_groups = {f"service:{name}" for name in session.names.services.values()}  # a project service task holds no job family's scratch folder
+        services = set(session.names.services.values())  # a project service task holds no job family's scratch folder
         arns = self.listed_tasks()
         busy: set[str] = set()
         unknown = False
@@ -211,9 +211,11 @@ class HostLaunchSettle:
                 raise HostSessionError("the task description does not account for the listed tasks")
             unknown = unknown or bool(reply["failures"])
             for task in tasks:
-                if task["lastStatus"] in ENDED_STATES or task["group"] in service_groups:
+                if task["lastStatus"] in ENDED_STATES:
                     continue
                 family = task["taskDefinitionArn"].rsplit("/", 1)[-1].rsplit(":", 1)[0]  # the shape check has shown that it is a full task definition ARN
+                if family in services and family not in definitions and task["group"] == f"service:{family}":
+                    continue  # a service task: Terraform names each service and its task definition alike, and no job host definition has that family
                 if family not in definitions or task["group"] != f"family:{family}":
                     unknown = True
                 else:
