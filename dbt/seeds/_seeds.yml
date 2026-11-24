@@ -1239,8 +1239,8 @@ seeds:
   - name: measure_id_aliases
     description: >
       Reviewed renames of a published measure ID to the registry's exact ID, each with its evidence. An alias row enters a
-      window model only where the same hospital and window have no row under the exact ID. The PSI renames are not listed:
-      they wait for a CMS release note.
+      window model only where the same hospital and window have no row under the exact ID. The CMS Hospital Downloadable
+      Database dictionary of July 2021 (pages 85 to 86) confirms the two PSI renames.
     config:
       column_types:
         source_model: varchar

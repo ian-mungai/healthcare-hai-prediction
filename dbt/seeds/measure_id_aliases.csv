@@ -1,2 +1,4 @@
 source_model,published_measure_id,measure_id,evidence
 int_cc_unplanned_visits_windows,OP-32,OP_32,"Same published measure name as OP_32: Rate of unplanned hospital visits after colonoscopy (per 1,000 colonoscopies)"
+int_cc_complications_deaths_windows,PSI_90_SAFETY,PSI_90,"The CMS Hospital Downloadable Database dictionary of July 2021 (pages 85 to 86) lists PSI-90-SAFETY as the alternate ID of PSI 90 (Serious complications). The old ID ends with the April 2021 release and PSI_90 starts with the July 2021 release, with no overlap"
+int_cc_complications_deaths_windows,PSI_13_POST_SEPSIS,PSI_13,"The CMS Hospital Downloadable Database dictionary of July 2021 (pages 85 to 86) lists PSI_13_POST_SEPSIS as the alternate ID of PSI 13 (Blood stream infection after surgery). The old ID ends with the April 2021 release and PSI_13 starts with the July 2021 release, with no overlap"

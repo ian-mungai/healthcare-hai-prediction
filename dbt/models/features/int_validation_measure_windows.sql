@@ -1,7 +1,7 @@
 -- One row per group D registry control, component measure, hospital and window: the published value of exactly the measure
 -- ID the registry names, and a number only when the value is a plain number; tokens stay text. A parent control appears
--- once per component. E038 and E039 read PSI_90 and PSI_13 (registry revision 3); PSI_90_SAFETY and PSI_13_POST_SEPSIS are
--- not aliased (failure modes 508 to 510). The gold window facts already carry the reviewed measure ID: a reviewed renamed ID
+-- once per component. E038 and E039 read PSI_90 and PSI_13 (registry revision 3); the reviewed aliases PSI_90_SAFETY and PSI_13_POST_SEPSIS
+-- enter under them (failure modes 508 to 510). The gold window facts already carry the reviewed measure ID: a reviewed renamed ID
 -- enters under the exact ID only where the hospital and window have no exact-ID row, and the published ID stays in
 -- published_measure_id (failure modes 629 and 630, applied in silver by validation_aliased_windows).
 

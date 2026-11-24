@@ -3124,7 +3124,7 @@ def hrrp_row(facility: str, measure: str, ratio: str, readmissions: str, **field
 
 
 # visits with an exact and a renamed OP_32, a measure no control names, a token and an older-layout file
-# whose OP_32 window a later release supersedes; deaths with a mapped mortality ID, PSI IDs E038 cannot map and a window
+# whose OP_32 window a later release supersedes; deaths with a mapped mortality ID, exact and renamed PSI IDs and a window
 # repeated in one file; HRRP keyed by measure_name with tokens.
 GROUP_D1 = (
     Stored(
@@ -3170,7 +3170,7 @@ GROUP_D1 = (
         "2025-07-01",
         "Complications_and_Deaths-Hospital.csv",
         sha("de1"),
-        6,
+        9,
         records=(
             cc(facility_id="010001", measure_id="MORT_30_AMI", score="12.3", lower_estimate="10.9", higher_estimate="13.8", **DATES_2022),
             cc(facility_id="010001", measure_id="PSI_90", score="1.01", denominator="Not Applicable", **DATES_2022),
@@ -3178,6 +3178,11 @@ GROUP_D1 = (
             cc(facility_id="010001", measure_id="PSI_13", score="4.52", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.0", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.4", **DATES_2022),
+            # A renamed PSI_13_POST_SEPSIS beside the exact PSI_13 of its hospital and window is dropped.
+            cc(facility_id="010001", measure_id="PSI_13_POST_SEPSIS", score="4.40", **DATES_2022),
+            # The renamed PSI_90_SAFETY and PSI_13_POST_SEPSIS of a hospital and window with no exact row enter as PSI_90 and PSI_13.
+            cc(facility_id="010003", measure_id="PSI_90_SAFETY", score="1.10", **DATES_2022),
+            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", score="4.10", **DATES_2022),
         ),
     ),
     Stored(
@@ -5187,7 +5192,9 @@ VALIDATION_SQL = (
     "coalesce(excess_readmission_ratio_number::VARCHAR, '') FROM int_cc_hrrp_windows ORDER BY ALL;"
 )
 VALIDATION_ALIASES_SQL = (
-    "SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_unplanned_visits_windows WHERE measure_id <> published_measure_id ORDER BY ALL;"
+    "SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_unplanned_visits_windows WHERE measure_id <> published_measure_id "
+    "UNION SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_complications_deaths_windows WHERE measure_id <> published_measure_id "
+    "ORDER BY ALL;"
 )
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
@@ -6412,8 +6419,10 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("visits", "010001", "OP_36", "2020-01-01", "9.9", sha("vi0")),
             ("deaths", "010001", "MORT_30_AMI", "2022-01-01", "12.3", sha("de1")),
             ("deaths", "010001", "PSI_90", "2022-01-01", "1.01", sha("de1")),
-            ("deaths", "010001", "PSI_90_SAFETY", "2022-01-01", "0.99", sha("de1")),
+            # The renamed PSI rows beside the exact IDs of 010001 are dropped; 010003's alias-only rows take PSI_90 and PSI_13.
+            ("deaths", "010003", "PSI_90", "2022-01-01", "1.10", sha("de1")),
             ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", sha("de1")),
+            ("deaths", "010003", "PSI_13", "2022-01-01", "4.10", sha("de1")),
             ("deaths", "010001", "PSI_08", "2021-01-01", "0.12", sha("g4a")),
             ("deaths", "010001", "PSI_08", "2024-01-01", "0.15", sha("g4b")),
             ("deaths", "010001", "PSI_09", "2021-01-01", "3.10", sha("g4a")),
@@ -6436,8 +6445,9 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("visits", "010001", "OP_36", "OP_36", "2020-01-01", "9.9"),
             ("deaths", "010001", "MORT_30_AMI", "MORT_30_AMI", "2022-01-01", "12.3"),
             ("deaths", "010001", "PSI_90", "PSI_90", "2022-01-01", "1.01"),
-            ("deaths", "010001", "PSI_90_SAFETY", "PSI_90_SAFETY", "2022-01-01", "0.99"),
+            ("deaths", "010003", "PSI_90", "PSI_90_SAFETY", "2022-01-01", "1.1"),
             ("deaths", "010001", "PSI_13", "PSI_13", "2022-01-01", "4.52"),
+            ("deaths", "010003", "PSI_13", "PSI_13_POST_SEPSIS", "2022-01-01", "4.1"),
             ("deaths", "010001", "PSI_08", "PSI_08", "2021-01-01", "0.12"),
             ("deaths", "010001", "PSI_08", "PSI_08", "2024-01-01", "0.15"),
             ("deaths", "010001", "PSI_09", "PSI_09", "2021-01-01", "3.1"),
@@ -6446,7 +6456,11 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("hrrp", "010003", "READM-30-AMI-HRRP", "READM-30-AMI-HRRP", "2020-07-01", ""),
         ]
     )
-    checks["validation_aliases_match_expected"] = base.get("validation_aliases") == [("010003", "OP_32", "OP-32")]
+    checks["validation_aliases_match_expected"] = base.get("validation_aliases") == [
+        ("010003", "OP_32", "OP-32"),
+        ("010003", "PSI_13", "PSI_13_POST_SEPSIS"),
+        ("010003", "PSI_90", "PSI_90_SAFETY"),
+    ]
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
@@ -7411,10 +7425,13 @@ D1_KEYS_SQL = """WITH keys AS (
     UNION ALL
     SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital',
         CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
-        WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END, trim(measure_id),
+        WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END, trim(stg.measure_id),
         try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date,
-        trim(measure_id)
-    FROM stg_cms_cc_complications_and_deaths_hospital WHERE NOT is_label_held
+        coalesce(alias.measure_id, trim(stg.measure_id))
+    FROM stg_cms_cc_complications_and_deaths_hospital AS stg
+    LEFT JOIN measure_id_aliases AS alias
+        ON alias.source_model = 'int_cc_complications_deaths_windows' AND alias.published_measure_id = trim(stg.measure_id)
+    WHERE NOT is_label_held
     UNION ALL
     SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital',
         CASE WHEN regexp_full_match(trim(facility_id), '[0-9]{5}') THEN lpad(trim(facility_id), 6, '0')
@@ -7426,7 +7443,8 @@ usable AS (SELECT * FROM keys WHERE nullif(e, '') IS NOT NULL AND nullif(m, '') 
 w AS (
     SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t, entity_id AS e, published_measure_id AS m, window_start AS s, window_end AS f
     FROM int_cc_unplanned_visits_windows
-    UNION ALL SELECT 'cms_cc_complications_and_deaths_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_complications_deaths_windows
+    UNION ALL SELECT 'cms_cc_complications_and_deaths_hospital', entity_id, published_measure_id, window_start, window_end
+    FROM int_cc_complications_deaths_windows
     UNION ALL SELECT 'cms_cc_hospital_readmissions_reduction_program_hospital', entity_id, measure_id, window_start, window_end FROM int_cc_hrrp_windows
 ),
 h AS (
