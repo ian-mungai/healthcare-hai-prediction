@@ -36,6 +36,7 @@ SOURCES = (
     "scripts/infrastructure/__init__.py",
     "scripts/infrastructure/terraform.sh",
     "scripts/infrastructure/render_project_config.py",
+    "scripts/infrastructure/state_protection.py",
     "scripts/infrastructure/capture_reader.py",
     "scripts/infrastructure/stack_settings.py",
     "scripts/infrastructure/synthetic_workspace.py",
