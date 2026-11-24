@@ -320,7 +320,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     def ps_blocked(_: Path, repo: Path) -> None:
         """The yamllint probe ends and then the process list cannot be read once (as when /bin/ps is blocked): the project python leaves a marker (every
         top-level probe lists the processes after it ends), and the fake ``ps`` that comes first on the PATH fails once when it finds the marker and runs
-        the real ``ps`` otherwise. The probe starts no other process, so nothing outlives the case."""
+        the real ``ps`` otherwise. The probe leaves no background process, so nothing outlives the case."""
         project_yamllint(f"yamllint {pinned}")(_, repo)
         (repo / ".ps_blocked/bin").mkdir(parents=True)
         python = repo / ".venv/bin/python"
