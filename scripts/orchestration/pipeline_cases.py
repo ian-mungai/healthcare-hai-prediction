@@ -630,9 +630,9 @@ PROVIDER_LINEAGE_CONF = {
 
 
 def a_route_run_with_the_lineage_providers_parent_facets_is_followed_and_every_other_setting_stays_checked() -> None:
-    """The Airflow OpenLineage provider adds its parent-run facets under the setting ``openlineage`` to every run that a trigger task starts
-    (apache-airflow-providers-standard 1.21.0, ``TriggerDagRunOperator``: ``openlineage_inject_parent_info`` is on by default). The live pipeline run of
-    Nov 23 failed all six routes on that setting. A route run that carries it is followed to its end, as the same run without it would be. Any other setting
+    """When OpenLineage is active, a trigger task can add its parent-run facets under the setting ``openlineage`` to the run it starts
+    (apache-airflow-providers-standard 1.21.0, ``TriggerDagRunOperator``: ``openlineage_inject_parent_info`` is on by default). A live pipeline run failed
+    all six routes on that setting. A route run that carries it is followed to its end, as the same run without it would be. Any other setting
     the route does not name, and a wrong value of a setting it names, still fail the route naming it, with or without the facets."""
     base = stage_run("features")
     model = "m1"

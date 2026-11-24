@@ -166,7 +166,7 @@ def dag_run_state(dag_id: str, run_id: str) -> str | None:
     return None if record is None else str(record["state"])
 
 
-# The Airflow OpenLineage provider adds this setting to the conf of every run that a TriggerDagRunOperator starts (apache-airflow-providers-standard 1.21.0,
+# When OpenLineage is active, a TriggerDagRunOperator can add this setting to the conf of the run it starts (apache-airflow-providers-standard 1.21.0,
 # ``openlineage_inject_parent_info``, on by default): the parent run's lineage facets and nothing else. It is for lineage only and no DAG reads it as a setting.
 LINEAGE_CONF_KEY = "openlineage"
 
