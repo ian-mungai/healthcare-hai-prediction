@@ -11,6 +11,7 @@ preparation_sha256=""
 mlflow_retention=false
 athena_retention=false
 prometheus_retention=false
+state_admin=""
 keep_launch_hold=false
 continue_token=""
 jobs_inputs=""
@@ -37,6 +38,11 @@ while [[ $# -gt 0 ]]; do
       [[ "$prometheus_retention" == false ]] || { printf 'Select the Prometheus history retention rules once.\n' >&2; exit 2; }
       prometheus_retention=true
       shift
+      ;;
+    --state-admin)
+      [[ -z "$state_admin" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --state-admin principal, role/NAME or user/NAME.\n' >&2; exit 2; }
+      state_admin="$2"
+      shift 2
       ;;
     --keep-launch-hold)
       [[ "$keep_launch_hold" == false ]] || { printf 'Select --keep-launch-hold once.\n' >&2; exit 2; }
@@ -80,6 +86,9 @@ if [[ "$athena_retention" == true ]]; then
 fi
 if [[ "$prometheus_retention" == true ]]; then
   [[ "$stack" == storage ]] || { printf 'The Prometheus history retention rules belong to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
+fi
+if [[ -n "$state_admin" ]]; then
+  [[ "$stack" == storage ]] || { printf 'The state prefix belongs to the storage stack: use --state-admin without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
@@ -159,6 +168,9 @@ if [[ "$stack" == storage && "$athena_retention" == true ]]; then
 fi
 if [[ "$stack" == storage && "$prometheus_retention" == true ]]; then
   render_args+=(--prometheus-history-retention)
+fi
+if [[ "$stack" == storage && -n "$state_admin" ]]; then
+  render_args+=(--state-admin "$state_admin")
 fi
 if [[ "$stack" == platform || "$stack" == services || "$stack" == alerts ]]; then
   # The shared renderer writes only the inputs the selected stack declares. The alerts root holds the alert address: apply it only through this wrapper

@@ -2096,6 +2096,40 @@ def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -
         {"PATH": str(stand_in)},
     )
     evidence.check(step, "prometheus_option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
+    state = "terraform_state_enabled"
+    principals = "terraform_state_admin_principals"
+    state_values = {state: True, principals: ["role/example_admin"]}
+    state_plans = {
+        "default": plans["default"],
+        "enabled": platform_plan(expected, {state: False, principals: []}, variables={name: {"value": value} for name, value in state_values.items()}),
+    }
+    state_cases = {
+        "reject_state_plan_without_the_option": ("enabled", [], 2, f"Saved plan input {principals} is not its committed default"),
+        "accept_state_plan_with_the_option": ("enabled", ["--state-admin", "role/example_admin"], 0, "Rendered private Terraform inputs"),
+        "reject_default_plan_with_the_state_option": ("default", ["--state-admin", "role/example_admin"], 2, "Saved plan inputs differ from .env"),
+        "reject_state_option_with_an_account_id": ("enabled", ["--state-admin", "role/admin_111111111111"], 2, "no 12-digit account ID"),
+        "reject_state_option_with_a_full_arn": ("enabled", ["--state-admin", "arn:aws:iam::example:role/x"], 2, "role/NAME or user/NAME"),
+    }
+    for name, (plan, options, returncode, message) in state_cases.items():
+        plan_path = workspace / f"{name}.json"
+        plan_path.write_text(json.dumps(state_plans[plan]), encoding="utf-8")
+        step, result = evidence.run(name, [*renderer, *options, "--check-plan", str(plan_path)], workspace, {"PATH": str(stand_in)})
+        evidence.check(step, "expected_outcome", result.returncode == returncode and message in result.stdout + result.stderr)
+    step, result = evidence.run(
+        "wrapper_storage_validate_state", [*wrapper, "--state-admin", "role/example_admin", "validate"], workspace, {"PATH": str(stand_in)}
+    )
+    evidence.check(
+        step, "state_inputs_render_the_flag_and_the_administrator", result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, **state_values}
+    )
+    step, result = evidence.run("wrapper_storage_validate_after_state", [*wrapper, "validate"], workspace, {"PATH": str(stand_in)})
+    evidence.check(step, "the_state_flag_does_not_persist", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
+    step, result = evidence.run(
+        "wrapper_iam_refuses_the_state_option",
+        [*wrapper, "--iam", "--state-admin", "role/example_admin", "--admin-profile", ADMIN, "validate"],
+        workspace,
+        {"PATH": str(stand_in)},
+    )
+    evidence.check(step, "state_option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
 
 
 def string_values(value: Any) -> list[str]:

@@ -60,6 +60,7 @@ terraform_checks() {
   timed "terraform_checks: platform repository group cases" "$python_bin" -m scripts.infrastructure.run_platform_groups_e2e --output-directory "$e2e_output/platform_groups"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
   timed "terraform_checks: serving transition on the first apply" "$python_bin" -m scripts.infrastructure.run_serving_transition_e2e --output-directory "$e2e_output/serving_transition"
+  timed "terraform_checks: state migration into the project bucket" "$python_bin" -m scripts.infrastructure.run_state_migration_e2e --out "$e2e_output/state_migration"
   # A change to the bronze writer's managed policies updates them in place and never replaces one: the real IAM stack is planned with the real AWS provider, offline, from the provider cache that the
   # iam stack init above filled and the committed lock file, against a synthetic applied state, and a planted description change must show the replacement.
   timed "terraform_checks: IAM upgrade plan" "$python_bin" -m scripts.infrastructure.run_iam_upgrade_plan_e2e --output-directory "$e2e_output/iam_upgrade_plan"

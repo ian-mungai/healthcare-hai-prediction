@@ -83,6 +83,8 @@ ALERT_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)
 ALERT_EMAIL_LIMIT = 254
 # .env keys that may be left out; only the alerts root reads them.
 OPTIONAL_ENV_KEYS = frozenset({"ALERT_EMAIL"})
+# The same rule as the terraform_state_admin_principals validation in infra/variables.tf: role/NAME or user/NAME, no wildcard, no full ARN, no account ID.
+STATE_ADMIN = re.compile(r"(user|role)/[A-Za-z0-9_+=,.@/-]+")
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
 
@@ -420,6 +422,12 @@ def main() -> None:
         action="store_true",
         help="Render prometheus_history_retention_enabled for the storage stack; without it the stack keeps its default (off).",
     )
+    parser.add_argument(
+        "--state-admin",
+        metavar="role/NAME",
+        help="Render terraform_state_enabled and terraform_state_admin_principals for the storage stack (the state prefix of the project bucket, with the "
+        "administrator that applies the iam stack); without it the stack keeps its defaults (off).",
+    )
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true", help="Verify that the project profile authenticates as the derived policy user.")
@@ -439,6 +447,13 @@ def main() -> None:
             if arguments.stack != "storage":
                 raise ConfigurationError("--prometheus-history-retention belongs to the storage stack: select --stack storage.")
             storage_inputs["prometheus_history_retention_enabled"] = True
+        if arguments.state_admin is not None:
+            if arguments.stack != "storage":
+                raise ConfigurationError("--state-admin belongs to the storage stack: select --stack storage.")
+            if not STATE_ADMIN.fullmatch(arguments.state_admin) or re.search(r"[0-9]{12}", arguments.state_admin):
+                raise ConfigurationError("--state-admin takes role/NAME or user/NAME with no wildcard, no full ARN and no 12-digit account ID.")
+            storage_inputs["terraform_state_enabled"] = True
+            storage_inputs["terraform_state_admin_principals"] = [arguments.state_admin]
         preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None
         if preparation is not None:
             preparation = derive_environment_inputs(preparation, iam)

@@ -49,7 +49,11 @@ ALERT_FILES = (
     "alert_email_teardown_3_apply.sh",
     "alert_email_teardown_4_subscriptions.sh",
 )
-EXPECTED_SCRIPTS = frozenset({CODE, RESOLVE, STAGING, *ALERT_FILES})
+STATE_PREFIX = "state_prefix_apply.sh"
+STATE_PROJECT = "state_migration.sh"
+STATE_IAM = "state_migration_iam.sh"
+STATE_FILES = (STATE_PREFIX, STATE_PROJECT, STATE_IAM)
+EXPECTED_SCRIPTS = frozenset({CODE, RESOLVE, STAGING, *ALERT_FILES, *STATE_FILES})
 CODE_STEPS = tuple(range(7))
 IAM_FLAGS = {"host_code_fetch_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs", "--alerts")
@@ -640,6 +644,72 @@ def step_mutant_checks(code_body: str, folder: Path) -> dict[str, bool]:
     return checks
 
 
+STATE_ORDER = (
+    "state_migration check",
+    "state_migration plan --phase before",
+    'confirm "',
+    "state_migration migrate",
+    "state_migration plan --phase after",
+    "state_migration verify",
+)
+
+
+def state_order(body: str) -> bool:
+    """The state move runs its steps in the safe order: check (read only), plan before, typed confirmation, move, plan after, verification."""
+    positions = [body.find(marker) for marker in STATE_ORDER]
+    return all(position >= 0 for position in positions) and positions == sorted(positions)
+
+
+def state_sheet_checks(folder: Path) -> dict[str, bool]:
+    """The three sheets of the Terraform state move: each parses as delivered, every command goes through its real parser, the steps come in the safe
+    order, the project stacks never name the administrator profile, the IAM stack always does, and no sheet applies or moves anything before its
+    typed confirmation."""
+    workspace = Workspace(folder / "state_workspace")
+    wrapper = make_wrapper(workspace, {})
+    bodies = {name: script_text(name) for name in STATE_FILES}
+    overrides = {
+        STATE_PREFIX: {"STATE_ADMIN": "role/example_admin", "STORAGE_PLAN": "/work/storage.tfplan"},
+        STATE_PROJECT: {"STACK": "platform"},
+        STATE_IAM: {"ADMIN_PROFILE": ADMIN},
+    }
+    checks: dict[str, bool] = {}
+    for name, body in bodies.items():
+        (folder / f"state_{name}").mkdir(parents=True, exist_ok=True)
+        checks.update(pasteable_checks(name, body, folder / f"state_{name}"))
+        checks[f"{name}: its steps are numbered from 0 in order"] = step_numbers(body) == list(range(len(step_numbers(body)))) and len(step_numbers(body)) >= 4
+        problems = owner_commands.check_shell_section(body, folder / f"state_{name}" / "run", wrapper, overrides[name])
+        checks[f"{name}: {len(problems)} printed commands were found"] = len(problems) >= 4
+        for number, (line, found) in enumerate(problems.items(), 1):
+            checks[f"{name}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
+    prefix, project, iam = bodies[STATE_PREFIX], bodies[STATE_PROJECT], bodies[STATE_IAM]
+    checks["the prefix sheet applies the saved plan only after its typed confirmation and checks the live bucket last"] = (
+        prefix.find('confirm "') < prefix.find('terraform.sh --state-admin "$STATE_ADMIN" apply') < prefix.find("state_migration check --stack storage")
+    )
+    checks["the prefix sheet plans and applies with the same --state-admin option, so the wrapper compares the plan with it"] = (
+        prefix.count('terraform.sh --state-admin "$STATE_ADMIN"') == 2
+    )
+    checks["the project sheet runs the steps in the safe order"] = state_order(project)
+    checks["the iam sheet runs the steps in the safe order"] = state_order(iam)
+    checks["the project sheet never names the administrator profile in a command"] = "--admin-profile" not in project
+    checks["the iam sheet gives the administrator profile to every command"] = all(
+        "--admin-profile" in line for line in iam.splitlines() if line.startswith(".venv/bin/python -m scripts.infrastructure.state_migration")
+    )
+    checks["the project sheet moves nothing before its confirmation and refuses a second typed word"] = (
+        project.find('confirm "') < project.find("state_migration migrate") and '[ "$CONFIRMATION" = migrate ]' in project
+    )
+    checks["all three sheets point to the rollback note"] = all("docs/terraform_state_migration.md" in body for body in (project, iam, prefix))
+    mutants = {
+        "a move sheet that migrates before its plan": project.replace("state_migration plan --phase before", "state_migration plan --phase after", 1),
+        "a move sheet without its verification": project.replace("state_migration verify", "state_migration check", 1),
+    }
+    for label, body in mutants.items():
+        checks[f"{label} fails the order check"] = not state_order(body)
+    mistyped = project.replace("state_migration migrate", "state_migration migrat")
+    planted = owner_commands.check_shell_section(mistyped, folder / "state_mutant", wrapper, overrides[STATE_PROJECT])
+    checks["a mistyped command of the move sheet fails its parser"] = any(planted.values())
+    return checks
+
+
 def run(output: Path) -> dict[str, dict[str, bool]]:
     code, resolve = script_text(CODE), script_text(RESOLVE)
     block_checks, block_calls = alert_email_block_cases.cases()
@@ -651,6 +721,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
             "alert_blocks": block_checks | alert_call_checks(block_calls, Path(folder)) | alert_email_block_cases.mutant_checks(),
             "commands": command_checks(code, resolve, Path(folder)),
             "mutants": mutant_checks(code, resolve, Path(folder)) | alert_mutant_checks(Path(folder)),
+            "state_move": state_sheet_checks(Path(folder)),
         }
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
