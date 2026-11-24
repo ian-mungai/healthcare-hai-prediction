@@ -661,6 +661,19 @@ def gold_rows(version: int = 1) -> Rows:
                 "row_count": 1,
             }
         )
+    # 990003 has no PSI window, only two rows of each renamed ID for one window ending before its window 2023: silver holds them under the published ID.
+    for published in ("PSI_90_SAFETY", "PSI_13_POST_SEPSIS"):
+        rows["fct_validation_window_hold"].append(
+            {
+                "bronze_table": "cms_cc_complications_and_deaths_hospital",
+                "entity_id": "990003",
+                "measure_id": published,
+                "window_start": date(2021, 1, 1),
+                "window_end": date(2021, 12, 31),
+                "hold_reason": "repeated_in_file",
+                "row_count": 2,
+            }
+        )
     rows["fct_hac_program_year"].append(
         {
             "ccn": "990001",

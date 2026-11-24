@@ -55,6 +55,16 @@ def built_support(report: Any, staging: Path, root: Path, run_folder: Path) -> N
             "PSI without an eligible period stays null and a prior hold stays held",
             missing == [("990002", "no_matching_period", None)] * 2 + [("990005", "held_in_staging", None)] * 2,
         )
+        aliased = con.execute(
+            "select measure, alignment_status, value_number from int_spine_validation_measures "
+            "where spine_key = '990003:2023' and measure in ('PSI_90', 'PSI_13') order by measure"
+        ).fetchall()
+        report.case(
+            "E01",
+            "DT7",
+            "a held PSI_90_SAFETY or PSI_13_POST_SEPSIS window is held under its reviewed ID, not absent from the source",
+            aliased == [("PSI_13", "held_in_staging", None), ("PSI_90", "held_in_staging", None)],
+        )
         hac = con.execute(
             "select window_year, value_text, fiscal_year, alignment_status from int_spine_validation_measures "
             "where ccn = '990001' and measure = 'payment_reduction' order by window_year"

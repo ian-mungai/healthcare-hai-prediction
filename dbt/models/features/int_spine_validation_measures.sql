@@ -133,20 +133,36 @@ any_period as (
     from periods
 ),
 
+window_holds as (
+    -- A held reviewed alias counts under the exact ID it would have entered as, before the prior-period rule; the hold record keeps
+    -- the published ID. Only the complications and deaths table has PSI aliases.
+    select
+        holds.entity_id,
+        holds.window_start,
+        holds.window_end,
+        coalesce(aliases.measure_id, holds.measure_id) as measure
+    from {{ ref('fct_validation_window_hold') }} as holds
+    left join {{ ref('measure_id_aliases') }} as aliases
+        on
+            aliases.source_model = 'int_cc_complications_deaths_windows'
+            and holds.bronze_table = 'cms_cc_complications_and_deaths_hospital'
+            and holds.measure_id = aliases.published_measure_id
+),
+
 held as (
     -- Windows or program years staging held that overlap the HAI window [601].
     -- Held PSI-90 and PSI-13 windows instead end strictly before the HAI window starts.
     select distinct
         spine.spine_key,
-        holds.measure_id as measure
-    from {{ ref('fct_validation_window_hold') }} as holds
+        holds.measure
+    from window_holds as holds
     inner join spine
         on
             holds.entity_id = spine.ccn
             and (
-                (holds.measure_id in ('PSI_90', 'PSI_13') and holds.window_end < spine.window_start)
+                (holds.measure in ('PSI_90', 'PSI_13') and holds.window_end < spine.window_start)
                 or (
-                    holds.measure_id not in ('PSI_90', 'PSI_13')
+                    holds.measure not in ('PSI_90', 'PSI_13')
                     and holds.window_start <= spine.window_end
                     and holds.window_end >= spine.window_start
                 )
