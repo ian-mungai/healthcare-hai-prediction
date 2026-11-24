@@ -20,10 +20,11 @@ the run fails when a file under test changes while it runs.
 The gate stage and launcher shard cases are the check group gate_stage_checks (hosted job CI Gate Stage E2E): ``--launcher-shards-only`` and
 ``--gate-stage-only`` run them, ``--selection-only`` (the Core CI tooling job) leaves them out and a run without a mode runs all.
 
-Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks, the pre-push stage holds ``local_ci_pushed`` (the
-shim check), and every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every hook that left the commit stage is in
-a hosted partition. Push gate cases build small repositories with stand-ins for the commands: the plan holds the changed-file checks, the commit
-messages, the removed names, the secret scan and the privacy scan of the files, the same scans of the commits the push sends and of its tag messages
+Hook-stage cases (selection-only mode runs them): the commit stage holds exactly the fast hooks and the path hooks (the checks of the old on-demand group
+that run at commit only when a file they read is staged, never ``always_run``, each selecting its inputs), the pre-push stage holds ``local_ci_pushed`` (the
+shim check), and every hook of the manual stage that hosted CI runs is unchanged (pinned fingerprints) and every manual hook is in a hosted partition.
+Push gate cases build small repositories with stand-ins for the commands: the plan holds the changed-file checks, the commit messages, the removed
+names, the secret scan and the privacy scan of the files, the same scans of the commits the push sends and of its tag messages
 (real scanners on scratch repositories: a value that one commit adds and the next removes is found, also on a new branch with no merge base) and OSV
 over the range, and no step of the old gate, a failing step is named, a step that outlives its deadline fails visibly, and a missing base leaves out
 the checks that read a range. Pushes through Git, the shim and pre-commit in scratch repositories cover a new branch, a lightweight tag and an
@@ -5201,23 +5202,41 @@ FAST_COMMIT_HOOKS = frozenset(
         "zizmor",
     }
 )
+# The checks of the old on-demand group that run at commit too, each only when a file it reads is staged (never ``always_run``); they stay in the manual stage.
+COMMIT_PATH_HOOKS = frozenset(
+    {
+        "gitleaks-outgoing",
+        "env-example",
+        "unused-code",
+        "unused-dependencies",
+        "dependency-lock",
+        "orphan-files",
+        "terraform-unused",
+        "sqlfluff",
+        "build-contexts",
+        "model-metadata",
+        "documentation-review-untracked",
+    }
+)
 PUSH_HOOKS = frozenset({"local_ci_pushed"})
 INSTALL_TYPES = ("pre-commit", "commit-msg", "pre-push")
 FINGERPRINT_KEYS = ("entry", "language", "files", "exclude", "types", "types_or", "always_run", "pass_filenames", "verbose", "args")
 # What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced, and the seven linters of lint_tools.
+# The eight hooks of ``COMMIT_PATH_HOOKS`` that had ``always_run`` carry their commit selection (``files``, ``exclude``, no ``always_run``) in the pin.
+# The hosted run passes ``--all-files``, which selects such a hook whenever a tracked file matches (``hook_path_cases`` proves it), so it runs them as before.
 MANUAL_FINGERPRINTS = {
-    "gitleaks-outgoing": "f1c92f2c178a",
+    "gitleaks-outgoing": "a82522522e4d",
     "credential-files": "9d1f2d4ee86b",
     "data-files": "1681a06bc29d",
-    "env-example": "30d8bdad529c",
+    "env-example": "48c7053aa441",
     "removed-names": "acffa6ea5eac",
     "task-ids": "af8e2f11a070",
     "command-modules": "aa5699cf839f",
     "temporary-code": "9ee83ad12203",
-    "unused-code": "b94f09bd9190",
-    "unused-dependencies": "66cd9ab1759e",
-    "orphan-files": "517c80728999",
-    "terraform-unused": "a2bc8e9b59b5",
+    "unused-code": "fec61cf0a373",
+    "unused-dependencies": "3e0448836624",
+    "orphan-files": "a387da5e5d12",
+    "terraform-unused": "c68a9174268e",
     "privacy-scan": "ce896f9743dd",
     "writing-check": "6103a7434254",
     "front-matter": "82a03c2777b3",
@@ -5231,12 +5250,12 @@ MANUAL_FINGERPRINTS = {
     "actionlint": "f19f2e73cdb9",
     "yamllint": "455872e07694",
     "hadolint": "9234e13781be",
-    "build-contexts": "8ab075ce9c74",
+    "build-contexts": "611ab3e8c469",
     "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
     "model-metadata": "0c3e9bd37b2b",
-    "documentation-review-untracked": "f6fa8c87e0d3",
+    "documentation-review-untracked": "83b7b0ce6039",
     "lint-settings": "60a35b84518b",
     "suppressions": "eda6794008b9",
     "subprocess-imports": "7bae5ddf818b",
@@ -5271,11 +5290,12 @@ def hook_config_problems(document: dict[str, Any], partitions: dict[str, list[st
     fingerprints = {
         name: hashlib.sha256(json.dumps({key: hooks[name].get(key) for key in FINGERPRINT_KEYS}, sort_keys=True).encode()).hexdigest()[:12] for name in manual
     }
-    moved = sorted(set(MANUAL_FINGERPRINTS) - commit)
+    moved = sorted(MANUAL_FINGERPRINTS)
     partitioned = {name for names in partitions.values() for name in names} | set(delegated or {})
     return {
-        "heavy_in_commit_stage": sorted(commit - FAST_COMMIT_HOOKS),
-        "fast_missing_from_commit_stage": sorted(FAST_COMMIT_HOOKS - commit),
+        "heavy_in_commit_stage": sorted(commit - FAST_COMMIT_HOOKS - COMMIT_PATH_HOOKS),
+        "fast_missing_from_commit_stage": sorted((FAST_COMMIT_HOOKS | COMMIT_PATH_HOOKS) - commit),
+        "commit_path_hooks_always_run": sorted(name for name in COMMIT_PATH_HOOKS if hooks.get(name, {}).get("always_run")),
         "install_types": [kind for kind in INSTALL_TYPES if kind not in document.get("default_install_hook_types", [])],
         "push_hooks_not_in_push_stage": sorted(name for name in PUSH_HOOKS if stage_set(document, hooks.get(name, {})) != {"pre-push"}),
         "manual_changed": sorted(name for name in MANUAL_FINGERPRINTS if fingerprints.get(name) != MANUAL_FINGERPRINTS[name])
@@ -5286,6 +5306,32 @@ def hook_config_problems(document: dict[str, Any], partitions: dict[str, list[st
 
 
 ROOT_MANIFESTS = ("uv.lock", "pyproject.toml")
+# A path that each commit-stage hook must select at commit: its own script and a file of each kind it reads, so that a staged change to one of them never
+# skips the check (and the hosted ``--all-files`` run, whose hook skips itself when no tracked file matches, finds at least one tracked file).
+COMMIT_PATH_INPUTS = {
+    "gitleaks-outgoing": ["scripts/quality/scan_secrets.py", "config/quality_tools.json", "services/model_api/Dockerfile", "README.md"],
+    "env-example": [".env.example", "config/quality/env_names.json", "scripts/quality/repo_checks.py", "infra/services/main.tf", "docker-compose.yaml"],
+    "unused-code": ["scripts/quality/repo_checks.py", "scripts/quality/vulture_whitelist.py", ".cleanup_allowlist", "uv.lock", "pyproject.toml"],
+    "unused-dependencies": [
+        "scripts/quality/repo_checks.py",
+        "scripts/quality/lock_env.py",
+        ".cleanup_allowlist",
+        "uv.lock",
+        "pyproject.toml",
+        "config/quality/dependency_runtimes.json",
+        "config/quality_tools.json",
+    ],
+    "orphan-files": ["README.md", "scripts/quality/repo_checks.py", "config/quality/env_names.json", "services/model_api/Dockerfile", ".cleanup_allowlist"],
+    "terraform-unused": ["infra/iam/main.tf", ".tflint.hcl", ".cleanup_allowlist", "scripts/quality/repo_checks.py", "config/quality_tools.json"],
+    "build-contexts": [
+        "services/model_api/Dockerfile",
+        "services/lakehouse/spark/Dockerfile",
+        "docker-compose.yaml",
+        "infra/services/images.json",
+        "scripts/quality/lint_sources.py",
+    ],
+    "documentation-review-untracked": [".documentation_review.json", ".gitignore", "scripts/quality/documentation_review.py"],
+}
 
 
 def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5299,6 +5345,11 @@ def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
         if name == "osv-scanner":
             missed = [path for path in missed if path != "pyproject.toml"]
         cases.append({"case": f"hook_{name}_selects_the_lock_and_manifest", "passed": not missed, "missed": missed})
+    for name, paths in COMMIT_PATH_INPUTS.items():
+        found = hooks.get(name, {})
+        include, exclude = re.compile(str(found.get("files") or "")), re.compile(str(found.get("exclude") or "^$"))
+        missed = [path for path in paths if not include.search(path) or exclude.search(path)]
+        cases.append({"case": f"commit_hook_{name}_selects_its_inputs", "passed": not missed, "missed": missed})
     return cases
 
 
@@ -5312,6 +5363,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     real = hook_config_problems(document, partitions, config.get("hooks_run_by_groups", {}))
     names = {
         "commit_stage_holds_only_fast_hooks": ("heavy_in_commit_stage", "fast_missing_from_commit_stage", "local_ci_affected_present"),
+        "commit_path_hooks_run_only_on_their_files": ("commit_path_hooks_always_run",),
         "pre_push_hooks_declared": ("install_types", "push_hooks_not_in_push_stage"),
         "manual_stage_unchanged": ("manual_changed",),
         "moved_hooks_are_in_a_hosted_partition": ("moved_not_in_a_partition",),
@@ -5346,11 +5398,15 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
     def edit_entry(document: dict[str, Any], _: dict[str, list[str]]) -> None:
         hook_table(document)["unused-code"]["entry"] += " --changed"
 
+    def always_run(document: dict[str, Any], _: dict[str, list[str]]) -> None:
+        hook_table(document)["orphan-files"]["always_run"] = True
+
     def unpartition(_: dict[str, Any], partitions: dict[str, list[str]]) -> None:
         partitions["orphans"].remove("orphan-files")
 
     results += [
-        planted("heavy_hook_in_commit_stage", add_stage("unused-code", "pre-commit"), "heavy_in_commit_stage", "commit_stage_holds_only_fast_hooks"),
+        planted("heavy_hook_in_commit_stage", add_stage("test-checks", "pre-commit"), "heavy_in_commit_stage", "commit_stage_holds_only_fast_hooks"),
+        planted("commit_path_hook_always_runs", always_run, "commit_path_hooks_always_run", "commit_path_hooks_run_only_on_their_files"),
         planted(
             "privacy_gate_dropped_from_commit_stage",
             drop_stage("privacy-scan", "pre-commit"),

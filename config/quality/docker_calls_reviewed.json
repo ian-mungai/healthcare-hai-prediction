@@ -1321,11 +1321,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 3701,
+      "line": 3702,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cdd48c9d864f83b9df731603ccb356b1d45f2d49d24b032df2365417d345ac6b",
+      "file_sha256": "f2cbb053fa3961905edcc429f01f8f6aa7858aa8e87659f7c5de9e4557513876",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7",
@@ -1334,7 +1334,7 @@
         "scripts/quality/ci_hooks.py": "sha256:26821626f35871d78624c6ee1efb3fd96426b5d69e9ae05305f3690e3bb37b99",
         "scripts/quality/core_commands.py": "sha256:efa5f4bbcad7c180a2934462fb39d6b59aa8c9b6968262e68e169110aadca458",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
-        "scripts/quality/pre_push.py": "sha256:9fc63e16c52a1433eb96027230cac8dc01dbde93f9d05120e5ab9677f3f2eb02",
+        "scripts/quality/pre_push.py": "sha256:6003a2eb3feca1828e7cbfe321431fb8c7a004f1a3e31f5f2644cf850d8f29e4",
         "scripts/quality/repo_checks.py": "sha256:d96d45297543a31c8b1ff2ec3c892380550ab21be7f0f8837a4beb72c4c82e3d",
         "scripts/quality/run_checks_e2e.py": "sha256:5642321ef1692ebaf8861fd3d2416453504b2aeab8c738c752ba811057e46033",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
@@ -1346,11 +1346,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 3753,
+      "line": 3754,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "cdd48c9d864f83b9df731603ccb356b1d45f2d49d24b032df2365417d345ac6b",
+      "file_sha256": "f2cbb053fa3961905edcc429f01f8f6aa7858aa8e87659f7c5de9e4557513876",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7",
@@ -1359,7 +1359,7 @@
         "scripts/quality/ci_hooks.py": "sha256:26821626f35871d78624c6ee1efb3fd96426b5d69e9ae05305f3690e3bb37b99",
         "scripts/quality/core_commands.py": "sha256:efa5f4bbcad7c180a2934462fb39d6b59aa8c9b6968262e68e169110aadca458",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
-        "scripts/quality/pre_push.py": "sha256:9fc63e16c52a1433eb96027230cac8dc01dbde93f9d05120e5ab9677f3f2eb02",
+        "scripts/quality/pre_push.py": "sha256:6003a2eb3feca1828e7cbfe321431fb8c7a004f1a3e31f5f2644cf850d8f29e4",
         "scripts/quality/repo_checks.py": "sha256:d96d45297543a31c8b1ff2ec3c892380550ab21be7f0f8837a4beb72c4c82e3d",
         "scripts/quality/run_checks_e2e.py": "sha256:5642321ef1692ebaf8861fd3d2416453504b2aeab8c738c752ba811057e46033",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
@@ -1632,7 +1632,7 @@
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7",
         "scripts/quality/lint_sources.py": "sha256:e79ffb2d1fe4ba8ffab204c0adb5cbdf5aafd287e4e0c08f80b6bfb22cf1a32a",
         "scripts/quality/lock_env.py": "sha256:4fea7f7b77b09f8b6011868c33b58ab517172cb2bbcb1b95f4664c6de0a6e62a",
-        "scripts/quality/pre_push.py": "sha256:9fc63e16c52a1433eb96027230cac8dc01dbde93f9d05120e5ab9677f3f2eb02"
+        "scripts/quality/pre_push.py": "sha256:6003a2eb3feca1828e7cbfe321431fb8c7a004f1a3e31f5f2644cf850d8f29e4"
       },
       "reason": "runs the Python that yamllint_environment selects (the private yamllint environment, else .venv), with -m yamllint --version"
     }

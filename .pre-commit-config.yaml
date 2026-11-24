@@ -3,8 +3,12 @@
 # from scripts/quality/install_tools.py in .tools. Install once with `.venv/bin/pre-commit install`: default_install_hook_types covers all three hook types.
 # Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for
 # every push with the whole push input, whatever reference pre-commit hands its own hooks. The local_ci_pushed hook below only refuses a push without it.
-# Stages: the commit stage holds only fast checks (a typical commit takes about two minutes); every hook marked `stages: [manual]` below is what the hosted
-# hooks job runs (scripts/quality/ci_hooks.py, in full on every pushed commit). The pre-push run (scripts/quality/pre_push.py) runs the changed-file checks, the commit
+# Stages: the commit stage holds the fast checks and the path checks. A path check (the cleanup checks, the outgoing secret scan, dependency lock, SQLFluff,
+# model metadata and the review-record check) also has the manual stage and runs at commit only when a staged file is one it reads (`files`, `exclude`),
+# over its whole scope; with no `files` it reads every file, so any staged file selects it. Git hands pre-commit no deleted file, so a commit that only deletes
+# files skips a path check: the hosted run catches it. Only test-checks, test-lock and test-documentation-review stay manual-only. Every hook with the manual
+# stage is what the hosted hooks job runs (scripts/quality/ci_hooks.py, in full with --all-files on every pushed commit, so a path hook runs there whatever
+# the commit changed). The pre-push run (scripts/quality/pre_push.py) runs the changed-file checks, the commit
 # messages, the removed names, the secret and privacy scans and the osv-scanner hook over the pushed range, in about two minutes.
 # `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify. The pre-push run clears SKIP and the other pre-commit variables that change which hooks run.
@@ -39,13 +43,12 @@ repos:
         always_run: true
         stages: [pre-commit]
       - id: gitleaks-outgoing
-        # The full set has nothing staged, so it scans every outgoing source file instead.
+        # Scans every file Git does not ignore (tracked or not), so any staged file selects it; the staged scan above covers only the staged diff.
         name: Scan all outgoing source files for secrets
         entry: .venv/bin/python -m scripts.quality.scan_secrets
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        stages: [pre-commit, manual]
       - id: credential-files
         name: Credential, state and saved-plan files
         entry: .venv/bin/python -m scripts.quality.repo_checks credential-files
@@ -55,12 +58,14 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks data-files
         language: system
       - id: env-example
+        # Reads .env.example, config/quality/env_names.json, every Python file for reads and every other tracked file for uses and setters. Markdown only mentions a
+        # name and the cleanup allowlist is not read, so neither selects the hook.
         name: Environment variables listed in .env.example
         entry: .venv/bin/python -m scripts.quality.repo_checks env-example
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        exclude: (\.md$|^\.cleanup_allowlist$)
+        stages: [pre-commit, manual]
       - id: removed-names
         name: Removed names gone from code, config and docs
         entry: .venv/bin/python -m scripts.quality.repo_checks removed-names
@@ -99,15 +104,19 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks unused-code
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        # Vulture reads every tracked Python file but e2e/ (its whitelist is one), the allowlist and the pinned vulture of the lock.
+        files: ^(.*\.py|\.cleanup_allowlist|pyproject\.toml|uv\.lock)$
+        exclude: ^e2e/
+        stages: [pre-commit, manual]
       - id: unused-dependencies
         name: Dependencies declared and used per runtime (deptry)
         entry: .venv/bin/python -m scripts.quality.repo_checks unused-dependencies
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        # Deptry reads every tracked Python file but e2e/ and data/, the runtime map, the allowlist, and the groups of pyproject.toml and the lock.
+        files: ^(.*\.py|\.cleanup_allowlist|pyproject\.toml|uv\.lock|config/quality_tools\.json|config/quality/dependency_runtimes\.json)$
+        exclude: ^(e2e|data)/
+        stages: [pre-commit, manual]
       - id: dependency-lock
         # pyproject.toml declares every dependency in one group per image or tool; uv.lock pins every group with hashes. The check needs no network.
         name: The dependency lock matches pyproject.toml and its own rules (uv)
@@ -115,21 +124,22 @@ repos:
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock|scripts/quality/lock_env\.py|config/quality_tools\.json)$
-        stages: [manual]
+        stages: [pre-commit, manual]
       - id: orphan-files
+        # A file is an orphan when no other tracked file names it, so any staged file (a new one, or an edit that drops a reference) selects the hook.
         name: Every file referenced by another
         entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        stages: [pre-commit, manual]
       - id: terraform-unused
+        # tflint reads the tracked Terraform files of every folder and its pinned version; the allowlist holds the exceptions.
         name: No unused Terraform declarations (tflint)
         entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        files: ^(.*\.tf(\.json)?|\.cleanup_allowlist|\.tflint\.hcl|config/quality_tools\.json|scripts/quality/repo_checks\.py)$
+        stages: [pre-commit, manual]
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
         entry: .venv/bin/python -m scripts.quality.repo_checks privacy-scan --all
@@ -176,7 +186,7 @@ repos:
         language: system
         pass_filenames: false
         files: (\.sql$|^\.sqlfluff$|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
-        stages: [manual]
+        stages: [pre-commit, manual]
       - id: ruff
         name: Every nonignored Python source passes Ruff and formatting
         entry: .venv/bin/python -m scripts.quality.lint_sources ruff
@@ -218,8 +228,9 @@ repos:
         entry: .venv/bin/python -m scripts.quality.lint_sources build-contexts
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        # It reads every tracked Dockerfile, the root Compose file and the image list of infra/services.
+        files: (^|/)Dockerfile(\..+)?$|^docker-compose\.yaml$|^infra/services/images\.json$|^scripts/quality/lint_sources\.py$
+        stages: [pre-commit, manual]
       - id: container-mounts
         name: First-party container imports fit their declared mounts
         entry: .venv/bin/python -m scripts.quality.container_mounts
@@ -301,22 +312,23 @@ repos:
         language: system
         pass_filenames: false
         files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py))|uv\.lock|pyproject\.toml)$
-        stages: [manual]
+        stages: [pre-commit, manual]
       - id: documentation-review
         name: All documentation reviewed for the staged revision
         entry: .venv/bin/python -m scripts.quality.documentation_review check
         language: system
         pass_filenames: false
         always_run: true
-        # The review record is local, so the full set runs documentation-review-untracked instead (a stage split, not a bypass).
+        # The review record is local, so the hosted run checks documentation-review-untracked instead (a stage split, not a bypass).
         stages: [pre-commit]
       - id: documentation-review-untracked
         name: Documentation review record stays local and untracked
         entry: .venv/bin/python -m scripts.quality.documentation_review check-untracked
         language: system
         pass_filenames: false
-        always_run: true
-        stages: [manual]
+        # It reads whether the index holds the record and whether a .gitignore ignores it.
+        files: (^|/)\.gitignore$|^\.documentation_review\.json$|^scripts/quality/documentation_review\.py$
+        stages: [pre-commit, manual]
       - id: lint-settings
         name: Lint and type settings never loosened
         entry: .venv/bin/python -m scripts.quality.repo_checks lint-settings

@@ -1,8 +1,8 @@
 """The push gate: the checks before every push to any branch, over the pushed range (the merge base of the pushed head with ``origin/main`` to the head).
 
 Hosted CI runs every check group in full on the pushed commit (.github/workflows/ci.yml), and main moves to a commit only after that run is green. The gate
-therefore runs only what hosted CI cannot do for a commit that is already public, in about two minutes. The commit stage holds the fast hooks
-(.pre-commit-config.yaml).
+therefore runs only what hosted CI cannot do for a commit that is already public, in about two minutes. The commit stage holds the fast hooks and the path
+hooks, which run when a staged file is one they read (.pre-commit-config.yaml).
 
 The changed-file checks run first (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the check group files).
 A failed check stops the run. Then these steps run at once, except the OSV-Scanner hook, which runs through pre-commit (it takes the worktree's index lock):
