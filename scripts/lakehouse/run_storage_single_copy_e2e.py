@@ -781,7 +781,9 @@ def metadata_scope() -> dict[str, bool]:
         refuses_loss = False
     committed = [row["table"] for row in bronze.load_table_map()["tables"]]
     complete = bronze_metadata.build(committed, [synthetic_metadata_item(name) for name in committed], [], [], committed)
+    results = metadata_leaving()
     return {
+        **results,
         "first_one_group_metadata_publication_refused": refused_partial,
         "full_map_metadata_bootstrap_succeeds": {row["table_name"] for row in original} == {"first", "second"},
         "full_map_selection_missing_table_is_refused": missing_table_refused,
@@ -791,6 +793,43 @@ def metadata_scope() -> dict[str, bool]:
         "backing_metadata_is_in_pin_set": "file_metadata" in pins.mapped_tables(),
         "backing_generation_covers_full_committed_map": {row["table_name"] for row in complete if row["kind"] == "observation"} == set(committed),
         "physical_index_covers_full_committed_map": {row["table_name"] for row in complete if row["kind"] == "object"} == set(committed),
+    }
+
+
+def metadata_leaving() -> dict[str, bool]:
+    """A table that left the bronze scope keeps its published rows untouched, is never loaded again and is never dropped; a mapped table cannot leave."""
+    first, second = synthetic_metadata_item("first"), synthetic_metadata_item("second")
+    generation = bronze_metadata.build(["first", "second"], [first, second], [], [], all_tables=["first", "second"])
+    envelope = {"generation", "generation_row_count", "generation_object_count"}
+
+    def held(rows: list[dict[str, Any]]) -> str:
+        return json.dumps([{key: value for key, value in row.items() if key not in envelope} for row in rows if row["table_name"] == "second"], sort_keys=True)
+
+    def refused(call: Any) -> bool:
+        try:
+            call()
+        except bronze_metadata.MetadataError:
+            return True
+        return False
+
+    without = refused(lambda: bronze_metadata.build(["first"], [first], [], generation, all_tables=["first"]))
+    after = bronze_metadata.build(["first"], [first], [], generation, all_tables=["first"], leaving=["second"])
+    bronze_metadata.validate_successor(generation, after)
+    fresh = bronze_metadata.build(["first"], [first], [], [], all_tables=["first"], leaving=["second"])
+    mapped_and_leaving = refused(lambda: bronze_metadata.build(["first"], [first], [], generation, all_tables=["first", "second"], leaving=["second"]))
+    dropped_rows = [row for row in after if row["table_name"] != "second"]
+    config = bronze.load_table_map()
+    removed = bronze.load_removed(bronze.REMOVED, config)
+    leaving = bronze.load_leaving(bronze.LEAVING, config, removed)
+    return {
+        "leaving_table_without_record_is_refused_as_undeclared": without,
+        "leaving_table_rows_stay_byte_for_byte": held(after) == held(generation) != "[]",
+        "leaving_table_is_not_in_the_generation_of_a_first_build": {row["table_name"] for row in fresh} == {"first"},
+        "mapped_table_cannot_also_leave": mapped_and_leaving,
+        "leaving_table_rows_cannot_be_lost_later": refused(lambda: bronze_metadata.validate_successor(after, dropped_rows)),
+        "committed_leaving_record_is_disjoint_from_the_map_and_the_removed_list": bool(leaving)
+        and not set(leaving) & {row["table"] for row in config["tables"]}
+        and not set(leaving) & set(removed),
     }
 
 

@@ -54,6 +54,8 @@ TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 RETIRED = Path("config/lakehouse/retired_objects.json")
 # Tables taken out of the table map, dropped with their dictionaries and side rows [257].
 REMOVED = Path("config/lakehouse/removed_tables.json")
+# Tables that left the bronze scope: no load writes them, no drop touches them, and their published rows stay as the frozen record.
+LEAVING = Path("config/lakehouse/bronze_leaving_scope.json")
 # The columns each silver staging projection reads by name, derived from the models; a loaded table that lacks one of them fails the load by table and column.
 CONSUMER_COLUMNS = Path("config/lakehouse/bronze_consumer_columns.json")
 # A manifest with these fields and no objects list records one document by checksum [153].
@@ -1260,6 +1262,27 @@ def load_removed(path: Path, config: dict[str, Any]) -> list[str]:
     return names
 
 
+def load_leaving(path: Path, config: dict[str, Any], removed: Iterable[str] = ()) -> list[str]:
+    """Read the tables that left the bronze scope; refuse a bad name, a repeat, a mapped table or a removed one."""
+    if not path.exists():
+        return []
+    mapped = {table["table"] for table in config["tables"]}
+    barred = set(removed)
+    names: list[str] = []
+    for entry in json.loads(path.read_text())["tables"]:
+        name = entry.get("table")
+        if not (isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,99}", name)):
+            raise BronzeError("a table that left the scope needs a plain lower-case identifier")
+        if name in names:
+            raise BronzeError(f"{name}: the leaving list names it twice")
+        if name in mapped:
+            raise BronzeError(f"{name}: still in the table map, so it has not left the scope")
+        if name in barred:
+            raise BronzeError(f"{name}: on the removed list, which drops it; a table that left the scope is kept")
+        names.append(name)
+    return names
+
+
 def drop_removed(spark: Any, names: list[str], namespace: str, dictionary_namespace: str = DICTIONARY_NAMESPACE) -> dict[str, str]:
     """Purge removed tables, their bound dictionaries and side rows, then report dropped or absent."""
     namespace_name(namespace)
@@ -1477,6 +1500,11 @@ def main(argv: list[str] | None = None) -> int:
     config = load_table_map()
     if args.namespace is not None:
         config["namespace"] = args.namespace
+    try:
+        leaving = load_leaving(LEAVING, config, load_removed(REMOVED, config))
+    except BronzeError as error:
+        sys.stderr.write(f"bronze: {error}\n")
+        return 1
     repair_names = args.repair_tables.split(",") if args.repair_tables is not None else []
     if args.repair_tables is not None and (
         len(repair_names) != len(set(repair_names)) or any(name not in {table["table"] for table in config["tables"]} for name in repair_names)
@@ -1535,7 +1563,7 @@ def main(argv: list[str] | None = None) -> int:
             bronze_pin.verify_replay(inventory, inputs)
         check_unsourced(storage, bucket, config, names, unsourced, previous, load_retired())
         if args.diagnose:
-            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, everything, unsourced)
+            diagnostic = bronze_metadata.diagnose(names, inputs, unselected, previous, everything, unsourced, leaving)
             path = REPORT_ROOT / "diagnostic.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(diagnostic, indent=2, sort_keys=True) + "\n")
@@ -1543,7 +1571,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps({"report": str(path), "passed": diagnostic["passed"], "failing_checksum_count": diagnostic["failing_checksum_count"]}) + "\n"
             )
             return 0 if diagnostic["passed"] else 1
-        metadata = bronze_metadata.build(names, inputs, unselected, previous, everything, unsourced)
+        metadata = bronze_metadata.build(names, inputs, unselected, previous, everything, unsourced, leaving)
         bronze_metadata.validate_successor(previous, metadata)
         load_inputs = [item for item in inputs if item["table"] in repair_names] if repair_names else inputs
         # A retry whose complete metadata generation equals the published one changes nothing: a plain load writes no table and loads no data.

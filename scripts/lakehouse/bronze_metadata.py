@@ -295,14 +295,18 @@ def build(
     previous: list[dict[str, Any]],
     all_tables: Iterable[str],
     unsourced: Iterable[str] = (),
+    leaving: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Retain every observation and untouched table, transferring canonical lineage only through a validated correction.
 
     ``unsourced`` names declared tables that the run left out because they have no source object yet. Such a table has no observation row in the
     generation, so the generation holds exactly the other declared tables. A table that is requested, undeclared, already published or holds failed or
     retired observations of stored objects cannot be left out.
+
+    ``leaving`` names the tables that left the bronze scope (``config/lakehouse/bronze_leaving_scope.json``). They are not declared and no run loads them.
+    Their published rows stay in the generation exactly as they were: the frozen record of what bronze held. A declared table cannot also leave.
     """
-    rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced)
+    rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced, leaving)
     validate(rows)
     return sorted(rows, key=lambda row: (row["kind"], row["sha256"], row["observation_id"] or ""))
 
@@ -314,10 +318,13 @@ def _build_rows(
     previous: list[dict[str, Any]],
     all_tables: Iterable[str],
     unsourced: Iterable[str] = (),
+    leaving: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     if previous:
         validate(previous)
-    chosen, declared = set(names), set(all_tables)
+    chosen, declared, departed = set(names), set(all_tables), set(leaving)
+    if departed & declared:
+        raise MetadataError("a table that left the bronze scope is also a committed bronze table")
     left_out = _left_out(list(unsourced), chosen, declared, previous)
     if any("copy" in entry and entry["copy"]["table"] in left_out for entry in excluded):
         raise MetadataError("a table with failed or retired observations cannot be left out of the load: the generation keeps those observations")
@@ -372,7 +379,7 @@ def _build_rows(
         rows.append(obj)
     rows += [{**row, "kind": "object"} for digest, row in selected.items() if digest not in old_objects]
     rows += [dict(row) for row in previous if row["table_name"] not in chosen]
-    if {row["table_name"] for row in rows if row["kind"] == "observation"} != complete_tables:
+    if {row["table_name"] for row in rows if row["kind"] == "observation"} - departed != complete_tables:
         raise MetadataError("metadata generation is missing a committed bronze table or contains an undeclared table")
     objects = {row["sha256"]: row for row in rows if row["kind"] == "object"}
     for row in rows:
@@ -539,11 +546,12 @@ def diagnose(
     previous: list[dict[str, Any]],
     all_tables: Iterable[str],
     unsourced: Iterable[str] = (),
+    leaving: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build the ordinary candidate without publishing and report preparation, checksum or successor failures."""
     counts = {"inputs": len(inputs), "excluded_copies": sum("copy" in entry for entry in excluded), "previous_rows": len(previous)}
     try:
-        rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced)
+        rows = _build_rows(names, inputs, excluded, previous, all_tables, unsourced, leaving)
     except MetadataError as error:
         return {
             "schema_version": 1,

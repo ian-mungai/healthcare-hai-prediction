@@ -598,6 +598,7 @@
     "config/lakehouse/bootstrap_ownership.json",
     "config/lakehouse/bronze_consumer_columns.json",
     "config/lakehouse/bronze_consumer_target_branches.json",
+    "config/lakehouse/bronze_leaving_scope.json",
     "config/lakehouse/bronze_silver_readers.json",
     "config/lakehouse/bronze_tables.json",
     "config/lakehouse/dbt_package_archive.json",

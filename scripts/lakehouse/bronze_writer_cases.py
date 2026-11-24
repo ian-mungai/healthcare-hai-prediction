@@ -432,6 +432,7 @@ def worker_import_closure(subject: ModuleType, journal: ModuleType, out: Path) -
     configs = {
         "config/lakehouse/aws_bronze_templates.json",
         "config/lakehouse/bronze_consumer_columns.json",
+        "config/lakehouse/bronze_leaving_scope.json",
         "config/lakehouse/bronze_silver_readers.json",
         "config/lakehouse/bronze_tables.json",
         "config/lakehouse/person_policies.json",

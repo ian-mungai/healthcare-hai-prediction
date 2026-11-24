@@ -123,8 +123,9 @@ def test_the_preflight_and_the_pin_accept_the_staged_inputs(monkeypatch: pytest.
     check((job.folder / bronze_run.RECORD).is_file(), "the pin phase wrote no record from the staged inputs")
 
 
-FULL_MAP = json.loads((Path(__file__).resolve().parents[1] / "config/lakehouse/bronze_tables.json").read_text())
-FULL_NAMES = [entry["table"] for entry in FULL_MAP["tables"]]
+# The size of the Nov 18 request (330 tables). The committed map has fewer tables since the bronze scope trim, so the guard names its own tables.
+FULL_NAMES = [f"synthetic_table_{index:03d}" for index in range(330)]
+FULL_MAP = {"tables": [{"table": name, "collection": "synthetic/collection"} for name in FULL_NAMES]}
 FULL_SOURCES = {
     "version": 1,
     "tables": sorted(FULL_NAMES),

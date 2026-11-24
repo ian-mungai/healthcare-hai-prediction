@@ -1684,18 +1684,26 @@ def supersession_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch
 
 
 def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
-    """A table taken out of the map is dropped with its dictionary and side rows; nothing else changes [257] to [260]."""
+    """A removed table is dropped with its dictionary and side rows; a table that left the scope is not. Nothing else changes [257] to [260]."""
     from scripts.lakehouse import dictionary
 
     results: dict[str, bool] = {}
-    store(storage, "x/removal", "docs", "RM__a", [(None, "drop_me.csv", csv_bytes(["A"], [["1"]])), (None, "keep_me.csv", csv_bytes(["A"], [["2"]]))])
+    store(
+        storage,
+        "x/removal",
+        "docs",
+        "RM__a",
+        [(None, "drop_me.csv", csv_bytes(["A"], [["1"]])), (None, "keep_me.csv", csv_bytes(["A"], [["2"]])), (None, "left_me.csv", csv_bytes(["A"], [["3"]]))],
+    )
     drop = {"table": "removal_drop", "group": "rm", "collection": "x/removal", "member_pattern": "^drop_me\\.csv$", "format": "csv"}
     keep = {"table": "removal_keep", "group": "rm", "collection": "x/removal", "member_pattern": "^keep_me\\.csv$", "format": "csv"}
-    both = bronze.load_table_map(table_map(root / "removal_both.json", [drop, keep]))
-    inputs, unselected = bronze.discover(storage, BUCKET, both, ["removal_drop", "removal_keep"])
+    left = {"table": "removal_left", "group": "rm", "collection": "x/removal", "member_pattern": "^left_me\\.csv$", "format": "csv"}
+    loaded = ["removal_drop", "removal_keep", "removal_left"]
+    both = bronze.load_table_map(table_map(root / "removal_both.json", [drop, keep, left]))
+    inputs, unselected = bronze.discover(storage, BUCKET, both, loaded)
     bronze.load_objects(spark, inputs, storage, "bronze", scratch)
-    bronze.write_copies(spark, "bronze", ["removal_drop", "removal_keep"], inputs, unselected)
-    dictionary.build(spark, both, ["removal_drop", "removal_keep"], "bronze")
+    bronze.write_copies(spark, "bronze", loaded, inputs, unselected)
+    dictionary.build(spark, both, loaded, "bronze")
     kept_only = bronze.load_table_map(table_map(root / "removal_kept.json", [keep]))
     listed = root / "removed_tables.json"
     listed.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_drop", "reason": "synthetic", "decision": "synthetic"}]}))
@@ -1711,7 +1719,21 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
     twice = root / "removed_twice.json"
     twice.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_drop", "reason": "r", "decision": "d"}] * 2}))
     results["removed_table_repeat_refused"] = expect_error(lambda: bronze.load_removed(twice, kept_only), "twice")
-    before_keep = side_tables("removal_keep")
+    before_keep, before_left = side_tables("removal_keep"), side_tables("removal_left")
+    # A table that left the scope is out of the map and off the removed list: no load writes it and no drop touches it.
+    left_list = root / "bronze_leaving_scope.json"
+    left_list.write_text(json.dumps({"version": 1, "tables": [{"table": "removal_left", "collection": "x/removal"}]}))
+    leaving_names = bronze.load_leaving(left_list, kept_only, bronze.load_removed(listed, kept_only))
+    results["leaving_table_is_read_from_the_record"] = leaving_names == ["removal_left"]
+    results["leaving_table_still_mapped_refused"] = expect_error(lambda: bronze.load_leaving(left_list, both), "still in the table map")
+    results["leaving_table_on_removed_list_refused"] = expect_error(lambda: bronze.load_leaving(left_list, kept_only, ["removal_left"]), "kept")
+    for label, entries, message in (
+        ("bad_name", [{"table": "x; DROP"}], "identifier"),
+        ("repeat", [{"table": "removal_left"}] * 2, "twice"),
+    ):
+        broken = root / f"leaving_{label}.json"
+        broken.write_text(json.dumps({"version": 1, "tables": entries}))
+        results[f"leaving_table_{label}_refused"] = expect_error(lambda path=broken: bronze.load_leaving(path, kept_only), message)
     # [257] The table, its dictionary and its side rows go.
     outcome = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze")
     results["removed_table_dropped"] = (
@@ -1726,6 +1748,14 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
         and spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_keep")
         and side_tables("removal_keep") == before_keep
         and before_keep["column_map"] > 0
+    )
+    # A table that left the scope keeps its rows, dictionary and side rows when the removed tables are dropped.
+    results["leaving_table_not_dropped"] = (
+        outcome == {"removal_drop": "dropped"}
+        and spark.table("bronze.removal_left").count() == 1
+        and spark.catalog.tableExists(f"{dictionary.NAMESPACE}.removal_left")
+        and side_tables("removal_left") == before_left
+        and before_left["column_map"] > 0
     )
     # [259] A rerun reports the table as absent and changes nothing.
     results["removed_table_rerun_absent"] = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze") == {"removal_drop": "absent"}

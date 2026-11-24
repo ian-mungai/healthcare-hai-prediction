@@ -1,0 +1,910 @@
+{
+  "version": 1,
+  "basis": "Tables that left the bronze scope (owner decision of Nov 24 2026, project standard: bronze loads only the data files that silver and gold need, plus the publisher dictionaries of those tables). Silver reads the tables of config/lakehouse/bronze_silver_readers.json, and gold and features read silver only. Capture still stores every file. Only the bronze load changed.",
+  "decision": "The scope switch only. No load writes these tables, and no step drops or deletes an existing table from the catalog, Glue or S3: physical retirement waits for a maintained searchable inventory (owner decision Registry Q4, Nov 18 2026).",
+  "interim_record": "The frozen file_metadata and stored_copies rows of these tables and the S3 manifests stay as the searchable record of what bronze held. The metadata build carries the rows forward unchanged.",
+  "trigger": "The first new capture in a leaving collection, or raw read acceptance.",
+  "follow_up": "The source_objects inventory (registry design v3 section 4.4), then physical retirement.",
+  "tables": [
+    {
+      "table": "cms_pos_clia",
+      "collection": "cms/provider_of_services"
+    },
+    {
+      "table": "cms_ipps_pdf_rows",
+      "collection": "cms/ipps"
+    },
+    {
+      "table": "bls_laus_documents_text",
+      "collection": "bls/local_area_unemployment"
+    },
+    {
+      "table": "acs_derived",
+      "collection": "census/acs"
+    },
+    {
+      "table": "acs_sequence_2009_text_lines",
+      "collection": "census/acs"
+    },
+    {
+      "table": "acs_documents_text",
+      "collection": "census/acs"
+    },
+    {
+      "table": "acs_documents_sheets",
+      "collection": "census/acs"
+    },
+    {
+      "table": "saipe_documents_text",
+      "collection": "census/saipe"
+    },
+    {
+      "table": "sahie_2005_text_lines",
+      "collection": "census/sahie"
+    },
+    {
+      "table": "county_adjacency_documents_text",
+      "collection": "census/county_adjacency"
+    },
+    {
+      "table": "rucc_documents_text",
+      "collection": "usda/rural_urban_continuum"
+    },
+    {
+      "table": "ruca_documents_text",
+      "collection": "usda/rural_urban_commuting"
+    },
+    {
+      "table": "ruca_documents_pdf",
+      "collection": "usda/rural_urban_commuting"
+    },
+    {
+      "table": "hud_documents_text",
+      "collection": "hud/usps_crosswalk"
+    },
+    {
+      "table": "hud_documents_pdf",
+      "collection": "hud/usps_crosswalk"
+    },
+    {
+      "table": "places_documents_csv",
+      "collection": "cdc/places"
+    },
+    {
+      "table": "wonder_documents_text",
+      "collection": "cdc/wonder_mortality"
+    },
+    {
+      "table": "cms_mmd_documents_pdf",
+      "collection": "cms/mapping_medicare_disparities"
+    },
+    {
+      "table": "cms_chronic_conditions_documents_pdf",
+      "collection": "cms/chronic_conditions"
+    },
+    {
+      "table": "hhs_capacity_documents_text",
+      "collection": "hhs/hospital_capacity"
+    },
+    {
+      "table": "hrsa_shortage_sheet_rows",
+      "collection": "hrsa/shortage_areas"
+    },
+    {
+      "table": "hrsa_shortage_documents_sheets",
+      "collection": "hrsa/shortage_areas"
+    },
+    {
+      "table": "hrsa_nursing_documents_sheets",
+      "collection": "hrsa/nursing_workforce"
+    },
+    {
+      "table": "hrsa_nursing_documents_docx",
+      "collection": "hrsa/nursing_workforce"
+    },
+    {
+      "table": "ahrq_psi_documents_pdf",
+      "collection": "ahrq/patient_safety_indicators"
+    },
+    {
+      "table": "nsi_retention_pdf",
+      "collection": "nsi/retention_and_staffing"
+    },
+    {
+      "table": "hcai_finance_text_lines",
+      "collection": "california_hcai/hospital_finance"
+    },
+    {
+      "table": "hcai_finance_documents_pdf",
+      "collection": "california_hcai/hospital_finance"
+    },
+    {
+      "table": "hcai_finance_documents_docx",
+      "collection": "california_hcai/hospital_finance"
+    },
+    {
+      "table": "hcai_util_documents_pdf",
+      "collection": "california_hcai/hospital_utilization"
+    },
+    {
+      "table": "hcai_util_documents_csv",
+      "collection": "california_hcai/hospital_utilization"
+    },
+    {
+      "table": "cms_cc_4aav_bsmy",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_4hje_vua3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_98ix_2iqy",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_acs_nsqip_data_file",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_acs_nsqip_data_file_sheet_rows",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_akfs_5dgr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_asc_ccn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_asc_facility",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_asc_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_asc_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ascqr_oas_cahps_by_asc",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ascqr_oas_cahps_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ascqr_oas_cahps_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_birthing_friendly_hospitals_geocoded",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_c7us_v4mf",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cebp_iqr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cebp_iqr_6_decimals",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cebp_iqr_breakdowns_by_claim_type",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cebp_iqr_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cebp_iqr_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cjr_quality_reporting",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_cms_psi_6_decimal_file",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_complications_and_deaths_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_complications_and_deaths_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_data_updates",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_distribution_of_net_change_in_base_op_drg_payment_amt",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_dod_te",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_dod_triss_final_file",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_e6hj_umam",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_esr2_9zyn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_g3fg_3myg",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_gbq5_7hzr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hbf_map_birthing_friendly_hospitals_geocoded",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hcahps_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hcahps_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_health_equity_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_health_equity_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_health_equity_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hopd_ccn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hopd_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hopd_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_annual_qualitymeasure_pch_ebrt_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_annual_qualitymeasure_pch_ocm_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_annual_qualitymeasure_pch_outcomes_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_annual_qualitymeasure_pch_outcomes_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_annual_qualitymeasures_pch_ocm_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_hac_domain_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_mspb_6_decimals",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_pch_hai_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_pch_hcahps_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_pch_hcahps_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_pch_hcahps_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_pch_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quarterly_qualitymeasure_rrp_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hospital_quartery_hac_domain_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_clinical_care",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_clinical_outcomes",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_efficiency",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_efficiency_and_cost_reduction",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_hcahps",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_person_and_community_engagement",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_hvbp_safety",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ipfqr_qualitymeasures_facility",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ipfqr_qualitymeasures_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ipfqr_qualitymeasures_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_maternal_health_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_maternal_health_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_measure_dates",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_medicare_hospital_spending_by_claim",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_medicare_hospital_spending_per_patient_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_medicare_hospital_spending_per_patient_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_medicare_hospital_spending_per_patient_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_net_change_in_base_op_drg_payment_amt",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_oqr_oas_cahps_by_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_oqr_oas_cahps_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_oqr_oas_cahps_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_outpatient_imaging_efficiency_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_outpatient_imaging_efficiency_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_outpatient_imaging_efficiency_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_outpatient_procedures_volume",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_p7bc_fjpi",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_patient_reported_outcomes_facility",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_payment_and_value_of_care_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_payment_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_payment_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_complications_unplanned_hospital_visits_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_complications_unplanned_hospital_visits_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_external_beam_radiotherapy_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_hcahps_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_hcahps_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_hcahps_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_healthcare_associated_infections_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_oncology_care_measures_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_outcomes_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_outcomes_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_palliative_care_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_palliative_care_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_patient_engagement_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_patient_engagement_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_unplanned_hospital_visits_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pch_unplanned_hospital_visits_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_3n5g_6b7f",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_48nr_hqxx",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_4aav_bsmy",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_4gkm_5ypv",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_4hje_vua3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_4j6d_yzce",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_4jcv_atw7",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_5gv4_jwyv",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_5hk7_b79m",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_632h_zaca",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_6pfg_whmx",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_6qxe_iqz8",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_84jm_wiui",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_98ix_2iqy",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_99ue_w85f",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_9g7e_btyt",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_9n3s_kdb3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_akfs_5dgr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_apyc_v239",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_avtz_f2ge",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_axe7_s95e",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_bs2r_24vh",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_bzsr_4my4",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_c7us_v4mf",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_cvcs_xecj",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_dc76_gh7x",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_dgck_syfz",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_dgmq_aat3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_di9i_zzrc",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_e6hj_umam",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_esr2_9zyn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_g3fg_3myg",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_gbq5_7hzr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_if5v_4x48",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_isrn_hqyy",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_iy27_wz37",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_jfnd_nl7s",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_k653_4ka8",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_muwa_iene",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_nrth_mfg3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_p7bc_fjpi",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_ptds_r8im",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_pudb_wetr",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_q9vs_r7wp",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_qatj_nmws",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_qqw3_t4ie",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_rrqw_56er",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_rs6n_9qwg",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_s5pj_hua3",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_s5xg_sys6",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_su9h_3pvj",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_tf3h_mrrs",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_tqkv_mgxq",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_u625_zae7",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_uyx4_5s7f",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_vtqa_m4zn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_wkfw_kthe",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_wue8_3vwe",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_x663_bwbj",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_xrgf_x36b",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_xubh_q36u",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_y9us_9xdf",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_ygty_mm5a",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_yizn_abxn",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_ynj2_r877",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_ypbt_wvdk",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_yq43_i98g",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_yv7e_xc69",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_pdc_s3_hos_data_z8ax_x9j1",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_percent_change_in_medicare_payments",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_percent_change_in_medicare_payments_utf16",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_promoting_interoperability_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_readmissions_and_deaths_copd_va",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_outpatient_imaging_efficiency_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_outpatient_imaging_efficiency_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_timely_and_effective_care_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_timely_and_effective_care_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_unplanned_hospital_visits_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_reh_unplanned_hospital_visits_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_structural_measures_hospital",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_timely_and_effective_care_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_timely_and_effective_care_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_unplanned_hospital_visits_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_unplanned_hospital_visits_state",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_va_ipf",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_va_psi",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_va_te",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_value_based_incentive_payment_amount",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_value_of_care_national",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_veterans_health_administration_measure_dates",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_veterans_health_administration_provider_level_data",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_y9us_9xdf",
+      "collection": "cms/hospitals"
+    },
+    {
+      "table": "cms_cc_ygty_mm5a",
+      "collection": "cms/hospitals"
+    }
+  ]
+}

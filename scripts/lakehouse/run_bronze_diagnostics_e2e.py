@@ -196,6 +196,8 @@ def command_case(
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "DEPLOYMENT", deployment)
         patch.setattr(bronze, "REPORT_ROOT", output)
+        # The synthetic maps reuse real table names, so the committed record of tables that left the scope would clash with them.
+        patch.setattr(bronze, "LEAVING", deployment.parent / "no_leaving_scope.json")
         patch.setattr(bronze, "S3Storage", lambda *, task_role=False: storage)
         patch.setattr(bronze, "load_table_map", lambda: {"namespace": "synthetic", "tables": tables or [TABLE]})
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
@@ -486,7 +488,8 @@ def all_ownership_groups(root: Path) -> dict[str, bool]:
             for row in group["observations"]
             if row["table_name"] in silver_sources | copy_tables
         ),
-        "all ownership tables remain declared in the full bronze map": set(names) <= {table["table"] for table in bronze.load_table_map()["tables"]},
+        "every ownership table is in the full bronze map or recorded as left the scope": set(names)
+        <= {table["table"] for table in bronze.load_table_map()["tables"]} | set(bronze.load_leaving(bronze.LEAVING, bronze.load_table_map())),
     }
     (root / "all_ownership_outcomes.json").write_text(
         json.dumps(
@@ -642,8 +645,8 @@ def bootstrap_repair_case(
     deployment.write_text('{"data_bucket_name":"synthetic"}')
     original_build = bronze_metadata.build
 
-    def build(chosen: Any, inputs: Any, excluded: Any, previous: Any, all_tables: Any, unsourced: Any = ()) -> Any:
-        rows = original_build(chosen, inputs, excluded, previous, all_tables, unsourced)
+    def build(chosen: Any, inputs: Any, excluded: Any, previous: Any, all_tables: Any, unsourced: Any = (), leaving: Any = ()) -> Any:
+        rows = original_build(chosen, inputs, excluded, previous, all_tables, unsourced, leaving)
         events.append(("validated", list(chosen)))
         return rows
 
@@ -686,6 +689,8 @@ def bootstrap_repair_case(
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "DEPLOYMENT", deployment)
         patch.setattr(bronze, "REPORT_ROOT", output)
+        # The synthetic maps reuse real table names, so the committed record of tables that left the scope would clash with them.
+        patch.setattr(bronze, "LEAVING", deployment.parent / "no_leaving_scope.json")
         patch.setattr(bronze, "S3Storage", lambda *, task_role=False: storage)
         patch.setattr(bronze, "load_table_map", lambda: config)
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
