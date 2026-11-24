@@ -43,7 +43,7 @@ import hashlib
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,8 +55,8 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.infrastructure.render_project_config import ConfigurationError, load_configuration
+from scripts.infrastructure.state_protection import LIFECYCLE_RULE, STATE_SIDS, Refused, deployment_digest
 from scripts.infrastructure.state_protection import RECORD as STATE_PROTECTION_RECORD
-from scripts.infrastructure.state_protection import Refused
 from scripts.infrastructure.state_protection import read as read_state_protection
 from scripts.process import TimeoutExpired, run_command
 
@@ -70,17 +70,26 @@ ENDPOINT_VARIABLES = ("AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_U
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 EXIT_STOPPED = 1
 EXIT_USAGE = 2
+EXIT_NOT_RESTORED = 3
 WRAPPER_SCRIPT = (
     'options=(); [ -z "$WRAPPER_STACK" ] || options+=("$WRAPPER_STACK"); [ -z "$WRAPPER_ADMIN" ] || options+=(--admin-profile "$WRAPPER_ADMIN"); '
     '[ -z "$WRAPPER_STATE_ADMIN" ] || options+=(--state-admin "$WRAPPER_STATE_ADMIN"); '
     'exec bash scripts/infrastructure/terraform.sh "${options[@]}" plan -detailed-exitcode -out "$WRAPPER_PLAN"'
 )
-LIFECYCLE_RULE = "expire_replaced_state_versions"
 STATE_RULE_PREFIX = f"{STATE_PREFIX}/"
 STATE_RULE_DAYS = 90
-OBJECT_STATEMENTS = ("ProjectUserUsesItsStateKeys", "ProjectUserHoldsItsStateLocks")
+OBJECT_STATEMENTS = STATE_SIDS[:2]
 OBJECT_ACTIONS = ({"s3:GetObject", "s3:PutObject"}, {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"})
-DENY_STATEMENTS = ("DenyStatePrefixToEveryoneElse", "DenyIamStateToProjectIdentities")
+DENY_STATEMENTS = STATE_SIDS[2:]
+SAVED_PLAN_STATEMENTS = (
+    "ProjectUserReadsSavedPlans",
+    "DenySavedPlansToEveryoneElse",
+    "DenySavedPlanWritesExceptThePlanRole",
+    "DenyThePlanRoleAnythingButSavingPlans",
+)
+PREFIX_POLICY = "aws_s3_bucket_policy.tls"
+PREFIX_LIFECYCLE = "aws_s3_bucket_lifecycle_configuration.data"
+PREFIX_RULES = (LIFECYCLE_RULE, "expire_saved_plans")
 NOT_KEYS = ("NotAction", "NotResource", "NotPrincipal")
 PHASES = ("before", "after")
 CLIENT_CONFIG = Config(retries={"max_attempts": 2, "mode": "standard"}, connect_timeout=10, read_timeout=60)
@@ -357,12 +366,26 @@ def check_state_rule(rule: dict[str, Any]) -> str | None:
     return None
 
 
+def state_objects() -> list[str]:
+    """The state key and the lock key of every stack: the objects that a rule expiring current objects must not reach."""
+    return [name for stack in STACKS for name in (state_key(stack), f"{state_key(stack)}.tflock")]
+
+
+def can_reach(rule: dict[str, Any], keys: list[str]) -> bool:
+    """False only when the rule's filter provably misses every key, which is a prefix that no key starts with. A tag or an object size condition cannot be
+    proved to miss, so a rule that names only those, or one that names a prefix some key has next to them, still counts as reaching."""
+    scope = rule.get("Filter")
+    if not isinstance(scope, dict):
+        scope = {"Prefix": rule.get("Prefix", "")}
+    combined = scope.get("And")
+    prefix = (combined if isinstance(combined, dict) else scope).get("Prefix")
+    return prefix is None or any(name.startswith(str(prefix)) for name in keys)
+
+
 def expires_state(rule: dict[str, Any]) -> bool:
-    """True when another enabled rule reaches the state prefix and expires current objects."""
-    prefix = rule_prefix(rule)
-    reaches = prefix is None or STATE_RULE_PREFIX.startswith(prefix)
+    """True when another enabled rule can expire the current state or lock object of any stack."""
     expiration = rule.get("Expiration", {})
-    return rule.get("Status") == "Enabled" and reaches and ("Days" in expiration or "Date" in expiration)
+    return rule.get("Status") == "Enabled" and ("Days" in expiration or "Date" in expiration) and can_reach(rule, state_objects())
 
 
 class Bucket:
@@ -446,7 +469,7 @@ class Bucket:
             raise Stopped(f"lifecycle: rule for replaced state versions invalid ({problem})")
         for rule in rules:
             if rule.get("ID") != LIFECYCLE_RULE and expires_state(rule):
-                raise Stopped(f"lifecycle: another rule expires current objects under the state prefix ({rule.get('ID', '?')})")
+                raise Stopped(f"lifecycle: another rule can expire the current state or lock object of a stack ({rule.get('ID', '?')})")
         say("lifecycle", "replaced state versions expire")
 
     def exists(self, key: str) -> bool:
@@ -587,6 +610,12 @@ def command_backend(settings: Settings) -> None:
 
 
 def command_check(settings: Settings, loopback: bool) -> None:
+    record = read_record(settings)
+    if record is not None and record.get("stage") == "copied" and backend_switched(settings):
+        # A run that stopped after the switch: the local state is empty by design and ``migrate`` resumes from the record, so only the identity is checked here.
+        Bucket(settings, loopback).identity()
+        say("check", "resume (the backend is switched and the record is copied; run the plan and migrate steps again to finish)")
+        return
     data, _ = read_local(settings)
     preflight(settings, Bucket(settings, loopback), data)
     say("check", "ok")
@@ -609,11 +638,11 @@ def changes_of(plan: dict[str, Any]) -> list[str]:
 def approved_state_admin(settings: Settings, phase: str) -> str:
     """The state administrator the owner approved for the storage stack, or a stop: every storage plan carries it once the protection is on."""
     try:
-        principal = read_state_protection(settings.root / STATE_PROTECTION_RECORD)
+        principal = read_state_protection(settings.root / STATE_PROTECTION_RECORD, deployment_digest(settings.bucket, settings.account))
     except Refused:
         raise Stopped(f"plan {phase}: the approved state protection inputs are not valid (repair {STATE_PROTECTION_RECORD})") from None
     if principal is None:
-        raise Stopped(f"plan {phase}: the approved state protection inputs are not recorded (run state_prefix_apply.sh first)")
+        raise Stopped(f"plan {phase}: the approved state protection inputs are not recorded as verified (run state_prefix_apply.sh first)")
     return principal
 
 
@@ -666,31 +695,126 @@ def command_plan(settings: Settings, phase: str) -> None:
     say(f"plan {phase}", "no change" if not lines else f"{len(lines)} change(s) (list in {settings.changes(phase).relative_to(settings.root)})")
 
 
+def has_unknown(value: object) -> bool:
+    """True when a plan's ``after_unknown`` structure marks any value as not yet known."""
+    if isinstance(value, dict):
+        return any(has_unknown(item) for item in value.values())
+    if isinstance(value, list):
+        return any(has_unknown(item) for item in value)
+    return value is True
+
+
+def delta_policy(change: dict[str, Any]) -> str | None:
+    """Why the bucket policy update is more than the state statements, or None: every statement but those of the state switch and every other attribute stay."""
+    before, after = change.get("before"), change.get("after")
+    if not isinstance(before, dict) or not isinstance(after, dict) or has_unknown(change.get("after_unknown")):
+        return "its before and after cannot be compared"
+    try:
+        old, new = json.loads(before["policy"]), json.loads(after["policy"])
+        old_rest, new_rest = old["Statement"], new["Statement"]
+        ids = [statement.get("Sid") for statement in new_rest]
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "its policy cannot be read"
+    allowed = (*STATE_SIDS, *SAVED_PLAN_STATEMENTS)
+    kept_old = [statement for statement in old_rest if statement.get("Sid") not in allowed]
+    kept_new = [statement for statement in new_rest if statement.get("Sid") not in allowed]
+    if kept_old != kept_new or {**old, "Statement": 0} != {**new, "Statement": 0}:
+        return "a statement other than the state statements changes"
+    if len({sid for sid in ids if sid in allowed}) != len([sid for sid in ids if sid in allowed]):
+        return "a state statement appears more than once"
+    if {key: value for key, value in before.items() if key != "policy"} != {key: value for key, value in after.items() if key != "policy"}:
+        return "an attribute other than the policy changes"
+    return None
+
+
+def delta_lifecycle(change: dict[str, Any]) -> str | None:
+    """Why the lifecycle update is more than the rules of the state switch, or None: every other rule and every other attribute stay."""
+    before, after, unknown = change.get("before"), change.get("after"), change.get("after_unknown")
+    if not isinstance(before, dict) or not isinstance(after, dict) or not isinstance(unknown, dict):
+        return "its before and after cannot be compared"
+    old, new, marks = before.get("rule"), after.get("rule"), unknown.get("rule")
+    if not isinstance(old, list) or not isinstance(new, list) or not isinstance(marks, list) or len(marks) != len(new):
+        return "its rules cannot be read"
+    if any(not isinstance(rule, dict) for rule in (*old, *new)):
+        return "its rules cannot be read"
+    kept_old = [rule for rule in old if rule.get("id") not in PREFIX_RULES]
+    if kept_old != [rule for rule in new if rule.get("id") not in PREFIX_RULES]:
+        return "a rule other than the state rules changes"
+    if any(has_unknown(mark) for rule, mark in zip(new, marks, strict=True) if rule.get("id") not in PREFIX_RULES):
+        return "a rule other than the state rules has values not known yet"
+    if has_unknown({key: value for key, value in unknown.items() if key != "rule"}):
+        return "an attribute other than the rules is not known yet"
+    if {key: value for key, value in before.items() if key != "rule"} != {key: value for key, value in after.items() if key != "rule"}:
+        return "an attribute other than the rules changes"
+    ids = [rule.get("id") for rule in new if rule.get("id") in PREFIX_RULES]
+    return "a state rule appears more than once" if len(set(ids)) != len(ids) else None
+
+
+DELTAS: dict[str, Callable[[dict[str, Any]], str | None]] = {PREFIX_POLICY: delta_policy, PREFIX_LIFECYCLE: delta_lifecycle}
+
+
+def plan_shape_problems(plan: dict[str, Any], updates: list[str]) -> list[str]:
+    """Why a saved plan is not the prefix change, or an empty list: only the named updates in place, no move, no import, no output change, and for each
+    update only the state statements of the bucket policy and the state rules of the lifecycle configuration differ."""
+    found: dict[str, dict[str, Any]] = {}
+    problems = []
+    for entry in plan.get("resource_changes", []):
+        address = str(entry.get("address", "?"))
+        body = entry.get("change", {})
+        if entry.get("previous_address"):
+            problems.append(f"{address}: moved")
+        if body.get("importing"):
+            problems.append(f"{address}: imported")
+        if body.get("actions", []) not in (["no-op"], ["read"]):
+            found[address] = body
+    for name, change in plan.get("output_changes", {}).items():
+        if change.get("actions", []) not in (["no-op"], ["read"]):
+            problems.append(f"output.{name}: {'+'.join(change.get('actions', []))}")
+    wanted = set(updates)
+    problems += [
+        f"{address}: {'+'.join(body.get('actions', []))}"
+        for address, body in sorted(found.items())
+        if address not in wanted or body.get("actions") != ["update"]
+    ]
+    problems += [f"{address}: missing" for address in sorted(wanted - found.keys())]
+    for address in sorted(wanted & found.keys()):
+        if found[address].get("actions") != ["update"]:
+            continue
+        rule = DELTAS.get(address)
+        reason = rule(found[address]) if rule is not None else "no rule says what may change in it"
+        if reason:
+            problems.append(f"{address}: {reason}")
+    return problems
+
+
+def file_sha256(path: Path) -> str:
+    try:
+        return sha256(path.read_bytes())
+    except OSError:
+        raise Stopped("plan shape: the plan could not be read") from None
+
+
 def command_approve_plan(settings: Settings, plan_file: Path, updates: list[str]) -> None:
-    """Accept a saved plan only when its resource changes are exactly the named addresses, each as an update in place."""
-    code, output = Terraform(settings).call(["show", "-json", str(plan_file.resolve())])
+    """Accept a saved plan only when it is the prefix change and nothing else, and print the SHA-256 of that file for the sheet to bind its confirmation to."""
+    path = plan_file.resolve()
+    digest = file_sha256(path)
+    code, output = Terraform(settings).call(["show", "-json", str(path)])
     try:
         plan = json.loads(output) if code == 0 else None
     except ValueError:
         plan = None
-    if not isinstance(plan, dict) or plan.get("errored"):
+    if not isinstance(plan, dict) or plan.get("errored") or file_sha256(path) != digest:
         raise Stopped("plan shape: the plan could not be read")
-    found = {}
-    for change in plan.get("resource_changes", []):
-        actions = change.get("change", {}).get("actions", [])
-        if actions not in (["no-op"], ["read"]):
-            found[str(change.get("address", "?"))] = actions
-    wanted = set(updates)
-    problems = [f"{address}: {'+'.join(actions)}" for address, actions in sorted(found.items()) if address not in wanted or actions != ["update"]]
-    problems += [f"{address}: missing" for address in sorted(wanted - found.keys())]
+    problems = plan_shape_problems(plan, updates)
     if problems:
         raise Stopped(f"plan shape: refused ({'; '.join(problems)})")
-    say("plan shape", f"ok ({len(wanted)} updates in place and nothing else)")
+    say("plan shape", f"ok ({len(set(updates))} updates in place and nothing else)")
+    say("plan sha256", digest)
 
 
-def restore(settings: Settings, terraform: Terraform, data: bytes, marker_before: bytes | None) -> None:
+def restore(settings: Settings, terraform: Terraform, data: bytes, marker_before: bytes | None) -> bool:
     """Put the stack back as it was: no backend file, the local state with its original bytes, the backend settings Terraform cached before the switch, and a
-    local command that reads the state again. Recovery is reported only after that command read the original state."""
+    local command that reads the state again. Recovery is reported, and True returned, only after that command read the original state."""
     marker = marker_path(settings)
     (settings.folder / "backend.tf").unlink(missing_ok=True)
     try:
@@ -703,15 +827,16 @@ def restore(settings: Settings, terraform: Terraform, data: bytes, marker_before
             marker.write_bytes(marker_before)
     except OSError:
         say("backend", "restore failed: copy the state back from the record folder")
-        return
+        return False
     raw = terraform.pull()
     if raw is None or fingerprint(raw) != fingerprint(data):
         say(
             "backend",
             "restore failed: a local command does not read the original state; copy it back from the record folder and run terraform init -reconfigure",
         )
-        return
+        return False
     say("backend", "restored")
+    return True
 
 
 def record_fingerprint(record: dict[str, Any]) -> Fingerprint:
@@ -775,7 +900,12 @@ def command_migrate(settings: Settings, loopback: bool) -> None:
         raw = terraform.pull()
         pulled = fingerprint(raw) if raw is not None else None
     if pulled != local:
-        restore(settings, terraform, data, marker_before)
+        if not restore(settings, terraform, data, marker_before):
+            raise Stopped(
+                "backend: the state read through the backend does not equal the local state and the stack is NOT back on its local state; "
+                "follow the rollback in docs/terraform_state_migration.md",
+                EXIT_NOT_RESTORED,
+            )
         raise Stopped("backend: the state read through the backend does not equal the local state; the stack is back on its local state")
     write_record(settings, "done", local, digest)
     say("backend", "switched")

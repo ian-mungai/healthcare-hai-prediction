@@ -24,6 +24,8 @@ from typing import Any
 
 from scripts.infrastructure import systemd_model
 from scripts.infrastructure.stack_settings import INFRA, project_parameter_values
+from scripts.infrastructure.state_migration_s3_stand_in import STATE_RULE, StateBucket, state_policy
+from scripts.infrastructure.state_protection import deployment_digest
 from scripts.infrastructure.synthetic_workspace import add_repository_files
 from scripts.process import LaunchPool, TimeoutExpired, run_command
 
@@ -2137,10 +2139,13 @@ def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -
 def run_state_protection_cases(
     evidence: Evidence, workspace: Path, stand_in: Path, expected: dict[str, Any], state_plans: dict[str, Any], wrapper: list[str], output: Path
 ) -> None:
-    """Once the state administrator is approved, every storage render and apply carries it; a different one and a plan without it are refused."""
+    """Once the state administrator is approved, every storage render and apply carries it; a different one and a plan without it are refused. The approval
+    is kept as pending before the apply and counts only after the apply succeeded and the live bucket read back with the protection; a checkout without the
+    record cannot plan or apply the protection away unless the disable flag says so."""
     principals = "terraform_state_admin_principals"
     record = workspace / "plans" / "state_migration" / "state_protection.json"
     record.unlink(missing_ok=True)
+    digest = deployment_digest(FIXTURE["S3_BUCKET"], FIXTURE["AWS_ACCOUNT_ID"])
     shim = stand_in / "python_without_identity"
     lines = [
         "#!/bin/bash",
@@ -2150,57 +2155,145 @@ def run_state_protection_cases(
     ]
     shim.write_text("\n".join(lines) + "\n", encoding="utf-8")
     shim.chmod(0o700)
-    environment = {"PATH": str(stand_in), "PYTHON_BIN": str(shim)}
+    failing = evidence.temporary / "storage_failing_tools"
+    failing.mkdir(exist_ok=True)
+    (failing / "terraform").write_text(f"#!{sys.executable}\nimport sys\nif sys.argv[2] == 'apply':\n    sys.exit(1)\n" + PLATFORM_TERRAFORM, encoding="utf-8")
+    (failing / "terraform").chmod(0o700)
+    (failing / "dirname").symlink_to("/usr/bin/dirname")
+    credentials, config = workspace / "aws_credentials", workspace / "aws_config"
+    credentials.write_text(f"[{PROFILE}]\naws_access_key_id=AKIAPROJECTSTANDIN\naws_secret_access_key=stand-in\n", encoding="utf-8")
+    config.write_text(f"[profile {PROFILE}]\nregion={FIXTURE['AWS_REGION']}\n", encoding="utf-8")
     plan_paths = {}
     for label, plan in state_plans.items():
         plan_paths[label] = workspace / f"{label}_state_plan.json"
         plan_paths[label].write_text(json.dumps(plan), encoding="utf-8")
     option = ["--state-admin", "role/example_admin"]
-    step, result = evidence.run(
-        "apply_refused_when_the_plan_lacks_the_option", [*wrapper, *option, "apply", str(plan_paths["default"])], workspace, environment
-    )
-    evidence.check(
-        step,
-        "a_refused_apply_keeps_no_record",
-        result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout and not record.exists(),
-    )
-    step, result = evidence.run("apply_accepts_the_plan_with_the_option", [*wrapper, *option, "apply", str(plan_paths["enabled"])], workspace, environment)
-    evidence.check(
-        step,
-        "the_approved_administrator_is_kept_after_the_apply",
-        result.returncode == 0
-        and record.is_file()
-        and json.loads(record.read_bytes()) == {principals: ["role/example_admin"]}
-        and record.stat().st_mode & 0o077 == 0,
-    )
-    step, result = evidence.run("wrapper_storage_validate_with_the_record", [*wrapper, "validate"], workspace, environment)
-    evidence.check(
-        step,
-        "the_approved_inputs_render_without_the_option",
-        result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, "terraform_state_enabled": True, principals: ["role/example_admin"]},
-    )
-    step, result = evidence.run("apply_accepts_the_state_plan_without_the_option", [*wrapper, "apply", str(plan_paths["enabled"])], workspace, environment)
-    evidence.check(step, "the_approved_inputs_match_the_saved_plan", result.returncode == 0)
-    step, result = evidence.run(
-        "apply_refuses_a_plan_that_would_remove_the_state_grants", [*wrapper, "apply", str(plan_paths["default"])], workspace, environment
-    )
-    evidence.check(
-        step, "a_plan_without_the_approved_inputs_is_refused", result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout
-    )
-    step, result = evidence.run("validate_refuses_another_administrator", [*wrapper, "--state-admin", "role/other_admin", "validate"], workspace, environment)
-    evidence.check(step, "another_administrator_is_refused", result.returncode == 2 and "differs from the approved state administrator" in result.stderr)
-    step, result = evidence.run(
-        "remember_refuses_another_administrator", [*wrapper, "--state-admin", "role/other_admin", "apply", str(plan_paths["enabled"])], workspace, environment
-    )
-    evidence.check(
-        step, "another_administrator_is_not_kept", result.returncode == 2 and json.loads(record.read_bytes()) == {principals: ["role/example_admin"]}
-    )
-    record.write_text('{"terraform_state_admin_principals": ["arn:aws:iam::x:role/y"]}\n', encoding="utf-8")
-    step, result = evidence.run("validate_refuses_an_invalid_record", [*wrapper, "validate"], workspace, environment)
-    evidence.check(step, "an_invalid_record_stops_the_render", result.returncode == 2 and "not valid" in result.stderr)
-    record.unlink(missing_ok=True)
-    step, result = evidence.run("wrapper_storage_validate_without_a_record", [*wrapper, "validate"], workspace, environment)
-    evidence.check(step, "no_record_keeps_the_defaults", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
+    admin_arn = f"arn:aws:iam::{FIXTURE['AWS_ACCOUNT_ID']}:role/example_admin"
+    user_arn = f"arn:aws:iam::{FIXTURE['AWS_ACCOUNT_ID']}:user/{PROFILE}"
+    plan_role = f"arn:aws:iam::{FIXTURE['AWS_ACCOUNT_ID']}:role/example_project_gh_terraform_plan_dev"
+    with StateBucket({"AKIAPROJECTSTANDIN": "project"}, name=FIXTURE["S3_BUCKET"]) as bucket:
+        bucket.lifecycle = ["abort_incomplete_uploads", STATE_RULE]
+        environment = {
+            "PATH": str(stand_in),
+            "PYTHON_BIN": str(shim),
+            "AWS_SHARED_CREDENTIALS_FILE": str(credentials),
+            "AWS_CONFIG_FILE": str(config),
+            "AWS_ENDPOINT_URL_S3": bucket.endpoint,
+            "AWS_EC2_METADATA_DISABLED": "true",
+        }
+        failing_environment = {**environment, "PATH": str(failing)}
+        protected = state_policy(FIXTURE["S3_BUCKET"], user_arn, admin_arn, plan_role)
+
+        def stored() -> dict[str, Any]:
+            return json.loads(record.read_bytes()) if record.is_file() else {}
+
+        step, result = evidence.run(
+            "apply_refused_when_the_plan_lacks_the_option", [*wrapper, *option, "apply", str(plan_paths["default"])], workspace, environment
+        )
+        evidence.check(
+            step,
+            "a_refused_apply_keeps_no_record",
+            result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout and not record.exists(),
+        )
+        step, result = evidence.run(
+            "apply_failure_keeps_the_record_pending", [*wrapper, *option, "apply", str(plan_paths["enabled"])], workspace, failing_environment
+        )
+        evidence.check(
+            step,
+            "a_failed_apply_is_no_approval",
+            result.returncode == 1 and stored().get("status") == "pending" and "stays pending" in result.stderr,
+        )
+        bucket.policy = protected
+        step, result = evidence.run("plan_refused_while_the_record_is_pending", [*wrapper, "plan", str(plan_paths["default"])], workspace, environment)
+        evidence.check(
+            step,
+            "a_pending_record_does_not_carry_the_plan_and_the_protected_bucket_refuses_it",
+            result.returncode == 2 and "already holds the state protection" in result.stderr,
+        )
+        bucket.policy = None
+        step, result = evidence.run("apply_without_the_read_back", [*wrapper, *option, "apply", str(plan_paths["enabled"])], workspace, environment)
+        evidence.check(
+            step,
+            "an_apply_that_does_not_read_back_stays_pending",
+            result.returncode == 1 and stored().get("status") == "pending" and "did not read back" in result.stderr,
+        )
+        bucket.policy = protected
+        step, result = evidence.run("apply_accepts_the_plan_with_the_option", [*wrapper, *option, "apply", str(plan_paths["enabled"])], workspace, environment)
+        evidence.check(
+            step,
+            "the_approved_administrator_is_kept_after_the_apply_and_the_read_back",
+            result.returncode == 0
+            and record.is_file()
+            and stored() == {principals: ["role/example_admin"], "deployment": digest, "status": "verified"}
+            and record.stat().st_mode & 0o077 == 0,
+        )
+        step, result = evidence.run("wrapper_storage_validate_with_the_record", [*wrapper, "validate"], workspace, environment)
+        evidence.check(
+            step,
+            "the_approved_inputs_render_without_the_option",
+            result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, "terraform_state_enabled": True, principals: ["role/example_admin"]},
+        )
+        step, result = evidence.run("apply_accepts_the_state_plan_without_the_option", [*wrapper, "apply", str(plan_paths["enabled"])], workspace, environment)
+        evidence.check(step, "the_approved_inputs_match_the_saved_plan", result.returncode == 0)
+        step, result = evidence.run(
+            "apply_refuses_a_plan_that_would_remove_the_state_grants", [*wrapper, "apply", str(plan_paths["default"])], workspace, environment
+        )
+        evidence.check(
+            step,
+            "a_plan_without_the_approved_inputs_is_refused",
+            result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout,
+        )
+        step, result = evidence.run(
+            "validate_refuses_another_administrator", [*wrapper, "--state-admin", "role/other_admin", "validate"], workspace, environment
+        )
+        evidence.check(step, "another_administrator_is_refused", result.returncode == 2 and "differs from the approved state administrator" in result.stderr)
+        step, result = evidence.run(
+            "remember_refuses_another_administrator",
+            [*wrapper, "--state-admin", "role/other_admin", "apply", str(plan_paths["enabled"])],
+            workspace,
+            environment,
+        )
+        evidence.check(step, "another_administrator_is_not_kept", result.returncode == 2 and stored()[principals] == ["role/example_admin"])
+        record.write_text(json.dumps({principals: ["arn:aws:iam::x:role/y"], "deployment": digest, "status": "verified"}) + "\n", encoding="utf-8")
+        step, result = evidence.run("validate_refuses_an_invalid_record", [*wrapper, "validate"], workspace, environment)
+        evidence.check(step, "an_invalid_record_stops_the_render", result.returncode == 2 and "not valid" in result.stderr)
+        record.write_text(json.dumps({principals: ["role/example_admin"], "deployment": "0" * 64, "status": "verified"}) + "\n", encoding="utf-8")
+        step, result = evidence.run("validate_refuses_a_record_of_another_deployment", [*wrapper, "validate"], workspace, environment)
+        evidence.check(step, "a_foreign_record_stops_the_render", result.returncode == 2 and "another bucket or account" in result.stderr)
+        record.unlink(missing_ok=True)
+        step, result = evidence.run("wrapper_storage_validate_without_a_record", [*wrapper, "validate"], workspace, environment)
+        evidence.check(
+            step, "no_record_keeps_the_defaults_when_nothing_is_rendered_live", result.returncode == 0 and json.loads(output.read_bytes()) == expected
+        )
+        step, result = evidence.run("plan_without_a_record_on_a_protected_bucket", [*wrapper, "plan", str(plan_paths["default"])], workspace, environment)
+        evidence.check(
+            step,
+            "a_checkout_without_the_record_cannot_plan_the_protection_away",
+            result.returncode == 2 and "already holds the state protection" in result.stderr,
+        )
+        step, result = evidence.run("apply_without_a_record_on_a_protected_bucket", [*wrapper, "apply", str(plan_paths["default"])], workspace, environment)
+        evidence.check(
+            step,
+            "a_checkout_without_the_record_cannot_apply_the_protection_away",
+            result.returncode == 2 and "already holds the state protection" in result.stderr,
+        )
+        step, result = evidence.run(
+            "plan_with_the_disable_flag", [*wrapper, "--disable-state-protection", "plan", str(plan_paths["default"])], workspace, environment
+        )
+        evidence.check(step, "the_disable_flag_lets_the_protection_go_on_purpose", result.returncode == 0)
+        bucket.faults.deny_all = True
+        step, result = evidence.run("plan_with_an_unreadable_bucket", [*wrapper, "plan", str(plan_paths["default"])], workspace, environment)
+        evidence.check(step, "an_unreadable_live_policy_refuses_the_plan", result.returncode == 2 and "could not be read" in result.stderr)
+        bucket.faults.deny_all = False
+        step, result = evidence.run("disable_flag_with_an_administrator", [*wrapper, "--disable-state-protection", *option, "validate"], workspace, environment)
+        evidence.check(step, "the_disable_flag_excludes_an_administrator", result.returncode == 2 and "do not combine" in result.stderr)
+        step, result = evidence.run(
+            "wrapper_iam_refuses_the_disable_flag",
+            [*wrapper, "--iam", "--disable-state-protection", "--admin-profile", ADMIN, "validate"],
+            workspace,
+            environment,
+        )
+        evidence.check(step, "disable_flag_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
 
 
 def string_values(value: Any) -> list[str]:

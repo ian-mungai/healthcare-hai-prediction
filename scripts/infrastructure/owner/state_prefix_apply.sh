@@ -5,10 +5,12 @@
 # expire_replaced_state_versions and expire_saved_plans and the state statements of the bucket policy (infra/main.tf): only the project user may touch terraform_state/ for the
 # storage, platform, services, jobs and alerts stacks, only the administrator you name below may touch terraform_state/iam/, and every other principal is denied. Versioning of
 # the bucket is already on. The saved plan must hold exactly two changes, an update in place of aws_s3_bucket_lifecycle_configuration.data and of aws_s3_bucket_policy.tls: step 1
-# reads the plan's JSON and stops before the question on any other change, any other action (a destroy or a replacement) or a missing update. The apply keeps the administrator you
-# name as the approved state input of the storage stack (plans/state_migration/state_protection.json), so every later storage plan and apply through the wrapper carries it and a
-# plan that would remove the state grants is refused. The last command reads the live bucket and stops unless the protection is there: run the state moves (state_migration.sh,
-# state_migration_iam.sh) after it.
+# reads the plan's JSON and stops before the question on any other change, any other action (a destroy or a replacement), a moved or imported resource, an output change, a missing
+# update or a change inside the two resources other than the state statements of the bucket policy and the state lifecycle rules. The question names the first 12 characters of the
+# SHA-256 of the saved plan file and you type them, and the apply runs only if that file still has the same SHA-256. The apply keeps the administrator you name as the approved state
+# input of the storage stack (plans/state_migration/state_protection.json) as pending, and the wrapper marks it verified only after the apply succeeded and the live bucket read back
+# with the protection. Every later storage plan and apply through the wrapper then carries it, and one that would remove the state grants is refused. The last command reads the live
+# bucket and stops unless the protection is there: run the state moves (state_migration.sh, state_migration_iam.sh) after it.
 # Run it from any folder of the main checkout, in one shell. It makes one new folder under the ignored plans/ folder that holds every file it saves (RECORD_DIR). A long plan goes
 # to a file in that folder and only its change lines reach the terminal. Rollback: docs/terraform_state_migration.md.
 set -euo pipefail
@@ -16,9 +18,11 @@ trap 'echo "Stopped at line $LINENO. Read the output above, fix the cause and ru
 cd "$(dirname "$0")/../../.."
 
 confirm() {
-  printf '%s Type apply to continue: ' "$1"
+  [ "${#2}" -eq 64 ] || { echo "The saved plan was not approved: no SHA-256 was printed." >&2; exit 1; }
+  printf '%s Type "apply %s" to continue: ' "$1" "${2:0:12}"
   read -r CONFIRMATION
-  [ "$CONFIRMATION" = apply ] || { echo "Not applied." >&2; exit 1; }
+  [ "$CONFIRMATION" = "apply ${2:0:12}" ] || { echo "Not applied." >&2; exit 1; }
+  [ "$(shasum -a 256 "$3" | cut -d' ' -f1)" = "$2" ] || { echo "The saved plan file changed after it was checked. Nothing was applied." >&2; exit 1; }
 }
 
 # Step 0: the settings that every later step reads.
@@ -33,10 +37,11 @@ STORAGE_PLAN="$PWD/$RECORD_DIR/storage.tfplan"
 bash scripts/infrastructure/terraform.sh --state-admin "$STATE_ADMIN" plan -no-color -out "$STORAGE_PLAN" > "$RECORD_DIR/storage_plan.txt"
 grep -E '^  # |^Plan:' "$RECORD_DIR/storage_plan.txt"
 .venv/bin/python -m scripts.infrastructure.state_migration approve-plan --stack storage --plan "$STORAGE_PLAN" \
-  --update aws_s3_bucket_lifecycle_configuration.data --update aws_s3_bucket_policy.tls
+  --update aws_s3_bucket_lifecycle_configuration.data --update aws_s3_bucket_policy.tls | tee "$RECORD_DIR/approve_plan.txt"
+PLAN_SHA="$(sed -n 's/^plan sha256: //p' "$RECORD_DIR/approve_plan.txt")"
 
-# Step 2: apply exactly that plan. The wrapper refuses a plan that does not match .env and the option.
-confirm "Apply exactly the storage plan above?"
+# Step 2: apply exactly that plan file. The typed words name its SHA-256, and the apply runs only if the file still has it (the confirm function checks both). The wrapper refuses a plan that does not match .env and the option.
+confirm "Apply exactly the storage plan above?" "$PLAN_SHA" "$STORAGE_PLAN"
 bash scripts/infrastructure/terraform.sh --state-admin "$STATE_ADMIN" apply "$STORAGE_PLAN" > "$RECORD_DIR/storage_apply.txt"
 grep -E 'Apply complete|Error' "$RECORD_DIR/storage_apply.txt"
 

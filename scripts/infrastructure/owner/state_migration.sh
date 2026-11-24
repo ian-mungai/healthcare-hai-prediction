@@ -16,7 +16,14 @@
 #   4. plan after, then 5. verify: the plan runs through the backend (it takes and releases the lock file), and verify compares the state, the lock and the two change lists.
 # Last, commit infra/<stack>/backend.tf: it holds no bucket, region or account value. Rollback: docs/terraform_state_migration.md.
 set -euo pipefail
-trap 'echo "Stopped at line $LINENO. Read the status line above, fix the cause and run the script again: a step that finished is not repeated, and a stack that finished is refused." >&2' ERR
+stopped() {
+  if [ "$1" -eq 3 ]; then
+    echo "Stopped at line $2: the stack is NOT back on its local state. Follow the rollback in docs/terraform_state_migration.md before any other step." >&2
+  else
+    echo "Stopped at line $2. Read the status line above, fix the cause and run the script again: a step that finished is not repeated, and a stack that finished is refused." >&2
+  fi
+}
+trap 'stopped "$?" "$LINENO"' ERR
 cd "$(dirname "$0")/../../.."
 
 confirm() {
@@ -29,7 +36,7 @@ confirm() {
 STACK="${1:?Name the stack: storage, alerts, jobs, platform or services}"
 printf 'Stack: %s\n' "$STACK"
 
-# Step 1: read only. Stop on any status that is not ok, present, absent or on.
+# Step 1: read only. Stop on any status that is not ok, present, absent or on. A run that stopped after the switch (its record says copied) prints resume here, and steps 2 and 3 then finish it from the record.
 .venv/bin/python -m scripts.infrastructure.state_migration check --stack "$STACK"
 
 # Step 2: the plan before the move. A run that stopped after the copy keeps its earlier plan (a new plan cannot run on a half-switched stack), and step 3 resumes from the record.

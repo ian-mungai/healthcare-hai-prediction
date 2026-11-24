@@ -76,14 +76,20 @@ def decode_chunked(body: bytes) -> bytes:
 
 def lifecycle_rule(rule: str | dict[str, Any]) -> str:
     """One lifecycle rule as S3 answers it. A name stands for the rule the bucket has: the state rule when it is that name, an empty filter otherwise. A dict
-    sets ``id``, ``status``, ``prefix`` (``None`` for an empty filter), ``noncurrent_days``, ``days`` (expiry of the current version) and ``delete_marker``."""
+    sets ``id``, ``status``, ``prefix`` (``None`` for an empty filter), ``tag`` (a ``(key, value)`` pair),
+    ``noncurrent_days``, ``days`` (expiry of the current version) and ``delete_marker``."""
     if isinstance(rule, str):
         if rule != STATE_RULE:
             return f"<Rule><ID>{rule}</ID><Status>Enabled</Status><Filter></Filter></Rule>"
         rule = {"id": STATE_RULE, "prefix": STATE_PREFIX, "noncurrent_days": 90, "delete_marker": True}
     prefix = rule.get("prefix")
     parts = [f"<ID>{rule['id']}</ID><Status>{rule.get('status', 'Enabled')}</Status>"]
-    parts.append("<Filter></Filter>" if prefix is None else f"<Filter><Prefix>{prefix}</Prefix></Filter>")
+    tag = rule.get("tag")
+    tag_xml = "" if tag is None else f"<Tag><Key>{tag[0]}</Key><Value>{tag[1]}</Value></Tag>"
+    if tag is None:
+        parts.append("<Filter></Filter>" if prefix is None else f"<Filter><Prefix>{prefix}</Prefix></Filter>")
+    else:
+        parts.append(f"<Filter>{tag_xml}</Filter>" if prefix is None else f"<Filter><And><Prefix>{prefix}</Prefix>{tag_xml}</And></Filter>")
     if rule.get("noncurrent_days") is not None:
         parts.append(f"<NoncurrentVersionExpiration><NoncurrentDays>{rule['noncurrent_days']}</NoncurrentDays></NoncurrentVersionExpiration>")
     expiration = ""
@@ -94,6 +100,50 @@ def lifecycle_rule(rule: str | dict[str, Any]) -> str:
     if expiration:
         parts.append(f"<Expiration>{expiration}</Expiration>")
     return f"<Rule>{''.join(parts)}</Rule>"
+
+
+def state_policy(bucket: str, user: str, administrator: str, plan_role: str) -> dict[str, Any]:
+    """The bucket policy of ``infra/main.tf`` with the state switch on, as the project bucket holds it after the prefix apply (effects, principals, actions,
+    resources and deny conditions of the four state statements, and the transport deny the bucket always has)."""
+    prefix = f"arn:aws:s3:::{bucket}/terraform_state"
+    keys = [f"{prefix}/{stack}/terraform.tfstate" for stack in ("storage", "platform", "services", "jobs", "alerts")]
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Sid": "DenyInsecureTransport",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"],
+                "Condition": {"Bool": {"aws:SecureTransport": "false"}},
+            },
+            {"Sid": "ProjectUserUsesItsStateKeys", "Effect": "Allow", "Principal": {"AWS": user}, "Action": ["s3:GetObject", "s3:PutObject"], "Resource": keys},
+            {
+                "Sid": "ProjectUserHoldsItsStateLocks",
+                "Effect": "Allow",
+                "Principal": {"AWS": user},
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                "Resource": [f"{key}.tflock" for key in keys],
+            },
+            {
+                "Sid": "DenyStatePrefixToEveryoneElse",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [f"{prefix}/*"],
+                "Condition": {"ArnNotLike": {"aws:PrincipalArn": [user, plan_role, administrator]}},
+            },
+            {
+                "Sid": "DenyIamStateToProjectIdentities",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:*",
+                "Resource": [f"{prefix}/iam/*"],
+                "Condition": {"ArnLike": {"aws:PrincipalArn": [user, plan_role]}},
+            },
+        ],
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -160,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
         self.bucket.record(Seen(role, method, key, tuple(sorted(query)), status))
 
     def dispatch(self, role: str, method: str, name: str, key: str, query: dict[str, list[str]]) -> int:
-        if name != BUCKET:
+        if name != self.bucket.name:
             return self.error(404, "NoSuchBucket")
         if not key:
             return self.bucket_call(role, method, query)
@@ -231,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(
             200,
             (
-                f'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>{BUCKET}</Name><Prefix>{prefix}</Prefix>'
+                f'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>{store.name}</Name><Prefix>{prefix}</Prefix>'
                 f"<KeyCount>{len(keys)}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>{contents}</ListBucketResult>"
             ).encode(),
         )
@@ -242,7 +292,8 @@ class Handler(BaseHTTPRequestHandler):
 class StateBucket:
     """The bucket, its access keys and its recorded requests. Use as a context manager; ``endpoint`` is the loopback URL."""
 
-    def __init__(self, roles: dict[str, str], identities: dict[str, tuple[str, str]] | None = None) -> None:
+    def __init__(self, roles: dict[str, str], identities: dict[str, tuple[str, str]] | None = None, name: str = BUCKET) -> None:
+        self.name = name
         self.roles = roles
         self.identities = identities or {}
         self.objects: dict[str, bytes] = {}

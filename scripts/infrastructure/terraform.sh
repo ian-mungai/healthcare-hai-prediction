@@ -12,6 +12,7 @@ mlflow_retention=false
 athena_retention=false
 prometheus_retention=false
 state_admin=""
+disable_state_protection=false
 keep_launch_hold=false
 continue_token=""
 jobs_inputs=""
@@ -43,6 +44,11 @@ while [[ $# -gt 0 ]]; do
       [[ -z "$state_admin" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --state-admin principal, role/NAME or user/NAME.\n' >&2; exit 2; }
       state_admin="$2"
       shift 2
+      ;;
+    --disable-state-protection)
+      [[ "$disable_state_protection" == false ]] || { printf 'Select --disable-state-protection once.\n' >&2; exit 2; }
+      disable_state_protection=true
+      shift
       ;;
     --keep-launch-hold)
       [[ "$keep_launch_hold" == false ]] || { printf 'Select --keep-launch-hold once.\n' >&2; exit 2; }
@@ -89,6 +95,10 @@ if [[ "$prometheus_retention" == true ]]; then
 fi
 if [[ -n "$state_admin" ]]; then
   [[ "$stack" == storage ]] || { printf 'The state prefix belongs to the storage stack: use --state-admin without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
+fi
+if [[ "$disable_state_protection" == true ]]; then
+  [[ "$stack" == storage ]] || { printf 'The state prefix belongs to the storage stack: use --disable-state-protection without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
+  [[ -z "$state_admin" ]] || { printf -- '--disable-state-protection removes the state protection: do not combine it with --state-admin.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
@@ -212,10 +222,17 @@ fi
 state_admin_given="$state_admin"
 if [[ "$stack" == storage ]]; then
   # Once the owner approved the state administrator, every storage render carries it: a plan without it would remove the bucket's state statements and
-  # lifecycle rules. A different --state-admin is refused.
+  # lifecycle rules. A different --state-admin is refused. A plan or apply without an approved administrator is refused too when the live bucket already holds
+  # the state protection (a checkout without the record), unless --disable-state-protection says that the protection goes on purpose.
   state_given_args=()
   if [[ -n "$state_admin" ]]; then
     state_given_args+=(--state-admin "$state_admin")
+  fi
+  if [[ "$action" != validate ]]; then
+    state_given_args+=(--live)
+  fi
+  if [[ "$disable_state_protection" == true ]]; then
+    state_given_args+=(--disable)
   fi
   state_admin="$("$python_bin" -m scripts.infrastructure.state_protection resolve ${state_given_args[@]+"${state_given_args[@]}"})" || exit 2
 fi
@@ -228,8 +245,19 @@ if [[ ( "$stack" != services && "$stack" != alerts ) || "$action" != validate ]]
   "$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
 fi
 if [[ "$action" == apply && "$stack" == storage && -n "$state_admin_given" ]]; then
-  # The renderer checked the saved plan against the inputs above, so the administrator it carries is the one to keep for every later storage plan and apply.
+  # The renderer checked the saved plan against the inputs above. The administrator is kept as pending now and counts as approved only after the apply
+  # exited 0 and the live bucket read back with the protection.
   "$python_bin" -m scripts.infrastructure.state_protection remember --state-admin "$state_admin_given" || exit 2
+  terraform -chdir="$directory" apply -input=false "$@" || {
+    code=$?
+    printf 'The storage apply failed, so the state administrator stays pending and counts as no approval.\n' >&2
+    exit "$code"
+  }
+  "$python_bin" -m scripts.infrastructure.state_protection verify --state-admin "$state_admin_given" || {
+    printf 'The storage apply finished but the live bucket did not read back with the state protection. Check the bucket, then plan and apply again with --state-admin.\n' >&2
+    exit 1
+  }
+  exit 0
 fi
 if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"

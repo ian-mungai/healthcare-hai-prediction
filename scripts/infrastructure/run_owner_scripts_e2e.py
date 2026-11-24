@@ -670,6 +670,139 @@ def prefix_shape_checked(body: str) -> bool:
     )
 
 
+STATE_PLAN_BYTES = b"plan-bytes-v1\n"
+STATE_SHIMS = {
+    "scripts/infrastructure/terraform.sh": """#!/bin/bash
+echo "wrapper $*" >> "$SEQUENCE_LOG"
+case " $* " in
+  *" plan "*)
+    for last in "$@"; do out="$last"; done
+    echo "plan-bytes-v1" > "$out"
+    echo "  # aws_s3_bucket_policy.tls will be updated in-place"
+    echo "Plan: 0 to add, 2 to change, 0 to destroy." ;;
+  *" apply "*) echo "Apply complete! Resources: 0 added, 2 changed, 0 destroyed." ;;
+esac
+""",
+    ".venv/bin/python": """#!/bin/bash
+echo "python $*" >> "$SEQUENCE_LOG"
+mode="$(cat "$SEQUENCE_STATE/mode")"
+case "$*" in
+  *"state_migration approve-plan"*)
+    arguments=("$@"); plan=""
+    for index in "${!arguments[@]}"; do [[ "${arguments[$index]}" == --plan ]] && plan="${arguments[$((index + 1))]}"; done
+    if [[ "$mode" == reject ]]; then
+      echo "plan shape: refused (aws_s3_bucket_policy.tls: a statement other than the state statements changes)"
+      exit 1
+    fi
+    echo "plan shape: ok (2 updates in place and nothing else)"
+    echo "plan sha256: $(shasum -a 256 "$plan" | cut -d' ' -f1)"
+    [[ "$mode" != change ]] || echo changed >> "$plan" ;;
+  *"state_migration migrate"*)
+    if [[ "$mode" == restore_failed ]]; then
+      echo "backend: restore failed: a local command does not read the original state"
+      echo "backend: the state read through the backend does not equal the local state and the stack is NOT back on its local state"
+      exit 3
+    fi
+    echo "migration: done" ;;
+  *"state_migration check"*) echo "check: ok" ;;
+esac
+""",
+}
+
+
+def state_sheet_run(root: Path, sheet: str, mode: str, answers: str, text: str | None = None) -> tuple[int, str, list[str]]:
+    """Run one state sheet in a scratch root against stand-ins of the wrapper and the state tool, answering its prompts."""
+    for name, body in STATE_SHIMS.items():
+        shim = root / name
+        shim.parent.mkdir(parents=True, exist_ok=True)
+        shim.write_text(body, encoding="utf-8")
+        shim.chmod(0o755)
+    script = root / "scripts/infrastructure/owner" / sheet
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(script_text(sheet) if text is None else text, encoding="utf-8")
+    state = root / "state"
+    state.mkdir(exist_ok=True)
+    (state / "mode").write_text(mode + "\n", encoding="utf-8")
+    (root / "answers.txt").write_text(answers, encoding="utf-8")
+    log = root / "calls.log"
+    log.write_text("", encoding="utf-8")
+    environment = {"PATH": "/usr/bin:/bin", "HOME": str(root), "SEQUENCE_LOG": str(log), "SEQUENCE_STATE": str(state), "SHEET": sheet}
+    result = run_command(
+        "bash", ["-c", 'bash "scripts/infrastructure/owner/$SHEET" platform < answers.txt'], cwd=root, env=environment, timeout=120, own_session=True
+    )
+    return result.returncode, result.stdout + result.stderr, log.read_text(encoding="utf-8").splitlines()
+
+
+def prefix_sheet_checks(prefix: str, folder: Path) -> dict[str, bool]:
+    """The prefix sheet as a whole: a saved plan that the shape check rejects never reaches the question or the apply, an approved one needs the typed words
+    that name its SHA-256, and a plan file that changes after the check is not applied."""
+    typed = hashlib.sha256(STATE_PLAN_BYTES).hexdigest()[:12]
+    sha_line = 'PLAN_SHA="$(sed -n \'s/^plan sha256: //p\' "$RECORD_DIR/approve_plan.txt")"'
+    own_sha_line = 'PLAN_SHA="$(shasum -a 256 "$STORAGE_PLAN" | cut -d\' \' -f1)"'
+    ungated = prefix.replace(' | tee "$RECORD_DIR/approve_plan.txt"', ' > "$RECORD_DIR/approve_plan.txt" || true', 1).replace(sha_line, own_sha_line, 1)
+    right = f"role/example_admin\napply {typed}\n"
+    runs = {}
+    for label, mode, answers, text in (
+        ("rejected", "reject", right, prefix),
+        ("approved", "accept", right, prefix),
+        ("bare word", "accept", "role/example_admin\napply\n", prefix),
+        ("changed", "change", right, prefix),
+        ("unchecked", "reject", right, ungated),
+    ):
+        root = folder / f"prefix_{label.replace(' ', '_')}"
+        root.mkdir(parents=True, exist_ok=True)
+        runs[label] = state_sheet_run(root, STATE_PREFIX, mode, answers, text)
+
+    def applied(calls: list[str]) -> bool:
+        return any(call.startswith("wrapper") and " apply " in f" {call} " for call in calls)
+
+    code, output, calls = runs["rejected"]
+    checks = {
+        "a prefix sheet whose saved plan the shape check rejects stops with a failing exit status": code != 0 and "plan shape: refused" in output,
+        "a rejected saved plan never reaches the typed confirmation": 'Type "apply' not in output,
+        "a rejected saved plan never reaches the apply": not applied(calls) and not any("state_migration check" in call for call in calls),
+    }
+    code, output, calls = runs["approved"]
+    checks["an approved saved plan asks for the typed words that name its SHA-256"] = f'Type "apply {typed}"' in output
+    checks["an approved saved plan applies once, after the check, and the live bucket is read last"] = (
+        code == 0
+        and sum(1 for call in calls if applied([call])) == 1
+        and [
+            call.split()[0] + (" approve" if "approve-plan" in call else " check" if "state_migration check" in call else "")
+            for call in calls
+            if "wrapper" not in call or applied([call])
+        ]
+        == ["python approve", "wrapper", "python check"]
+    )
+    code, output, calls = runs["bare word"]
+    checks["the bare word apply does not confirm a saved plan"] = code != 0 and "Not applied" in output and not applied(calls)
+    code, output, calls = runs["changed"]
+    checks["a saved plan file that changes after its check is not applied"] = code != 0 and "changed after it was checked" in output and not applied(calls)
+    code, output, calls = runs["unchecked"]
+    checks["a prefix sheet without its shape check reaches the question (so the rejected-plan check above can fail)"] = 'Type "apply' in output and applied(
+        calls
+    )
+    return checks
+
+
+def move_sheet_checks(project: str, folder: Path) -> dict[str, bool]:
+    """A move sheet whose migrate step ends in a failed restore stops with the sheet's own message and runs no later step."""
+    root = folder / "move_restore_failed"
+    root.mkdir(parents=True, exist_ok=True)
+    code, output, calls = state_sheet_run(root, STATE_PROJECT, "restore_failed", "migrate\n")
+    return {
+        "a move sheet whose restore failed ends with a failing exit status": code != 0,
+        "a move sheet whose restore failed says that the stack is not back on its local state and points to the rollback": "NOT back on its local state"
+        in output
+        and "restore failed" in output
+        and "Follow the rollback in docs/terraform_state_migration.md" in output,
+        "a move sheet whose restore failed runs no plan after and no verification": not any(
+            "plan --phase after" in call or "state_migration verify" in call for call in calls
+        ),
+        "a move sheet whose restore failed prints no success line": "migration: done" not in output and "run the script again" not in output,
+    }
+
+
 def state_sheet_checks(folder: Path) -> dict[str, bool]:
     """The three sheets of the Terraform state move: each parses as delivered, every command goes through its real parser, the steps come in the safe
     order, the project stacks never name the administrator profile, the IAM stack always does, and no sheet applies or moves anything before its
@@ -678,7 +811,7 @@ def state_sheet_checks(folder: Path) -> dict[str, bool]:
     wrapper = make_wrapper(workspace, {})
     bodies = {name: script_text(name) for name in STATE_FILES}
     overrides = {
-        STATE_PREFIX: {"STATE_ADMIN": "role/example_admin", "STORAGE_PLAN": "/work/storage.tfplan"},
+        STATE_PREFIX: {"STATE_ADMIN": "role/example_admin", "STORAGE_PLAN": "/work/storage.tfplan", "PLAN_SHA": "c" * 64},
         STATE_PROJECT: {"STACK": "platform"},
         STATE_IAM: {"ADMIN_PROFILE": ADMIN},
     }
@@ -721,6 +854,8 @@ def state_sheet_checks(folder: Path) -> dict[str, bool]:
     checks["a prefix sheet that never reads the saved plan's shape fails the shape check"] = not prefix_shape_checked(
         prefix.replace("state_migration approve-plan", "state_migration check", 1)
     )
+    checks.update(prefix_sheet_checks(prefix, folder / "prefix_runs"))
+    checks.update(move_sheet_checks(project, folder / "move_runs"))
     mistyped = project.replace("state_migration migrate", "state_migration migrat")
     planted = owner_commands.check_shell_section(mistyped, folder / "state_mutant", wrapper, overrides[STATE_PROJECT])
     checks["a mistyped command of the move sheet fails its parser"] = any(planted.values())
