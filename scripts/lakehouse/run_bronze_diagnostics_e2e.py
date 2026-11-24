@@ -423,6 +423,7 @@ def leaving_alias_command_cases(root: Path) -> dict[str, bool]:
     other["objects"][0]["object"]["sha256"] = "b" * 64
     discovered, _excluded = bronze.discover(ManifestStorage([*documents, other]), "synthetic", retained, ["named_files"])
     other_inputs = [candidate for candidate in discovered if candidate["sha256"] == "b" * 64]
+    owner_inputs = [candidate for candidate in discovered if candidate["sha256"] == "a" * 64]
     alias = next(candidate for candidate in inputs if candidate["table"] == "legacy_files")
     empty = root / "leaving_alias_no_ownership.json"
     empty.write_text(json.dumps({"schema_version": 1, "groups": []}))
@@ -433,7 +434,17 @@ def leaving_alias_command_cases(root: Path) -> dict[str, bool]:
         )
     held = [row for row in published if row["table_name"] == "legacy_files"]
     later = publish_command(root, "leaving_alias", [*documents, other], retained, ["legacy_files"], ownership, published)
+    # The same change while legacy_files is still in the scope: a partial load of the owner may move the unselected alias's canonical reference.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bronze_metadata, "BOOTSTRAP_OWNERSHIP", ownership, raising=False)
+        try:
+            partial = bronze_metadata.build(["named_files"], [*other_inputs, *owner_inputs], [], published, ["named_files", "legacy_files"])
+        except bronze_metadata.MetadataError:
+            partial = []
+    moved = [row for row in partial if row["table_name"] == "legacy_files"]
     return {
+        "retained alias: a partial load of the owner publishes and moves the unselected alias's canonical reference": len(moved) == 1
+        and moved[0]["canonical_object_key"] is not None,
         "leaving alias: the previous generation holds the departed alias with no canonical reference": len(held) == 1
         and held[0]["canonical_object_key"] is None,
         "leaving alias: a retained owner that would change the alias row publishes nothing": later["code"] not in (0, None) and later["published"] is None,
@@ -458,10 +469,14 @@ def care_compare_generator_cases(root: Path) -> dict[str, bool]:
     unselected = [{"collection": care_compare_tables.COLLECTION, "dataset_id": "cms_legacy_kept_family", "file_name": "Kept_Family.csv"}]
     config = {"namespace": "synthetic", "tables": []}
     results: dict[str, bool] = {}
-    for label, name in (("original name", "ASC_Facility.csv"), ("renamed file", "Ambulatory_Surgical_Centers_by_Facility.csv")):
+    for label, dataset_id, name in (
+        ("original name", "cms_4jcv_atw7", "ASC_Facility.csv"),
+        ("renamed file", "cms_4jcv_atw7", "Ambulatory_Surgical_Centers_by_Facility.csv"),
+        ("new dataset under the old file name", "cms_new_asc_facility", "ASC_Facility.csv"),
+    ):
         table_map = root / f"care_compare_{label.replace(' ', '_')}.json"
         table_map.write_text(json.dumps({"namespace": "synthetic", "tables": []}))
-        found = [*unselected, {"collection": care_compare_tables.COLLECTION, "dataset_id": "cms_4jcv_atw7", "file_name": name}]
+        found = [*unselected, {"collection": care_compare_tables.COLLECTION, "dataset_id": dataset_id, "file_name": name}]
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("AWS_PROFILE", "synthetic")
             patch.setenv("AWS_REGION", "synthetic")

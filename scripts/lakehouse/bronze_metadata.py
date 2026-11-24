@@ -391,7 +391,8 @@ def _build_rows(
         row["generation_row_count"], row["generation_object_count"] = len(rows), len(objects)
     envelope = {"generation", "generation_row_count", "generation_object_count"}
     for old, kept in zip(held, carried, strict=True):
-        if any(kept[field] != old[field] for field in FIELDS if field not in envelope):
+        # Only a table that left the scope is frozen; an unselected retained table's row may follow a canonical change, as a partial load allows.
+        if old["table_name"] in departed and any(kept[field] != old[field] for field in FIELDS if field not in envelope):
             raise MetadataError(f"{old['table_name']}: the successor generation cannot keep a carried row as published")
     digest = generation_digest(rows)
     for row in rows:
