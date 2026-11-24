@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import tempfile
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import date
@@ -2014,6 +2015,207 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 boundary = suite.fit_slot(req, "m3_mixed")
         require(boundary.status == "not_converged" and "singular variance" in boundary.reason, "zero ownership variance changed an unresolved rule")
 
+    convergence_warning = type("ConvergenceWarning", (UserWarning,), {})
+    singular_warning = type("SingularMatrixWarning", (UserWarning,), {})
+    unrelated_warning = type("UnrelatedNotice", (UserWarning,), {})
+    scripted_warnings = {
+        "warning": ("Retrying MixedLM optimization", convergence_warning),
+        "both": ("Retrying MixedLM optimization", convergence_warning),
+        "singular": ("Retrying MixedLM optimization", convergence_warning),
+        "numeric": ("overflow in the likelihood", RuntimeWarning),
+        "singularwarn": ("Covariance of the parameter estimates is singular", singular_warning),
+        "unrelated": ("an unrelated notice", unrelated_warning),
+        "future": ("an option was renamed", FutureWarning),
+    }
+
+    plain_sources = {
+        "plain_statsmodels": ("/env/lib/python3.12/site-packages/statsmodels/regression/mixed_linear_model.py", "statsmodels.regression.mixed_linear_model"),
+        "plain_other": ("/env/lib/python3.12/site-packages/other_library/thing.py", "other_library.thing"),
+        "plain_project": ("/work/statsmodels/project/warning_fixture.py", "project.warning_fixture"),
+    }
+
+    def scripted_mixed(
+        outcomes: dict[str, str], operation: Any = None, clock: list[float] | None = None, slow_build: bool = False
+    ) -> tuple[Any, list[tuple[str, bool]]]:
+        """Fit the mixed slot with one scripted outcome per optimizer; a "+late" suffix moves the controlled clock past every deadline."""
+        calls: list[tuple[str, bool]] = []
+        with libraries() as replacements:
+            mixed = replacements["statsmodels.api"].MixedLM
+            original_fit = mixed.fit
+
+            def scripted(self: Any, **kwargs: Any) -> Any:
+                calls.append((kwargs["method"], kwargs["reml"]))
+                fitted = original_fit(self, **kwargs)
+                outcome = outcomes[kwargs["method"]]
+                late = outcome.endswith("+late")
+                outcome = outcome.removesuffix("+late")
+                fitted.converged = outcome not in ("unconverged", "both", "singular")
+                if outcome in scripted_warnings:
+                    warnings.warn(*scripted_warnings[outcome], stacklevel=2)
+                if outcome in plain_sources:
+                    # A plain UserWarning told apart only by the file and module it was recorded with.
+                    warnings.warn_explicit("a plain notice", UserWarning, plain_sources[outcome][0], 1830, module=plain_sources[outcome][1])
+                if late and clock is not None:
+                    clock[0] += 10_000.0
+                if outcome == "singular":
+                    raise np.linalg.LinAlgError("Singular matrix")
+                return fitted
+
+            original_init = mixed.__init__
+
+            def slow_init(self: Any, *args: Any, **kwargs: Any) -> None:
+                original_init(self, *args, **kwargs)
+                if slow_build and clock is not None:
+                    clock[0] += 10_000.0
+
+            with patch.object(mixed, "fit", scripted), patch.object(mixed, "__init__", slow_init):
+                return suite.fit_slot(req if operation is None else operation, "m3_mixed"), calls
+
+    def unclean_converged_attempts() -> None:
+        # A fit that reports convergence but warned during the attempt (statsmodels' own warning classes or a RuntimeWarning) is not accepted.
+        for outcome in ("singularwarn", "numeric", "warning"):
+            moved, calls = scripted_mixed({"lbfgs": outcome, "bfgs": "clean"})
+            require(
+                moved.status == "fitted" and moved.details["optimizer"] == "bfgs" and [name for name, _ in calls] == ["lbfgs", "bfgs"],
+                f"a converged lbfgs fit that warned ({outcome}) was accepted without trying bfgs: {moved.details.get('optimizer')} {calls}",
+            )
+        sourced, calls = scripted_mixed({"lbfgs": "plain_statsmodels", "bfgs": "clean"})
+        require(
+            sourced.status == "fitted" and sourced.details["optimizer"] == "bfgs" and len(calls) == 2,
+            f"a plain UserWarning recorded from statsmodels made no attempt unclean: {sourced.details.get('optimizer')} {calls}",
+        )
+        stuck, calls = scripted_mixed({"lbfgs": "singularwarn", "bfgs": "numeric", "powell": "warning", "nm": "singularwarn"})
+        require(stuck.status == "not_converged" and len(calls) == 4, f"four warned attempts were accepted or cut short: {stuck.status} {calls}")
+        require(
+            all(
+                text in stuck.reason
+                for text in (
+                    "lbfgs: Covariance of the parameter estimates is singular",
+                    "bfgs: overflow in the likelihood",
+                    "powell: Retrying MixedLM optimization",
+                    "nm: Covariance of the parameter estimates is singular",
+                )
+            ),
+            f"the reason does not carry each attempt's first warning: {stuck.reason}",
+        )
+        for outcome in ("unrelated", "future", "plain_other", "plain_project"):
+            kept, calls = scripted_mixed({"lbfgs": outcome})
+            require(
+                kept.status == "fitted" and kept.details["optimizer"] == "lbfgs" and len(calls) == 1,
+                f"a warning from another library made a converged attempt unclean ({outcome}): {kept.status} {calls}",
+            )
+
+    def caller_warning_filters() -> None:
+        # Recording warnings leaves the caller's own filters in force, whatever the category.
+        for outcome, category in (("unrelated", unrelated_warning), ("future", FutureWarning), ("numeric", RuntimeWarning)):
+            raised = False
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", category)
+                try:
+                    scripted_mixed({"lbfgs": outcome, "bfgs": "clean"})
+                except Warning as caught:
+                    raised = isinstance(caught, category)
+            require(raised, f"a {category.__name__} the caller made an error did not reach the caller")
+        # A caller's ignore filter hides a warning from the caller, not from the optimizer classification.
+        for outcome in ("singularwarn", "numeric", "warning", "plain_statsmodels"):
+            for category in (Warning, scripted_warnings.get(outcome, ("", UserWarning))[1]):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category)
+                    moved, calls = scripted_mixed({"lbfgs": outcome, "bfgs": "clean"})
+                require(
+                    moved.status == "fitted" and moved.details["optimizer"] == "bfgs" and len(calls) == 2,
+                    f"a caller's ignore filter on {category.__name__} let a warned lbfgs fit ({outcome}) be accepted: {moved.details.get('optimizer')} {calls}",
+                )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            kept, calls = scripted_mixed({"lbfgs": "unrelated"})
+        require(kept.status == "fitted" and len(calls) == 1, f"an ignored unrelated warning changed the sequence: {kept.status} {calls}")
+
+    def mixed_optimizer_sequence() -> None:
+        first, calls = scripted_mixed({"lbfgs": "clean"})
+        require(first.status == "fitted" and first.details["optimizer"] == "lbfgs", "a clean first optimizer was not recorded")
+        require(calls == [("lbfgs", False)], f"a converged first optimizer still tried others: {calls}")
+        require(first.details["reml"] is False, "the mixed model left maximum likelihood")
+        unchanged = {key: value for key, value in first.details.items() if key != "optimizer"}
+        later_plans = {
+            "bfgs": {"lbfgs": "unconverged", "bfgs": "clean"},
+            "powell": {"lbfgs": "warning", "bfgs": "both", "powell": "clean"},
+            "nm": {"lbfgs": "both", "bfgs": "unconverged", "powell": "warning", "nm": "clean"},
+        }
+        for optimizer, plan in later_plans.items():
+            result, calls = scripted_mixed(plan)
+            require(
+                result.status == "fitted" and result.details["optimizer"] == optimizer, f"{optimizer} was not accepted after earlier failed attempts: {result}"
+            )
+            require(calls == [(name, False) for name in list(plan)], f"optimizers ran out of order or in ML mode: {calls}")
+            require(
+                {key: value for key, value in result.details.items() if key != "optimizer"} == unchanged,
+                "the likelihood-ratio, ICC and variance details changed with the optimizer",
+            )
+        failed, calls = scripted_mixed({"lbfgs": "both", "bfgs": "warning", "powell": "unconverged", "nm": "both"})
+        require(failed.status == "not_converged", "a mixed model with every optimizer failing was accepted")
+        require(all(name in failed.reason for name in ("lbfgs", "bfgs", "powell", "nm")), f"the reason does not name the optimizers tried: {failed.reason}")
+        require(
+            "bfgs: Retrying MixedLM optimization" in failed.reason and "powell: not converged" in failed.reason,
+            f"the reason does not tell a warned attempt from an unconverged one: {failed.reason}",
+        )
+        require([name for name, _ in calls] == ["lbfgs", "bfgs", "powell", "nm"], f"not every optimizer was tried once: {calls}")
+        rescued, calls = scripted_mixed({"lbfgs": "singular", "bfgs": "clean"})
+        require(
+            rescued.status == "fitted" and rescued.details["optimizer"] == "bfgs",
+            f"a singular matrix in one optimizer stopped the sequence before a clean fit: {rescued}",
+        )
+        stuck, _calls = scripted_mixed({"lbfgs": "singular", "bfgs": "singular", "powell": "singular", "nm": "singular"})
+        require(
+            stuck.status == "not_converged" and "lbfgs: Retrying MixedLM optimization" in stuck.reason,
+            f"a singular matrix in every optimizer is not reported with each attempt's warning: {stuck}",
+        )
+        require(
+            stuck.reason.count("LinAlgError: Singular matrix") == 4,
+            f"the exception text that follows a warning is missing from an attempt's reason: {stuck.reason}",
+        )
+        unclean_converged_attempts()
+        caller_warning_filters()
+
+    def mixed_optimizer_deadline() -> None:
+        from scripts.training.models import common
+
+        def run(plan: dict[str, str], before_first: bool = False, slow_build: bool = False) -> tuple[Any, list[tuple[str, bool]]]:
+            clock = [1000.0]
+            operation = replace(req, deadline=Deadline(clock[0] + 600.0))
+            original = FoldPreprocessor.fit_transform
+
+            def slow(self: Any, *args: Any, **kwargs: Any) -> Any:
+                design = original(self, *args, **kwargs)
+                clock[0] += 10_000.0 if before_first else 0.0
+                return design
+
+            with patch.object(common.time, "monotonic", lambda: clock[0]), patch.object(FoldPreprocessor, "fit_transform", slow):
+                return scripted_mixed(plan, operation, clock, slow_build)
+
+        within, calls = run({"lbfgs": "clean", "bfgs": "clean"})
+        require(within.status == "fitted" and calls == [("lbfgs", False)], f"a fit inside its deadline changed: {within.status} {calls}")
+        for name, plan, expected in (
+            ("an exception that ends after the deadline", {"lbfgs": "singular+late", "bfgs": "clean"}, ["lbfgs"]),
+            ("an unconverged attempt that ends after the deadline", {"lbfgs": "unconverged+late", "bfgs": "clean"}, ["lbfgs"]),
+            ("a warned attempt that ends after the deadline", {"lbfgs": "singularwarn+late", "bfgs": "clean"}, ["lbfgs"]),
+            (
+                "an exception from the last optimizer that ends after the deadline",
+                {"lbfgs": "unconverged", "bfgs": "unconverged", "powell": "unconverged", "nm": "singular+late"},
+                ["lbfgs", "bfgs", "powell", "nm"],
+            ),
+        ):
+            late, calls = run(plan)
+            require(late.status == "not_run" and late.reason == "deadline", f"{name} was not reported as not_run: {late.status} {late.reason}")
+            require([method for method, _ in calls] == expected, f"{name} still started another optimizer: {calls}")
+        built, calls = run({"lbfgs": "clean"}, slow_build=True)
+        require(
+            built.status == "not_run" and built.reason == "deadline" and calls == [],
+            f"a fit started after the deadline passed during model construction: {built.status} {calls}",
+        )
+        expired, calls = run({"lbfgs": "clean"}, before_first=True)
+        require(expired.status == "not_run" and calls == [], f"an optimizer started after the deadline had expired: {expired.status} {calls}")
+
     def mediation_known_values() -> None:
         x = np.asarray([row["process"] for row in req.data.rows])
         cmi = np.asarray([row["cmi"] for row in req.data.rows])
@@ -2945,6 +3147,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("aggregate_panel_counts", result_has_aggregate_panel_counts),
         ("nested_and_joint_values", nested_and_joint_values),
         ("mixed_values_and_ownership_hold", mixed_values_and_unresolved_ownership),
+        ("mixed_optimizer_sequence", mixed_optimizer_sequence),
+        ("mixed_optimizer_deadline", mixed_optimizer_deadline),
         ("mediation_known_values", mediation_known_values),
         ("moran_island_values_and_work", moran_island_values_and_work),
         ("optional_analysis_failures", optional_analysis_failures),

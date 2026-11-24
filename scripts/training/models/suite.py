@@ -78,7 +78,7 @@ def _pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any], f
     elif slot == "m2_elastic_net":
         estimator = ElasticRegressor(float(parameters["alpha"]), float(parameters["l1_ratio"]), forced, seed)
     elif slot == "m3_mixed":
-        estimator = MixedRegressor()
+        estimator = MixedRegressor(request.deadline)
     elif slot == "m4_boosting":
         estimator = TreeRegressor("random_forest" if forest else "xgboost", seed, request.threads, parameters)
     elif slot == "m5_spatial":

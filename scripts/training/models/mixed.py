@@ -6,19 +6,43 @@ import importlib
 import math
 import warnings
 from collections import defaultdict
+from pathlib import PurePath
 from typing import Any
 
 import numpy as np
 
-from scripts.training.models.common import Array, NotConverged, Prepared, Regressor, full_rank, with_intercept
+from scripts.training.models.common import Array, Deadline, NotConverged, Prepared, Regressor, full_rank, with_intercept
 from scripts.training.models.preprocessing import missing
+
+# Tried in this order; each attempt starts from the default start values, and the first that converges without a warning is kept.
+OPTIMIZERS = ("lbfgs", "bfgs", "powell", "nm")
+# statsmodels' own warning classes (all derive from ModelWarning) are told apart by module or, for a stand-in, by name.
+STATSMODELS_WARNINGS = ("ModelWarning", "ConvergenceWarning", "SingularMatrixWarning")
+# The folders that hold installed packages; a statsmodels folder directly inside one is the installed package.
+INSTALL_FOLDERS = frozenset({"site-packages", "dist-packages"})
+
+
+def _makes_attempt_unclean(item: warnings.WarningMessage) -> bool:
+    """Tell a warning that spoils an optimizer attempt (a RuntimeWarning, a statsmodels class or a UserWarning from statsmodels) from one that does not."""
+    category = item.category
+    return (
+        issubclass(category, RuntimeWarning)
+        or any(kind.__module__.startswith("statsmodels.") or kind.__name__ in STATSMODELS_WARNINGS for kind in category.__mro__)
+        or (issubclass(category, UserWarning) and _from_installed_statsmodels(str(item.filename)))
+    )
+
+
+def _from_installed_statsmodels(filename: str) -> bool:
+    """True for a file of the installed statsmodels package (site-packages/statsmodels/...), not for a project folder that happens to be named statsmodels."""
+    parts = PurePath(filename).parts
+    return any(part in INSTALL_FOLDERS and following == "statsmodels" for part, following in zip(parts, parts[1:], strict=False))
 
 
 class MixedRegressor(Regressor):
     """Estimate ownership intercept variance and compare it with the same fixed-only design."""
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, deadline: Deadline | None = None) -> None:
+        self.deadline = deadline
 
     def fit(self, design: Prepared, y: Array) -> MixedRegressor:
         """Fit ML, require usable ownership groups and expose ICC with a boundary-aware likelihood test."""
@@ -36,11 +60,35 @@ class MixedRegressor(Regressor):
         if np.linalg.matrix_rank(np.column_stack((matrix, group_columns))) == matrix.shape[1]:
             raise NotConverged("ownership random intercepts are fully represented by fixed-effect columns")
         api = importlib.import_module("statsmodels.api")
-        with warnings.catch_warnings(record=True) as observed:
-            model = api.MixedLM(y, matrix, groups=groups).fit(reml=False, method="lbfgs", disp=False)
+        model, optimizer, outcomes = None, "", []
+        for optimizer in OPTIMIZERS:
+            self._check_deadline()
+            failure = ""
+            with warnings.catch_warnings(record=True) as observed:
+                # A caller's ignore, default or once filter must not hide a warning from the classifier, so each becomes always while a caller's error
+                # filter stays and still raises. The two filters go last: they only make a warning that no filter covers show up on every attempt.
+                warnings.filters = [
+                    ("error" if action == "error" else "always", text, kind, module, line) for action, text, kind, module, line in warnings.filters
+                ]
+                warnings.simplefilter("always", UserWarning, append=True)
+                warnings.simplefilter("always", RuntimeWarning, append=True)
+                try:
+                    candidate = api.MixedLM(y, matrix, groups=groups)
+                    self._check_deadline()
+                    attempt = candidate.fit(reml=False, method=optimizer, disp=False)
+                except (np.linalg.LinAlgError, FloatingPointError) as error:
+                    attempt, failure = None, f"{type(error).__name__}: {error}"
+            self._check_deadline()
+            warned = [str(item.message) for item in observed if _makes_attempt_unclean(item)]
+            if attempt is not None and attempt.converged and not warned:
+                model = attempt
+                break
+            # The cause of each failed attempt goes into the reason, so a fit on the boundary is told apart from one that never converged.
+            causes = [cause[:120] for cause in (warned[:1] + ([failure] if failure else []))]
+            outcomes.append(f"{optimizer}: {' then '.join(causes) or 'not converged'}")
+        if model is None:
+            raise NotConverged(f"ownership mixed model did not converge with any of the optimizers ({'; '.join(outcomes)})")
         variance, residual = float(np.asarray(model.cov_re)[0, 0]), float(model.scale)
-        if not model.converged or any(item.category.__name__ == "ConvergenceWarning" for item in observed):
-            raise NotConverged("ownership mixed model did not converge")
         if not math.isfinite(variance) or not math.isfinite(residual) or variance <= 1e-10 or residual <= 0:
             raise NotConverged("ownership mixed model has singular variance")
         pooled = api.OLS(y, matrix).fit(method="qr")
@@ -57,11 +105,17 @@ class MixedRegressor(Regressor):
             "p_value": p_value,
             "null_distribution": "half_point_mass_zero_half_chi_squared_1",
             "reml": False,
+            "optimizer": optimizer,
             "ownership_groups": len(hospitals),
             "aic": float(model.aic),
             "bic": float(model.bic),
         }
         return self
+
+    def _check_deadline(self) -> None:
+        """Refuse to start or accept an optimizer attempt after the inherited operation deadline."""
+        if self.deadline is not None:
+            self.deadline.check()
 
     def predict(self, design: Prepared) -> Any:
         """Use a known ownership intercept or its zero population mean for an unseen group."""

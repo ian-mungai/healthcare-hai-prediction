@@ -182,8 +182,8 @@ class MixedLM:
         self.y, self.x, self.groups = np.asarray(y), np.asarray(x), np.asarray(groups)
 
     def fit(self, *, reml: bool, method: str, disp: bool) -> Any:
-        if reml or method != "lbfgs" or disp:
-            raise AssertionError("mixed comparison must use maximum likelihood without verbose output")
+        if reml or method not in ("lbfgs", "bfgs", "powell", "nm") or disp:
+            raise AssertionError("mixed comparison must use maximum likelihood with a named optimizer and without verbose output")
         pooled = OLS(self.y, self.x).fit()
         residual = self.y - self.x @ pooled.params
         effects = {group: np.asarray([np.mean(residual[self.groups == group])]) for group in sorted(set(self.groups))}
