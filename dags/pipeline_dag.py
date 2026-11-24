@@ -18,8 +18,9 @@ after ingestion and before bronze, whatever the start: it binds every layer run 
 which that run bound at its own launch), and the run of each model that the features base starts. ``await_downstream`` then waits for each model's route after
 the features base (its features run, its drift check, its training run when the gate trains and, for a promotion model, the research that training starts),
 checks that each of those runs was started with the settings the DAG before it gives it, and fails when any route failed. The pipeline's result is the result of
-those runs. It does not wait for the catalog start of a training run (a failed catalog never fails a pipeline) or for the promotion and serving DAGs, which only
-the owner starts.
+those runs. It does not wait for the catalog start of a training run (a failed catalog never fails a pipeline) or for the promotion and serving deploys. The
+research run it waits for starts those itself: ``research_dag`` runs the canary check, the promotion, the online release and the owner notice with no owner
+approval, and starts the serving deploys. ``model_promotion_dag`` stays for an explicit promote or rollback.
 """
 
 from __future__ import annotations
