@@ -6,7 +6,9 @@
 # Stages: the commit stage holds the fast checks and the path checks. A path check (the cleanup checks, the outgoing secret scan, dependency lock, SQLFluff,
 # model metadata and the review-record check) also has the manual stage and runs at commit only when a staged file is one it reads (`files`, `exclude`),
 # over its whole scope; with no `files` it reads every file, so any staged file selects it. Git hands pre-commit no deleted file, so a commit that only deletes
-# files skips a path check: the hosted run catches it. Only test-checks, test-lock and test-documentation-review stay manual-only. Every hook with the manual
+# files skips a path check: the hosted run catches it. A commit that stages one Python file takes about three minutes on this Mac: about a minute of it is
+# orphan-files, about twenty seconds the other path checks that read Python; a Terraform, Dockerfile or SQL change adds that check's time (SQLFluff about
+# five minutes, model-metadata about two). Only test-checks, test-lock and test-documentation-review stay manual-only. Every hook with the manual
 # stage is what the hosted hooks job runs (scripts/quality/ci_hooks.py, in full with --all-files on every pushed commit, so a path hook runs there whatever
 # the commit changed). The pre-push run (scripts/quality/pre_push.py) runs the changed-file checks, the commit
 # messages, the removed names, the secret and privacy scans and the osv-scanner hook over the pushed range, in about two minutes.
