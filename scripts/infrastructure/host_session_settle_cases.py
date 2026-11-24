@@ -8,6 +8,7 @@ between its ``at`` and the session's wall clock.
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -18,7 +19,7 @@ from scripts.infrastructure import host_session_restore_cases as restore
 from scripts.infrastructure.host_session import Session, TerminationRequested
 from scripts.infrastructure.host_session_stand_in import ACCOUNT_MARK, EPOCH, OPENMETADATA_SERVICE, StandInError
 from scripts.infrastructure.host_session_stop_cases import on_wall_time
-from scripts.process import LaunchesNotStopped
+from scripts.process import CompletedProcess, LaunchesNotStopped
 
 PREFIX = launch_record_prefix()
 JOB_PREFIX = "stand_in_dev_job_"
@@ -47,8 +48,16 @@ class LaunchHost(restore.RecordHost):
         super().__init__(faults, None, False, False, checkout=restore.SHA_OLD, code_run=restore.RUN_OLD, openmetadata=True, catalog_setup=True)
 
     raised = False
+    mangle: dict[tuple[str, str], Callable[[dict[str, Any]], dict[str, Any]]] = {}
 
     def runner(self, argv: list[str], **kwargs: Any) -> Any:
+        result = self.answer(argv, **kwargs)
+        change = self.mangle.get((argv[1], argv[2]))
+        if change is None or result.returncode != 0:
+            return result
+        return CompletedProcess(result.args, 0, json.dumps(change(json.loads(result.stdout))), result.stderr)
+
+    def answer(self, argv: list[str], **kwargs: Any) -> Any:
         if argv[2] == "list-objects-v2":
             for fault, signal_error in (("not_stopped_from_signal", KeyboardInterrupt()), ("not_stopped_from_termination", TerminationRequested("SIGTERM"))):
                 if fault in self.faults:
@@ -470,6 +479,125 @@ def one_deadline_bounds_the_whole_settle() -> dict[str, bool]:
     }
 
 
+def edit(path: tuple[str | int, ...], value: Any = None, drop: bool = False) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """A change of one reply: set the value at the path, or drop the key at its end."""
+
+    def change(reply: dict[str, Any]) -> dict[str, Any]:
+        changed = copy.deepcopy(reply)
+        target: Any = changed
+        for step in path[:-1]:
+            target = target[step]
+        if drop:
+            del target[path[-1]]
+        else:
+            target[path[-1]] = value
+        return changed
+
+    return change
+
+
+def repeating_token(reply: dict[str, Any]) -> dict[str, Any]:
+    return {**reply, "nextToken": "same"}
+
+
+GROUP = ("autoscaling", "describe-auto-scaling-groups")
+INSTANCES = ("ecs", "list-container-instances")
+LISTING = ("ecs", "list-tasks")
+DESCRIPTION = ("ecs", "describe-tasks")
+ASG = ("AutoScalingGroups", 0)
+TASK = ("tasks", 0)
+MALFORMED: dict[tuple[str, str], dict[str, Callable[[dict[str, Any]], dict[str, Any]]]] = {
+    GROUP: {
+        "Instances omitted": edit((*ASG, "Instances"), drop=True),
+        "Instances null": edit((*ASG, "Instances"), None),
+        "Instances a string": edit((*ASG, "Instances"), "none"),
+        "DesiredCapacity a string": edit((*ASG, "DesiredCapacity"), "0"),
+        "DesiredCapacity a boolean": edit((*ASG, "DesiredCapacity"), False),
+        "no group": edit(("AutoScalingGroups",), []),
+        "two groups": lambda reply: {"AutoScalingGroups": reply["AutoScalingGroups"] * 2},
+    },
+    INSTANCES: {
+        "list omitted": edit(("containerInstanceArns",), drop=True),
+        "list null": edit(("containerInstanceArns",), None),
+        "an entry that is no ARN": edit(("containerInstanceArns",), ["one"]),
+        "token false": edit(("nextToken",), False),
+        "token empty": edit(("nextToken",), ""),
+        "token a number": edit(("nextToken",), 5),
+        "token with more to read": edit(("nextToken",), "more"),
+    },
+    LISTING: {
+        "list omitted": edit(("taskArns",), drop=True),
+        "list null": edit(("taskArns",), None),
+        "an entry that is no ARN": edit(("taskArns", 0), "task"),
+        "token false": edit(("nextToken",), False),
+        "token empty": edit(("nextToken",), ""),
+        "token a number": edit(("nextToken",), 5),
+        "token repeated": repeating_token,
+    },
+    DESCRIPTION: {
+        "tasks not a list": edit(("tasks",), "none"),
+        "tasks omitted": edit(("tasks",), drop=True),
+        "failures omitted": edit(("failures",), drop=True),
+        "failures not a list": edit(("failures",), "none"),
+        "truncated task definition ARN": edit((*TASK, "taskDefinitionArn"), "arn:aws:ecs:stand-in:111111111111:task-definition/gold_host"),
+        "task definition ARN omitted": edit((*TASK, "taskDefinitionArn"), drop=True),
+        "group omitted": edit((*TASK, "group"), drop=True),
+        "group null": edit((*TASK, "group"), None),
+        "lastStatus unknown": edit((*TASK, "lastStatus"), "GONE"),
+        "lastStatus omitted": edit((*TASK, "lastStatus"), drop=True),
+        "taskArn not a listed ARN": edit((*TASK, "taskArn"), f"{ACCOUNT_MARK}task/stand-in-cluster/other"),
+    },
+}
+
+
+def a_stopped_host_with_a_stopped_task() -> tuple[LaunchHost, Session, list[str]]:
+    """A stopped host with a stale launch and one task that has stopped, so that every valid reply lets the settle write."""
+    host, session, lines = after_stop()
+    arn = host.add_task(f"{JOB_PREFIX}gold_host")
+    host.tasks[arn]["status"], host.tasks[arn]["desired"] = "STOPPED", "STOPPED"
+    return host, session, lines
+
+
+def every_malformed_reply_stops_the_settle_with_no_write() -> dict[str, bool]:
+    host, session, lines = a_stopped_host_with_a_stopped_task()
+    rerun(session, "stop")
+    checks: dict[str, bool] = {"control: the same host with valid replies settles the launch": host.end_of(RUN, "gold") is not None}
+    for operation, variants in MALFORMED.items():
+        for label, change in variants.items():
+            host, session, lines = a_stopped_host_with_a_stopped_task()
+            host.mangle = {operation: change}
+            rerun(session, "stop")
+            checks[f"{operation[1]}, {label}: nothing was written"] = host.store_writes() == 0 and host.end_of(RUN, "gold") is None
+    return checks
+
+
+def a_task_that_ecs_cannot_identify_is_reported_as_unverifiable() -> dict[str, bool]:
+    host, session, lines = after_stop({"ghost_task"})
+    rerun(session, "stop")
+    shown = line_with(lines, "launch_unresolved")
+    return {"the reason says the family could not be verified": "could not be verified" in shown and "not STOPPED" not in shown}
+
+
+def an_unknown_family_holds_every_job() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    host.add_task("stand_in_dev_other_thing")
+    rerun(session, "stop")
+    return {"nothing was written": host.store_writes() == 0 and host.end_of(RUN, "gold") is None}
+
+
+def an_earlier_signal_never_relabels_a_later_failure() -> dict[str, bool]:
+    host, session, lines = after_stop({"interrupt_run_task", "not_stopped_on_list"})
+    raised = signal_raised(session.start)
+    return {
+        "start raises its own interrupt": isinstance(raised, KeyboardInterrupt),
+        "the host-off was verified": stopped(host),
+        "the later runner failure is reported as a failure, not as an interrupt": any(
+            line.startswith("launch_settle_failed") and "LaunchesNotStopped" in line for line in lines
+        )
+        and not line_with(lines, "launch_settle_interrupted"),
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_stop_settles_a_launch_whose_saved_task_ecs_forgot": stop_settles_a_launch_whose_saved_task_ecs_forgot,
     "host_stop_after_failure_settles_and_keep_on_does_not": stop_after_failure_settles_and_keep_on_does_not,
@@ -486,6 +614,10 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_on_goes_on_after_any_settle_failure": a_runner_failure_never_stops_the_start,
     "host_stop_cleanup_interrupt_keeps_the_start_error": an_interrupt_in_the_cleanup_keeps_the_first_error,
     "host_stop_settle_has_one_deadline": one_deadline_bounds_the_whole_settle,
+    "host_stop_every_malformed_reply_stops_the_settle_with_no_write": every_malformed_reply_stops_the_settle_with_no_write,
+    "host_stop_reports_a_task_ecs_cannot_identify_as_unverifiable": a_task_that_ecs_cannot_identify_is_reported_as_unverifiable,
+    "host_stop_unknown_family_holds_every_job": an_unknown_family_holds_every_job,
+    "host_stop_earlier_signal_never_relabels_a_later_failure": an_earlier_signal_never_relabels_a_later_failure,
     "host_on_never_hides_a_signal_inside_a_runner_failure": a_signal_inside_a_runner_failure_stops_the_start,
     "host_stop_signal_during_the_settle_keeps_the_first_error": a_signal_during_the_settle_keeps_the_first_stop_error,
     "host_stop_incomplete_ecs_replies_never_authorize_a_cancel": incomplete_ecs_replies_never_authorize_a_cancel,

@@ -2112,6 +2112,36 @@ def host_stop_revalidates_the_host_before_every_end_write() -> None:
     require(len(results) == 1 and results[0].status == "settled", f"the quiet host did not settle: {results}")
 
 
+def host_stop_writes_the_cancel_before_the_end() -> None:
+    """The durable cancel request is in the store when the first end write starts, so a sender with a late reply sees it before the end is visible."""
+    rig = Rig()
+    open_window_gold(rig)
+    rig.time.now = START_TIME + LATE
+    seen: list[tuple[str, bool]] = []
+
+    def watch(key: str) -> None:
+        seen.append((key.rsplit("/", 1)[-1], f"{PREFIX}/{RUN}/gold/cancel.json" in rig.bucket.objects))
+
+    rig.bucket.write_hook = watch
+    results = settle_gold(rig, host_proof(rig))
+    ends = [present for name, present in seen if name == "end.json"]
+    require(len(results) == 1 and results[0].status == "settled", f"the launch was not settled: {results}")
+    require(bool(ends) and all(ends), f"an end write started before the cancel request was stored: {seen}")
+
+
+def host_stop_reports_an_unverifiable_family_as_such() -> None:
+    """When ECS lists a task it cannot identify, the reason says the family could not be verified, not that a task of the family was found."""
+    rig = Rig()
+    open_window_gold(rig)
+    rig.time.now = START_TIME + LATE
+    unverified = host_proof(rig, busy_jobs=frozenset({"gold", "drift"}), unverified=True)
+    results = settle_gold(rig, unverified)
+    require(len(results) == 1 and results[0].status == "unresolved", f"an unverifiable family settled: {results}")
+    require("could not be verified" in results[0].reason and "not STOPPED" not in results[0].reason, f"the reason is wrong: {results[0].reason}")
+    results = settle_gold(rig, host_proof(rig, busy_jobs=frozenset({"gold"})))
+    require("not STOPPED" in results[0].reason and "verified" not in results[0].reason, f"a found task is reported wrongly: {results[0].reason}")
+
+
 def returns(proof: HostStopProof) -> HostStopProof:
     return proof
 
@@ -2181,6 +2211,8 @@ CASES: dict[str, Callable[[], None]] = {
     "host_stop_settle_survives_a_record_store_failure": host_stop_settle_survives_a_record_store_failure,
     "host_stop_ended_by_another_is_reported_as_theirs": host_stop_ended_by_another_is_reported_as_theirs,
     "host_stop_revalidates_the_host_before_every_end_write": host_stop_revalidates_the_host_before_every_end_write,
+    "host_stop_writes_the_cancel_before_the_end": host_stop_writes_the_cancel_before_the_end,
+    "host_stop_reports_an_unverifiable_family_as_such": host_stop_reports_an_unverifiable_family_as_such,
     "family_index_listing_never_follows_a_repeated_token": family_index_listing_never_follows_a_repeated_token,
     "fit_credits_the_family_own_idle_scratch": fit_credits_the_family_own_idle_scratch,
     "fit_never_credits_another_family_and_names_it": fit_never_credits_another_family_and_names_it,

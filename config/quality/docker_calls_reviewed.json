@@ -1379,7 +1379,7 @@
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
-        "scripts/infrastructure/host_launch_settle.py": "sha256:e0a0eba5bd90e158230eeb79d4b095624a1af1415f4c5e5f35fafc9cb0d4bc05",
+        "scripts/infrastructure/host_launch_settle.py": "sha256:a95c65b5442b5e0285dc9ae53e908599bcc190fa2177524849b8e2e8a2e7c947",
         "scripts/infrastructure/render_platform_config.py": "sha256:9c6e6c72708608e954d923932901db38e63695bae54548e2830b99ab38fc4bf0",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7"

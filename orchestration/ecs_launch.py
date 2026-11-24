@@ -1443,7 +1443,8 @@ class HostStopProof:
 
     The group was read first (``desired_capacity`` and ``group_instances``), then the ACTIVE container instances of the cluster
     (``active_container_instances``), then the tasks of the project's host definitions that ECS does not show STOPPED: ``busy_jobs`` holds the job of every
-    such task, and every job when a task cannot be tied to one job. A read that failed gives no proof, so the caller builds none."""
+    such task, and every job when a task cannot be tied to one job (``unverified``: ECS listed a task that it did not describe or that is not the host
+    definition of a known job, so no family can be verified). A read that failed gives no proof, so the caller builds none."""
 
     desired_capacity: int
     group_instances: int
@@ -1452,6 +1453,7 @@ class HostStopProof:
     instances_read_at: float
     tasks_read_at: float
     busy_jobs: frozenset[str]
+    unverified: bool = False
 
     def refusal(self, job: str, now: float, claim_at: float) -> str:
         """Why this proof does not end the launch of ``job`` claimed at ``claim_at`` (epoch seconds), or an empty string when it does."""
@@ -1463,14 +1465,16 @@ class HostStopProof:
             return f"ECS lists {self.active_container_instances} ACTIVE container instance(s)"
         if self.instances_read_at < self.group_read_at:
             return "the container instances were read before the host group"
+        if self.unverified:
+            return f"the {job} family could not be verified: ECS listed a task that it could not identify"
         if job in self.busy_jobs:
             return f"ECS lists a task of the {job} host definition that is not STOPPED"
         if now - first_read > PROOF_MAX_AGE_SECONDS:
             return f"the host was read {int(now - first_read)} s ago, more than {int(PROOF_MAX_AGE_SECONDS)} s"
         if first_read - claim_at < needed:
             return (
-                f"its claim is {int(first_read - claim_at)} s old and a RunTask request that passed its guard may still be in flight until it is "
-                f"{int(needed)} s old (the {int(FIT_WAIT_SECONDS)} s send window plus {int(SETTLE_MARGIN_SECONDS)} s)"
+                f"its claim is {int(first_read - claim_at)} s old and a host stop settles a launch only when its claim is {int(needed)} s old "
+                f"(the {int(FIT_WAIT_SECONDS)} s send window plus a margin of {int(SETTLE_MARGIN_SECONDS)} s)"
             )
         return ""
 
@@ -1497,7 +1501,8 @@ class HostStopSettler:
     The gate (``Launcher.auto_settle``) cannot end a launch whose task ECS no longer describes, or whose RunTask call may have been sent and found no
     task: only positive evidence about the task ends it, and no timer or empty listing is that. A stopped host is the evidence. The host session reads that
     the group has capacity 0 and no instance, that ECS lists no ACTIVE container instance and no task of the host definition that is not STOPPED
-    (``HostStopProof``), and the claim is older than the send window plus ``SETTLE_MARGIN_SECONDS``, so no request that passed its guard can still land.
+    (``HostStopProof``), and the claim is at least as old as the send window plus ``SETTLE_MARGIN_SECONDS``. That age is the minimum claim age for a
+    settlement, not a promise that a guarded request cannot land later (see the accepted limit below).
     The proof is read once and a scan of the records takes time, so ``reread`` reads the host again immediately before each end write (it returns None when
     the host group shows capacity) and that fresh proof, judged at that moment, must refuse nothing. The settler writes the write-once ``end`` record through
     ``write_end``, as ``Launcher.cancel`` does, after the durable ``cancel`` request (``HOST_STOP_REASON``, write-once, so one already there stands). The
