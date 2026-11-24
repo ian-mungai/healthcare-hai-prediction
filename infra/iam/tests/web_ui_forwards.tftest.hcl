@@ -102,6 +102,23 @@ run "monitoring_adds_grafana_and_prometheus" {
   }
 }
 
+run "evidently_ui_preparation_adds_exactly_its_document" {
+  command = plan
+
+  variables {
+    evidently_ui_prepared = true
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_ssm_document.web_ui_forward)) == toset(["airflow", "evidently_ui"])
+      && aws_ssm_document.web_ui_forward["evidently_ui"].name == "example_project_evidently_ui_forward_dev"
+      && jsondecode(aws_ssm_document.web_ui_forward["evidently_ui"].content).properties.portNumber == "8600"
+    )
+    error_message = "The Evidently UI switch adds the Evidently UI document at 8600 and nothing else."
+  }
+}
+
 run "every_document_fixes_its_port_and_takes_only_the_local_port" {
   command = plan
 
@@ -111,6 +128,7 @@ run "every_document_fixes_its_port_and_takes_only_the_local_port" {
     model_api_registry_key           = "lakehouse/feast/registry.pb"
     model_api_manifest_prefix        = "serving/deployments"
     monitoring_enabled               = true
+    evidently_ui_prepared            = true
     openmetadata_persistent_prepared = true
   }
 
@@ -131,10 +149,10 @@ run "every_document_fixes_its_port_and_takes_only_the_local_port" {
 
   assert {
     condition = (
-      toset([for document in aws_ssm_document.web_ui_forward : jsondecode(document.content).properties.portNumber]) == toset(["8080", "5100", "8501", "3001", "9090"])
+      toset([for document in aws_ssm_document.web_ui_forward : jsondecode(document.content).properties.portNumber]) == toset(["8080", "5100", "8501", "3001", "9090", "8600"])
       && jsondecode(aws_ssm_document.openmetadata_ui_forward[0].content).properties.portNumber == "8585"
     )
-    error_message = "The documents forward exactly the web page ports 8080, 8585, 5100, 8501, 3001 and 9090."
+    error_message = "The documents forward exactly the web page ports 8080, 8585, 5100, 8501, 3001, 9090 and 8600."
   }
 
   assert {

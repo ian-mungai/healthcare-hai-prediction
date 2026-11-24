@@ -44,6 +44,7 @@ WEB_INTERFACES = {
     "streamlit": ("streamlit", "streamlit"),
     "grafana": ("monitoring", "grafana"),
     "prometheus": ("monitoring", "prometheus"),
+    "evidently_ui": ("evidently_ui", "evidently_ui"),
 }
 ALWAYS_ON = {"airflow_apiserver"}
 # A README sentence that gives the default of a service switch: "`monitoring_enabled` defaults to `false`" or "monitoring_enabled is off by default".

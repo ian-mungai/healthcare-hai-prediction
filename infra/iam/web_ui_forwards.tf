@@ -1,14 +1,15 @@
 # The owner reaches a web page on the host through one project Session Manager document per page and no other. Each document fixes the host port and takes only the
-# local port as a parameter, so a port without a web page cannot be forwarded. The persistent OpenMetadata document (openmetadata_persistent.tf) is the sixth.
+# local port as a parameter, so a port without a web page cannot be forwarded. The persistent OpenMetadata document (openmetadata_persistent.tf) is a further one.
 # A document exists only while its service is prepared. Airflow always runs on the host, so its document always exists. The project user's policy names each
 # document by ARN, and the generic AWS port forward document is not granted.
 locals {
   web_ui_forwards = {
-    airflow    = { port = 8080, page = "the Airflow web interface", present = true }
-    mlflow     = { port = 5100, page = "the MLflow web interface", present = var.training_prepared }
-    streamlit  = { port = 8501, page = "the Streamlit page", present = var.model_api_prepared }
-    grafana    = { port = 3001, page = "the Grafana web interface", present = var.monitoring_enabled }
-    prometheus = { port = 9090, page = "the Prometheus web interface", present = var.monitoring_enabled }
+    airflow      = { port = 8080, page = "the Airflow web interface", present = true }
+    mlflow       = { port = 5100, page = "the MLflow web interface", present = var.training_prepared }
+    streamlit    = { port = 8501, page = "the Streamlit page", present = var.model_api_prepared }
+    grafana      = { port = 3001, page = "the Grafana web interface", present = var.monitoring_enabled }
+    prometheus   = { port = 9090, page = "the Prometheus web interface", present = var.monitoring_enabled }
+    evidently_ui = { port = 8600, page = "the Evidently web interface", present = var.evidently_ui_prepared }
   }
 }
 

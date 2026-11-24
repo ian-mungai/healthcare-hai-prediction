@@ -14,7 +14,8 @@
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_mlflow_forward_${ENVIRONMENT}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_streamlit_forward_${ENVIRONMENT}",
         "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_grafana_forward_${ENVIRONMENT}",
-        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_prometheus_forward_${ENVIRONMENT}"
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_prometheus_forward_${ENVIRONMENT}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:document/${PROJECT_NAME}_evidently_ui_forward_${ENVIRONMENT}"
       ]
     }
   ]

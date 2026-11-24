@@ -135,7 +135,15 @@ def test_the_names_the_script_accepts_equal_the_terraform_map(tmp_path: Path) ->
 def test_a_new_map_entry_is_accepted_and_a_removed_one_is_not(tmp_path: Path) -> None:
     text = FORWARDS.read_text()
     added = tmp_path / "added.tf"
-    added.write_text(text.replace("    airflow    = {", '    kibana     = { port = 5601, page = "the Kibana page", present = true }\n    airflow    = {', 1))
+    added.write_text(
+        re.sub(
+            r"^(\s+)airflow(\s+)= \{",
+            r'\1kibana = { port = 5601, page = "the Kibana page", present = true }\n\1airflow\2= {',
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    )
     removed = tmp_path / "removed.tf"
     removed.write_text(re.sub(r"^\s+prometheus\s+= \{.*\n", "", text, flags=re.MULTILINE))
     persistent = web_ui_terraform.OPENMETADATA_FORWARD
@@ -279,6 +287,7 @@ def test_list_prints_service_port_and_health_path_without_aws_or_env(tmp_path: P
     documents = web_ui_terraform.forward_documents()
     check({row[0]: int(row[1]) for row in rows[1:]} == documents, f"the rows must be the documents and their ports: {rows[1:]} {documents}")
     check(["airflow", "8080", "/api/v2/version"] in rows, f"the Airflow row must carry its health path: {rows}")
+    check(["evidently_ui", "8600", "/api/version"] in rows, f"the Evidently UI row must carry its port and health path: {rows}")
     check(["openmetadata", "8585", "None"] in rows, f"a service whose health check calls no path must show None: {rows}")
     check(not any(unknown[2] == "unknown" for unknown in rows[1:]), f"every port must have exactly one service listener: {rows}")
 

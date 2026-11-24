@@ -91,7 +91,7 @@ ECS_GROUP_TAG = {"AmazonECSManaged": ""}
 BUDGET = f"arn:aws:budgets::{A}:budget/{P}_platform_{E}"
 # The owner forwards a port of the host to the Mac through one project document per web page and no other port.
 # The catalog document belongs to the on-demand catalog task.
-WEB_PAGE_FORWARDS = ("openmetadata", "airflow", "mlflow", "streamlit", "grafana", "prometheus")
+WEB_PAGE_FORWARDS = ("openmetadata", "airflow", "mlflow", "streamlit", "grafana", "prometheus", "evidently_ui")
 FORWARD_DOCUMENTS = tuple(f"arn:aws:ssm:{R}:{A}:document/{P}_{name}_forward_{E}" for name in ("catalog", *WEB_PAGE_FORWARDS))
 GENERIC_FORWARD_DOCUMENT = f"arn:aws:ssm:{R}::document/AWS-StartPortForwardingSession"
 # Services that listen on the host and have no web page: no project document exists for them, so none may be named.
