@@ -557,40 +557,51 @@ run "state_keys_belong_to_the_project_user_and_ci_only" {
   assert {
     condition = (
       jsondecode(aws_s3_bucket_policy.tls.policy).Statement[0].Sid == "DenyInsecureTransport" &&
-      alltrue([
-        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
-        join(",", sort(tolist(statement.Resource))) == join(",", sort([
+      length([for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : statement if statement.Sid == "ProjectUserUsesItsStateKeys"]) == 1 &&
+      length([
+        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : statement
+        if statement.Sid == "ProjectUserUsesItsStateKeys" &&
+        statement.Effect == "Allow" &&
+        statement.Principal.AWS == "arn:aws:iam::111111111111:user/example_project_dev" &&
+        toset(statement.Action) == toset(["s3:GetObject", "s3:PutObject"]) &&
+        length(statement.Resource) == 5 &&
+        toset(statement.Resource) == toset([
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/alerts/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/storage/terraform.tfstate"
-        ]))
-        if statement.Sid == "ProjectUserUsesItsStateKeys"
-      ]) &&
+        ])
+      ]) == 1 &&
       alltrue([
         for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
         statement.Principal.AWS == "arn:aws:iam::111111111111:user/example_project_dev"
         if statement.Effect == "Allow"
       ])
     )
-    error_message = "The project user may use the storage, platform, services, jobs and alerts state keys and no other key."
+    error_message = "Exactly one Allow lets the project user get and put the storage, platform, services, jobs and alerts state keys and no other key."
   }
 
   assert {
-    condition = anytrue([
-      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
-      statement.Sid == "ProjectUserHoldsItsStateLocks" &&
-      toset(statement.Resource) == toset([
-        "arn:aws:s3:::example-project-ci-bucket/terraform_state/alerts/terraform.tfstate.tflock",
-        "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate.tflock",
-        "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate.tflock",
-        "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate.tflock",
-        "arn:aws:s3:::example-project-ci-bucket/terraform_state/storage/terraform.tfstate.tflock"
-      ]) &&
-      toset(statement.Action) == toset(["s3:GetObject", "s3:PutObject", "s3:DeleteObject"])
-    ])
-    error_message = "The project user may read, write and delete the lock file of each of its five stacks and nothing else."
+    condition = (
+      length([for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : statement if statement.Sid == "ProjectUserHoldsItsStateLocks"]) == 1 &&
+      length([
+        for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement : statement
+        if statement.Sid == "ProjectUserHoldsItsStateLocks" &&
+        statement.Effect == "Allow" &&
+        statement.Principal.AWS == "arn:aws:iam::111111111111:user/example_project_dev" &&
+        length(statement.Resource) == 5 &&
+        toset(statement.Resource) == toset([
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/alerts/terraform.tfstate.tflock",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate.tflock",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate.tflock",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate.tflock",
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/storage/terraform.tfstate.tflock"
+        ]) &&
+        toset(statement.Action) == toset(["s3:GetObject", "s3:PutObject", "s3:DeleteObject"])
+      ]) == 1
+    )
+    error_message = "Exactly one Allow lets the project user read, write and delete the lock file of each of its five stacks and nothing else."
   }
 
   assert {
