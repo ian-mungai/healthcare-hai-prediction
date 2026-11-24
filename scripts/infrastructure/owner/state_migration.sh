@@ -32,7 +32,7 @@ printf 'Stack: %s\n' "$STACK"
 # Step 1: read only. Stop on any status that is not ok, present, absent or on.
 .venv/bin/python -m scripts.infrastructure.state_migration check --stack "$STACK"
 
-# Step 2: the plan before the move.
+# Step 2: the plan before the move. A run that stopped after the copy keeps its earlier plan (a new plan cannot run on a half-switched stack), and step 3 resumes from the record.
 .venv/bin/python -m scripts.infrastructure.state_migration plan --phase before --stack "$STACK"
 
 # Step 3: the move.

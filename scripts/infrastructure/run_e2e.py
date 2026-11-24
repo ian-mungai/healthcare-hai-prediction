@@ -36,6 +36,7 @@ DISCLOSURE_SENTINEL = "example_e2e_value_do_not_print"
 SOURCE_PATHS = (
     "scripts/process.py",
     "scripts/infrastructure/render_project_config.py",
+    "scripts/infrastructure/state_protection.py",
     "scripts/infrastructure/render_platform_config.py",
     "scripts/infrastructure/capture_reader.py",
     "scripts/infrastructure/stack_settings.py",
@@ -2130,6 +2131,76 @@ def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -
         {"PATH": str(stand_in)},
     )
     evidence.check(step, "state_option_is_for_the_storage_stack_only", result.returncode == 2 and "storage stack" in result.stderr)
+    run_state_protection_cases(evidence, workspace, stand_in, expected, state_plans, wrapper, output)
+
+
+def run_state_protection_cases(
+    evidence: Evidence, workspace: Path, stand_in: Path, expected: dict[str, Any], state_plans: dict[str, Any], wrapper: list[str], output: Path
+) -> None:
+    """Once the state administrator is approved, every storage render and apply carries it; a different one and a plan without it are refused."""
+    principals = "terraform_state_admin_principals"
+    record = workspace / "plans" / "state_migration" / "state_protection.json"
+    record.unlink(missing_ok=True)
+    shim = stand_in / "python_without_identity"
+    lines = [
+        "#!/bin/bash",
+        "args=()",
+        'for argument in "$@"; do [[ "$argument" == --verify-identity ]] || args+=("$argument"); done',
+        f'exec {sys.executable} "${{args[@]}}"',
+    ]
+    shim.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    shim.chmod(0o700)
+    environment = {"PATH": str(stand_in), "PYTHON_BIN": str(shim)}
+    plan_paths = {}
+    for label, plan in state_plans.items():
+        plan_paths[label] = workspace / f"{label}_state_plan.json"
+        plan_paths[label].write_text(json.dumps(plan), encoding="utf-8")
+    option = ["--state-admin", "role/example_admin"]
+    step, result = evidence.run(
+        "apply_refused_when_the_plan_lacks_the_option", [*wrapper, *option, "apply", str(plan_paths["default"])], workspace, environment
+    )
+    evidence.check(
+        step,
+        "a_refused_apply_keeps_no_record",
+        result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout and not record.exists(),
+    )
+    step, result = evidence.run("apply_accepts_the_plan_with_the_option", [*wrapper, *option, "apply", str(plan_paths["enabled"])], workspace, environment)
+    evidence.check(
+        step,
+        "the_approved_administrator_is_kept_after_the_apply",
+        result.returncode == 0
+        and record.is_file()
+        and json.loads(record.read_bytes()) == {principals: ["role/example_admin"]}
+        and record.stat().st_mode & 0o077 == 0,
+    )
+    step, result = evidence.run("wrapper_storage_validate_with_the_record", [*wrapper, "validate"], workspace, environment)
+    evidence.check(
+        step,
+        "the_approved_inputs_render_without_the_option",
+        result.returncode == 0 and json.loads(output.read_bytes()) == {**expected, "terraform_state_enabled": True, principals: ["role/example_admin"]},
+    )
+    step, result = evidence.run("apply_accepts_the_state_plan_without_the_option", [*wrapper, "apply", str(plan_paths["enabled"])], workspace, environment)
+    evidence.check(step, "the_approved_inputs_match_the_saved_plan", result.returncode == 0)
+    step, result = evidence.run(
+        "apply_refuses_a_plan_that_would_remove_the_state_grants", [*wrapper, "apply", str(plan_paths["default"])], workspace, environment
+    )
+    evidence.check(
+        step, "a_plan_without_the_approved_inputs_is_refused", result.returncode == 2 and "Saved plan inputs differ from .env" in result.stderr + result.stdout
+    )
+    step, result = evidence.run("validate_refuses_another_administrator", [*wrapper, "--state-admin", "role/other_admin", "validate"], workspace, environment)
+    evidence.check(step, "another_administrator_is_refused", result.returncode == 2 and "differs from the approved state administrator" in result.stderr)
+    step, result = evidence.run(
+        "remember_refuses_another_administrator", [*wrapper, "--state-admin", "role/other_admin", "apply", str(plan_paths["enabled"])], workspace, environment
+    )
+    evidence.check(
+        step, "another_administrator_is_not_kept", result.returncode == 2 and json.loads(record.read_bytes()) == {principals: ["role/example_admin"]}
+    )
+    record.write_text('{"terraform_state_admin_principals": ["arn:aws:iam::x:role/y"]}\n', encoding="utf-8")
+    step, result = evidence.run("validate_refuses_an_invalid_record", [*wrapper, "validate"], workspace, environment)
+    evidence.check(step, "an_invalid_record_stops_the_render", result.returncode == 2 and "not valid" in result.stderr)
+    record.unlink(missing_ok=True)
+    step, result = evidence.run("wrapper_storage_validate_without_a_record", [*wrapper, "validate"], workspace, environment)
+    evidence.check(step, "no_record_keeps_the_defaults", result.returncode == 0 and json.loads(output.read_bytes()) == expected)
 
 
 def string_values(value: Any) -> list[str]:

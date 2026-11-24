@@ -7,7 +7,8 @@ bucket policy by the key's role: the iam stack's objects answer only to the admi
 request is recorded with its role.
 
 Faults the cases switch on: ``drop_put`` (the connection closes before the object is stored), ``corrupt_get`` (a read returns another serial),
-``race_put`` (another writer creates the key just before a write arrives) and ``deny_all``.
+``corrupt_get_after`` (the reads of a key after the given number of honest ones return another serial), ``race_put`` (another writer creates the key
+just before a write arrives) and ``deny_all``.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ ACCOUNT = "".join(["1"] * 12)
 SIGNING_KEY = re.compile(r"Credential=([A-Z0-9]+)/")
 STATE_PREFIX = "terraform_state/"
 IAM_PREFIX = "terraform_state/iam/"
+STATE_RULE = "expire_replaced_state_versions"
 XML = "application/xml"
 
 
@@ -44,6 +46,7 @@ class Seen:
 class Faults:
     drop_put: set[str] = field(default_factory=set)
     corrupt_get: set[str] = field(default_factory=set)
+    corrupt_get_after: dict[str, int] = field(default_factory=dict)
     deny_all: bool = False
     race_put: dict[str, bytes] = field(default_factory=dict)
 
@@ -69,6 +72,28 @@ def decode_chunked(body: bytes) -> bytes:
         out += body[end + 2 : end + 2 + size]
         position = end + 2 + size + 2
     return bytes(out)
+
+
+def lifecycle_rule(rule: str | dict[str, Any]) -> str:
+    """One lifecycle rule as S3 answers it. A name stands for the rule the bucket has: the state rule when it is that name, an empty filter otherwise. A dict
+    sets ``id``, ``status``, ``prefix`` (``None`` for an empty filter), ``noncurrent_days``, ``days`` (expiry of the current version) and ``delete_marker``."""
+    if isinstance(rule, str):
+        if rule != STATE_RULE:
+            return f"<Rule><ID>{rule}</ID><Status>Enabled</Status><Filter></Filter></Rule>"
+        rule = {"id": STATE_RULE, "prefix": STATE_PREFIX, "noncurrent_days": 90, "delete_marker": True}
+    prefix = rule.get("prefix")
+    parts = [f"<ID>{rule['id']}</ID><Status>{rule.get('status', 'Enabled')}</Status>"]
+    parts.append("<Filter></Filter>" if prefix is None else f"<Filter><Prefix>{prefix}</Prefix></Filter>")
+    if rule.get("noncurrent_days") is not None:
+        parts.append(f"<NoncurrentVersionExpiration><NoncurrentDays>{rule['noncurrent_days']}</NoncurrentDays></NoncurrentVersionExpiration>")
+    expiration = ""
+    if rule.get("days") is not None:
+        expiration += f"<Days>{rule['days']}</Days>"
+    if rule.get("delete_marker"):
+        expiration += "<ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker>"
+    if expiration:
+        parts.append(f"<Expiration>{expiration}</Expiration>")
+    return f"<Rule>{''.join(parts)}</Rule>"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -159,7 +184,9 @@ class Handler(BaseHTTPRequestHandler):
                 if key not in store.objects:
                     return self.error(404, "NoSuchKey")
                 body = store.objects[key]
-                if key in store.faults.corrupt_get:
+                if method == "GET":
+                    store.reads[key] = store.reads.get(key, 0) + 1
+                if key in store.faults.corrupt_get or (key in store.faults.corrupt_get_after and store.reads[key] > store.faults.corrupt_get_after[key]):
                     body = body.replace(b'"serial": ', b'"serial": 9')
                 headers = {"ETag": '"' + hashlib.md5(body, usedforsecurity=False).hexdigest() + '"', "Content-Length": str(len(body))}
                 self.send_response(200)
@@ -191,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(404, "NoSuchBucketPolicy")
             return self.reply(200, json.dumps(store.policy).encode(), "application/json")
         if "lifecycle" in query:
-            rules = "".join(f"<Rule><ID>{name}</ID><Status>Enabled</Status><Filter><Prefix>x</Prefix></Filter></Rule>" for name in store.lifecycle)
+            rules = "".join(lifecycle_rule(rule) for rule in store.lifecycle)
             return self.reply(200, f'<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">{rules}</LifecycleConfiguration>'.encode())
         prefix = (query.get("prefix") or [""])[0]
         delimiter = (query.get("delimiter") or [""])[0]
@@ -221,9 +248,10 @@ class StateBucket:
         self.objects: dict[str, bytes] = {}
         self.seen: list[Seen] = []
         self.faults = Faults()
+        self.reads: dict[str, int] = {}
         self.versioning = "Enabled"
         self.policy: dict[str, Any] | None = None
-        self.lifecycle: list[str] = []
+        self.lifecycle: list[str | dict[str, Any]] = []
         self.guard = threading.Lock()
         self.server = Server(("127.0.0.1", 0), Handler)
         self.server.stand_in = self

@@ -23,6 +23,7 @@ project is touched. The cases are:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -30,9 +31,11 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 from scripts.infrastructure.state_migration import RECORD_FOLDER, STACKS, backend_text
-from scripts.infrastructure.state_migration_s3_stand_in import ACCOUNT, BUCKET, StateBucket
+from scripts.infrastructure.state_migration_s3_stand_in import ACCOUNT, BUCKET, STATE_RULE, StateBucket
+from scripts.infrastructure.state_protection import RECORD as STATE_PROTECTION_RECORD
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,16 +56,25 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 stack=infra
 admin=""
+state_admin=""
 log="$PWD/wrapper_calls.log"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --iam | --platform | --services | --jobs | --alerts) stack="infra/${1#--}"; shift ;;
     --admin-profile) admin="$2"; shift 2 ;;
+    --state-admin) state_admin="$2"; shift 2 ;;
     *) break ;;
   esac
 done
 [[ "$stack" != infra/iam || -n "$admin" ]] || { echo "IAM updates require --admin-profile." >&2; exit 2; }
-printf '%s admin=%s\\n' "$stack" "${admin:-none}" >> "$log"
+printf '%s admin=%s state_admin=%s\\n' "$stack" "${admin:-none}" "${state_admin:-none}" >> "$log"
+if [[ "$stack" == infra ]]; then
+  if [[ -n "$state_admin" ]]; then
+    printf '{"terraform_state_enabled": true, "terraform_state_admin_principals": ["%s"]}\\n' "$state_admin" > "$stack/deployment.auto.tfvars.json"
+  else
+    rm -f "$stack/deployment.auto.tfvars.json"
+  fi
+fi
 exec terraform -chdir="$stack" "$@" -input=false
 """
 
@@ -71,9 +83,15 @@ def text_of(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
-def main_tf(count: int) -> str:
+STATE_VARIABLES = (
+    'variable "terraform_state_enabled" {\n  type    = bool\n  default = false\n}\n\n'
+    'variable "terraform_state_admin_principals" {\n  type    = list(string)\n  default = []\n}\n\n'
+)
+
+
+def main_tf(count: int, storage: bool = False) -> str:
     resources = "\n".join(f'resource "terraform_data" "r{index}" {{\n  input = "value{index}"\n}}\n' for index in range(count))
-    return f'terraform {{\n  required_version = "~> 1.16.1"\n}}\n\n{resources}'
+    return f'terraform {{\n  required_version = "~> 1.16.1"\n}}\n\n{STATE_VARIABLES if storage else ""}{resources}'
 
 
 class Scene:
@@ -117,7 +135,7 @@ class Scene:
         for stack, count in RESOURCES.items():
             folder = path / FOLDERS[stack]
             folder.mkdir(parents=True, exist_ok=True)
-            (folder / "main.tf").write_text(main_tf(count), encoding="utf-8")
+            (folder / "main.tf").write_text(main_tf(count, storage=stack == "storage"), encoding="utf-8")
             for arguments in (["init", "-input=false"], ["apply", "-auto-approve", "-input=false"]):
                 result = run_command("terraform", [f"-chdir={folder}", *arguments], timeout=STEP_SECONDS)
                 if result.returncode:
@@ -156,20 +174,74 @@ class Scene:
     def record(self, stack: str) -> Path:
         return self.root / RECORD_FOLDER / f"{stack}.json"
 
+    def approve_state_admin(self, principal: str = "role/example_admin") -> None:
+        """Record the state administrator the owner approved for the storage stack, as the apply sheet does."""
+        path = self.root / STATE_PROTECTION_RECORD
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"terraform_state_admin_principals": [principal]}) + "\n", encoding="utf-8")
+
     def protect(self) -> None:
-        """Give the stand-in bucket the state protection the migration requires: versioning, the lifecycle rule and the bucket policy statements."""
+        """Give the stand-in bucket the state protection the migration requires: the version history, the lifecycle rule and the state statements of the bucket
+        policy of ``infra/main.tf`` (effects, principals, actions, resources and deny conditions)."""
+        user = f"arn:aws:iam::{ACCOUNT}:user/{PROJECT_PROFILE}"
+        administrator = f"arn:aws:iam::{ACCOUNT}:user/{ADMIN_PROFILE}"
+        plan_role = f"arn:aws:iam::{ACCOUNT}:role/example_project_gh_terraform_plan_dev"
+        prefix = f"arn:aws:s3:::{BUCKET}/terraform_state"
+        keys = [f"{prefix}/{stack}/terraform.tfstate" for stack in STACKS if stack != "iam"]
         self.bucket.versioning = "Enabled"
-        self.bucket.lifecycle = ["abort_incomplete_uploads", "expire_replaced_state_versions"]
-        keys = [f"arn:aws:s3:::{BUCKET}/terraform_state/{stack}/terraform.tfstate" for stack in STACKS if stack != "iam"]
+        self.bucket.lifecycle = ["abort_incomplete_uploads", STATE_RULE]
         self.bucket.policy = {
             "Version": "2012-10-17",
             "Statement": [
-                {"Sid": "ProjectUserUsesItsStateKeys", "Effect": "Allow", "Resource": keys},
-                {"Sid": "ProjectUserHoldsItsStateLocks", "Effect": "Allow", "Resource": [f"{key}.tflock" for key in keys]},
-                {"Sid": "DenyStatePrefixToEveryoneElse", "Effect": "Deny", "Resource": [f"arn:aws:s3:::{BUCKET}/terraform_state/*"]},
-                {"Sid": "DenyIamStateToProjectIdentities", "Effect": "Deny", "Resource": [f"arn:aws:s3:::{BUCKET}/terraform_state/iam/*"]},
+                {
+                    "Sid": "DenyInsecureTransport",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Action": "s3:*",
+                    "Resource": [f"arn:aws:s3:::{BUCKET}", f"arn:aws:s3:::{BUCKET}/*"],
+                    "Condition": {"Bool": {"aws:SecureTransport": "false"}},
+                },
+                {
+                    "Sid": "ProjectUserUsesItsStateKeys",
+                    "Effect": "Allow",
+                    "Principal": {"AWS": user},
+                    "Action": ["s3:GetObject", "s3:PutObject"],
+                    "Resource": keys,
+                },
+                {
+                    "Sid": "ProjectUserHoldsItsStateLocks",
+                    "Effect": "Allow",
+                    "Principal": {"AWS": user},
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": [f"{key}.tflock" for key in keys],
+                },
+                {
+                    "Sid": "DenyStatePrefixToEveryoneElse",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Action": "s3:*",
+                    "Resource": [f"{prefix}/*"],
+                    "Condition": {"ArnNotLike": {"aws:PrincipalArn": [user, plan_role, administrator]}},
+                },
+                {
+                    "Sid": "DenyIamStateToProjectIdentities",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Action": "s3:*",
+                    "Resource": [f"{prefix}/iam/*"],
+                    "Condition": {"ArnLike": {"aws:PrincipalArn": [user, plan_role]}},
+                },
             ],
         }
+
+    def statements(self) -> list[dict[str, Any]]:
+        """The statements of the stand-in's policy, for a case to change in place."""
+        if self.bucket.policy is None:
+            raise RuntimeError("the case has not protected its bucket")
+        return cast(list[dict[str, Any]], self.bucket.policy["Statement"])
+
+    def statement(self, sid: str) -> dict[str, Any]:
+        return next(statement for statement in self.statements() if statement["Sid"] == sid)
 
 
 def fingerprint(path: Path) -> tuple[int, str, int]:
@@ -191,6 +263,7 @@ def fresh(template: Path, work: Path, name: str) -> Scene:
 def full_run(scene: Scene, problems: list[str], report: dict[str, object]) -> None:
     """All six stacks, in the order of the owner sheet."""
     originals = {stack: scene.state_file(stack).read_bytes() for stack in ORDER}
+    scene.approve_state_admin()
     for stack in ORDER:
         label = f"[{stack}]"
         code, output = scene.run("backend", stack, *scene.admin(stack))
@@ -310,6 +383,51 @@ def interrupted_and_mismatch(template: Path, work: Path, problems: list[str]) ->
         expect(problems, len(bucket.requests("PUT")) == puts, "the retry wrote the state again instead of adopting it")
 
 
+def mutate(scene: Scene, sid: str, **changes: object) -> None:
+    scene.statement(sid).update(changes)
+
+
+def drop_project_user(scene: Scene) -> None:
+    names = scene.statement("DenyStatePrefixToEveryoneElse")["Condition"]["ArnNotLike"]
+    names["aws:PrincipalArn"] = [value for value in names["aws:PrincipalArn"] if "gh_terraform_plan" in value]
+
+
+def duplicate_sid(scene: Scene) -> None:
+    scene.statements().append({**scene.statement("ProjectUserUsesItsStateKeys"), "Effect": "Deny"})
+
+
+def other_deny(scene: Scene) -> None:
+    scene.statements().append(
+        {
+            "Sid": "DenyEverythingUnderTheStatePrefix",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": "s3:*",
+            "Resource": [f"arn:aws:s3:::{BUCKET}/terraform_state/*"],
+        }
+    )
+
+
+POLICY_MUTATIONS = {
+    "deny_prefix": lambda scene: mutate(scene, "DenyStatePrefixToEveryoneElse", Resource=[f"arn:aws:s3:::{BUCKET}/terraform_other/*"]),
+    "allow_effect": lambda scene: mutate(scene, "ProjectUserUsesItsStateKeys", Effect="Deny"),
+    "lock_effect": lambda scene: mutate(scene, "ProjectUserHoldsItsStateLocks", Effect="Deny"),
+    "allow_principal": lambda scene: mutate(scene, "ProjectUserUsesItsStateKeys", Principal={"AWS": f"arn:aws:iam::{ACCOUNT}:user/someone_else"}),
+    "allow_actions": lambda scene: mutate(scene, "ProjectUserUsesItsStateKeys", Action=["s3:GetObject"]),
+    "deny_exception": drop_project_user,
+    "duplicate_sid": duplicate_sid,
+    "other_deny": other_deny,
+}
+STATE_RULE_FIELDS = {"id": STATE_RULE, "prefix": "terraform_state/", "noncurrent_days": 90, "delete_marker": True}
+LIFECYCLE_MUTATIONS: dict[str, list[str | dict[str, object]]] = {
+    "lifecycle_off": [{**STATE_RULE_FIELDS, "status": "Disabled"}],
+    "lifecycle_prefix": [{**STATE_RULE_FIELDS, "prefix": "lakehouse/"}],
+    "lifecycle_no_expiry": [{**STATE_RULE_FIELDS, "noncurrent_days": None}],
+    "lifecycle_current": [{**STATE_RULE_FIELDS, "days": 30}],
+    "lifecycle_other": [STATE_RULE, {"id": "expire_everything", "prefix": None, "days": 30}],
+}
+
+
 def refusals(template: Path, work: Path, problems: list[str]) -> None:
     stack = "services"
     cases: dict[str, tuple[str, str]] = {
@@ -323,6 +441,21 @@ def refusals(template: Path, work: Path, problems: list[str]) -> None:
         "a local state that is not state": ("local state: invalid", "bad_local"),
         "a wrong account": ("identity: refused", "identity"),
         "a policy that does not allow this stack's state key": ("the state key of this stack is not allowed", "key_missing"),
+        "deny statements that name another prefix": ("bucket policy: state statements invalid", "deny_prefix"),
+        "a state allow that became a deny": ("bucket policy: state statements invalid", "allow_effect"),
+        "a lock statement that became a deny": ("bucket policy: state statements invalid", "lock_effect"),
+        "a state allow for another principal": ("bucket policy: state statements invalid", "allow_principal"),
+        "a state allow with other actions": ("bucket policy: state statements invalid", "allow_actions"),
+        "a deny that does not except the project user": ("bucket policy: state statements invalid", "deny_exception"),
+        "a second statement with a state Sid": ("bucket policy: state statements invalid", "duplicate_sid"),
+        "a deny of this stack's key without a condition": ("bucket policy: state statements invalid", "other_deny"),
+        "a lifecycle rule that is disabled": ("lifecycle: rule for replaced state versions invalid", "lifecycle_off"),
+        "a lifecycle rule on another prefix": ("lifecycle: rule for replaced state versions invalid", "lifecycle_prefix"),
+        "a lifecycle rule without version expiry": ("lifecycle: rule for replaced state versions invalid", "lifecycle_no_expiry"),
+        "a lifecycle rule that expires the current state": ("lifecycle: rule for replaced state versions invalid", "lifecycle_current"),
+        "another rule that expires current objects of the whole bucket": ("lifecycle: another rule expires", "lifecycle_other"),
+        "named workspaces left in the stack folder": ("local state: named workspaces", "workspace_dir"),
+        "a named workspace selected": ("local state: a named workspace is selected", "workspace_selected"),
     }
     for name, (status, tag) in cases.items():
         scene = fresh(template, work, f"refuse_{tag}")
@@ -350,6 +483,17 @@ def refusals(template: Path, work: Path, problems: list[str]) -> None:
                 bucket.policy = json.loads(json.dumps(bucket.policy).replace("terraform_state/services/", "terraform_state/other/"))
             elif tag == "identity":
                 bucket.identities = {"project": ("222222222222", IDENTITIES["project"][1])}
+            elif tag in POLICY_MUTATIONS:
+                POLICY_MUTATIONS[tag](scene)
+            elif tag.startswith("lifecycle_"):
+                bucket.lifecycle = ["abort_incomplete_uploads", *LIFECYCLE_MUTATIONS[tag]]
+            elif tag.startswith("workspace_"):
+                folder = scene.root / FOLDERS[stack]
+                terraform = [f"-chdir={folder}", "workspace"]
+                created = run_command("terraform", [*terraform, "new", "dev"], timeout=STEP_SECONDS)
+                if tag == "workspace_dir":
+                    created = run_command("terraform", [*terraform, "select", "default"], timeout=STEP_SECONDS)
+                expect(problems, created.returncode == 0, f"{name}: the workspace could not be prepared: {created.stdout[-300:]}")
             before = dict(bucket.objects)
             local_before = local.read_bytes() if local.exists() else None
             record = scene.root / RECORD_FOLDER
@@ -456,6 +600,208 @@ def backend_contract(template: Path, work: Path, problems: list[str]) -> None:
         expect(problems, f'terraform_state/{stack}/terraform.tfstate"' in backend_text(stack), f"the backend of {stack} names another key")
 
 
+def migrate_fully(scene: Scene, stack: str, problems: list[str]) -> None:
+    """The sheet's steps for one stack, each expected to succeed."""
+    for command, extra, text in (
+        ("plan", ["--phase", "before"], "plan before"),
+        ("migrate", [], "migration: done"),
+        ("plan", ["--phase", "after"], "plan after"),
+    ):
+        code, output = scene.run(command, stack, *extra, *scene.admin(stack))
+        expect(problems, code == 0 and text in output, f"[{stack}] {command} {extra}: exit {code}: {output}")
+
+
+def tampered_verification(template: Path, work: Path, problems: list[str]) -> None:
+    """A state read through the backend must equal the record: the same serial and the same bytes in the bucket."""
+    stack = "jobs"
+    scene = fresh(template, work, "tampered")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        migrate_fully(scene, stack, problems)
+        code, output = scene.run("verify", stack)
+        expect(problems, code == 0 and "plans: equal" in output, f"verify before any change: exit {code}: {output}")
+        original = bucket.objects[scene.key(stack)]
+        document = json.loads(original)
+        newer = {**document, "serial": document["serial"] + 1}
+        changed = json.loads(original)
+        changed["resources"][0]["instances"][0]["attributes"]["input"] = "another_value"
+        for label, data in (("a newer serial with the same counts", newer), ("the same serial with another attribute", changed)):
+            bucket.objects[scene.key(stack)] = (json.dumps(data, indent=2) + "\n").encode()
+            code, output = scene.run("verify", stack)
+            expect(problems, code == 1 and "verify:" in output and "plans:" not in output, f"verify must refuse {label}: exit {code}: {output}")
+        bucket.objects[scene.key(stack)] = original
+        code, output = scene.run("verify", stack)
+        expect(problems, code == 0, f"verify after the object was put back: exit {code}: {output}")
+
+
+def output_only_plan(template: Path, work: Path, problems: list[str]) -> None:
+    """A plan that changes only an output is a change: it is kept in the list, and an exit code 2 with an empty list is refused."""
+    stack = "alerts"
+    scene = fresh(template, work, "output_plan")
+    folder = scene.root / FOLDERS[stack]
+    (folder / "main.tf").write_text(main_tf(RESOURCES[stack]) + '\noutput "stamp" {\n  value = "new"\n}\n', encoding="utf-8")
+    code, output = scene.run("plan", stack, "--phase", "before")
+    listed = text_of(scene.root / RECORD_FOLDER / f"{stack}_before.changes.txt")
+    expect(problems, code == 0 and "1 change(s)" in output and listed == "output.stamp: create\n", f"an output-only plan: exit {code}: {output}: {listed!r}")
+    wrapper = scene.root / "scripts/infrastructure/terraform.sh"
+    wrapper.write_text(
+        WRAPPER.replace('exec terraform -chdir="$stack" "$@" -input=false', 'terraform -chdir="$stack" "$@" -input=false || true\nexit 2'), encoding="utf-8"
+    )
+    (folder / "main.tf").write_text(main_tf(RESOURCES[stack]), encoding="utf-8")
+    code, output = scene.run("plan", stack, "--phase", "after")
+    expect(problems, code == 1 and "plan after: reported changes" in output, f"exit code 2 with no listed change: exit {code}: {output}")
+
+
+def resumed_runs(template: Path, work: Path, problems: list[str]) -> None:
+    """A run that stopped at any stage is resumed from its record: after the backend file, after the switch, and after a failed read through the backend."""
+    stack = "jobs"
+    scene = fresh(template, work, "resume_backend")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        code, output = scene.run("plan", stack, "--phase", "before")
+        expect(problems, code == 0, f"resume: plan before: exit {code}: {output}")
+        data = scene.state_file(stack).read_bytes()
+        document = json.loads(data)
+        bucket.objects[scene.key(stack)] = data
+        record = {"stack": stack, "stage": "copied", "serial": document["serial"], "lineage": document["lineage"], "resources": len(document["resources"])}
+        record |= {"instances": sum(len(item.get("instances", [])) for item in document["resources"]), "sha256": hashlib.sha256(data).hexdigest(), "at": "x"}
+        scene.record(stack).write_text(json.dumps(record), encoding="utf-8")
+        code, output = scene.run("backend", stack)
+        expect(problems, code == 0, f"resume: backend: exit {code}: {output}")
+        code, output = scene.run("plan", stack, "--phase", "before")
+        expect(problems, code == 0 and "plan before: kept" in output, f"a stop after the backend file must resume at the plan before: exit {code}: {output}")
+        code, output = scene.run("migrate", stack)
+        expect(problems, code == 0 and "migration: done" in output, f"resume: migrate after the backend file: exit {code}: {output}")
+        for command, extra in (("plan", ["--phase", "after"]), ("verify", [])):
+            code, output = scene.run(command, stack, *extra)
+            expect(problems, code == 0, f"resume: {command}: exit {code}: {output}")
+    scene = fresh(template, work, "resume_switched")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        migrate_fully(scene, stack, problems)
+        record = json.loads(scene.record(stack).read_text())
+        scene.record(stack).write_text(json.dumps({**record, "stage": "copied"}), encoding="utf-8")
+        puts = len(bucket.requests("PUT"))
+        code, output = scene.run("migrate", stack)
+        expect(problems, code == 0 and "backend: switched (resumed" in output, f"a stop after the switch must resume from the record: exit {code}: {output}")
+        expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "done", "the resumed run did not record done")
+        expect(problems, len(bucket.requests("PUT")) == puts, "the resumed run wrote to the bucket")
+        code, output = scene.run("verify", stack)
+        expect(problems, code == 0, f"resume after the switch: verify: exit {code}: {output}")
+    scene = fresh(template, work, "resume_pull")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        code, output = scene.run("plan", stack, "--phase", "before")
+        original = scene.state_file(stack).read_bytes()
+        bucket.faults.corrupt_get_after = {scene.key(stack): 1}
+        code, output = scene.run("migrate", stack)
+        expect(problems, code == 1 and "backend: restored" in output, f"a failed read through the backend must restore the stack: exit {code}: {output}")
+        expect(problems, scene.state_file(stack).read_bytes() == original, "a failed read through the backend changed the local state")
+        marker = scene.root / FOLDERS[stack] / ".terraform" / "terraform.tfstate"
+        expect(problems, not marker.is_file() or '"type": "s3"' not in marker.read_text(), "a failed read left the cached S3 backend marker")
+        code, output = scene.run("plan", stack, "--phase", "after")
+        expect(problems, code == 0, f"an ordinary plan after the restore: exit {code}: {output}")
+        bucket.faults.corrupt_get_after = {}
+        code, output = scene.run("migrate", stack)
+        expect(problems, code == 0 and "migration: done" in output, f"migrate must retry after a restore: exit {code}: {output}")
+
+
+def storage_protection(template: Path, work: Path, problems: list[str]) -> None:
+    """The storage plans carry the approved state inputs; a plan without them is refused before it is kept."""
+    stack = "storage"
+    scene = fresh(template, work, "storage_inputs")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        code, output = scene.run("plan", stack, "--phase", "before")
+        expect(problems, code == 1 and "state protection inputs are not recorded" in output, f"no approved inputs on record: exit {code}: {output}")
+        expect(problems, not (scene.root / RECORD_FOLDER / "storage_before.changes.txt").exists(), "a refused plan wrote its change list")
+        scene.approve_state_admin()
+        code, output = scene.run("plan", stack, "--phase", "before")
+        calls = text_of(scene.root / "wrapper_calls.log") or ""
+        expect(
+            problems,
+            code == 0 and "state_admin=role/example_admin" in calls,
+            f"the storage plan must pass the approved administrator: exit {code}: {output}: {calls}",
+        )
+        wrapper = scene.root / "scripts/infrastructure/terraform.sh"
+        wrapper.write_text(WRAPPER.replace('state_admin="$2"; shift 2', "shift 2"), encoding="utf-8")
+        code, output = scene.run("plan", stack, "--phase", "after")
+        expect(
+            problems,
+            code == 1 and "does not carry the approved state protection inputs" in output,
+            f"a plan without the inputs must be refused: exit {code}: {output}",
+        )
+        scene.root.joinpath(STATE_PROTECTION_RECORD).write_text('{"terraform_state_admin_principals": ["arn:aws:iam::x:role/y"]}\n', encoding="utf-8")
+        code, output = scene.run("plan", stack, "--phase", "after")
+        expect(problems, code == 1 and "state protection inputs are not valid" in output, f"an invalid record must be refused: exit {code}: {output}")
+
+
+def approved_plan_shape(template: Path, work: Path, problems: list[str]) -> None:
+    """The prefix sheet applies a saved plan only when it holds exactly the two approved updates in place and nothing else."""
+    scene = fresh(template, work, "plan_shape")
+    folder = scene.root / FOLDERS["storage"]
+
+    def write(inputs: dict[str, str], extra: str = "") -> None:
+        body = "\n".join(f'resource "terraform_data" "{name}" {{\n  input = "{value}"\n{extra if name == "r1" else ""}}}\n' for name, value in inputs.items())
+        (folder / "main.tf").write_text(f'terraform {{\n  required_version = "~> 1.16.1"\n}}\n\n{STATE_VARIABLES}{body}', encoding="utf-8")
+
+    def plan() -> Path:
+        path = scene.root / "storage_shape.tfplan"
+        result = run_command("terraform", [f"-chdir={folder}", "plan", "-input=false", "-no-color", "-out", str(path)], timeout=STEP_SECONDS)
+        if result.returncode:
+            raise RuntimeError(f"planning the storage shape failed: {result.stdout[-300:]}")
+        return path
+
+    write({"r0": "value0", "r1": "value1", "r2": "value2"})
+    result = run_command("terraform", [f"-chdir={folder}", "apply", "-auto-approve", "-input=false"], timeout=STEP_SECONDS)
+    expect(problems, result.returncode == 0, f"preparing the storage shape failed: {result.stdout[-300:]}")
+    approved = ["--update", "terraform_data.r0", "--update", "terraform_data.r1"]
+    cases = (
+        ("two updates in place", {"r0": "a", "r1": "b", "r2": "value2"}, "", 0, "plan shape: ok"),
+        ("two updates and a destroy", {"r0": "a", "r1": "b"}, "", 1, "terraform_data.r2: delete"),
+        ("two updates and a create", {"r0": "a", "r1": "b", "r2": "value2", "r3": "c"}, "", 1, "terraform_data.r3: create"),
+        ("one update only", {"r0": "a", "r1": "value1", "r2": "value2"}, "", 1, "terraform_data.r1: missing"),
+        (
+            "a replacement instead of an update",
+            {"r0": "a", "r1": "value1", "r2": "value2"},
+            '  triggers_replace = "x"\n',
+            1,
+            "terraform_data.r1: delete+create",
+        ),
+    )
+    for label, inputs, extra, code_wanted, text in cases:
+        write(inputs, extra)
+        saved = plan()
+        code, output = scene.run("approve-plan", "storage", "--plan", str(saved), *approved)
+        expect(problems, code == code_wanted and text in output, f"{label}: exit {code}: {output}")
+        saved.unlink(missing_ok=True)
+
+
+def iam_deny_exception(template: Path, work: Path, problems: list[str]) -> None:
+    """The iam stack needs the administrator among the principals that the prefix deny excepts."""
+    stack = "iam"
+    scene = fresh(template, work, "refuse_iam_deny")
+    with StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        names = scene.statement("DenyStatePrefixToEveryoneElse")["Condition"]["ArnNotLike"]
+        names["aws:PrincipalArn"] = [value for value in names["aws:PrincipalArn"] if ADMIN_PROFILE not in value]
+        code, output = scene.run("check", stack, *scene.admin(stack))
+        expect(
+            problems,
+            code == 1 and "bucket policy: state statements invalid" in output,
+            f"the iam stack must refuse a deny that does not except the administrator: exit {code}: {output}",
+        )
+        names["aws:PrincipalArn"].append(f"arn:aws:iam::{ACCOUNT}:user/{ADMIN_PROFILE}")
+        code, output = scene.run("check", stack, *scene.admin(stack))
+        expect(problems, code == 0, f"the iam stack must accept the policy with the administrator excepted: exit {code}: {output}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, required=True, help="A new folder for the report.")
@@ -476,6 +822,12 @@ def main() -> int:
             second_run(scene, problems)
         interrupted_and_mismatch(template, work, problems)
         refusals(template, work, problems)
+        iam_deny_exception(template, work, problems)
+        tampered_verification(template, work, problems)
+        output_only_plan(template, work, problems)
+        resumed_runs(template, work, problems)
+        storage_protection(template, work, problems)
+        approved_plan_shape(template, work, problems)
         profile_split(template, work, problems)
         symlinked_state(template, work, problems)
         backend_contract(template, work, problems)

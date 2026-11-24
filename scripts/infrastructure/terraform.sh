@@ -169,9 +169,6 @@ fi
 if [[ "$stack" == storage && "$prometheus_retention" == true ]]; then
   render_args+=(--prometheus-history-retention)
 fi
-if [[ "$stack" == storage && -n "$state_admin" ]]; then
-  render_args+=(--state-admin "$state_admin")
-fi
 if [[ "$stack" == platform || "$stack" == services || "$stack" == alerts ]]; then
   # The shared renderer writes only the inputs the selected stack declares. The alerts root holds the alert address: apply it only through this wrapper
   # with the project profile, and never plan it in CI.
@@ -211,10 +208,28 @@ fi
 if [[ "$action" != validate ]]; then
   render_args+=(--verify-identity)
 fi
+
+state_admin_given="$state_admin"
+if [[ "$stack" == storage ]]; then
+  # Once the owner approved the state administrator, every storage render carries it: a plan without it would remove the bucket's state statements and
+  # lifecycle rules. A different --state-admin is refused.
+  state_given_args=()
+  if [[ -n "$state_admin" ]]; then
+    state_given_args+=(--state-admin "$state_admin")
+  fi
+  state_admin="$("$python_bin" -m scripts.infrastructure.state_protection resolve ${state_given_args[@]+"${state_given_args[@]}"})" || exit 2
+fi
+if [[ "$stack" == storage && -n "$state_admin" ]]; then
+  render_args+=(--state-admin "$state_admin")
+fi
 unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
 # Services and alerts validation needs no rendered inputs or applied platform stack.
 if [[ ( "$stack" != services && "$stack" != alerts ) || "$action" != validate ]]; then
   "$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
+fi
+if [[ "$action" == apply && "$stack" == storage && -n "$state_admin_given" ]]; then
+  # The renderer checked the saved plan against the inputs above, so the administrator it carries is the one to keep for every later storage plan and apply.
+  "$python_bin" -m scripts.infrastructure.state_protection remember --state-admin "$state_admin_given" || exit 2
 fi
 if [[ "$action" == validate ]]; then
   exec terraform -chdir="$directory" validate "$@"

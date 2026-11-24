@@ -660,6 +660,16 @@ def state_order(body: str) -> bool:
     return all(position >= 0 for position in positions) and positions == sorted(positions)
 
 
+def prefix_shape_checked(body: str) -> bool:
+    """The prefix sheet reads the saved plan's JSON before its typed confirmation and names exactly the two approved updates in place."""
+    return (
+        0 <= body.find("state_migration approve-plan --stack storage --plan") < body.find('confirm "')
+        and body.count("--update ") == 2
+        and "--update aws_s3_bucket_lifecycle_configuration.data" in body
+        and "--update aws_s3_bucket_policy.tls" in body
+    )
+
+
 def state_sheet_checks(folder: Path) -> dict[str, bool]:
     """The three sheets of the Terraform state move: each parses as delivered, every command goes through its real parser, the steps come in the safe
     order, the project stacks never name the administrator profile, the IAM stack always does, and no sheet applies or moves anything before its
@@ -688,6 +698,10 @@ def state_sheet_checks(folder: Path) -> dict[str, bool]:
     checks["the prefix sheet plans and applies with the same --state-admin option, so the wrapper compares the plan with it"] = (
         prefix.count('terraform.sh --state-admin "$STATE_ADMIN"') == 2
     )
+    checks["the prefix sheet reads the saved plan's shape before its typed confirmation and names exactly the two approved updates"] = prefix_shape_checked(
+        prefix
+    )
+    checks["the prefix sheet plans without color codes, so its change lines are readable"] = "plan -no-color -out" in prefix
     checks["the project sheet runs the steps in the safe order"] = state_order(project)
     checks["the iam sheet runs the steps in the safe order"] = state_order(iam)
     checks["the project sheet never names the administrator profile in a command"] = "--admin-profile" not in project
@@ -704,6 +718,9 @@ def state_sheet_checks(folder: Path) -> dict[str, bool]:
     }
     for label, body in mutants.items():
         checks[f"{label} fails the order check"] = not state_order(body)
+    checks["a prefix sheet that never reads the saved plan's shape fails the shape check"] = not prefix_shape_checked(
+        prefix.replace("state_migration approve-plan", "state_migration check", 1)
+    )
     mistyped = project.replace("state_migration migrate", "state_migration migrat")
     planted = owner_commands.check_shell_section(mistyped, folder / "state_mutant", wrapper, overrides[STATE_PROJECT])
     checks["a mistyped command of the move sheet fails its parser"] = any(planted.values())
