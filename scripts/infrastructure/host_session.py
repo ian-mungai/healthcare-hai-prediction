@@ -14,7 +14,8 @@ ECS does not have.
 ``stop`` lists the running job tasks of the project first, as ``aws_tasks list`` does, and changes nothing while any runs: it refuses, or with
 ``--wait-seconds N`` polls every 15 seconds until none runs and refuses when the N seconds pass. ``--force-stop`` skips the check. A listing that fails
 or cannot be read refuses; it is never read as "no job task is running". Stopping the host ends every task on it; a job launched in the seconds between
-the check and the stop is resumed by its DAG retry.
+the check and the stop loses its task. Its launch stays unresolved, and the next host stop or start that finds the host empty, once its claim is 20 minutes
+old, records it as cancelled: a cancelled launch is terminal, so trying again needs a new run.
 
 After the host-off is verified (``stop``, ``stop_after_failure``) and before the capacity is raised when the group already shows 0 desired and no instance
 (``host_on``), the session settles the launches that the stopped host leaves behind (owner decision A, Nov 24 2026;
@@ -607,11 +608,19 @@ class Session:
             raise HostSessionError(f"{error}; last seen: {seen[0]}" if seen[0] else str(error)) from None
         self.step("host_registered")
 
-    def settle_launches(self, point: str) -> None:
-        """End the claimed launches that a stopped host leaves with no end record (``HostLaunchSettle``). It reports and never raises, so a settle failure
-        changes neither the host-off nor the start. A session with no settle (a case, a command that does not stop the host) does nothing."""
-        if self.launch_settle is not None:
+    def settle_launches(self, point: str, keep_error: bool = False) -> None:
+        """End the claimed launches that a stopped host leaves with no end record (``HostLaunchSettle``). It reports and never raises a failure, so a settle
+        failure changes neither the host-off nor the start. A session with no settle (a case, a command that does not stop the host) does nothing.
+        ``keep_error`` is for the cleanup of a failed command: a SIGINT or SIGTERM during the settle is reported and dropped, so the failure that started the
+        cleanup stays the one the command raises."""
+        if self.launch_settle is None:
+            return
+        try:
             self.launch_settle.run(point)
+        except (KeyboardInterrupt, TerminationRequested):
+            if not keep_error:
+                raise
+            self.step("launch_settle_interrupted", "interrupted; the host is off and the first error stands; the next stop or start repeats the settle")
 
     def host_off(self) -> None:
         """Set the desired capacity to 0 and verify the group has no instance left."""
@@ -950,9 +959,10 @@ class Session:
         """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates.
 
         It never checks for running job tasks, unlike ``stop``: it is the cleanup of a command that already failed, and a refusal or a wait here would leave a
-        failed host running and billed with nobody present. ``--keep-on`` is the way to keep the host; a job that a half-started host loses is resumed by
-        its DAG retry, as for a job launched between the check of ``stop`` and its host-off call. Every shutdown signal is held from the first report to the
-        verified host-off, so a second signal cannot cut the cleanup short.
+        failed host running and billed with nobody present. ``--keep-on`` is the way to keep the host; a job that a half-started host loses stays an
+        unresolved launch, which a later host stop or start ends as cancelled (``settle_launches``), as for a job launched between the check of ``stop`` and
+        its host-off call. Every shutdown signal is held from the first report to the verified host-off, so a second signal cannot cut the cleanup short; a
+        signal during the launch settle that follows is reported and dropped, so the error that started the cleanup is the one the command raises.
         """
         with deferred_signals(self.step):
             self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
@@ -967,7 +977,7 @@ class Session:
                 self.step("host_off_failed", f"the host may still be on; run stop ({error})")
                 return
             self.cleanup_outcome = "host_off_verified"
-        self.settle_launches("stop")
+        self.settle_launches("stop", keep_error=True)
 
     def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
         """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of

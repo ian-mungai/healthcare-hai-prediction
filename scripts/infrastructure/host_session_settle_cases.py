@@ -15,9 +15,10 @@ from typing import Any
 
 from orchestration.ecs_launch import launch_record_prefix
 from scripts.infrastructure import host_session_restore_cases as restore
-from scripts.infrastructure.host_session import Session
+from scripts.infrastructure.host_session import Session, TerminationRequested
 from scripts.infrastructure.host_session_stand_in import ACCOUNT_MARK, EPOCH, StandInError
 from scripts.infrastructure.host_session_stop_cases import on_wall_time
+from scripts.process import LaunchesNotStopped
 
 PREFIX = launch_record_prefix()
 JOB_PREFIX = "stand_in_dev_job_"
@@ -35,10 +36,23 @@ class LaunchHost(restore.RecordHost):
 
     ``faults`` may also hold ``ghost_container_instance`` (ECS lists an ACTIVE container instance that the group does not show), ``group_read_fails_when_off``
     (the host group cannot be read once it shows no instance), ``slow_down_end`` (the next write of an end record answers SlowDown) and ``store_denied``
-    (every launch record call answers AccessDenied)."""
+    (every launch record call answers AccessDenied), ``host_up_on_records`` (the host group comes up when a started record is read, as another session's
+    start does), ``not_stopped_on_list`` (the AWS runner raises ``LaunchesNotStopped`` for a record listing) and ``interrupt_in_cleanup`` (a record listing
+    receives SIGTERM once the capacity was raised: the cleanup after a failed start)."""
 
     def __init__(self, faults: set[str] | None = None) -> None:
         super().__init__(faults, None, False, False, checkout=restore.SHA_OLD, code_run=restore.RUN_OLD, openmetadata=True, catalog_setup=True)
+
+    raised = False
+
+    def runner(self, argv: list[str], **kwargs: Any) -> Any:
+        if "not_stopped_on_list" in self.faults and argv[2] == "list-objects-v2":
+            raise LaunchesNotStopped("a stand-in stop was not confirmed")
+        return super().runner(argv, **kwargs)
+
+    def autoscaling_set_desired_capacity(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        self.raised = self.raised or options["--desired-capacity"] == ["1"]
+        return super().autoscaling_set_desired_capacity(options)
 
     def launch_key(self, run: str, job: str, *parts: str) -> str:
         return "/".join((PREFIX, run, job, *parts))
@@ -77,6 +91,9 @@ class LaunchHost(restore.RecordHost):
         key = options["--key"][0]
         if "store_denied" in self.faults and key.startswith(PREFIX):
             raise StandInError("AccessDenied")
+        if "host_up_on_records" in self.faults and key.endswith("/started.json"):
+            self.faults.discard("host_up_on_records")
+            self.desired, self.instance_up_at = 1, self.now
         answer = super().s3_get_object(options)
         return {**answer, "ETag": f'"{hash(self.objects[key]) & 0xFFFF:x}"'}
 
@@ -96,6 +113,8 @@ class LaunchHost(restore.RecordHost):
 
     def s3_list_objects(self, options: dict[str, list[str]]) -> dict[str, Any]:
         prefix = options["--prefix"][0]
+        if "interrupt_in_cleanup" in self.faults and self.raised:
+            raise TerminationRequested("SIGTERM")
         if "store_denied" in self.faults:
             raise StandInError("AccessDenied")
         return {"Contents": [{"Key": key} for key in sorted(self.objects) if key.startswith(prefix)], "IsTruncated": False}
@@ -266,6 +285,7 @@ def a_record_store_failure_never_stops_the_host_off() -> dict[str, bool]:
         "no end record was written": held,
         "the retry settles the launch": end is not None and end["outcome"] == "cancelled",
         "a store that denies every call still lets the host off": stopped(closed) and any(line.startswith("launch_settle_failed") for line in shown),
+        "an incomplete scan is reported as incomplete": any(line.startswith("launch_settle_incomplete") for line in shown),
     }
 
 
@@ -316,6 +336,67 @@ def an_unreadable_data_bucket_name_skips_the_settle() -> dict[str, bool]:
     }
 
 
+def after_stop(faults: set[str] | None = None) -> tuple[LaunchHost, Session, list[str]]:
+    """A stopped host with a stale launch, and the faults armed after the host-off."""
+    host, session, lines = build()
+    session.stop()
+    host.add_launch(RUN, "gold", OLD, saved=True)
+    host.faults |= faults or set()
+    host.raised = False
+    lines.clear()
+    host.log.clear()
+    return host, session, lines
+
+
+def a_host_that_comes_up_before_the_end_write_stops_the_write() -> dict[str, bool]:
+    host, session, lines = after_stop({"host_up_on_records"})
+    rerun(session, "stop")
+    return {
+        "nothing was written to the launch records": host.store_writes() == 0 and host.end_of(RUN, "gold") is None,
+        "the launch is reported unresolved with the host's state": "capacity" in line_with(lines, "launch_unresolved"),
+    }
+
+
+def a_listed_task_that_ecs_cannot_describe_holds_every_family() -> dict[str, bool]:
+    host, session, lines = after_stop({"ghost_task"})
+    rerun(session, "stop")
+    return {
+        "nothing was written to the launch records": host.store_writes() == 0 and host.end_of(RUN, "gold") is None,
+        "the launch is reported unresolved": bool(line_with(lines, "launch_unresolved")),
+    }
+
+
+def a_runner_failure_never_stops_the_start() -> dict[str, bool]:
+    host, session, lines = after_stop({"not_stopped_on_list"})
+    session.host_on()
+    return {
+        "the capacity was raised": host.desired == 1 and host.raised,
+        "the failure is reported": bool(line_with(lines, "launch_settle_failed")),
+    }
+
+
+def an_interrupt_in_the_cleanup_keeps_the_first_error() -> dict[str, bool]:
+    host, session, lines = after_stop({"never_register", "interrupt_in_cleanup"})
+    message = restore.failure(session.start)
+    return {
+        "start fails with its own error, not the signal": message is not None and "host registration" in message,
+        "the host-off was verified": stopped(host) and session.cleanup_outcome == "host_off_verified",
+        "the interrupted settle is reported": bool(line_with(lines, "launch_settle_interrupted")),
+    }
+
+
+def one_deadline_bounds_the_whole_settle() -> dict[str, bool]:
+    host, session, lines = after_stop()
+    host.latency = 100  # every describe and list call takes 100 virtual seconds, so the whole settle needs more than its 900
+    begin = host.now
+    rerun(session, "stop")
+    return {
+        "the settle stopped within its deadline": host.now - begin <= 900,
+        "the failure is reported": bool(line_with(lines, "launch_settle_failed")),
+        "nothing was written": host.store_writes() == 0,
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_stop_settles_a_launch_whose_saved_task_ecs_forgot": stop_settles_a_launch_whose_saved_task_ecs_forgot,
     "host_stop_after_failure_settles_and_keep_on_does_not": stop_after_failure_settles_and_keep_on_does_not,
@@ -327,5 +408,10 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_on_settles_before_it_raises_the_capacity": host_on_settles_before_it_raises_the_capacity,
     "host_on_with_an_instance_settles_nothing": host_on_with_an_instance_settles_nothing,
     "host_session_without_the_settle_makes_no_record_call": a_session_without_the_settle_makes_no_record_call,
+    "host_stop_stops_the_write_when_the_host_comes_up_first": a_host_that_comes_up_before_the_end_write_stops_the_write,
+    "host_stop_holds_every_family_for_a_task_ecs_cannot_describe": a_listed_task_that_ecs_cannot_describe_holds_every_family,
+    "host_on_goes_on_after_any_settle_failure": a_runner_failure_never_stops_the_start,
+    "host_stop_cleanup_interrupt_keeps_the_start_error": an_interrupt_in_the_cleanup_keeps_the_first_error,
+    "host_stop_settle_has_one_deadline": one_deadline_bounds_the_whole_settle,
     "host_stop_skips_the_settle_without_a_data_bucket": an_unreadable_data_bucket_name_skips_the_settle,
 }

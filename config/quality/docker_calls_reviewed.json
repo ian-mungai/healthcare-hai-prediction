@@ -1369,17 +1369,17 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 1783,
+      "line": 1793,
       "code_sha256": "6eabf6922d0dcfc0c6ab8a78c4a8b071ea00cebd9a4df97104af549b56640e4f",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "8e038afdf5b24b0c942e22e7695a889330901e343b113b09a7e892d25dc88ea4",
+      "file_sha256": "77a0bb7e8442a0e5419550c57c78e393d18b6e058ff116dadd78afc3128ff4af",
       "dependencies": {
         "orchestration/training_contract.py": "sha256:fee74767d4cf749b12b0a0a91ff8c1f397013d21f90a27a4503a23c44ba1e7e9",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
-        "scripts/infrastructure/host_launch_settle.py": "sha256:f82238afb9b3538aa8bc809b5de426ec4a3d26640f5d6f280e9640f68545ccbd",
+        "scripts/infrastructure/host_launch_settle.py": "sha256:79d5234f4ebb9bd4d7d2ddd0e48dbfcee1cbd6ca52e4b8a6bb6f13e75b41d7c3",
         "scripts/infrastructure/render_platform_config.py": "sha256:9c6e6c72708608e954d923932901db38e63695bae54548e2830b99ab38fc4bf0",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7"
@@ -1582,7 +1582,7 @@
         "orchestration/ecs_preflight.py": "sha256:3d312a60f090a1b50ff2fd6d72a0ae7b8ac27df7cabc1ec1ad66cb17a517cdcc",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:8e038afdf5b24b0c942e22e7695a889330901e343b113b09a7e892d25dc88ea4",
+        "scripts/infrastructure/host_session.py": "sha256:77a0bb7e8442a0e5419550c57c78e393d18b6e058ff116dadd78afc3128ff4af",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7b3526a3ea78ffb4bc77e11c8ef67784396524e0cba1bbb072d7d673c5ed2893",
         "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde",
         "scripts/infrastructure/stack_settings.py": "sha256:a9580b9774651199e32bf6e988e13507fe43fea3ac1ce072a50a2b28c5acc0bd"

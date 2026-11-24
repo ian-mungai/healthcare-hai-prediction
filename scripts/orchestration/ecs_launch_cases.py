@@ -1955,8 +1955,11 @@ def host_proof(rig: Rig, **changes: Any) -> HostStopProof:
     return replace(base, **changes)
 
 
-def settler(rig: Rig) -> HostStopSettler:
-    return HostStopSettler(S3LaunchStore(rig.bucket, BUCKET, PREFIX), rig.time.clock(), FAMILIES)
+def settler(rig: Rig, reread: Callable[[], HostStopProof | None] | None = None, shift: float = 0.0) -> HostStopSettler:
+    """A settler whose fresh proof, read again just before an end write, is a proof of the host as it is now unless ``reread`` says otherwise."""
+    clock = rig.time.clock()
+    clock.wall = lambda: rig.time.now + shift
+    return HostStopSettler(S3LaunchStore(rig.bucket, BUCKET, PREFIX), clock, FAMILIES, reread or (lambda: host_proof(rig)))
 
 
 def settle_gold(rig: Rig, proof: HostStopProof) -> list[Any]:
@@ -2020,12 +2023,17 @@ def host_stop_needs_every_part_of_the_proof() -> None:
         "container instance is ACTIVE": host_proof(rig, active_container_instances=1),
         "instances read before the group": host_proof(rig, instances_read_at=now - 1),
         "a task of the family is not stopped": host_proof(rig, busy_jobs=frozenset({"gold"})),
-        "the proof is old": host_proof(rig, group_read_at=now - 3600, instances_read_at=now - 3599, tasks_read_at=now - 3599),
     }
     for label, proof in weak.items():
         results = settle_gold(rig, proof)
         require(len(results) == 1 and results[0].status == "unresolved", f"{label}: the launch was not left unresolved: {results}")
         require("end" not in rig.events(1), f"{label}: an end was recorded")
+    read = host_proof(rig)
+    rig.time.now += 3600
+    results = settle_gold(rig, read)
+    require(len(results) == 1 and results[0].status == "unresolved" and "ago" in results[0].reason, f"an expired proof settled the launch: {results}")
+    require("end" not in rig.events(1), "an end was recorded on an expired proof")
+    rig.time.now -= 3600
     results = settle_gold(rig, host_proof(rig, busy_jobs=frozenset({"drift"})))
     require(len(results) == 1 and results[0].status == "settled", f"a task of another family held the launch: {results}")
 
@@ -2041,13 +2049,80 @@ def host_stop_never_changes_an_ended_launch() -> None:
     open_window_gold(other)
     other.time.now = START_TIME + LATE
     claim = other.bucket.objects[other.claim_key()]
-    first, second = settler(other), settler(other)
+    first, second = settler(other), settler(other, shift=5.0)  # the second one's end record would carry another time
     proof = host_proof(other)
     stale: dict[str, dict[str, Any]] = {}
     one = first.settle_launch(json.loads(claim), stale, proof)
     two = second.settle_launch(json.loads(claim), stale, proof)
     ends = [key for key in other.bucket.objects if key.endswith("/end.json")]
     require(len(ends) == 1 and one.status == "settled" and two.status == "settled", f"two settles did not read one end record: {ends} {one} {two}")
+    require(two.ended_at == one.ended_at == other.record(1, "end")["at"], f"the second settle reported its own record, not the standing one: {one} {two}")
+
+
+def host_stop_ended_by_another_is_reported_as_theirs() -> None:
+    """An end record that stands from another caller (a success, or an operator's cancel) is reported with its own outcome and reason, never as a host
+    stop cancel, and it is not changed."""
+    ends: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("a success", {"outcome": "succeeded", "exit_code": 0, "reason": "done", "task_arn": "task-x"}),
+        ("an operator cancel", {"outcome": "cancelled", "exit_code": 143, "reason": "cancel", "task_arn": ""}),
+    )
+    for label, end in ends:
+        rig = Rig()
+        open_window_gold(rig)
+        rig.time.now = START_TIME + LATE
+        claim = json.loads(rig.bucket.objects[rig.claim_key()])
+        rig.bucket.objects[rig.key(1, "end")] = json.dumps(
+            {"schema_version": 1, "event": "end", "run_id": RUN, "job": "gold", "attempt": 1, "at": iso(START_TIME), **end}
+        ).encode()
+        before = dict(rig.bucket.objects)
+        result = settler(rig).settle_launch(claim, {}, host_proof(rig))
+        require(result.status == "ended_by_other" and end["reason"] in result.reason and end["outcome"] in result.reason, f"{label}: reported as {result}")
+        require(rig.bucket.objects == before, f"{label}: a record was written")
+
+
+def host_stop_revalidates_the_host_before_every_end_write() -> None:
+    """The proof is read once, and the scan of the records takes time: a host that comes up before the end write, a container instance, a task of the
+    family or a proof that has aged each stop the write, and nothing is recorded."""
+    rig = Rig()
+    open_window_gold(rig)
+    rig.time.now = START_TIME + LATE
+    now = rig.time.now
+    changed = {
+        "the group wants capacity": host_proof(rig, desired_capacity=1),
+        "the group has an instance": host_proof(rig, group_instances=1),
+        "a container instance is ACTIVE": host_proof(rig, active_container_instances=1),
+        "a task of the family is not stopped": host_proof(rig, busy_jobs=frozenset({"gold"})),
+        "the fresh proof was read long ago": host_proof(rig, group_read_at=now - 3600, instances_read_at=now - 3599, tasks_read_at=now - 3599),
+    }
+    writes = rig.bucket.count("put_object")
+    for label, fresh in changed.items():
+        results = settle_gold_with(rig, host_proof(rig), partial(returns, fresh))
+        require(len(results) == 1 and results[0].status == "unresolved", f"{label}: the launch was not left unresolved: {results}")
+        require(rig.bucket.count("put_object") == writes and "end" not in rig.events(1), f"{label}: a record was written")
+    results = settle_gold_with(rig, host_proof(rig), lambda: None)
+    require(len(results) == 1 and results[0].status == "unresolved" and rig.bucket.count("put_object") == writes, f"a host that shows capacity: {results}")
+    results = settle_gold_with(rig, host_proof(rig), lambda: host_proof(rig))
+    require(len(results) == 1 and results[0].status == "settled", f"the quiet host did not settle: {results}")
+
+
+def returns(proof: HostStopProof) -> HostStopProof:
+    return proof
+
+
+def settle_gold_with(rig: Rig, proof: HostStopProof, reread: Callable[[], HostStopProof | None]) -> list[Any]:
+    return list(settler(rig, reread).settle_family("gold", proof))
+
+
+class RepeatingListing(FakeLaunchBucket):
+    """A bucket whose listing answers one page and the same continuation token for ever."""
+
+    def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
+        return {"Contents": [{"Key": f"{PREFIX}/families/gold/{RUN}.json"}], "IsTruncated": True, "NextContinuationToken": "same"}
+
+
+def family_index_listing_never_follows_a_repeated_token() -> None:
+    """A listing that answers the same continuation token again would loop for ever: the store refuses it."""
+    refuses(LaunchRefused, lambda: S3LaunchStore(RepeatingListing(BUCKET, f"{PREFIX}/"), BUCKET, PREFIX).family_runs("gold"))
 
 
 def host_stop_settle_survives_a_record_store_failure() -> None:
@@ -2097,6 +2172,9 @@ CASES: dict[str, Callable[[], None]] = {
     "host_stop_needs_every_part_of_the_proof": host_stop_needs_every_part_of_the_proof,
     "host_stop_never_changes_an_ended_launch": host_stop_never_changes_an_ended_launch,
     "host_stop_settle_survives_a_record_store_failure": host_stop_settle_survives_a_record_store_failure,
+    "host_stop_ended_by_another_is_reported_as_theirs": host_stop_ended_by_another_is_reported_as_theirs,
+    "host_stop_revalidates_the_host_before_every_end_write": host_stop_revalidates_the_host_before_every_end_write,
+    "family_index_listing_never_follows_a_repeated_token": family_index_listing_never_follows_a_repeated_token,
     "fit_credits_the_family_own_idle_scratch": fit_credits_the_family_own_idle_scratch,
     "fit_never_credits_another_family_and_names_it": fit_never_credits_another_family_and_names_it,
     "fit_without_a_usage_reader_counts_free_space_only": fit_without_a_usage_reader_counts_free_space_only,

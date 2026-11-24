@@ -4,8 +4,9 @@ When the host is shown stopped, every claimed launch of the job families with no
 launch unresolved for good when ECS no longer describes its saved task. ``HostLaunchSettle.run`` reads the proof (host group at desired capacity 0 with no
 instance, then no ACTIVE container instance in the cluster, then no task of a job host definition that ECS does not show STOPPED) and gives it to
 ``HostStopSettler``, which also needs the claim to be older than the RunTask send window plus a margin. Each launch is reported as a step line by run, job and
-attempt, with the last 8 characters of a saved task ID, never an ARN. A failure is reported and never raised: the host-off stays complete and reported, and the
-next stop or start repeats the settle.
+attempt, with the last 8 characters of a saved task ID, never an ARN. The proof is read again immediately before each end write, a task that ECS lists and
+does not describe completely holds every family, and the whole settle has one deadline (``SETTLE_SECONDS``). A failure is reported and never raised: the
+host-off stays complete and reported, and the next stop or start repeats the settle.
 
 The jobs are those of the job catalog (``load_tables``), the set the family gate and ``Launcher.validate`` use, so every family whose gate can be blocked is
 visited, with one list of its family index. The launch records are read and written through the session's AWS CLI (``CliS3Client``), the same way the session
@@ -26,12 +27,14 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 
 from orchestration.ecs_adapter import HOST_SUFFIX
 from orchestration.ecs_launch import Clock, HostStopProof, HostStopSettler, LaunchError, S3LaunchStore, SettleResult, launch_record_prefix
-from scripts.infrastructure.host_session import ARN_TEXT, AwsCallFailed, HostSessionError, Session
+from scripts.infrastructure.host_session import ARN_TEXT, AwsCallFailed, HostSessionError, Session, TerminationRequested
 from scripts.infrastructure.render_project_config import REPO_ROOT
 
 UNCONFIRMED_CODES = frozenset({"request_unconfirmed", "invalid_response"})
 TASK_ID_LENGTH = 8
 SHOWN_LIMIT = 300
+SETTLE_SECONDS = 900  # one deadline for the whole settle: every proof read, record read and write counts against it
+TASK_COMPLETE = ("lastStatus", "taskDefinitionArn")
 
 
 class CliS3Client:
@@ -62,8 +65,6 @@ class CliS3Client:
             options = ["--key", arguments["Key"], "--body", str(body), "--content-type", "application/json"]
             if "IfNoneMatch" in arguments:
                 options += ["--if-none-match", arguments["IfNoneMatch"]]
-            if "IfMatch" in arguments:
-                options += ["--if-match", arguments["IfMatch"]]
             return self.call("put-object", options)
 
     def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
@@ -103,25 +104,53 @@ class HostLaunchSettle:
         return HostStopProof(0, 0, group_read_at, len(arns), instances_read_at, session.clock.wall(), busy)
 
     def busy_jobs(self, jobs: Sequence[str]) -> frozenset[str]:
-        """The jobs with a task that ECS does not show STOPPED: every job when a task is not the host definition of one job (it cannot be tied to a family)."""
+        """The jobs with a task that ECS does not show STOPPED. The discovery is strict: a task that ECS lists (with either desired status) and does not
+        describe completely, such as a PROVISIONING task that DescribeTasks reports MISSING, has no known family, so every job is busy. This differs from
+        the cleanup helper of ``aws_tasks``, which drops a MISSING task because its callers stop tasks and a task that is gone needs no stop. A task of
+        another family (a service task) does not hold a job."""
+        from scripts.infrastructure.aws_tasks import DESCRIBE_LIMIT, GROUP_PREFIX, TaskCleanup
+
         session = self.session
         if session.job_prefix is None:
             raise HostSessionError("the session has no job task family prefix")
         definitions = {f"{session.job_prefix}{job}{HOST_SUFFIX}": job for job in jobs}
+        arns = TaskCleanup(session, session.job_prefix).page_arns()
         busy: set[str] = set()
-        for task in session.running_job_tasks():
-            if task.mismatch or task.family not in definitions:
-                return frozenset(jobs)
-            busy.add(definitions[task.family])
+        for start in range(0, len(arns), DESCRIBE_LIMIT):
+            chunk = arns[start : start + DESCRIBE_LIMIT]
+            described = session.call("ecs", "describe-tasks", ["--cluster", session.names.cluster, "--tasks", *chunk]).get("tasks", [])
+            tasks = {str(item.get("taskArn")): item for item in described if isinstance(item, dict)}
+            for arn in chunk:
+                task = tasks.get(arn)
+                if task is None or not all(isinstance(task.get(name), str) for name in TASK_COMPLETE):
+                    return frozenset(jobs)
+                if task["lastStatus"] == "STOPPED":
+                    continue
+                family = task["taskDefinitionArn"].rsplit("/", 1)[-1].rsplit(":", 1)[0]
+                group = task.get("group")
+                grouped = group.removeprefix(GROUP_PREFIX) if isinstance(group, str) and group.startswith(GROUP_PREFIX) else family
+                if not (family.startswith(session.job_prefix) or grouped.startswith(session.job_prefix)):
+                    continue
+                if family != grouped or family not in definitions:
+                    return frozenset(jobs)
+                busy.add(definitions[family])
         return frozenset(busy)
 
     def run(self, point: str) -> None:
-        """Settle at ``point`` (``stop`` after a verified host-off, ``start`` before the capacity is raised). Reports every result, and any failure, as a step;
-        never raises, so the host-off or the start goes on."""
+        """Settle at ``point`` (``stop`` after a verified host-off, ``start`` before the capacity is raised). Reports every result, and any failure, as a step,
+        and raises nothing but a signal: the settle is optional, so the host-off or the start goes on whatever the AWS runner or the stores raise. The whole
+        settle has one deadline (``SETTLE_SECONDS``) that every AWS call counts against."""
+        session = self.session
+        outer, begin = session.deadline, session.clock.now()
+        session.deadline = begin + SETTLE_SECONDS if outer is None else min(begin + SETTLE_SECONDS, outer)
         try:
             self.settle(point)
-        except (HostSessionError, LaunchError, ClientError, EndpointConnectionError, OSError, KeyError, ValueError) as error:
-            self.session.step("launch_settle_failed", f"{self.shown(error)}; the next stop or start repeats the settle")
+        except (KeyboardInterrupt, TerminationRequested):
+            raise
+        except Exception as error:
+            session.step("launch_settle_failed", f"{type(error).__name__}: {self.shown(error)}; the next stop or start repeats the settle")
+        finally:
+            session.deadline = outer
 
     def settle(self, point: str) -> None:
         session = self.session
@@ -136,7 +165,7 @@ class HostLaunchSettle:
                 session.step("launch_settle_skipped", "the host group shows capacity, so the host is not stopped")
             return
         store = S3LaunchStore(CliS3Client(session), bucket, launch_record_prefix())
-        settler = HostStopSettler(store, Clock(wall=session.clock.wall), jobs)
+        settler = HostStopSettler(store, Clock(wall=session.clock.wall), jobs, lambda: self.read_proof(jobs))
         settled = unresolved = failed = 0
         for job in jobs:
             try:
@@ -146,7 +175,11 @@ class HostLaunchSettle:
             except (LaunchError, ClientError, EndpointConnectionError, HostSessionError) as error:
                 failed += 1
                 session.step("launch_settle_failed", f"{job}: {self.shown(error)}; the next stop or start repeats the settle")
-        session.step("launch_settle", f"{settled} launch(es) cancelled, {unresolved} still unresolved, {failed} job family(ies) not read")
+        done = f"{settled} launch(es) cancelled, {unresolved} still unresolved"
+        if failed:
+            session.step("launch_settle_incomplete", f"{done}; {failed} job family(ies) not read to the end, so a launch may still be unresolved")
+        else:
+            session.step("launch_settle", done)
 
     def report(self, result: SettleResult) -> None:
         who = f"{result.run_id} {result.job} attempt {result.attempt}"
