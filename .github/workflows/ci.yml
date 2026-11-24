@@ -32,7 +32,9 @@ jobs:
       matrix:
         include:
           - group: privacy
-            timeout: 12  # max 2.5 min
+            # The pushed-range step (commit messages, removed names per commit) runs before the hooks inside this budget: 9 min for the 126 commits of
+            # combine/round3-20261123 (run 45315201599, Nov 24 2026), so 12 minutes left the hooks no time.
+            timeout: 20  # max 2.5 min for the hooks alone
           - group: documentation
             timeout: 30  # max 1.9 min
           - group: code
