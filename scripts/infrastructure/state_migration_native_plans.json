@@ -1,0 +1,1406 @@
+{
+ "enable": [
+  {
+   "address": "aws_s3_bucket_lifecycle_configuration.data",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_state/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_state_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 90
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_plans/",
+         "tag": []
+        }
+       ],
+       "id": "expire_saved_plans",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after_unknown": {}
+   }
+  },
+  {
+   "address": "aws_s3_bucket_policy.tls",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate\"],\"Sid\":\"ProjectUserUsesItsStateKeys\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate.tflock\"],\"Sid\":\"ProjectUserHoldsItsStateLocks\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/*\"],\"Sid\":\"DenyStatePrefixToEveryoneElse\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/iam/*\"],\"Sid\":\"DenyIamStateToProjectIdentities\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"ProjectUserReadsSavedPlans\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlansToEveryoneElse\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectAcl\",\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlanWritesExceptThePlanRole\"},{\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"NotAction\":[\"s3:PutObject\"],\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenyThePlanRoleAnythingButSavingPlans\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after_unknown": {}
+   }
+  }
+ ],
+ "policy_applied": [
+  {
+   "address": "aws_s3_bucket_lifecycle_configuration.data",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_state/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_state_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 90
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_plans/",
+         "tag": []
+        }
+       ],
+       "id": "expire_saved_plans",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after_unknown": {}
+   }
+  },
+  {
+   "address": "aws_s3_bucket_policy.tls",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate\"],\"Sid\":\"ProjectUserUsesItsStateKeys\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate.tflock\"],\"Sid\":\"ProjectUserHoldsItsStateLocks\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/*\"],\"Sid\":\"DenyStatePrefixToEveryoneElse\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/iam/*\"],\"Sid\":\"DenyIamStateToProjectIdentities\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"ProjectUserReadsSavedPlans\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlansToEveryoneElse\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectAcl\",\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlanWritesExceptThePlanRole\"},{\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"NotAction\":[\"s3:PutObject\"],\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenyThePlanRoleAnythingButSavingPlans\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate\"],\"Sid\":\"ProjectUserUsesItsStateKeys\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate.tflock\"],\"Sid\":\"ProjectUserHoldsItsStateLocks\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/*\"],\"Sid\":\"DenyStatePrefixToEveryoneElse\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/iam/*\"],\"Sid\":\"DenyIamStateToProjectIdentities\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"ProjectUserReadsSavedPlans\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlansToEveryoneElse\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectAcl\",\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlanWritesExceptThePlanRole\"},{\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"NotAction\":[\"s3:PutObject\"],\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenyThePlanRoleAnythingButSavingPlans\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after_unknown": {}
+   }
+  }
+ ],
+ "both_applied": [
+  {
+   "address": "aws_s3_bucket_lifecycle_configuration.data",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_state/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_state_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 90
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_plans/",
+         "tag": []
+        }
+       ],
+       "id": "expire_saved_plans",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "expected_bucket_owner": null,
+     "id": "example-data-bucket",
+     "region": "us-west-2",
+     "rule": [
+      {
+       "abort_incomplete_multipart_upload": [
+        {
+         "days_after_initiation": 7
+        }
+       ],
+       "expiration": [],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "",
+         "tag": []
+        }
+       ],
+       "id": "abort_incomplete_uploads",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "lakehouse/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_lakehouse_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_state/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_state_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 90
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "terraform_plans/",
+         "tag": []
+        }
+       ],
+       "id": "expire_saved_plans",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 7,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "expire_ingestion_test_objects",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "ingestion_test/",
+         "tag": []
+        }
+       ],
+       "id": "clear_ingestion_test_delete_markers",
+       "noncurrent_version_expiration": [],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 30,
+         "expired_object_delete_marker": false
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "pg_backups/",
+         "tag": []
+        }
+       ],
+       "id": "expire_postgres_backups",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 1
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      },
+      {
+       "abort_incomplete_multipart_upload": [],
+       "expiration": [
+        {
+         "date": null,
+         "days": 0,
+         "expired_object_delete_marker": true
+        }
+       ],
+       "filter": [
+        {
+         "and": [],
+         "object_size_greater_than": null,
+         "object_size_less_than": null,
+         "prefix": "dvc/",
+         "tag": []
+        }
+       ],
+       "id": "expire_replaced_dvc_versions",
+       "noncurrent_version_expiration": [
+        {
+         "newer_noncurrent_versions": null,
+         "noncurrent_days": 30
+        }
+       ],
+       "noncurrent_version_transition": [],
+       "prefix": "",
+       "status": "Enabled",
+       "transition": []
+      }
+     ],
+     "timeouts": null,
+     "transition_default_minimum_object_size": "all_storage_classes_128K"
+    },
+    "after_unknown": {}
+   }
+  },
+  {
+   "address": "aws_s3_bucket_policy.tls",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate\"],\"Sid\":\"ProjectUserUsesItsStateKeys\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate.tflock\"],\"Sid\":\"ProjectUserHoldsItsStateLocks\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/*\"],\"Sid\":\"DenyStatePrefixToEveryoneElse\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/iam/*\"],\"Sid\":\"DenyIamStateToProjectIdentities\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"ProjectUserReadsSavedPlans\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlansToEveryoneElse\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectAcl\",\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlanWritesExceptThePlanRole\"},{\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"NotAction\":[\"s3:PutObject\"],\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenyThePlanRoleAnythingButSavingPlans\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after": {
+     "bucket": "example-data-bucket",
+     "id": "example-data-bucket",
+     "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket\",\"arn:aws:s3:::example-data-bucket/*\"],\"Sid\":\"DenyInsecureTransport\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate\"],\"Sid\":\"ProjectUserUsesItsStateKeys\"},{\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/storage/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/platform/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/services/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/jobs/terraform.tfstate.tflock\",\"arn:aws:s3:::example-data-bucket/terraform_state/alerts/terraform.tfstate.tflock\"],\"Sid\":\"ProjectUserHoldsItsStateLocks\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/*\"],\"Sid\":\"DenyStatePrefixToEveryoneElse\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_state/iam/*\"],\"Sid\":\"DenyIamStateToProjectIdentities\"},{\"Action\":[\"s3:GetObject\"],\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:user/example_project_dev\"},\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"ProjectUserReadsSavedPlans\"},{\"Action\":\"s3:*\",\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:user/example_project_dev\",\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\",\"arn:aws:iam::111111111111:role/example_admin\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlansToEveryoneElse\"},{\"Action\":[\"s3:PutObject\",\"s3:PutObjectAcl\",\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Condition\":{\"ArnNotLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenySavedPlanWritesExceptThePlanRole\"},{\"Condition\":{\"ArnLike\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/example_project_gh_terraform_plan_dev\"]}},\"Effect\":\"Deny\",\"NotAction\":[\"s3:PutObject\"],\"Principal\":\"*\",\"Resource\":[\"arn:aws:s3:::example-data-bucket/terraform_plans/*\"],\"Sid\":\"DenyThePlanRoleAnythingButSavingPlans\"}],\"Version\":\"2012-10-17\"}",
+     "region": "us-west-2"
+    },
+    "after_unknown": {}
+   }
+  }
+ ]
+}

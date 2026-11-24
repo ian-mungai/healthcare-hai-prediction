@@ -11,6 +11,9 @@
 # input of the storage stack (plans/state_migration/state_protection.json) as pending, and the wrapper marks it verified only after the apply succeeded and the live bucket read back
 # with the protection. Every later storage plan and apply through the wrapper then carries it, and one that would remove the state grants is refused. The last command reads the live
 # bucket and stops unless the protection is there: run the state moves (state_migration.sh, state_migration_iam.sh) after it.
+# A run that stopped after a partial apply (one of the two updates is live, the record is still pending) is run again the same way: step 1 reads the live bucket for each update that
+# the new plan holds as no change, and checks and prints only the remaining change; you confirm that plan by its SHA-256 and step 2 applies it. When nothing remains (both updates are live
+# and only the read-back failed), the saved plan holds no change: step 2 applies it (it changes nothing) and the wrapper's read-back marks the record verified.
 # Run it from any folder of the main checkout, in one shell. It makes one new folder under the ignored plans/ folder that holds every file it saves (RECORD_DIR). A long plan goes
 # to a file in that folder and only its change lines reach the terminal. Rollback: docs/terraform_state_migration.md.
 set -euo pipefail
@@ -35,8 +38,8 @@ printf '%s %s\n' "$RECORD_DIR" "$STATE_ADMIN"
 # Step 1: plan the storage stack with the state prefix on, then read the saved plan itself: exactly the two updates in place below and nothing else. The log has no color codes.
 STORAGE_PLAN="$PWD/$RECORD_DIR/storage.tfplan"
 bash scripts/infrastructure/terraform.sh --state-admin "$STATE_ADMIN" plan -no-color -out "$STORAGE_PLAN" > "$RECORD_DIR/storage_plan.txt"
-grep -E '^  # |^Plan:' "$RECORD_DIR/storage_plan.txt"
-.venv/bin/python -m scripts.infrastructure.state_migration approve-plan --stack storage --plan "$STORAGE_PLAN" \
+grep -E '^  # |^Plan:|^No changes' "$RECORD_DIR/storage_plan.txt" || true
+.venv/bin/python -m scripts.infrastructure.state_migration approve-plan --stack storage --plan "$STORAGE_PLAN" --state-admin "$STATE_ADMIN" \
   --update aws_s3_bucket_lifecycle_configuration.data --update aws_s3_bucket_policy.tls | tee "$RECORD_DIR/approve_plan.txt"
 PLAN_SHA="$(sed -n 's/^plan sha256: //p' "$RECORD_DIR/approve_plan.txt")"
 

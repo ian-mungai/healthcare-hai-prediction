@@ -322,7 +322,7 @@
       "dependencies": {
         "scripts/infrastructure/stack_settings.py": "sha256:a9580b9774651199e32bf6e988e13507fe43fea3ac1ce072a50a2b28c5acc0bd",
         "scripts/infrastructure/state_migration_s3_stand_in.py": "sha256:f6f4106c13da22c2614337e865f23d626209b7ba485945c6a1443ad137502987",
-        "scripts/infrastructure/state_protection.py": "sha256:f45e47d41dbf1b84deb8439be383508a7e371f3cd02d11036e5b115db145a19a",
+        "scripts/infrastructure/state_protection.py": "sha256:a7a3ebae1e685591aafb59f98fe4e35618ef8225dfbe50f0d92d16aadbab6729",
         "scripts/infrastructure/synthetic_workspace.py": "sha256:93c9515c41876390eb0685ed9709a2f1a88fcae39358456f4f2e33236a9e3db5",
         "scripts/infrastructure/systemd_model.py": "sha256:243c2005d72cbc71203b570d16c75c4324fd80524a6959b27abcb0ea9fb23ec2",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7"

@@ -142,8 +142,8 @@ def protected(target: Deployment) -> bool:
     return any(statement.get("Sid") in STATE_SIDS for statement in live_statements(target))
 
 
-def read_back(target: Deployment, principal: str) -> None:
-    """Refuse unless the live bucket holds all four state statements, names the administrator in the prefix deny and has the enabled lifecycle rule."""
+def policy_back(target: Deployment, principal: str) -> None:
+    """Refuse unless the live bucket policy holds all four state statements and names the administrator in the prefix deny."""
     statements = live_statements(target)
     found = {statement.get("Sid"): statement for statement in statements}
     if any(sid not in found for sid in STATE_SIDS):
@@ -153,12 +153,22 @@ def read_back(target: Deployment, principal: str) -> None:
     names = [names] if isinstance(names, str) else names
     if f"arn:aws:iam::{target.account}:{principal}" not in names:
         raise Refused("the live bucket policy does not except the approved state administrator after the apply")
+
+
+def lifecycle_back(target: Deployment) -> None:
+    """Refuse unless the live bucket has the enabled lifecycle rule for replaced state versions."""
     try:
         rules = s3_client(target).get_bucket_lifecycle_configuration(Bucket=target.bucket).get("Rules", [])
     except (BotoCoreError, ClientError):
         raise Refused("the live lifecycle rules could not be read, so the state protection cannot be confirmed") from None
     if not any(rule.get("ID") == LIFECYCLE_RULE and rule.get("Status") == "Enabled" for rule in rules if isinstance(rule, dict)):
         raise Refused("the live bucket has no enabled lifecycle rule for replaced state versions after the apply")
+
+
+def read_back(target: Deployment, principal: str) -> None:
+    """Refuse unless the live bucket holds all four state statements, names the administrator in the prefix deny and has the enabled lifecycle rule."""
+    policy_back(target, principal)
+    lifecycle_back(target)
 
 
 def resolve(root: Path, given: str | None, live: bool = False, disable: bool = False) -> str:

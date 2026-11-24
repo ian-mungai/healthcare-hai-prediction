@@ -12,7 +12,7 @@
 #      terraform_state/<stack>/terraform.tfstate with a write that refuses an existing key, reads it back and compares its bytes, writes infra/<stack>/backend.tf, runs
 #      terraform init -reconfigure and reads the state through the backend. The serial, the lineage and the resource count must equal the local ones. Terraform empties the local
 #      terraform.tfstate and keeps its content in terraform.tfstate.backup beside it. A second run for a stack that finished is refused.
-#   4. plan after, then 5. verify: the plan runs through the backend (it takes and releases the lock file), and verify compares the state, the lock and the two change lists.
+#   4. plan after, then 5. verify: the plan runs through the backend (it takes and releases the lock file), and verify compares the state, the lock and the two change lists. The record says switched after step 3 and done only after step 5.
 # Last, commit infra/iam/backend.tf: it holds no bucket, region or account value. Rollback: docs/terraform_state_migration.md.
 set -euo pipefail
 stopped() {
@@ -36,7 +36,7 @@ printf 'Administrator profile: '
 read -r ADMIN_PROFILE
 printf 'Stack: iam, profile: %s\n' "$ADMIN_PROFILE"
 
-# Step 1: read only. Stop on any status that is not ok, present, absent or on. A run that stopped after the switch (its record says copied) prints resume here, and steps 2 and 3 then finish it from the record.
+# Step 1: read only. Stop on any status that is not ok, present, absent or on. A run that stopped after the switch (its record says copied or switched) prints resume here, and steps 2 to 5 then finish it from the record without copying the state again.
 .venv/bin/python -m scripts.infrastructure.state_migration check --stack iam --admin-profile "$ADMIN_PROFILE"
 
 # Step 2: the plan before the move. A run that stopped after the copy keeps its earlier plan (a new plan cannot run on a half-switched stack), and step 3 resumes from the record.

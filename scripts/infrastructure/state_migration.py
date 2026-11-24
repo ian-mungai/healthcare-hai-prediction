@@ -19,19 +19,21 @@ Commands, in the order the sheet runs them:
   plan file (it holds values). The storage plan carries the approved state administrator (``plans/state_migration/state_protection.json``, kept by the
   prefix apply) and is refused when it does not. A run that stopped after the copy keeps its plan before.
 - ``approve-plan`` reads a saved plan's JSON and passes only when its resource changes are exactly the named ``--update`` addresses, each as an update in
-  place (the prefix sheet runs it before its question).
+  place (the prefix sheet runs it before its question). With ``--state-admin`` and a pending record of that administrator, an update that a partial apply
+  already made may be missing from the plan when the live bucket shows it; ``plan changes: N`` tells the owner how many changes remain (0 when only the
+  read-back failed).
 - ``migrate`` needs the plan before, runs the check, backs up the local state, copies it with a write that refuses an existing key, reads it back and
   compares the bytes, switches the backend with ``terraform init -reconfigure`` (equal states, so Terraform moves nothing itself and empties the local
   file) and reads the state back through the backend. The serial, the lineage and the resource count must equal the local ones at every step. A stop
   before the switch leaves the local state and the stack folder as they were. A failed read puts back the backend file, the local file and the backend
   settings Terraform cached, and reports recovery only after a local command read the original state. A run that stopped after the switch resumes from
-  its record when the backend and the bucket still hold the recorded state.
+  its record (``copied`` or ``switched``) when the backend and the bucket still hold the recorded state. It records ``switched``, never ``done``.
 - ``verify`` reads the state through the backend again and needs the exact recorded fingerprint and an object whose SHA-256 equals the record, then
-  compares the plan after with the plan before.
+  compares the plan after with the plan before. Only when both lists are equal does it record ``done``.
 
-A stack that finished is never migrated again: its record says ``done`` and its folder holds the switched backend. A remote key that holds other bytes
-than the local state is refused. The bytes of the same state are adopted, which resumes a run that stopped between the copy and the record. Output is
-``<subject>: <status>`` lines only. Exit code 0 means the step is done, 1 means it stopped and 2 means a bad argument. Rollback: see
+A stack that finished (record ``done``, written by ``verify``) is never migrated again, and its folder holds the switched backend. A remote key that holds
+other bytes than the local state is refused. The bytes of the same state are adopted, which resumes a run that stopped between the copy and the record.
+Output is ``<subject>: <status>`` lines only. Exit code 0 means the step is done, 1 means it stopped and 2 means a bad argument. Rollback: see
 ``docs/terraform_state_migration.md``.
 """
 
@@ -55,8 +57,19 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.infrastructure.render_project_config import ConfigurationError, load_configuration
-from scripts.infrastructure.state_protection import LIFECYCLE_RULE, STATE_SIDS, Refused, deployment_digest
+from scripts.infrastructure.state_protection import (
+    LIFECYCLE_RULE,
+    PENDING,
+    STATE_SIDS,
+    Deployment,
+    Refused,
+    deployment_digest,
+    lifecycle_back,
+    load_deployment,
+    policy_back,
+)
 from scripts.infrastructure.state_protection import RECORD as STATE_PROTECTION_RECORD
+from scripts.infrastructure.state_protection import load as load_state_protection
 from scripts.infrastructure.state_protection import read as read_state_protection
 from scripts.process import TimeoutExpired, run_command
 
@@ -92,6 +105,8 @@ PREFIX_LIFECYCLE = "aws_s3_bucket_lifecycle_configuration.data"
 PREFIX_RULES = (LIFECYCLE_RULE, "expire_saved_plans")
 NOT_KEYS = ("NotAction", "NotResource", "NotPrincipal")
 PHASES = ("before", "after")
+COPIED, SWITCHED, DONE = "copied", "switched", "done"
+MOVED = (COPIED, SWITCHED)
 CLIENT_CONFIG = Config(retries={"max_attempts": 2, "mode": "standard"}, connect_timeout=10, read_timeout=60)
 LOOPBACK_CONFIG = Config(retries={"max_attempts": 2, "mode": "standard"}, connect_timeout=10, read_timeout=60, s3={"addressing_style": "path"})
 
@@ -611,10 +626,10 @@ def command_backend(settings: Settings) -> None:
 
 def command_check(settings: Settings, loopback: bool) -> None:
     record = read_record(settings)
-    if record is not None and record.get("stage") == "copied" and backend_switched(settings):
+    if record is not None and record.get("stage") in MOVED and backend_switched(settings):
         # A run that stopped after the switch: the local state is empty by design and ``migrate`` resumes from the record, so only the identity is checked here.
         Bucket(settings, loopback).identity()
-        say("check", "resume (the backend is switched and the record is copied; run the plan and migrate steps again to finish)")
+        say("check", f"resume (the backend is switched and the record is {record['stage']}; run the plan and migrate steps again to finish)")
         return
     data, _ = read_local(settings)
     preflight(settings, Bucket(settings, loopback), data)
@@ -657,7 +672,7 @@ def carries_state_inputs(plan: dict[str, Any], principal: str) -> bool:
 def command_plan(settings: Settings, phase: str) -> None:
     """Plan through the project wrapper (it renders the inputs and verifies the identity) and keep only the sorted change list."""
     record = read_record(settings)
-    if phase == "before" and record is not None and record.get("stage") == "copied" and settings.changes("before").is_file():
+    if phase == "before" and record is not None and record.get("stage") in MOVED and settings.changes("before").is_file():
         say("plan before", "kept (the run stopped after the copy, so the list from before the move stands)")
         return
     principal = approved_state_admin(settings, phase) if settings.stack == "storage" else ""
@@ -732,7 +747,9 @@ def delta_lifecycle(change: dict[str, Any]) -> str | None:
     before, after, unknown = change.get("before"), change.get("after"), change.get("after_unknown")
     if not isinstance(before, dict) or not isinstance(after, dict) or not isinstance(unknown, dict):
         return "its before and after cannot be compared"
-    old, new, marks = before.get("rule"), after.get("rule"), unknown.get("rule")
+    old, new = before.get("rule"), after.get("rule")
+    # Terraform leaves "rule" out of after_unknown when every rule value is known (a plan made with the state inputs set): an absent key means all known.
+    marks = unknown.get("rule", [{} for _ in new] if isinstance(new, list) else None)
     if not isinstance(old, list) or not isinstance(new, list) or not isinstance(marks, list) or len(marks) != len(new):
         return "its rules cannot be read"
     if any(not isinstance(rule, dict) for rule in (*old, *new)):
@@ -753,14 +770,18 @@ def delta_lifecycle(change: dict[str, Any]) -> str | None:
 DELTAS: dict[str, Callable[[dict[str, Any]], str | None]] = {PREFIX_POLICY: delta_policy, PREFIX_LIFECYCLE: delta_lifecycle}
 
 
-def plan_shape_problems(plan: dict[str, Any], updates: list[str]) -> list[str]:
+def plan_shape_problems(plan: dict[str, Any], updates: list[str], live: frozenset[str] = frozenset()) -> list[str]:
     """Why a saved plan is not the prefix change, or an empty list: only the named updates in place, no move, no import, no output change, and for each
-    update only the state statements of the bucket policy and the state rules of the lifecycle configuration differ."""
+    update only the state statements of the bucket policy and the state rules of the lifecycle configuration differ. An address in ``live`` is one that an
+    earlier apply already made: the plan must hold it as a no-op instead of an update."""
     found: dict[str, dict[str, Any]] = {}
+    unchanged = set()
     problems = []
     for entry in plan.get("resource_changes", []):
         address = str(entry.get("address", "?"))
         body = entry.get("change", {})
+        if body.get("actions") == ["no-op"]:
+            unchanged.add(address)
         if entry.get("previous_address"):
             problems.append(f"{address}: moved")
         if body.get("importing"):
@@ -771,6 +792,8 @@ def plan_shape_problems(plan: dict[str, Any], updates: list[str]) -> list[str]:
         if change.get("actions", []) not in (["no-op"], ["read"]):
             problems.append(f"output.{name}: {'+'.join(change.get('actions', []))}")
     wanted = set(updates)
+    problems += [f"{address}: not in the plan as a no-op" for address in sorted(live - unchanged)]
+    wanted -= live
     problems += [
         f"{address}: {'+'.join(body.get('actions', []))}"
         for address, body in sorted(found.items())
@@ -794,8 +817,42 @@ def file_sha256(path: Path) -> str:
         raise Stopped("plan shape: the plan could not be read") from None
 
 
-def command_approve_plan(settings: Settings, plan_file: Path, updates: list[str]) -> None:
-    """Accept a saved plan only when it is the prefix change and nothing else, and print the SHA-256 of that file for the sheet to bind its confirmation to."""
+LIVE_PARTS: dict[str, Callable[[Deployment, str], None]] = {
+    PREFIX_POLICY: policy_back,
+    PREFIX_LIFECYCLE: lambda target, principal: lifecycle_back(target),
+}
+
+
+def applied_already(settings: Settings, plan: dict[str, Any], updates: list[str], administrator: str) -> frozenset[str]:
+    """The named updates that a partial apply of the prefix change already made, so that the plan holds no change for them. This is allowed only while a pending
+    state protection record of this administrator is on hand (the apply started and its read-back never marked it verified), and only for an update that the
+    plan holds as no change and that the live bucket shows. The remaining changes of the plan are then checked and confirmed as before."""
+    try:
+        target = load_deployment(settings.root)
+        recorded = load_state_protection(settings.root / STATE_PROTECTION_RECORD, target.digest)
+    except Refused as refusal:
+        raise Stopped(f"plan shape: refused ({refusal})") from None
+    if recorded != (administrator, PENDING):
+        raise Stopped("plan shape: refused (a plan without all the updates needs a pending state protection record of this administrator)")
+    held = {
+        str(entry.get("address", "?")) for entry in plan.get("resource_changes", []) if entry.get("change", {}).get("actions", []) not in (["no-op"], ["read"])
+    }
+    live = set()
+    for address in sorted(set(updates) - held):
+        check = LIVE_PARTS.get(address)
+        if check is None:
+            continue
+        try:
+            check(target, administrator)
+        except Refused as refusal:
+            raise Stopped(f"plan shape: refused ({address}: the plan holds no change for it and the live bucket does not show it: {refusal})") from None
+        live.add(address)
+    return frozenset(live)
+
+
+def command_approve_plan(settings: Settings, plan_file: Path, updates: list[str], administrator: str | None = None) -> None:
+    """Accept a saved plan only when it is the prefix change and nothing else, and print the SHA-256 of that file for the sheet to bind its confirmation to.
+    With ``administrator`` the plan may omit an update that an earlier, partial apply already made (see ``applied_already``)."""
     path = plan_file.resolve()
     digest = file_sha256(path)
     code, output = Terraform(settings).call(["show", "-json", str(path)])
@@ -805,10 +862,13 @@ def command_approve_plan(settings: Settings, plan_file: Path, updates: list[str]
         plan = None
     if not isinstance(plan, dict) or plan.get("errored") or file_sha256(path) != digest:
         raise Stopped("plan shape: the plan could not be read")
-    problems = plan_shape_problems(plan, updates)
+    live = applied_already(settings, plan, updates, administrator) if administrator is not None else frozenset()
+    problems = plan_shape_problems(plan, updates, live)
     if problems:
         raise Stopped(f"plan shape: refused ({'; '.join(problems)})")
-    say("plan shape", f"ok ({len(set(updates))} updates in place and nothing else)")
+    remaining = len(set(updates) - live)
+    say("plan shape", f"ok ({remaining} updates in place, {len(live)} already live and nothing else)")
+    say("plan changes", str(remaining))
     say("plan sha256", digest)
 
 
@@ -855,16 +915,17 @@ def resume_switched(settings: Settings, record: dict[str, Any], loopback: bool) 
     key = state_key(settings.stack)
     if raw is None or fingerprint(raw) != expected or not bucket.exists(key) or sha256(bucket.read(key)) != record.get("sha256"):
         raise Stopped("backend: switched, but the state read through it is not the recorded one; follow the rollback in docs/terraform_state_migration.md")
-    write_record(settings, "done", expected, str(record["sha256"]))
+    if record.get("stage") != SWITCHED:
+        write_record(settings, SWITCHED, expected, str(record["sha256"]))
     say("backend", "switched (resumed from the record)")
     say("migration", f"done (serial {expected.serial}, lineage {expected.lineage}, {expected.resources} resources)")
 
 
 def command_migrate(settings: Settings, loopback: bool) -> None:
     record = read_record(settings)
-    if record is not None and record.get("stage") == "done":
+    if record is not None and record.get("stage") == DONE:
         raise Stopped("migration: already done for this stack")
-    if record is not None and record.get("stage") == "copied" and backend_switched(settings):
+    if record is not None and record.get("stage") in MOVED and backend_switched(settings):
         resume_switched(settings, record, loopback)
         return
     data, local = read_local(settings)
@@ -890,7 +951,7 @@ def command_migrate(settings: Settings, loopback: bool) -> None:
         say("copy", f"done ({local.text()})")
     else:
         say("copy", f"adopted (the remote object is the same state; {local.text()})")
-    write_record(settings, "copied", local, digest)
+    write_record(settings, COPIED, local, digest)
     command_backend(settings)
     terraform = Terraform(settings)
     marker = marker_path(settings)
@@ -907,7 +968,7 @@ def command_migrate(settings: Settings, loopback: bool) -> None:
                 EXIT_NOT_RESTORED,
             )
         raise Stopped("backend: the state read through the backend does not equal the local state; the stack is back on its local state")
-    write_record(settings, "done", local, digest)
+    write_record(settings, SWITCHED, local, digest)
     say("backend", "switched")
     say("migration", f"done (serial {local.serial}, lineage {local.lineage}, {local.resources} resources)")
 
@@ -915,8 +976,8 @@ def command_migrate(settings: Settings, loopback: bool) -> None:
 def command_verify(settings: Settings, loopback: bool) -> None:
     """Compare the state read through the backend and the object in the bucket with the record: serial, lineage, counts and the digest of the bytes."""
     record = read_record(settings)
-    if record is None or record.get("stage") != "done":
-        raise Stopped("verify: no finished migration record for this stack")
+    if record is None or record.get("stage") not in (SWITCHED, DONE):
+        raise Stopped("verify: no record of a switched backend for this stack")
     pulled = Terraform(settings).pull()
     found = fingerprint(pulled) if pulled is not None else None
     if found != record_fingerprint(record):
@@ -936,6 +997,8 @@ def command_verify(settings: Settings, loopback: bool) -> None:
     if before.read_bytes() != after.read_bytes():
         raise Stopped("plans: differ (compare the two change lists in the record folder)")
     say("plans", "equal")
+    if record["stage"] != DONE:
+        write_record(settings, DONE, found, str(record["sha256"]))
 
 
 def parse(arguments: list[str]) -> argparse.Namespace:
@@ -950,6 +1013,10 @@ def parse(arguments: list[str]) -> argparse.Namespace:
             command.add_argument("--phase", choices=PHASES, required=True)
         if name == "approve-plan":
             command.add_argument("--plan", type=Path, required=True, help="The saved plan to inspect.")
+            command.add_argument(
+                "--state-admin",
+                help="The state administrator of a pending record: an update that the plan holds as no change must then already be live in the bucket.",
+            )
             command.add_argument(
                 "--update", action="append", required=True, metavar="ADDRESS", help="A resource address that the plan must update in place; give each one."
             )
@@ -970,7 +1037,7 @@ def run(arguments: list[str]) -> int:
         elif parsed.command == "migrate":
             command_migrate(settings, loopback)
         elif parsed.command == "approve-plan":
-            command_approve_plan(settings, parsed.plan, parsed.update)
+            command_approve_plan(settings, parsed.plan, parsed.update, parsed.state_admin)
         else:
             command_verify(settings, loopback)
     except Stopped as stop:

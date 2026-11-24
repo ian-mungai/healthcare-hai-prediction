@@ -694,9 +694,12 @@ case "$*" in
       echo "plan shape: refused (aws_s3_bucket_policy.tls: a statement other than the state statements changes)"
       exit 1
     fi
-    echo "plan shape: ok (2 updates in place and nothing else)"
+    case "$mode" in one_left) left=1 ;; nothing_left) left=0 ;; *) left=2 ;; esac
+    echo "plan shape: ok ($left updates in place, $((2 - left)) already live and nothing else)"
+    echo "plan changes: $left"
     echo "plan sha256: $(shasum -a 256 "$plan" | cut -d' ' -f1)"
     [[ "$mode" != change ]] || echo changed >> "$plan" ;;
+
   *"state_migration migrate"*)
     if [[ "$mode" == restore_failed ]]; then
       echo "backend: restore failed: a local command does not read the original state"
@@ -747,6 +750,8 @@ def prefix_sheet_checks(prefix: str, folder: Path) -> dict[str, bool]:
         ("approved", "accept", right, prefix),
         ("bare word", "accept", "role/example_admin\napply\n", prefix),
         ("changed", "change", right, prefix),
+        ("one left", "one_left", right, prefix),
+        ("nothing left", "nothing_left", right, prefix),
         ("unchecked", "reject", right, ungated),
     ):
         root = folder / f"prefix_{label.replace(' ', '_')}"
@@ -778,6 +783,16 @@ def prefix_sheet_checks(prefix: str, folder: Path) -> dict[str, bool]:
     checks["the bare word apply does not confirm a saved plan"] = code != 0 and "Not applied" in output and not applied(calls)
     code, output, calls = runs["changed"]
     checks["a saved plan file that changes after its check is not applied"] = code != 0 and "changed after it was checked" in output and not applied(calls)
+    approvals = [call for call in runs["approved"][2] if "approve-plan" in call]
+    checks["the prefix sheet gives the approved administrator to the shape check, so a pending record can recover a partial apply"] = (
+        len(approvals) == 1 and "--state-admin role/example_admin" in approvals[0]
+    )
+    for label, text in (("one update", "one left"), ("no update", "nothing left")):
+        code, output, calls = runs[text]
+        kinds = ["approve" if "approve-plan" in call else "apply" for call in calls if "approve-plan" in call or applied([call])]
+        checks[f"a prefix sheet with {label} left asks for the typed words of its plan and applies it once, after the shape check"] = (
+            code == 0 and f'Type "apply {typed}"' in output and kinds == ["approve", "apply"]
+        )
     code, output, calls = runs["unchecked"]
     checks["a prefix sheet without its shape check reaches the question (so the rejected-plan check above can fail)"] = 'Type "apply' in output and applied(
         calls

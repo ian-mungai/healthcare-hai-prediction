@@ -22,7 +22,13 @@ project is touched. The cases are:
   record is no approval until the read-back marks it verified, and a record of another bucket or account is refused;
 - a lifecycle rule that can expire the state or lock object of any stack is refused (prefix and tag filters), and one that cannot is accepted;
 - the shape check of the prefix plan: moves, imports, output changes and any change inside the two resources besides the state statements and rules;
-- a stop after the switch resumes from the sheet's first step, and a failed restore ends with its own exit code and no success line.
+- a stop after the switch resumes from the sheet's first step, and a failed restore ends with its own exit code and no success line;
+- the record says ``switched`` after the move and ``done`` only after the verification, so a stop between them resumes at the plan after in both move sheets
+  (the project profile sheet and the iam sheet, run as delivered) without copying the state again;
+- the prefix plan as Terraform writes it (``state_migration_native_plans.json``: the plans of a first apply, of a retry after the policy was applied and of
+  a retry after both updates, from ``terraform show -json`` of the two resources of ``infra/main.tf`` with Terraform 1.16.4, provider 6.66.0, offline and
+  synthetic credentials) and the recovery of a pending record: an update that a partial apply already made must be live in the bucket, the rest is checked
+  as before.
 
 ``--cases NAME[,NAME]`` runs only the named cases (a name is the function name); the default is all of them.
 """
@@ -42,12 +48,13 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 from scripts.infrastructure import state_migration
 from scripts.infrastructure.state_migration import RECORD_FOLDER, STACKS, backend_text, plan_shape_problems
 from scripts.infrastructure.state_migration_s3_stand_in import ACCOUNT, BUCKET, STATE_RULE, StateBucket, state_policy
+from scripts.infrastructure.state_protection import PENDING, VERIFIED, deployment_digest, load_deployment
 from scripts.infrastructure.state_protection import RECORD as STATE_PROTECTION_RECORD
-from scripts.infrastructure.state_protection import deployment_digest, load_deployment
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -678,10 +685,13 @@ def resumed_runs(template: Path, work: Path, problems: list[str]) -> None:
         expect(problems, code == 0 and "plan before: kept" in output, f"the plan step must keep its list after the switch: exit {code}: {output}")
         code, output = scene.run("migrate", stack)
         expect(problems, code == 0 and "backend: switched (resumed" in output, f"a stop after the switch must resume from the record: exit {code}: {output}")
-        expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "done", "the resumed run did not record done")
+        expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "switched", "the resumed run did not record the switch")
         expect(problems, len(bucket.requests("PUT")) == puts, "the resumed run wrote to the bucket")
+        code, output = scene.run("plan", stack, "--phase", "after")
+        expect(problems, code == 0, f"resume after the switch: plan after: exit {code}: {output}")
         code, output = scene.run("verify", stack)
         expect(problems, code == 0, f"resume after the switch: verify: exit {code}: {output}")
+        expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "done", "the verification did not record done")
     scene = fresh(template, work, "resume_pull")
     with StateBucket(KEYS, IDENTITIES) as bucket:
         scene.bucket = bucket
@@ -794,6 +804,7 @@ def approved_plan_shape(template: Path, work: Path, problems: list[str]) -> None
     )
     saved.unlink(missing_ok=True)
     prefix_plan_shape(problems)
+    native_prefix_plans(problems)
 
 
 def iam_deny_exception(template: Path, work: Path, problems: list[str]) -> None:
@@ -1045,6 +1056,251 @@ def prefix_plan_shape(problems: list[str]) -> None:
         )
 
 
+NATIVE_PLANS = Path(__file__).with_name("state_migration_native_plans.json")
+RECOVERY_ADMIN = f"user/{ADMIN_PROFILE}"
+SHEET_PYTHON = """#!/bin/bash
+# Stand-in of .venv/bin/python for the owner sheets: the state tool of this checkout, run against the scratch root.
+[[ "$1" == -m && "$2" == scripts.infrastructure.state_migration ]] || { echo "unexpected command: $*" >&2; exit 99; }
+shift 2
+cd "$REPO_ROOT"
+exec "$REAL_PYTHON" -m scripts.infrastructure.state_migration --root "$SCENE_ROOT" "$@"
+"""
+
+
+def native_plan(name: str) -> dict[str, Any]:
+    """A saved plan of the prefix change as ``terraform show -json`` wrote it (the two resource changes of ``state_migration_native_plans.json``)."""
+    return {"resource_changes": json.loads(NATIVE_PLANS.read_text(encoding="utf-8"))[name], "output_changes": {}}
+
+
+def native_change(plan: dict[str, Any], address: str) -> dict[str, Any]:
+    return cast(dict[str, Any], next(entry["change"] for entry in plan["resource_changes"] if entry["address"] == address))
+
+
+def native_prefix_plans(problems: list[str]) -> None:
+    """The plans that Terraform writes for the prefix change pass the shape check: a first apply (after_unknown has no ``rule`` key: all rule values are
+    known), a retry after the policy was applied and a retry after both were. Values that are not known yet in another rule or attribute are still refused."""
+    first = native_plan("enable")
+    found = plan_shape_problems(first, PLAN_UPDATES)
+    expect(problems, found == [], f"the plan of a first prefix apply, as Terraform writes it, must pass: {found}")
+    rules = native_change(first, state_migration.PREFIX_LIFECYCLE)["after"]["rule"]
+    other = next(index for index, rule in enumerate(rules) if rule["id"] not in state_migration.PREFIX_RULES)
+    unknown_rule = native_plan("enable")
+    marks: list[dict[str, bool]] = [{} for _ in rules]
+    marks[other] = {"status": True}
+    native_change(unknown_rule, state_migration.PREFIX_LIFECYCLE)["after_unknown"] = {"rule": marks}
+    text = "; ".join(plan_shape_problems(unknown_rule, PLAN_UPDATES))
+    expect(problems, "values not known yet" in text, f"a rule other than the state rules with values not known yet must be refused: {text!r}")
+    unknown_attribute = native_plan("enable")
+    native_change(unknown_attribute, state_migration.PREFIX_LIFECYCLE)["after_unknown"] = {"expected_bucket_owner": True}
+    text = "; ".join(plan_shape_problems(unknown_attribute, PLAN_UPDATES))
+    expect(problems, "an attribute other than the rules is not known yet" in text, f"another attribute not known yet must be refused: {text!r}")
+    policy, lifecycle = frozenset({state_migration.PREFIX_POLICY}), frozenset({state_migration.PREFIX_LIFECYCLE})
+    partial = native_plan("policy_applied")
+    found = plan_shape_problems(partial, PLAN_UPDATES)
+    expect(
+        problems, found == [f"{state_migration.PREFIX_POLICY}: missing"], f"a retry after the policy update, with no live read, must still be refused: {found}"
+    )
+    found = plan_shape_problems(partial, PLAN_UPDATES, policy)
+    expect(problems, found == [], f"a retry after the policy update must pass when the policy is live: {found}")
+    text = "; ".join(plan_shape_problems(partial, PLAN_UPDATES, policy | lifecycle))
+    expect(
+        problems,
+        "aws_s3_bucket_lifecycle_configuration.data: not in the plan as a no-op" in text,
+        f"an update that the plan still holds cannot be declared live: {text!r}",
+    )
+    complete = native_plan("both_applied")
+    found = plan_shape_problems(complete, PLAN_UPDATES, policy | lifecycle)
+    expect(problems, found == [], f"a retry after both updates must pass when both are live: {found}")
+    found = plan_shape_problems(complete, PLAN_UPDATES)
+    expect(problems, len(found) == 2 and all(line.endswith(": missing") for line in found), f"no live read, no recovery: {found}")
+
+
+def storage_shape_folder(scene: Scene, inputs: dict[str, str], problems: list[str]) -> Path:
+    """Write the three-resource storage folder for the recovery cases and apply it once."""
+    folder = scene.root / FOLDERS["storage"]
+    write_storage_shape(folder, inputs)
+    result = run_command("terraform", [f"-chdir={folder}", "apply", "-auto-approve", "-input=false"], timeout=STEP_SECONDS)
+    expect(problems, result.returncode == 0, f"preparing the recovery folder failed: {result.stdout[-300:]}")
+    return folder
+
+
+def write_storage_shape(folder: Path, inputs: dict[str, str]) -> None:
+    body = "\n".join(f'resource "terraform_data" "{name}" {{\n  input = "{value}"\n}}\n' for name, value in inputs.items())
+    (folder / "main.tf").write_text(f'terraform {{\n  required_version = "~> 1.16.1"\n}}\n\n{STATE_VARIABLES}{body}', encoding="utf-8")
+
+
+def save_storage_plan(scene: Scene, folder: Path, name: str) -> Path:
+    path = scene.root / f"{name}.tfplan"
+    result = run_command("terraform", [f"-chdir={folder}", "plan", "-input=false", "-no-color", "-out", str(path)], timeout=STEP_SECONDS)
+    if result.returncode:
+        raise RuntimeError(f"planning {name} failed: {result.stdout[-300:]}")
+    return path
+
+
+def approve_recovery(scene: Scene, plan: Path, *extra: str) -> tuple[int, str]:
+    """``approve-plan`` as the prefix sheet runs it, in this process, against the stand-in bucket and with two stand-in resources."""
+    arguments = ["--root", str(scene.root), "approve-plan", "--stack", "storage", "--plan", str(plan)]
+    arguments += ["--update", "terraform_data.r0", "--update", "terraform_data.r1", *extra]
+    names = {name: value for name, value in scene.environment().items() if name.startswith("AWS_")}
+    buffer = io.StringIO()
+    with mock.patch.dict(os.environ, names), contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+        try:
+            code = state_migration.run(arguments)
+        except SystemExit as stop:
+            code = int(stop.code or 0)
+    return code, buffer.getvalue()
+
+
+def approve_plan_recovery(template: Path, work: Path, problems: list[str]) -> None:
+    """A pending record after a partial apply: the next plan holds only the remaining update. It passes only when the live bucket shows the update that the
+    plan no longer holds, and only for the administrator of the pending record. Nothing left to apply passes too (the sheet then reads the bucket back)."""
+    scene = fresh(template, work, "approve_recovery")
+    admin = ["--state-admin", RECOVERY_ADMIN]
+    original = (dict(state_migration.DELTAS), dict(state_migration.LIVE_PARTS))
+    state_migration.DELTAS.update({"terraform_data.r0": lambda _: None, "terraform_data.r1": lambda _: None})
+    state_migration.LIVE_PARTS.update(
+        {"terraform_data.r0": original[1][state_migration.PREFIX_POLICY], "terraform_data.r1": original[1][state_migration.PREFIX_LIFECYCLE]}
+    )
+    try:
+        with StateBucket(KEYS, IDENTITIES) as bucket:
+            scene.bucket = bucket
+            scene.protect()
+            folder = storage_shape_folder(scene, {"r0": "value0", "r1": "value1", "r2": "value2"}, problems)
+            write_storage_shape(folder, {"r0": "value0", "r1": "b", "r2": "value2"})
+            one_left = save_storage_plan(scene, folder, "one_left")
+            code, output = approve_recovery(scene, one_left)
+            expect(
+                problems,
+                code == 1 and "terraform_data.r0: missing" in output,
+                f"without the recovery option the partial plan is refused as before: {code}: {output}",
+            )
+            code, output = approve_recovery(scene, one_left, *admin)
+            expect(problems, code == 1 and "pending state protection record" in output, f"no record, no recovery: exit {code}: {output}")
+            scene.approve_state_admin(RECOVERY_ADMIN, status=VERIFIED)
+            code, output = approve_recovery(scene, one_left, *admin)
+            expect(problems, code == 1 and "pending state protection record" in output, f"a verified record needs no recovery: exit {code}: {output}")
+            scene.approve_state_admin("role/another_admin", status=PENDING)
+            code, output = approve_recovery(scene, one_left, *admin)
+            expect(
+                problems,
+                code == 1 and "pending state protection record" in output,
+                f"the record of another administrator gives no recovery: exit {code}: {output}",
+            )
+            scene.approve_state_admin(RECOVERY_ADMIN, status=PENDING)
+            code, output = approve_recovery(scene, one_left, *admin)
+            digest = hashlib.sha256(one_left.read_bytes()).hexdigest()
+            expect(
+                problems,
+                code == 0 and "plan changes: 1\n" in output and f"plan sha256: {digest}\n" in output and "1 already live" in output,
+                f"the plan of the remaining update must pass with its digest when the live bucket holds the other: exit {code}: {output}",
+            )
+            policy = bucket.policy
+            bucket.policy = None
+            code, output = approve_recovery(scene, one_left, *admin)
+            expect(
+                problems,
+                code == 1 and "terraform_data.r0" in output and "does not show it" in output and "plan sha256" not in output,
+                f"an update that is not live must not be skipped: exit {code}: {output}",
+            )
+            bucket.policy = policy
+            write_storage_shape(folder, {"r0": "value0", "r1": "b"})
+            wrong = save_storage_plan(scene, folder, "wrong_rest")
+            code, output = approve_recovery(scene, wrong, *admin)
+            expect(problems, code == 1 and "terraform_data.r2: delete" in output, f"the remaining changes are checked as before: exit {code}: {output}")
+            write_storage_shape(folder, {"r0": "a", "r1": "value1", "r2": "value2"})
+            other_left = save_storage_plan(scene, folder, "other_left")
+            bucket.lifecycle = ["abort_incomplete_uploads"]
+            code, output = approve_recovery(scene, other_left, *admin)
+            expect(
+                problems,
+                code == 1 and "terraform_data.r1" in output and "does not show it" in output,
+                f"a lifecycle update that is not live must not be skipped: exit {code}: {output}",
+            )
+            scene.protect()
+            code, output = approve_recovery(scene, other_left, *admin)
+            expect(
+                problems, code == 0 and "plan changes: 1\n" in output, f"the policy update left, with the lifecycle rule live, must pass: exit {code}: {output}"
+            )
+            write_storage_shape(folder, {"r0": "value0", "r1": "value1", "r2": "value2"})
+            result = run_command("terraform", [f"-chdir={folder}", "apply", "-auto-approve", "-input=false"], timeout=STEP_SECONDS)
+            expect(problems, result.returncode == 0, f"resetting the recovery folder failed: {result.stdout[-300:]}")
+            nothing_left = save_storage_plan(scene, folder, "nothing_left")
+            code, output = approve_recovery(scene, nothing_left, *admin)
+            expect(problems, code == 0 and "plan changes: 0\n" in output, f"a plan with nothing left passes while both parts are live: exit {code}: {output}")
+            bucket.lifecycle = ["abort_incomplete_uploads"]
+            code, output = approve_recovery(scene, nothing_left, *admin)
+            expect(
+                problems, code == 1 and "does not show it" in output, f"a plan with nothing left must not pass without the live parts: exit {code}: {output}"
+            )
+    finally:
+        state_migration.DELTAS.clear()
+        state_migration.DELTAS.update(original[0])
+        state_migration.LIVE_PARTS.clear()
+        state_migration.LIVE_PARTS.update(original[1])
+
+
+def run_move_sheet(scene: Scene, sheet: str, arguments: list[str], answers: str) -> tuple[int, str]:
+    """One move sheet as delivered, in the scratch root, with the state tool of this checkout behind it and the typed answers on its input."""
+    (scene.root / "scripts/infrastructure/owner").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "scripts/infrastructure/owner" / sheet, scene.root / "scripts/infrastructure/owner" / sheet)
+    shim = scene.root / ".venv/bin/python"
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(SHEET_PYTHON, encoding="utf-8")
+    shim.chmod(0o755)
+    if not (scene.root / ".git").exists():
+        run_command("git", ["init", "-q"], cwd=scene.root, timeout=STEP_SECONDS)
+    (scene.root / "answers.txt").write_text(answers, encoding="utf-8")
+    environment = {**scene.environment(), "REPO_ROOT": str(ROOT), "SCENE_ROOT": str(scene.root), "REAL_PYTHON": sys.executable, "SHEET": sheet}
+    environment["SHEET_ARGUMENTS"] = " ".join(arguments)
+    result = run_command(
+        "bash",
+        ["-c", 'bash "scripts/infrastructure/owner/$SHEET" $SHEET_ARGUMENTS < answers.txt'],
+        cwd=scene.root,
+        env=environment,
+        timeout=STEP_SECONDS * 4,
+        own_session=True,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def resumed_move_sheets(template: Path, work: Path, problems: list[str]) -> None:
+    """A stop after the switch and before the plan after: the project profile sheet and the iam sheet start again, resume at the plan after without any
+    copy, and only the verification marks the stack done. A second run of a finished stack is still refused at the first step."""
+    for sheet, stack, arguments, answers in (
+        ("state_migration.sh", "jobs", ["jobs"], "migrate\n"),
+        ("state_migration_iam.sh", "iam", [], f"{ADMIN_PROFILE}\nmigrate\n"),
+    ):
+        label = f"{sheet} after a stop at the switch"
+        scene = fresh(template, work, f"sheet_{stack}")
+        with StateBucket(KEYS, IDENTITIES) as bucket:
+            scene.bucket = bucket
+            scene.protect()
+            for command, extra in (("plan", ["--phase", "before"]), ("migrate", [])):
+                code, output = scene.run(command, stack, *extra, *scene.admin(stack))
+                expect(problems, code == 0, f"{label}: {command}: exit {code}: {output}")
+            expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "switched", f"{label}: the move was not recorded as switched only")
+            state_puts = len([seen for seen in bucket.requests("PUT") if seen.key == scene.key(stack)])
+            code, output = run_move_sheet(scene, sheet, arguments, answers)
+            expect(problems, code == 0 and "check: resume" in output, f"{label}: the sheet must resume at its first step: exit {code}: {output}")
+            expect(
+                problems,
+                "plan after: no change" in output and "verify: equal" in output,
+                f"{label}: the sheet did not reach the plan after and the verification: {output}",
+            )
+            expect(
+                problems,
+                len([seen for seen in bucket.requests("PUT") if seen.key == scene.key(stack)]) == state_puts,
+                f"{label}: the resumed sheet copied the state again",
+            )
+            expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "done", f"{label}: the verification did not record done")
+            code, output = run_move_sheet(scene, sheet, arguments, answers)
+            expect(
+                problems,
+                code != 0 and "backend already switched" in output,
+                f"{label}: a finished stack must be refused at the first step: exit {code}: {output}",
+            )
+
+
 def failed_restore(template: Path, work: Path, problems: list[str]) -> None:
     """A failed read through the backend whose restore also fails ends with its own exit code and message, never the line that says the stack is back."""
     stack = "jobs"
@@ -1110,6 +1366,8 @@ def main() -> int:
             protection_fails_closed,
             lifecycle_other_prefixes_accepted,
             failed_restore,
+            approve_plan_recovery,
+            resumed_move_sheets,
         )
         for case in cases:
             if not chosen or case.__name__ in chosen:
