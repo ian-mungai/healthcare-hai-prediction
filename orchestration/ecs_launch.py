@@ -48,6 +48,10 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    container instance, and that ECS lists no task of the job's host definition that is not STOPPED, it records ``cancelled`` for every claimed launch with
    no end record whose claim is older than the send window plus ``SETTLE_MARGIN_SECONDS`` (``HostStopSettler``, write-once end record, the proof passed
    in as a ``HostStopProof``). Any other launch stays unresolved and is reported by run, job and attempt.
+   Accepted limit (owner, Nov 24 2026): the proof is a set of reads, not a lock. A host start by another session, or a RunTask request placed more than 20
+   minutes late, in the seconds between the final reread and the end write, could leave a cancelled end record for a running task. The operating rule is one
+   host session at a time. The settler writes the durable ``cancel`` request after the reread and before the end, so a sender that gets a late RunTask reply
+   sees it at its next check and stops its own task.
 12. Checked revision (owner A, Nov 10 2026): a request names the ARN of the revision of the job's host definition that the preflight checked against the
    current host capacity (``JobSpec.task_definition``). A request without one is refused before any record, and RunTask names that revision, never the
    family, so ECS cannot substitute a later latest revision.
@@ -115,7 +119,8 @@ FIT_POLL_SECONDS = 15.0
 SETTLE_MARGIN_SECONDS = 600.0  # beyond the send window (FIT_WAIT_SECONDS): a request that passed its guard has had 10 more minutes to land
 PROOF_MAX_AGE_SECONDS = 900.0  # the longest a host proof is used after it was read
 HOST_STOP_REASON = (
-    "host stopped: the host group has no instance, ECS lists no container instance and no task of the family, and no RunTask request can be in flight"
+    "host stopped: when read, the host group had no instance, ECS listed no container instance and no unstopped task of the family, and the claim was older "
+    "than the send window plus the margin"
 )
 HOST_STOP_NOTE = (
     "a host stop (host_session stop, or the start after it) ends the launch as cancelled when the host group has no instance, ECS lists no container "
@@ -1495,10 +1500,14 @@ class HostStopSettler:
     (``HostStopProof``), and the claim is older than the send window plus ``SETTLE_MARGIN_SECONDS``, so no request that passed its guard can still land.
     The proof is read once and a scan of the records takes time, so ``reread`` reads the host again immediately before each end write (it returns None when
     the host group shows capacity) and that fresh proof, judged at that moment, must refuse nothing. The settler writes the write-once ``end`` record through
-    ``write_end``, as ``Launcher.cancel`` does, and no ``cancel`` request: the claim is older than the send window, which every sender checks before RunTask,
-    so a request cannot be sent after it, and a request left on a launch that stays unresolved would only change what the gate reads. It calls no cloud
-    service but the record store, so a repeat or a second settler reads the one end record. A record store failure raises ``RecordStoreUnavailable`` and the
-    same call repeats the settle."""
+    ``write_end``, as ``Launcher.cancel`` does, after the durable ``cancel`` request (``HOST_STOP_REASON``, write-once, so one already there stands). The
+    cancel is written after the reread passes and before the end: a sender that gets a late RunTask reply sees it at its next check and stops its own task.
+    The settler calls no cloud service but the record store, so a repeat or a second settler reads the one end record. A record store failure raises
+    ``RecordStoreUnavailable`` and the same call repeats the settle.
+
+    Accepted limit (owner, Nov 24 2026): the proof is a set of reads, not a lock. A host start by another session, or a RunTask request placed more than 20
+    minutes late, in the seconds between the final reread and the end write, could leave a cancelled end record for a running task. The operating rule is one
+    host session at a time, and the cancel request is the only added protection (no lease or lock)."""
 
     def __init__(self, store: LaunchStore, clock: Clock | None, families: Collection[str], reread: Callable[[], HostStopProof | None]) -> None:
         self.store = store
@@ -1531,6 +1540,7 @@ class HostStopSettler:
             why = f"the host changed before the end was written: {why}" if why else ""
         if why:
             return SettleResult(run, job, attempt, "unresolved", why, saved, "")
+        put_record(self.store, self.clock.wall(), "cancel", attempt, claim, reason=HOST_STOP_REASON[:REPORT_LIMIT])
         end = write_end(self.store, self.clock.wall(), self.families, claim, attempt, attempt, "cancelled", CANCEL_EXIT, HOST_STOP_REASON, saved)
         ours = end["outcome"] == "cancelled" and end["reason"] == HOST_STOP_REASON
         reason = HOST_STOP_REASON if ours else f"{end['outcome']}: {end['reason']}"

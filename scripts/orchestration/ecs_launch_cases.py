@@ -20,7 +20,7 @@ from typing import Any
 
 from botocore.exceptions import ReadTimeoutError
 
-from orchestration.ecs_adapter import EcsAdapter, EcsSettings
+from orchestration.ecs_adapter import EcsAdapter, EcsSettings, SendWithheld
 from orchestration.ecs_launch import (
     FIT_WAIT_SECONDS,
     SETTLE_MARGIN_SECONDS,
@@ -1983,6 +1983,10 @@ def host_stop_settles_a_saved_task_that_ecs_forgot() -> None:
     )
     end = rig.record(1, "end")
     require(end["outcome"] == "cancelled" and end["task_arn"] == arn and "host" in end["reason"], f"the end record is wrong: {end}")
+    require("in flight" not in end["reason"] and "no RunTask" not in end["reason"], f"the end reason claims what the proof does not show: {end['reason']}")
+    cancel = json.loads(rig.bucket.objects[f"{PREFIX}/{RUN}/gold/cancel.json"])
+    require(cancel["event"] == "cancel", f"the cancel record is wrong: {cancel}")  # the gate's refusal wrote one first; a cancel already there stands
+    refuses(SendWithheld, lambda: rig.launcher().guard(RUN, "gold", rig.time.now + 3600))  # a sender that gets a late reply sees the cancel at its next check
     writes = rig.bucket.count("put_object")
     require(settle_gold(rig, host_proof(rig)) == [] and rig.bucket.count("put_object") == writes, "a second settle wrote or reported something")
     rig.ecs.hold = False
@@ -2006,6 +2010,9 @@ def host_stop_settles_an_unknown_send_after_the_window_and_margin() -> None:
     require(len(results) == 1 and results[0].status == "settled", f"the retry after the margin did not settle it: {results}")
     end = rig.record(1, "end")
     require(end["outcome"] == "cancelled" and end["task_arn"] == "", f"the end record is wrong: {end}")
+    require(
+        json.loads(rig.bucket.objects[f"{PREFIX}/{RUN}/gold/cancel.json"])["reason"] == end["reason"], "the cancel request does not carry the host stop reason"
+    )
     done = rig.launcher().run(spec(1, run_id=OTHER_RUN))
     require(done.ok, f"the next launch of the family was not admitted: {done}")
 
@@ -2074,10 +2081,10 @@ def host_stop_ended_by_another_is_reported_as_theirs() -> None:
         rig.bucket.objects[rig.key(1, "end")] = json.dumps(
             {"schema_version": 1, "event": "end", "run_id": RUN, "job": "gold", "attempt": 1, "at": iso(START_TIME), **end}
         ).encode()
-        before = dict(rig.bucket.objects)
+        before = rig.bucket.objects[rig.key(1, "end")]
         result = settler(rig).settle_launch(claim, {}, host_proof(rig))
         require(result.status == "ended_by_other" and end["reason"] in result.reason and end["outcome"] in result.reason, f"{label}: reported as {result}")
-        require(rig.bucket.objects == before, f"{label}: a record was written")
+        require(rig.bucket.objects[rig.key(1, "end")] == before, f"{label}: the standing end record was changed")
 
 
 def host_stop_revalidates_the_host_before_every_end_write() -> None:

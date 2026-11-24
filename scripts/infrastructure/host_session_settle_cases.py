@@ -1,7 +1,7 @@
 """Host session cases for the settle of launches by a host stop (owner decision A, Nov 24 2026): ``stop``, ``stop_after_failure`` and ``host_on`` end every
 claimed launch that has no end record as ``cancelled`` once the host is shown stopped, so a launch whose task ECS no longer describes stops blocking its family.
 
-The stand-in host here keeps the launch records as S3 objects (``s3api get-object``, ``put-object`` with ``--if-none-match`` or ``--if-match``, and
+The stand-in host here keeps the launch records as S3 objects (``s3api get-object``, ``put-object`` with ``--if-none-match``, and
 ``list-objects-v2``) over the data bucket, as the real store sees them through the AWS CLI. Time is virtual: a claim is old or young by the virtual time
 between its ``at`` and the session's wall clock.
 """
@@ -16,7 +16,7 @@ from typing import Any
 from orchestration.ecs_launch import launch_record_prefix
 from scripts.infrastructure import host_session_restore_cases as restore
 from scripts.infrastructure.host_session import Session, TerminationRequested
-from scripts.infrastructure.host_session_stand_in import ACCOUNT_MARK, EPOCH, StandInError
+from scripts.infrastructure.host_session_stand_in import ACCOUNT_MARK, EPOCH, OPENMETADATA_SERVICE, StandInError
 from scripts.infrastructure.host_session_stop_cases import on_wall_time
 from scripts.process import LaunchesNotStopped
 
@@ -38,7 +38,10 @@ class LaunchHost(restore.RecordHost):
     (the host group cannot be read once it shows no instance), ``slow_down_end`` (the next write of an end record answers SlowDown) and ``store_denied``
     (every launch record call answers AccessDenied), ``host_up_on_records`` (the host group comes up when a started record is read, as another session's
     start does), ``not_stopped_on_list`` (the AWS runner raises ``LaunchesNotStopped`` for a record listing) and ``interrupt_in_cleanup`` (a record listing
-    receives SIGTERM once the capacity was raised: the cleanup after a failed start)."""
+    receives SIGTERM once the capacity was raised: the cleanup after a failed start), ``interrupt_in_settle`` (a record listing receives SIGTERM),
+    ``not_stopped_from_signal`` and ``not_stopped_from_termination`` (the AWS runner raises ``LaunchesNotStopped`` chained from a SIGINT or a SIGTERM),
+    ``no_task_arns_key``, ``no_instances_key`` and ``empty_definition`` (a successful ECS reply that lacks the task list or the container instance list, or
+    describes a task with an empty task definition and group)."""
 
     def __init__(self, faults: set[str] | None = None) -> None:
         super().__init__(faults, None, False, False, checkout=restore.SHA_OLD, code_run=restore.RUN_OLD, openmetadata=True, catalog_setup=True)
@@ -46,6 +49,13 @@ class LaunchHost(restore.RecordHost):
     raised = False
 
     def runner(self, argv: list[str], **kwargs: Any) -> Any:
+        if argv[2] == "list-objects-v2":
+            for fault, signal_error in (("not_stopped_from_signal", KeyboardInterrupt()), ("not_stopped_from_termination", TerminationRequested("SIGTERM"))):
+                if fault in self.faults:
+                    try:
+                        raise signal_error
+                    except (KeyboardInterrupt, TerminationRequested) as caught:
+                        raise LaunchesNotStopped("a stand-in stop was not confirmed") from caught
         if "not_stopped_on_list" in self.faults and argv[2] == "list-objects-v2":
             raise LaunchesNotStopped("a stand-in stop was not confirmed")
         return super().runner(argv, **kwargs)
@@ -105,7 +115,7 @@ class LaunchHost(restore.RecordHost):
             if key.endswith("/end.json") and "slow_down_end" in self.faults:
                 self.faults.discard("slow_down_end")
                 raise StandInError("SlowDown")
-            if options.get("--if-none-match") != ["*"] and "--if-match" not in options:
+            if options.get("--if-none-match") != ["*"]:
                 raise StandInError("AccessDenied")  # an unconditional write under the launch prefix is refused, as the IAM policy of the role refuses it
             if "--if-none-match" in options and key in self.objects:
                 raise StandInError("PreconditionFailed")
@@ -113,13 +123,25 @@ class LaunchHost(restore.RecordHost):
 
     def s3_list_objects(self, options: dict[str, list[str]]) -> dict[str, Any]:
         prefix = options["--prefix"][0]
-        if "interrupt_in_cleanup" in self.faults and self.raised:
+        if "interrupt_in_settle" in self.faults or ("interrupt_in_cleanup" in self.faults and self.raised):
             raise TerminationRequested("SIGTERM")
         if "store_denied" in self.faults:
             raise StandInError("AccessDenied")
         return {"Contents": [{"Key": key} for key in sorted(self.objects) if key.startswith(prefix)], "IsTruncated": False}
 
+    def ecs_list_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        return {} if "no_task_arns_key" in self.faults else super().ecs_list_tasks(options)
+
+    def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        answer = super().ecs_describe_tasks(options)
+        if "empty_definition" in self.faults:
+            for task in answer.get("tasks", []):
+                task["taskDefinitionArn"], task["group"] = "", ""
+        return answer
+
     def ecs_list_container_instances(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        if "no_instances_key" in self.faults:
+            return {}
         answer = super().ecs_list_container_instances(options)
         if "ghost_container_instance" in self.faults and not answer["containerInstanceArns"]:
             return {"containerInstanceArns": [f"{ACCOUNT_MARK}container-instance/ghost"]}
@@ -371,8 +393,59 @@ def a_runner_failure_never_stops_the_start() -> dict[str, bool]:
     session.host_on()
     return {
         "the capacity was raised": host.desired == 1 and host.raised,
-        "the failure is reported": bool(line_with(lines, "launch_settle_failed")),
+        "the failure is reported as the runner's own error": "LaunchesNotStopped" in line_with(lines, "launch_settle_failed"),
     }
+
+
+def a_signal_inside_a_runner_failure_stops_the_start() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for fault, expected in (("not_stopped_from_signal", KeyboardInterrupt), ("not_stopped_from_termination", TerminationRequested)):
+        host, session, lines = after_stop({fault})
+        raised = signal_raised(session.host_on)
+        checks[f"{fault}: host_on raises the signal"] = isinstance(raised, expected)
+        checks[f"{fault}: the capacity was not raised"] = host.desired == 0 and not host.raised
+    return checks
+
+
+def signal_raised(action: Callable[[], object]) -> BaseException | None:
+    try:
+        action()
+    except (KeyboardInterrupt, TerminationRequested) as error:
+        return error
+    return None
+
+
+def a_signal_during_the_settle_keeps_the_first_stop_error() -> dict[str, bool]:
+    host, session, lines = build()
+    session.names = replace(session.names, services={**session.names.services, "openmetadata": OPENMETADATA_SERVICE})
+    host.add_launch(RUN, "gold", OLD, saved=True)
+    host.faults |= {"interrupt_catalog_stop", "interrupt_in_settle"}
+    lines.clear()
+    raised = signal_raised(session.stop)
+    return {
+        "stop raises the first error, the interrupt of the catalog drain": isinstance(raised, KeyboardInterrupt),
+        "the host-off was verified": stopped(host),
+        "the interrupted settle is reported": bool(line_with(lines, "launch_settle_interrupted")),
+    }
+
+
+def incomplete_ecs_replies_never_authorize_a_cancel() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for label, fault, task in (
+        ("a task list reply without the list", "no_task_arns_key", False),
+        ("a container instance reply without the list", "no_instances_key", False),
+        ("a running task with an empty definition and group", "empty_definition", True),
+    ):
+        host, session, lines = after_stop()
+        if task:
+            host.add_task(f"{JOB_PREFIX}gold_host")
+        host.faults.add(fault)
+        rerun(session, "stop")
+        checks[f"{label}: nothing was written"] = host.store_writes() == 0 and host.end_of(RUN, "gold") is None
+        checks[f"{label}: the launch stays unresolved or the failure is reported"] = bool(
+            line_with(lines, "launch_unresolved") or line_with(lines, "launch_settle_failed")
+        )
+    return checks
 
 
 def an_interrupt_in_the_cleanup_keeps_the_first_error() -> dict[str, bool]:
@@ -413,5 +486,8 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "host_on_goes_on_after_any_settle_failure": a_runner_failure_never_stops_the_start,
     "host_stop_cleanup_interrupt_keeps_the_start_error": an_interrupt_in_the_cleanup_keeps_the_first_error,
     "host_stop_settle_has_one_deadline": one_deadline_bounds_the_whole_settle,
+    "host_on_never_hides_a_signal_inside_a_runner_failure": a_signal_inside_a_runner_failure_stops_the_start,
+    "host_stop_signal_during_the_settle_keeps_the_first_error": a_signal_during_the_settle_keeps_the_first_stop_error,
+    "host_stop_incomplete_ecs_replies_never_authorize_a_cancel": incomplete_ecs_replies_never_authorize_a_cancel,
     "host_stop_skips_the_settle_without_a_data_bucket": an_unreadable_data_bucket_name_skips_the_settle,
 }

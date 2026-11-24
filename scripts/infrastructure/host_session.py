@@ -948,12 +948,14 @@ class Session:
             self.step("stop_forced", "the running job task check is skipped by --force-stop; a job task that runs now ends with the host")
         else:
             self.check_no_job_tasks(wait_seconds)
+        unwinding = True
         try:
             self.openmetadata_stop()
+            unwinding = False
         finally:
             with deferred_signals(self.step):
                 self.host_off()
-            self.settle_launches("stop")
+            self.settle_launches("stop", keep_error=unwinding)
 
     def stop_after_failure(self, command: str, keep_on: bool) -> None:
         """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates.

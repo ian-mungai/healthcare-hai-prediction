@@ -74,6 +74,19 @@ class CliS3Client:
         return self.call("list-objects-v2", options)
 
 
+def chained_signal(error: BaseException) -> BaseException | None:
+    """The SIGINT or SIGTERM that an error is chained from, through its causes and contexts, or None. An error that carries a signal (the AWS runner raises
+    ``LaunchesNotStopped`` from an interrupt) is that signal: the settle never hides it."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, KeyboardInterrupt | TerminationRequested):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def jobs_of_catalog() -> list[str]:
     """The jobs of the job catalog: the families the launch gate knows."""
     from orchestration.ecs_preflight import load_tables
@@ -98,7 +111,10 @@ class HostLaunchSettle:
             raise HostSessionError("the host group does not show its desired capacity")
         if desired != 0 or instances:
             return None
-        arns = session.call("ecs", "list-container-instances", ["--cluster", session.names.cluster, "--status", "ACTIVE"]).get("containerInstanceArns", [])
+        listed = session.call("ecs", "list-container-instances", ["--cluster", session.names.cluster, "--status", "ACTIVE"]).get("containerInstanceArns")
+        if not isinstance(listed, list):
+            raise HostSessionError("ECS answered the container instance listing without a list of instances")
+        arns = listed
         instances_read_at = session.clock.wall()
         busy = self.busy_jobs(jobs)
         return HostStopProof(0, 0, group_read_at, len(arns), instances_read_at, session.clock.wall(), busy)
@@ -108,33 +124,64 @@ class HostLaunchSettle:
         describe completely, such as a PROVISIONING task that DescribeTasks reports MISSING, has no known family, so every job is busy. This differs from
         the cleanup helper of ``aws_tasks``, which drops a MISSING task because its callers stop tasks and a task that is gone needs no stop. A task of
         another family (a service task) does not hold a job."""
-        from scripts.infrastructure.aws_tasks import DESCRIBE_LIMIT, GROUP_PREFIX, TaskCleanup
+        from scripts.infrastructure.aws_tasks import DESCRIBE_LIMIT, GROUP_PREFIX
 
         session = self.session
         if session.job_prefix is None:
             raise HostSessionError("the session has no job task family prefix")
         definitions = {f"{session.job_prefix}{job}{HOST_SUFFIX}": job for job in jobs}
-        arns = TaskCleanup(session, session.job_prefix).page_arns()
+        arns = self.listed_tasks()
         busy: set[str] = set()
         for start in range(0, len(arns), DESCRIBE_LIMIT):
             chunk = arns[start : start + DESCRIBE_LIMIT]
-            described = session.call("ecs", "describe-tasks", ["--cluster", session.names.cluster, "--tasks", *chunk]).get("tasks", [])
+            described = session.call("ecs", "describe-tasks", ["--cluster", session.names.cluster, "--tasks", *chunk]).get("tasks")
+            if not isinstance(described, list):
+                raise HostSessionError("ECS answered the task description without a list of tasks")
             tasks = {str(item.get("taskArn")): item for item in described if isinstance(item, dict)}
             for arn in chunk:
                 task = tasks.get(arn)
-                if task is None or not all(isinstance(task.get(name), str) for name in TASK_COMPLETE):
+                if task is None or not all(isinstance(task.get(name), str) and task[name] for name in TASK_COMPLETE) or "/" not in task["taskDefinitionArn"]:
                     return frozenset(jobs)
                 if task["lastStatus"] == "STOPPED":
                     continue
                 family = task["taskDefinitionArn"].rsplit("/", 1)[-1].rsplit(":", 1)[0]
                 group = task.get("group")
                 grouped = group.removeprefix(GROUP_PREFIX) if isinstance(group, str) and group.startswith(GROUP_PREFIX) else family
+                if not family:
+                    return frozenset(jobs)
                 if not (family.startswith(session.job_prefix) or grouped.startswith(session.job_prefix)):
                     continue
                 if family != grouped or family not in definitions:
                     return frozenset(jobs)
                 busy.add(definitions[family])
         return frozenset(busy)
+
+    def listed_tasks(self) -> list[str]:
+        """Every task ARN of the cluster with either desired status. A reply that is not a list of ARNs, a repeated page token and too many pages each raise:
+        a listing that is not read to its end is no evidence that no task runs."""
+        from scripts.infrastructure.aws_tasks import DESIRED_STATUSES, MAX_PAGES
+
+        session = self.session
+        arns: dict[str, None] = {}
+        for desired in DESIRED_STATUSES:
+            token: str | None = None
+            seen: set[str] = set()
+            for _ in range(MAX_PAGES):
+                options = ["--cluster", session.names.cluster, "--desired-status", desired, "--no-paginate"]
+                page = session.call("ecs", "list-tasks", [*options, "--next-token", token] if token else options)
+                listed = page.get("taskArns")
+                if not isinstance(listed, list) or not all(isinstance(arn, str) and arn for arn in listed):
+                    raise HostSessionError("ECS answered the task listing without a list of tasks")
+                arns |= dict.fromkeys(listed)
+                token = page.get("nextToken")
+                if not token:
+                    break
+                if token in seen:
+                    raise HostSessionError("ECS repeated a page token of the task listing")
+                seen.add(str(token))
+            else:
+                raise HostSessionError(f"the task listing has more than {MAX_PAGES} pages")
+        return list(arns)
 
     def run(self, point: str) -> None:
         """Settle at ``point`` (``stop`` after a verified host-off, ``start`` before the capacity is raised). Reports every result, and any failure, as a step,
@@ -148,6 +195,9 @@ class HostLaunchSettle:
         except (KeyboardInterrupt, TerminationRequested):
             raise
         except Exception as error:
+            signal_error = chained_signal(error)
+            if signal_error is not None:
+                raise signal_error from None
             session.step("launch_settle_failed", f"{type(error).__name__}: {self.shown(error)}; the next stop or start repeats the settle")
         finally:
             session.deadline = outer

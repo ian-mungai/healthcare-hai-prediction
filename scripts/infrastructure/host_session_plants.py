@@ -88,12 +88,14 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "ignores the termination signal": ("raise TerminationRequested(signal.Signals(number).name)", "return"),
     "skips host off after an interrupted catalog drain": (
-        "        try:\n            self.openmetadata_stop()\n        finally:\n            with deferred_signals(self.step):\n                self.host_off()",
-        "        self.openmetadata_stop()\n        self.host_off()",
+        "        try:\n            self.openmetadata_stop()\n            unwinding = False\n        finally:\n            with deferred_signals(self.step):\n"
+        '                self.host_off()\n            self.settle_launches("stop", keep_error=unwinding)',
+        '        self.openmetadata_stop()\n        self.host_off()\n        self.settle_launches("stop", keep_error=False)',
     ),
     "lets a signal cut the host off after a catalog drain": (
-        "        finally:\n            with deferred_signals(self.step):\n                self.host_off()\n\n    def stop_after_failure",
-        "        finally:\n            self.host_off()\n\n    def stop_after_failure",
+        "        finally:\n            with deferred_signals(self.step):\n                self.host_off()\n"
+        '            self.settle_launches("stop", keep_error=unwinding)',
+        '        finally:\n            self.host_off()\n            self.settle_launches("stop", keep_error=unwinding)',
     ),
     "keeps every aws call in the session of the launched command": ("run_argv(*args, own_session=True, **kwargs)", "run_argv(*args, **kwargs)"),
     "launches without a client token": ('            "--client-token",\n            token,\n', ""),
