@@ -548,7 +548,7 @@
     },
     "hook_privacy": {
       "job": "Repository Hooks (privacy)",
-      "minutes": 12,
+      "minutes": 22,
       "cores": 1
     },
     "hook_documentation": {

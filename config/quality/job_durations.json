@@ -4,9 +4,9 @@
   "jobs": [
     {
       "job": "Repository Hooks (privacy)",
-      "measured_minutes": 5,
-      "timeout_minutes": 12,
-      "basis": "estimate, secret and data checks"
+      "measured_minutes": 11,
+      "timeout_minutes": 22,
+      "basis": "estimate from hosted run 45315201599 (Nov 24 2026): setup 1.2 min, the pushed-range step 9.1 min over 126 commits, the hooks 0.7 min"
     },
     {
       "job": "Repository Hooks (documentation)",
