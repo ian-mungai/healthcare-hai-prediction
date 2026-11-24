@@ -16,6 +16,8 @@ REGISTRY_PATH = REPO_ROOT / "config" / "acquisition" / "source_registry.json"
 LOCK_PATH = REGISTRY_PATH.with_name("source_registry_lock.json")
 VERSION_CATALOG_PATH = REGISTRY_PATH.with_name("registry_versions.json")
 VERSION_CATALOG_LOCK_PATH = REGISTRY_PATH.with_name("registry_versions.lock.json")
+BRONZE_TABLES_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
+BRONZE_LEAVING_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_leaving_scope.json"
 # Private, Git-ignored archives of exact earlier registries (revision 1, then revision 2).
 LEGACY_ARCHIVES = ("data/acquisition_planning/registry_legacy_20260929", "data/acquisition_planning/acquisition_legacy_20261009")
 ROUTE_RULES = {
@@ -77,6 +79,18 @@ def read_json(path: Path) -> dict[str, Any]:
     except OSError as error:
         raise RegistryError(f"Cannot read {path.name}: {error}") from error
     return parse_json(content, path.name)
+
+
+def historical_bronze_tables(tables_path: Path = BRONZE_TABLES_PATH, leaving_path: Path = BRONZE_LEAVING_PATH) -> list[dict[str, Any]]:
+    """Return every table of the bronze map the registry was approved against: the tables the load still writes and the tables that left its scope.
+
+    The scope switch changes what bronze loads, not what the registry evidence says, so registry evidence reads both lists with their original selectors.
+    """
+    loaded = read_json(tables_path)["tables"]
+    departed = read_json(leaving_path)["tables"] if leaving_path.exists() else []
+    names = [table["table"] for table in [*loaded, *departed]]
+    require(len(names) == len(set(names)), "A bronze table is both loaded and recorded as left the scope, or is listed twice.")
+    return [*loaded, *departed]
 
 
 def index_records(records: Any, key: str, label: str) -> dict[str, dict[str, Any]]:

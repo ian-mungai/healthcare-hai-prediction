@@ -781,7 +781,7 @@ def metadata_scope() -> dict[str, bool]:
         refuses_loss = False
     committed = [row["table"] for row in bronze.load_table_map()["tables"]]
     complete = bronze_metadata.build(committed, [synthetic_metadata_item(name) for name in committed], [], [], committed)
-    results = metadata_leaving()
+    results = {**metadata_leaving(), **metadata_boundary_group()}
     return {
         **results,
         "first_one_group_metadata_publication_refused": refused_partial,
@@ -830,6 +830,68 @@ def metadata_leaving() -> dict[str, bool]:
         "committed_leaving_record_is_disjoint_from_the_map_and_the_removed_list": bool(leaving)
         and not set(leaving) & {row["table"] for row in config["tables"]}
         and not set(leaving) & set(removed),
+    }
+
+
+def boundary_rule(owner: dict[str, Any], aliases: list[dict[str, Any]]) -> dict[str, Any]:
+    """A reviewed ownership group over one checksum: the owner's observation first, then each alias, as the reviewed file writes them."""
+    members = [bronze_metadata.observation(item, False) for item in (owner, *aliases)]
+    references = [
+        {"table_name": row["table_name"], "observation_id": row["observation_id"], "logical_id": row["_object_key"]}
+        | {field: row[field] for field in ("s3_key", "s3_version_id", "byte_count", "manifest_key", "manifest_version_id")}
+        for row in members
+    ]
+    return {"sha256": owner["sha256"], "owner_table": owner["table"], "canonical_observation_id": owner["observation_id"], "observations": references}
+
+
+def metadata_boundary_group() -> dict[str, bool]:
+    """A reviewed checksum group that spans the bronze scope boundary: the retained owner publishes without the aliases of the table that left."""
+
+    def identity(name: str) -> str:
+        return hashlib.sha256(name.encode()).hexdigest()
+
+    kept = {**synthetic_metadata_item("kept"), "observation_id": identity("kept")}
+    gone = {**kept, "table": "gone", "observation_id": identity("gone"), "object_key": "gone", "manifest_key": "gone/manifest.json"}
+    other = {**kept, "table": "other", "observation_id": identity("other"), "object_key": "other", "manifest_key": "other/manifest.json"}
+
+    def refused(call: Any, text: str) -> bool:
+        try:
+            call()
+        except bronze_metadata.MetadataError as error:
+            return text in str(error)
+        return False
+
+    with tempfile.TemporaryDirectory(prefix="boundary_group_") as temporary, pytest.MonkeyPatch.context() as patch:
+        ownership = Path(temporary) / "bootstrap_ownership.json"
+        patch.setattr(bronze_metadata, "BOOTSTRAP_OWNERSHIP", ownership)
+
+        def reviewed(*aliases: dict[str, Any]) -> None:
+            ownership.write_text(json.dumps({"schema_version": 1, "groups": [boundary_rule(kept, list(aliases))]}))
+
+        reviewed(gone)
+        first = bronze_metadata.build(["kept"], [kept], [], [], all_tables=["kept"], leaving=["gone"])
+        published = bronze_metadata.build(["kept", "gone"], [kept, gone], [], [], all_tables=["kept", "gone"])
+        carried = bronze_metadata.build(["kept"], [kept], [], published, all_tables=["kept"], leaving=["gone"])
+        bronze_metadata.validate_successor(published, carried)
+        held = [json.dumps({k: v for k, v in row.items() if k != "generation"}, sort_keys=True) for row in published if row["table_name"] == "gone"]
+        after = [json.dumps({k: v for k, v in row.items() if k != "generation"}, sort_keys=True) for row in carried if row["table_name"] == "gone"]
+        reviewed(gone, other)
+        missing = refused(
+            lambda: bronze_metadata.build(
+                ["kept", "other"], [kept, {**other, "observation_id": identity("elsewhere")}], [], [], ["kept", "other"], leaving=["gone"]
+            ),
+            "missing from discovery",
+        )
+        both = bronze_metadata.build(["kept", "other"], [kept, other], [], [], ["kept", "other"], leaving=["gone"])
+        reviewed(gone)
+        altered = refused(lambda: bronze_metadata.build(["kept"], [{**kept, "manifest_key": "kept/other.json"}], [], [], ["kept"], leaving=["gone"]), "differs")
+    return {
+        "boundary_group_first_publication_keeps_retained_owner": {row["table_name"] for row in first} == {"kept"}
+        and sum(row["kind"] == "object" for row in first) == 1,
+        "boundary_group_carried_generation_keeps_leaving_rows": held == after != [] and {row["table_name"] for row in carried} == {"kept", "gone"},
+        "boundary_group_in_scope_observation_missing_is_refused": missing,
+        "boundary_group_two_in_scope_tables_publish_with_one_leaving": {row["table_name"] for row in both} == {"kept", "other"},
+        "boundary_group_in_scope_identity_change_is_refused": altered,
     }
 
 

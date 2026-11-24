@@ -10,12 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, load_registry, read_json, require
+from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, historical_bronze_tables, load_registry, read_json, require
 
 CONFIG = REPO_ROOT / "config" / "acquisition"
 LOG_PATH = CONFIG / "source_verification_log.json"
 ALLOWLIST_PATH = CONFIG / "source_verification_text_allowlist.json"
-BRONZE_PATH = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
 LOG_VERSION = 1
 NOT_RECORDED = "not recorded"
 # The access release records, oldest first; a later record supersedes an earlier one for a source it names.
@@ -126,12 +125,14 @@ ROUTES = frozenset({*ROUTE_CLASSES, "access_hold"})
 def load_inputs(root: Path = REPO_ROOT) -> dict[str, Any]:
     """Return every committed input of the log, with the registry checked against its lock."""
     config = root / "config" / "acquisition"
+    lakehouse = root / "config" / "lakehouse"
+    bronze = read_json(lakehouse / "bronze_tables.json")
     registry = load_registry(config / "source_registry.json", config / "source_registry_lock.json")
     return {
         "registry": registry,
         "lock": read_json(config / "source_registry_lock.json"),
         "layout": read_json(config / "collection_layout.json"),
-        "bronze": read_json(root / "config" / "lakehouse" / "bronze_tables.json"),
+        "bronze": {**bronze, "tables": historical_bronze_tables(lakehouse / "bronze_tables.json", lakehouse / "bronze_leaving_scope.json")},
         "closeout": read_json(config / "collection_closeout.json"),
         "terms": read_json(config / "terms_acceptance_20260928.json"),
         "allowlist": read_json(config / ALLOWLIST_PATH.name),
@@ -171,7 +172,7 @@ def unresolved_bronze_collections(inputs: dict[str, Any]) -> list[str]:
 
 
 def bronze_source_ids(inputs: dict[str, Any]) -> list[str]:
-    """Return the registry sources whose collection the bronze table map loads, in sorted order."""
+    """Return the registry sources whose collection the bronze table map loads or loaded before it left the scope, in sorted order."""
     groups = bronze_groups(inputs["bronze"])
     return sorted(source for source, (_, collection) in collections_by_source(inputs["layout"]).items() if collection in groups)
 

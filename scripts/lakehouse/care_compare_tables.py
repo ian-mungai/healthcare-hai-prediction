@@ -1,6 +1,7 @@
 """Generate the bronze table map entries for the Care Compare tables other than HAI, one table per file family.
 
-Run from the repository root with read-only S3 access; it rewrites only the `care_compare` group in the table map:
+Run from the repository root with read-only S3 access; it rewrites only the `care_compare` group in the table map, and leaves out every table that
+config/lakehouse/bronze_leaving_scope.json records as having left the bronze scope:
 
     .venv/bin/python -m scripts.lakehouse.care_compare_tables
 
@@ -128,8 +129,14 @@ def table_entries(
     return [tables[name] for name in sorted(tables)]
 
 
+def within_scope(entries: list[dict[str, Any]], leaving: Iterable[str]) -> list[dict[str, Any]]:
+    """Return the generated entries without the tables that left the bronze scope, which the load no longer writes."""
+    departed = set(leaving)
+    return [entry for entry in entries if entry["table"] not in departed]
+
+
 def main() -> int:
-    """Discover the unselected Care Compare datasets read-only and rewrite the care_compare group in the table map."""
+    """Discover the unselected Care Compare datasets read-only and rewrite the care_compare group in the table map, without the tables that left the scope."""
     from scripts.lakehouse import bronze
     from scripts.lakehouse.catalog import deployment
 
@@ -137,6 +144,11 @@ def main() -> int:
     os.environ.setdefault("AWS_PROFILE", settings["aws_profile"])
     os.environ.setdefault("AWS_REGION", settings["aws_region"])
     config = bronze.load_table_map()
+    try:
+        leaving = bronze.load_leaving(bronze.LEAVING, config, bronze.load_removed(bronze.REMOVED, config))
+    except bronze.BronzeError as error:
+        sys.stderr.write(f"care compare tables: {error}\n")
+        return 1
     others = [table["table"] for table in config["tables"] if table["collection"] == COLLECTION and table.get("group") != GROUP]
     inputs, unselected = bronze.discover(bronze.S3Storage(), settings["data_bucket_name"], config, others, bronze.load_retired())
     # Only data tables claim a dataset; document tables read other roles from the same datasets.
@@ -150,7 +162,7 @@ def main() -> int:
         shared = sorted(set(datasets) & existing)
         if shared:
             raise FamilyError(f"{shared[0]}: an existing table selects part of this dataset ({len(shared)} such datasets)")
-        entries = table_entries(assign(datasets, existing), datasets)
+        entries = within_scope(table_entries(assign(datasets, existing), datasets), leaving)
     except FamilyError as error:
         sys.stderr.write(f"care compare tables: {error}\n")
         return 1

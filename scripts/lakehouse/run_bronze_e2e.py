@@ -2061,6 +2061,148 @@ def bootstrap_repair_scenarios(spark: Any, root: Path) -> dict[str, bool]:
     }
 
 
+LEFT_ENVELOPE = {"generation", "generation_row_count", "generation_object_count"}
+
+
+def left_scope_record(root: Path, label: str, names: list[str]) -> Path:
+    """Write a synthetic record of the tables that left the bronze scope."""
+    record = root / f"{label}_leaving_scope.json"
+    record.write_text(json.dumps({"version": 1, "tables": [{"table": name, "collection": "synthetic/" + name} for name in names]}))
+    return record
+
+
+def leaving_scope_run(
+    spark: Any, root: Path, label: str, storage: FakeStorage, config: dict[str, Any], leaving: list[str], tokens: list[str]
+) -> tuple[int, dict[str, Any]]:
+    """Run ``bronze.main`` on the real Spark session with the synthetic storage, table map and leaving record; return its exit code and its report."""
+    from scripts.lakehouse import session
+
+    deployment = root / f"{label}_deployment.json"
+    deployment.write_text(json.dumps({"data_bucket_name": BUCKET}))
+    report_root = root / f"{label}_report"
+    with (
+        patch.object(session, "spark_session", lambda *_args, **_kwargs: spark),
+        patch.object(session, "job_memory", lambda: "synthetic"),
+        patch.object(spark, "stop", lambda: None),
+        patch.object(bronze, "DEPLOYMENT", deployment),
+        patch.object(bronze, "REPORT_ROOT", report_root),
+        patch.object(bronze, "SCRATCH", root / f"{label}_scratch"),
+        patch.object(bronze, "LEAVING", left_scope_record(root, label, leaving)),
+        patch.object(bronze, "S3Storage", lambda *, task_role=False: storage),
+        patch.object(bronze, "load_table_map", lambda: config),
+        patch.object(bronze, "load_retired", bronze.RetiredObjects),
+        patch.object(sys, "argv", ["bronze", *tokens]),
+    ):
+        code = bronze.main()
+    reports = sorted(report_root.glob("report_*.json"))
+    return code, json.loads(reports[-1].read_text()) if reports else {}
+
+
+def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
+    """A table that left the bronze scope stays as it was through bronze.main: a new retained capture, and a first publication over a shared checksum."""
+    namespace = "leaving_scope"
+    storage = FakeStorage()
+    tables = [
+        {"table": name, "collection": "synthetic/" + name, "format": "csv", "encodings": ["utf-8"], "roles": ["data"], "dataset_ids": [name]}
+        for name in ("scope_kept", "scope_gone")
+    ]
+    names = [table["table"] for table in tables]
+    for name in names:
+        store(storage, "synthetic/" + name, name, "capture", [(None, "data.csv", csv_bytes(["value"], [[name]]))])
+    both = {"namespace": namespace, "tables": tables}
+    inputs, excluded = bronze.discover(storage, BUCKET, both, names)
+    bronze.load_objects(spark, inputs, storage, namespace, root / "leaving_scope_first_scratch")
+    bronze.write_copies(spark, namespace, names, inputs, excluded)
+    dictionary.build(spark, both, names, namespace)
+    bronze_metadata.publish(spark, namespace, bronze_metadata.build(names, inputs, excluded, [], names))
+
+    def frozen(rows: list[Any]) -> list[str]:
+        return sorted(json.dumps(row.asDict(True) if hasattr(row, "asDict") else row, sort_keys=True, default=str) for row in rows)
+
+    def held(name: str) -> dict[str, Any]:
+        side = {kind: frozen(spark.table(f"{namespace}.{kind}").where(f"table_name = '{name}'").collect()) for kind in ("column_map", "stored_copies")}
+        metadata = [
+            {key: value for key, value in row.items() if key not in LEFT_ENVELOPE}
+            for row in bronze_metadata.read(spark, namespace)
+            if row["table_name"] == name
+        ]
+        return {
+            "table": frozen(spark.table(f"{namespace}.{name}").collect()),
+            "snapshot": bronze.latest_snapshot(spark, namespace, name),
+            "dictionary": frozen(spark.table(f"{dictionary.NAMESPACE}.{name}").collect()),
+            "dictionary_snapshot": bronze.latest_snapshot(spark, dictionary.NAMESPACE, name),
+            "metadata": frozen(metadata),
+            **side,
+        }
+
+    gone_before, kept_before = held("scope_gone"), held("scope_kept")
+    store(storage, "synthetic/scope_kept", "scope_kept", "capture_two", [(None, "more.csv", csv_bytes(["value"], [["later"]]))], release="2026-02-01")
+    retained = {"namespace": namespace, "tables": tables[:1]}
+    code, report = leaving_scope_run(spark, root, "leaving_scope_load", storage, retained, ["scope_gone"], ["--tables", "scope_kept"])
+    gone_after, kept_after = held("scope_gone"), held("scope_kept")
+    results = {
+        "leaving_scope_new_retained_capture_publishes": code == 0
+        and len(kept_after["table"]) == len(kept_before["table"]) + 1
+        and kept_after["snapshot"] != kept_before["snapshot"]
+        and len(kept_after["metadata"]) > len(kept_before["metadata"]),
+        "leaving_scope_table_rows_and_snapshot_unchanged": gone_after["table"] == gone_before["table"] != []
+        and gone_after["snapshot"] == gone_before["snapshot"],
+        "leaving_scope_dictionary_rows_and_snapshot_unchanged": gone_after["dictionary"] == gone_before["dictionary"] != []
+        and gone_after["dictionary_snapshot"] == gone_before["dictionary_snapshot"],
+        "leaving_scope_side_table_rows_unchanged": gone_after["column_map"] == gone_before["column_map"] != []
+        and gone_after["stored_copies"] == gone_before["stored_copies"],
+        "leaving_scope_metadata_rows_unchanged": gone_after["metadata"] == gone_before["metadata"] != [],
+        "leaving_scope_report_names_only_the_retained_table": set(report.get("checks", {})) == {"scope_kept"}
+        and set(report.get("snapshots", {})) == {"scope_kept"}
+        and set(report.get("dictionaries", {})) == {"scope_kept"},
+    }
+    # A reviewed checksum group spans the boundary: the retained owner and the aliases of a table that left the scope share one file's checksum.
+    shared = csv_bytes(["value"], [["shared"]])
+    pair = [
+        {"table": name, "collection": "synthetic/" + name, "format": "csv", "encodings": ["utf-8"], "roles": ["data"], "dataset_ids": [name]}
+        for name in ("bound_kept", "bound_gone")
+    ]
+    for table in pair:
+        store(storage, table["collection"], table["table"], "capture", [(None, "data.csv", shared)])
+    items, _unselected = bronze.discover(storage, BUCKET, {"namespace": "leaving_boundary", "tables": pair}, ["bound_kept", "bound_gone"])
+    owner = next(item for item in items if item["table"] == "bound_kept")
+    fields = ("table_name", "observation_id", "_object_key", "s3_key", "s3_version_id", "byte_count", "manifest_key", "manifest_version_id")
+    group = {
+        "sha256": owner["sha256"],
+        "owner_table": "bound_kept",
+        "canonical_observation_id": owner["observation_id"],
+        "observations": [
+            {"logical_id" if field == "_object_key" else field: row[field] for field in fields}
+            for item in (owner, *(item for item in items if item["table"] == "bound_gone"))
+            for row in [bronze_metadata.observation(item, False)]
+        ],
+    }
+    ownership = root / "leaving_boundary_ownership.json"
+    ownership.write_text(json.dumps({"schema_version": 1, "groups": [group]}))
+    with patch.object(bronze_metadata, "BOOTSTRAP_OWNERSHIP", ownership):
+        code, report = leaving_scope_run(
+            spark,
+            root,
+            "leaving_boundary",
+            storage,
+            {"namespace": "leaving_boundary", "tables": pair[:1]},
+            ["bound_gone"],
+            ["--bootstrap-all", "--repair-tables", "bound_kept"],
+        )
+    published = bronze_metadata.read(spark, "leaving_boundary")
+    results["leaving_scope_first_publication_over_a_shared_checksum"] = (
+        code == 0
+        and {row["table_name"] for row in published} == {"bound_kept"}
+        and sum(row["kind"] == "object" for row in published) == 1
+        and not spark.catalog.tableExists("leaving_boundary.bound_gone")
+        and spark.table("leaving_boundary.bound_kept").count() == 1
+    )
+    results["care_compare_generator_omits_the_tables_that_left_the_scope"] = [
+        entry["table"] for entry in care_compare_tables.within_scope([{"table": "kept"}, {"table": "gone"}], ["gone"])
+    ] == ["kept"]
+    return results
+
+
 PERSON_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"synthetic bronze e2e person key").digest()).decode()
 PERSON_TABLE = "cms_hospital_owners"
 DROPPED_HEADERS = frozenset({"FIRST NAME - OWNER", "MIDDLE NAME - OWNER", "LAST NAME - OWNER", "TITLE - OWNER"})
@@ -2133,6 +2275,7 @@ def main() -> int:
     try:
         results = scenarios(spark, root)
         results.update(bootstrap_repair_scenarios(spark, root))
+        results.update(leaving_scope_scenarios(spark, root))
     finally:
         spark.stop()
         shutil.rmtree(root, ignore_errors=True)

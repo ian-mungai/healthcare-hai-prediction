@@ -22,7 +22,7 @@ models:
     meta:
       classification: Public
     description: >
-      One immutable manifest entry within the 70-table analytical scope declared by copy_tables,
+      One immutable manifest entry within the 74-table analytical scope declared by copy_tables,
       including aliases, superseded manifests, retired versions and failed attempts. Additions to that family map join automatically.
       The unfiltered bronze.file_metadata source contains observations for every committed bronze table, including the carried-forward rows of tables that left the bronze scope.
     columns:

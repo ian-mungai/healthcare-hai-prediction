@@ -129,7 +129,7 @@ def _reviewed_group(matches: list[dict[str, Any]], obj: dict[str, Any] | None, r
     return True
 
 
-def _apply_bootstrap_ownership(rows: list[dict[str, Any]], previous: list[dict[str, Any]], chosen: set[str]) -> None:
+def _apply_bootstrap_ownership(rows: list[dict[str, Any]], previous: list[dict[str, Any]], chosen: set[str], departed: set[str]) -> None:
     rules = _bootstrap_ownership()
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -137,7 +137,9 @@ def _apply_bootstrap_ownership(rows: list[dict[str, Any]], previous: list[dict[s
             groups[row["sha256"]].append(row)
     for digest, matches in groups.items():
         rule = rules[digest]
-        if not previous and set(rule["by_observation"]) - {row["observation_id"] for row in matches}:
+        # A first publication needs each reviewed observation of a table in scope; a table that left the scope is not discovered.
+        in_scope = {identity for identity, reference in rule["by_observation"].items() if reference["table_name"] not in departed}
+        if not previous and in_scope - {row["observation_id"] for row in matches}:
             raise MetadataError(f"{digest}: reviewed bootstrap observations are missing from discovery")
         if rule["owner_table"] in chosen and any(live(row) for row in matches):
             canonical = [
@@ -333,7 +335,7 @@ def _build_rows(
         raise MetadataError("first metadata publication requires the full committed bronze table map")
     rows = [observation(item, True) for item in inputs] + [observation(entry["copy"], False) for entry in excluded if "copy" in entry]
     rows = [row for row in rows if row["table_name"] in chosen]
-    _apply_bootstrap_ownership(rows, previous, chosen)
+    _apply_bootstrap_ownership(rows, previous, chosen, departed)
     current = {row["observation_id"]: row for row in rows}
     mutable = {
         "generation",

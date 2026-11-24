@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from orchestration import launcher
-from scripts.lakehouse import bronze, bronze_entry_cases, bronze_metadata, catalog, dictionary
+from scripts.lakehouse import bronze, bronze_entry_cases, bronze_metadata, bronze_mirror, catalog, dictionary
 from scripts.quality.model_metadata import load_yaml
 
 TABLE = {"table": "files", "collection": "cms/synthetic", "roles": ["data"], "format": "csv", "encodings": ["utf-8"], "member_pattern": r"\.csv$"}
@@ -300,6 +300,118 @@ def ownership_fixture(root: Path, count: int) -> tuple[dict[str, Any], list[dict
     ownership = root / f"ownership_{count}.json"
     ownership.write_text(json.dumps(mapping, indent=2) + "\n")
     return config, documents, ownership, inputs
+
+
+def publish_command(
+    root: Path, label: str, documents: list[dict[str, Any]], config: dict[str, Any], leaving: list[str], ownership: Path, previous: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Run an ordinary bronze load through ``bronze.main`` with recorders for every Spark step, and return the published rows and the names each step saw."""
+    deployment = root / f"{label}_deployment.json"
+    deployment.write_text('{"data_bucket_name":"synthetic"}')
+    record = root / f"{label}_leaving.json"
+    record.write_text(json.dumps({"version": 1, "tables": [{"table": name, "collection": "cms/synthetic"} for name in leaving]}))
+    seen: dict[str, list[str]] = {step: [] for step in ("load", "prune", "copies", "verify", "snapshots", "dictionary", "mirror")}
+    published: list[list[dict[str, Any]]] = []
+    session = SimpleNamespace(spark_session=lambda *_args, **_kwargs: SimpleNamespace(stop=lambda: None), job_memory=lambda: "synthetic")
+
+    def load(_spark: Any, inputs: list[dict[str, Any]], *_args: Any) -> dict[str, int]:
+        seen["load"] += [entry["table"] for entry in inputs]
+        return {}
+
+    def verify(_spark: Any, table_map: dict[str, Any], _inputs: list[dict[str, Any]], _namespace: str) -> dict[str, dict[str, Any]]:
+        seen["verify"] += [table["table"] for table in table_map["tables"]]
+        return {table["table"]: {"passed": True} for table in table_map["tables"]}
+
+    def snapshots(_spark: Any, _namespace: str, names: list[str]) -> dict[str, int]:
+        seen["snapshots"] += names
+        return dict.fromkeys(names, 1)
+
+    def build_dictionary(_spark: Any, _config: dict[str, Any], names: list[str], *_args: Any, **_kwargs: Any) -> dict[str, int]:
+        seen["dictionary"] += names
+        return dict.fromkeys(names, 1)
+
+    def publish(_spark: Any, _namespace: str, rows: list[dict[str, Any]]) -> str:
+        published.append(rows)
+        return str(rows[0]["generation"])
+
+    def prune(_spark: Any, _config: dict[str, Any], names: list[str], *_args: Any) -> dict[str, int]:
+        seen["prune"] += names
+        return {}
+
+    def copies(_spark: Any, _namespace: str, names: list[str], *_args: Any) -> int:
+        seen["copies"] += names
+        return 0
+
+    def mirror(_spark: Any, _namespace: str, names: list[str], *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        seen["mirror"] += names
+        return {"status": "synthetic"}
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sys, "argv", ["bronze", "--tables", ",".join(table["table"] for table in config["tables"])])
+        patch.setitem(sys.modules, "scripts.lakehouse.session", session)
+        patch.setattr(bronze, "DEPLOYMENT", deployment)
+        patch.setattr(bronze, "REPORT_ROOT", root / label)
+        patch.setattr(bronze, "LEAVING", record)
+        patch.setattr(bronze, "S3Storage", lambda *, task_role=False: ManifestStorage(documents))
+        patch.setattr(bronze, "load_table_map", lambda: config)
+        patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
+        patch.setattr(bronze_metadata, "BOOTSTRAP_OWNERSHIP", ownership, raising=False)
+        patch.setattr(bronze_metadata, "read", lambda *_args: previous)
+        patch.setattr(bronze_metadata, "write_bootstrap", lambda *_args: "0" * 64)
+        patch.setattr(bronze_metadata, "publish", publish)
+        patch.setattr(dictionary, "build", build_dictionary)
+        patch.setattr(bronze, "load_objects", load)
+        patch.setattr(bronze, "prune", prune)
+        patch.setattr(bronze, "write_copies", copies)
+        patch.setattr(bronze, "verify", verify)
+        patch.setattr(bronze, "table_snapshots", snapshots)
+        patch.setattr(bronze_mirror, "mirror_after_load", mirror)
+        try:
+            code: int | str | None = bronze.main()
+        except SystemExit as error:
+            code = error.code
+    return {"code": code, "published": published[0] if published else None, "seen": seen}
+
+
+def leaving_scope_command_cases(root: Path) -> dict[str, bool]:
+    """A table that left the bronze scope goes through ``bronze.main`` untouched: first publication, and a new retained capture over published rows."""
+    config, documents, ownership, inputs = ownership_fixture(root, 2)
+    retained = {**config, "tables": [table for table in config["tables"] if table["table"] == "named_files"]}
+    both = [candidate["table"] for candidate in inputs]
+    first = publish_command(root, "leaving_first", documents, retained, ["legacy_files"], ownership, [])
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bronze_metadata, "BOOTSTRAP_OWNERSHIP", ownership, raising=False)
+        published = bronze_metadata.build(both, inputs, [], [], both)
+    capture = manifest("third", "cms/synthetic/datasets/named_files/release_date=2026-02-01/" + "c" * 64 + "/file.csv", "version_third")
+    capture["objects"][0]["dataset_id"] = "named_files"
+    capture["objects"][0]["object"]["sha256"] = "c" * 64
+    later = publish_command(root, "leaving_carried", [*documents, capture], retained, ["legacy_files"], ownership, published)
+    envelope = {"generation", "generation_row_count", "generation_object_count"}
+
+    def held(rows: list[dict[str, Any]] | None) -> list[str]:
+        return [
+            json.dumps({key: value for key, value in row.items() if key not in envelope}, sort_keys=True)
+            for row in rows or []
+            if row["table_name"] == "legacy_files"
+        ]
+
+    def retained_observations(rows: list[dict[str, Any]]) -> int:
+        return sum(row["kind"] == "observation" and row["table_name"] == "named_files" for row in rows)
+
+    first_rows, later_rows = first["published"] or [], later["published"] or []
+    return {
+        "leaving command: first publication with a boundary-spanning group exits zero": first["code"] == 0 and bool(first_rows),
+        "leaving command: first publication holds only the retained table": {row["table_name"] for row in first_rows} == {"named_files"},
+        "leaving command: new retained capture publishes a new generation": later["code"] == 0
+        and bool(later_rows)
+        and later_rows[0]["generation"] != published[0]["generation"],
+        "leaving command: new capture adds a retained observation": retained_observations(later_rows) == retained_observations(published) + 1,
+        "leaving command: leaving table rows are published as they were": held(later_rows) == held(published) != [],
+        "leaving command: no step loads, copies, verifies, snapshots, documents or mirrors the leaving table": all(
+            "legacy_files" not in names for case in (first, later) for names in case["seen"].values()
+        )
+        and "named_files" in later["seen"]["load"],
+    }
 
 
 def ownership_cases(root: Path) -> dict[str, bool]:
@@ -826,6 +938,7 @@ def main() -> int:
             **command_cases(folder),
             **entry_cases(),
             **ownership_cases(folder),
+            **leaving_scope_command_cases(folder),
             **all_ownership_groups(folder),
             **ownership_reference_commands(folder),
             **ownership_identity_commands(folder),

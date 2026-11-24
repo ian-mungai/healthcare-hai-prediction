@@ -13,13 +13,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.source_registry import REGISTRY_PATH, RegistryError, index_records, read_json, require
+from scripts.acquisition.source_registry import REGISTRY_PATH, RegistryError, historical_bronze_tables, index_records, read_json, require
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = REGISTRY_PATH
 LAYOUT = REPO_ROOT / "config/acquisition/collection_layout.json"
 ADDITIONS = REGISTRY.with_name("registry_additions.json")
-BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 RETIRED_OBJECTS = REPO_ROOT / "config/lakehouse/retired_objects.json"
 DATASET_LAYOUT = REPO_ROOT / "scripts/acquisition/dataset_layout.py"
 RULE_ORDER = (
@@ -66,7 +65,7 @@ def candidate_placements(
     sources_in = defaultdict(list)
     for source, collection in collection_of.items():
         sources_in[collection].append(source)
-    tables = json.loads(BRONZE_TABLES.read_text(encoding="utf-8"))["tables"]
+    tables = historical_bronze_tables()
     table_collections: dict[str, set[str]] = defaultdict(set)
     table_names: dict[str, set[str]] = defaultdict(set)
     named_tables: dict[str, str] = {}
