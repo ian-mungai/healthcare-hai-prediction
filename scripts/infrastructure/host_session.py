@@ -16,6 +16,13 @@ ECS does not have.
 or cannot be read refuses; it is never read as "no job task is running". Stopping the host ends every task on it; a job launched in the seconds between
 the check and the stop is resumed by its DAG retry.
 
+After the host-off is verified (``stop``, ``stop_after_failure``) and before the capacity is raised when the group already shows 0 desired and no instance
+(``host_on``), the session settles the launches that the stopped host leaves behind (owner decision A, Nov 24 2026;
+``scripts/infrastructure/host_launch_settle.py``, rule 11 of ``orchestration/ecs_launch.py``): every claimed launch of a catalog job with no end record is
+recorded ``cancelled`` when the host group has no instance, ECS lists no ACTIVE container instance and no unstopped task of the job, and the claim is older than
+20 minutes. Each launch is reported as a step by run, job and attempt. A settle failure is reported, never stops the host-off or the
+start, and the next stop or start repeats the settle.
+
 ``session`` is the development command that replaces the hand records of a host session. It runs ``start``, prints the host address, holds the host on for
 ``--hold-seconds`` (default 3600, at most 43200; Ctrl+C or SIGTERM ends the hold early), runs ``stop`` with ``--stop-wait-seconds`` (default 1800) and writes
 one JSON record, ``data/host_session/sessions/session_<UTC time>_<id>.json`` (``--record-folder`` changes the folder). The record holds the phases, the times,
@@ -50,6 +57,7 @@ from scripts.process import CompletedProcess
 
 if TYPE_CHECKING:
     from scripts.infrastructure.aws_tasks import JobTask
+    from scripts.infrastructure.host_launch_settle import HostLaunchSettle
 
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
 JOBS_DIRECTORY = REPO_ROOT / "infra" / "jobs"
@@ -156,6 +164,14 @@ RUN_TASK_CODE = re.compile(r"[A-Z][A-Z0-9_]*(:[A-Z0-9_]+)?")
 
 class HostSessionError(Exception):
     """A step failed; the message names the step and the cause, never an ARN or an account ID."""
+
+
+class AwsCallFailed(HostSessionError):
+    """An AWS call failed. ``code`` is the provider's error code (or a fixed word such as ``request_unconfirmed``), which the launch record store reads."""
+
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class CodeMissing(HostSessionError):
@@ -461,6 +477,7 @@ class Session:
         self.deadline: float | None = None
         self.setup_task, self.setup_state = "", ""
         self.pending_file = marker.parent / "catalog_recovery.pending"  # beside the bootstrap marker on the Mac, so a test's folder holds it
+        self.launch_settle: HostLaunchSettle | None = None  # set by ``open_session``: ends the launches that a stopped host leaves with no end record
         self.launch_tokens: dict[str, str] = {}
         self.last_task: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
@@ -484,7 +501,7 @@ class Session:
         try:
             return self.cli.call_bounded(service, operation, arguments, timeout=remaining)
         except StorageError as error:
-            raise HostSessionError(f"{service} {operation} failed ({error})") from None
+            raise AwsCallFailed(f"{service} {operation} failed ({error})", error.code) from None
 
     def wait(self, what: str, check: Callable[[], Any], seconds: int, every: int) -> Any:
         """Poll ``check`` until it returns a truthy value within ``seconds``; each call gets the remaining budget, and a success after the deadline fails."""
@@ -569,6 +586,7 @@ class Session:
         An instance can be ACTIVE before ECS lists it in its capacity provider, and RunTask on the provider then fails with "contains no container
         instances"; ``capacityProviderName`` of ``describe-container-instances`` shows the membership.
         """
+        self.settle_launches("start")
         self.host_requested = True
         self.call("autoscaling", "set-desired-capacity", ["--auto-scaling-group-name", self.names.group, "--desired-capacity", "1", "--no-honor-cooldown"])
         self.step("host_on_requested")
@@ -588,6 +606,12 @@ class Session:
         except HostSessionError as error:
             raise HostSessionError(f"{error}; last seen: {seen[0]}" if seen[0] else str(error)) from None
         self.step("host_registered")
+
+    def settle_launches(self, point: str) -> None:
+        """End the claimed launches that a stopped host leaves with no end record (``HostLaunchSettle``). It reports and never raises, so a settle failure
+        changes neither the host-off nor the start. A session with no settle (a case, a command that does not stop the host) does nothing."""
+        if self.launch_settle is not None:
+            self.launch_settle.run(point)
 
     def host_off(self) -> None:
         """Set the desired capacity to 0 and verify the group has no instance left."""
@@ -920,6 +944,7 @@ class Session:
         finally:
             with deferred_signals(self.step):
                 self.host_off()
+            self.settle_launches("stop")
 
     def stop_after_failure(self, command: str, keep_on: bool) -> None:
         """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates.
@@ -942,6 +967,7 @@ class Session:
                 self.step("host_off_failed", f"the host may still be on; run stop ({error})")
                 return
             self.cleanup_outcome = "host_off_verified"
+        self.settle_launches("stop")
 
     def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
         """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of
@@ -1755,6 +1781,9 @@ def open_session(reload: bool = False) -> Session:
     Raises ConfigurationError."""
     settings, _ = load_configuration(REPO_ROOT / ".env")
     session = Session(AwsCli(settings, tolerant_runner), load_names(settings, reload=reload))
+    from scripts.infrastructure.host_launch_settle import HostLaunchSettle
+
+    session.launch_settle = HostLaunchSettle(session)
     session.job_prefix = f"{settings['project_name']}_{settings['environment']}_job_"
     session.environment = settings["environment"]
     return session

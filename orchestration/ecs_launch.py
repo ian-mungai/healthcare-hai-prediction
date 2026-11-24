@@ -40,9 +40,14 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    does not show STOPPED (running, pending or stopping) or while a run in the write-once family index has a claimed attempt without an end record. A
    listing that fails refuses too. An unfinished launch is settled by the gate itself (``auto_settle``, automatic launch recovery, owner Nov 11 2026): it
    cancels, which ends the launch only with proof: its task is found by identity and its stop is confirmed, or no RunTask call was ever sent. A launch whose
-   call may have been sent and whose task is not found, and a launch whose saved task ECS no longer describes, stay unresolved, and the new run is refused with
-   the old run, job, attempt, task identity and saved ARN: no timer, no send window and no empty
-   listing ends it, because ECS lists a new task late and a request that passed its guard may still be in flight. No statement of the owner ends it either.
+   call may have been sent and whose task is not found, and a launch whose saved task ECS no longer describes, stay unresolved at the gate, and the new run is
+   refused with the old run, job, attempt, task identity and saved ARN: no timer, no send window and no empty listing ends it, because ECS lists a new task
+   late and a request that passed its guard may still be in flight. No statement of the owner ends it either.
+   Host stop (owner decision A, Nov 24 2026): a stopped host is the one proof that ends such a launch without a task. When the host session (``stop``,
+   ``stop_after_failure`` and the ``start`` that follows) has read that the host group has desired capacity 0 and no instance, that ECS then lists no ACTIVE
+   container instance, and that ECS lists no task of the job's host definition that is not STOPPED, it records ``cancelled`` for every claimed launch with
+   no end record whose claim is older than the send window plus ``SETTLE_MARGIN_SECONDS`` (``HostStopSettler``, write-once end record, the proof passed
+   in as a ``HostStopProof``). Any other launch stays unresolved and is reported by run, job and attempt.
 12. Checked revision (owner A, Nov 10 2026): a request names the ARN of the revision of the job's host definition that the preflight checked against the
    current host capacity (``JobSpec.task_definition``). A request without one is refused before any record, and RunTask names that revision, never the
    family, so ECS cannot substitute a later latest revision.
@@ -58,7 +63,7 @@ import re
 import socket
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -107,6 +112,12 @@ STOP_WAIT_SECONDS = 120.0
 STOP_POLL_SECONDS = 2.0
 FIT_WAIT_SECONDS = 600.0
 FIT_POLL_SECONDS = 15.0
+SETTLE_MARGIN_SECONDS = 600.0  # beyond the send window (FIT_WAIT_SECONDS): a request that passed its guard has had 10 more minutes to land
+PROOF_MAX_AGE_SECONDS = 900.0  # the longest a host proof is used after it was read
+HOST_STOP_NOTE = (
+    "a host stop (host_session stop, or the start after it) ends the launch as cancelled when the host group has no instance, ECS lists no container "
+    "instance and no unstopped task of the family, and the claim is older than 20 minutes"
+)
 POLL_SECONDS = 6.0
 POLL_FAILURES = 5
 ABSENT_CODE = "NoSuchKey"
@@ -281,6 +292,37 @@ class Clock:
     sleep: Callable[[float], None] = time.sleep
 
 
+def put_record(store: LaunchStore, now: float, event: str, attempt: int, base: Mapping[str, Any], **fields: Any) -> dict[str, Any]:
+    """Write one record of the run and job of ``base`` once and return the record that stands."""
+    record = {"schema_version": 1, "event": event, "run_id": base["run_id"], "job": base["job"], "attempt": attempt, "at": iso(now), **fields}
+    return store.put_once(record)
+
+
+def write_end(
+    store: LaunchStore,
+    now: float,
+    families: Collection[str],
+    base: Mapping[str, Any],
+    owner: int,
+    mine: int,
+    outcome: str,
+    code: int,
+    reason: str,
+    arn: str,
+    failure: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record how the launch ended. The end record of the attempt that holds the claim is written first and is the one outcome: an attempt that joined it
+    records and reports whatever is stored there, even when it judged the task differently. A closed ``failure`` record is kept in it, and copied."""
+    first = put_record(
+        store, now, "end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn, **({"failure": dict(failure)} if failure else {})
+    )
+    if mine == owner:
+        if base["job"] in families:
+            count_outcome(base["job"], first["outcome"])
+        return first
+    return put_record(store, now, "end", mine, base, **copied(first))
+
+
 class LaunchStore(Protocol):
     """Write-once launch records."""
 
@@ -291,6 +333,10 @@ class LaunchStore(Protocol):
     def records(self, run_id: str, job: str, attempts: Sequence[int]) -> list[dict[str, Any]]:
         """The intent, started and end records of the given attempts of the run and job, by attempt and then by event order. The store never lists: it reads
         known keys."""
+        ...
+
+    def end_record(self, run_id: str, job: str, attempt: int) -> dict[str, Any] | None:
+        """The end record of one attempt, or None while nobody has written it: one key read, for a caller that scans many launches."""
         ...
 
     def run_record(self, run_id: str, job: str, event: str) -> dict[str, Any] | None:
@@ -517,6 +563,9 @@ class S3LaunchStore:
     def run_record(self, run_id: str, job: str, event: str) -> dict[str, Any] | None:
         return self.get(self.run_key(run_id, job, event))
 
+    def end_record(self, run_id: str, job: str, attempt: int) -> dict[str, Any] | None:
+        return self.get(self.key_of(run_id, job, attempt, "end"))
+
     def decision(self, run_id: str, job: str) -> tuple[dict[str, Any], str] | None:
         return self.get_with_etag(self.run_key(run_id, job, "decision"))
 
@@ -681,8 +730,7 @@ class Launcher:
                 )
 
     def put(self, event: str, attempt: int, base: Mapping[str, Any], **fields: Any) -> dict[str, Any]:
-        record = {"schema_version": 1, "event": event, "run_id": base["run_id"], "job": base["job"], "attempt": attempt, "at": iso(self.clock.wall()), **fields}
-        return self.store.put_once(record)
+        return put_record(self.store, self.clock.wall(), event, attempt, base, **fields)
 
     def poll(self, arn: str) -> TaskReport:
         try:
@@ -822,7 +870,9 @@ class Launcher:
         has a claimed attempt with no end record (an index entry
         with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. A claimed launch with no end record is settled
         here (``auto_settle``) and the gate goes on when that ends it, which needs proof about its task; a launch that stays
-        unresolved refuses the run with its reason. Two runs that pass this gate at the
+        unresolved refuses the run with its reason. The gate alone never ends a launch whose task ECS no longer describes or whose RunTask call may have
+        been sent and found no task: a host stop that verifies no instance, no container instance and no unstopped task of the family does
+        (``HostStopSettler``, rule 11 of the module docstring), and the refusal says so. Two runs that pass this gate at the
         same moment are kept apart by the Airflow pool of host jobs (a full-size job takes all its slots) and, when they both settle the same launch, by the
         write-once end record. The run is not claimed, so it launches once the earlier launch is settled."""
         definition = self.adapter.definition(spec.job)
@@ -999,7 +1049,8 @@ class Launcher:
         return LaunchUnavailable(
             f"{prefix}A RunTask call may have been sent for attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']} and no task has been "
             f"found, so the launch stays unresolved and nothing else will start. The next launch of the family settles it when it finds the task: it stops "
-            f"the task, confirms the stop and records the end. No timer and no empty listing ends the launch. The task, if one exists, carries the tag "
+            f"the task, confirms the stop and records the end, or a host stop settles it ({HOST_STOP_NOTE}). No timer and no empty listing ends the launch. "
+            f"The task, if one exists, carries the tag "
             f"{self.adapter.identity(key)} (the client token is the SHA-256 of {key})."
         )
 
@@ -1068,14 +1119,8 @@ class Launcher:
     def finalize(
         self, base: Mapping[str, Any], owner: int, mine: int, outcome: str, code: int, reason: str, arn: str, failure: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Record how the launch ended. The end record of the attempt that holds the claim is written first and is the one outcome: an attempt that joined it
-        records and reports whatever is stored there, even when it judged the task differently. A closed ``failure`` record is kept in it, and copied."""
-        first = self.put("end", owner, base, outcome=outcome, exit_code=code, reason=reason, task_arn=arn, **({"failure": dict(failure)} if failure else {}))
-        if mine == owner:
-            if base["job"] in self.adapter.settings.families:
-                count_outcome(base["job"], first["outcome"])
-            return first
-        return self.put("end", mine, base, **copied(first))
+        """``write_end`` with this launcher's store, clock and families."""
+        return write_end(self.store, self.clock.wall(), self.adapter.settings.families, base, owner, mine, outcome, code, reason, arn, failure)
 
     def close(self, launch: Launch, outcome: str, code: int, reason: str, failure: Mapping[str, Any] | None = None) -> None:
         """Record how this attempt ended, through the end record of the attempt that holds the claim."""
@@ -1274,7 +1319,8 @@ class Launcher:
         still be in flight. A launch record that cannot be read or written now, at any step of the settle, is a temporary failure, not a refusal: it raises
         ``RecordStoreUnavailable`` (a ``LaunchUnavailable``) with the launch's identity as far as it is known, claims no cancel and no end, and the same call
         repeats the settle. The caller may pass the claim it read (a claim is write-once), which the settle then does not read again. A repeat, or a second
-        caller at the same moment, reads the one end record, because every record is write-once."""
+        caller at the same moment, reads the one end record, because every record is write-once. A launch this leaves unresolved is ended only by a host
+        stop with the proof of ``HostStopSettler``; the ``FamilyBusy`` message says so."""
         try:
             if claim is None:
                 claim = self.store.run_record(run_id, job, "claim")
@@ -1292,12 +1338,12 @@ class Launcher:
                     raise FamilyBusy(
                         f"{who} has no end record and was not settled: its task is saved in the launch records and its stop could not be confirmed "
                         f"({error}). {self.cancel_note(run_id, job)}The run launches once ECS describes that task STOPPED, which the next launch of the "
-                        "family then records"
+                        f"family then records, or once a host stop settles it: {HOST_STOP_NOTE}"
                     ) from None
             raise FamilyBusy(
                 f"{who} has no end record and was not settled: a RunTask call may have been sent and no task of it is found, and neither the end of its send "
                 f"window nor an empty listing proves that none exists. {self.cancel_note(run_id, job)}The run launches once ECS lists that task, which the "
-                "next launch of the family then stops and records"
+                f"next launch of the family then stops and records, or once a host stop settles it: {HOST_STOP_NOTE}"
             )
         except RecordStoreUnavailable as error:
             attempt_known = int(claim["attempt"]) if claim is not None else None
@@ -1376,3 +1422,100 @@ class Launcher:
         self.confirm_stop(arn, reason)
         end = self.finalize(claim, owner, attempt, "cancelled", CANCEL_EXIT, reason[:REPORT_LIMIT], arn)
         return outcome_of(end, adopted=attempt != owner)
+
+
+@dataclass(frozen=True)
+class HostStopProof:
+    """What the host session read to show that the host is stopped, each read with its time in epoch seconds. The caller reads; ``HostStopSettler`` judges.
+
+    The group was read first (``desired_capacity`` and ``group_instances``), then the ACTIVE container instances of the cluster
+    (``active_container_instances``), then the tasks of the project's host definitions that ECS does not show STOPPED: ``busy_jobs`` holds the job of every
+    such task, and every job when a task cannot be tied to one job. A read that failed gives no proof, so the caller builds none."""
+
+    desired_capacity: int
+    group_instances: int
+    group_read_at: float
+    active_container_instances: int
+    instances_read_at: float
+    tasks_read_at: float
+    busy_jobs: frozenset[str]
+
+    def refusal(self, job: str, now: float, claim_at: float) -> str:
+        """Why this proof does not end the launch of ``job`` claimed at ``claim_at`` (epoch seconds), or an empty string when it does."""
+        first_read = min(self.group_read_at, self.instances_read_at, self.tasks_read_at)
+        needed = FIT_WAIT_SECONDS + SETTLE_MARGIN_SECONDS
+        if self.desired_capacity != 0 or self.group_instances != 0:
+            return f"the host group shows desired capacity {self.desired_capacity} and {self.group_instances} instance(s)"
+        if self.active_container_instances != 0:
+            return f"ECS lists {self.active_container_instances} ACTIVE container instance(s)"
+        if self.instances_read_at < self.group_read_at:
+            return "the container instances were read before the host group"
+        if job in self.busy_jobs:
+            return f"ECS lists a task of the {job} host definition that is not STOPPED"
+        if now - first_read > PROOF_MAX_AGE_SECONDS:
+            return f"the host was read {int(now - first_read)} s ago, more than {int(PROOF_MAX_AGE_SECONDS)} s"
+        if first_read - claim_at < needed:
+            return (
+                f"its claim is {int(first_read - claim_at)} s old and a RunTask request that passed its guard may still be in flight until it is "
+                f"{int(needed)} s old (the {int(FIT_WAIT_SECONDS)} s send window plus {int(SETTLE_MARGIN_SECONDS)} s)"
+            )
+        return ""
+
+
+@dataclass(frozen=True)
+class SettleResult:
+    """What one settle did to one claimed launch with no end record: ``settled`` (``cancelled`` is recorded, by this call or by an equal call),
+    ``ended_by_other`` (another caller's end record stands) or ``unresolved`` (nothing was recorded; ``reason`` says which part of the proof is missing).
+    ``saved_task`` is the task ARN of the launch's started record, or empty."""
+
+    run_id: str
+    job: str
+    attempt: int
+    status: str
+    reason: str
+    saved_task: str
+
+
+class HostStopSettler:
+    """Ends claimed launches that have no end record, as ``cancelled``, on the proof that the host is stopped (owner decision A, Nov 24 2026, rule 11).
+
+    The gate (``Launcher.auto_settle``) cannot end a launch whose task ECS no longer describes, or whose RunTask call may have been sent and found no
+    task: only positive evidence about the task ends it, and no timer or empty listing is that. A stopped host is the evidence. The host session reads that
+    the group has capacity 0 and no instance, that ECS lists no ACTIVE container instance and no task of the host definition that is not STOPPED
+    (``HostStopProof``), and the claim is older than the send window plus ``SETTLE_MARGIN_SECONDS``, so no request that passed its guard can still land.
+    The settler writes the same write-once ``cancel`` and ``end`` records as ``Launcher.cancel``, through ``write_end``, and calls no cloud service but the
+    record store, so a repeat or a second settler reads the one end record. A record store failure raises ``RecordStoreUnavailable`` and the same call
+    repeats the settle."""
+
+    def __init__(self, store: LaunchStore, clock: Clock | None = None, families: Collection[str] = ()) -> None:
+        self.store = store
+        self.clock = clock or Clock()
+        self.families = frozenset(families)
+
+    def settle_family(self, job: str, proof: HostStopProof) -> Iterator[SettleResult]:
+        """Settle each claimed launch of the family index of ``job`` that has no end record, one result each. A launch with an end record is not reported."""
+        for run in self.store.family_runs(job):
+            claim = self.store.run_record(run, job, "claim")
+            if claim is None:
+                continue
+            attempt = int(claim["attempt"])
+            if self.store.end_record(run, job, attempt) is not None:
+                continue
+            events = {record["event"]: record for record in self.store.records(run, job, [attempt])}
+            if "end" not in events:
+                yield self.settle_launch(claim, events, proof)
+
+    def settle_launch(self, claim: Mapping[str, Any], events: Mapping[str, Mapping[str, Any]], proof: HostStopProof) -> SettleResult:
+        """Settle the launch of ``claim``, whose own attempt's records read ``events`` (no end among them)."""
+        run, job, attempt = str(claim["run_id"]), str(claim["job"]), int(claim["attempt"])
+        saved = str(events["started"]["task_arn"]) if "started" in events else ""
+        why = proof.refusal(job, self.clock.wall(), stamp(str(claim["at"])))
+        if why:
+            return SettleResult(run, job, attempt, "unresolved", why, saved)
+        now = self.clock.wall()
+        reason = (
+            "host stopped: the host group has no instance, ECS lists no container instance and no task of the family, and no RunTask request can be in flight"
+        )
+        put_record(self.store, now, "cancel", attempt, claim, reason=reason[:REPORT_LIMIT])
+        end = write_end(self.store, now, self.families, claim, attempt, attempt, "cancelled", CANCEL_EXIT, reason[:REPORT_LIMIT], saved)
+        return SettleResult(run, job, attempt, "settled" if end["outcome"] == "cancelled" else "ended_by_other", str(end["reason"]), saved)

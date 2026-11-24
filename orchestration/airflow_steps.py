@@ -6,7 +6,8 @@ launch. A failed job fails each step, and trying again needs a new run. A contro
 gate launch nothing: the gate binds the code runs of the chain.
 A staged input that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
-the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found.
+the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found,
+or a host stop that finds the host empty settles it (``HostStopSettler``).
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
 (the launch's end record says the job passed; after a bronze, silver, gold or features job it also sends the job's per-table lineage events, outside the
 OpenLineage provider's forked process and under their own total deadline).

@@ -22,15 +22,20 @@ from botocore.exceptions import ReadTimeoutError
 
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import (
+    FIT_WAIT_SECONDS,
+    SETTLE_MARGIN_SECONDS,
     CleanupFailed,
     EcsFitProbe,
     FamilyBusy,
+    HostStopProof,
+    HostStopSettler,
     JobSpec,
     Launch,
     Launcher,
     LaunchError,
     LaunchRefused,
     LaunchUnavailable,
+    RecordStoreUnavailable,
     Resources,
     S3LaunchStore,
     StopFailed,
@@ -1931,6 +1936,132 @@ def unresolved_gold(rig: Rig) -> None:
     require(not gold_tasks(rig) and "end" not in rig.events(1), "the stand-in launch is not unresolved")
 
 
+LATE = FIT_WAIT_SECONDS + SETTLE_MARGIN_SECONDS + 1  # seconds after the claim at which no request that passed its guard can still be in flight
+FAMILIES = frozenset({"gold", "drift"})
+
+
+def host_proof(rig: Rig, **changes: Any) -> HostStopProof:
+    """What the host session read just now: the group at 0 with no instance, no ACTIVE container instance (read after the group) and no unstopped task."""
+    now = rig.time.now
+    base = HostStopProof(
+        desired_capacity=0,
+        group_instances=0,
+        group_read_at=now,
+        active_container_instances=0,
+        instances_read_at=now + 1,
+        tasks_read_at=now + 1,
+        busy_jobs=frozenset(),
+    )
+    return replace(base, **changes)
+
+
+def settler(rig: Rig) -> HostStopSettler:
+    return HostStopSettler(S3LaunchStore(rig.bucket, BUCKET, PREFIX), rig.time.clock(), FAMILIES)
+
+
+def settle_gold(rig: Rig, proof: HostStopProof) -> list[Any]:
+    return list(settler(rig).settle_family("gold", proof))
+
+
+def host_stop_settles_a_saved_task_that_ecs_forgot() -> None:
+    """Owner decision A (Nov 24 2026): the launch whose saved task ECS no longer describes stays unresolved at the gate, and a host stop that verifies no
+    instance settles it as cancelled, once, so the next launch of the family is admitted."""
+    rig = Rig()
+    arn = stopped_saved_launch(rig)
+    rig.ecs.purge_after = 3600.0
+    rig.time.now += 3601
+    error = refused_gate(rig)
+    require("host stop" in str(error), f"the refusal does not tell that a host stop settles the launch: {error}")
+    results = settle_gold(rig, host_proof(rig))
+    require(len(results) == 1 and results[0].status == "settled", f"the stale launch was not settled: {results}")
+    require(
+        (results[0].run_id, results[0].job, results[0].attempt, results[0].saved_task) == (RUN, "gold", 1, arn),
+        f"the result does not name the launch: {results}",
+    )
+    end = rig.record(1, "end")
+    require(end["outcome"] == "cancelled" and end["task_arn"] == arn and "host" in end["reason"], f"the end record is wrong: {end}")
+    writes = rig.bucket.count("put_object")
+    require(settle_gold(rig, host_proof(rig)) == [] and rig.bucket.count("put_object") == writes, "a second settle wrote or reported something")
+    rig.ecs.hold = False
+    done = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(done.ok and claim_of(rig, OTHER_RUN), f"the next launch of the family was not admitted: {done}")
+
+
+def host_stop_settles_an_unknown_send_after_the_window_and_margin() -> None:
+    """A launch that holds the send token with no task is cancelled by the host stop only when its claim is older than the send window plus the margin: a
+    request that passed its guard cannot be in flight any more."""
+    rig = Rig()
+    open_window_gold(rig)
+    for elapsed in (600, 1199):
+        rig.time.now = START_TIME + elapsed
+        results = settle_gold(rig, host_proof(rig))
+        require(len(results) == 1 and results[0].status == "unresolved", f"after {elapsed} s the launch was not left unresolved: {results}")
+        require("end" not in rig.events(1) and results[0].saved_task == "", f"after {elapsed} s an end was recorded: {rig.events(1)}")
+        require(f"{int(FIT_WAIT_SECONDS + SETTLE_MARGIN_SECONDS)}" in results[0].reason, f"the reason does not give the needed age: {results[0].reason}")
+    rig.time.now = START_TIME + LATE
+    results = settle_gold(rig, host_proof(rig))
+    require(len(results) == 1 and results[0].status == "settled", f"the retry after the margin did not settle it: {results}")
+    end = rig.record(1, "end")
+    require(end["outcome"] == "cancelled" and end["task_arn"] == "", f"the end record is wrong: {end}")
+    done = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(done.ok, f"the next launch of the family was not admitted: {done}")
+
+
+def host_stop_needs_every_part_of_the_proof() -> None:
+    """A group with capacity, an ACTIVE container instance, a container instance listing read before the group, an unstopped task of the family and an old
+    proof each leave the launch unresolved with no end record. A task of another family does not."""
+    rig = Rig()
+    open_window_gold(rig)
+    rig.time.now = START_TIME + LATE
+    now = rig.time.now
+    weak = {
+        "group has an instance": host_proof(rig, group_instances=1),
+        "group wants capacity": host_proof(rig, desired_capacity=1),
+        "container instance is ACTIVE": host_proof(rig, active_container_instances=1),
+        "instances read before the group": host_proof(rig, instances_read_at=now - 1),
+        "a task of the family is not stopped": host_proof(rig, busy_jobs=frozenset({"gold"})),
+        "the proof is old": host_proof(rig, group_read_at=now - 3600, instances_read_at=now - 3599, tasks_read_at=now - 3599),
+    }
+    for label, proof in weak.items():
+        results = settle_gold(rig, proof)
+        require(len(results) == 1 and results[0].status == "unresolved", f"{label}: the launch was not left unresolved: {results}")
+        require("end" not in rig.events(1), f"{label}: an end was recorded")
+    results = settle_gold(rig, host_proof(rig, busy_jobs=frozenset({"drift"})))
+    require(len(results) == 1 and results[0].status == "settled", f"a task of another family held the launch: {results}")
+
+
+def host_stop_never_changes_an_ended_launch() -> None:
+    """A launch with an end record is never touched, and two settles that read the launch before either wrote read the one end record."""
+    rig = Rig()
+    rig.launcher().run(spec())
+    ended = dict(rig.bucket.objects)
+    rig.time.now += 7200
+    require(settle_gold(rig, host_proof(rig)) == [] and rig.bucket.objects == ended, "an ended launch was settled or changed")
+    other = Rig()
+    open_window_gold(other)
+    other.time.now = START_TIME + LATE
+    claim = other.bucket.objects[other.claim_key()]
+    first, second = settler(other), settler(other)
+    proof = host_proof(other)
+    stale: dict[str, dict[str, Any]] = {}
+    one = first.settle_launch(json.loads(claim), stale, proof)
+    two = second.settle_launch(json.loads(claim), stale, proof)
+    ends = [key for key in other.bucket.objects if key.endswith("/end.json")]
+    require(len(ends) == 1 and one.status == "settled" and two.status == "settled", f"two settles did not read one end record: {ends} {one} {two}")
+
+
+def host_stop_settle_survives_a_record_store_failure() -> None:
+    """The record store fails while the end is written: the settle raises the temporary error, no end is recorded, and the same call settles the launch."""
+    rig = Rig()
+    open_window_gold(rig)
+    rig.time.now = START_TIME + LATE
+    rig.bucket.put_faults["end.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
+    refuses(RecordStoreUnavailable, lambda: settle_gold(rig, host_proof(rig)))
+    require("end" not in rig.events(1), "an end was recorded although its write failed")
+    results = settle_gold(rig, host_proof(rig))
+    require(len(results) == 1 and results[0].status == "settled" and rig.record(1, "end")["outcome"] == "cancelled", f"the retry did not settle: {results}")
+
+
 GIB = 2**30
 
 
@@ -1961,6 +2092,11 @@ def fit_without_a_usage_reader_counts_free_space_only() -> None:
 
 
 CASES: dict[str, Callable[[], None]] = {
+    "host_stop_settles_a_saved_task_that_ecs_forgot": host_stop_settles_a_saved_task_that_ecs_forgot,
+    "host_stop_settles_an_unknown_send_after_the_window_and_margin": host_stop_settles_an_unknown_send_after_the_window_and_margin,
+    "host_stop_needs_every_part_of_the_proof": host_stop_needs_every_part_of_the_proof,
+    "host_stop_never_changes_an_ended_launch": host_stop_never_changes_an_ended_launch,
+    "host_stop_settle_survives_a_record_store_failure": host_stop_settle_survives_a_record_store_failure,
     "fit_credits_the_family_own_idle_scratch": fit_credits_the_family_own_idle_scratch,
     "fit_never_credits_another_family_and_names_it": fit_never_credits_another_family_and_names_it,
     "fit_without_a_usage_reader_counts_free_space_only": fit_without_a_usage_reader_counts_free_space_only,

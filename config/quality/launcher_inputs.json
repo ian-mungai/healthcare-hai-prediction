@@ -1840,6 +1840,7 @@
     "scripts/features/training_extract.py",
     "scripts/infrastructure/aws_tasks.py",
     "scripts/infrastructure/capture_reader.py",
+    "scripts/infrastructure/host_launch_settle.py",
     "scripts/infrastructure/host_session.py",
     "scripts/infrastructure/render_jobs_config.py",
     "scripts/infrastructure/render_platform_config.py",
