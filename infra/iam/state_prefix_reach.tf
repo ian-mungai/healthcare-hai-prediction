@@ -3,7 +3,7 @@
 # A glob of an IAM resource (* any run of characters, ? one character) is turned into an anchored pattern and tried on one key and one
 # lock file per stack. The project policies, the owner policies and the two pipeline role templates are read.
 locals {
-  reach_stacks = ["iam", "jobs", "platform", "services", "storage"]
+  reach_stacks = ["alerts", "iam", "jobs", "platform", "services", "storage"]
   reach_keys   = flatten([for stack in local.reach_stacks : ["terraform_state/${stack}/terraform.tfstate", "terraform_state/${stack}/terraform.tfstate.tflock"]])
   reach_bucket = "arn:aws:s3:::${var.data_bucket_name}/"
 

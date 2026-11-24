@@ -560,6 +560,7 @@ run "state_keys_belong_to_the_project_user_and_ci_only" {
       alltrue([
         for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
         join(",", sort(tolist(statement.Resource))) == join(",", sort([
+          "arn:aws:s3:::example-project-ci-bucket/terraform_state/alerts/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate",
           "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate",
@@ -573,7 +574,23 @@ run "state_keys_belong_to_the_project_user_and_ci_only" {
         if statement.Effect == "Allow"
       ])
     )
-    error_message = "The project user may use the storage, platform, services and jobs state keys and no other key."
+    error_message = "The project user may use the storage, platform, services, jobs and alerts state keys and no other key."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.tls.policy).Statement :
+      statement.Sid == "ProjectUserHoldsItsStateLocks" &&
+      toset(statement.Resource) == toset([
+        "arn:aws:s3:::example-project-ci-bucket/terraform_state/alerts/terraform.tfstate.tflock",
+        "arn:aws:s3:::example-project-ci-bucket/terraform_state/jobs/terraform.tfstate.tflock",
+        "arn:aws:s3:::example-project-ci-bucket/terraform_state/platform/terraform.tfstate.tflock",
+        "arn:aws:s3:::example-project-ci-bucket/terraform_state/services/terraform.tfstate.tflock",
+        "arn:aws:s3:::example-project-ci-bucket/terraform_state/storage/terraform.tfstate.tflock"
+      ]) &&
+      toset(statement.Action) == toset(["s3:GetObject", "s3:PutObject", "s3:DeleteObject"])
+    ])
+    error_message = "The project user may read, write and delete the lock file of each of its five stacks and nothing else."
   }
 
   assert {
