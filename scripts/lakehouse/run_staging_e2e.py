@@ -3171,7 +3171,7 @@ GROUP_D1 = (
         "2025-07-01",
         "Complications_and_Deaths-Hospital.csv",
         sha("de1"),
-        12,
+        13,
         records=(
             cc(facility_id="010001", measure_id="MORT_30_AMI", score="12.3", lower_estimate="10.9", higher_estimate="13.8", **DATES_2022),
             cc(facility_id="010001", measure_id="PSI_90", score="1.01", denominator="Not Applicable", **DATES_2022),
@@ -3189,6 +3189,8 @@ GROUP_D1 = (
             cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", score="3.10", **DATES_2020),
             # A dated renamed row beside an exact row of an undated release: the exact row is held, so the renamed row enters as PSI_90.
             cc(facility_id="010003", measure_id="PSI_90_SAFETY", score="0.80", **DATES_2019),
+            # An exact PSI_13 of a dated release beside the same hospital and window in an undated release: the dated row is a window; the undated row is held.
+            cc(facility_id="010003", measure_id="PSI_13", score="3.50", **DATES_2019),
         ),
     ),
     Stored(
@@ -3197,8 +3199,13 @@ GROUP_D1 = (
         "undated-release",
         "Complications_and_Deaths-Hospital.csv",
         sha("de0"),
-        1,
-        records=(cc(facility_id="010003", measure_id="PSI_90", score="0.70", **DATES_2019),),
+        3,
+        records=(
+            cc(facility_id="010003", measure_id="PSI_90", score="0.70", **DATES_2019),
+            # Two undated PSI_90 windows for one hospital: the hold records both rows, and the key reconciliation compares row counts, not windows.
+            cc(facility_id="010003", measure_id="PSI_90", score="0.60", **DATES_2018),
+            cc(facility_id="010003", measure_id="PSI_13", score="3.40", **DATES_2019),
+        ),
     ),
     Stored(
         "cms_cc_hospital_readmissions_reduction_program_hospital",
@@ -6439,6 +6446,8 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("deaths", "010003", "PSI_90", "2022-01-01", "1.10", sha("de1")),
             # A dated PSI_90_SAFETY beside an exact PSI_90 of an undated release enters as PSI_90: that exact row is held.
             ("deaths", "010003", "PSI_90", "2019-01-01", "0.80", sha("de1")),
+            # An exact PSI_13 of a dated release is a window although an undated release holds the same hospital and window.
+            ("deaths", "010003", "PSI_13", "2019-01-01", "3.50", sha("de1")),
             ("deaths", "010001", "PSI_13", "2022-01-01", "4.52", sha("de1")),
             ("deaths", "010003", "PSI_13", "2022-01-01", "4.10", sha("de1")),
             ("deaths", "010001", "PSI_08", "2021-01-01", "0.12", sha("g4a")),
@@ -6465,6 +6474,7 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
             ("deaths", "010001", "PSI_90", "PSI_90", "2022-01-01", "1.01"),
             ("deaths", "010003", "PSI_90", "PSI_90_SAFETY", "2022-01-01", "1.1"),
             ("deaths", "010003", "PSI_90", "PSI_90_SAFETY", "2019-01-01", "0.8"),
+            ("deaths", "010003", "PSI_13", "PSI_13", "2019-01-01", "3.5"),
             ("deaths", "010001", "PSI_13", "PSI_13", "2022-01-01", "4.52"),
             ("deaths", "010003", "PSI_13", "PSI_13_POST_SEPSIS", "2022-01-01", "4.1"),
             ("deaths", "010001", "PSI_08", "PSI_08", "2021-01-01", "0.12"),
@@ -6482,15 +6492,17 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     ]
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
-        # Two renamed rows for one hospital and window are held under the published ID; the exact row of an undated release is a row hold.
+        # Two renamed rows for one hospital and window are held under the published ID. The rows of an undated release are row holds with no window
+        # dates: one PSI_13 row, and the two PSI_90 rows of two windows counted together.
+        ("cms_cc_complications_and_deaths_hospital", "010003", "PSI_13", "undated_release", "1"),
         ("cms_cc_complications_and_deaths_hospital", "010003", "PSI_13_POST_SEPSIS", "repeated_in_file", "2"),
-        ("cms_cc_complications_and_deaths_hospital", "010003", "PSI_90", "undated_release", "1"),
+        ("cms_cc_complications_and_deaths_hospital", "010003", "PSI_90", "undated_release", "2"),
         ("cms_cc_unplanned_hospital_visits_hospital", "", "", "no_key", "1"),
     ]
-    # The key reconciliation: the renamed PSI_90_SAFETY of the undated-release case stays a window, so its exact key is counted as undated and not subtracted
-    # as a dropped alias; the two held windows are MORT_30_HF and the repeated PSI_13_POST_SEPSIS.
+    # The key reconciliation: 13 dated keys, 11 windows and the two held windows (MORT_30_HF and the repeated PSI_13_POST_SEPSIS); the three undated rows (two
+    # PSI_90 windows and a PSI_13 window that a dated row shares) equal their holds' row counts, so no hospital and ID disagrees.
     checks["validation_keys_reconcile_expected"] = base.get("validation_keys") == [
-        ("cms_cc_complications_and_deaths_hospital", "12", "10", "2", "0", "1", "1"),
+        ("cms_cc_complications_and_deaths_hospital", "13", "11", "2", "0", "3", "0"),
         ("cms_cc_hospital_readmissions_reduction_program_hospital", "2", "2", "0", "0", "0", "0"),
         ("cms_cc_unplanned_hospital_visits_hospital", "8", "8", "0", "0", "0", "0"),
     ]
@@ -7437,10 +7449,11 @@ UNION ALL SELECT 'mmd_unknown_county', (SELECT count(*) FROM stg_cms_mmd_csv WHE
 MMD_CONTROLS_SQL = "SELECT count(DISTINCT condition_label)::VARCHAR FROM int_mmd_prevalence;"
 
 
-# Every distinct usable window key of a Care Compare window table is a window or a held window, never both and never neither; the hospital ID
-# follows the models' rule: a 5-digit ID padded, any other ID that is not 6 digits or capital letters null.
+# Every distinct usable window key of a dated release of a Care Compare window table is a window or a held window, never both and never neither; the
+# staged rows of an undated release equal the row count of their undated_release hold per hospital and published ID. The hospital ID follows the
+# models' rule: a 5-digit ID padded, any other ID that is not 6 digits or capital letters null.
 D1_KEYS_SQL = """WITH keys AS (
-    SELECT DISTINCT 'cms_cc_unplanned_hospital_visits_hospital' AS t,
+    SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t,
         CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
         WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END AS e,
         trim(stg.measure_id) AS m,
@@ -7455,7 +7468,7 @@ D1_KEYS_SQL = """WITH keys AS (
         ON files.bronze_table = 'cms_cc_unplanned_hospital_visits_hospital' AND files.member_sha256 = stg._member_sha256
     WHERE NOT stg.is_label_held
     UNION ALL
-    SELECT DISTINCT 'cms_cc_complications_and_deaths_hospital',
+    SELECT 'cms_cc_complications_and_deaths_hospital',
         CASE WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9]{5}') THEN lpad(trim(coalesce(facility_id, provider_id)), 6, '0')
         WHEN regexp_full_match(trim(coalesce(facility_id, provider_id)), '[0-9A-Z]{6}') THEN trim(coalesce(facility_id, provider_id)) END, trim(stg.measure_id),
         try_strptime(coalesce(start_date, measure_start_date), '%m/%d/%Y')::date, try_strptime(coalesce(end_date, measure_end_date), '%m/%d/%Y')::date,
@@ -7467,7 +7480,7 @@ D1_KEYS_SQL = """WITH keys AS (
         ON files.bronze_table = 'cms_cc_complications_and_deaths_hospital' AND files.member_sha256 = stg._member_sha256
     WHERE NOT stg.is_label_held
     UNION ALL
-    SELECT DISTINCT 'cms_cc_hospital_readmissions_reduction_program_hospital',
+    SELECT 'cms_cc_hospital_readmissions_reduction_program_hospital',
         CASE WHEN regexp_full_match(trim(facility_id), '[0-9]{5}') THEN lpad(trim(facility_id), 6, '0')
         WHEN regexp_full_match(trim(facility_id), '[0-9A-Z]{6}') THEN trim(facility_id) END, trim(measure_name),
         try_strptime(start_date, '%m/%d/%Y')::date, try_strptime(end_date, '%m/%d/%Y')::date, trim(measure_name), files.latest_publication_date IS NOT NULL
@@ -7476,11 +7489,13 @@ D1_KEYS_SQL = """WITH keys AS (
         ON files.bronze_table = 'cms_cc_hospital_readmissions_reduction_program_hospital' AND files.member_sha256 = stg._member_sha256
     WHERE NOT stg.is_label_held
 ),
--- One key per table, hospital, published ID and window; dated is true when any of its rows comes from a dated release.
+-- One row per staged usable row, so the undated rows can be counted before their windows collapse into keys.
 usable AS (
-    SELECT t, e, m, s, f, c, bool_or(d) AS dated FROM keys
-    WHERE nullif(e, '') IS NOT NULL AND nullif(m, '') IS NOT NULL AND s IS NOT NULL AND f IS NOT NULL
-    GROUP BY ALL
+    SELECT * FROM keys WHERE nullif(e, '') IS NOT NULL AND nullif(m, '') IS NOT NULL AND s IS NOT NULL AND f IS NOT NULL
+),
+-- A key is a table, hospital, published ID and window of a dated release; an undated row never joins a key, so a dated row of the same window cannot hide it.
+dated AS (
+    SELECT DISTINCT t, e, m, s, f, c FROM usable WHERE d
 ),
 w AS (
     SELECT 'cms_cc_unplanned_hospital_visits_hospital' AS t, entity_id AS e, published_measure_id AS m, window_start AS s, window_end AS f
@@ -7493,26 +7508,34 @@ h AS (
     SELECT bronze_table AS t, entity_id AS e, measure_id AS m, window_start AS s, window_end AS f
     FROM int_validation_window_holds WHERE window_start IS NOT NULL
 ),
--- A key of an undated release is a row hold with no window dates (undated_release): counted apart and tied to its hold by table, hospital and
--- published ID. A dated alias key is dropped by the model only when the exact key of its reviewed ID is kept as a window; a held alias key stays
--- (A12, A32, A33). Keys, windows and holds compare by published ID.
-undated AS (
-    SELECT a.t, a.e, a.m, a.s, a.f FROM usable AS a WHERE NOT a.dated
-),
+-- A dated alias key is dropped by the model only when the exact key of its reviewed ID is kept as a window; a held alias key stays (A12, A32, A33).
+-- Keys, windows and holds compare by published ID.
 discarded AS (
-    SELECT a.t, a.e, a.m, a.s, a.f FROM usable AS a
-    WHERE a.dated AND a.c <> a.m
+    SELECT a.t, a.e, a.m, a.s, a.f FROM dated AS a
+    WHERE a.c <> a.m
         AND EXISTS (SELECT 1 FROM w WHERE w.t = a.t AND w.e = a.e AND w.m = a.c AND w.s = a.s AND w.f = a.f)
         AND NOT EXISTS (SELECT 1 FROM h WHERE h.t = a.t AND h.e = a.e AND h.m = a.m AND h.s = a.s AND h.f = a.f)
-)
-SELECT usable.t,
-    (count(*) - (SELECT count(*) FROM undated WHERE undated.t = usable.t) - (SELECT count(*) FROM discarded WHERE discarded.t = usable.t))::VARCHAR,
-    (SELECT count(*) FROM w WHERE w.t = usable.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = usable.t)::VARCHAR,
-    (SELECT count(*) FROM w INNER JOIN h USING (t, e, m, s, f) WHERE w.t = usable.t)::VARCHAR,
-    (SELECT count(*) FROM undated WHERE undated.t = usable.t)::VARCHAR,
-    (SELECT count(*) FROM undated WHERE undated.t = usable.t AND EXISTS (SELECT 1 FROM int_validation_window_holds AS u
-        WHERE u.bronze_table = undated.t AND u.entity_id = undated.e AND u.measure_id = undated.m AND u.hold_reason = 'undated_release'))::VARCHAR
-FROM usable GROUP BY usable.t ORDER BY 1;"""
+),
+-- An undated release is a row hold with no window dates (undated_release) at the grain of table, hospital and published ID, and its row count is the
+-- staged undated rows of that grain. The staged rows and the hold's row count must be equal there, in both directions.
+undated_rows AS (
+    SELECT t, e, m, count(*) AS n FROM usable WHERE NOT d GROUP BY ALL
+),
+undated_holds AS (
+    SELECT bronze_table AS t, entity_id AS e, measure_id AS m, sum(row_count) AS n FROM int_validation_window_holds
+    WHERE hold_reason = 'undated_release' GROUP BY ALL
+),
+undated AS (
+    SELECT t, e, m, coalesce(r.n, 0) AS staged, coalesce(u.n, 0) AS held FROM undated_rows AS r FULL JOIN undated_holds AS u USING (t, e, m)
+),
+tables AS (SELECT DISTINCT t FROM usable)
+SELECT tables.t,
+    ((SELECT count(*) FROM dated WHERE dated.t = tables.t) - (SELECT count(*) FROM discarded WHERE discarded.t = tables.t))::VARCHAR,
+    (SELECT count(*) FROM w WHERE w.t = tables.t)::VARCHAR, (SELECT count(*) FROM h WHERE h.t = tables.t)::VARCHAR,
+    (SELECT count(*) FROM w INNER JOIN h USING (t, e, m, s, f) WHERE w.t = tables.t)::VARCHAR,
+    (SELECT coalesce(sum(staged), 0) FROM undated WHERE undated.t = tables.t)::VARCHAR,
+    (SELECT count(*) FROM undated WHERE undated.t = tables.t AND staged <> held)::VARCHAR
+FROM tables ORDER BY 1;"""
 
 
 # Every distinct usable hospital and fiscal year of a HAC and value-based purchasing table is a program-year row or held, never both and never neither,
@@ -7544,10 +7567,17 @@ def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real Care Compare windows with their staging views' window keys; count rows per control."""
     checks: dict[str, bool] = {}
     counts: dict[str, Any] = {}
-    for table, keys, windows, held, both, undated, undated_held in duckdb_csv(database, D1_KEYS_SQL, init):
-        counts[table] = {"window_keys": int(keys), "windows": int(windows), "held_windows": int(held), "both": int(both), "undated_keys": int(undated)}
+    for table, keys, windows, held, both, undated, undated_mismatched in duckdb_csv(database, D1_KEYS_SQL, init):
+        counts[table] = {
+            "window_keys": int(keys),
+            "windows": int(windows),
+            "held_windows": int(held),
+            "both": int(both),
+            "undated_rows": int(undated),
+            "undated_mismatched": int(undated_mismatched),
+        }
         checks[f"validation_{table}_keys_reconcile"] = (
-            int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0 and int(undated) == int(undated_held)
+            int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0 and int(undated_mismatched) == 0
         )
     for table, keys, rows, held, both in duckdb_csv(database, D2_KEYS_SQL, init):
         counts[table] = {"hospital_years": int(keys), "rows": int(rows), "held": int(held), "both": int(both)}
