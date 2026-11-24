@@ -5881,6 +5881,7 @@ def read_models(case: str) -> dict[str, Any]:
         "validation_aliases": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIASES_SQL)],
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "validation_keys": [tuple(row) for row in duckdb_csv(database, D1_KEYS_SQL)],
+        "validation_keys_partial_hold": [tuple(row) for row in duckdb_csv(database, PARTIAL_HOLD_KEYS_SQL)],
         "program_years": [tuple(row) for row in duckdb_csv(database, PROGRAM_YEARS_SQL)],
         "program_values": [tuple(row) for row in duckdb_csv(database, PROGRAM_VALUES_SQL)],
         "vbp_domains": [tuple(row) for row in duckdb_csv(database, VBP_DOMAINS_SQL)],
@@ -6506,6 +6507,14 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("cms_cc_hospital_readmissions_reduction_program_hospital", "2", "2", "0", "0", "0", "0"),
         ("cms_cc_unplanned_hospital_visits_hospital", "8", "8", "0", "0", "0", "0"),
     ]
+    # A partial hold (one of the two staged undated PSI_90 rows of 010003) is reported as one mismatched hospital and ID, and the real check's predicate
+    # fails for that table while the other tables still reconcile.
+    partial = base.get("validation_keys_partial_hold") or []
+    checks["validation_keys_partial_hold_fails"] = (
+        PARTIAL_HOLD_KEYS_SQL != D1_KEYS_SQL
+        and [row[6] for row in partial] == ["1", "0", "0"]
+        and [keys_reconcile(*row[1:5], row[6]) for row in partial] == [False, True, True]
+    )
     return checks
 
 
@@ -7537,6 +7546,14 @@ SELECT tables.t,
     (SELECT count(*) FROM undated WHERE undated.t = tables.t AND staged <> held)::VARCHAR
 FROM tables ORDER BY 1;"""
 
+# The key reconciliation with the undated_release hold of hospital 010003's PSI_90 recording one row fewer than the two staged rows (a partial hold): the
+# reconciliation must report that hospital and ID as mismatched, so the real check fails.
+PARTIAL_HOLD_TARGET = "sum(row_count) AS n FROM int_validation_window_holds"
+PARTIAL_HOLD_KEYS_SQL = D1_KEYS_SQL.replace(
+    PARTIAL_HOLD_TARGET,
+    "sum(CASE WHEN entity_id = '010003' AND measure_id = 'PSI_90' THEN row_count - 1 ELSE row_count END) AS n FROM int_validation_window_holds",
+)
+
 
 # Every distinct usable hospital and fiscal year of a HAC and value-based purchasing table is a program-year row or held, never both and never neither,
 # with the models' hospital ID rule.
@@ -7563,6 +7580,12 @@ SELECT usable.t, count(*)::VARCHAR, (SELECT count(*) FROM p WHERE p.t = usable.t
 FROM usable GROUP BY usable.t ORDER BY 1;"""
 
 
+def keys_reconcile(keys: str, windows: str, held: str, both: str, undated_mismatched: str) -> bool:
+    """Whether one table's window keys reconcile: every dated key is a window or a held window, no key is both, and every undated hold row count equals its
+    staged undated rows."""
+    return int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0 and int(undated_mismatched) == 0
+
+
 def validation_real(database: str, init: str) -> dict[str, Any]:
     """Reconcile the real Care Compare windows with their staging views' window keys; count rows per control."""
     checks: dict[str, bool] = {}
@@ -7576,9 +7599,7 @@ def validation_real(database: str, init: str) -> dict[str, Any]:
             "undated_rows": int(undated),
             "undated_mismatched": int(undated_mismatched),
         }
-        checks[f"validation_{table}_keys_reconcile"] = (
-            int(keys) == int(windows) + int(held) and int(both) == 0 and int(windows) > 0 and int(undated_mismatched) == 0
-        )
+        checks[f"validation_{table}_keys_reconcile"] = keys_reconcile(keys, windows, held, both, undated_mismatched)
     for table, keys, rows, held, both in duckdb_csv(database, D2_KEYS_SQL, init):
         counts[table] = {"hospital_years": int(keys), "rows": int(rows), "held": int(held), "both": int(both)}
         checks[f"validation_{table}_years_reconcile"] = int(keys) == int(rows) + int(held) and int(both) == 0 and int(rows) > 0
