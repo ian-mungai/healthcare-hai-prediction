@@ -847,6 +847,10 @@ def a_full_bronze_run_fits_the_runtask_overrides() -> None:
     for arguments in sent:
         size = len(json.dumps(arguments["overrides"], separators=(",", ":")))
         require(size < 4096, f"the overrides of {arguments['taskDefinition']} hold {size} characters, with a service limit of 8192")
+        # A command override could carry the table list past the environment checks below (the worker gives --tables precedence over the request).
+        fields = [sorted(override) for override in arguments["overrides"]["containerOverrides"]]
+        require(set(arguments["overrides"]) == {"containerOverrides"}, f"the overrides of {arguments['taskDefinition']} set {sorted(arguments['overrides'])}")
+        require(all(names == ["environment", "name"] for names in fields), f"a container override of {arguments['taskDefinition']} sets {fields}")
     values = rig.environment(1)
     require(set(values) == {"fetch", "pin", "load", "check"}, f"{sorted(values)}")
     require(all(not value or "," not in value for variables in values.values() for value in variables.values()), "a table list is in the container overrides")
