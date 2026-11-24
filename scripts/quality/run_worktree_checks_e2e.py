@@ -67,10 +67,12 @@ def advance_origin(scratch: Path, repo: Path) -> None:
 
 
 TOP_LEVEL_CHECK = (
-    "import os, runpy; os.environ.pop('PROCESS_LAUNCH_SESSION', None); runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
+    "import os, runpy, scripts.process; os.environ.pop('PROCESS_LAUNCH_SESSION', None); scripts.process.PROC_ROOT = '/no_such_proc_root'; "
+    "runpy.run_module('scripts.quality.check_tools', run_name='__main__', alter_sys=True)"
 )
 TOP_LEVEL_LINT = (
-    "import os, runpy, sys; os.environ.pop('PROCESS_LAUNCH_SESSION', None); sys.argv[1:] = ['yamllint']; "
+    "import os, runpy, sys, scripts.process; os.environ.pop('PROCESS_LAUNCH_SESSION', None); scripts.process.PROC_ROOT = '/no_such_proc_root'; "
+    "sys.argv[1:] = ['yamllint']; "
     "runpy.run_module('scripts.quality.lint_sources', run_name='__main__', alter_sys=True)"
 )
 
@@ -89,7 +91,8 @@ def run_check(repo: Path, module: str) -> tuple[int, str]:
         result = run_command(str(PYTHON), ["-c", SHORT_EXPORT], cwd=repo, env=environment, timeout=240)
     elif module == "check_tools_ps_blocked":
         # The fake ps (see ``ps_blocked``) comes first on the check's PATH. The runner's launch names its children as a nested session, and a nested launch
-        # lists no process, so the check drops that name and is a top-level launch.
+        # lists no process, so the check drops that name and is a top-level launch. The launch also points PROC_ROOT at a missing folder, so the session
+        # listing runs ps on Linux too (where it reads /proc and never calls ps otherwise).
         blocked = {**environment, "PATH": f"{repo / '.ps_blocked/bin'}{os.pathsep}{environment['PATH']}"}
         result = run_command(str(PYTHON), ["-c", TOP_LEVEL_CHECK], cwd=repo, env=blocked, timeout=240)
     elif module == "lint_yamllint_ps_blocked":

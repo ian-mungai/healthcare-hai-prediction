@@ -87,8 +87,8 @@ def test_a_python_command_a_missing_script_a_placeholder_and_a_missing_command_a
             readme.replace("bash scripts/run_ci.sh", 'env PYTHON_BIN="$PWD/.venv/bin/python" bash scripts/run_ci.sh', 1),
             "must be one",
         ),
-        "a missing install command": (readme.replace("bash scripts/install.sh", "", 1), "must show"),
-        "a missing check command": (readme.replace("bash scripts/run_ci.sh", "", 1), "must show"),
+        "a missing install command": (readme.replace("bash scripts/install.sh", ""), "must show"),
+        "a missing check command": (readme.replace("bash scripts/run_ci.sh", ""), "must show"),
         "an unclosed fence": (readme + "\n```sh\nbash scripts/install.sh\n", "never closed"),
     }
     for name, (text, expected) in cases.items():
