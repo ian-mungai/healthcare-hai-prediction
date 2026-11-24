@@ -1733,7 +1733,7 @@ def removed_table_scenarios(spark: Any, root: Path, storage: FakeStorage, scratc
     ):
         broken = root / f"leaving_{label}.json"
         broken.write_text(json.dumps({"version": 1, "tables": entries}))
-        results[f"leaving_table_{label}_refused"] = expect_error(lambda path=broken: bronze.load_leaving(path, kept_only), message)
+        results[f"leaving_table_{label}_refused"] = expect_error(partial(bronze.load_leaving, broken, kept_only), message)
     # [257] The table, its dictionary and its side rows go.
     outcome = bronze.drop_removed(spark, bronze.load_removed(listed, kept_only), "bronze")
     results["removed_table_dropped"] = (
@@ -2102,7 +2102,7 @@ def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
     """A table that left the bronze scope stays as it was through bronze.main: a new retained capture, and a first publication over a shared checksum."""
     namespace = "leaving_scope"
     storage = FakeStorage()
-    tables = [
+    tables: list[dict[str, Any]] = [
         {"table": name, "collection": "synthetic/" + name, "format": "csv", "encodings": ["utf-8"], "roles": ["data"], "dataset_ids": [name]}
         for name in ("scope_kept", "scope_gone")
     ]
@@ -2162,7 +2162,7 @@ def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
     }
     # A reviewed checksum group spans the boundary: the retained owner and the aliases of a table that left the scope share one file's checksum.
     shared = csv_bytes(["value"], [["shared"]])
-    pair = [
+    pair: list[dict[str, Any]] = [
         {"table": name, "collection": "synthetic/" + name, "format": "csv", "encodings": ["utf-8"], "roles": ["data"], "dataset_ids": [name]}
         for name in ("bound_kept", "bound_gone")
     ]

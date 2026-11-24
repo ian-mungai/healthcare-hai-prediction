@@ -826,16 +826,19 @@ def bronze_request_is_checked_and_bound() -> None:
 
 
 def a_full_bronze_run_fits_the_runtask_overrides() -> None:
-    """The bronze_stage job stages a request for every table of the table map (330 at Nov 18 2026, about 11 KB) and the bronze job runs it. A RunTask call
+    """The bronze_stage job stages a request for every table of the table map (106 at Nov 24 2026, about 2.8 KB) and the bronze job runs it. A RunTask call
     takes at most 8192 characters of container overrides, all containers together (the fake refuses more, as the service does). The tables travel in the
-    staged request, which each phase reads and checks against its digest, and never in the overrides of the pin, load or check container."""
+    staged request, which each phase reads and checks against its digest, and never in the overrides of the pin, load or check container. A full run is
+    every table of the map, so the case proves it can see a table list in the overrides: the lists of those three containers would take more than the 4096
+    characters that a job's overrides may use."""
     names = list(collections_of_table_map())
     good = bronze_request(names)
     ingestion, bronze = "ingestion_0f0f0f0f", "bronze_0f0f0f0f"
     rig = Rig()
     rig.stage_runs(ingestion)
     rig.stage.stage(bronze, "bronze_request.json", good)
-    require(len(rig.stage.objects[RUN_KEY.format(run=bronze, name="bronze_request.json")]) > 4096, "the request is not as large as a full run's")
+    require(good["tables"] == names, "the request does not name every table of the map")
+    require(3 * len(",".join(names)) > 4096, "the table lists of a full run would fit in the overrides, so the case cannot see them there")
     with world(rig, "bronze_dag", {"run_id": bronze, "mode": "real"}) as current:
         require(current.step("bronze_stage") == "succeeded", "the stage job did not launch")
         require(current.step("bronze_load") == "succeeded", "a full-map bronze request did not launch")

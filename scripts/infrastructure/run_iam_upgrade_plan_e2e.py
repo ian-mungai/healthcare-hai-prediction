@@ -8,7 +8,8 @@ mock provider does not run the provider's own diff. So this plans the real IAM s
 skipped, a targeted plan, no refresh) against ``tests/fixtures/bronze_writer_policies_applied_state.json``, a synthetic state of the seven managed bronze
 policies as they were applied (their descriptions and documents, with synthetic names, account and ARNs). The plan must:
 
-1. update ``run_record_writes`` in place (its document gained the mirror attempt keys) and leave the six other policies untouched;
+1. update ``run_record_writes`` in place (its document gained the mirror attempt keys), update the three source read policies in place (their documents list
+   the collections of the bronze table map, which now holds the tables that silver reads) and leave the three other policies untouched;
 2. destroy, create or replace nothing, and name no ``replace_paths`` anywhere.
 
 A second plan targets the Glue mirror grants: the bronze writer's two inline policies (the bronze and the bronze_dictionary database) are created, the three
@@ -41,7 +42,7 @@ TIMEOUT_SECONDS = 900.0
 TARGET = "aws_iam_policy.bronze_writer"
 GRANT_TARGET = "aws_iam_role_policy.athena_mirror_writer"
 GRANT_ADDRESS = 'aws_iam_role_policy.athena_mirror_writer["{layer}"]'
-CHANGED = 'aws_iam_policy.bronze_writer["run_record_writes"]'
+CHANGED = tuple(f'aws_iam_policy.bronze_writer["{name}"]' for name in ("run_record_writes", "source_lists", "source_objects_raw", "source_objects_root"))
 OFFLINE_PROVIDER = """provider "aws" {
   profile                     = null
   allowed_account_ids         = null
@@ -137,10 +138,10 @@ def grant_verdict(changes: list[dict[str, Any]]) -> Mapping[str, bool]:
 def verdict(changes: list[dict[str, Any]]) -> Mapping[str, bool]:
     """The two rules over the planned changes."""
     actions = {change["address"]: change["change"]["actions"] for change in changes}
-    others = [address for address in actions if address != CHANGED]
+    others = [address for address in actions if address not in CHANGED]
     return {
-        "the changed policy is updated in place": actions.get(CHANGED) == ["update"],
-        "the six other policies are untouched": len(others) == 6 and all(actions[address] == ["no-op"] for address in others),
+        "the four changed policies are updated in place": all(actions.get(address) == ["update"] for address in CHANGED),
+        "the three other policies are untouched": len(others) == 3 and all(actions[address] == ["no-op"] for address in others),
         "nothing is destroyed, created or replaced": not any(action in ("delete", "create") for value in actions.values() for action in value),
         "no resource names a replace path": not any(change["change"].get("replace_paths") for change in changes),
     }

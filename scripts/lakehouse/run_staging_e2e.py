@@ -6513,7 +6513,7 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     checks["validation_keys_partial_hold_fails"] = (
         PARTIAL_HOLD_KEYS_SQL != D1_KEYS_SQL
         and [row[6] for row in partial] == ["1", "0", "0"]
-        and [keys_reconcile(*row[1:5], row[6]) for row in partial] == [False, True, True]
+        and [keys_reconcile(row[1], row[2], row[3], row[4], row[6]) for row in partial] == [False, True, True]
     )
     return checks
 
