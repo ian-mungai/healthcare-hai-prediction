@@ -23,6 +23,7 @@ and only when both carry the protection for that administrator does it mark the 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -44,6 +45,14 @@ RECORD = Path("plans/state_migration/state_protection.json")
 STATE_ADMIN = re.compile(r"(user|role)/[A-Za-z0-9_+=,.@/-]+")
 STATE_SIDS = ("ProjectUserUsesItsStateKeys", "ProjectUserHoldsItsStateLocks", "DenyStatePrefixToEveryoneElse", "DenyIamStateToProjectIdentities")
 LIFECYCLE_RULE = "expire_replaced_state_versions"
+STATE_PREFIX = "terraform_state"
+STATE_STACKS = ("storage", "iam", "platform", "services", "jobs", "alerts")
+STATE_RULE_PREFIX = f"{STATE_PREFIX}/"
+STATE_RULE_DAYS = 90
+OBJECT_STATEMENTS = STATE_SIDS[:2]
+OBJECT_ACTIONS = ({"s3:GetObject", "s3:PutObject"}, {"s3:GetObject", "s3:PutObject", "s3:DeleteObject"})
+DENY_STATEMENTS = STATE_SIDS[2:]
+NOT_KEYS = ("NotAction", "NotResource", "NotPrincipal")
 PENDING, VERIFIED = "pending", "verified"
 NO_POLICY = ("NoSuchBucketPolicy", "NoSuchBucket")
 CLIENT_CONFIG = Config(retries={"max_attempts": 2, "mode": "standard"}, connect_timeout=10, read_timeout=60)
@@ -142,12 +151,147 @@ def protected(target: Deployment) -> bool:
     return any(statement.get("Sid") in STATE_SIDS for statement in live_statements(target))
 
 
+def state_key(stack: str) -> str:
+    return f"{STATE_PREFIX}/{stack}/terraform.tfstate"
+
+
+def listed(value: object) -> list[str]:
+    """The strings of a policy field that may be one string or a list of them."""
+    if isinstance(value, str):
+        return [value]
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def invalid_policy(sid: str, reason: str) -> Refused:
+    return Refused(f"bucket policy: state statements invalid ({sid}: {reason})")
+
+
+def check_allow(statement: dict[str, Any], sid: str, actions: set[str], user: str, wanted: str) -> None:
+    """One Allow statement: effect, principal, actions and resources are exactly the ones of ``infra/main.tf`` and the stack's own key is named."""
+    principal = statement.get("Principal")
+    if statement.get("Effect") != "Allow" or any(name in statement for name in (*NOT_KEYS, "Condition")):
+        raise invalid_policy(sid, "it is not a plain allow")
+    if not isinstance(principal, dict) or listed(principal.get("AWS")) != [user]:
+        raise invalid_policy(sid, "its principal is not the project user")
+    if set(listed(statement.get("Action"))) != actions:
+        raise invalid_policy(sid, "its actions differ")
+    resources = listed(statement.get("Resource"))
+    if any("*" in resource or f"/{STATE_PREFIX}/iam/" in resource for resource in resources):
+        raise invalid_policy(sid, "a resource is a wildcard or the iam stack")
+    if wanted not in resources:
+        raise Refused("bucket policy: state statements missing (the state key of this stack is not allowed)")
+
+
+def check_deny(statement: dict[str, Any], sid: str, resource: str, operator: str, names: list[str], absent: list[str]) -> None:
+    """One Deny statement: it covers everyone, all S3 actions and exactly this prefix, and its condition lists the principals that must stay in or out."""
+    if statement.get("Effect") != "Deny" or any(name in statement for name in NOT_KEYS):
+        raise invalid_policy(sid, "it is not a plain deny")
+    principal = statement.get("Principal")
+    if principal != "*" and not (isinstance(principal, dict) and listed(principal.get("AWS")) == ["*"]):
+        raise invalid_policy(sid, "its principal is not everyone")
+    if listed(statement.get("Action")) != ["s3:*"] or listed(statement.get("Resource")) != [resource]:
+        raise invalid_policy(sid, "its actions or its resource differ")
+    condition = statement.get("Condition")
+    if (
+        not isinstance(condition, dict)
+        or list(condition) != [operator]
+        or not isinstance(condition[operator], dict)
+        or list(condition[operator]) != ["aws:PrincipalArn"]
+    ):
+        raise invalid_policy(sid, "its condition is not the principal list")
+    found = listed(condition[operator]["aws:PrincipalArn"])
+    if any(name not in found for name in names) or any(name in found for name in absent):
+        raise invalid_policy(sid, "its principal list differs")
+
+
+def check_policy(statements: list[dict[str, Any]], bucket: str, stack: str, administrator: bool, user: str, principal: str) -> None:
+    """Check each state statement of a bucket policy for what it does (its effect, principal, actions, resources and deny conditions) for one stack, whose
+    caller is ``principal``. ``administrator`` is True for the iam stack, which has no allow statements of its own."""
+    required = DENY_STATEMENTS if administrator else (*OBJECT_STATEMENTS, *DENY_STATEMENTS)
+    found = {sid: [statement for statement in statements if statement.get("Sid") == sid] for sid in required}
+    if any(not matching for matching in found.values()):
+        raise Refused("bucket policy: state statements missing")
+    for sid, matching in found.items():
+        if len(matching) > 1:
+            raise invalid_policy(sid, "the Sid appears more than once")
+    prefix = f"arn:aws:s3:::{bucket}/{STATE_PREFIX}"
+    if not administrator:
+        key = f"{prefix}/{stack}/terraform.tfstate"
+        for sid, actions, wanted in zip(OBJECT_STATEMENTS, OBJECT_ACTIONS, (key, f"{key}.tflock"), strict=True):
+            check_allow(found[sid][0], sid, actions, user, wanted)
+    check_deny(found[DENY_STATEMENTS[0]][0], DENY_STATEMENTS[0], f"{prefix}/*", "ArnNotLike", [principal], [])
+    check_deny(found[DENY_STATEMENTS[1]][0], DENY_STATEMENTS[1], f"{prefix}/iam/*", "ArnLike", [user], [principal] if administrator else [])
+    reached = [f"{prefix}/{stack}/terraform.tfstate", f"{prefix}/{stack}/terraform.tfstate.tflock"]
+    for statement in statements:
+        unconditional = statement.get("Effect") == "Deny" and "Condition" not in statement and statement.get("Sid") not in required
+        if unconditional and any(fnmatch.fnmatchcase(key, pattern) for key in reached for pattern in listed(statement.get("Resource"))):
+            raise invalid_policy(str(statement.get("Sid", "?")), "an unconditional deny reaches this stack's state key")
+
+
+def rule_prefix(rule: dict[str, Any]) -> str | None:
+    """The prefix of a lifecycle rule's filter, an empty string for a rule of the whole bucket and None for a filter that is not a plain prefix."""
+    scope = rule.get("Filter")
+    if isinstance(scope, dict):
+        return str(scope["Prefix"]) if "Prefix" in scope else ("" if not scope else None)
+    return str(rule.get("Prefix", ""))
+
+
+def check_state_rule(rule: dict[str, Any]) -> str | None:
+    """Why the rule of replaced state versions differs from ``infra/main.tf``, or None when it is the same: enabled, this prefix, replaced versions expire."""
+    expiration = rule.get("Expiration", {})
+    if rule.get("Status") != "Enabled":
+        return "it is not enabled"
+    if rule_prefix(rule) != STATE_RULE_PREFIX:
+        return "it does not cover the state prefix"
+    if rule.get("NoncurrentVersionExpiration", {}).get("NoncurrentDays") != STATE_RULE_DAYS:
+        return f"replaced versions do not expire after {STATE_RULE_DAYS} days"
+    if "Days" in expiration or "Date" in expiration:
+        return "it expires the current state"
+    return None
+
+
+def state_objects() -> list[str]:
+    """The state key and the lock key of every stack: the objects that a rule expiring current objects must not reach."""
+    return [name for stack in STATE_STACKS for name in (state_key(stack), f"{state_key(stack)}.tflock")]
+
+
+def can_reach(rule: dict[str, Any], keys: list[str]) -> bool:
+    """False only when the rule's filter provably misses every key, which is a prefix that no key starts with. A tag or an object size condition cannot be
+    proved to miss, so a rule that names only those, or one that names a prefix some key has next to them, still counts as reaching."""
+    scope = rule.get("Filter")
+    if not isinstance(scope, dict):
+        scope = {"Prefix": rule.get("Prefix", "")}
+    combined = scope.get("And")
+    prefix = (combined if isinstance(combined, dict) else scope).get("Prefix")
+    return prefix is None or any(name.startswith(str(prefix)) for name in keys)
+
+
+def expires_state(rule: dict[str, Any]) -> bool:
+    """True when another enabled rule can expire the current state or lock object of any stack."""
+    expiration = rule.get("Expiration", {})
+    return rule.get("Status") == "Enabled" and ("Days" in expiration or "Date" in expiration) and can_reach(rule, state_objects())
+
+
+def check_lifecycle(rules: list[dict[str, Any]]) -> None:
+    """Check the lifecycle rules for what they do: the rule of replaced state versions is the one of ``infra/main.tf`` and no other rule expires state."""
+    mine = [rule for rule in rules if rule.get("ID") == LIFECYCLE_RULE]
+    if not mine:
+        raise Refused("lifecycle: rule for replaced state versions missing")
+    problem = "the rule appears more than once" if len(mine) > 1 else check_state_rule(mine[0])
+    if problem:
+        raise Refused(f"lifecycle: rule for replaced state versions invalid ({problem})")
+    for rule in rules:
+        if rule.get("ID") != LIFECYCLE_RULE and expires_state(rule):
+            raise Refused(f"lifecycle: another rule can expire the current state or lock object of a stack ({rule.get('ID', '?')})")
+
+
 def policy_back(target: Deployment, principal: str) -> None:
-    """Refuse unless the live bucket policy holds all four state statements and names the administrator in the prefix deny."""
+    """Refuse unless the live bucket policy passes the same detailed check as the sheet's final check for the storage stack and names the administrator in the
+    prefix deny."""
     statements = live_statements(target)
+    user = f"arn:aws:iam::{target.account}:user/{target.profile}"
+    check_policy(statements, target.bucket, "storage", False, user, user)
     found = {statement.get("Sid"): statement for statement in statements}
-    if any(sid not in found for sid in STATE_SIDS):
-        raise Refused("the live bucket policy does not hold the state statements after the apply")
     condition = found["DenyStatePrefixToEveryoneElse"].get("Condition", {})
     names = condition.get("ArnNotLike", {}).get("aws:PrincipalArn", []) if isinstance(condition, dict) else []
     names = [names] if isinstance(names, str) else names
@@ -156,17 +300,16 @@ def policy_back(target: Deployment, principal: str) -> None:
 
 
 def lifecycle_back(target: Deployment) -> None:
-    """Refuse unless the live bucket has the enabled lifecycle rule for replaced state versions."""
+    """Refuse unless the live lifecycle rules pass the same detailed check as the sheet's final check."""
     try:
         rules = s3_client(target).get_bucket_lifecycle_configuration(Bucket=target.bucket).get("Rules", [])
     except (BotoCoreError, ClientError):
         raise Refused("the live lifecycle rules could not be read, so the state protection cannot be confirmed") from None
-    if not any(rule.get("ID") == LIFECYCLE_RULE and rule.get("Status") == "Enabled" for rule in rules if isinstance(rule, dict)):
-        raise Refused("the live bucket has no enabled lifecycle rule for replaced state versions after the apply")
+    check_lifecycle([rule for rule in rules if isinstance(rule, dict)])
 
 
 def read_back(target: Deployment, principal: str) -> None:
-    """Refuse unless the live bucket holds all four state statements, names the administrator in the prefix deny and has the enabled lifecycle rule."""
+    """Refuse unless the live policy and lifecycle rules pass the detailed checks of the sheet's final check and the prefix deny names the administrator."""
     policy_back(target, principal)
     lifecycle_back(target)
 

@@ -46,6 +46,7 @@ import re
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -1151,92 +1152,206 @@ def approve_recovery(scene: Scene, plan: Path, *extra: str) -> tuple[int, str]:
     return code, buffer.getvalue()
 
 
-def approve_plan_recovery(template: Path, work: Path, problems: list[str]) -> None:
-    """A pending record after a partial apply: the next plan holds only the remaining update. It passes only when the live bucket shows the update that the
-    plan no longer holds, and only for the administrator of the pending record. Nothing left to apply passes too (the sheet then reads the bucket back)."""
-    scene = fresh(template, work, "approve_recovery")
-    admin = ["--state-admin", RECOVERY_ADMIN]
+@contextlib.contextmanager
+def stand_in_updates() -> Iterator[None]:
+    """Let the two stand-in resources of the recovery folder take the place of the policy and the lifecycle configuration: the same shape check and the same
+    live read of the real update."""
     original = (dict(state_migration.DELTAS), dict(state_migration.LIVE_PARTS))
     state_migration.DELTAS.update({"terraform_data.r0": lambda _: None, "terraform_data.r1": lambda _: None})
     state_migration.LIVE_PARTS.update(
         {"terraform_data.r0": original[1][state_migration.PREFIX_POLICY], "terraform_data.r1": original[1][state_migration.PREFIX_LIFECYCLE]}
     )
     try:
-        with StateBucket(KEYS, IDENTITIES) as bucket:
-            scene.bucket = bucket
-            scene.protect()
-            folder = storage_shape_folder(scene, {"r0": "value0", "r1": "value1", "r2": "value2"}, problems)
-            write_storage_shape(folder, {"r0": "value0", "r1": "b", "r2": "value2"})
-            one_left = save_storage_plan(scene, folder, "one_left")
-            code, output = approve_recovery(scene, one_left)
-            expect(
-                problems,
-                code == 1 and "terraform_data.r0: missing" in output,
-                f"without the recovery option the partial plan is refused as before: {code}: {output}",
-            )
-            code, output = approve_recovery(scene, one_left, *admin)
-            expect(problems, code == 1 and "pending state protection record" in output, f"no record, no recovery: exit {code}: {output}")
-            scene.approve_state_admin(RECOVERY_ADMIN, status=VERIFIED)
-            code, output = approve_recovery(scene, one_left, *admin)
-            expect(problems, code == 1 and "pending state protection record" in output, f"a verified record needs no recovery: exit {code}: {output}")
-            scene.approve_state_admin("role/another_admin", status=PENDING)
-            code, output = approve_recovery(scene, one_left, *admin)
-            expect(
-                problems,
-                code == 1 and "pending state protection record" in output,
-                f"the record of another administrator gives no recovery: exit {code}: {output}",
-            )
-            scene.approve_state_admin(RECOVERY_ADMIN, status=PENDING)
-            code, output = approve_recovery(scene, one_left, *admin)
-            digest = hashlib.sha256(one_left.read_bytes()).hexdigest()
-            expect(
-                problems,
-                code == 0 and "plan changes: 1\n" in output and f"plan sha256: {digest}\n" in output and "1 already live" in output,
-                f"the plan of the remaining update must pass with its digest when the live bucket holds the other: exit {code}: {output}",
-            )
-            policy = bucket.policy
-            bucket.policy = None
-            code, output = approve_recovery(scene, one_left, *admin)
-            expect(
-                problems,
-                code == 1 and "terraform_data.r0" in output and "does not show it" in output and "plan sha256" not in output,
-                f"an update that is not live must not be skipped: exit {code}: {output}",
-            )
-            bucket.policy = policy
-            write_storage_shape(folder, {"r0": "value0", "r1": "b"})
-            wrong = save_storage_plan(scene, folder, "wrong_rest")
-            code, output = approve_recovery(scene, wrong, *admin)
-            expect(problems, code == 1 and "terraform_data.r2: delete" in output, f"the remaining changes are checked as before: exit {code}: {output}")
-            write_storage_shape(folder, {"r0": "a", "r1": "value1", "r2": "value2"})
-            other_left = save_storage_plan(scene, folder, "other_left")
-            bucket.lifecycle = ["abort_incomplete_uploads"]
-            code, output = approve_recovery(scene, other_left, *admin)
-            expect(
-                problems,
-                code == 1 and "terraform_data.r1" in output and "does not show it" in output,
-                f"a lifecycle update that is not live must not be skipped: exit {code}: {output}",
-            )
-            scene.protect()
-            code, output = approve_recovery(scene, other_left, *admin)
-            expect(
-                problems, code == 0 and "plan changes: 1\n" in output, f"the policy update left, with the lifecycle rule live, must pass: exit {code}: {output}"
-            )
-            write_storage_shape(folder, {"r0": "value0", "r1": "value1", "r2": "value2"})
-            result = run_command("terraform", [f"-chdir={folder}", "apply", "-auto-approve", "-input=false"], timeout=STEP_SECONDS)
-            expect(problems, result.returncode == 0, f"resetting the recovery folder failed: {result.stdout[-300:]}")
-            nothing_left = save_storage_plan(scene, folder, "nothing_left")
-            code, output = approve_recovery(scene, nothing_left, *admin)
-            expect(problems, code == 0 and "plan changes: 0\n" in output, f"a plan with nothing left passes while both parts are live: exit {code}: {output}")
-            bucket.lifecycle = ["abort_incomplete_uploads"]
-            code, output = approve_recovery(scene, nothing_left, *admin)
-            expect(
-                problems, code == 1 and "does not show it" in output, f"a plan with nothing left must not pass without the live parts: exit {code}: {output}"
-            )
+        yield
     finally:
         state_migration.DELTAS.clear()
         state_migration.DELTAS.update(original[0])
         state_migration.LIVE_PARTS.clear()
         state_migration.LIVE_PARTS.update(original[1])
+
+
+def approve_plan_recovery(template: Path, work: Path, problems: list[str]) -> None:
+    """A pending record after a partial apply: the next plan holds only the remaining update. It passes only when the live bucket shows the update that the
+    plan no longer holds, and only for the administrator of the pending record. Nothing left to apply passes too (the sheet then reads the bucket back)."""
+    scene = fresh(template, work, "approve_recovery")
+    admin = ["--state-admin", RECOVERY_ADMIN]
+    with stand_in_updates(), StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        scene.protect()
+        folder = storage_shape_folder(scene, {"r0": "value0", "r1": "value1", "r2": "value2"}, problems)
+        write_storage_shape(folder, {"r0": "value0", "r1": "b", "r2": "value2"})
+        one_left = save_storage_plan(scene, folder, "one_left")
+        code, output = approve_recovery(scene, one_left)
+        expect(
+            problems,
+            code == 1 and "terraform_data.r0: missing" in output,
+            f"without the recovery option the partial plan is refused as before: {code}: {output}",
+        )
+        code, output = approve_recovery(scene, one_left, *admin)
+        expect(problems, code == 1 and "pending state protection record" in output, f"no record, no recovery: exit {code}: {output}")
+        scene.approve_state_admin(RECOVERY_ADMIN, status=VERIFIED)
+        code, output = approve_recovery(scene, one_left, *admin)
+        expect(problems, code == 1 and "pending state protection record" in output, f"a verified record needs no recovery: exit {code}: {output}")
+        scene.approve_state_admin("role/another_admin", status=PENDING)
+        code, output = approve_recovery(scene, one_left, *admin)
+        expect(
+            problems,
+            code == 1 and "pending state protection record" in output,
+            f"the record of another administrator gives no recovery: exit {code}: {output}",
+        )
+        scene.approve_state_admin(RECOVERY_ADMIN, status=PENDING)
+        code, output = approve_recovery(scene, one_left, *admin)
+        digest = hashlib.sha256(one_left.read_bytes()).hexdigest()
+        expect(
+            problems,
+            code == 0 and "plan changes: 1\n" in output and f"plan sha256: {digest}\n" in output and "1 already live" in output,
+            f"the plan of the remaining update must pass with its digest when the live bucket holds the other: exit {code}: {output}",
+        )
+        policy = bucket.policy
+        bucket.policy = None
+        code, output = approve_recovery(scene, one_left, *admin)
+        expect(
+            problems,
+            code == 1 and "terraform_data.r0" in output and "does not show it" in output and "plan sha256" not in output,
+            f"an update that is not live must not be skipped: exit {code}: {output}",
+        )
+        bucket.policy = policy
+        write_storage_shape(folder, {"r0": "value0", "r1": "b"})
+        wrong = save_storage_plan(scene, folder, "wrong_rest")
+        code, output = approve_recovery(scene, wrong, *admin)
+        expect(problems, code == 1 and "terraform_data.r2: delete" in output, f"the remaining changes are checked as before: exit {code}: {output}")
+        write_storage_shape(folder, {"r0": "a", "r1": "value1", "r2": "value2"})
+        other_left = save_storage_plan(scene, folder, "other_left")
+        bucket.lifecycle = ["abort_incomplete_uploads"]
+        code, output = approve_recovery(scene, other_left, *admin)
+        expect(
+            problems,
+            code == 1 and "terraform_data.r1" in output and "does not show it" in output,
+            f"a lifecycle update that is not live must not be skipped: exit {code}: {output}",
+        )
+        scene.protect()
+        code, output = approve_recovery(scene, other_left, *admin)
+        expect(problems, code == 0 and "plan changes: 1\n" in output, f"the policy update left, with the lifecycle rule live, must pass: exit {code}: {output}")
+        write_storage_shape(folder, {"r0": "value0", "r1": "value1", "r2": "value2"})
+        result = run_command("terraform", [f"-chdir={folder}", "apply", "-auto-approve", "-input=false"], timeout=STEP_SECONDS)
+        expect(problems, result.returncode == 0, f"resetting the recovery folder failed: {result.stdout[-300:]}")
+        nothing_left = save_storage_plan(scene, folder, "nothing_left")
+        code, output = approve_recovery(scene, nothing_left, *admin)
+        expect(problems, code == 0 and "plan changes: 0\n" in output, f"a plan with nothing left passes while both parts are live: exit {code}: {output}")
+        bucket.lifecycle = ["abort_incomplete_uploads"]
+        code, output = approve_recovery(scene, nothing_left, *admin)
+        expect(problems, code == 1 and "does not show it" in output, f"a plan with nothing left must not pass without the live parts: exit {code}: {output}")
+
+
+def first_prefix_apply_needs_no_record(template: Path, work: Path, problems: list[str]) -> None:
+    """The first prefix apply has no pending record: the sheet passes the administrator and the plan holds both updates, so the plan is approved with no
+    record and no live read. A plan that omits an update still needs the pending record of that administrator."""
+    scene = fresh(template, work, "first_apply")
+    admin = ["--state-admin", RECOVERY_ADMIN]
+    with stand_in_updates(), StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        folder = storage_shape_folder(scene, {"r0": "value0", "r1": "value1", "r2": "value2"}, problems)
+        write_storage_shape(folder, {"r0": "a", "r1": "b", "r2": "value2"})
+        both = save_storage_plan(scene, folder, "both_left")
+        write_storage_shape(folder, {"r0": "value0", "r1": "b", "r2": "value2"})
+        one = save_storage_plan(scene, folder, "one_left")
+        digest = hashlib.sha256(both.read_bytes()).hexdigest()
+        expected = f"plan changes: 2\nplan sha256: {digest}\n"
+        for record, label in ((None, "no record"), (VERIFIED, "a verified record")):
+            if record is not None:
+                scene.approve_state_admin(RECOVERY_ADMIN, status=record)
+            code, output = approve_recovery(scene, both, *admin)
+            expect(
+                problems,
+                code == 0 and "0 already live" in output and output.endswith(expected),
+                f"the first apply, whose plan holds both updates, must pass with {label}: exit {code}: {output}",
+            )
+        code, output = approve_recovery(scene, one, *admin)
+        expect(
+            problems,
+            code == 1 and "pending state protection record" in output,
+            f"a plan that omits an update must still need the pending record: exit {code}: {output}",
+        )
+
+
+def retry_checks_the_live_protection(template: Path, work: Path, problems: list[str]) -> None:
+    """A retry that omits an update, and the read-back that marks the record verified, accept only a live bucket that passes the detailed checks of the
+    sheet's final check: a deny aimed at another prefix, a rule that expires current state and another rule that does so are all refused."""
+    scene = fresh(template, work, "retry_live")
+    admin = ["--state-admin", RECOVERY_ADMIN]
+    record = scene.root / STATE_PROTECTION_RECORD
+    with stand_in_updates(), StateBucket(KEYS, IDENTITIES) as bucket:
+        scene.bucket = bucket
+        folder = storage_shape_folder(scene, {"r0": "value0", "r1": "value1", "r2": "value2"}, problems)
+        write_storage_shape(folder, {"r0": "value0", "r1": "b", "r2": "value2"})
+        policy_left = save_storage_plan(scene, folder, "policy_omitted")
+        write_storage_shape(folder, {"r0": "value0", "r1": "value1", "r2": "value2"})
+        nothing_left = save_storage_plan(scene, folder, "nothing_left")
+        scene.protect()
+        scene.approve_state_admin(RECOVERY_ADMIN, status=PENDING)
+        code, output = approve_recovery(scene, nothing_left, *admin)
+        expect(problems, code == 0 and "plan changes: 0\n" in output, f"a bucket with the whole protection must pass: exit {code}: {output}")
+        code, output = scene.protection("verify", "--state-admin", RECOVERY_ADMIN)
+        expect(problems, code == 0 and json.loads(record.read_text())["status"] == VERIFIED, f"the read-back of a valid bucket must verify: {code}: {output}")
+        for label, plan, damage in (
+            ("a deny aimed at another prefix", policy_left, POLICY_MUTATIONS["deny_prefix"]),
+            ("an allow that is not plain", policy_left, POLICY_MUTATIONS["allow_effect"]),
+            ("an unconditional deny that reaches the state key", policy_left, POLICY_MUTATIONS["other_deny"]),
+            (
+                "a state rule that expires the current state",
+                nothing_left,
+                lambda scene: setattr(scene.bucket, "lifecycle", LIFECYCLE_MUTATIONS["lifecycle_current"]),
+            ),
+            ("another rule that expires every object", nothing_left, lambda scene: setattr(scene.bucket, "lifecycle", LIFECYCLE_MUTATIONS["lifecycle_other"])),
+        ):
+            scene.protect()
+            damage(scene)
+            scene.approve_state_admin(RECOVERY_ADMIN, status=PENDING)
+            code, output = approve_recovery(scene, plan, *admin)
+            expect(
+                problems,
+                code == 1 and "does not show it" in output and "plan sha256" not in output,
+                f"a retry must not be approved with {label}: exit {code}: {output}",
+            )
+            code, output = scene.protection("verify", "--state-admin", RECOVERY_ADMIN)
+            expect(
+                problems,
+                code == 2 and json.loads(record.read_text())["status"] == PENDING,
+                f"the read-back must not verify a bucket with {label}: exit {code}: {output}",
+            )
+
+
+def switched_resume_needs_the_saved_list(template: Path, work: Path, problems: list[str]) -> None:
+    """After the switch the plan before is not generated again: with the saved list missing, the plan step and both move sheets stop, the record stays
+    ``switched`` and no second copy is made."""
+    for sheet, stack, arguments, answers in (
+        ("state_migration.sh", "jobs", ["jobs"], "migrate\n"),
+        ("state_migration_iam.sh", "iam", [], f"{ADMIN_PROFILE}\nmigrate\n"),
+    ):
+        label = f"{sheet} with the saved list missing"
+        scene = fresh(template, work, f"missing_list_{stack}")
+        with StateBucket(KEYS, IDENTITIES) as bucket:
+            scene.bucket = bucket
+            scene.protect()
+            for command, extra in (("plan", ["--phase", "before"]), ("migrate", [])):
+                code, output = scene.run(command, stack, *extra, *scene.admin(stack))
+                expect(problems, code == 0, f"{label}: {command}: exit {code}: {output}")
+            (scene.root / RECORD_FOLDER / f"{stack}_before.changes.txt").unlink()
+            state_puts = len([seen for seen in bucket.requests("PUT") if seen.key == scene.key(stack)])
+            code, output = scene.run("plan", stack, "--phase", "before", *scene.admin(stack))
+            expect(problems, code == 1 and "saved list from before the move is missing" in output, f"{label}: the plan step must stop: exit {code}: {output}")
+            code, output = run_move_sheet(scene, sheet, arguments, answers)
+            expect(
+                problems,
+                code != 0 and "saved list from before the move is missing" in output and "plans: equal" not in output,
+                f"{label}: the sheet must stop at the plan before: exit {code}: {output}",
+            )
+            expect(problems, json.loads(scene.record(stack).read_text())["stage"] == "switched", f"{label}: the record must stay switched")
+            expect(
+                problems,
+                len([seen for seen in bucket.requests("PUT") if seen.key == scene.key(stack)]) == state_puts,
+                f"{label}: the state was copied again",
+            )
 
 
 def run_move_sheet(scene: Scene, sheet: str, arguments: list[str], answers: str) -> tuple[int, str]:
@@ -1367,7 +1482,10 @@ def main() -> int:
             lifecycle_other_prefixes_accepted,
             failed_restore,
             approve_plan_recovery,
+            first_prefix_apply_needs_no_record,
+            retry_checks_the_live_protection,
             resumed_move_sheets,
+            switched_resume_needs_the_saved_list,
         )
         for case in cases:
             if not chosen or case.__name__ in chosen:
