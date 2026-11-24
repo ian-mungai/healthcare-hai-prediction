@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import io
 import json
 import sys
 import tempfile
@@ -488,11 +489,16 @@ def care_compare_generator_cases(root: Path) -> dict[str, bool]:
             patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
             patch.setattr(bronze, "S3Storage", lambda *, task_role=False: None)
             patch.setattr(bronze, "discover", lambda *_args, found=found: ([], found))
+            output = io.StringIO()
+            patch.setattr(sys, "stdout", output)
             code = care_compare_tables.main()
         generated = json.loads(table_map.read_text())["tables"]
         results[f"care compare generator, {label}: only the retained dataset gets a table"] = code == 0 and [entry["dataset_ids"] for entry in generated] == [
             ["cms_legacy_kept_family"]
         ]
+        results[f"care compare generator, {label}: the report counts only the contributing dataset"] = output.getvalue().startswith(
+            "1 care_compare tables from 1 datasets"
+        )
     return results
 
 

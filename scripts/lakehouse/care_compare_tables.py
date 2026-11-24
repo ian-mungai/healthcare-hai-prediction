@@ -180,7 +180,8 @@ def main() -> int:
     raw["tables"] = [table for table in raw["tables"] if table.get("group") != GROUP] + entries
     bronze.TABLE_MAP.write_text(json.dumps(raw, indent=2) + "\n")
     excluded = sorted(dataset_id for dataset_id in datasets if dataset_id in EXCLUDED)
-    sys.stdout.write(f"{len(entries)} care_compare tables from {len(datasets) - len(excluded)} datasets; excluded: {', '.join(excluded) or 'none'}\n")
+    contributing = {dataset_id for entry in entries for dataset_id in entry["dataset_ids"]}
+    sys.stdout.write(f"{len(entries)} care_compare tables from {len(contributing)} datasets; excluded: {', '.join(excluded) or 'none'}\n")
     return 0
 
 
