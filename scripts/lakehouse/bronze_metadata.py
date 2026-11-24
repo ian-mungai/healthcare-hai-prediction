@@ -380,13 +380,19 @@ def _build_rows(
             obj = dict(old)
         rows.append(obj)
     rows += [{**row, "kind": "object"} for digest, row in selected.items() if digest not in old_objects]
-    rows += [dict(row) for row in previous if row["table_name"] not in chosen]
+    held = [row for row in previous if row["table_name"] not in chosen]
+    carried = [dict(row) for row in held]
+    rows += carried
     if {row["table_name"] for row in rows if row["kind"] == "observation"} - departed != complete_tables:
         raise MetadataError("metadata generation is missing a committed bronze table or contains an undeclared table")
     objects = {row["sha256"]: row for row in rows if row["kind"] == "object"}
     for row in rows:
         row["canonical_object_key"] = objects[row["sha256"]]["_object_key"] if row["sha256"] in objects else None
         row["generation_row_count"], row["generation_object_count"] = len(rows), len(objects)
+    envelope = {"generation", "generation_row_count", "generation_object_count"}
+    for old, kept in zip(held, carried, strict=True):
+        if any(kept[field] != old[field] for field in FIELDS if field not in envelope):
+            raise MetadataError(f"{old['table_name']}: the successor generation cannot keep a carried row as published")
     digest = generation_digest(rows)
     for row in rows:
         row["generation"] = digest

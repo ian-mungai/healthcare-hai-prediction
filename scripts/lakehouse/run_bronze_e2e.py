@@ -2108,7 +2108,8 @@ def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
     ]
     names = [table["table"] for table in tables]
     for name in names:
-        store(storage, "synthetic/" + name, name, "capture", [(None, "data.csv", csv_bytes(["value"], [[name]]))])
+        # Each table has its own snapshot ID: the column map and the object partitions are keyed by the object key, which comes from the snapshot ID and member.
+        store(storage, "synthetic/" + name, name, f"capture_{name}", [(None, "data.csv", csv_bytes(["value"], [[name]]))])
     both = {"namespace": namespace, "tables": tables}
     inputs, excluded = bronze.discover(storage, BUCKET, both, names)
     bronze.load_objects(spark, inputs, storage, namespace, root / "leaving_scope_first_scratch")
@@ -2141,6 +2142,9 @@ def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
     code, report = leaving_scope_run(spark, root, "leaving_scope_load", storage, retained, ["scope_gone"], ["--tables", "scope_kept"])
     gone_after, kept_after = held("scope_gone"), held("scope_kept")
     results = {
+        "leaving_scope_both_tables_hold_side_table_rows_before_the_switch": all(
+            held_rows["column_map"] and held_rows["stored_copies"] for held_rows in (gone_before, kept_before)
+        ),
         "leaving_scope_new_retained_capture_publishes": code == 0
         and len(kept_after["table"]) == len(kept_before["table"]) + 1
         and kept_after["snapshot"] != kept_before["snapshot"]
@@ -2197,9 +2201,6 @@ def leaving_scope_scenarios(spark: Any, root: Path) -> dict[str, bool]:
         and not spark.catalog.tableExists("leaving_boundary.bound_gone")
         and spark.table("leaving_boundary.bound_kept").count() == 1
     )
-    results["care_compare_generator_omits_the_tables_that_left_the_scope"] = [
-        entry["table"] for entry in care_compare_tables.within_scope([{"table": "kept"}, {"table": "gone"}], ["gone"])
-    ] == ["kept"]
     return results
 
 

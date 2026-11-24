@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from orchestration import launcher
-from scripts.lakehouse import bronze, bronze_entry_cases, bronze_metadata, bronze_mirror, catalog, dictionary
+from scripts.lakehouse import bronze, bronze_entry_cases, bronze_metadata, bronze_mirror, care_compare_tables, catalog, dictionary
 from scripts.quality.model_metadata import load_yaml
 
 TABLE = {"table": "files", "collection": "cms/synthetic", "roles": ["data"], "format": "csv", "encodings": ["utf-8"], "member_pattern": r"\.csv$"}
@@ -412,6 +412,73 @@ def leaving_scope_command_cases(root: Path) -> dict[str, bool]:
         )
         and "named_files" in later["seen"]["load"],
     }
+
+
+def leaving_alias_command_cases(root: Path) -> dict[str, bool]:
+    """A retained owner that appears over a published alias of a table that left the scope must not change the alias row: the command refuses to publish."""
+    config, documents, ownership, inputs = ownership_fixture(root, 2)
+    retained = {**config, "tables": [table for table in config["tables"] if table["table"] == "named_files"]}
+    other = manifest("other", "cms/synthetic/datasets/named_files/release_date=2026-02-01/" + "b" * 64 + "/file.csv", "version_other")
+    other["objects"][0]["dataset_id"] = "named_files"
+    other["objects"][0]["object"]["sha256"] = "b" * 64
+    discovered, _excluded = bronze.discover(ManifestStorage([*documents, other]), "synthetic", retained, ["named_files"])
+    other_inputs = [candidate for candidate in discovered if candidate["sha256"] == "b" * 64]
+    alias = next(candidate for candidate in inputs if candidate["table"] == "legacy_files")
+    empty = root / "leaving_alias_no_ownership.json"
+    empty.write_text(json.dumps({"schema_version": 1, "groups": []}))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bronze_metadata, "BOOTSTRAP_OWNERSHIP", empty, raising=False)
+        published = bronze_metadata.build(
+            ["named_files", "legacy_files"], other_inputs, [{"copy": {**alias, "retired": True}}], [], ["named_files", "legacy_files"]
+        )
+    held = [row for row in published if row["table_name"] == "legacy_files"]
+    later = publish_command(root, "leaving_alias", [*documents, other], retained, ["legacy_files"], ownership, published)
+    return {
+        "leaving alias: the previous generation holds the departed alias with no canonical reference": len(held) == 1
+        and held[0]["canonical_object_key"] is None,
+        "leaving alias: a retained owner that would change the alias row publishes nothing": later["code"] not in (0, None) and later["published"] is None,
+    }
+
+
+def care_compare_generator_cases(root: Path) -> dict[str, bool]:
+    """``care_compare_tables.main`` generates no table for a dataset that left the bronze scope, whatever its file is named now."""
+    leaving = root / "care_compare_leaving.json"
+    leaving.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tables": [
+                    {"table": "cms_cc_asc_facility", "collection": care_compare_tables.COLLECTION, "group": "care_compare", "dataset_ids": ["cms_4jcv_atw7"]}
+                ],
+            }
+        )
+    )
+    removed = root / "care_compare_removed.json"
+    removed.write_text(json.dumps({"version": 1, "tables": []}))
+    unselected = [{"collection": care_compare_tables.COLLECTION, "dataset_id": "cms_legacy_kept_family", "file_name": "Kept_Family.csv"}]
+    config = {"namespace": "synthetic", "tables": []}
+    results: dict[str, bool] = {}
+    for label, name in (("original name", "ASC_Facility.csv"), ("renamed file", "Ambulatory_Surgical_Centers_by_Facility.csv")):
+        table_map = root / f"care_compare_{label.replace(' ', '_')}.json"
+        table_map.write_text(json.dumps({"namespace": "synthetic", "tables": []}))
+        found = [*unselected, {"collection": care_compare_tables.COLLECTION, "dataset_id": "cms_4jcv_atw7", "file_name": name}]
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("AWS_PROFILE", "synthetic")
+            patch.setenv("AWS_REGION", "synthetic")
+            patch.setattr(catalog, "deployment", lambda: {"aws_profile": "synthetic", "aws_region": "synthetic", "data_bucket_name": "synthetic"})
+            patch.setattr(bronze, "TABLE_MAP", table_map)
+            patch.setattr(bronze, "LEAVING", leaving)
+            patch.setattr(bronze, "REMOVED", removed)
+            patch.setattr(bronze, "load_table_map", lambda: config)
+            patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
+            patch.setattr(bronze, "S3Storage", lambda *, task_role=False: None)
+            patch.setattr(bronze, "discover", lambda *_args, found=found: ([], found))
+            code = care_compare_tables.main()
+        generated = json.loads(table_map.read_text())["tables"]
+        results[f"care compare generator, {label}: only the retained dataset gets a table"] = code == 0 and [entry["dataset_ids"] for entry in generated] == [
+            ["cms_legacy_kept_family"]
+        ]
+    return results
 
 
 def ownership_cases(root: Path) -> dict[str, bool]:
@@ -939,6 +1006,8 @@ def main() -> int:
             **entry_cases(),
             **ownership_cases(folder),
             **leaving_scope_command_cases(folder),
+            **leaving_alias_command_cases(folder),
+            **care_compare_generator_cases(folder),
             **all_ownership_groups(folder),
             **ownership_reference_commands(folder),
             **ownership_identity_commands(folder),

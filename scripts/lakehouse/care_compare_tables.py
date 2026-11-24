@@ -1,7 +1,8 @@
 """Generate the bronze table map entries for the Care Compare tables other than HAI, one table per file family.
 
 Run from the repository root with read-only S3 access; it rewrites only the `care_compare` group in the table map, and leaves out every table that
-config/lakehouse/bronze_leaving_scope.json records as having left the bronze scope:
+config/lakehouse/bronze_leaving_scope.json records as having left the bronze scope. A departed dataset is recognized by its dataset ID, so a renamed
+file never brings its table back:
 
     .venv/bin/python -m scripts.lakehouse.care_compare_tables
 
@@ -20,6 +21,7 @@ import os
 import re
 import sys
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 GROUP = "care_compare"
@@ -129,14 +131,15 @@ def table_entries(
     return [tables[name] for name in sorted(tables)]
 
 
-def within_scope(entries: list[dict[str, Any]], leaving: Iterable[str]) -> list[dict[str, Any]]:
-    """Return the generated entries without the tables that left the bronze scope, which the load no longer writes."""
-    departed = set(leaving)
-    return [entry for entry in entries if entry["table"] not in departed]
+def departed_datasets(path: Path, leaving: Iterable[str]) -> set[str]:
+    """Return the dataset IDs that the tables which left the bronze scope selected, as the leaving record keeps them."""
+    names = set(leaving)
+    entries = json.loads(path.read_text())["tables"] if path.exists() else []
+    return {dataset_id for entry in entries if entry["table"] in names and entry["collection"] == COLLECTION for dataset_id in entry.get("dataset_ids", [])}
 
 
 def main() -> int:
-    """Discover the unselected Care Compare datasets read-only and rewrite the care_compare group in the table map, without the tables that left the scope."""
+    """Discover the unselected Care Compare datasets read-only and rewrite the care_compare group, leaving out datasets of tables that left the scope."""
     from scripts.lakehouse import bronze
     from scripts.lakehouse.catalog import deployment
 
@@ -150,19 +153,20 @@ def main() -> int:
         sys.stderr.write(f"care compare tables: {error}\n")
         return 1
     others = [table["table"] for table in config["tables"] if table["collection"] == COLLECTION and table.get("group") != GROUP]
+    departed = departed_datasets(bronze.LEAVING, leaving)
     inputs, unselected = bronze.discover(bronze.S3Storage(), settings["data_bucket_name"], config, others, bronze.load_retired())
     # Only data tables claim a dataset; document tables read other roles from the same datasets.
     data_tables = {table["table"] for table in config["tables"] if table["roles"] == ["data"]}
     existing = {item["dataset_id"] for item in inputs if item["table"] in data_tables}
     datasets: dict[str, list[str]] = {}
     for entry in unselected:
-        if entry["collection"] == COLLECTION and not entry.get("identical_copy") and not entry.get("retired"):
+        if entry["collection"] == COLLECTION and entry["dataset_id"] not in departed and not entry.get("identical_copy") and not entry.get("retired"):
             datasets.setdefault(entry["dataset_id"], []).append(entry["file_name"])
     try:
         shared = sorted(set(datasets) & existing)
         if shared:
             raise FamilyError(f"{shared[0]}: an existing table selects part of this dataset ({len(shared)} such datasets)")
-        entries = within_scope(table_entries(assign(datasets, existing), datasets), leaving)
+        entries = table_entries(assign(datasets, existing), datasets)
     except FamilyError as error:
         sys.stderr.write(f"care compare tables: {error}\n")
         return 1
