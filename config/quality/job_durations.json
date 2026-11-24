@@ -6,7 +6,7 @@
       "job": "Repository Hooks (privacy)",
       "measured_minutes": 11,
       "timeout_minutes": 22,
-      "basis": "estimate from hosted run 45315201599 (Nov 24 2026): setup 1.2 min, the pushed-range step 9.1 min over 126 commits, the hooks 0.7 min"
+      "basis": "estimate from hosted run 45315201599 (Nov 24 2026): setup 1.2 min and the pushed-range step 9.1 min over 126 commits measured; the hooks never ran there, so 0.7 min is a planning allowance"
     },
     {
       "job": "Repository Hooks (documentation)",
