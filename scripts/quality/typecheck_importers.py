@@ -4,8 +4,9 @@ A removed or renamed Python function, class or module breaks the files that impo
 that grimp builds (scripts/quality/importer_graph.py, run by the pinned import-linter's Python), read from the tree before the change so that the importers
 of a deleted module are found too. The graph takes the import roots the project declares (MyPy's ``mypy_path``, pytest's ``pythonpath`` and Ruff's ``src`` in
 pyproject.toml). When it cannot read them, every covered file counts as an importer, so the run falls back to whole-scope MyPy and never passes by default.
-Files that MyPy does not cover (``pending`` in config/quality/mypy_runtimes.json and the files that import them) are
-left out here; the removed-names check reads those as text.
+Files that the host MyPy run leaves out (``pending`` in config/quality/mypy_runtimes.json and the files that import them) need packages this machine lacks
+(pyspark, airflow). A second MyPy run covers the changed ones and the importers among them with the rule of the hosted run (typecheck.check_pending): a missing
+import is allowed and any other diagnostic fails. The removed-names check also reads those files as text.
 
     .venv/bin/python -m scripts.quality.typecheck_importers
 
@@ -141,25 +142,51 @@ def importing_files(root: Path, base: str, paths: list[str]) -> list[str]:
     return sorted({path for path in found if path})
 
 
+def waiting_files() -> dict[str, str]:
+    """The files MyPy leaves out of the host scope: the pending ones and their importers (config/quality/mypy_runtimes.json), each with its cause."""
+    if not (typecheck.ROOT / "config/quality/mypy_runtimes.json").is_file():
+        return {}
+    pending = json.loads((typecheck.ROOT / "config/quality/mypy_runtimes.json").read_text(encoding="utf-8"))["pending"]
+    return typecheck.pending_by_import(typecheck.source_files(), pending)
+
+
 def covered(files: list[str]) -> list[str]:
     """The files MyPy covers: all but the pending ones and their importers (config/quality/mypy_runtimes.json)."""
     if not files:
         return []
-    config = typecheck.ROOT / "config/quality/mypy_runtimes.json"
-    pending = json.loads(config.read_text(encoding="utf-8"))["pending"] if config.is_file() else {}
-    waiting = typecheck.pending_by_import(typecheck.source_files(), pending)
+    waiting = waiting_files()
     return [path for path in files if path not in waiting]
 
 
-def selection(root: Path, refs: list[str], base: str) -> tuple[list[str], list[str]]:
-    """The changed files and the files that import them, both limited to what MyPy covers and the tree still holds."""
+def selection(root: Path, refs: list[str], base: str) -> tuple[list[str], list[str], list[str]]:
+    """The changed files, the files that import them and the dependency-bound (pending) files among both. The first two lists hold what MyPy covers, the
+    third holds the files it leaves out of the host scope; all three are limited to what the tree still holds."""
     present, gone = changed_python(root, refs)
     if not present and not gone:
-        return [], []
+        return [], [], []
     changed = sorted(path for path in present if (root / path).is_file())
     importers = [path for path in importing_files(root, base, [*present, *gone]) if path not in present]
-    typed = set(covered([*changed, *importers]))
-    return [path for path in changed if path in typed], [path for path in importers if path in typed]
+    waiting = waiting_files()
+    return (
+        [path for path in changed if path not in waiting],
+        [path for path in importers if path not in waiting],
+        [path for path in [*changed, *importers] if path in waiting],
+    )
+
+
+def check_pending_files(root: Path, pending: list[str]) -> int:
+    """MyPy over the dependency-bound files with the rule of the host run (typecheck.check_pending): a missing import is allowed, any other diagnostic fails."""
+    try:
+        errors = typecheck.unrestricted_errors(pending, root, MYPY_SECONDS)
+    except TimeoutExpired:
+        sys.stderr.write(f"typecheck-importers: MyPy exceeded its deadline of {MYPY_SECONDS} seconds and was stopped\n")
+        return 1
+    except ValueError as error:
+        sys.stderr.write(f"typecheck-importers: {error}\n")
+        return 1
+    problems = typecheck.non_import_problems(errors)
+    sys.stderr.write("".join(f"{problem}\n" for problem in problems))
+    return 1 if problems else 0
 
 
 def main() -> int:
@@ -167,23 +194,29 @@ def main() -> int:
     start, end = os.environ.get("PRE_COMMIT_FROM_REF"), os.environ.get("PRE_COMMIT_TO_REF")
     refs, base = ([start, end], start) if start and end else (["--cached"], "HEAD")
     try:
-        changed, importers = selection(root, refs, base)
+        changed, importers, pending = selection(root, refs, base)
     except (ValueError, SyntaxError, OSError, TimeoutExpired) as error:
         sys.stderr.write(f"typecheck-importers: {error}\n")
         return 1
     targets = [*changed, *importers]
-    if not targets:
+    if not targets and not pending:
         sys.stdout.write("typecheck-importers: no Python file to check\n")
         return 0
-    sys.stdout.write(f"typecheck-importers: {len(changed)} changed files and {len(importers)} files that import them\n")
-    try:
-        result = run_command(sys.executable, ["-m", "mypy", *MYPY_FLAGS, "--", *targets], cwd=root, timeout=MYPY_SECONDS)
-    except TimeoutExpired:
-        sys.stderr.write(f"typecheck-importers: MyPy exceeded its deadline of {MYPY_SECONDS} seconds and was stopped\n")
-        return 1
-    sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    status = 0
+    if targets:
+        sys.stdout.write(f"typecheck-importers: {len(changed)} changed files and {len(importers)} files that import them\n")
+        try:
+            result = run_command(sys.executable, ["-m", "mypy", *MYPY_FLAGS, "--", *targets], cwd=root, timeout=MYPY_SECONDS)
+        except TimeoutExpired:
+            sys.stderr.write(f"typecheck-importers: MyPy exceeded its deadline of {MYPY_SECONDS} seconds and was stopped\n")
+            return 1
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        status = result.returncode
+    if pending:
+        sys.stdout.write(f"typecheck-importers: {len(pending)} dependency-bound files among them, checked for every diagnostic but a missing import\n")
+        status = check_pending_files(root, pending) or status
+    return status
 
 
 if __name__ == "__main__":

@@ -15,12 +15,14 @@ import sys
 from collections.abc import Callable
 from importlib.util import resolve_name
 from pathlib import Path
+from typing import Any
 
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "config/quality/mypy_runtimes.json"
 MYPY_FLAGS = ["--check-untyped-defs", "--disallow-untyped-defs"]
+IMPORT_CODES = {"import-not-found", "import-untyped"}
 
 
 def source_files() -> set[str]:
@@ -84,25 +86,31 @@ def targets(runtime: str, pending: dict[str, dict[str, str]]) -> tuple[list[str]
     return sorted(files - deferred.keys()), {path: deferred[path] for path in sorted(files & deferred.keys())}
 
 
-def check_pending(pending: dict[str, dict[str, str]]) -> bool:
+def unrestricted_errors(paths: list[str], cwd: Path = ROOT, timeout: int = 900) -> list[dict[str, Any]]:
+    """The error diagnostics of MyPy over ``paths`` with missing imports reported as errors. Raises ValueError when MyPy itself fails."""
     result = run_command(
-        sys.executable,
-        ["-m", "mypy", "--output=json", "--no-error-summary", "--no-incremental", *MYPY_FLAGS, "--", *sorted(source_files())],
-        cwd=ROOT,
-        timeout=900,
+        sys.executable, ["-m", "mypy", "--output=json", "--no-error-summary", "--no-incremental", *MYPY_FLAGS, "--", *paths], cwd=cwd, timeout=timeout
     )
     diagnostics = [json.loads(line) for line in result.stdout.splitlines()]
     errors = [item for item in diagnostics if item["severity"] == "error"]
     if result.returncode not in (0, 1) or result.stderr or (result.returncode == 1 and not errors):
         raise ValueError(f"unrestricted MyPy failed: {result.stdout}{result.stderr}")
-    imports = {item["file"] for item in errors if item["code"] in {"import-not-found", "import-untyped"}}
+    return errors
+
+
+def non_import_problems(errors: list[dict[str, Any]]) -> list[str]:
+    """The diagnostics that fail a dependency-bound file: everything except a module that is not installed or has no stubs."""
+    return [
+        f"non-import MyPy diagnostic: {item['file']}:{item['line']}: {item['message']} [{item['code']}]" for item in errors if item["code"] not in IMPORT_CODES
+    ]
+
+
+def check_pending(pending: dict[str, dict[str, str]]) -> bool:
+    errors = unrestricted_errors(sorted(source_files()))
+    imports = {item["file"] for item in errors if item["code"] in IMPORT_CODES}
     problems = [f"missing manifest leaf: {path}" for path in sorted(imports - pending.keys())]
     problems += [f"stale manifest leaf: {path}" for path in sorted(pending.keys() - imports)]
-    problems += [
-        f"non-import MyPy diagnostic: {item['file']}:{item['line']}: {item['message']} [{item['code']}]"
-        for item in errors
-        if item["code"] not in {"import-not-found", "import-untyped"}
-    ]
+    problems += non_import_problems(errors)
     if problems:
         sys.stderr.write("\n".join(problems) + "\n")
         return False

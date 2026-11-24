@@ -140,6 +140,7 @@ INPUT_NAME = "warm" + "-cache"
 RETIRED_ENV = "retired" + "-key"
 PENDING_LIST = "config/quality/mypy_runtimes.json"
 PENDING_FIXTURE = '{"pending": {"dags/pending_dag.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}}}\n'
+PENDING_IMPORT_ONLY = "import hai_missing_dependency\n"
 LEFTOVER = "was removed but is still referenced"
 IMPORTERS_HOOK = "typecheck-importers"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
@@ -3486,9 +3487,48 @@ CASES = [
     Case(
         "function removed, importer is a pending file",
         IMPORTERS_HOOK,
-        True,
+        False,
         committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "import hai_missing_dependency\n" + UTIL_IMPORT},
         files={"app/util.py": "X = 1\n"},
+        reason=NO_ATTRIBUTE,
+    ),
+    Case(
+        "staged pending file has a type error",
+        IMPORTERS_HOOK,
+        False,
+        committed={PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": PENDING_IMPORT_ONLY},
+        files={"dags/pending_dag.py": PENDING_IMPORT_ONLY + "\nVALUE: int = 'text'\n"},
+        reason="Incompatible types in assignment",
+    ),
+    Case(
+        "staged pending file has only a missing import",
+        IMPORTERS_HOOK,
+        True,
+        committed={PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "VALUE = 1\n"},
+        files={"dags/pending_dag.py": PENDING_IMPORT_ONLY + "\nVALUE: int = 1\n"},
+    ),
+    Case(
+        "staged importer of a pending file has a type error",
+        IMPORTERS_HOOK,
+        False,
+        committed={
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": PENDING_IMPORT_ONLY,
+            "app/main.py": "from dags import pending_dag\n\nVALUE: int = 1\n",
+        },
+        files={"app/main.py": "from dags import pending_dag\n\nVALUE: int = 'text'\n"},
+        reason="Incompatible types in assignment",
+    ),
+    Case(
+        "staged importer of a pending file has only the pending file's missing import",
+        IMPORTERS_HOOK,
+        True,
+        committed={
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": PENDING_IMPORT_ONLY,
+            "app/main.py": "from dags import pending_dag\n\nVALUE: int = 1\n",
+        },
+        files={"app/main.py": "from dags import pending_dag\n\nVALUE: int = 2\n"},
     ),
     *[
         Case(
