@@ -101,6 +101,24 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: collector-code-versions
+        # Runs the hosted acquisition test of the committed code-version lists. The files are the closure of every collector entry module (scripts/acquisition, the
+        # process and log helpers and the project config renderer they import) and the lists; a test in that file fails when a closure holds a file this pattern misses.
+        name: Each collector's code closure is in its committed code-version list
+        entry: .venv/bin/python -m scripts.quality.repo_checks collector-code-versions
+        language: system
+        pass_filenames: false
+        files: ^(scripts/acquisition/|scripts/infrastructure/render_project_config\.py$|scripts/(process|sdk_logs)\.py$|config/acquisition/[^/]+_code_versions\.json$)
+        stages: [pre-commit]
+      - id: launcher-list
+        # No file pattern can name the launcher inputs (more than a thousand paths and the folders the suite reads whole), so the entry runs when the staged paths
+        # select the launcher group of config/quality/ci_groups.json, as the hosted launcher job does.
+        name: The launcher input list equals what the launcher suite needs
+        entry: .venv/bin/python -m scripts.quality.repo_checks launcher-list
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       - id: temporary-code
         # The list of temporary files is config/quality/temporary_code.json; temporary code may import permanent code, never the reverse.
         name: Permanent code never imports, calls or reads temporary code

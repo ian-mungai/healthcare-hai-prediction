@@ -3154,6 +3154,24 @@ def link_findings() -> list[Finding]:
     return [Finding(location, problem, LINK_RULE, LINK_FIX) for location, problem in check_links(git("ls-files", "-s", "-z", "--cached"), DATA_FOLDERS)]
 
 
+def collector_code_versions() -> list[Finding]:
+    """The code closure of each collector is in its committed code-version list (scripts/quality/committed_lists.py), as the hosted acquisition job checks."""
+    from scripts.quality import committed_lists
+
+    rule = "scripts/acquisition/tests/test_committed_code_versions.py: a collector refuses to fetch unless its committed list holds its code as it is on disk"
+    fix = "add the reviewed code version of the changed closure to each affected config/acquisition/*_code_versions.json, or undo the collector change"
+    return [Finding(location, problem, rule, fix) for location, problem in committed_lists.collector_problems()]
+
+
+def launcher_list() -> list[Finding]:
+    """config/quality/launcher_inputs.json equals what the launcher suite needs (scripts/quality/committed_lists.py), as the hosted checks require."""
+    from scripts.quality import committed_lists
+
+    rule = "scripts/quality/launcher_inputs.py: the committed list names each file the launcher suite imports or reads, and each file under its folders"
+    fix = "run .venv/bin/python -m scripts.quality.launcher_inputs --write and stage config/quality/launcher_inputs.json, then review each new inventory read"
+    return [Finding(location, problem, rule, fix) for location, problem in committed_lists.launcher_problems()]
+
+
 def warn(findings: list[Finding]) -> int:
     """Report findings without failing: the warn period before a check blocks."""
     for finding in findings:
@@ -3174,7 +3192,7 @@ def main() -> int:
         "task-ids",
         "command-modules",
     ]
-    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code"]
+    checks += ["unused-code", "unused-dependencies", "orphan-files", "terraform-unused", "temporary-code", "collector-code-versions", "launcher-list"]
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "check", choices=[*checks, "commit-msg", "commit-range", "privacy-scan", "writing-check", "front-matter", "docs-references", "markdown-links"]
@@ -3239,6 +3257,8 @@ def run(args: argparse.Namespace) -> int:
         "orphan-files": orphan_files,
         "terraform-unused": terraform_unused,
         "temporary-code": temporary_code,
+        "collector-code-versions": collector_code_versions,
+        "launcher-list": launcher_list,
         "front-matter": front_matter,
         "docs-references": docs_references,
         "markdown-links": link_findings,

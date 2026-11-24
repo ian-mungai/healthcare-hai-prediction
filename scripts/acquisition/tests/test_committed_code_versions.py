@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from functools import cache
 from pathlib import Path
 from types import ModuleType
 
@@ -12,6 +14,7 @@ from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError
 from scripts.process import run_command
+from scripts.quality.repo_checks import load_yaml
 from tests.support import check
 
 VERSIONS = REPO_ROOT / "config/acquisition"
@@ -29,7 +32,17 @@ ENTRIES = {
 }
 
 
-@pytest.mark.parametrize("contract", [cms_owners_contract, hcai_util_contract, onc_mu_contract], ids=["cms_owners", "hcai_util", "onc_mu"])
+CONTRACTS = [cms_owners_contract, hcai_util_contract, onc_mu_contract]
+COMMIT_HOOK = "collector-code-versions"
+
+
+@cache
+def entry_hashes(entry: str) -> dict[str, str]:
+    """The closure of an entry module, computed once for the cases below."""
+    return closure_hashes(entry)
+
+
+@pytest.mark.parametrize("contract", CONTRACTS, ids=["cms_owners", "hcai_util", "onc_mu"])
 def test_collector_admits_its_current_code_against_the_committed_list(contract: ModuleType) -> None:
     """The collectors the Run 3 route changed refuse to fetch unless their committed list holds their code as it is on disk."""
     try:
@@ -44,7 +57,7 @@ def test_other_collector_closure_is_listed_in_its_committed_versions(name: str) 
     """The closure of every other collector entry module appears in its committed list, read from the real file."""
     stem, entry = ENTRIES[name]
     listed = [version["code_sha256"] for version in read_code_versions(VERSIONS / f"{stem}_code_versions.json")["versions"]]
-    check(closure_hashes(entry) in listed, f"{name}: no committed version holds the closure of {entry}")
+    check(entry_hashes(entry) in listed, f"{name}: no committed version holds the closure of {entry}")
 
 
 def test_every_committed_version_list_has_its_closure_checked() -> None:
@@ -53,6 +66,22 @@ def test_every_committed_version_list_has_its_closure_checked() -> None:
     checked = {stem for stem, _ in ENTRIES.values()} | contract_lists
     present = {path.name.removesuffix("_code_versions.json") for path in VERSIONS.glob("*_code_versions.json")}
     check(present <= checked, f"version lists with no closure check: {sorted(present - checked)}")
+
+
+def test_the_commit_hook_selects_every_file_of_every_collector_closure() -> None:
+    """The commit hook that runs these cases (.pre-commit-config.yaml) selects by a file pattern: a closure file the pattern misses could change unchecked."""
+    document = load_yaml((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise AssertionError(".pre-commit-config.yaml must contain a mapping")
+    hooks = [entry for repo in document["repos"] for entry in repo["hooks"] if entry["id"] == COMMIT_HOOK]
+    check(len(hooks) == 1 and bool(hooks[0].get("files")), f"The hook {COMMIT_HOOK} needs a files pattern")
+    pattern = re.compile(hooks[0]["files"])
+    entries = {entry for _, entry in ENTRIES.values()} | {contract.CODE_ENTRY for contract in CONTRACTS}
+    files = {path for entry in entries for path in entry_hashes(entry)} | {
+        path.relative_to(REPO_ROOT).as_posix() for path in VERSIONS.glob("*_code_versions.json")
+    }
+    missed = sorted(path for path in files if not pattern.search(path))
+    check(not missed, f"Files that the {COMMIT_HOOK} pattern in .pre-commit-config.yaml does not select: {missed}")
 
 
 def head_lists() -> dict[str, str]:

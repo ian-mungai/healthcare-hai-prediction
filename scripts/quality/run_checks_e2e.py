@@ -143,6 +143,10 @@ PENDING_FIXTURE = '{"pending": {"dags/pending_dag.py": {"runtime": "fixture", "r
 PENDING_IMPORT_ONLY = "import hai_missing_dependency\n"
 LEFTOVER = "was removed but is still referenced"
 IMPORTERS_HOOK = "typecheck-importers"
+LAUNCHER_HOOK = "launcher-list"
+LAUNCHER_LIST = "config/quality/launcher_inputs.json"
+LAUNCHER_BODY = "scripts/ci/groups/launcher.sh"
+LAUNCHER_START = "launcher_e2e() {\n  python -m app.entry\n}\n"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
@@ -1508,6 +1512,23 @@ SOURCE_ROOT_SETTINGS = {
     "pytest pythonpath": MYPY_SRC + '\n[tool.pytest.ini_options]\npythonpath = ["src"]\n',
     "ruff src": MYPY_SRC + '\n[tool.ruff]\nsrc = ["src"]\n',
 }
+
+
+def launcher_list(files: list[str], folders: list[str] | None = None) -> str:
+    """A committed launcher input list for the fixture suite whose one entry point is app/entry.py; ``folders`` are read whole (extra inputs)."""
+    folders = folders or []
+    document = {
+        "note": "fixture",
+        "entry_points": ["app/entry.py"],
+        "extra_inputs": folders,
+        "ignored_reads": [],
+        "inventory_reads": [],
+        "dynamic_sites": {},
+        "inventory_sites": {},
+        "folders": folders,
+        "files": sorted(files),
+    }
+    return json.dumps(document, indent=2) + "\n"
 
 
 def both_hooks(name: str, expect_pass: bool, **extra: Any) -> tuple[Case, Case]:
@@ -3574,6 +3595,53 @@ CASES = [
     ),
     Case("documentation change only", IMPORTERS_HOOK, True, committed={"app/util.py": UTIL_FUNCTION}, files={"README.md": "A note.\n"}),
     Case(
+        "launcher list lacks a file that the suite now imports",
+        LAUNCHER_HOOK,
+        False,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": "VALUE = 1\n"},
+        files={"app/entry.py": "from app import helper\n", "app/helper.py": "X = 1\n"},
+        reason="app/helper.py: the launcher suite needs it",
+    ),
+    Case(
+        "launcher list names the file that the suite now imports",
+        LAUNCHER_HOOK,
+        True,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": "VALUE = 1\n"},
+        files={"app/entry.py": "from app import helper\n", "app/helper.py": "X = 1\n", LAUNCHER_LIST: launcher_list(["app/entry.py", "app/helper.py"])},
+    ),
+    Case(
+        "launcher list lacks a new file under a folder the suite reads whole",
+        LAUNCHER_HOOK,
+        False,
+        committed={
+            LAUNCHER_BODY: LAUNCHER_START,
+            LAUNCHER_LIST: launcher_list(["app/entry.py", "app/data/a.txt"], ["app/data"]),
+            "app/entry.py": "VALUE = 1\n",
+            "app/data/a.txt": "a\n",
+        },
+        files={"app/data/b.txt": "b\n"},
+        reason="app/data/b.txt",
+    ),
+    Case(
+        "launcher list names a new file under a folder the suite reads whole",
+        LAUNCHER_HOOK,
+        True,
+        committed={
+            LAUNCHER_BODY: LAUNCHER_START,
+            LAUNCHER_LIST: launcher_list(["app/entry.py", "app/data/a.txt"], ["app/data"]),
+            "app/entry.py": "VALUE = 1\n",
+            "app/data/a.txt": "a\n",
+        },
+        files={"app/data/b.txt": "b\n", LAUNCHER_LIST: launcher_list(["app/entry.py", "app/data/a.txt", "app/data/b.txt"], ["app/data"])},
+    ),
+    Case(
+        "launcher list, a change outside what the suite reads",
+        LAUNCHER_HOOK,
+        True,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": "VALUE = 1\n"},
+        files={"README.md": "A note.\n"},
+    ),
+    Case(
         "config key removed, code still reads it",
         "removed-names",
         False,
@@ -4367,6 +4435,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             "command-modules",
             "env-example",
             IMPORTERS_HOOK,
+            LAUNCHER_HOOK,
             *CLEANUP_HOOKS,
         ):
             correct = correct and (case.reason or BLOCK_REASONS.get(case.name, "")) in output
@@ -4382,6 +4451,7 @@ TASK_IDS_COMMAND = ["-m", "scripts.quality.repo_checks", "task-ids"]
 LOCATION_MOVES = -1  # The planted exit code of a plant that keeps the finding and changes only the location it names.
 MODULES_COMMAND = ["-m", "scripts.quality.repo_checks", "command-modules"]
 IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
+LAUNCHER_COMMAND = ["-m", "scripts.quality.repo_checks", "launcher-list"]
 # Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
 # Fields: rule, the cases that show it, the command, the source file, the marker text, its replacement and the exit code the damaged check must give.
 PLANTED_REGRESSIONS = [
@@ -5134,6 +5204,24 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/typecheck_importers.py",
         "importing_files(root, base, [*present, *gone])",
         "importing_files(root, base, present)",
+        0,
+    ),
+    (
+        "the launcher list is checked when its group is selected",
+        [case for case in CASES if case.hook == LAUNCHER_HOOK and not case.expect_pass],
+        LAUNCHER_COMMAND,
+        "scripts/quality/committed_lists.py",
+        'if "launcher" not in ci_groups.plan("staged", "launcher")["run"]:',
+        "if True:",
+        0,
+    ),
+    (
+        "the launcher list is compared with the computed list",
+        [case for case in CASES if case.hook == LAUNCHER_HOOK and case.name == "launcher list lacks a file that the suite now imports"],
+        LAUNCHER_COMMAND,
+        "scripts/quality/committed_lists.py",
+        'found = [("launcher_list_equals_computed", line) for line in launcher_inputs.problems(ROOT, tracked, committed)]',
+        "found = []",
         0,
     ),
 ]

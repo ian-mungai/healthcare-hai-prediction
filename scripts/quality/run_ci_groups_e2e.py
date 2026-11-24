@@ -5173,6 +5173,8 @@ FAST_COMMIT_HOOKS = frozenset(
         "task-ids",
         "command-modules",
         "typecheck-importers",
+        "collector-code-versions",
+        "launcher-list",
         "temporary-code",
         "privacy-scan",
         "writing-check",
