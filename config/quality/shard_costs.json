@@ -1,5 +1,5 @@
 {
-  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run (run_checks_e2e: the four hosted samples shards of run 44930295246, Nov 21 2026). scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 44930295246 of Nov 21 2026 (pull request 97, four shard jobs on separate hosted runners, 845 hosted measurements, 3,818 seconds in all); the other 21 cases (the shared folder and local file address cases of the privacy scan that combine/round2-20261121 added) have no hosted measurement yet and carry 4.014 s, the median of the 65 hosted costs of the cases of that shape, until a hosted run measures them; the 866 costs come to 3,902 seconds in all. The costs of the earlier runs (run 43730985805: 7,662 seconds; a Mac validation run: 4,361 seconds) no longer apply.",
+  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run (run_checks_e2e: the four hosted samples shards of run 44930295246, Nov 21 2026). scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run. The costs of run_checks_e2e are the seconds of the cases rows in the shard manifests (manifest.json) of hosted CI run 44930295246 of Nov 21 2026 (pull request 97, four shard jobs on separate hosted runners, 845 hosted measurements, 3,818 seconds in all); the other 21 cases (the shared folder and local file address cases of the privacy scan that combine/round2-20261121 added) have no hosted measurement yet and carry 4.014 s, the median of the 65 hosted costs of the cases of that shape, until a hosted run measures them; the 866 costs come to 3,902 seconds in all. The costs of the earlier runs (run 43730985805: 7,662 seconds; a Mac validation run: 4,361 seconds) no longer apply. The 25 cases that the commit-gap and importer checks of round 3 added carry the seconds of the cases rows in the shard manifests of hosted CI run 45547677850 of Nov 24 2026 (downloaded with gh run download, artifacts hook_samples_shard_1 to 4). The two importer plants that the dependency-bound file samples need (changed dependency-bound files are checked; dependency-bound importers are checked at any depth) and the importers-of-a-changed-module plant, whose samples changed, have no hosted measurement yet and carry the seconds of one local run (22.4, 21.6 and 42.5), until a hosted run measures them. The four shards come to 983.8 to 984.2 s.",
   "suites": {
     "run_checks_e2e": {
       "clean file": 1.016,
@@ -645,7 +645,7 @@
       "planted regressions of text after a tokenizer error declares nothing: samples 1 to 1": 4.691,
       "planted regressions of declared import roots: samples 1 to 4": 42.871,
       "planted regressions of unreadable import roots check every file: samples 1 to 1": 40.271,
-      "planted regressions of importers of a changed module: samples 1 to 10": 134.673,
+      "planted regressions of importers of a changed module: samples 1 to 10": 42.5,
       "planted regressions of importers of a deleted module: samples 1 to 1": 6.634,
       "importer check on a pushed range": 37.631,
       "typecheck import closure": 3.263,
@@ -867,7 +867,34 @@
       "YAML list item with apostrophes around a parent name": 4.014,
       "single-quoted local file address to the shared folder": 4.014,
       "double-quoted local file address to the shared folder": 4.014,
-      "parenthesized local file address to the shared folder": 4.014
+      "parenthesized local file address to the shared folder": 4.014,
+      "staged pending file has a type error": 11.058,
+      "staged pending file has only a missing import": 7.39,
+      "staged importer of a pending file has a type error": 11.935,
+      "staged importer of a pending file has only the pending file's missing import": 7.036,
+      "staged pending file changes a type that a second-level pending importer uses": 11.016,
+      "staged pending file keeps the type that a second-level pending importer uses": 7.166,
+      "collector lists, a staged package initializer that no file pattern names": 1.739,
+      "collector lists, a staged deletion of a committed version list": 1.362,
+      "collector lists, a staged new module of the acquisition folder": 1.681,
+      "collector lists, a staged change outside every closure": 0.763,
+      "launcher list lacks a file that the suite now imports": 1.47,
+      "launcher list names the file that the suite now imports": 0.705,
+      "launcher list lacks a new file under a folder the suite reads whole": 1.297,
+      "launcher list names a new file under a folder the suite reads whole": 1.018,
+      "launcher list lacks a file that a staged addition makes an optional read find": 1.198,
+      "launcher list names the file that a staged addition makes an optional read find": 0.889,
+      "launcher list names a file that a staged deletion removes": 1.178,
+      "launcher list lacks a file that a staged addition makes an f-string optional read find": 0.896,
+      "launcher list lacks a file that an optional parenthesized import now finds": 1.19,
+      "launcher list, a staged addition that no launcher file names still runs the check and passes": 0.886,
+      "launcher list, a staged addition that no launcher file names runs the check and finds a stale list": 1.168,
+      "launcher list, a modification outside what the suite reads skips the check": 0.996,
+      "launcher list, a change outside what the suite reads": 1.449,
+      "planted regressions of changed dependency-bound files are checked: samples 1 to 2": 22.4,
+      "planted regressions of dependency-bound importers are checked at any depth: samples 1 to 2": 21.6,
+      "planted regressions of the launcher list is checked when its group is selected or a file is added or deleted: samples 1 to 7": 5.037,
+      "planted regressions of the launcher list is compared with the computed list: samples 1 to 1": 1.088
     }
   }
 }
