@@ -4,13 +4,16 @@
 # Then run `.venv/bin/python -m scripts.quality.pre_push install-shim` once: the pre-push run is a Git config hook (Git 2.54 or newer) that Git starts for
 # every push with the whole push input, whatever reference pre-commit hands its own hooks. The local_ci_pushed hook below only refuses a push without it.
 # Stages: the commit stage holds the fast checks and the path checks. A path check (the cleanup checks, the outgoing secret scan, dependency lock, SQLFluff,
-# model metadata and the review-record check) also has the manual stage and runs at commit only when a staged file is one it reads (`files`, `exclude`),
-# over its whole scope; with no `files` it reads every file, so any staged file selects it. Git hands pre-commit no deleted file, so a commit that only deletes
-# files skips a path check: the hosted run catches it. A commit that stages one Python file takes about three minutes on this Mac: about a minute of it is
+# model metadata and the review-record check) also has the manual stage and runs at commit only when a staged file is one it reads (`files`, `exclude`, `types`),
+# over its whole scope; with no `files` it reads every file, so any staged file selects it. Two limits follow from what Git hands pre-commit. A commit that
+# only deletes files hands it nothing, so a path check skips it. A path check reads the working tree, so a staged deletion that leaves the file on disk
+# (git rm --cached) beside a matching edit still lets build-contexts or terraform-unused read the leftover file. The hosted run checks out the committed
+# tree and catches both. A commit that stages one Python file takes about three minutes on this Mac: about a minute of it is
 # orphan-files, about twenty seconds the other path checks that read Python; a Terraform, Dockerfile or SQL change adds that check's time (SQLFluff about
-# five minutes, model-metadata about two). Only test-checks, test-lock and test-documentation-review stay manual-only. Every hook with the manual
-# stage is what the hosted hooks job runs (scripts/quality/ci_hooks.py, in full with --all-files on every pushed commit, so a path hook runs there whatever
-# the commit changed). The pre-push run (scripts/quality/pre_push.py) runs the changed-file checks, the commit
+# five minutes, model-metadata about two). Only test-checks, test-lock and test-documentation-review stay manual-only. The hosted hooks job runs every hook
+# with the manual stage except model-metadata (scripts/quality/ci_hooks.py, in full with --all-files on every pushed commit, so a path hook runs there
+# whatever the commit changed); the Gold group runs model-metadata (hooks_run_by_groups in config/quality/ci_groups.json). The pre-push run
+# (scripts/quality/pre_push.py) runs the changed-file checks, the commit
 # messages, the removed names, the secret and privacy scans and the osv-scanner hook over the pushed range, in about two minutes.
 # `pre-commit run --all-files --hook-stage manual` runs the whole manual set on demand.
 # There are no other bypasses: do not use SKIP= or git commit --no-verify. The pre-push run clears SKIP and the other pre-commit variables that change which hooks run.
@@ -50,6 +53,9 @@ repos:
         entry: .venv/bin/python -m scripts.quality.scan_secrets
         language: system
         pass_filenames: false
+        # A symlink is refused by the scan, so a staged one selects the hook too (pre-commit's default types skip a symlink).
+        types: []
+        types_or: [file, symlink]
         stages: [pre-commit, manual]
       - id: credential-files
         name: Credential, state and saved-plan files
@@ -67,6 +73,8 @@ repos:
         language: system
         pass_filenames: false
         exclude: (\.md$|^\.cleanup_allowlist$)
+        types: []
+        types_or: [file, symlink]
         stages: [pre-commit, manual]
       - id: removed-names
         name: Removed names gone from code, config and docs
@@ -125,7 +133,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.lock_env check
         language: system
         pass_filenames: false
-        files: ^(pyproject\.toml|uv\.lock|scripts/quality/lock_env\.py|config/quality_tools\.json)$
+        files: ^(pyproject\.toml|uv\.lock|uv\.toml|scripts/quality/lock_env\.py|config/quality_tools\.json)$
         stages: [pre-commit, manual]
       - id: orphan-files
         # A file is an orphan when no other tracked file names it, so any staged file (a new one, or an edit that drops a reference) selects the hook.
@@ -133,6 +141,8 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks orphan-files
         language: system
         pass_filenames: false
+        types: []
+        types_or: [file, symlink]
         stages: [pre-commit, manual]
       - id: terraform-unused
         # tflint reads the tracked Terraform files of every folder and its pinned version; the allowlist holds the exceptions.
@@ -140,7 +150,7 @@ repos:
         entry: .venv/bin/python -m scripts.quality.repo_checks terraform-unused
         language: system
         pass_filenames: false
-        files: ^(.*\.tf(\.json)?|\.cleanup_allowlist|\.tflint\.hcl|config/quality_tools\.json|scripts/quality/repo_checks\.py)$
+        files: (\.tf(\.json)?$|(^|/)\.tflint\.hcl$|^\.cleanup_allowlist$|^config/quality_tools\.json$|^scripts/quality/repo_checks\.py$)
         stages: [pre-commit, manual]
       - id: privacy-scan
         name: No personal data or environment-specific values in project files
@@ -187,7 +197,10 @@ repos:
         entry: .venv/bin/python -m scripts.quality.lint_sources sql
         language: system
         pass_filenames: false
-        files: (\.sql$|^\.sqlfluff$|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
+        # It lints every tracked SQL file through the dbt project (models, macros, schema files, packages and the lint profile: all of dbt/ but the seed data,
+        # which a template never reads) with the .sqlfluff settings (the root file, any nested one and an ignore file) of the pinned install.
+        files: (\.sql$|(^|/)\.sqlfluff(ignore)?$|^dbt/|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
+        exclude: ^dbt/seeds/.*\.csv$
         stages: [pre-commit, manual]
       - id: ruff
         name: Every nonignored Python source passes Ruff and formatting
@@ -231,7 +244,7 @@ repos:
         language: system
         pass_filenames: false
         # It reads every tracked Dockerfile, the root Compose file and the image list of infra/services.
-        files: (^|/)Dockerfile(\..+)?$|^docker-compose\.yaml$|^infra/services/images\.json$|^scripts/quality/lint_sources\.py$
+        files: (^|/)Dockerfile(\..*)?$|^docker-compose\.yaml$|^infra/services/images\.json$|^scripts/quality/lint_sources\.py$
         stages: [pre-commit, manual]
       - id: container-mounts
         name: First-party container imports fit their declared mounts
@@ -313,7 +326,9 @@ repos:
         entry: .venv/bin/python -m scripts.quality.model_metadata
         language: system
         pass_filenames: false
-        files: ^(dbt/.*\.(ya?ml|sql)|data_contracts/lakehouse/gold_contract\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py))|uv\.lock|pyproject\.toml)$
+        # It reads all of dbt/ (YAML, SQL, macros, seed names, project file), the gold contract, the two silver contracts that the deferral record is checked
+        # against and the bronze table map.
+        files: ^(dbt/.*|data_contracts/lakehouse/(gold_contract|silver_publish|silver_columns)\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py))|uv\.lock|pyproject\.toml)$
         stages: [pre-commit, manual]
       - id: documentation-review
         name: All documentation reviewed for the staged revision

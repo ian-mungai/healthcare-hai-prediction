@@ -5222,39 +5222,39 @@ PUSH_HOOKS = frozenset({"local_ci_pushed"})
 INSTALL_TYPES = ("pre-commit", "commit-msg", "pre-push")
 FINGERPRINT_KEYS = ("entry", "language", "files", "exclude", "types", "types_or", "always_run", "pass_filenames", "verbose", "args")
 # What the hosted hooks job runs: every hook of the manual stage, as it was before the commit stage was reduced, and the seven linters of lint_tools.
-# The eight hooks of ``COMMIT_PATH_HOOKS`` that had ``always_run`` carry their commit selection (``files``, ``exclude``, no ``always_run``) in the pin.
+# The path hooks of ``COMMIT_PATH_HOOKS`` carry their commit selection (``files``, ``exclude``, ``types``, no ``always_run``) in the pin.
 # The hosted run passes ``--all-files``, which selects such a hook whenever a tracked file matches (``hook_path_cases`` proves it), so it runs them as before.
 MANUAL_FINGERPRINTS = {
-    "gitleaks-outgoing": "a82522522e4d",
+    "gitleaks-outgoing": "cb03afc2b3f1",
     "credential-files": "9d1f2d4ee86b",
     "data-files": "1681a06bc29d",
-    "env-example": "48c7053aa441",
+    "env-example": "b59895fa6402",
     "removed-names": "acffa6ea5eac",
     "task-ids": "af8e2f11a070",
     "command-modules": "aa5699cf839f",
     "temporary-code": "9ee83ad12203",
     "unused-code": "fec61cf0a373",
     "unused-dependencies": "3e0448836624",
-    "orphan-files": "a387da5e5d12",
-    "terraform-unused": "c68a9174268e",
+    "orphan-files": "0c7fc958a22e",
+    "terraform-unused": "20a4046c86ae",
     "privacy-scan": "ce896f9743dd",
     "writing-check": "6103a7434254",
     "front-matter": "82a03c2777b3",
     "docs-references": "6546547e6ece",
     "markdown-links": "8edd25262d5a",
     "markdownlint": "28a824e49edc",
-    "sqlfluff": "27f53eb77481",
+    "sqlfluff": "f22033de945f",
     "ruff": "5f2147654150",
     "shell-syntax": "f63508f2a1fc",
     "shellcheck": "f0e1e106ec2c",
     "actionlint": "f19f2e73cdb9",
     "yamllint": "455872e07694",
     "hadolint": "9234e13781be",
-    "build-contexts": "611ab3e8c469",
+    "build-contexts": "31f024a54e9b",
     "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
-    "model-metadata": "0c3e9bd37b2b",
+    "model-metadata": "394c86dd10a8",
     "documentation-review-untracked": "83b7b0ce6039",
     "lint-settings": "60a35b84518b",
     "suppressions": "eda6794008b9",
@@ -5268,7 +5268,7 @@ MANUAL_FINGERPRINTS = {
     "typos": "61801f4f88b0",
     "osv-scanner": "6cccadc5d95b",
     "test-checks": "dce7c585008d",
-    "dependency-lock": "161d1011d863",
+    "dependency-lock": "f296b158cf5d",
     "test-lock": "54d78b27f865",
     "test-documentation-review": "db426284e54a",
 }
@@ -5322,16 +5322,56 @@ COMMIT_PATH_INPUTS = {
         "config/quality_tools.json",
     ],
     "orphan-files": ["README.md", "scripts/quality/repo_checks.py", "config/quality/env_names.json", "services/model_api/Dockerfile", ".cleanup_allowlist"],
-    "terraform-unused": ["infra/iam/main.tf", ".tflint.hcl", ".cleanup_allowlist", "scripts/quality/repo_checks.py", "config/quality_tools.json"],
+    "terraform-unused": [
+        "infra/iam/main.tf",
+        "infra/iam/.tflint.hcl",
+        ".tflint.hcl",
+        ".cleanup_allowlist",
+        "scripts/quality/repo_checks.py",
+        "config/quality_tools.json",
+    ],
     "build-contexts": [
         "services/model_api/Dockerfile",
         "services/lakehouse/spark/Dockerfile",
+        "services/model_api/Dockerfile.",
+        "services/model_api/Dockerfile.prod",
         "docker-compose.yaml",
         "infra/services/images.json",
         "scripts/quality/lint_sources.py",
     ],
     "documentation-review-untracked": [".documentation_review.json", ".gitignore", "scripts/quality/documentation_review.py"],
+    "dependency-lock": ["pyproject.toml", "uv.lock", "uv.toml", "scripts/quality/lock_env.py", "config/quality_tools.json"],
+    "sqlfluff": [
+        "dbt/models/gold/dimensions/dim_county.sql",
+        "dbt/macros/columns.sql",
+        "dbt/profiles.yml",
+        "dbt/dbt_project.yml",
+        "dbt/packages.yml",
+        "dbt/models/gold/dimensions/_dimensions__models.yml",
+        "services/analytics/resources.sql",
+        ".sqlfluff",
+        "dbt/models/.sqlfluff",
+        "uv.lock",
+        "scripts/quality/lint_sources.py",
+        "scripts/quality/install_sqlfluff.py",
+    ],
+    "model-metadata": [
+        "dbt/models/gold/dimensions/dim_county.sql",
+        "dbt/models/gold/dimensions/_dimensions__models.yml",
+        "dbt/dbt_project.yml",
+        "dbt/seeds/acs_variable_map.csv",
+        "data_contracts/lakehouse/gold_contract.json",
+        "data_contracts/lakehouse/silver_publish.json",
+        "data_contracts/lakehouse/silver_columns.json",
+        "config/lakehouse/bronze_tables.json",
+        "scripts/process.py",
+        "scripts/quality/model_metadata.py",
+        "uv.lock",
+        "pyproject.toml",
+    ],
 }
+# The hooks whose selection is "any staged path", which includes a symlink: pre-commit's default ``types: [file]`` leaves a symlink out.
+ANY_PATH_HOOKS = ("gitleaks-outgoing", "env-example", "orphan-files")
 
 
 def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5350,6 +5390,11 @@ def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
         include, exclude = re.compile(str(found.get("files") or "")), re.compile(str(found.get("exclude") or "^$"))
         missed = [path for path in paths if not include.search(path) or exclude.search(path)]
         cases.append({"case": f"commit_hook_{name}_selects_its_inputs", "passed": not missed, "missed": missed})
+    for name in ANY_PATH_HOOKS:
+        # The tags identify gives a symlink are {"symlink"} alone: a hook selects it only when every ``types`` entry is among them and ``types_or`` names one.
+        found, tags = hooks.get(name, {}), {"symlink"}
+        selected = set(found.get("types", ["file"])) <= tags and (not found.get("types_or") or bool(tags & set(found["types_or"])))
+        cases.append({"case": f"commit_hook_{name}_selects_a_symlink", "passed": selected})
     return cases
 
 
@@ -7405,7 +7450,9 @@ def hook_and_tree_cases(scratch: Path) -> list[dict[str, Any]]:
 
 
 STAGE_RUNNERS = ("scripts/quality/run_model_metadata_e2e.py", "scripts/quality/run_checks_e2e.py", "scripts/quality/run_lint_coverage_e2e.py")
+# The path hooks the runners start by name run at commit when a file they read is staged, so they resolve to the commit stage; test-checks stays manual-only.
 MOVED_HOOKS = ("model-metadata", "build-contexts", "sqlfluff", "orphan-files", "unused-code")
+MANUAL_ONLY_HOOKS = ("test-checks",)
 FAST_HOOKS_IN_RUNNERS = ("ruff", "privacy-scan", "docker-calls")
 
 
@@ -7414,8 +7461,10 @@ def runner_stage_problems(sources: dict[str, str], stages: dict[str, str]) -> li
     problems = [
         f"{name} does not pass --hook-stage from hook_stage()" for name, text in sources.items() if "hook_stage(" not in text or "--hook-stage" not in text
     ]
-    problems += [f"{hook} resolves to {stages.get(hook)!r}, not 'manual'" for hook in MOVED_HOOKS if stages.get(hook) != "manual"]
-    problems += [f"{hook} resolves to {stages.get(hook)!r}, not 'pre-commit'" for hook in FAST_HOOKS_IN_RUNNERS if stages.get(hook) != "pre-commit"]
+    problems += [
+        f"{hook} resolves to {stages.get(hook)!r}, not 'pre-commit'" for hook in (*MOVED_HOOKS, *FAST_HOOKS_IN_RUNNERS) if stages.get(hook) != "pre-commit"
+    ]
+    problems += [f"{hook} resolves to {stages.get(hook)!r}, not 'manual'" for hook in MANUAL_ONLY_HOOKS if stages.get(hook) != "manual"]
     return problems
 
 
@@ -7424,7 +7473,7 @@ def resolved_stages(config: Path) -> dict[str, str]:
         resolver = importlib.import_module("scripts.quality.hook_stage").hook_stage
     except ImportError:
         return {}
-    return {hook: resolver(config, hook) for hook in (*MOVED_HOOKS, *FAST_HOOKS_IN_RUNNERS)}
+    return {hook: resolver(config, hook) for hook in (*MOVED_HOOKS, *MANUAL_ONLY_HOOKS, *FAST_HOOKS_IN_RUNNERS)}
 
 
 def runner_stage_cases(scratch: Path) -> list[dict[str, Any]]:
@@ -7435,7 +7484,11 @@ def runner_stage_cases(scratch: Path) -> list[dict[str, Any]]:
     problems = runner_stage_problems(sources, stages)
     unstaged = {name: text.replace("hook_stage(", "hook_name(") for name, text in sources.items()}
     damaged = scratch / "hook_config_damaged.yaml"
-    damaged.write_text(re.sub(r"(id: orphan-files.*?\n\s+stages: )\[manual\]", r"\1[pre-commit, manual]", config.read_text(), count=1, flags=re.S))
+    document = load_yaml(config.read_text())
+    if not isinstance(document, dict):
+        raise ValueError(".pre-commit-config.yaml must contain a mapping")
+    hook_table(document)["orphan-files"]["stages"] = ["manual"]
+    damaged.write_text(json.dumps(document))
     return [
         {"case": "runners_name_the_stage_of_moved_hooks", "passed": not problems, "problems": problems},
         {
@@ -7443,7 +7496,7 @@ def runner_stage_cases(scratch: Path) -> list[dict[str, Any]]:
             "passed": any("does not pass" in problem for problem in runner_stage_problems(unstaged, stages)),
         },
         {
-            "case": "planted_moved_hook_back_in_commit_stage_caught_by_runners_name_the_stage_of_moved_hooks",
+            "case": "planted_path_hook_left_the_commit_stage_caught_by_runners_name_the_stage_of_moved_hooks",
             "passed": bool(stages) and any("orphan-files" in problem for problem in runner_stage_problems(sources, resolved_stages(damaged))),
         },
     ]
