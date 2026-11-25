@@ -24,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, NoReturn
 
+from scripts.infrastructure.render_platform_config import made_up_empty_state
 from scripts.infrastructure.render_project_config import ConfigurationError, load_alert_email, load_configuration
 from scripts.process import TimeoutExpired, run_command
 
@@ -214,12 +215,17 @@ def state_addresses() -> set[str] | None:
     """The resources of the alerts root state, or ``None`` when there is no state. A resource other than the two subscriptions stops the step.
 
     The state is read through Terraform (``state pull``), so a local file and a remote backend work alike. Terraform prints nothing for a stack with no state,
-    and for a local file that is empty, such as the one that ``init -reconfigure`` leaves after a move to the project bucket."""
+    and for a local file that is empty, such as the one that ``init -reconfigure`` leaves after a move to the project bucket. For a remote backend that holds
+    no state object it prints an empty state (serial 0, no lineage, no resources) while ``state list`` fails; that is no state too. A persisted state that has
+    no resources has a lineage and is a state."""
     pulled = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "pull"])
     if not pulled.strip():
         return None
-    if not isinstance(read_json(Subject.STATE, pulled), dict):
+    document = read_json(Subject.STATE, pulled)
+    if not isinstance(document, dict):
         raise Stop(Subject.STATE, Status.UNEXPECTED)
+    if made_up_empty_state(document):
+        return None
     listed = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"]).splitlines()
     if not set(listed) <= {ALERTS_ADDRESS, BUDGET_ADDRESS} or len(listed) != len(set(listed)):
         raise Stop(Subject.STATE, Status.UNEXPECTED)

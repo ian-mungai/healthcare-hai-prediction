@@ -925,8 +925,9 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
     started: list[dict[str, Any]] = []
 
     class Recorder:
-        def __init__(self, reload: bool = False) -> None:
+        def __init__(self, reload: bool = False, serial: bool = False) -> None:
             self.reload = reload
+            self.serial = serial
 
         def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
             started.append({"keep_on": keep_on, "code": code})

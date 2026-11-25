@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from orchestration.training_contract import CODE_RUN, MODEL_NAMES, compose_run_id, new_run_hex
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.s3_store import AwsCli, StorageError
-from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
+from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, made_up_empty_state, terraform_document
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 from scripts.process import CompletedProcess
 
@@ -69,6 +69,7 @@ DEV_HOLD_SECONDS = 3600  # the default hold of a development session
 DEV_MAX_HOLD_SECONDS = 43200
 DEV_STOP_WAIT_SECONDS = 1800  # how long the end of a development session waits for a running job task
 PRODUCTION = "prod"
+SERIAL_SECONDS = 15  # the bound of the services state serial lookup, which only reports
 MISSING = "MISSING"
 REGISTRATION_SECONDS = 600
 HOST_PREPARE_SECONDS = 600
@@ -388,10 +389,15 @@ def output_value(document: dict[str, Any], name: str, kind: type) -> Any:
 def services_state_serial(settings: dict[str, str], remaining: Callable[[], float] | None = None) -> int | None:
     """The serial of the services state, read with ``terraform state pull`` in the services folder, so a local file and a remote backend work alike.
 
-    None when Terraform cannot read the state, prints nothing (no state, or an empty local file) or the document has no whole-number serial."""
+    The read has its own bound, ``SERIAL_SECONDS``, or the time the caller has left when that is shorter; no process starts when none is left. None when
+    Terraform cannot read the state in that time, prints nothing (no state, or an empty local file), prints the empty state that it makes up for a missing
+    remote object or the document has no whole-number serial."""
+    seconds = SERIAL_SECONDS if remaining is None else min(SERIAL_SECONDS, remaining())
     try:
-        document = terraform_document(SERVICES_DIRECTORY, ["state", "pull"], settings, "The services state could not be read.", **limit(remaining))
+        document = terraform_document(SERVICES_DIRECTORY, ["state", "pull"], settings, "The services state could not be read.", timeout=seconds)
     except ConfigurationError:
+        return None
+    if made_up_empty_state(document):
         return None
     serial = document.get("serial")
     return serial if isinstance(serial, int) and not isinstance(serial, bool) else None
@@ -421,7 +427,7 @@ def jobs_log_group(settings: dict[str, str]) -> str:
     return f"{project}_jobs_{environment}" if project and environment else ""
 
 
-def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None, reload: bool = False) -> Names:
+def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None, reload: bool = False, serial: bool = False) -> Names:
     """Read the platform and services outputs with the project profile; with ``reload`` also the jobs outputs (``start`` only: a stop never waits for them).
 
     ``remaining`` gives the seconds left under the caller's deadline. It is read before each lookup, which gets only that much time.
@@ -452,7 +458,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
                 *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP, MLFLOW_USER) if optional in one_shot),
             )
         },
-        state_serial=services_state_serial(settings, remaining),
+        state_serial=services_state_serial(settings, remaining) if serial else None,
         reload=reload_task(jobs),
         host_address=address if isinstance(address, str) else "",
         log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
@@ -1789,11 +1795,11 @@ def online_sets() -> list[str]:
     return sorted(name for name, entry in document["model_sets"].items() if entry["online"])
 
 
-def open_session(reload: bool = False) -> Session:
-    """The session of the project profile, with the names read from the Terraform outputs; ``reload`` also reads the jobs outputs (the ``start`` command).
-    Raises ConfigurationError."""
+def open_session(reload: bool = False, serial: bool = False) -> Session:
+    """The session of the project profile, with the names read from the Terraform outputs; ``reload`` also reads the jobs outputs (the ``start`` command)
+    and ``serial`` also reads the serial of the services state (the commands that print or record it). Raises ConfigurationError."""
     settings, _ = load_configuration(REPO_ROOT / ".env")
-    session = Session(AwsCli(settings, tolerant_runner), load_names(settings, reload=reload))
+    session = Session(AwsCli(settings, tolerant_runner), load_names(settings, reload=reload, serial=serial))
     from scripts.infrastructure.host_launch_settle import HostLaunchSettle
 
     session.launch_settle = HostLaunchSettle(session)
@@ -1903,7 +1909,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"usage: {error}\n")
             return 2
     try:
-        session = open_session(arguments.command in {"start", "session"})
+        session = open_session(arguments.command in {"start", "session"}, arguments.command in {"status", "refresh", "session"})
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")
         return 2

@@ -94,6 +94,13 @@ def terraform_document(directory: Path, arguments: list[str], storage: dict[str,
     return document
 
 
+def made_up_empty_state(document: dict[str, Any]) -> bool:
+    """True for the empty state that Terraform prints from ``state pull`` when a remote backend holds no state object: serial 0, no lineage and no resources.
+
+    A state that was ever written has a lineage, so a persisted state with no resources is not this document."""
+    return not document.get("lineage") and not document.get("resources") and document.get("serial") in (0, None)
+
+
 def platform_outputs(storage: dict[str, str]) -> dict[str, Any]:
     """The outputs of the applied platform stack, as ``terraform output -json`` prints them."""
     return terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], storage, "The platform outputs could not be read. Apply the platform stack first.")

@@ -206,7 +206,15 @@ PLANTS: dict[str, tuple[str, str]] = {
         '            self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")\n            self.check_no_job_tasks(0)',
     ),
     "the command line runs a second copy of the module": ("    raise SystemExit(packaged_main())", "    raise SystemExit(main())"),
-    "names carry no state serial": ("state_serial=services_state_serial(settings, remaining),", "state_serial=None,"),
+    "names carry no state serial": ("state_serial=services_state_serial(settings, remaining) if serial else None,", "state_serial=None,"),
+    "names always read the state serial": (
+        "state_serial=services_state_serial(settings, remaining) if serial else None,",
+        "state_serial=services_state_serial(settings, remaining),",
+    ),
+    "the serial lookup takes all the time that is left": ("min(SERIAL_SECONDS, remaining())", "remaining()"),
+    "the serial lookup has no bound without a caller deadline": ("SERIAL_SECONDS if remaining is None else", "1e9 if remaining is None else"),
+    "the made up empty state counts as a serial": ("    if made_up_empty_state(document):\n        return None\n", ""),
+    "every command asks for the serial": ('arguments.command in {"status", "refresh", "session"})', "True)"),
     "status raises on an absent service": (
         "        found, absent = self.lookup_services()\n        services = {",
         "        found, absent = self.service_states(), []\n        services = {",

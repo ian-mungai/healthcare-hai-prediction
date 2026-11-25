@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import alert_email_block_cases, owner_commands, services_code_inputs
+from scripts.infrastructure import alert_email_block_cases, owner_commands, services_code_inputs, state_reader_cases
 from scripts.infrastructure.run_activation_inputs_e2e import ADMIN, ROOT, Workspace
 from scripts.process import run_command
 
@@ -889,6 +889,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
             "commands": command_checks(code, resolve, Path(folder)),
             "mutants": mutant_checks(code, resolve, Path(folder)) | alert_mutant_checks(Path(folder)),
             "state_move": state_sheet_checks(Path(folder)),
+            "state_readers": state_reader_cases.run(),
         }
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")

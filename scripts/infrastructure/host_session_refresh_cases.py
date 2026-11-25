@@ -32,6 +32,7 @@ from scripts.infrastructure.host_session_stand_in import (
     SERVICES,
     StandInHost,
 )
+from scripts.process import CompletedProcess, TimeoutExpired
 
 CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
 JOB_PREFIX = "stand_in_dev_job_"
@@ -282,7 +283,7 @@ def the_services_state_serial_is_read_through_terraform() -> dict[str, bool]:
             return platform if folder == host_session.PLATFORM_DIRECTORY else services
 
         with mock.patch.object(host_session, "SERVICES_DIRECTORY", directory), mock.patch.object(host_session, "terraform_document", terraform):
-            return host_session.load_names({}).state_serial
+            return host_session.load_names({}, serial=True).state_serial
 
     remote = serial({"version": 4, "serial": SERIAL, "lineage": "x"})
     (directory / "terraform.tfstate").write_text(json.dumps({"serial": 1}), encoding="utf-8")
@@ -297,6 +298,104 @@ def the_services_state_serial_is_read_through_terraform() -> dict[str, bool]:
         "a state that cannot be read, or is empty, is unknown and not an error": unreadable is None,
         "the state is pulled in the services folder": bool(pulls)
         and all(folder == directory and arguments == ["state", "pull"] for folder, arguments in pulls),
+    }
+
+
+def the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero() -> dict[str, bool]:
+    """Only the commands that print or record the serial read it, and the read has a short bound of its own inside the time the caller has left. The ECS task
+    cleanup never reads it, so it keeps its two Terraform lookups and all its time. The empty state that Terraform makes up for a missing remote object
+    (serial 0, no lineage, no resources) is no serial."""
+    host_session = module()
+    renderer = importlib.import_module("scripts.infrastructure.render_platform_config")
+    settings = {"aws_profile": PROFILE, "aws_region": REGION}
+    started: list[tuple[list[str], float]] = []
+    answers: dict[str, Any] = {"state": {"version": 4, "serial": SERIAL, "lineage": "x", "resources": []}}
+
+    def fake_run(program: str, argv: Any, *, env: Any, timeout: float) -> CompletedProcess[str]:
+        started.append((list(argv), timeout))
+        if "state" in argv and isinstance(answers["state"], BaseException):
+            raise answers["state"]
+        return CompletedProcess([program, *argv], 0, json.dumps(answers["state"]), "")
+
+    def serial(remaining: Callable[[], float] | None = None) -> Any:
+        started.clear()
+        with mock.patch.object(renderer, "run_command", fake_run):
+            return host_session.services_state_serial(settings, remaining)
+
+    unbounded = serial()
+    unbounded_timeout = started[0][1] if started else None
+    roomy = serial(lambda: 100.0)
+    roomy_timeout = started[0][1] if started else None
+    tight = serial(lambda: 5.0)
+    tight_timeout = started[0][1] if started else None
+    spent = serial(lambda: 0.0)
+    spent_started = len(started)
+    answers["state"] = TimeoutExpired(["terraform"], 15)
+    slow = serial(lambda: 100.0)
+    answers["state"] = {"version": 4, "serial": 0, "lineage": "", "outputs": {}, "resources": []}
+    synthetic = serial()
+    answers["state"] = {"version": 4, "serial": 9, "lineage": "persisted", "outputs": {}, "resources": []}
+    persisted_empty = serial()
+    platform = {
+        "cluster_name": {"value": CLUSTER},
+        "host_autoscaling_group_name": {"value": GROUP},
+        "ec2_capacity_provider_name": {"value": PROVIDER},
+        "project_tag": {"value": PROJECT},
+    }
+    services = {
+        "service_names": {"value": {"postgres": "q"}},
+        "one_shot_run_task": {"value": {key: {"task_definition": family} for key, family in FAMILIES.items()}},
+    }
+    pulls: list[bool] = []
+
+    def terraform(folder: Path, arguments: list[str], *_: object, **__: object) -> dict[str, Any]:
+        if arguments[:2] == ["state", "pull"]:
+            pulls.append(True)
+            return {"serial": SERIAL, "lineage": "x"}
+        return platform if folder == host_session.PLATFORM_DIRECTORY else services
+
+    with mock.patch.object(host_session, "terraform_document", terraform):
+        plain = host_session.load_names({}, lambda: 100.0)
+        plain_pulls = len(pulls)
+        asked = host_session.load_names({}, lambda: 100.0, serial=True)
+    routed: dict[str, Any] = {}
+
+    class Recorder:
+        def __init__(self, *_: object) -> None:
+            pass
+
+        def start(self, *_: object, **__: object) -> None:
+            pass
+
+        refresh = dev_session = bootstrap = catalog_setup = stop = start
+
+        def status(self) -> dict[str, Any]:
+            return {}
+
+    def opened(*arguments: Any, **options: Any) -> Recorder:
+        routed["last"] = (arguments, options)
+        return Recorder()
+
+    wanted: dict[str, bool] = {}
+    with mock.patch.object(host_session, "open_session", opened), mock.patch.object(host_session, "install_termination_handler", lambda: lambda: None):
+        for command in ("start", "stop", "bootstrap", "status", "refresh", "session"):
+            try:
+                host_session.main([command])
+            except SystemExit:
+                continue
+            arguments, options = routed["last"]
+            wanted[command] = bool(options.get("serial", arguments[1] if len(arguments) > 1 else False))
+    return {
+        "a lookup without a caller deadline gets the short bound": unbounded == SERIAL and unbounded_timeout == host_session.SERIAL_SECONDS,
+        "a lookup under a long deadline gets the short bound, not the whole time left": roomy == SERIAL and roomy_timeout == host_session.SERIAL_SECONDS,
+        "a lookup under a short deadline gets only the time left": tight == SERIAL and tight_timeout == 5.0,
+        "a lookup with no time left starts no process": spent is None and spent_started == 0,
+        "a pull that outruns its bound is an unknown serial, not an error": slow is None,
+        "the empty state that Terraform makes up for a missing object is no serial": synthetic is None,
+        "a persisted state with no resources keeps its serial": persisted_empty == 9,
+        "load_names reads no serial unless asked": plain.state_serial is None and plain_pulls == 0 and asked.state_serial == SERIAL and len(pulls) == 1,
+        "only status, refresh and session ask for the serial": wanted
+        == {"start": False, "stop": False, "bootstrap": False, "status": True, "refresh": True, "session": True},
     }
 
 
@@ -362,5 +461,6 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "status_reports_an_absent_service_by_name": status_reports_an_absent_service_by_name,
     "status_without_a_missing_service_names_none": status_without_a_missing_service_names_none,
     "the_services_state_serial_is_read_through_terraform": the_services_state_serial_is_read_through_terraform,
+    "the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero": the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero,
     "refresh_command_line": refresh_command_line,
 }

@@ -634,6 +634,26 @@ def teardown_cases(section: str, sink: list[str], helper: str) -> tuple[dict[str
         code, output, called = scratch.run(plan)
         calls += called
         case("an empty local state file gives a destroy plan with nothing to do", code == 0 and output == "alerts: nothing to do\n")
+    # A backend with no state object: Terraform prints an empty state from pull (serial 0, no lineage) and fails state list. That is no state.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink, helper=helper)
+        scratch.set(missing_remote_object=True)
+        code, output, called = scratch.run(state)
+        calls += called
+        case("a remote backend with no state object reports an absent state and succeeds", code == 0 and output == "state: absent\n")
+        code, output, called = scratch.run(plan)
+        calls += called
+        case("a remote backend with no state object gives a destroy plan with nothing to do", code == 0 and output == "alerts: nothing to do\n")
+    # A persisted state that holds no resources is a state, not an absent one.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink, helper=helper)
+        scratch.set(zero_resource_state=True)
+        code, output, called = scratch.run(state)
+        calls += called
+        case(
+            "a persisted state with no resources reports both subscriptions absent from it",
+            code == 0 and output == "alerts subscription: absent\nbudget subscription: absent\n",
+        )
     for label, extra, words in (
         ("a state that cannot be pulled", {"fail_state_pull": True}, ("state: failed\n",)),
         ("a state pull that is not a state document", {"pull_raw": "not json"}, ("state: unexpected\n",)),

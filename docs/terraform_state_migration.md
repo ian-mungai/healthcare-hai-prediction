@@ -36,7 +36,7 @@ The E2E is `scripts/infrastructure/run_state_migration_e2e.py` (real Terraform a
 
 ## After the move
 
-Terraform empties the local `terraform.tfstate` and keeps the old content in `terraform.tfstate.backup`. When the file is a link, Terraform empties the file the link points to. The script's own copy of the state stays in `plans/state_migration/<stack>.local_state.json` (owner only). Two project tools read a stack's state through Terraform (`terraform state pull`), so they work for a moved stack. `host_session` takes the serial of the services state from it. `alert_email` (`state_addresses`) takes the resources of the alerts state from it. An empty or missing local file counts as no state when the backend holds none. A state in the bucket counts when no local file exists.
+Terraform empties the local `terraform.tfstate` and keeps the old content in `terraform.tfstate.backup`. When the file is a link, Terraform empties the file the link points to. The script's own copy of the state stays in `plans/state_migration/<stack>.local_state.json` (owner only). Two project tools read a stack's state through Terraform (`terraform state pull`), so they work for a moved stack. `host_session` takes the serial of the services state from it. `alert_email` (`state_addresses`) takes the resources of the alerts state from it. An empty or missing local file counts as no state when the backend holds none. A backend with no state object counts as no state too: `state pull` then prints an empty state with serial 0 and no lineage. A state in the bucket counts when no local file exists. A persisted state with no resources is still a state.
 
 ## Rollback
 
