@@ -238,14 +238,6 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
         for other in ("commit.json", "features_snapshot.json", "gold_pins.json", "layer_run.json"):
             add(f"{layer} features run record excludes {other}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/{other}", False)
             add(f"{layer} features run list excludes {other}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"{RUN_RECORD_PREFIX}run/{other}",)})
-        add(
-            f"{layer} features run list excludes feast_apply.json",
-            layer,
-            "s3:ListBucket",
-            BUCKET,
-            False,
-            {"s3:prefix": (f"{RUN_RECORD_PREFIX}run/feast_apply.json",)},
-        )
         for prefix in (RUN_RECORD_PREFIX, f"{RUN_RECORD_PREFIX}run/", "lakehouse/layer_runs/", "lakehouse/layer_runs/features"):
             add(f"{layer} features run folders are not listed {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")

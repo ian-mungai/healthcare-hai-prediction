@@ -1744,6 +1744,15 @@
     },
     {
       "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_apply.json",
+      "granted_by": [
+        "ReadFeaturesRunRecords"
+      ],
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
       "action": "s3:PutObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/feast_materialize.json",
       "scope": "features"
