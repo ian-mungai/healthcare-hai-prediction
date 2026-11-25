@@ -35,6 +35,11 @@ body = json.dumps({"tables": state["databases"][database]["tables"]}).encode()
 if database in os.environ.get("FAKE_TRUNCATE_DUMP", "").split():
     body = body[: len(body) // 2]
 open(target, "wb").write(b"PGDMP" + body)
+manifest = os.path.join(os.path.dirname(target), "manifest.tsv")
+if database in os.environ.get("FAKE_BLOCK_MANIFEST", "").split():
+    os.makedirs(manifest, exist_ok=True)
+elif os.path.isdir(manifest):
+    os.rmdir(manifest)
 """
 
 PG_RESTORE = """#!/usr/bin/env python3

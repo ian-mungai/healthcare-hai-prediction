@@ -88,6 +88,11 @@
       "why": "reviewed: install lists only host folders at run time, never a repository folder: iterdir at infra/services/scripts/code_fetch.py:73 checks that the repo path, when it is a plain folder, holds no content, and iterdir at :79 lists the release folders under the host's repo_releases to find the complete release that matches the digest. It also reads file contents at run time, only of a release on the host: verified opens the release's code.tar.gz at :29 to hash it and read its members (:33), and opens each installed member of the release's code folder at :37 to compare it with the archive member. These are reads of one release folder and its own archive, never a file of the repository checkout that the launcher suite runs from"
     },
     {
+      "module": "infra/services/scripts/pg_backup_upload.py",
+      "pattern": null,
+      "why": "reviewed: the glob at infra/services/scripts/pg_backup_upload.py:186 lists only the finished set folders (*.ready) under BACKUP_DIR, the backup folder of the host that the Postgres backup service mounts, to find the sets to upload; it lists no repository folder and reads no file of the repository checkout that the launcher suite runs from"
+    },
+    {
       "module": "orchestration/airflow_steps.py",
       "pattern": null,
       "why": "reviewed: folder_bytes walks (os.walk at orchestration/airflow_steps.py:158) only the family scratch folders under HAI_LAUNCH_SCRATCH_PATH, the host scratch volume mounted read-only into the Airflow container, to count their allocated bytes; it lists no repository folder and reads no file contents"
@@ -435,6 +440,7 @@
   },
   "inventory_sites": {
     "infra/services/scripts/code_fetch.py": 2,
+    "infra/services/scripts/pg_backup_upload.py": 1,
     "orchestration/airflow_steps.py": 1,
     "orchestration/code_digest.py": 3,
     "orchestration/launcher.py": 9,
@@ -540,6 +546,7 @@
     "infra/jobs",
     "infra/platform",
     "infra/services",
+    "infra/services/scripts",
     "orchestration",
     "scripts/acquisition",
     "scripts/lakehouse",

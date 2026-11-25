@@ -82,6 +82,7 @@ STOP_PROGRESS_SECONDS = 60
 CALL_SECONDS = 180
 RUN_TASK_ATTEMPTS = 3
 UNCONFIRMED = "request_unconfirmed"
+UNCLASSIFIED = frozenset({UNCONFIRMED, "request_failed", "invalid_response"})  # the codes of a call that has no provider error code: its effect is not known
 TASK_POLL_SECONDS = 6
 FAILED_POLLS_ALLOWED = 3
 DESCRIBE_SERVICES_LIMIT = 10
@@ -115,6 +116,16 @@ PROMETHEUS_RESTORE_SECONDS = 1800
 # The services that open the Prometheus data folder (infra/services/prometheus_history.tf): the restore runs only while both are stopped.
 PROMETHEUS_SERVICES = ("monitoring", "prometheus_history")
 PROMETHEUS_HOLD_SECONDS = 300
+POSTGRES_BACKUP = "postgres_backup"  # the backup service: it dumps every database at an interval
+POSTGRES_FINAL_BACKUP = "postgres_final_backup"  # the one-shot with the same dump and upload steps, one pass each (infra/services/postgres_backup.tf)
+FINAL_BACKUP_HOLD_SECONDS = 300  # how long the backup service may take to stop before the final dump runs
+FINAL_BACKUP_SECONDS = 1800  # the deadline of the final dump and its upload at a stop
+FINAL_BACKUP_FAILURE_SECONDS = 900  # the same at the cleanup of a failed command, which holds every shutdown signal
+FINAL_BACKUP_CONTAINERS = ("postgres_backup_dump", "postgres_backup_upload")  # the containers of the final backup one-shot (infra/services/postgres_backup.tf)
+SERVICES_SCRIPTS = SERVICES_DIRECTORY / "scripts"
+# The scripts the registered final backup task definition must embed (infra/services/postgres_backup.tf reads these files): a definition that was not applied
+# after a change of them runs older scripts.
+FINAL_BACKUP_SCRIPTS = {"postgres_backup_dump": SERVICES_SCRIPTS / "pg_backup_dump.sh", "postgres_backup_upload": SERVICES_SCRIPTS / "pg_backup_upload.py"}
 CODE_RUN_ID = re.compile(CODE_RUN)
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
@@ -173,6 +184,12 @@ class AwsCallFailed(HostSessionError):
     def __init__(self, message: str, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def refused_by_provider(error: HostSessionError) -> bool:
+    """True when the call failed with an error code of the provider (AccessDeniedException, ThrottlingException): the provider answered and did not apply it.
+    A call with no provider code (a timeout, a CLI read error, an unreadable answer) may have been applied, so it is no refusal."""
+    return isinstance(error, AwsCallFailed) and error.code not in UNCLASSIFIED
 
 
 class CodeMissing(HostSessionError):
@@ -457,7 +474,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
             for key in (
                 HOST_PREPARE,
                 POLARIS_BOOTSTRAP,
-                *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP, MLFLOW_USER) if optional in one_shot),
+                *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP, MLFLOW_USER, POSTGRES_FINAL_BACKUP) if optional in one_shot),
             )
         },
         state_serial=services_state_serial(settings, remaining) if serial else None,
@@ -494,6 +511,13 @@ class Session:
         self.environment = "dev"
         self.cleanup_outcome: str | None = None  # how the last ``stop_after_failure`` ended: kept_on, host_off_verified or host_off_failed: <reason>
         self.host_requested = False  # a host-on request was made or may have been made: a development session then owes a capacity-zero request
+        self.services_ready = (
+            False  # ``deploy_services`` saw every service stable and the postgres setup complete: the databases then hold the restored history
+        )
+        self.final_backup_outcome: str | None = None  # how the last final dump ended: taken, interrupted, skipped: <reason> or failed: <reason>
+        self.final_definition = ""  # the ARN, with its revision, of the final backup task definition whose scripts were checked
+        self.backup_hold: tuple[str, int] | None = None  # the interval backup service that the final dump scaled to zero, with the count it had
+        self.final_task_open = False  # a final backup task may still be running (it was launched or may have been, and no stop was seen)
         self.output_errors = 0  # the reports that a closed output refused during a development session
 
     def step(self, name: str, detail: str = "ok") -> None:
@@ -632,8 +656,14 @@ class Session:
             self.step("launch_settle_interrupted", "interrupted; the host is off and the first error stands; the next stop or start repeats the settle")
 
     def host_off(self) -> None:
-        """Set the desired capacity to 0 and verify the group has no instance left."""
-        self.call("autoscaling", "set-desired-capacity", ["--auto-scaling-group-name", self.names.group, "--desired-capacity", "0", "--no-honor-cooldown"])
+        """Set the desired capacity to 0 and verify the group has no instance left. A request that the provider refuses with an error code leaves the host
+        on, so the interval backup service that the final dump stopped is given back (``resume_interval_backup``); the refusal is the error that propagates."""
+        try:
+            self.call("autoscaling", "set-desired-capacity", ["--auto-scaling-group-name", self.names.group, "--desired-capacity", "0", "--no-honor-cooldown"])
+        except HostSessionError as error:
+            if refused_by_provider(error):
+                self.resume_interval_backup()
+            raise
         self.step("host_off_requested")
 
         def gone() -> bool:
@@ -643,15 +673,16 @@ class Session:
         self.wait("host termination", gone, TERMINATE_SECONDS, POLL_SECONDS)
         self.step("host_off_verified")
 
-    def run_task(self, key: str, family: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-        """RunTask with a client token kept until a reply arrives, so a launch whose reply was lost is retried as the same launch, never a second one."""
+    def run_task(self, key: str, family: str, overrides: dict[str, Any] | None = None, definition: str = "") -> dict[str, Any]:
+        """RunTask with a client token kept until a reply arrives, so a launch whose reply was lost is retried as the same launch, never a second one. A
+        ``definition`` (the ARN of a checked revision) is what RunTask names instead of the family, which ECS resolves to the latest revision."""
         token = self.launch_tokens.setdefault(key, uuid.uuid4().hex)
         extra = ["--overrides", json.dumps(overrides, separators=(",", ":"), sort_keys=True)] if overrides else []
         arguments = [
             "--cluster",
             self.names.cluster,
             "--task-definition",
-            family,
+            definition or family,
             "--capacity-provider-strategy",
             f"capacityProvider={self.names.provider},weight=1",
             "--propagate-tags",
@@ -708,6 +739,8 @@ class Session:
         stops, then the requested task launches, so two tasks of the family never run at once and the requested code is the code that is installed.
         """
         family = self.family_of(key)
+        if key == POSTGRES_FINAL_BACKUP:
+            self.final_task_open = True
 
         running = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"]).get("taskArns", [])
         if running and not self.same_code(key, running, overrides):
@@ -718,10 +751,17 @@ class Session:
             task = running[0]
             self.step(key, "a task of this family is already running; waiting for it")
         else:
-            launched = self.run_task(key, family, overrides)
+            try:
+                launched = self.run_task(key, family, overrides, self.final_definition if key == POSTGRES_FINAL_BACKUP else "")
+            except HostSessionError as error:
+                if key == POSTGRES_FINAL_BACKUP and refused_by_provider(error) and not self.family_tasks_running(family):
+                    self.final_task_open = False  # the provider refused the launch and ECS shows no task of the family
+                raise
             tasks = launched.get("tasks", [])
             if launched.get("failures") or len(tasks) != 1:
                 reasons = [run_task_code(item.get("reason")) for item in launched.get("failures", [])]
+                if launched.get("failures") and not tasks:
+                    self.final_task_open = False  # ECS named a failure and started no task
                 raise HostSessionError(f"{key} RunTask failures: {reasons or ['no task started']}")
             task = tasks[0]["taskArn"]
         self.last_task[key] = str(task)
@@ -734,7 +774,12 @@ class Session:
             return found[0] if len(found) == 1 and found[0].get("lastStatus") == "STOPPED" else None
 
         stopped_task = self.wait(f"{key} task stop", stopped, seconds, TASK_POLL_SECONDS)
+        if key == POSTGRES_FINAL_BACKUP:
+            self.final_task_open = False
         exits = {item.get("name"): item.get("exitCode") for item in stopped_task.get("containers", [])}
+        absent = [name for name in FINAL_BACKUP_CONTAINERS if key == POSTGRES_FINAL_BACKUP and name not in exits]
+        if absent and all(code == 0 for code in exits.values()):
+            raise HostSessionError(f"{key} stopped without an exit code for {', '.join(absent)}: whether the dump and the upload both ended well is not known")
         if not exits or any(code != 0 for code in exits.values()):
             message = f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}"
             # Only a container that ran to its end with a nonzero exit code proves that its script ran. A task that never started has no exit code.
@@ -742,6 +787,14 @@ class Session:
             raise TaskExitError(message, exits) if ran else HostSessionError(message)
         self.step(key, f"exit codes {exits}")
         return str(task)
+
+    def family_tasks_running(self, family: str) -> bool:
+        """True when ECS lists a task of the family that is not STOPPED, or when the listing fails (the state is then not known)."""
+        try:
+            listed = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"])
+        except HostSessionError:
+            return True
+        return bool(listed.get("taskArns", []))
 
     def described(self, key: str, arns: list[str]) -> list[dict[str, Any]]:
         """The described tasks of ``arns``; a failure entry or a missing task raises, as the wait of ``one_shot`` does."""
@@ -756,7 +809,7 @@ class Session:
 
     def same_code(self, key: str, arns: list[str], overrides: dict[str, Any] | None) -> bool:
         """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256, CODE_MODE) and the command that ``overrides`` ask for."""
-        if key.startswith(ONLINE_RELOAD) or key == CATALOG_SETUP:
+        if key.startswith(ONLINE_RELOAD) or key in {CATALOG_SETUP, POSTGRES_FINAL_BACKUP}:
             return False  # a task of any other launch is never this one: wait for it to stop, then launch
         wanted = (code_environment(overrides, key), code_command(overrides, key))
         return all((code_environment(task.get("overrides"), key), code_command(task.get("overrides"), key)) == wanted for task in self.described(key, arns))
@@ -768,14 +821,15 @@ class Session:
     def deploy_services(self) -> None:
         """Force a new deployment of every project service, postgres first, then wait until all are stable."""
         for key, name in self.names.services.items():
-            # The catalog service is scaled to zero by stop and the Prometheus services by the restore hold, so their deployment sets the count back to one.
-            count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE or key in PROMETHEUS_SERVICES else []
+            # Stop scales the catalog and backup services to zero and the restore hold the Prometheus services, so their deployment sets the count back to one.
+            count = ["--desired-count", "1"] if key in {OPENMETADATA_SERVICE, POSTGRES_BACKUP} or key in PROMETHEUS_SERVICES else []
             self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, *count, "--force-new-deployment"])
         self.step("services_deployment_forced", ", ".join(self.names.services.values()))
         try:
             self.wait("services stable", self.stable_and_set_up, SERVICES_STABLE_SECONDS, POLL_SECONDS)
         except HostSessionError as error:
             raise HostSessionError(f"{error}; postgres setup unfinished: {self.setup_state}" if self.setup_state else str(error)) from None
+        self.services_ready = True
         self.step("services_stable", ", ".join(f"{item['serviceName']}={item['runningCount']}" for item in self.service_states()))
 
     def restart_service(self, key: str, seconds: int = SERVICE_RESTART_SECONDS) -> None:
@@ -878,6 +932,127 @@ class Session:
         except HostSessionError as error:
             self.step("openmetadata_stop_failed", f"{error}; stopping the host anyway; the index rebuilds from the database after a restore")
 
+    def final_backup(self, seconds: int = FINAL_BACKUP_SECONDS) -> None:
+        """Take one more dump of every backed-up database, so that what the interval dumps have not yet seen survives the host stop.
+
+        The restore reads the newest completed backup set. The interval dump writes one and so does this final dump. The backup service is scaled to zero and
+        verified stopped first (the dump and the upload step then have the backup folder to themselves), and then the final backup one-shot runs the same dump
+        and upload steps once: the dump step exits 0 only for a set whose every database reads back whole, the upload step starts only after that, takes only
+        the set that dump wrote and writes the completion marker last, so a set that stopped half way has no marker and the restore never selects it.
+        The one-shot must end with exit code 0 in both containers within ``seconds``. The launch names the task definition revision whose embedded scripts
+        were checked against this checkout (``check_final_backup_scripts``) and carries a new task ID that the dump and upload steps check, so the upload
+        never takes the set that an earlier dump left.
+
+        It never holds the host on: a stack with no such one-shot (the backup is off) or a postgres task whose setup is not complete (its databases may not
+        hold the restored history, and a new set would hide the older ones) skips it, and a failure is reported by name with the exit codes of the containers.
+        The host stops anyway, because a failed stop leaves a billed host running; the newest usable completed set stays the restore point. An interruption or
+        SIGTERM is reported and re-raised, so the caller still reaches its drain and host-off steps. The backup service stays at zero until the next start,
+        unless the host-off request is refused: ``resume_interval_backup`` then gives it back its count, once the final task is known to have ended or never
+        to have been launched.
+
+        Recorded limits (docs/restore_after_teardown.md, "Known limits of the final dump"): it assumes one host sheet at a time.
+        """
+        self.final_definition = ""
+        self.backup_hold, self.final_task_open = None, False
+        if POSTGRES_FINAL_BACKUP not in self.names.one_shot:
+            self.final_backup_outcome = "skipped: the stack plans no final backup one-shot"
+            self.step("final_backup_skipped", "the services stack plans no postgres_final_backup one-shot (the backup is off), so no final dump is taken")
+            return
+        try:
+            if not self.postgres_setup():
+                self.final_backup_outcome = f"skipped: the postgres setup is unfinished ({self.setup_state})"
+                self.step(
+                    "final_backup_skipped", f"the postgres setup is not complete ({self.setup_state}), so a dump could hide the restored history; none is taken"
+                )
+                return
+            self.check_final_backup_scripts()
+            service = self.names.services.get(POSTGRES_BACKUP)
+            if service is None:
+                raise HostSessionError("the services state has no postgres_backup service, so the backup folder cannot be held")
+            was = self.service_desired(service)
+            self.backup_hold = (service, was)  # kept before the write: a reply that is lost after the write applied still leaves the count to give back
+            try:
+                self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", service, "--desired-count", "0"])
+            except HostSessionError as error:
+                if refused_by_provider(error):
+                    self.backup_hold = None  # the provider refused the write, so the service still has its count
+                raise
+            self.step("final_backup_service_scaled_down", service)
+            self.wait("backup service stop", lambda: self.service_stopped(service) and self.tasks_stopped(service), FINAL_BACKUP_HOLD_SECONDS, POLL_SECONDS)
+            self.one_shot(POSTGRES_FINAL_BACKUP, seconds, self.final_backup_overrides())
+            self.final_backup_outcome = "taken"
+            self.step("final_backup_taken", "every database was dumped, uploaded and marked complete; the restore starts from this set")
+        except (KeyboardInterrupt, TerminationRequested):
+            self.final_backup_outcome = "interrupted"
+            self.step("final_backup_interrupted", "interrupted; the host is turned off now; a set without its completion marker is never restored")
+            raise
+        except HostSessionError as error:
+            self.final_backup_outcome = f"failed: {error}"
+            self.step("final_backup_failed", f"{error}; stopping the host anyway; the newest usable completed set stays the restore point")
+
+    def check_final_backup_scripts(self) -> None:
+        """Raise unless the registered final backup task definition embeds the dump and upload scripts of this checkout, and keep its ARN (with the revision) in
+        ``final_definition``. A definition that was not applied after a change of the scripts runs older ones, and an old pair can mark a stale set complete,
+        so the dump is reported as not taken before anything is changed. The launch names this revision: a family name resolves to the latest one."""
+        family = self.names.one_shot[POSTGRES_FINAL_BACKUP]
+        definition = self.call("ecs", "describe-task-definition", ["--task-definition", family]).get("taskDefinition", {})
+        arn = definition.get("taskDefinitionArn")
+        if not isinstance(arn, str) or not arn:
+            raise HostSessionError(
+                "ECS did not name the revision of the final backup task definition, so its scripts cannot be tied to the launch; no dump was taken"
+            )
+        embedded = {str(item.get("name")): item.get("command") for item in definition.get("containerDefinitions", []) if isinstance(item, dict)}
+        stale = [name for name, path in FINAL_BACKUP_SCRIPTS.items() if embedded.get(name) != [self.script_text(path)]]
+        if stale:
+            raise HostSessionError(
+                f"the registered final backup task definition runs other scripts than this checkout for {', '.join(stale)}: "
+                "apply the services stack; no dump was taken"
+            )
+        self.final_definition = arn
+
+    @staticmethod
+    def script_text(path: Path) -> str:
+        """The text of a local script; a script that cannot be read raises ``HostSessionError`` that names the file, so the dump is reported as not taken."""
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as error:
+            raise HostSessionError(
+                f"the local script {path.name} cannot be read ({type(error).__name__}), so it cannot be checked against the task definition; no dump was taken"
+            ) from None
+
+    def service_desired(self, name: str) -> int:
+        """The desired count of one service, as ECS describes it; an answer that does not give one whole number raises."""
+        described = self.call("ecs", "describe-services", ["--cluster", self.names.cluster, "--services", name])
+        found = described.get("services", [])
+        count = found[0].get("desiredCount") if len(found) == 1 else None
+        if described.get("failures") or type(count) is not int:
+            raise HostSessionError(f"describe-services did not give the desired count of {name}, so it is not scaled down; no dump was taken")
+        return count
+
+    def resume_interval_backup(self) -> None:
+        """After a refused host-off request, give the interval backup service the count it had before the final dump, when no final task can still run.
+
+        The host stays on after a refusal, and without this the service stays at zero and no interval dump runs until the next start. While the final task may
+        still run (it was launched and no stop was seen) the service stays at zero, so two dump containers never share the backup folder. A failed call is
+        reported by name and never replaces the refusal that the caller raises.
+        """
+        if self.backup_hold is None or self.final_task_open:
+            return
+        name, count = self.backup_hold
+        try:
+            self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, "--desired-count", str(count)])
+        except HostSessionError as error:
+            self.step("backup_service_restore_failed", f"{error}; the host stays on without interval dumps; run start or refresh to set {name} back")
+            return
+        self.backup_hold = None
+        self.step("backup_service_restored", f"{name} back to {count}; the host-off request was refused, so the host stays on")
+
+    def final_backup_overrides(self) -> dict[str, Any]:
+        """The RunTask overrides of the final backup: a new task ID in both containers (``PG_BACKUP_TASK_ID``). The dump step writes it into its result file
+        and the upload step takes only a result file that carries it, so it never uploads the set that an earlier dump left."""
+        environment = [{"name": "PG_BACKUP_TASK_ID", "value": uuid.uuid4().hex}]
+        return {"containerOverrides": [{"name": name, "environment": environment} for name in FINAL_BACKUP_CONTAINERS]}
+
     def running_job_tasks(self) -> list[JobTask]:
         """The job tasks of the project's families that are not STOPPED (a task that is stopping counts), listed as ``aws_tasks list`` lists them under its
         120-second cleanup limit. A listing that fails raises. ``TaskCleanup`` is imported here because ``aws_tasks`` imports this module."""
@@ -947,11 +1122,14 @@ class Session:
             raise
 
     def stop(self, wait_seconds: int = 0, force_stop: bool = False) -> None:
-        """Check that no job task runs, stop the catalog service, then turn the host off and verify it.
+        """Check that no job task runs, take the final dump of the databases, stop the catalog service, then turn the host off and verify it.
 
         The check comes first and changes nothing: while a job task runs, ``stop`` refuses, or with ``wait_seconds`` waits up to that deadline for the tasks to
         end and then refuses. ``force_stop`` skips the check and reports that it did. An interruption or SIGTERM during the check leaves the host on. After the
-        check, an interruption or SIGTERM during the catalog drain still reaches the host-off step, which then holds every shutdown signal until it is verified.
+        check, the final backup of the databases runs (``final_backup``), then the catalog drain, which also runs after an interruption of the final backup (the
+        interruption still propagates after it); an interruption or SIGTERM during either still reaches the host-off step, which then holds every shutdown
+        signal until it is verified. Known limits of the final dump under the operating rule of one host sheet at a time (overlapping stops, a job not yet
+        visible to ECS, racing dump containers): docs/restore_after_teardown.md, "Known limits of the final dump".
         """
         if force_stop:
             self.step("stop_forced", "the running job task check is skipped by --force-stop; a job task that runs now ends with the host")
@@ -959,7 +1137,10 @@ class Session:
             self.check_no_job_tasks(wait_seconds)
         unwinding = True
         try:
-            self.openmetadata_stop()
+            try:
+                self.final_backup()
+            finally:
+                self.openmetadata_stop()
             unwinding = False
         finally:
             with deferred_signals(self.step):
@@ -973,7 +1154,9 @@ class Session:
         failed host running and billed with nobody present. ``--keep-on`` is the way to keep the host; a job that a half-started host loses stays an
         unresolved launch, which a later host stop or start ends as cancelled (``settle_launches``), as for a job launched between the check of ``stop`` and
         its host-off call. Every shutdown signal is held from the first report to the verified host-off, so a second signal cannot cut the cleanup short; a
-        signal during the launch settle that follows is reported and dropped, so the error that started the cleanup is the one the command raises.
+        signal during the launch settle that follows is reported and dropped, so the error that started the cleanup is the one the command raises. When the
+        services had become stable, the cleanup first takes the final dump of the databases (``final_backup``, bounded by ``FINAL_BACKUP_FAILURE_SECONDS``, its
+        failure only reported), because what the failed command left in them would be lost with the host.
         """
         with deferred_signals(self.step):
             self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
@@ -981,6 +1164,8 @@ class Session:
                 self.cleanup_outcome = "kept_on"
                 self.step("host_kept_on", "left on for diagnosis; run stop when done")
                 return
+            if self.services_ready:
+                self.cleanup_final_backup()
             try:
                 self.host_off()
             except HostSessionError as error:
@@ -989,6 +1174,17 @@ class Session:
                 return
             self.cleanup_outcome = "host_off_verified"
         self.settle_launches("stop", keep_error=True)
+
+    def cleanup_final_backup(self) -> None:
+        """The optional final dump of a failed command's cleanup. Whatever it raises is reported and dropped, so the required host-off request that follows
+        always runs and the failure that started the cleanup stays the one the command raises."""
+        try:
+            self.final_backup(FINAL_BACKUP_FAILURE_SECONDS)
+        except Exception as error:
+            self.final_backup_outcome = f"failed: {type(error).__name__}: {error}"
+            self.step(
+                "final_backup_failed", f"{type(error).__name__}: {error}; stopping the host anyway; the newest usable completed set stays the restore point"
+            )
 
     def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
         """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of

@@ -88,15 +88,94 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "ignores the termination signal": ("raise TerminationRequested(signal.Signals(number).name)", "return"),
     "skips host off after an interrupted catalog drain": (
-        "        try:\n            self.openmetadata_stop()\n            unwinding = False\n        finally:\n            with deferred_signals(self.step):\n"
+        "        try:\n            try:\n                self.final_backup()\n            finally:\n                self.openmetadata_stop()\n"
+        "            unwinding = False\n"
+        "        finally:\n            with deferred_signals(self.step):\n"
         '                self.host_off()\n            self.settle_launches("stop", keep_error=unwinding)',
-        '        self.openmetadata_stop()\n        self.host_off()\n        self.settle_launches("stop", keep_error=False)',
+        '        self.final_backup()\n        self.openmetadata_stop()\n        self.host_off()\n        self.settle_launches("stop", keep_error=False)',
     ),
     "lets a signal cut the host off after a catalog drain": (
         "        finally:\n            with deferred_signals(self.step):\n                self.host_off()\n"
         '            self.settle_launches("stop", keep_error=unwinding)',
         '        finally:\n            self.host_off()\n            self.settle_launches("stop", keep_error=unwinding)',
     ),
+    "takes no final dump at a stop": ("                self.final_backup()\n            finally:", "                pass\n            finally:"),
+    "skips the catalog drain after an interrupted final dump": (
+        "            finally:\n                self.openmetadata_stop()",
+        "            finally:\n                pass",
+    ),
+    "launches the final dump beside the running backup service": (
+        'self.wait("backup service stop", lambda: self.service_stopped(service) and self.tasks_stopped(service), FINAL_BACKUP_HOLD_SECONDS, POLL_SECONDS)',
+        "pass",
+    ),
+    "lets a failed final dump hold the host": ('self.final_backup_outcome = f"failed: {error}"', "raise"),
+    "does not report an interrupted final dump": (
+        '        except (KeyboardInterrupt, TerminationRequested):\n            self.final_backup_outcome = "interrupted"',
+        '        except ():\n            self.final_backup_outcome = "interrupted"',
+    ),
+    "swallows an interrupt of the final dump": ('is never restored")\n            raise\n', 'is never restored")\n'),
+    "dumps while the postgres setup is unfinished": ("            if not self.postgres_setup():", "            if False:"),
+    "leaves the backup service at zero at the next start": ("key in {OPENMETADATA_SERVICE, POSTGRES_BACKUP}", "key == OPENMETADATA_SERVICE"),
+    "dumps in the cleanup before the services were stable": (
+        "            if self.services_ready:\n                self.cleanup_final_backup()",
+        "            self.cleanup_final_backup()",
+    ),
+    "dumps when the failed host is kept on": (
+        '            if keep_on:\n                self.cleanup_outcome = "kept_on"',
+        '            if keep_on:\n                self.final_backup(FINAL_BACKUP_FAILURE_SECONDS)\n                self.cleanup_outcome = "kept_on"',
+    ),
+    "waits for the final dump without a deadline": (
+        "self.one_shot(POSTGRES_FINAL_BACKUP, seconds, self.final_backup_overrides())",
+        "self.one_shot(POSTGRES_FINAL_BACKUP, 10**7, self.final_backup_overrides())",
+    ),
+    "launches the final dump without a task ID": (
+        "self.one_shot(POSTGRES_FINAL_BACKUP, seconds, self.final_backup_overrides())",
+        "self.one_shot(POSTGRES_FINAL_BACKUP, seconds)",
+    ),
+    "launches the final dump by its family, not the checked revision": ("            definition or family,\n", "            family,\n"),
+    "forgets the checked revision of the final dump": ("        self.final_definition = arn", '        self.final_definition = ""'),
+    "dumps without checking the scripts of the task definition": ("            self.check_final_backup_scripts()\n", ""),
+    "dumps with scripts of an earlier release": ("        if stale:\n", "        if False:\n"),
+    "lets an unreadable script raise out of the check": (
+        "        except (OSError, ValueError) as error:\n            raise HostSessionError(\n",
+        "        except ():\n            raise HostSessionError(\n",
+    ),
+    "lets a failed cleanup dump stop the host-off": (
+        "        except Exception as error:\n            self.final_backup_outcome",
+        "        except ():\n            self.final_backup_outcome",
+    ),
+    "gives the interval backup service back after a refused host-off": (
+        "            if refused_by_provider(error):\n                self.resume_interval_backup()",
+        "            pass",
+    ),
+    "gives the interval backup service back after an unanswered host-off": (
+        "            if refused_by_provider(error):\n                self.resume_interval_backup()",
+        "            self.resume_interval_backup()",
+    ),
+    "forgets the count of the interval backup service before the scale-down write": (
+        "            self.backup_hold = (service, was)  # kept before the write: a reply",
+        "            pass  # kept before the write: a reply",
+    ),
+    "keeps the interval backup service off after a refused final launch": (
+        "                    self.final_task_open = False  # the provider refused the launch and ECS shows no task of the family",
+        "                    pass",
+    ),
+    "gives the interval backup service back after a refused launch while a task of the family is listed": (
+        "refused_by_provider(error) and not self.family_tasks_running(family):",
+        "refused_by_provider(error):",
+    ),
+    "gives the interval backup service back while the final task may run": (
+        "        if self.backup_hold is None or self.final_task_open:",
+        "        if self.backup_hold is None:",
+    ),
+    "forgets that the final task ended": ("        if key == POSTGRES_FINAL_BACKUP:\n            self.final_task_open = False\n", ""),
+    "lets a failed recovery replace the host-off refusal": (
+        '        except HostSessionError as error:\n            self.step("backup_service_restore_failed"',
+        '        except ():\n            self.step("backup_service_restore_failed"',
+    ),
+    "gives the interval backup service back with no count it had": ("        self.backup_hold = (service, was)", "        self.backup_hold = (service, 1)"),
+    "calls a final dump taken with one container missing": ("        if absent and all(code == 0 for code in exits.values()):", "        if False:"),
+    "joins the final backup task of an earlier stop": ("key in {CATALOG_SETUP, POSTGRES_FINAL_BACKUP}", "key == CATALOG_SETUP"),
     "keeps every aws call in the session of the launched command": ("run_argv(*args, own_session=True, **kwargs)", "run_argv(*args, **kwargs)"),
     "launches without a client token": ('            "--client-token",\n            token,\n', ""),
     "keeps the token after a confirmed launch": ("            del self.launch_tokens[key]\n            return launched", "            return launched"),
@@ -281,8 +360,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "launches the reload without its phase": ('"LAYER_PHASE": RELOAD_PHASE,', '"LAYER_PHASE": "",'),
     "takes a running features task for the reload": (
-        "if key.startswith(ONLINE_RELOAD) or key == CATALOG_SETUP:\n            return False",
-        "if key.startswith(ONLINE_RELOAD):\n            return True\n        if key == CATALOG_SETUP:\n            return False",
+        "if key.startswith(ONLINE_RELOAD) or key in {CATALOG_SETUP, POSTGRES_FINAL_BACKUP}:\n            return False",
+        "if key.startswith(ONLINE_RELOAD):\n            return True\n        if key in {CATALOG_SETUP, POSTGRES_FINAL_BACKUP}:\n            return False",
     ),
     "reads the identity without the log": (
         'found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)',

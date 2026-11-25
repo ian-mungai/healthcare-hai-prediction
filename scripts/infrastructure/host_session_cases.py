@@ -18,6 +18,7 @@ from typing import Any
 from orchestration.training_contract import MODEL_NAMES
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import (
+    host_session_backup_cases,
     host_session_catalog_cases,
     host_session_code_cases,
     host_session_dev_cases,
@@ -58,7 +59,7 @@ REVIEWED_SCRIPT = host_session_code_cases.REVIEWED_SCRIPT
 JOB_PREFIX = host_session_refresh_cases.JOB_PREFIX
 IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
-CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
+CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, OSError, HostSessionError)
 
 
 def session_module() -> Any:
@@ -1528,6 +1529,7 @@ CASES.update(host_session_code_cases.CASES)
 CASES.update(host_session_restore_cases.CASES)
 CASES.update(host_session_refresh_cases.CASES)
 CASES.update(host_session_stop_cases.CASES)
+CASES.update(host_session_backup_cases.CASES)
 CASES.update(host_session_settle_cases.CASES)
 CASES.update(host_session_dev_cases.CASES)
 CASES.update(host_session_dev_failure_cases.CASES)

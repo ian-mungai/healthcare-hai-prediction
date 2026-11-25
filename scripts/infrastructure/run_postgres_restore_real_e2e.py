@@ -174,9 +174,9 @@ def main() -> int:
         code, output = dump_script(dump_env)
         results["the dump step leaves one ready set"] = code == 0 and len(list(backup.glob("*.ready"))) == 1
         client = StandInS3()
-        results["the upload step writes the set and the marker"] = load("pg_backup_upload").run(backup, BUCKET, client, lambda: 0.0) == 0 and any(
-            "/complete/" in key for key in client.objects
-        )
+        results["the upload step writes the set and the marker"] = load("pg_backup_upload").run(
+            backup, BUCKET, client, tuple(DATABASES), lambda: 0.0
+        ) == 0 and any("/complete/" in key for key in client.objects)
         for name in ("airflow", "mlflow", "mlflow_auth"):
             psql("postgres", 'DROP DATABASE :"db";', db=name)
         psql("polaris", 'DROP TABLE public.:"tbl";')

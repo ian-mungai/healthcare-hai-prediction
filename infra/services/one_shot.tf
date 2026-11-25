@@ -111,6 +111,7 @@ locals {
     local.prometheus_history_on ? { prometheus_restore = local.prometheus_restore_task } : {},
     local.catalog_setup_on ? { catalog_setup = local.catalog_setup_task } : {},
     local.mlflow_user_on ? { mlflow_user = local.mlflow_user_task } : {},
+    local.pg_backup_on ? { postgres_final_backup = local.postgres_final_backup_task } : {},
   )
 }
 

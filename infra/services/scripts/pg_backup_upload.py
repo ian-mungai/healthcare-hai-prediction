@@ -6,8 +6,13 @@ every dump again (the custom-format header, the size in the manifest and at leas
 ``IfNoneMatch="*"`` so a key is created once and never replaced, and only then writes ``pg_backups/complete/<run>.json`` the same way. A restore reads
 only sets that have a marker, so a set that stopped half way is never used. The role may not read, so a key that already exists is accepted only when
 the set's own ``uploaded.tsv`` records that an earlier try wrote it with the same hash, which makes a rerun after an interruption safe.
-A set that fails three times is set aside as ``<run>.failed``. A dump that is empty or truncated is set aside at once as ``<run>.refused`` and
-nothing of it is uploaded. Every set has a deadline and every S3 call has timeouts.
+A set whose manifest does not list exactly the databases of PG_DATABASES is refused before anything is uploaded, so a marker never stands for a set that
+omits a database. The marker records that membership (``members``), so the restore can tell a set that was whole when it was written from one that is
+not, after a database is enabled later. A set that fails three times is set aside as ``<run>.failed``. A dump that is empty or truncated is set aside at
+once as ``<run>.refused`` and nothing of it is uploaded. Every set has a deadline and every S3 call has timeouts.
+With PG_BACKUP_ONCE=1 (the final backup one-shot) it uploads only the set that the dump step of the same task has just written, named by ``last_result.json``,
+and its exit code is that of this one set: an older set that stays in the folder is the service's to upload and neither changes the exit code nor is read.
+The pointer must carry the task ID that the launch passed in PG_BACKUP_TASK_ID to both containers, so a pointer left by an earlier dump is refused.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from typing import Any
 
 PREFIX = "pg_backups"
 RUN = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+TASK_ID = re.compile(r"[0-9a-f]{32}")
 DATABASE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 MAGIC = b"PGDMP"
@@ -112,11 +118,13 @@ def put_once(client: Any, bucket: str, key: str, path: Path, digest: str, record
             handle.write(line + "\n")
 
 
-def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float]) -> str:
-    """Check and upload one ready set, then write its marker; returns the run ID."""
+def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float], expected: tuple[str, ...]) -> str:
+    """Check and upload one ready set, then write its marker; returns the run ID. The manifest must list exactly the ``expected`` databases."""
     run = folder.name.removesuffix(".ready")
     deadline = clock() + RUN_SECONDS
     manifest = read_manifest(folder)
+    if set(manifest) != set(expected):
+        raise Refused(f"the manifest lists {sorted(manifest)}, not the expected databases {sorted(expected)}")
     for name, (tables, size) in manifest.items():
         check_dump(folder, name, tables, size)
     entries = {}
@@ -131,7 +139,10 @@ def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float
         raise Failed(f"the deadline of {RUN_SECONDS} seconds passed before the marker")
     marker = folder / "marker.json"
     marker.write_text(
-        json.dumps({"schema": 1, "run": run, "uploaded_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"), "databases": entries}, sort_keys=True),
+        json.dumps(
+            {"schema": 1, "run": run, "uploaded_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"), "members": sorted(expected), "databases": entries},
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     put_once(client, bucket, f"{PREFIX}/complete/{run}.json", marker, sha256_of(marker), folder / "uploaded.tsv")
@@ -151,13 +162,37 @@ def tried(folder: Path) -> int:
     return count
 
 
-def run(backups: Path, bucket: str, client: Any, clock: Callable[[], float] = time.monotonic) -> int:
-    """Upload every ready set, oldest first, once; returns 1 when any set failed or was refused."""
+def dumped_run(backups: Path, task: str) -> str:
+    """The run ID of the set that the dump step of task ``task`` has just written, from its ``last_result.json``; raises Refused when the step did not leave
+    a dumped set, or when the pointer names another task (an earlier dump's pointer that this task's dump did not replace)."""
+    if not TASK_ID.fullmatch(task):
+        raise Refused("PG_BACKUP_TASK_ID is not set or has another form, so the pointer of this dump cannot be told from an older one")
+    try:
+        document = json.loads((backups / "last_result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Refused("last_result.json is missing or unreadable, so the set of this dump is not known") from None
+    if not isinstance(document, dict) or document.get("task") != task:
+        raise Refused("last_result.json belongs to another task, so this dump left no pointer")
+    found = document.get("run") if document.get("result") == "dumped" else None
+    if not isinstance(found, str) or not RUN.fullmatch(found):
+        raise Refused("last_result.json does not name a dumped set")
+    return found
+
+
+def run(backups: Path, bucket: str, client: Any, expected: tuple[str, ...], clock: Callable[[], float] = time.monotonic, only: str | None = None) -> int:
+    """Upload every ready set, oldest first, once; returns 1 when any set failed or was refused. With ``only`` it takes just the set of that run ID and
+    returns 1 when that set is not there."""
     status = 0
-    for folder in sorted(item for item in backups.glob("*.ready") if item.is_dir() and RUN.fullmatch(item.name.removesuffix(".ready"))):
+    folders = sorted(item for item in backups.glob("*.ready") if item.is_dir() and RUN.fullmatch(item.name.removesuffix(".ready")))
+    if only is not None:
+        folders = [item for item in folders if item.name == f"{only}.ready"]
+        if not folders:
+            note(backups, "failed", only, "the set of this dump is not in the backup folder")
+            return 1
+    for folder in folders:
         name = folder.name.removesuffix(".ready")
         try:
-            note(backups, "uploaded", upload_set(folder, bucket, client, clock))
+            note(backups, "uploaded", upload_set(folder, bucket, client, clock, expected))
             shutil.rmtree(folder)
         except Refused as refusal:
             status = 1
@@ -180,12 +215,21 @@ def main() -> int:
     if not BUCKET.fullmatch(bucket):
         sys.stderr.write("pg_backup_upload refused: DATA_BUCKET_NAME is not set or has another form\n")
         return 1
+    expected = tuple(os.environ.get("PG_DATABASES", "").split())
+    if not expected or not all(DATABASE.fullmatch(name) for name in expected):
+        sys.stderr.write("pg_backup_upload refused: PG_DATABASES is not set or names a database in another form\n")
+        return 1
     backups = Path(os.environ.get("BACKUP_DIR", "/backup"))
     client = boto3.client("s3", config=Config(connect_timeout=10, read_timeout=120, retries={"max_attempts": 3, "mode": "standard"}))
     while True:
-        code = run(backups, bucket, client)
         if os.environ.get("PG_BACKUP_ONCE") == "1":
-            return code
+            try:
+                only = dumped_run(backups, os.environ.get("PG_BACKUP_TASK_ID", ""))
+            except Refused as refusal:
+                sys.stderr.write(f"pg_backup_upload refused: {refusal}\n")
+                return 1
+            return run(backups, bucket, client, expected, only=only)
+        run(backups, bucket, client, expected)
         time.sleep(POLL_SECONDS)
 
 

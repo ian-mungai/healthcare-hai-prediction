@@ -227,6 +227,71 @@ run "backup_adds_its_own_service_with_a_write_only_role" {
   }
 }
 
+run "final_backup_one_shot_runs_the_reviewed_scripts_once_after_the_dump" {
+  command = plan
+
+  variables {
+    postgres_backup_enabled          = true
+    postgres_backup_task_role_arn    = "arn:aws:iam::111111111111:role/example_project_postgres_backup_task_dev"
+    postgres_backup_bucket_name      = "example-project-data-dev"
+    postgres_backup_interval_seconds = 3600
+  }
+
+  assert {
+    condition = (
+      contains(keys(aws_ecs_task_definition.one_shot), "postgres_final_backup")
+      && aws_ecs_task_definition.one_shot["postgres_final_backup"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_postgres_backup_task_dev"
+      && aws_ecs_task_definition.one_shot["postgres_final_backup"].network_mode == "host"
+      && [for container in jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions) : container.name] == ["postgres_backup_dump", "postgres_backup_upload"]
+      && contains(keys(output.one_shot_run_task), "postgres_final_backup")
+    )
+    error_message = "With the backup on, the final backup is a one-shot task of the backup role with the dump and upload containers, and its run-task arguments are an output."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].command == jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].command
+      && jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].command == jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[1].command
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].environment, { name = "PG_BACKUP_ONCE", value = "1" })
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].environment, { name = "BACKUP_FIRST_DELAY_SECONDS", value = "0" })
+      && !contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].environment, { name = "BACKUP_FIRST_DELAY_SECONDS", value = "900" })
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].environment, { name = "PG_DATABASES", value = "polaris airflow mlflow mlflow_auth openmetadata_db" })
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].environment, { name = "PG_BACKUP_ONCE", value = "1" })
+    )
+    error_message = "The final backup runs the service's own reviewed scripts, one pass each with no first delay, for the same databases."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].essential == false
+      && jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].essential == true
+      && jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].dependsOn == [{ containerName = "postgres_backup_dump", condition = "SUCCESS" }]
+      && jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[0].restartPolicy.enabled == false
+      && jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].restartPolicy.enabled == false
+      && contains(jsondecode(aws_ecs_task_definition.one_shot["postgres_final_backup"].container_definitions)[1].environment, { name = "PG_DATABASES", value = "polaris airflow mlflow mlflow_auth openmetadata_db" })
+    )
+    error_message = "The upload starts only after the dump exited 0, the dump's exit does not end the task, neither container restarts (a failed dump never runs again beside the upload), and the upload step knows the databases a set must hold."
+  }
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].environment, { name = "BACKUP_FIRST_DELAY_SECONDS", value = "900" })
+      && !contains([for item in jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[0].environment : item.name], "PG_BACKUP_ONCE")
+      && !contains([for item in jsondecode(aws_ecs_task_definition.service["postgres_backup"].container_definitions)[1].environment : item.name], "PG_BACKUP_ONCE")
+    )
+    error_message = "The interval dumps of the backup service are unchanged: the first delay stays and no one-pass flag is set."
+  }
+}
+
+run "final_backup_is_absent_while_the_backup_is_off" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_ecs_task_definition.one_shot), "postgres_final_backup") && !contains(keys(output.one_shot_run_task), "postgres_final_backup")
+    error_message = "A stack with the backup off plans no final backup one-shot."
+  }
+}
+
 run "backup_needs_its_role_and_bucket" {
   command = plan
 

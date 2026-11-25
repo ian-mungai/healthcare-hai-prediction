@@ -1,12 +1,15 @@
 """Fetch step of the Postgres restore: write the dumps of the newest completed backup set to RESTORE_DIR, checked against its marker.
 
 It is the command of the ``postgres_restore_fetch`` container of the postgres task (training image, ``python -I -c``). It reads the markers under
-``pg_backups/complete/`` and takes the newest set whose marker is well formed (schema 1, its own run, at least one requested database, every entry checked)
-and whose every requested dump exists with the size and SHA-256 its marker records. A dump streams to disk in 1 MiB chunks, so its size is not held in
-memory. A set that fails a check is skipped and the next older one is tried (at most FALLBACKS sets). A dump with no marker is never read, because the dump
-step writes the marker last. When no marker exists it writes nothing and exits 0: there is nothing to restore. When markers exist and none passes, it exits 1
-with the reason, and the databases step then creates and starts nothing. It writes each dump as ``<database>.dump`` and the run ID as ``RUN``; only the
-databases named in PG_DATABASES are read. The whole fetch has a deadline and every S3 call has timeouts.
+``pg_backups/complete/`` and takes the newest set whose marker is well formed (schema 1, its own run, every entry checked, every database that its own
+``members`` record lists present) and whose every requested dump that the set holds exists with the size and SHA-256 its marker records. A set that was
+whole when it was written stays usable after a database is enabled later: the new database has no dump in it, and the databases step creates it empty. A
+marker with no ``members`` (written before the field existed) is read as before: it must hold at least one requested database, and each one it holds is
+restored. A dump streams to disk in 1 MiB chunks, so its size is not held in memory. A set that fails a check is skipped and the next older one is tried (at
+most FALLBACKS sets). A dump with no marker is never read, because the dump step writes the marker last. When no marker exists it writes nothing and exits
+0: there is nothing to restore. When markers exist and none passes, it exits 1 with the reason, and the databases step then creates and starts nothing. It
+writes each dump as ``<database>.dump`` and the run ID as ``RUN``; only the databases named in PG_DATABASES are read. The whole fetch has a deadline and
+every S3 call has timeouts.
 """
 
 from __future__ import annotations
@@ -51,8 +54,9 @@ def marker_keys(client: Any, bucket: str) -> list[str]:
 
 
 def read_marker(client: Any, bucket: str, key: str, run: str, databases: list[str]) -> dict[str, dict[str, Any]]:
-    """The checked entries of one marker. Raises Refused unless the marker is schema 1, names its own run, lists at least one requested database and
-    every entry has the expected key, a whole-number size within the limit, a SHA-256 and at least one table."""
+    """The checked entries of one marker. Raises Refused unless the marker is schema 1, names its own run, holds at least one requested database and, when it
+    has a ``members`` record, that record lists exactly its entries, and every entry has the expected key, a whole-number size within the limit, a SHA-256
+    and at least one table."""
     try:
         raw = client.get_object(Bucket=bucket, Key=key)["Body"].read(MARKER_LIMIT + 1)
         marker = json.loads(raw) if len(raw) <= MARKER_LIMIT else None
@@ -78,6 +82,14 @@ def read_marker(client: Any, bucket: str, key: str, run: str, databases: list[st
         )
         if not good:
             raise Refused(f"the marker of {run} has a malformed entry for {name}")
+    recorded = marker.get("members")  # a marker written before the field existed has none and holds what its writer saw
+    if recorded is not None and not (
+        isinstance(recorded, list)
+        and recorded
+        and all(isinstance(name, str) and DATABASE.fullmatch(name) for name in recorded)
+        and set(recorded) == set(entries)
+    ):
+        raise Refused(f"the marker of {run} has a membership that is malformed or differs from its entries")
     if not any(name in entries for name in databases):
         raise Refused(f"the marker of {run} lists none of the requested databases")
     return entries
@@ -112,9 +124,8 @@ def read_set(client: Any, bucket: str, key: str, databases: list[str], target: P
     staging = target / f"{run}.partial"
     staging.mkdir(parents=True, exist_ok=True)
     try:
-        for name in databases:
-            if name in entries:
-                download(client, bucket, entries[name], staging / f"{name}.dump", f"{name} in {run}", clock, deadline)
+        for name in [name for name in databases if name in entries]:
+            download(client, bucket, entries[name], staging / f"{name}.dump", f"{name} in {run}", clock, deadline)
     except Refused:
         for leftover in staging.glob("*"):
             leftover.unlink(missing_ok=True)

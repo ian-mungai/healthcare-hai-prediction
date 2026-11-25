@@ -160,7 +160,7 @@ locals {
       stopTimeout            = 30
       entryPoint             = ["python", "-I", "-c"]
       command                = [file("${path.module}/scripts/pg_backup_upload.py")]
-      environment            = concat(local.pg_aws_environment, [{ name = "BACKUP_DIR", value = "/backup" }])
+      environment            = concat(local.pg_aws_environment, [{ name = "BACKUP_DIR", value = "/backup" }, { name = "PG_DATABASES", value = join(" ", local.postgres_database_names) }])
       mountPoints            = [{ sourceVolume = "postgres_backup", containerPath = "/backup", readOnly = false }]
       linuxParameters = {
         capabilities = { add = [], drop = ["ALL"] }
@@ -170,4 +170,30 @@ locals {
       logConfiguration = lookup(local.log_configuration, "postgres_backup_upload", null)
     }),
   ]
+
+  # The final backup one-shot (host_session stop runs it after the job tasks have ended and with the backup service scaled to zero): the same two reviewed scripts as the
+  # service, each running one pass (PG_BACKUP_ONCE) with no first delay. The upload step starts only when the dump step exited 0, so a refused dump uploads nothing, and the
+  # completion marker is still written last, so the restore never reads a final set that is not whole. The dump step is not essential: its exit ends the step, not the task.
+  # Neither container restarts: a dump that exited 1 after a long run must not start again beside an upload step, and the upload step must not start after a later pass.
+  # The upload step takes only the set that this task's dump step wrote and refuses a manifest that omits one of PG_DATABASES.
+  postgres_final_backup_task = {
+    network_mode  = "host"
+    task_role_arn = var.postgres_backup_task_role_arn
+    volumes       = { postgres_backup = local.pg_backup_path }
+    containers = [
+      merge(local.postgres_backup_containers[0], {
+        essential = false
+        environment = concat(
+          [for item in local.postgres_backup_containers[0].environment : item if item.name != "BACKUP_FIRST_DELAY_SECONDS"],
+          [{ name = "BACKUP_FIRST_DELAY_SECONDS", value = "0" }, { name = "PG_BACKUP_ONCE", value = "1" }],
+        )
+        restartPolicy = { enabled = false }
+      }),
+      merge(local.postgres_backup_containers[1], {
+        environment   = concat(local.postgres_backup_containers[1].environment, [{ name = "PG_BACKUP_ONCE", value = "1" }])
+        dependsOn     = [{ containerName = "postgres_backup_dump", condition = "SUCCESS" }]
+        restartPolicy = { enabled = false }
+      }),
+    ]
+  }
 }

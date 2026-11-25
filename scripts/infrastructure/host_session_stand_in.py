@@ -30,6 +30,8 @@ OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 CODE_FETCH_FAMILY = "stand-in-code-fetch"
 CATALOG_SETUP_FAMILY = "stand-in-catalog-setup"
+BACKUP_SERVICE = "stand-in-postgres-backup"
+BACKUP_FAMILY = "stand-in-postgres-final-backup"
 RELOAD_FAMILY = "stand-in-features"
 HELD_RUN = "features_0000a002"  # a held, not released run that a skipped reload names
 OLDER_RUN = "features_0000a001"  # the run that a loaded reload names
@@ -43,6 +45,8 @@ PAGE_BREAK = "\f"  # separates the pages of a task's output (a page may be empty
 RELOAD_STREAM = "features/feast"  # the awslogs stream prefix of the features task (the layer) and its container that runs the reload
 HOST_ADDRESS = "stand-in-host"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:111111111111:"
+CHECKED_REVISION = 7  # the revision of the final backup task definition that a checked launch describes
+LATEST_REVISION = 8  # the revision that a launch by family name gets
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
 TASK_SECONDS = 20
@@ -141,6 +145,7 @@ class StandInHost:
         checkout: str | None = None,
         code_run: str | None = None,
         catalog_setup: bool = False,
+        backup: bool = False,
     ) -> None:
         self.faults = set(faults or ())
         self.families = dict(
@@ -149,6 +154,7 @@ class StandInHost:
             **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}),
             **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {}),
             **({"catalog_setup": CATALOG_SETUP_FAMILY} if catalog_setup else {}),
+            **({"postgres_final_backup": BACKUP_FAMILY} if backup else {}),
         )
         # The code digest that /data/repo shows and the run ID recorded beside it. The code one-shot changes them only when it exits 0 with a digest in its
         # overrides, and exits 1 without overrides on a host that has none, as infra/services/scripts/code_fetch.py does. The identity task prints them.
@@ -170,11 +176,12 @@ class StandInHost:
         self.tasks: dict[str, dict[str, Any]] = {}
         self.services: dict[str, dict[str, Any]] = {
             name: {"desired": 1, "forced_at": None, "state": "IN_PROGRESS", "running": 0, "stop_at": None}
-            for name in [*SERVICES.values(), *([OPENMETADATA_SERVICE] if openmetadata else [])]
+            for name in [*SERVICES.values(), *([OPENMETADATA_SERVICE] if openmetadata else []), *([BACKUP_SERVICE] if backup else [])]
         }
         self.log: list[dict[str, Any]] = []
         self.service_tasks_for: set[str] = set()
         self.restore_snapshots: list[dict[str, dict[str, Any]]] = []
+        self.final_backup_runs: list[dict[str, Any]] = []
         self.tokens: dict[str, str] = {}
         self.lost_replies = next((int(fault.split(":")[1]) if ":" in fault else 1 for fault in self.faults if fault.startswith("lose_run_task_reply")), 0)
         self.latency = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("slow_calls:")), 0)
@@ -188,6 +195,7 @@ class StandInHost:
             ("ecs", "describe-tasks"): self.ecs_describe_tasks,
             ("ecs", "update-service"): self.ecs_update_service,
             ("ecs", "describe-services"): self.ecs_describe_services,
+            ("ecs", "describe-task-definition"): self.ecs_describe_task_definition,
         }
         self.throttled = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("throttle:")), 0)
         self.provider_delay = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("late_provider:")), 0)
@@ -377,7 +385,10 @@ class StandInHost:
         return {"task": {"taskArn": options["--task"][0], "desiredStatus": "STOPPED"}}
 
     def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        family = options["--task-definition"][0]
+        named = options["--task-definition"][0]
+        # A family name resolves to the latest revision (8) as ECS does; an ARN keeps its revision.
+        family = named.rsplit("/", 1)[-1].split(":")[0]
+        definition = named if ":task-definition/" in named else f"{ACCOUNT_MARK}task-definition/{named}:{LATEST_REVISION}"
         if len(options.get("--overrides", [""])[0]) > OVERRIDES_LIMIT:
             raise StandInError("ClientException")
         token = options.get("--client-token", [""])[0]
@@ -390,6 +401,8 @@ class StandInHost:
         key = next(name for name, value in self.families.items() if value == family)
         if key == "prometheus_restore":
             self.restore_snapshots.append(self.service_snapshot())
+        if key == "postgres_final_backup":
+            self.final_backup_runs.append(self.final_backup_snapshot())
         if key == "polaris_bootstrap":
             self.bootstrap_runs += 1
         code = next(
@@ -407,6 +420,7 @@ class StandInHost:
         self.tasks[arn] = {
             "key": key,
             "family": family,
+            "definition": definition,
             "status": "RUNNING",
             "stops_at": self.now + seconds,
             "exit": code,
@@ -578,11 +592,42 @@ class StandInHost:
                     ),
                     "stoppedReason": "Task failed to start" if task.get("unstarted") and task["status"] == "STOPPED" else reason,
                     **({"stopCode": "TaskFailedToStart"} if task.get("unstarted") and task["status"] == "STOPPED" else {}),
-                    "containers": [container],
+                    "containers": self.reported_containers(task, container),
                     "overrides": overrides,
                 }
             )
         return {"tasks": found, "failures": failures}
+
+    def reported_containers(self, task: dict[str, Any], container: dict[str, Any]) -> list[dict[str, Any]]:
+        """The containers a described task reports: one named after the task, or for the final backup its dump and upload containers, with only the dump
+        container when the fault ``final_backup_one_container`` is set (a stopped reply that reports no upload container)."""
+        if task["key"] != "postgres_final_backup":
+            return [container]
+        from scripts.infrastructure.host_session import FINAL_BACKUP_CONTAINERS  # host_session does not import this module
+
+        names = FINAL_BACKUP_CONTAINERS[:1] if "final_backup_one_container" in self.faults else FINAL_BACKUP_CONTAINERS
+        return [{**container, "name": name} for name in names]
+
+    def ecs_describe_task_definition(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        """The registered final backup definition at revision ``CHECKED_REVISION`` with the dump and upload scripts of this checkout embedded, or, with the
+        fault ``old_final_scripts``, the scripts of an earlier release. ``ecs_run_task`` resolves a family name to the later ``LATEST_REVISION``."""
+        from scripts.infrastructure.host_session import FINAL_BACKUP_SCRIPTS  # host_session does not import this module
+
+        family = options["--task-definition"][0]
+        if family != self.families.get("postgres_final_backup"):
+            raise StandInError("ClientException")
+        old = "old_final_scripts" in self.faults
+        containers = [
+            {"name": name, "command": ["# the script of an earlier release\n"] if old else [path.read_text(encoding="utf-8")]}
+            for name, path in FINAL_BACKUP_SCRIPTS.items()
+        ]
+        return {"taskDefinition": {"taskDefinitionArn": f"{ACCOUNT_MARK}task-definition/{family}:{CHECKED_REVISION}", "containerDefinitions": containers}}
+
+    def final_backup_snapshot(self) -> dict[str, Any]:
+        """What the host shows when a final backup launches: the instance, the job tasks of other families still running and what each service with task
+        records shows (the backup service must be at zero with its task stopped, so the one-shot has the backup folder to itself)."""
+        running = [task["family"] for task in self.tasks.values() if task["status"] == "RUNNING" and str(task.get("group", "")).startswith("family:")]
+        return {"instance_active": self.instance_active(), "running_job_families": running, "services": self.service_snapshot(), "at": self.now}
 
     def service_snapshot(self) -> dict[str, dict[str, Any]]:
         """What each service with task records shows now: its desired and running counts and the status of each of its tasks."""
