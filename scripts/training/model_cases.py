@@ -1639,6 +1639,24 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         (dropped,) = [record for record in tuning if record["status"] == "fold_dropped"]
         require(dropped["validation_year"] == 2021 and dropped["fitting_years"] == 2, f"the dropped fold is not recorded: {dropped}")
 
+    def panel_tuning_skips_a_fold_with_no_repeated_hospital() -> None:
+        """The reviewer's reproduction: before 2021 every hospital has one window, so the 2021 fold keeps no row; the 2022 fold still tunes."""
+        base = request(range(2018, 2024), 60)
+        rows = tuple(row for row in base.data.rows if row["window_year"] >= 2021 or row["window_year"] == 2018 + int(row["ccn"]) % 3)
+        result = fit_m6(replace(base, data=replace(base.data, rows=rows)))
+        require(result.status == "fitted", f"an empty fold stopped the m6 tuning: {result.status} {result.reason}")
+        dropped = [record for record in result.details["tuning"] if record["status"] == "fold_dropped"]
+        require([record["fitting_years"] for record in dropped] == [0], f"the empty fold is not recorded with zero years: {dropped}")
+
+    def panel_failure_keeps_the_tuning_audit() -> None:
+        """The reviewer's reproduction: CMI missing in 2018 and 2021 drops the fold and then fails the final fit; the failure keeps the dropped-fold record."""
+        base = request(range(2018, 2023), 60)
+        rows = tuple(dict(row, cmi=None) if row["window_year"] in {2018, 2021} else row for row in base.data.rows)
+        result = fit_m6(replace(base, data=replace(base.data, rows=rows)))
+        require(result.status == "not_estimable", f"the final fit was expected to fail: {result.status} {result.reason}")
+        tuning = result.details.get("tuning", [])
+        require(any(record["status"] == "fold_dropped" for record in tuning), f"the failure lost the tuning audit: {result.details}")
+
     def panel_with_few_clusters_reports_the_tested_slopes() -> None:
         changed = panel_with(range(2019, 2023), 40, late=lambda row: None)
         result = fit_m6(changed)
@@ -3156,6 +3174,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("panel_fold_selection_ignores_validation_rows", panel_fold_selection_ignores_validation_rows),
         ("panel_tuning_drops_a_fold_that_loses_a_fitting_year", panel_tuning_drops_a_fold_that_loses_a_fitting_year),
         ("panel_tuning_with_every_fold_short_takes_the_first_option", panel_tuning_with_every_fold_short_takes_the_first_option),
+        ("panel_tuning_skips_a_fold_with_no_repeated_hospital", panel_tuning_skips_a_fold_with_no_repeated_hospital),
+        ("panel_failure_keeps_the_tuning_audit", panel_failure_keeps_the_tuning_audit),
         ("panel_with_few_clusters_reports_the_tested_slopes", panel_with_few_clusters_reports_the_tested_slopes),
         ("panel_selection_is_in_the_run_result", panel_selection_is_in_the_run_result),
         ("panel_without_repeated_hospitals_stays_not_estimable", panel_without_repeated_hospitals_stays_not_estimable),

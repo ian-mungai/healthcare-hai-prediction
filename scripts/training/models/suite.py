@@ -170,11 +170,15 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
         fitting, validation = training.subset(left), training.subset(right)
         features = None
         if slot == "m6_fixed_effects":
-            sample = _panel_rows(request, fitting)
-            fitting, features = sample.data, sample.features
-            years = len({row["window_year"] for row in fitting.rows})
-            if years < MINIMUM_FITTING_YEARS:
+            try:
+                sample = _panel_rows(request, fitting)
+            except NotEstimable as error:
+                years, reason = 0, str(error)
+            else:
+                fitting, features = sample.data, sample.features
+                years = len({row["window_year"] for row in fitting.rows})
                 reason = f"panel requires at least {MINIMUM_FITTING_YEARS} fitting years after the complete-case and repeated-hospital filters, found {years}"
+            if years < MINIMUM_FITTING_YEARS:
                 dropped.append(
                     {"status": "fold_dropped", "validation_year": max(row["window_year"] for row in validation.rows), "fitting_years": years, "reason": reason}
                 )
@@ -246,7 +250,12 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         if not training.rows or not holdout.rows:
             raise NotEstimable("mixed model has no ownership-eligible training or holdout windows")
     parameters, audit = _tune(request, slot, forest, training)
-    pipeline, sample = _fit_pipeline(request, slot, parameters, forest, training)
+    try:
+        pipeline, sample = _fit_pipeline(request, slot, parameters, forest, training)
+    except NotConverged as error:
+        return SlotResult(slot, "not_converged", str(error), details={"tuning": audit})
+    except (NotEstimable, np.linalg.LinAlgError) as error:
+        return SlotResult(slot, "not_estimable", str(error), details={"tuning": audit})
     prediction = np.asarray(pipeline.predict(holdout.rows), dtype=np.float64).reshape(-1)
     scored = metrics(holdout.y, prediction)
     request.deadline.check()
@@ -294,7 +303,7 @@ def fit_slot(request: ModelRequest, slot: str, *, forest: bool = False) -> SlotR
     operation = replace(request, deadline=request.deadline.within(request.config["slots"][slot]["budget_seconds"]))
     try:
         result = _fit_slot(operation, slot, forest)
-        if slot == "m4_boosting" and not forest:
+        if slot == "m4_boosting" and not forest and result.status == "fitted":
             check = fit_slot(operation, slot, forest=True)
             result.details["forest_check"] = {
                 "status": check.status,
