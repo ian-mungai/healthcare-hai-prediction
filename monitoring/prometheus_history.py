@@ -399,15 +399,19 @@ def candidate(client: Any, bucket: str, name: str, group: dict[str, int]) -> Can
 def prepare(client: Any, bucket: str, found: Candidate, partial: Path, owner: tuple[int, int] | None) -> bool:
     """Download and verify one block into ``partial``. ``False``: an object expired during the download and the block is incomplete."""
     shutil.rmtree(partial, ignore_errors=True)
+    ready = False
     try:
         for file, expected in found.manifest.items():
             download(client, bucket, found.name, file, expected, partial / file)
+        verify_block(found.name, partial, found.manifest)
+        if owner is not None:
+            hand_over(partial, owner)
+        ready = True
     except Gone:
-        shutil.rmtree(partial, ignore_errors=True)
         return False
-    verify_block(found.name, partial, found.manifest)
-    if owner is not None:
-        hand_over(partial, owner)
+    finally:
+        if not ready:
+            shutil.rmtree(partial, ignore_errors=True)
     return True
 
 

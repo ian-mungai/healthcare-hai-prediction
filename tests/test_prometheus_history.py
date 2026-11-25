@@ -445,6 +445,28 @@ def test_every_checked_file_header_must_be_complete_and_of_a_supported_version(t
     check(not any((tmp_path / "volume" / "prometheus").glob(f"{ulid(1)}*")), "a block with a damaged header is not placed")
 
 
+@pytest.mark.parametrize("failure", ["hash", "index header", "chunk header"])
+def test_a_block_that_fails_its_hash_or_header_check_leaves_no_scratch_folder(tmp_path: Path, failure: str) -> None:
+    data = tmp_path / "source"
+    data.mkdir()
+    block = write_block(data, ulid(1), 0)
+    if failure == "index header":
+        (block / "index").write_bytes(b"\0" * 12)
+    if failure == "chunk header":
+        (block / "chunks" / "000001").write_bytes(b"\0" * 12)
+    store = Pages("shipper")
+    ship(store, data)
+    if failure == "hash":
+        corrupt(store, "chunks/000001", lambda body: body[:-1] + bytes([body[-1] ^ 1]))
+    with pytest.raises(history.HistoryError):
+        restore(Pages("restore", store.objects), tmp_path)
+    scratch = tmp_path / "volume" / "prometheus_restore"
+    check(
+        scratch.is_dir() and not any(scratch.iterdir()),
+        f"the scratch folder of the failed block is gone after a {failure} failure: {sorted(scratch.iterdir())}",
+    )
+
+
 @pytest.mark.parametrize("version", [2, 3])
 def test_both_index_versions_that_prometheus_writes_are_accepted(tmp_path: Path, version: int) -> None:
     data = tmp_path / "source"
