@@ -23,6 +23,7 @@ from scripts.process import CompletedProcess, run_command
 PROFILE = "synthetic-review-profile"
 KEY = "REVIEWONLYKEY"
 INIT_SECONDS = 60
+ROOT_OUTPUT = {"synthetic": {"value": "fixture", "type": "string"}}
 ALERT_ADDRESSES = {alert_email.ALERTS_ADDRESS, alert_email.BUDGET_ADDRESS}
 
 
@@ -133,6 +134,23 @@ def checks(root: Path) -> dict[str, bool]:
                 put(bucket, "alerts", state_document(9))
                 zero = readers()
                 results["a persisted state with no resources is a state, not an absent one"] = zero["alerts"] == []
+                for label, document in (
+                    ("no lineage", {"version": 4, "terraform_version": "1.16.4", "serial": 0, "lineage": "", "outputs": {}, "resources": []}),
+                    (
+                        "no lineage and a root output",
+                        {"version": 4, "terraform_version": "1.16.4", "serial": 0, "lineage": "", "resources": [], "outputs": ROOT_OUTPUT},
+                    ),
+                ):
+                    put(bucket, "alerts", document)
+                    put(bucket, "services", document)
+                    written = readers()
+                    results[f"a persisted state with serial 0 and {label}: the alerts reader finds a state with no addresses"] = written["alerts"] == []
+                    results[f"a persisted state with serial 0 and {label}: the serial is 0"] = written["serial"] == 0
+                bucket.objects.clear()
+                gone = readers()
+                results["no object again after the written ones: no state"] = gone["alerts"] is None and gone["serial"] is None
+                put(bucket, "alerts", state_document(9))
+                put(bucket, "services", state_document(62))
                 bucket.faults.deny_all = True
                 denied = readers()
                 results["a denied read is a failure, not an absent state"] = denied["alerts"] == "state: failed"

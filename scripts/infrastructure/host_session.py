@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from orchestration.training_contract import CODE_RUN, MODEL_NAMES, compose_run_id, new_run_hex
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.s3_store import AwsCli, StorageError
-from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, made_up_empty_state, terraform_document
+from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, made_up_empty_state, state_exists, terraform_document
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 from scripts.process import CompletedProcess
 
@@ -391,13 +391,15 @@ def services_state_serial(settings: dict[str, str], remaining: Callable[[], floa
 
     The read has its own bound, ``SERIAL_SECONDS``, or the time the caller has left when that is shorter; no process starts when none is left. None when
     Terraform cannot read the state in that time, prints nothing (no state, or an empty local file), prints the empty state that it makes up for a missing
-    remote object or the document has no whole-number serial."""
+    remote object (``state list`` then says that there is no state, and shares the same bound) or the document has no whole-number serial. A persisted state
+    with serial 0 and no lineage keeps its serial."""
     seconds = SERIAL_SECONDS if remaining is None else min(SERIAL_SECONDS, remaining())
+    started = time.monotonic()
     try:
         document = terraform_document(SERVICES_DIRECTORY, ["state", "pull"], settings, "The services state could not be read.", timeout=seconds)
+        if made_up_empty_state(document) and not state_exists(SERVICES_DIRECTORY, settings, seconds - (time.monotonic() - started)):
+            return None
     except ConfigurationError:
-        return None
-    if made_up_empty_state(document):
         return None
     serial = document.get("serial")
     return serial if isinstance(serial, int) and not isinstance(serial, bool) else None

@@ -64,6 +64,15 @@ def platform_values(storage: dict[str, str]) -> dict[str, str]:
     return {key: storage[key] for key in PLATFORM_KEYS}
 
 
+def project_environment(storage: dict[str, str]) -> dict[str, str]:
+    """The environment of a Terraform command: this process's, with the AWS sign-in replaced by the project profile and region."""
+    environment = os.environ.copy()
+    for name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
+        environment.pop(name, None)
+    environment.update(AWS_PROFILE=storage["aws_profile"], AWS_REGION=storage["aws_region"], AWS_DEFAULT_REGION=storage["aws_region"])
+    return environment
+
+
 def terraform_document(directory: Path, arguments: list[str], storage: dict[str, str], failure: str, timeout: float = TERRAFORM_SECONDS) -> dict[str, Any]:
     """Read Terraform JSON with the project profile and report failures without printing subprocess output.
 
@@ -73,12 +82,8 @@ def terraform_document(directory: Path, arguments: list[str], storage: dict[str,
     if timeout <= 0:
         raise ConfigurationError(f"{failure} The command deadline passed before Terraform started.")
     timeout = min(timeout, TERRAFORM_SECONDS)
-    environment = os.environ.copy()
-    for name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
-        environment.pop(name, None)
-    environment.update(AWS_PROFILE=storage["aws_profile"], AWS_REGION=storage["aws_region"], AWS_DEFAULT_REGION=storage["aws_region"])
     try:
-        result = run_command("terraform", [f"-chdir={directory}", *arguments], env=environment, timeout=timeout)
+        result = run_command("terraform", [f"-chdir={directory}", *arguments], env=project_environment(storage), timeout=timeout)
     except TimeoutExpired:
         raise ConfigurationError(f"{failure} Terraform exceeded {timeout:g} seconds.") from None
     except OSError:
@@ -94,11 +99,32 @@ def terraform_document(directory: Path, arguments: list[str], storage: dict[str,
     return document
 
 
-def made_up_empty_state(document: dict[str, Any]) -> bool:
-    """True for the empty state that Terraform prints from ``state pull`` when a remote backend holds no state object: serial 0, no lineage and no resources.
+NO_STATE_TEXT = "No state file was found"
 
-    A state that was ever written has a lineage, so a persisted state with no resources is not this document."""
+
+def made_up_empty_state(document: dict[str, Any]) -> bool:
+    """True for a ``state pull`` document that may be the empty state Terraform makes up when a remote backend holds no state object: serial 0, no lineage and
+    no resources.
+
+    ``terraform state push`` can persist the same document, so the shape alone does not say that there is no state. ``state_exists`` decides."""
     return not document.get("lineage") and not document.get("resources") and document.get("serial") in (0, None)
+
+
+def state_exists(directory: Path, storage: dict[str, str], timeout: float) -> bool:
+    """Whether the stack holds a state, by ``terraform state list``: it exits 0 for a persisted state, even one with no resources, and fails with "No state
+    file was found" when there is none. Any other failure, a timeout or no time left raises ConfigurationError, so an unreadable state is never read as an
+    absent one."""
+    if timeout <= 0:
+        raise ConfigurationError("The command deadline passed before Terraform started.")
+    try:
+        result = run_command("terraform", [f"-chdir={directory}", "state", "list"], env=project_environment(storage), timeout=min(timeout, TERRAFORM_SECONDS))
+    except (TimeoutExpired, OSError):
+        raise ConfigurationError("The state could not be listed.") from None
+    if result.returncode == 0:
+        return True
+    if NO_STATE_TEXT in result.stderr:
+        return False
+    raise ConfigurationError("The state could not be listed.")
 
 
 def platform_outputs(storage: dict[str, str]) -> dict[str, Any]:

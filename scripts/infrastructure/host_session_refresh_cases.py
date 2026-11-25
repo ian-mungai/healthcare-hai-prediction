@@ -309,10 +309,13 @@ def the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero() -> 
     renderer = importlib.import_module("scripts.infrastructure.render_platform_config")
     settings = {"aws_profile": PROFILE, "aws_region": REGION}
     started: list[tuple[list[str], float]] = []
-    answers: dict[str, Any] = {"state": {"version": 4, "serial": SERIAL, "lineage": "x", "resources": []}}
+    answers: dict[str, Any] = {"state": {"version": 4, "serial": SERIAL, "lineage": "x", "resources": []}, "list": (0, "")}
 
     def fake_run(program: str, argv: Any, *, env: Any, timeout: float) -> CompletedProcess[str]:
         started.append((list(argv), timeout))
+        if "list" in argv:
+            code, text = answers["list"]
+            return CompletedProcess([program, *argv], code, "", text)
         if "state" in argv and isinstance(answers["state"], BaseException):
             raise answers["state"]
         return CompletedProcess([program, *argv], 0, json.dumps(answers["state"]), "")
@@ -333,7 +336,18 @@ def the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero() -> 
     answers["state"] = TimeoutExpired(["terraform"], 15)
     slow = serial(lambda: 100.0)
     answers["state"] = {"version": 4, "serial": 0, "lineage": "", "outputs": {}, "resources": []}
+    answers["list"] = (1, "No state file was found!")
     synthetic = serial()
+    answers["list"] = (0, "")
+    written_empty = serial()
+    written_calls = [argv[-1] for argv, _ in started]
+    ticks = iter((100.0, 102.0, 103.0))
+    with mock.patch.object(host_session.time, "monotonic", lambda: next(ticks)):
+        written_timeout = serial(lambda: 5.0)
+    written_timeouts = [timeout for _, timeout in started]
+    answers["list"] = (1, "Error: Failed to load state: access denied")
+    unlisted = serial()
+    answers["list"] = (0, "")
     answers["state"] = {"version": 4, "serial": 9, "lineage": "persisted", "outputs": {}, "resources": []}
     persisted_empty = serial()
     platform = {
@@ -392,6 +406,10 @@ def the_services_state_serial_is_opt_in_bounded_and_never_a_synthetic_zero() -> 
         "a lookup with no time left starts no process": spent is None and spent_started == 0,
         "a pull that outruns its bound is an unknown serial, not an error": slow is None,
         "the empty state that Terraform makes up for a missing object is no serial": synthetic is None,
+        "a persisted state with serial 0 and no lineage keeps its serial, as state list shows it exists": written_empty == 0
+        and written_calls == ["pull", "list"],
+        "the second lookup shares the bound of the first": written_timeout == 0 and written_timeouts == [5.0, 3.0],
+        "a state list that fails for another reason is an unknown serial": unlisted is None,
         "a persisted state with no resources keeps its serial": persisted_empty == 9,
         "load_names reads no serial unless asked": plain.state_serial is None and plain_pulls == 0 and asked.state_serial == SERIAL and len(pulls) == 1,
         "only status, refresh and session ask for the serial": wanted

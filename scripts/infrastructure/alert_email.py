@@ -24,9 +24,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, NoReturn
 
-from scripts.infrastructure.render_platform_config import made_up_empty_state
+from scripts.infrastructure.render_platform_config import NO_STATE_TEXT, made_up_empty_state
 from scripts.infrastructure.render_project_config import ConfigurationError, load_alert_email, load_configuration
-from scripts.process import TimeoutExpired, run_command
+from scripts.process import CompletedProcess, TimeoutExpired, run_command
 
 RECORD = Path("plans/alert_email")
 LOG = RECORD / "last_run.log"
@@ -109,8 +109,9 @@ def note(text: str) -> None:
     LOG.chmod(0o600)
 
 
-def run(subject: Subject, program: str, args: list[str], *, env: dict[str, str] | None = None) -> str:
-    """Run one command and return its standard output; a failed command stops the step. The log gets the identity and the exit status, never the output."""
+def attempt(subject: Subject, program: str, args: list[str], *, env: dict[str, str] | None = None) -> CompletedProcess[str]:
+    """Run one command and return its result, whatever its exit status; only a timeout or a command that cannot start stops the step. The log gets the
+    identity and the exit status, never the output."""
     environment = {**os.environ, **(env or {})}
     identity = f"{subject.value}: {Path(program).name}"
     try:
@@ -122,6 +123,12 @@ def run(subject: Subject, program: str, args: list[str], *, env: dict[str, str] 
         note(f"{identity} could not run")
         raise Stop(subject, Status.FAILED) from None
     note(f"{identity} exit {result.returncode}")
+    return result
+
+
+def run(subject: Subject, program: str, args: list[str], *, env: dict[str, str] | None = None) -> str:
+    """Run one command and return its standard output; a failed command stops the step."""
+    result = attempt(subject, program, args, env=env)
     if result.returncode != 0:
         raise Stop(subject, Status.FAILED)
     return result.stdout
@@ -216,17 +223,21 @@ def state_addresses() -> set[str] | None:
 
     The state is read through Terraform (``state pull``), so a local file and a remote backend work alike. Terraform prints nothing for a stack with no state,
     and for a local file that is empty, such as the one that ``init -reconfigure`` leaves after a move to the project bucket. For a remote backend that holds
-    no state object it prints an empty state (serial 0, no lineage, no resources) while ``state list`` fails; that is no state too. A persisted state that has
-    no resources has a lineage and is a state."""
+    no state object it prints an empty state (serial 0, no lineage, no resources) while ``state list`` fails with "No state file was found"; that is no state
+    too. ``terraform state push`` can persist the same document, and ``state list`` then succeeds: that is a state with no addresses. Any other failure of
+    ``state list`` stops the step."""
     pulled = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "pull"])
     if not pulled.strip():
         return None
     document = read_json(Subject.STATE, pulled)
     if not isinstance(document, dict):
         raise Stop(Subject.STATE, Status.UNEXPECTED)
-    if made_up_empty_state(document):
-        return None
-    listed = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"]).splitlines()
+    listing = attempt(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"])
+    if listing.returncode != 0:
+        if made_up_empty_state(document) and NO_STATE_TEXT in listing.stderr:
+            return None
+        raise Stop(Subject.STATE, Status.FAILED)
+    listed = listing.stdout.splitlines()
     if not set(listed) <= {ALERTS_ADDRESS, BUDGET_ADDRESS} or len(listed) != len(set(listed)):
         raise Stop(Subject.STATE, Status.UNEXPECTED)
     return set(listed)

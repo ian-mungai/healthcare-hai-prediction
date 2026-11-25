@@ -654,6 +654,22 @@ def teardown_cases(section: str, sink: list[str], helper: str) -> tuple[dict[str
             "a persisted state with no resources reports both subscriptions absent from it",
             code == 0 and output == "alerts subscription: absent\nbudget subscription: absent\n",
         )
+    # A persisted state with serial 0 and no lineage looks like the made up empty state, but state list shows that it exists.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink, helper=helper)
+        scratch.set(unlineaged_state=True)
+        code, output, called = scratch.run(state)
+        calls += called
+        case(
+            "a persisted state with serial 0 and no lineage reports both subscriptions absent from it",
+            code == 0 and output == "alerts subscription: absent\nbudget subscription: absent\n",
+        )
+        code, output, called = scratch.run(plan)
+        calls += called
+        case(
+            "a persisted state with serial 0 and no lineage gives a destroy plan that compares its empty list",
+            code == 0 and output == "alerts: nothing to do\n",
+        )
     for label, extra, words in (
         ("a state that cannot be pulled", {"fail_state_pull": True}, ("state: failed\n",)),
         ("a state pull that is not a state document", {"pull_raw": "not json"}, ("state: unexpected\n",)),

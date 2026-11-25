@@ -213,7 +213,12 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "the serial lookup takes all the time that is left": ("min(SERIAL_SECONDS, remaining())", "remaining()"),
     "the serial lookup has no bound without a caller deadline": ("SERIAL_SECONDS if remaining is None else", "1e9 if remaining is None else"),
-    "the made up empty state counts as a serial": ("    if made_up_empty_state(document):\n        return None\n", ""),
+    "the made up empty state counts as a serial": ("if made_up_empty_state(document) and not state_exists(", "if False and not state_exists("),
+    "a persisted state with serial 0 and no lineage counts as absent": (
+        " and not state_exists(SERVICES_DIRECTORY, settings, seconds - (time.monotonic() - started))",
+        "",
+    ),
+    "the state existence check gets a whole new bound": ("seconds - (time.monotonic() - started)", "seconds"),
     "every command asks for the serial": ('arguments.command in {"status", "refresh", "session"})', "True)"),
     "status raises on an absent service": (
         "        found, absent = self.lookup_services()\n        services = {",
