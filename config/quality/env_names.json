@@ -178,6 +178,7 @@
     "RUN_LOCK_TOKEN": {"category": "shell", "reason": "The token of a run that the run lock command line (scripts/lakehouse/run_lock.py) acquired; the caller exports it for one command. A run's token lives in the token store."},
     "TFLINT_PLUGIN_DIR": {"category": "shell", "reason": "Optional folder of the pinned TFLint rulesets."},
     "AWS_DEFAULT_REGION": {"category": "tool", "reason": "The standard AWS variable; the startup check reads it only when AWS_REGION is unset. Leave it unset locally."},
+    "AWS_ENDPOINT_URL_S3": {"category": "tool", "reason": "The standard AWS SDK endpoint override; only the local S3 stand-ins of the E2Es set it, and state_protection.py then picks the loopback client config. Leave it unset."},
     "CHECKS_SHARD": {"category": "tool", "reason": "Set by scripts/quality/ci_hooks.py for each shard of the test-checks hook."},
     "CHECKS_SHARD_DIRECTORY": {"category": "tool", "reason": "Set by scripts/quality/ci_hooks.py for each shard of the test-checks hook."},
     "FEATURE_SHARD": {"category": "tool", "reason": "Set by a feature CI shard job."},

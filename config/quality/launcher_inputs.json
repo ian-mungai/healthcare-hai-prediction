@@ -1853,6 +1853,8 @@
     "scripts/infrastructure/secret_store_stand_in.py",
     "scripts/infrastructure/services_apply.py",
     "scripts/infrastructure/stack_settings.py",
+    "scripts/infrastructure/state_migration_s3_stand_in.py",
+    "scripts/infrastructure/state_protection.py",
     "scripts/infrastructure/sts_stand_in.py",
     "scripts/infrastructure/synthetic_workspace.py",
     "scripts/infrastructure/systemd_model.py",

@@ -19,7 +19,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/acquisition/source_registry.py": "sha256:8a201611c371ecfc2982f80473d2a94107db8ed2c8be33278503c6e8a60e1e94",
-        "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
+        "scripts/infrastructure/render_project_config.py": "sha256:7b090250b0e9c9398ecc14fe53823ebc9a05f5621ba258688c169693e94d7901"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and aws_runner runs run_command(command[0], ...)",
       "lines": [
@@ -44,7 +44,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/acquisition/source_registry.py": "sha256:8a201611c371ecfc2982f80473d2a94107db8ed2c8be33278503c6e8a60e1e94",
-        "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
+        "scripts/infrastructure/render_project_config.py": "sha256:7b090250b0e9c9398ecc14fe53823ebc9a05f5621ba258688c169693e94d7901"
       },
       "reason": "aws_runner is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -71,7 +71,7 @@
         "scripts/acquisition/process.py": "sha256:513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7",
         "scripts/acquisition/s3_store.py": "sha256:c81168f2bcebc216ace0c6c26e646c4f51799c268bdf5202d9dff9c03bb713fa",
         "scripts/acquisition/source_registry.py": "sha256:8a201611c371ecfc2982f80473d2a94107db8ed2c8be33278503c6e8a60e1e94",
-        "scripts/infrastructure/render_project_config.py": "sha256:bd081c8deedece982ccaab25162335b996d0879b77805dcf15d0ad1f2c0a8dde"
+        "scripts/infrastructure/render_project_config.py": "sha256:7b090250b0e9c9398ecc14fe53823ebc9a05f5621ba258688c169693e94d7901"
       },
       "reason": "aws_runner (imported from the Census collector) is handed to AwsCli; AwsCli builds every command as a list that starts with the literal aws",
       "lines": [
@@ -1325,7 +1325,7 @@
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "2ef6175925ab0c5ab4b204bceda1d9447b45fb2c3e0c950e1ad9adbf1e55c33f",
+      "file_sha256": "5f3dc32ff612cd416596457ac6f5dc986b37817fd1684ee97671574a87edaf87",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7",
@@ -1335,8 +1335,8 @@
         "scripts/quality/core_commands.py": "sha256:efa5f4bbcad7c180a2934462fb39d6b59aa8c9b6968262e68e169110aadca458",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
         "scripts/quality/pre_push.py": "sha256:6003a2eb3feca1828e7cbfe321431fb8c7a004f1a3e31f5f2644cf850d8f29e4",
-        "scripts/quality/repo_checks.py": "sha256:d96d45297543a31c8b1ff2ec3c892380550ab21be7f0f8837a4beb72c4c82e3d",
-        "scripts/quality/run_checks_e2e.py": "sha256:5642321ef1692ebaf8861fd3d2416453504b2aeab8c738c752ba811057e46033",
+        "scripts/quality/repo_checks.py": "sha256:4ef947669be1c2fd1369d45d6d9d993ce62c8fd0705b24197f4550e25e50cd5c",
+        "scripts/quality/run_checks_e2e.py": "sha256:7a172dfdcf67165d6a12130d6192a2679baafa50f24aa3bd79a77aa41105b66a",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
         "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
         "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089",
@@ -1350,7 +1350,7 @@
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "2ef6175925ab0c5ab4b204bceda1d9447b45fb2c3e0c950e1ad9adbf1e55c33f",
+      "file_sha256": "5f3dc32ff612cd416596457ac6f5dc986b37817fd1684ee97671574a87edaf87",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:1d12a5016dd5c183c487c31758725af1c39dda78af91ca695cc663e3da639b8c",
         "scripts/process.py": "sha256:76e7835001333d679a6f1e0d9090f0c6b92a5141395470bed9d91114d80788c7",
@@ -1360,8 +1360,8 @@
         "scripts/quality/core_commands.py": "sha256:efa5f4bbcad7c180a2934462fb39d6b59aa8c9b6968262e68e169110aadca458",
         "scripts/quality/launcher_inputs.py": "sha256:192fd078a42da8a983706fc57e017b776201b381cad65a9a24c6b30ff80394ea",
         "scripts/quality/pre_push.py": "sha256:6003a2eb3feca1828e7cbfe321431fb8c7a004f1a3e31f5f2644cf850d8f29e4",
-        "scripts/quality/repo_checks.py": "sha256:d96d45297543a31c8b1ff2ec3c892380550ab21be7f0f8837a4beb72c4c82e3d",
-        "scripts/quality/run_checks_e2e.py": "sha256:5642321ef1692ebaf8861fd3d2416453504b2aeab8c738c752ba811057e46033",
+        "scripts/quality/repo_checks.py": "sha256:4ef947669be1c2fd1369d45d6d9d993ce62c8fd0705b24197f4550e25e50cd5c",
+        "scripts/quality/run_checks_e2e.py": "sha256:7a172dfdcf67165d6a12130d6192a2679baafa50f24aa3bd79a77aa41105b66a",
         "scripts/quality/run_lint_tools_e2e.py": "sha256:6caea24d53aacef8b7d982faffb4a8dfc8b465cdc8ac2945ab35c9b25c4a61c8",
         "scripts/quality/scratch_marker.py": "sha256:79a0ce7d5cdad4c208a592d9b66553ae03cb2b96e8362fc6ea56b194fc04a278",
         "scripts/quality/scratch_worktree.py": "sha256:8c456b186230e3bcc8344113890b75b4674defd7e6ef73326c284491ab6fd089",
