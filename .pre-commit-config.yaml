@@ -112,7 +112,8 @@ repos:
         stages: [pre-commit]
       - id: launcher-list
         # No file pattern can name the launcher inputs (more than a thousand paths and the folders the suite reads whole), so the entry runs when the staged paths
-        # select the launcher group of config/quality/ci_groups.json, as the hosted launcher job does, or when a staged addition or deletion changes what it reads.
+        # select the launcher group of config/quality/ci_groups.json, as the hosted launcher job does, or when the staged diff adds, deletes or renames any file
+        # (an addition can make an optional read of the suite find a file): such a commit runs the launcher check, about 32 seconds. A modification-only commit skips it.
         name: The launcher input list equals what the launcher suite needs
         entry: .venv/bin/python -m scripts.quality.repo_checks launcher-list
         language: system

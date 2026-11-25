@@ -153,6 +153,11 @@ COLLECTOR_TEST = "scripts/acquisition/tests/test_committed_code_versions.py"
 COLLECTOR_STUB = "def test_the_collector_closures_are_listed() -> None:\n    raise AssertionError('the stand-in for the acquisition test ran')\n"
 COLLECTOR_BLOCKED = "the collector code closures are not all in their committed version lists"
 OPTIONAL_READ = "from pathlib import Path\nNOTE = Path('docs/review_probe.md')\nif NOTE.is_file():\n    TEXT = NOTE.read_text()\n"
+# The optional read names its file by an f-string and a parenthesized import: no text in the launcher file spells the path or the module name in one piece.
+OPTIONAL_FSTRING_READ = (
+    "from pathlib import Path\nPROFILE = 'review_probe'\nNOTE = Path(f'docs/{PROFILE}.md')\nif NOTE.is_file():\n    TEXT = NOTE.read_text()\n"
+)
+PARENTHESIZED_IMPORT = "try:\n    from app import (\n        helper,\n    )\nexcept ImportError:\n    helper = None\n"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
@@ -3725,11 +3730,47 @@ CASES = [
         reason="app/helper.py: in the list but not tracked",
     ),
     Case(
-        "launcher list, a staged addition that no launcher file names",
+        "launcher list lacks a file that a staged addition makes an f-string optional read find",
+        LAUNCHER_HOOK,
+        False,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": OPTIONAL_FSTRING_READ},
+        files={"docs/review_probe.md": "A note that the suite now reads.\n"},
+        reason="docs/review_probe.md: the launcher suite needs it",
+    ),
+    Case(
+        "launcher list lacks a file that an optional parenthesized import now finds",
+        LAUNCHER_HOOK,
+        False,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": PARENTHESIZED_IMPORT},
+        files={"app/helper.py": "X = 1\n"},
+        reason="app/helper.py: the launcher suite needs it",
+    ),
+    Case(
+        "launcher list, a staged addition that no launcher file names still runs the check and passes",
         LAUNCHER_HOOK,
         True,
         committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": OPTIONAL_READ},
         files={"docs/another_note.md": "A note that no launcher file names.\n"},
+    ),
+    Case(
+        "launcher list, a staged addition that no launcher file names runs the check and finds a stale list",
+        LAUNCHER_HOOK,
+        False,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py", "app/gone.py"]), "app/entry.py": "VALUE = 1\n"},
+        files={"docs/another_note.md": "A note that no launcher file names.\n"},
+        reason="app/gone.py: in the list but not tracked",
+    ),
+    Case(
+        "launcher list, a modification outside what the suite reads skips the check",
+        LAUNCHER_HOOK,
+        True,
+        committed={
+            LAUNCHER_BODY: LAUNCHER_START,
+            LAUNCHER_LIST: launcher_list(["app/entry.py", "app/gone.py"]),
+            "app/entry.py": "VALUE = 1\n",
+            "docs/note.md": "A note.\n",
+        },
+        files={"docs/note.md": "A changed note.\n"},
     ),
     Case(
         "launcher list, a change outside what the suite reads",
@@ -5305,11 +5346,11 @@ PLANTED_REGRESSIONS = [
         0,
     ),
     (
-        "the launcher list is checked when its group is selected",
+        "the launcher list is checked when its group is selected or a file is added or deleted",
         [case for case in CASES if case.hook == LAUNCHER_HOOK and not case.expect_pass],
         LAUNCHER_COMMAND,
         "scripts/quality/committed_lists.py",
-        'if "launcher" not in ci_groups.plan("staged", "launcher")["run"]:',
+        'if "launcher" not in ci_groups.plan("staged", "launcher")["run"] and not (added or deleted):',
         "if True:",
         0,
     ),

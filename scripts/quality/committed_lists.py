@@ -13,8 +13,9 @@ Each check calls the check that the hosted job runs; none reimplements it.
 - ``launcher-list`` runs ``launcher_list_equals_computed`` (scripts/quality/run_ci_groups_e2e.py: launcher_inputs.problems) and
   ``launcher_inventory_lists_every_file_of_the_folders_it_reads`` (scripts/quality/model_code_cases.py) over config/quality/launcher_inputs.json. The list
   holds more than a thousand paths and the folders the launcher suite reads, so no hook ``files`` pattern could name them. The check runs when the staged
-  paths select the ``launcher`` group of config/quality/ci_groups.json, the selection of the hosted launcher job, or when a staged addition or deletion
-  changes what the launcher reads (``launcher_reads_staged``): the computation takes about 30 seconds, so a cheap test of the added and deleted paths decides.
+  paths select the ``launcher`` group of config/quality/ci_groups.json, the selection of the hosted launcher job, or when the staged diff adds, deletes or
+  renames any file: an addition can make an optional read of the launcher find a file and no text test of the paths can tell which one. The check takes about
+  32 seconds. A commit that only modifies files and does not select the group skips it.
 
 E2E: ``.venv/bin/python -m scripts.quality.run_checks_e2e --hook launcher-list``.
 """
@@ -40,15 +41,6 @@ COLLECTOR_FILES = re.compile(
     r"^(scripts/acquisition/|scripts/infrastructure/render_project_config\.py$|scripts/(process|sdk_logs)\.py$|config/acquisition/[^/]+_code_versions\.json$)"
 )
 CODE_FOLDER = "scripts/"
-LAUNCHER_LIST = "config/quality/launcher_inputs.json"
-READER_SUFFIXES = (
-    ".py",
-    ".sh",
-    ".yaml",
-    ".yml",
-    ".tmpl",
-    ".toml",
-)  # The files whose text the launcher computation reads (launcher_inputs.TEXT_SUFFIXES and Python).
 
 
 def staged_changes() -> tuple[list[str], list[str], list[str]]:
@@ -86,47 +78,11 @@ def collector_problems() -> list[tuple[str, str]]:
     return [(COLLECTOR_TEST, "the collector code closures are not all in their committed version lists:\n  " + "\n  ".join(shown))]
 
 
-def read_needles(path: str) -> list[str]:
-    """The texts by which a launcher file can name a file: its path, its file name, and for Python its dotted module name and an import of its name."""
-    folder, _, name = path.rpartition("/")
-    needles = [re.escape(path)]
-    if name != "__init__.py":
-        needles.append(re.escape(name))
-    if name.endswith(".py"):
-        stem = name.removesuffix(".py")
-        package = folder.replace("/", ".")
-        dotted = package if stem == "__init__" else f"{package}.{stem}" if package else stem
-        needles.append(re.escape(dotted))
-        if stem != "__init__":
-            needles += [rf"import.*\b{re.escape(stem)}\b", rf"from +\.+{re.escape(stem)}\b"]
-    return needles
-
-
-def launcher_reads_staged() -> bool:
-    """True when a staged addition or deletion can change what the launcher suite reads although the paths do not select its group.
-
-    A file the launcher already reads (named in the list, or under a folder it reads whole) counts when it is added or deleted. A new file counts when a
-    file of the list names it in text: a read that was optional until the file appeared. The test is a superset of the computation, which is the check."""
-    _, added, deleted = staged_changes()
-    if not added and not deleted:
-        return False
-    committed = json.loads((ROOT / LAUNCHER_LIST).read_text(encoding="utf-8"))
-    listed, folders = set(committed["files"]), committed.get("folders", [])
-    if any(path in listed or any(path.startswith(f"{folder}/") for folder in folders) for path in [*added, *deleted]):
-        return True
-    readers = sorted(path for path in listed if path.endswith(READER_SUFFIXES))
-    if not added or not readers:
-        return False
-    needles = [argument for path in added for needle in read_needles(path) for argument in ("-e", needle)]
-    found = run_command("git", ["--literal-pathspecs", "grep", "--cached", "-l", "-E", *needles, "--", *readers], cwd=ROOT, timeout=GIT_SECONDS)
-    if found.returncode not in (0, 1):
-        raise ValueError(f"git grep over the launcher files failed ({found.returncode}): {found.stderr[-500:]}")
-    return found.returncode == 0
-
-
 def launcher_problems() -> list[tuple[str, str]]:
-    """(location, problem) of each way the launcher input list is not what the suite needs, when the staged paths select the launcher group."""
-    if "launcher" not in ci_groups.plan("staged", "launcher")["run"] and not launcher_reads_staged():
+    """(location, problem) of each way the launcher input list is not what the suite needs, when the staged paths select the launcher group or the staged diff
+    adds, deletes or renames a file (``staged_changes`` lists a rename as a deletion and an addition)."""
+    _, added, deleted = staged_changes()
+    if "launcher" not in ci_groups.plan("staged", "launcher")["run"] and not (added or deleted):
         return []
     from scripts.quality import launcher_inputs, model_code_cases
 

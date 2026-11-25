@@ -79,20 +79,49 @@ def test_the_commit_hook_selects_every_file_of_every_collector_closure() -> None
     check(not missed, f"Files that COLLECTOR_FILES in scripts/quality/committed_lists.py does not select: {missed}")
 
 
+def binding_names(source: str) -> set[str]:
+    """The binding calls that a module names, under any import alias: an imported name (``from m import require_code as rc``), an attribute
+    (``module.require_code``, whatever the module is called) or a plain name. An aliased name counts through the name it imports, so the alias hides nothing."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+    return names & BINDING_CALLS
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from scripts.acquisition.code_versions import require_code\nrequire_code()\n",
+        "from scripts.acquisition.code_versions import require_code as admit\nadmit()\n",
+        "from scripts.acquisition.code_versions import collector_code_hashes as hashes, require_code as admit\n",
+        "from scripts.acquisition import code_versions as versions\nversions.require_code()\n",
+        "import scripts.acquisition.code_closure as closure\nclosure.closure_hashes('entry')\n",
+    ],
+)
+def test_a_binding_call_is_found_under_an_import_alias(source: str) -> None:
+    """An alias of the import or of its module does not hide the call that binds a collector to a list."""
+    check(binding_names(source), f"No binding call found in: {source!r}")
+
+
+def test_a_module_without_a_binding_call_binds_nothing() -> None:
+    """A module that only imports unrelated names is not a collector entry."""
+    check(not binding_names("from scripts.process import run_command as run\nrun()\n"), "A module with no binding call was taken for a collector entry")
+
+
 def test_every_collector_entry_is_checked_against_its_list() -> None:
-    """A collector that binds itself to a list (a call of require_code, reviewed_code_versions, closure_hashes or collector_code_hashes) must be an entry above
-    or a contract entry, so a new collector that reuses an existing list has its own closure checked too."""
+    """A collector that binds itself to a list (a call of require_code, reviewed_code_versions, closure_hashes or collector_code_hashes, under any alias)
+    must be an entry above or a contract entry, so a new collector that reuses an existing list has its own closure checked too."""
     checked = {entry for _, entry in ENTRIES.values()} | {contract.CODE_ENTRY for contract in CONTRACTS}
     bound: set[str] = set()
     for path in sorted((REPO_ROOT / "scripts/acquisition").glob("*.py")):
         if path.stem.endswith(("_contract", "_e2e")):
             continue
-        calls = {
-            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
-        }
-        if calls & BINDING_CALLS:
+        if binding_names(path.read_text(encoding="utf-8")):
             bound.add(f"scripts.acquisition.{path.stem}")
     check(bound <= checked, f"Collector entries with no closure check (add each to ENTRIES with its list): {sorted(bound - checked)}")
 
