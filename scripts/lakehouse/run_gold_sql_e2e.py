@@ -2986,6 +2986,45 @@ def boundary_cases(contract: Any, rendered: dict[str, str], expected: dict[str, 
     return records
 
 
+def projection(fact: Any) -> tuple[str, ...]:
+    """The silver columns a fact's projection names; the fact of a preserved older checker has no such field and keeps every silver column."""
+    return tuple(getattr(fact, "kept_silver_columns", ()))
+
+
+def expected_fact_sql(facts: Iterable[Any], macro: str, relations: dict[str, str]) -> dict[str, str]:
+    """Each fact rendered from the actual gold_fact macro with its contract entry, as the delivered checker renders it."""
+    return {
+        fact.name: gold_checks.gold_sql.render_fact(
+            macro,
+            fact.silver_model,
+            fact.grain,
+            {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys},
+            relations,
+            projection(fact),
+        )
+        for fact in facts
+    }
+
+
+def older_checker_case(contract: Any) -> dict[str, Any]:
+    """A fact of a preserved older checker (no projection field, as in the saved proposals) renders as a plain star projection and does not stop the run."""
+    fact = next(item for item in contract.facts if item.name == "fct_hai_hospital_window")
+    older = SimpleNamespace(
+        name=fact.name, silver_model=fact.silver_model, grain=fact.grain, columns=fact.columns, keys=fact.keys, source_dates=fact.source_dates
+    )
+    macro = (ROOT / "dbt/macros/gold_facts.sql").read_text()
+    relations = {name: f'main."{name}"' for name in (fact.silver_model, *(key.dimension for key in fact.keys))}
+    try:
+        rendered = expected_fact_sql([older], macro, relations)[fact.name]
+        plain = gold_checks.gold_sql.render_fact(
+            macro, fact.silver_model, fact.grain, {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}, relations
+        )
+        passed = projection(older) == () and rendered == plain and "silver.*" in rendered
+    except AttributeError:
+        passed = False
+    return {"name": "older_checker_fact_without_projection", "passed": passed}
+
+
 def range_cases(contract: Any, aggregates: frozenset[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Render a synthetic edition join from macro text, then change its fact-date predicate as a negative control."""
     fact = next(item for item in contract.facts if item.name == "fct_hai_hospital_window")
@@ -2997,8 +3036,8 @@ def range_cases(contract: Any, aggregates: frozenset[str]) -> tuple[list[dict[st
     variant = macro.replace(anchor, anchor + addition)
     keys = {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}
     relations = {name: f'main."{name}"' for name in (fact.silver_model, *(key.dimension for key in fact.keys))}
-    rendered = gold_checks.gold_sql.render_fact(variant, fact.silver_model, fact.grain, keys, relations, fact.kept_silver_columns)
-    original = gold_checks.gold_sql.render_fact(macro, fact.silver_model, fact.grain, keys, relations, fact.kept_silver_columns)
+    rendered = gold_checks.gold_sql.render_fact(variant, fact.silver_model, fact.grain, keys, relations, projection(fact))
+    original = gold_checks.gold_sql.render_fact(macro, fact.silver_model, fact.grain, keys, relations, projection(fact))
     records = []
     edited = rendered.replace("silver.window_start >=", "silver.window_end >=", 1)
     for label, compiled, expectation, reject in (
@@ -3192,17 +3231,7 @@ def run(out: Path, proposals: Path | None = None, only_g4: bool = False) -> bool
         names = set(re.findall(r"main\.\"?(\w+)", "\n".join(rendered.values())))
         relations = {name: f'main."{name}"' for name in names}
         macro = (ROOT / "dbt/macros/gold_facts.sql").read_text()
-        expected = {
-            fact.name: gold_checks.gold_sql.render_fact(
-                macro,
-                fact.silver_model,
-                fact.grain,
-                {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys},
-                relations,
-                fact.kept_silver_columns,
-            )
-            for fact in contract.facts
-        }
+        expected = expected_fact_sql(contract.facts, macro, relations)
     result = run_command(
         "duckdb",
         [":memory:", "-init", "/dev/null", "-json", "-c", "select distinct function_name from duckdb_functions() where function_type='aggregate'"],
@@ -3210,7 +3239,7 @@ def run(out: Path, proposals: Path | None = None, only_g4: bool = False) -> bool
         check=True,
     )
     aggregates = frozenset(row["function_name"] for row in json.loads(result.stdout))
-    records: list[dict[str, Any]] = [g4_policy_record(contract, aggregates), policy_mirror_record(contract)]
+    records: list[dict[str, Any]] = [g4_policy_record(contract, aggregates), policy_mirror_record(contract), older_checker_case(contract)]
     corpus = (
         []
         if only_g4

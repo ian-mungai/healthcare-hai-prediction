@@ -1,6 +1,6 @@
 """Contract-driven gold checks: SQL builders, verdicts and the Great Expectations gold suites (failure modes 838 to 842).
 
-Everything here reads ``data_contracts/lakehouse/gold_contract.json`` (facts, grains, columns, surrogate keys, source dates,
+Everything here reads ``data_contracts/lakehouse/gold_contract.json`` (facts, grains, columns, silver-only columns, surrogate keys, source dates,
 text columns, dimensions and the expression allowlist) and ``silver_columns.json`` (the kept silver models). No fact list is
 copied: a new fact in the contract is covered without a change here. The functions build SQL text or judge rows that a
 caller fetched; ``scripts/lakehouse/run_gold_e2e.py`` runs the SQL against a build file and reports the verdicts.
@@ -244,7 +244,7 @@ def load_contract(contract_path: Path = CONTRACT, silver_path: Path = SILVER_COL
 
 
 def contract_problems(contract: Contract) -> list[str]:
-    """Static reading of the contract against silver: each silver value column lands in one gold column (failure mode 744)."""
+    """Static reading of the contract against silver: each silver column lands in one gold column unless the fact lists it as silver-only (failure mode 744)."""
     problems: list[str] = []
     dimensions = {table.name for table in contract.dimensions}
     for fact in contract.facts:
@@ -452,7 +452,7 @@ def fingerprint_statement(label: str, side: str, source: str, pairs: Iterable[tu
 
 
 def reconcile_statements(facts: Iterable[Fact]) -> list[str]:
-    """Rows and content fingerprint of each fact and of its silver model over the silver columns (743, 744)."""
+    """Rows and content fingerprint of each fact and of its silver model over the silver columns the fact carries (743, 744)."""
     statements = []
     for fact in facts:
         gold = [(column.silver_column, column.name) for column in fact.columns]

@@ -1276,7 +1276,7 @@
       "surrogate_keys": "mapping of <dimension>_sk to {'dimension': ..., 'natural_key': ...}, as in this contract"
     },
     "file": "dbt/macros/gold_facts.sql (owned by G2)",
-    "output": "every silver column unchanged (less the fact's silver_only_columns, which stay in silver), then one <dimension>_sk per mapping, using the unknown member for a null or unmatched natural key",
+    "output": "every silver column unchanged, or only the silver_columns of a fact that lists silver_only_columns (those stay in silver), then one <dimension>_sk per mapping, using the unknown member for a null or unmatched natural key",
     "signature": "gold_fact(silver_model, grain, surrogate_keys, silver_columns)"
   },
   "facts": {
@@ -10070,8 +10070,8 @@
     "writer_principal": "gold_writer"
   },
   "rules": {
-    "columns": "Every silver column lands once, under its silver name; no value is stored twice. Controls appear only in bridge_measure_control.",
-    "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns.",
+    "columns": "Every silver column lands once, under its silver name, except the columns a fact lists in silver_only_columns, which stay in silver; no value is stored twice. Controls appear only in bridge_measure_control.",
+    "grain": "A fact's rows equal its silver model's rows; grain test on the silver unique key; rows and content fingerprint equal the silver model's over the silver columns the fact carries (all of them unless the fact lists silver_only_columns).",
     "lineage": "Facts read only their kept silver model, their dimensions and lookup seeds; a dimension or bridge reads only the inputs this contract lists for it, lookup seeds and gold models.",
     "surrogate_keys": "<dimension>_sk = md5 of the natural key's text in the dimension; a null or unmatched natural key takes the unknown member. A natural key of several parts is concat_ws('|', parts): a null part is skipped, so a row with a null edition keeps the key it had before the edition column existed.",
     "unknown_member": "Each dimension has one row with <dimension>_sk = md5('<unknown>') and the text '<unknown>' in every natural key part, except three models. dim_date has a null calendar_date. dim_measure has null fact, measure_key, value_column and edition_start and a measure_identity of '<unknown>'. dim_hospital_owner_history has a null valid_from. Facts never carry a null foreign key."
