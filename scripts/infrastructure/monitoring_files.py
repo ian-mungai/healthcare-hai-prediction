@@ -115,10 +115,10 @@ PROMTOOL_SCENARIOS = (
     "second_integration_first_failure",
     "all_undefined_heap_maxima",
     "three_observed_5xx",
-    "job_results_stale_host_on",
     "job_results_missing_host_on",
-    "job_results_stale_host_off",
+    "job_results_old_host_on",
     "job_results_missing_host_off",
+    "job_results_missing_host_series_absent",
 )
 POLARIS_TERRAFORM = "infra/services/polaris.tf"
 POLARIS_BUCKET = "http_server_requests_seconds_bucket"
