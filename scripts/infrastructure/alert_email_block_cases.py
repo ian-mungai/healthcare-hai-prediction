@@ -670,6 +670,21 @@ def teardown_cases(section: str, sink: list[str], helper: str) -> tuple[dict[str
             "a persisted state with serial 0 and no lineage gives a destroy plan that compares its empty list",
             code == 0 and output == "alerts: nothing to do\n",
         )
+    # An empty-looking pull followed by a list that fails for any other reason is a failed read, never an absent state.
+    for label, flag in (("a persisted-looking empty state", "unlineaged_state"), ("a missing remote object", "missing_remote_object")):
+        with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+            scratch = Scratch(Path(folder), sink, helper=helper)
+            scratch.set(**{flag: True, "fail_state_list": True})
+            code, output, called = scratch.run(state)
+            calls += called
+            case(f"{label} and a state list that fails for another reason stops the state block as failed", code == 1 and output == "state: failed\n")
+            case(
+                f"{label} and a state list that fails for another reason: pull and list both ran",
+                first_call(called, "state pull") and first_call(called, "state list"),
+            )
+            code, output, called = scratch.run(plan)
+            calls += called
+            case(f"{label} and a state list that fails for another reason stops the destroy plan", code == 1)
     for label, extra, words in (
         ("a state that cannot be pulled", {"fail_state_pull": True}, ("state: failed\n",)),
         ("a state pull that is not a state document", {"pull_raw": "not json"}, ("state: unexpected\n",)),
@@ -798,6 +813,11 @@ MUTANTS = (
         '    sys.stdout.write(result.stdout)\n    note(f"{identity} exit {result.returncode}")\n',
     ),
     ("a policy step for another policy is accepted", "    if not all(POLICY_STEP.fullmatch(line) for line in steps):", "    if False:"),
+    (
+        "a list failure other than the no-state one counts as an absent state",
+        "        if made_up_empty_state(document) and NO_STATE_TEXT in listing.stderr:",
+        "        if made_up_empty_state(document):",
+    ),
 )
 
 

@@ -6,18 +6,19 @@ JSON file (``STAND_IN_STATE``): the subscriptions that AWS holds per topic, the 
 subscription shows ``PendingConfirmation`` in a listing, as SNS does. The project user holds every action on the alert topics, so nothing is refused.
 
 A case can make one read return something else, as AWS or Terraform do: ``fail_list`` (every listing exits 255), ``list_raw`` (the listing prints that
-text), ``fail_state_list`` (``terraform state list`` exits 1), ``fail_state_pull`` (``terraform state pull`` exits 1), ``pull_raw`` (it prints that
-text), ``remote_state`` (the state lives in a remote backend: it is read with no local file), ``missing_remote_object`` (the backend holds no state
-object: ``state pull`` prints the empty state that Terraform makes up, serial 0 with no lineage, and ``state list`` exits 1), ``zero_resource_state``
-(a persisted state with no resources: ``state pull`` prints a state with a lineage and ``state list`` prints nothing and exits 0),
-``unlineaged_state`` (the same, but ``state pull`` prints serial 0 and no lineage, as ``terraform state push`` can write it, which looks like the made
-up empty state), ``state_extra`` (``state list`` also lists that resource), ``show_raw`` (``terraform show -json`` prints that text), ``plan_extra``
-(the saved plan also changes that address), ``alerts_output`` and ``budget_output`` (the platform and IAM topic outputs print that text),
-``policy_steps`` (the SNS policy plan prints those step lines too), ``digest`` (it replaces the plan digest) and ``wrapper_fail`` (the wrapper prints
-that text to standard error and exits 1). The saved plan reads as Terraform prints it: ``plan_document`` builds the envelope of ``terraform show
--json``, with the metadata and the plan structure of a supported plan and, when it has changes, ``resource_changes``. The alerts root has a state file
-(``infra/alerts/terraform.tfstate``) once an import or an apply created something. Without a state (no file, an empty file and no remote state)
-``state pull`` prints nothing and exits 0 and ``state list`` exits 1, as Terraform does.
+text), ``fail_state_list`` (``terraform state list`` exits 1, also for the two states that look empty, with a message that is not the no-state one),
+``fail_state_pull`` (``terraform state pull`` exits 1), ``pull_raw`` (it prints that text), ``remote_state`` (the state lives in a remote backend: it
+is read with no local file), ``missing_remote_object`` (the backend holds no state object: ``state pull`` prints the empty state that Terraform makes
+up, serial 0 with no lineage, and ``state list`` exits 1), ``zero_resource_state`` (a persisted state with no resources: ``state pull`` prints a state
+with a lineage and ``state list`` prints nothing and exits 0), ``unlineaged_state`` (the same, but ``state pull`` prints serial 0 and no lineage, as
+``terraform state push`` can write it, which looks like the made up empty state), ``state_extra`` (``state list`` also lists that resource),
+``show_raw`` (``terraform show -json`` prints that text), ``plan_extra`` (the saved plan also changes that address), ``alerts_output`` and
+``budget_output`` (the platform and IAM topic outputs print that text), ``policy_steps`` (the SNS policy plan prints those step lines too), ``digest``
+(it replaces the plan digest) and ``wrapper_fail`` (the wrapper prints that text to standard error and exits 1). The saved plan reads as Terraform
+prints it: ``plan_document`` builds the envelope of ``terraform show -json``, with the metadata and the plan structure of a supported plan and, when
+it has changes, ``resource_changes``. The alerts root has a state file (``infra/alerts/terraform.tfstate``) once an import or an apply created
+something. Without a state (no file, an empty file and no remote state) ``state pull`` prints nothing and exits 0 and ``state list`` exits 1, as
+Terraform does.
 """
 
 from __future__ import annotations
@@ -161,6 +162,8 @@ def terraform(arguments: list[str], state: dict[str, Any]) -> int:
             )
         return 0
     if rest == ["state", "list"]:
+        if state.get("fail_state_list") and (state.get("unlineaged_state") or state.get("missing_remote_object")):
+            return fail("Error: Failed to read the state: access denied", 1)
         if state.get("zero_resource_state") or state.get("unlineaged_state"):
             return 0
         if state.get("missing_remote_object") or not holds_state(state):
