@@ -80,16 +80,19 @@ def test_the_commit_hook_selects_every_file_of_every_collector_closure() -> None
 
 
 def binding_names(source: str) -> set[str]:
-    """The binding calls that a module names, under any import alias: an imported name (``from m import require_code as rc``), an attribute
-    (``module.require_code``, whatever the module is called) or a plain name. An aliased name counts through the name it imports, so the alias hides nothing."""
+    """The binding calls that a module makes, under any import alias: only a call counts. A called name resolves through its import
+    (``from m import require_code as rc`` then ``rc()``) and a called attribute counts by its own name (``module.require_code()``, whatever the module's name).
+    An import, a re-export or a variable of the same name is no call, so it binds nothing."""
+    tree = ast.parse(source)
+    imported = {alias.asname or alias.name: alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
     names: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.ImportFrom):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.Attribute):
-            names.add(node.attr)
-        elif isinstance(node, ast.Name):
-            names.add(node.id)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            names.add(imported.get(node.func.id, node.func.id))
+        elif isinstance(node.func, ast.Attribute):
+            names.add(node.func.attr)
     return names & BINDING_CALLS
 
 
@@ -98,7 +101,7 @@ def binding_names(source: str) -> set[str]:
     [
         "from scripts.acquisition.code_versions import require_code\nrequire_code()\n",
         "from scripts.acquisition.code_versions import require_code as admit\nadmit()\n",
-        "from scripts.acquisition.code_versions import collector_code_hashes as hashes, require_code as admit\n",
+        "from scripts.acquisition.code_versions import collector_code_hashes as hashes, require_code as admit\nhashes()\n",
         "from scripts.acquisition import code_versions as versions\nversions.require_code()\n",
         "import scripts.acquisition.code_closure as closure\nclosure.closure_hashes('entry')\n",
     ],
@@ -108,9 +111,19 @@ def test_a_binding_call_is_found_under_an_import_alias(source: str) -> None:
     check(binding_names(source), f"No binding call found in: {source!r}")
 
 
-def test_a_module_without_a_binding_call_binds_nothing() -> None:
-    """A module that only imports unrelated names is not a collector entry."""
-    check(not binding_names("from scripts.process import run_command as run\nrun()\n"), "A module with no binding call was taken for a collector entry")
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from scripts.process import run_command as run\nrun()\n",
+        "def receipt(entry):\n    closure_hashes = {}\n    return closure_hashes.get(entry)\n",
+        "from scripts.acquisition.collect_bls_api import closure_hashes, require_code\n__all__ = ['closure_hashes', 'require_code']\n",
+        "from scripts.acquisition.code_closure import closure_hashes as hashes\nfingerprint = hashes\n",
+    ],
+    ids=["unrelated_call", "local_variable", "re_export", "alias_not_called"],
+)
+def test_a_module_without_a_binding_call_binds_nothing(source: str) -> None:
+    """Only a call binds a collector to a list: an unrelated call, a local variable of that name, a re-export or an uncalled alias binds nothing."""
+    check(not binding_names(source), f"A module with no binding call was taken for a collector entry: {source!r}")
 
 
 def test_every_collector_entry_is_checked_against_its_list() -> None:
