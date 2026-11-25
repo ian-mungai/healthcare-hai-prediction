@@ -1,4 +1,4 @@
-# Alerts on the request, error, latency and heap metrics that Polaris and MLflow expose, on Grafana's own alerting metrics and on the finish timestamps of the host jobs while the host is on.
+# Alerts on the request, error, latency and heap metrics that Polaris and MLflow expose and on Grafana's own alerting metrics.
 # Names and labels are the ones monitoring/known_metrics.json records from the pinned sources. The up alerts of these services stay in rules_scrapes.yml.
 # The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
 apiVersion: 1
@@ -317,47 +317,3 @@ groups:
           affects: 'Alerts fire late.'
           next_step: 'Open the HAI host capacity dashboard to see if the host is under load.'
           dashboard: 'HAI Grafana'
-
-      - uid: job_results_missing
-        title: JobResultsMissing
-        condition: C
-        data:
-          - refId: A
-            relativeTimeRange: {from: 600, to: 0}
-            datasourceUid: hai_prometheus
-            model:
-              refId: A
-              expr: 'absent(hai_job_finish_timestamp_seconds) and on () (hai_host_instances > 0)'
-              instant: true
-              intervalMs: 1000
-              maxDataPoints: 43200
-          - refId: B
-            datasourceUid: __expr__
-            model:
-              refId: B
-              type: reduce
-              expression: A
-              reducer: last
-              settings: {mode: dropNN}
-          - refId: C
-            datasourceUid: __expr__
-            model:
-              refId: C
-              type: threshold
-              expression: B
-              conditions:
-                - evaluator: {type: gt, params: [0]}
-        noDataState: OK
-        execErrState: Error
-        for: 30m
-        labels:
-          severity: warning
-        annotations:
-          summary: While the host is on, no host job has a recorded finish time. The result panels and job alerts have no data.
-          headline: 'Host job results are missing'
-          recovered: 'A job finish time is recorded or the host is off. The Pushgateway or the host state may also be unreadable.'
-          resolved_affects: 'The job alerts and result panels had no data during the gap.'
-          resolved_next: 'Open the HAI host jobs dashboard and check that the results of the latest runs are there.'
-          affects: 'A failed job or a lost push stays unnoticed, because the job alerts and the result panels read no data.'
-          next_step: 'Open the HAI host jobs dashboard. Check that the Pushgateway task runs and holds job metrics. Then check in Airflow that the jobs pushed them.'
-          dashboard: 'HAI host jobs'

@@ -76,35 +76,6 @@ def promtool_rule_is_missing(root: Path) -> dict[str, bool]:
     return reported(root, plant, "has no promtool rule")
 
 
-def job_results_rule_is_dropped(root: Path) -> dict[str, bool]:
-    def plant(tree: Path) -> None:
-        path = tree / RULES
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        document["groups"][0]["rules"] = [rule for rule in document["groups"][0]["rules"] if rule["title"] != "JobResultsMissing"]
-        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-
-    return reported(root, plant, "JobResultsMissing has no Grafana rule")
-
-
-def job_results_fixtures_pin_the_host_condition(root: Path) -> dict[str, bool]:
-    """The alert fires for a missing result timestamp while the host is on. An old timestamp, a host that is off and no host series stay silent."""
-    tests = yaml.safe_load((root / PROMTOOL_TESTS).read_text(encoding="utf-8"))["tests"]
-    fires = {
-        str(test["name"]): any(bool(item.get("exp_alerts")) for item in test.get("alert_rule_test", []) if item["alertname"] == "JobResultsMissing")
-        for test in tests
-        if str(test["name"]).startswith("job_results_")
-    }
-    rules = yaml.safe_load((root / RULES).read_text(encoding="utf-8"))["groups"][0]["rules"]
-    expression = next(str(rule["data"][0]["model"]["expr"]) for rule in rules if rule["title"] == "JobResultsMissing")
-    return {
-        "a missing result timestamp with the host on fires": fires.get("job_results_missing_host_on") is True,
-        "an old result timestamp with the host on stays silent": fires.get("job_results_old_host_on") is False,
-        "a missing result timestamp with the host off stays silent": fires.get("job_results_missing_host_off") is False,
-        "a missing result timestamp without a host series stays silent": fires.get("job_results_missing_host_series_absent") is False,
-        "the rule reads no age, because jobs start by hand and an old finish is not a fault": "time()" not in expression,
-    }
-
-
 def promtool_scenario_is_dropped(root: Path) -> dict[str, bool]:
     def drop(document: dict[str, Any]) -> None:
         document["tests"] = [test for test in document["tests"] if test.get("name") != "three_observed_5xx"]
@@ -241,8 +212,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "service_alert_promtool_rule_query_differs_from_the_grafana_rule": promtool_rule_query_differs_from_the_grafana_rule,
     "service_alert_grafana_rule_changes_without_its_promtool_rule": grafana_rule_changes_without_its_promtool_rule,
     "service_alert_promtool_rule_is_missing": promtool_rule_is_missing,
-    "service_alert_job_results_rule_is_dropped": job_results_rule_is_dropped,
-    "service_alert_job_results_fixtures_pin_the_host_condition": job_results_fixtures_pin_the_host_condition,
     "service_alert_promtool_scenario_is_dropped": promtool_scenario_is_dropped,
     "service_alert_promtool_rule_never_stays_silent": promtool_rule_never_stays_silent,
     "service_alert_promtool_rule_never_fires": promtool_rule_never_fires,
