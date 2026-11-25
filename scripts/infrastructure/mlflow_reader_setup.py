@@ -110,10 +110,19 @@ def reader_identity(client: Client, registry: str, admin: Mapping[str, str]) -> 
 
 
 def user_names(client: Client, registry: str, admin: Mapping[str, str]) -> dict[int, str]:
-    """The names of the users by ID, for a message. An answer that cannot be read leaves the IDs to stand for the names."""
+    """The names of the users by ID, for a message. An answer that cannot be read gives no names: a message then names the user ID and never prints it as a
+    username."""
     status, answer = client.call("GET", f"{registry}/api/2.0/mlflow/users/list", admin)
     users = answer.get("users") if status == 200 and isinstance(answer, dict) else None
-    return {int(user["id"]): str(user["username"]) for user in users or [] if isinstance(user, dict) and "id" in user and "username" in user}
+    return {int(user["id"]): str(user["username"]) for user in users or [] if isinstance(user, dict) and isinstance(user.get("id"), int) and "username" in user}
+
+
+def unassign_other_holder(names: Mapping[int, str], user_id: int, role_id: Any) -> str:
+    """The administrator call that takes the role from another holder. It is printed only for a holder whose name the registry gave; otherwise the user ID
+    is named and the call is left to be built once the administrator has looked the name up."""
+    if user_id in names:
+        return unassign(names[user_id], role_id)
+    return f"user ID {user_id} (the registry gave no name for it; look up its username, then unassign role_id {role_id} from that user)"
 
 
 def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mapping[str, str], roles: list[dict[str, Any]], user_id: int) -> None:
@@ -137,7 +146,7 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
         others = sorted(user for user in assigned if user != user_id)
         if others:
             names = user_names(client, registry, admin)
-            calls = "; ".join(unassign(names.get(user, str(user)), role["id"]) for user in others)
+            calls = "; ".join(unassign_other_holder(names, user, role["id"]) for user in others)
             raise StepFailed(
                 f"the role {own} of {READER} is also held by other users, so its grants are not the reader's alone. As the administrator: {calls}, then rerun. "
                 "Nothing was changed"

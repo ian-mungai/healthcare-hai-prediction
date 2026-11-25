@@ -707,6 +707,8 @@ class Registry:
         self.ignore_remove = False  # answers 200 and keeps the grant
         self.fail_holders = False  # the list of the holders of a role answers 500
         self.hide_user_id = False  # the user read answers without an ID
+        self.fail_user_list = False  # the list of all users answers 500
+        self.roles_answer: Any = None  # when set, the roles of the reader are answered with this document and HTTP 200
 
     @property
     def granted(self) -> set[str]:
@@ -775,9 +777,13 @@ class Registry:
             holders = self.holders(role) if role else []
             return 200, {"assignments": [{"id": 100 + user, "role_id": role_id, "user_id": user} for user in holders]}
         if method == "GET" and path == "/api/2.0/mlflow/users/list":
+            if self.fail_user_list:
+                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
             users = {self.reader_id: READER[0], **self.other_users}
             return 200, {"users": [{"id": user, "username": name, "is_admin": False} for user, name in sorted(users.items())]}
         if method == "GET" and path == "/api/3.0/mlflow/users/roles/list":
+            if self.roles_answer is not None:
+                return 200, self.roles_answer
             roles: dict[str, list[dict[str, Any]]] = {}
             for (kind, pattern), (level, role) in sorted(self.rows.items()):
                 roles.setdefault(role, []).append(
@@ -1074,6 +1080,38 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
     require(code == 0 and "unchanged" in out and len(writes(own)) == again, (code, out, err))
 
 
+def stops(label: str, registry: Registry, *said: str) -> str:
+    """The setup stops with exit 1 and has written nothing to the registry or Parameter Store; returns the error text."""
+    require = base().require
+    ssm = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+    before = (dict(registry.rows), registry.reader_login, registry.administrator, dict(ssm.values))
+    code, out, err = run_setup(registry, ssm)
+    require(code == 1 and all(text in err for text in said), (label, code, err))
+    require(not any(call[0] in ("POST", "PATCH", "DELETE") for call in registry.calls), f"{label}: a write reached the registry")
+    require((dict(registry.rows), registry.reader_login, registry.administrator, dict(ssm.values)) == before and not ssm.puts, f"{label}: state changed")
+    values_absent(ssm, out, err)
+    return err
+
+
+def a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it() -> None:
+    """A failed user list leaves the holder's name unknown: the refusal names the unresolved user ID and prints no executable unassign call for it."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    # Card 1: the reader's own role is also held by user 5, and the user list fails.
+    extra = {("experiment", "7"): ("MANAGE", "__user_2__")}
+    shared = {"__user_2__": (5,)}
+    blind = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, other_users={5: "other_user"}, shared_with=shared)
+    blind.fail_user_list = True
+    err = stops("failed user list", blind, "user ID 5", "Nothing was changed")
+    require('"username": "5"' not in err and "unassign {" not in err, f"a user ID must never stand as the username of an executable call: {err}")
+    seen = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, other_users={5: "other_user"}, shared_with=shared)
+    err = stops("user list answers", seen, 'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 2}')
+    # A user list that answers 200 without the holder resolves nothing either.
+    partial = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, shared_with=shared)
+    err = stops("holder missing from the user list", partial, "user ID 5")
+    require('"username": "5"' not in err, err)
+
+
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
     require = base().require
     for default in ("USE", "EDIT"):
@@ -1115,5 +1153,6 @@ CASES = [
     the_setup_talks_only_to_a_loopback_registry,
     the_setup_downgrades_an_elevated_reader_or_fails_naming_why,
     the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_role_first,
+    a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]
