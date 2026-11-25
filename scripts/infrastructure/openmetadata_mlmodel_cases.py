@@ -1251,6 +1251,62 @@ def a_malformed_role_answer_after_a_write_says_what_was_changed() -> None:
     values_absent(ssm, out, err)
 
 
+HOLDERS_PATH = "/api/3.0/mlflow/roles/users/list"
+PERMISSIONS_PATH = "/api/3.0/mlflow/users/current/permissions"
+
+
+def a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant() -> None:
+    """MLflow 3.17.2 removes a grant for every holder of its role. The roles query already named the reader as a holder, so the holder list must be an explicit,
+    non-empty list that holds the reader's own integer ID before any grant is removed. A missing, null, object, empty or contradicting list is refused and the
+    grant that user 5 shares stays."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+
+    def shared() -> Registry:
+        return Registry(
+            reader_login="Synthetic-Stored-1!",
+            grants=every,
+            extra={("experiment", "7"): ("MANAGE", "__user_2__")},
+            other_users={5: "other_user"},
+            shared_with={"__user_2__": (5,)},
+        )
+
+    for label, answer in (
+        ("an omitted list", {}),
+        ("a null list", {"assignments": None}),
+        ("an object instead of a list", {"assignments": {}}),
+        ("an empty list", {"assignments": []}),
+        ("a list of another user only", {"assignments": [{"id": 105, "role_id": 2, "user_id": 9}]}),
+        ("a list of a Boolean", {"assignments": [{"id": 105, "role_id": 2, "user_id": True}]}),
+        ("a list that is not a list of rows", {"assignments": [5]}),
+    ):
+        registry = shared()
+        stops(label, registry, "holders of the role __user_2__", "Nothing was changed", answers={HOLDERS_PATH: [(200, answer), (200, answer)]})
+        require(registry.rows[("experiment", "7")] == ("MANAGE", "__user_2__"), f"{label}: the grant that user 5 shares is intact")
+    control = shared()
+    stops("the real holder list", control, "also held by other users", "other_user")
+
+
+def a_malformed_permissions_reply_after_a_write_says_what_was_changed() -> None:
+    """The registry always answers the permissions of a login as ``is_admin`` (a Boolean) and ``permissions`` (a list of objects). Any other 200 answer is a
+    malformed reply: a step failure that names the writes already done, never an uncaught exception."""
+    require = base().require
+    for label, document in (
+        ("permissions that is a number", {"is_admin": False, "permissions": 23}),
+        ("permissions that is missing", {"is_admin": False}),
+        ("a row that is not an object", {"is_admin": False, "permissions": ["READ"]}),
+        ("is_admin that is not a Boolean", {"is_admin": "no", "permissions": []}),
+    ):
+        registry, ssm = Registry(), FakeParameters()
+        code, out, err = run_setup(answering(registry, {PERMISSIONS_PATH: [(200, document)]}), ssm)
+        require(code == 1 and "permissions of metadata_reader" in err, (label, code, err))
+        require(
+            "Nothing was changed" not in err and "user created" in err and f"parameter {READER_PARAMETER} created" in err,
+            f"{label}: the writes are named: {err}",
+        )
+        values_absent(ssm, out, err)
+
+
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
     require = base().require
     for default in ("USE", "EDIT"):
@@ -1297,5 +1353,7 @@ CASES = [
     an_unnamed_holder_never_gets_an_executable_unassign_call,
     a_boolean_is_not_an_integer_id,
     a_malformed_role_answer_after_a_write_says_what_was_changed,
+    a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant,
+    a_malformed_permissions_reply_after_a_write_says_what_was_changed,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]

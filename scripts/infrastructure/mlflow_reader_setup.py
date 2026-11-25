@@ -90,9 +90,14 @@ def stored_reader_login(ssm: Any, name: str) -> tuple[str, bool]:
 
 
 def reader_permissions(client: Client, registry: str, reader: Mapping[str, str]) -> Mapping[str, Any]:
+    """The permissions of the reader's own login. The registry always answers ``is_admin`` (a Boolean) and ``permissions`` (a list of objects); any other
+    answer to a request that it accepted is malformed and stops the step, so the writes done so far can be named."""
     status, permissions = client.call("GET", f"{registry}/api/3.0/mlflow/users/current/permissions", reader)
     if status != 200 or not isinstance(permissions, dict):
         raise StepFailed(f"the registry answered HTTP {status} to the login of {READER}")
+    rows = permissions.get("permissions")
+    if not isinstance(permissions.get("is_admin"), bool) or not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise StepFailed(f"the registry answered HTTP {status} when the permissions of {READER} were read, but the answer is not a list of permissions")
     return permissions
 
 
@@ -155,14 +160,17 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
             )
         query = urllib.parse.urlencode({"role_id": role["id"]})
         status, holders = client.call("GET", f"{registry}/api/3.0/mlflow/roles/users/list?{query}", admin)
-        rows = holders.get("assignments") or [] if status == 200 and isinstance(holders, dict) else None
+        rows = holders.get("assignments") if status == 200 and isinstance(holders, dict) else None
         assigned = (
             {item["user_id"] for item in rows}
-            if isinstance(rows, list) and all(isinstance(item, dict) and is_id(item.get("user_id")) for item in rows)
+            if isinstance(rows, list) and rows and all(isinstance(item, dict) and is_id(item.get("user_id")) for item in rows)
             else None
         )
-        if assigned is None:
-            raise StepFailed(f"the registry answered HTTP {status} when the holders of the role {own} were listed")
+        if assigned is None or user_id not in assigned:
+            raise StepFailed(
+                f"the registry answered HTTP {status} when the holders of the role {own} were listed, but the answer is not a list that names {READER}. "
+                "A grant is removed for every holder of its role"
+            )
         others = sorted(user for user in assigned if user != user_id)
         if others:
             names = user_names(client, registry, admin)
