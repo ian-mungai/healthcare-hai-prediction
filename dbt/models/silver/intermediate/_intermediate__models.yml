@@ -1340,6 +1340,10 @@ models:
       - name: published_measure_id
         description: The measure ID as published; differs from measure_id only for an aliased rename.
         data_tests: [not_null]
+      - name: measure_name
+        description: The name of measure_id. An aliased row takes the name of its reviewed ID (the latest release of that ID's own rows), so a measure keeps one name; with no row of its own the reviewed ID keeps the published name.
+      - name: published_measure_name
+        description: The measure name as published; differs from measure_name only for an aliased rename whose published name differs.
       - name: score_number
         description: The score when it is a plain number; tokens and other text give null (checked by assert_validation_values_cast).
 
@@ -1357,6 +1361,10 @@ models:
       - name: published_measure_id
         description: The measure ID as published; differs from measure_id only for an aliased rename.
         data_tests: [not_null]
+      - name: measure_name
+        description: The name of measure_id. An aliased row takes the name of its reviewed ID (the latest release of that ID's own rows), so a measure keeps one name; with no row of its own the reviewed ID keeps the published name.
+      - name: published_measure_name
+        description: The measure name as published; differs from measure_name only for an aliased rename whose published name differs.
       - name: score_number
         description: The score when it is a plain number; tokens and other text give null (checked by assert_validation_values_cast).
 

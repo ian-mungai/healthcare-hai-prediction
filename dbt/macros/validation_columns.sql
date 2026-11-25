@@ -24,19 +24,39 @@ end
 try_strptime(nullif(trim({{ column }}), ''), '%m/%d/%Y')::date
 {%- endmacro %}
 
-{% macro validation_aliased_windows(source_model, windows, numbers) %}
+{% macro validation_target_labels(windows) %}
+{#- The measure name of each reviewed ID, from its own rows (not an alias's): the name of the latest release, then the latest window end, then
+    the first name in order. dim_measure picks its name for a measure by the same order, so the label an aliased row takes is the label gold
+    shows for the measure. -#}
+select distinct on (measure_id)
+    measure_id,
+    measure_name
+from {{ windows }}
+where measure_name is not null
+order by measure_id asc, release_date desc nulls last, window_end desc nulls last, measure_name asc
+{% endmacro %}
+
+{% macro validation_aliased_windows(source_model, windows, numbers, labels=none) %}
 {#- The window rows of a CTE with the reviewed measure ID: the exact published ID wins; a reviewed alias of measure_id_aliases
     fills only a hospital and window the exact ID leaves empty. A renamed row keeps the ID as published in
     published_measure_id and its window_key carries the reviewed ID, so a second row for one reviewed ID fails the unique
     test. numbers is a list of [number column, text column] pairs cast with strict_number (failure modes 629, 630, 785
-    and 786). -#}
+    and 786). labels is the CTE that validation_target_labels builds, for a model with a measure_name column: a renamed row takes the
+    measure_name of its reviewed ID (the published name stays in published_measure_name), so each measure keeps one label and needs no
+    identity_splits row; a reviewed ID with no row of its own keeps the published name (owner decision of Nov 25 2026). -#}
 select
     published.* replace (
         coalesce(aliases.measure_id, published.measure_id) as measure_id,
         published.entity_id || ':' || coalesce(aliases.measure_id, published.measure_id) || ':' || published.window_start || ':'
         || published.window_end as window_key
+        {%- if labels %},
+        coalesce(target_labels.measure_name, published.measure_name) as measure_name
+        {%- endif %}
     ),
     published.measure_id as published_measure_id,
+    {%- if labels %}
+    published.measure_name as published_measure_name,
+    {%- endif %}
     {%- for number, text in numbers %}
     {{ strict_number('published.' ~ text) }} as {{ number }}{{ ',' if not loop.last }}
     {%- endfor %}
@@ -45,6 +65,10 @@ left join {{ ref('measure_id_aliases') }} as aliases
     on
         aliases.source_model = '{{ source_model }}'
         and published.measure_id = aliases.published_measure_id
+{%- if labels %}
+left join {{ labels }} as target_labels
+    on aliases.measure_id = target_labels.measure_id
+{%- endif %}
 where
     aliases.measure_id is null
     or not exists (

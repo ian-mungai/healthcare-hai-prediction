@@ -3124,6 +3124,14 @@ def hrrp_row(facility: str, measure: str, ratio: str, readmissions: str, **field
     return tuple((base | HRRP_2023 | fields).items())
 
 
+# The published measure names of the PSI rows below. CMS published PSI_90_SAFETY and PSI_13_POST_SEPSIS under other names than PSI_90 and PSI_13; the
+# silver model must give an aliased row the name of its reviewed ID, so each measure keeps one name (owner decision of Nov 25 2026).
+PSI_90_NAME = "Serious complications"
+PSI_90_SAFETY_NAME = "Patient safety indicator 90 composite (retired title)"
+PSI_13_NAME = "Blood stream infection after surgery"
+PSI_13_POST_SEPSIS_NAME = "Postoperative sepsis (retired title)"
+OP_32_NAME = "Rate of unplanned hospital visits after colonoscopy (per 1,000 colonoscopies)"
+
 # visits with an exact and a renamed OP_32, a measure no control names, a token and an older-layout file
 # whose OP_32 window a later release supersedes; deaths with a mapped mortality ID, exact and renamed PSI IDs and a window
 # repeated in one file; HRRP keyed by measure_name with tokens.
@@ -3139,18 +3147,19 @@ GROUP_D1 = (
             cc(
                 facility_id="010001",
                 measure_id="OP_32",
+                measure_name=OP_32_NAME,
                 score="12.5",
                 denominator="300",
                 compared_to_national="No Different Than the National Rate",
                 **DATES_2022,
             ),
-            cc(facility_id="010001", measure_id="OP-32", score="13.0", **DATES_2022),
+            cc(facility_id="010001", measure_id="OP-32", measure_name=OP_32_NAME, score="13.0", **DATES_2022),
             cc(facility_id="010001", measure_id="READM_30_HF", score="20.1", **DATES_2022),
             cc(facility_id="010003", measure_id="OP_35_ED", score="Not Available", **DATES_2022),
             cc(facility_id="10003", measure_id="OP_36", score="7.0", **DATES_2022),
-            cc(facility_id="01-003", measure_id="OP_32", score="5.0", **DATES_2022),
+            cc(facility_id="01-003", measure_id="OP_32", measure_name=OP_32_NAME, score="5.0", **DATES_2022),
             # A renamed OP-32 with no OP_32 row for its hospital and window enters as OP_32.
-            cc(facility_id="010003", measure_id="OP-32", score="4.0", **DATES_2022),
+            cc(facility_id="010003", measure_id="OP-32", measure_name=OP_32_NAME, score="4.0", **DATES_2022),
         ),
     ),
     Stored(
@@ -3161,7 +3170,7 @@ GROUP_D1 = (
         sha("vi0"),
         2,
         records=(
-            cc(provider_id="010001", measure_id="OP_32", score="11.0", **OLD_DATES_2022),
+            cc(provider_id="010001", measure_id="OP_32", measure_name=OP_32_NAME, score="11.0", **OLD_DATES_2022),
             cc(provider_id="010001", measure_id="OP_36", score="9.9", measure_start_date="01/01/2020", measure_end_date="12/31/2020"),
         ),
     ),
@@ -3174,23 +3183,23 @@ GROUP_D1 = (
         13,
         records=(
             cc(facility_id="010001", measure_id="MORT_30_AMI", score="12.3", lower_estimate="10.9", higher_estimate="13.8", **DATES_2022),
-            cc(facility_id="010001", measure_id="PSI_90", score="1.01", denominator="Not Applicable", **DATES_2022),
-            cc(facility_id="010001", measure_id="PSI_90_SAFETY", score="0.99", **DATES_2022),
-            cc(facility_id="010001", measure_id="PSI_13", score="4.52", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_90", measure_name=PSI_90_NAME, score="1.01", denominator="Not Applicable", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_90_SAFETY", measure_name=PSI_90_SAFETY_NAME, score="0.99", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_13", measure_name=PSI_13_NAME, score="4.52", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.0", **DATES_2022),
             cc(facility_id="010001", measure_id="MORT_30_HF", score="10.4", **DATES_2022),
             # A renamed PSI_13_POST_SEPSIS beside the exact PSI_13 of its hospital and window is dropped.
-            cc(facility_id="010001", measure_id="PSI_13_POST_SEPSIS", score="4.40", **DATES_2022),
+            cc(facility_id="010001", measure_id="PSI_13_POST_SEPSIS", measure_name=PSI_13_POST_SEPSIS_NAME, score="4.40", **DATES_2022),
             # The renamed PSI_90_SAFETY and PSI_13_POST_SEPSIS of a hospital and window with no exact row enter as PSI_90 and PSI_13.
-            cc(facility_id="010003", measure_id="PSI_90_SAFETY", score="1.10", **DATES_2022),
-            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", score="4.10", **DATES_2022),
+            cc(facility_id="010003", measure_id="PSI_90_SAFETY", measure_name=PSI_90_SAFETY_NAME, score="1.10", **DATES_2022),
+            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", measure_name=PSI_13_POST_SEPSIS_NAME, score="4.10", **DATES_2022),
             # Two renamed PSI_13_POST_SEPSIS rows for one hospital and window are a repeated_in_file hold under the published ID.
-            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", score="3.00", **DATES_2020),
-            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", score="3.10", **DATES_2020),
+            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", measure_name=PSI_13_POST_SEPSIS_NAME, score="3.00", **DATES_2020),
+            cc(facility_id="010003", measure_id="PSI_13_POST_SEPSIS", measure_name=PSI_13_POST_SEPSIS_NAME, score="3.10", **DATES_2020),
             # A dated renamed row beside an exact row of an undated release: the exact row is held, so the renamed row enters as PSI_90.
-            cc(facility_id="010003", measure_id="PSI_90_SAFETY", score="0.80", **DATES_2019),
+            cc(facility_id="010003", measure_id="PSI_90_SAFETY", measure_name=PSI_90_SAFETY_NAME, score="0.80", **DATES_2019),
             # An exact PSI_13 of a dated release beside the same hospital and window in an undated release: the dated row is a window; the undated row is held.
-            cc(facility_id="010003", measure_id="PSI_13", score="3.50", **DATES_2019),
+            cc(facility_id="010003", measure_id="PSI_13", measure_name=PSI_13_NAME, score="3.50", **DATES_2019),
         ),
     ),
     Stored(
@@ -3201,10 +3210,10 @@ GROUP_D1 = (
         sha("de0"),
         3,
         records=(
-            cc(facility_id="010003", measure_id="PSI_90", score="0.70", **DATES_2019),
+            cc(facility_id="010003", measure_id="PSI_90", measure_name=PSI_90_NAME, score="0.70", **DATES_2019),
             # Two undated PSI_90 windows for one hospital: the hold records both rows, and the key reconciliation compares row counts, not windows.
-            cc(facility_id="010003", measure_id="PSI_90", score="0.60", **DATES_2018),
-            cc(facility_id="010003", measure_id="PSI_13", score="3.40", **DATES_2019),
+            cc(facility_id="010003", measure_id="PSI_90", measure_name=PSI_90_NAME, score="0.60", **DATES_2018),
+            cc(facility_id="010003", measure_id="PSI_13", measure_name=PSI_13_NAME, score="3.40", **DATES_2019),
         ),
     ),
     Stored(
@@ -5218,6 +5227,13 @@ VALIDATION_ALIASES_SQL = (
     "UNION SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_complications_deaths_windows WHERE measure_id <> published_measure_id "
     "ORDER BY ALL;"
 )
+# The measure name of each reviewed ID beside the name as published: an aliased row takes the name of its reviewed ID, so a measure keeps one name.
+VALIDATION_LABELS_SQL = (
+    "SELECT DISTINCT 'visits', measure_id, published_measure_id, measure_name, published_measure_name FROM int_cc_unplanned_visits_windows "
+    "WHERE measure_id = 'OP_32' AND measure_name IS NOT NULL "
+    "UNION SELECT DISTINCT 'deaths', measure_id, published_measure_id, measure_name, published_measure_name FROM int_cc_complications_deaths_windows "
+    "WHERE measure_id IN ('PSI_90', 'PSI_13') AND measure_name IS NOT NULL ORDER BY ALL;"
+)
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
 )
@@ -5879,6 +5895,7 @@ def read_models(case: str) -> dict[str, Any]:
         "d1_windows": [tuple(row) for row in duckdb_csv(database, D1_WINDOWS_SQL)],
         "validation": [tuple(row) for row in duckdb_csv(database, VALIDATION_SQL)],
         "validation_aliases": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIASES_SQL)],
+        "validation_labels": [tuple(row) for row in duckdb_csv(database, VALIDATION_LABELS_SQL)],
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "validation_keys": [tuple(row) for row in duckdb_csv(database, D1_KEYS_SQL)],
         "validation_keys_partial_hold": [tuple(row) for row in duckdb_csv(database, PARTIAL_HOLD_KEYS_SQL)],
@@ -6491,6 +6508,18 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
         ("010003", "PSI_13", "PSI_13_POST_SEPSIS"),
         ("010003", "PSI_90", "PSI_90_SAFETY"),
     ]
+    # An aliased row takes the name of its reviewed ID and keeps the published name beside it, so PSI_90, PSI_13 and OP_32 each carry one name and
+    # assert_multi_label_keys_have_rule needs no identity_splits row for them.
+    checks["validation_alias_labels_match_expected"] = base.get("validation_labels") == sorted(
+        [
+            ("visits", "OP_32", "OP-32", OP_32_NAME, OP_32_NAME),
+            ("visits", "OP_32", "OP_32", OP_32_NAME, OP_32_NAME),
+            ("deaths", "PSI_13", "PSI_13", PSI_13_NAME, PSI_13_NAME),
+            ("deaths", "PSI_13", "PSI_13_POST_SEPSIS", PSI_13_NAME, PSI_13_POST_SEPSIS_NAME),
+            ("deaths", "PSI_90", "PSI_90", PSI_90_NAME, PSI_90_NAME),
+            ("deaths", "PSI_90", "PSI_90_SAFETY", PSI_90_NAME, PSI_90_SAFETY_NAME),
+        ]
+    )
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),
         # Two renamed rows for one hospital and window are held under the published ID. The rows of an undated release are row holds with no window

@@ -2,8 +2,9 @@
 -- whose latest release holds two rows are held in int_validation_window_holds. Mortality, PSI and other IDs are all kept;
 -- none is a predictor. A reviewed renamed ID (PSI_90_SAFETY, PSI_13_POST_SEPSIS) follows the same rule as in
 -- int_cc_unplanned_visits_windows: the exact ID wins, and a renamed row enters under the exact ID only where its hospital and
--- window have no exact-ID window row; it keeps its published ID in published_measure_id. score_number is the score when it
--- is a plain number and tokens stay text (failure modes 504 to 508, 524, 629 and 630).
+-- window have no exact-ID window row; it keeps its published ID in published_measure_id and its published name in
+-- published_measure_name, and takes the measure_name of the reviewed ID, so PSI_90 and PSI_13 each carry one name. score_number
+-- is the score when it is a plain number and tokens stay text (failure modes 504 to 508, 524, 629 and 630).
 with
 
 windows as (
@@ -20,6 +21,10 @@ windows as (
             ['footnote', 'footnote']
         ]
     ) }}
+),
+
+target_labels as (
+    {{ validation_target_labels('windows') }}
 )
 
-{{ validation_aliased_windows('int_cc_complications_deaths_windows', 'windows', [['score_number', 'score']]) }}
+{{ validation_aliased_windows('int_cc_complications_deaths_windows', 'windows', [['score_number', 'score']], 'target_labels') }}

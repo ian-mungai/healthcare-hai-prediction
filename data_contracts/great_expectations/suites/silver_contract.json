@@ -114,6 +114,7 @@
           "release_file_count",
           "window_key",
           "published_measure_id",
+          "published_measure_name",
           "score_number"
         ]
       },
@@ -133,7 +134,7 @@
       "table": "int_cc_complications_deaths_windows",
       "type": "UnexpectedRowsExpectation",
       "kwargs": {
-        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('score_number', 'DOUBLE')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_cc_complications_deaths_windows' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('published_measure_name', 'VARCHAR'), ('score_number', 'DOUBLE')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_cc_complications_deaths_windows' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
       },
       "severity": "structural"
     },
@@ -343,6 +344,7 @@
           "release_file_count",
           "window_key",
           "published_measure_id",
+          "published_measure_name",
           "score_number"
         ]
       },
@@ -362,7 +364,7 @@
       "table": "int_cc_unplanned_visits_windows",
       "type": "UnexpectedRowsExpectation",
       "kwargs": {
-        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('number_of_patients', 'VARCHAR'), ('number_of_patients_returned', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('score_number', 'DOUBLE')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_cc_unplanned_visits_windows' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
+        "unexpected_rows_query": "SELECT e.column_name, e.data_type AS expected, c.data_type AS found FROM (VALUES ('entity_id', 'VARCHAR'), ('measure_id', 'VARCHAR'), ('window_start', 'DATE'), ('window_end', 'DATE'), ('measure_name', 'VARCHAR'), ('compared_to_national', 'VARCHAR'), ('denominator', 'VARCHAR'), ('score', 'VARCHAR'), ('lower_estimate', 'VARCHAR'), ('higher_estimate', 'VARCHAR'), ('number_of_patients', 'VARCHAR'), ('number_of_patients_returned', 'VARCHAR'), ('footnote', 'VARCHAR'), ('member_sha256', 'VARCHAR'), ('object_key', 'VARCHAR'), ('release_date', 'DATE'), ('release_file_count', 'BIGINT'), ('window_key', 'VARCHAR'), ('published_measure_id', 'VARCHAR'), ('published_measure_name', 'VARCHAR'), ('score_number', 'DOUBLE')) AS e(column_name, data_type) LEFT JOIN information_schema.columns AS c ON c.table_schema = 'main' AND c.table_name = 'int_cc_unplanned_visits_windows' AND c.column_name = e.column_name CROSS JOIN (SELECT count(*) AS batch_rows FROM {batch}) AS b WHERE c.data_type IS DISTINCT FROM e.data_type"
       },
       "severity": "structural"
     },
