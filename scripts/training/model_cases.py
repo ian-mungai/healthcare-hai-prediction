@@ -1694,6 +1694,27 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         )
         require([record["parameters"] for record in tuning] == list(options), f"the options are not recorded in order: {tuning}")
 
+    def panel_every_option_failing_after_a_dropped_fold_keeps_the_dropped_fold() -> None:
+        """Training years 2018 to 2022: the 2021 fold loses 2018 to the panel filters and is dropped, and every option fails on the 2022 fold. The failure keeps
+        each option's reason and the dropped fold with its validation year, fitting-year count and reason."""
+        from scripts.training.models.common import NotEstimable
+
+        changed = panel_with(range(2018, 2024), 60, early=lambda row: None if row["window_year"] == 2018 else value_of(row))
+        options = suite._grid(changed.config["slots"]["m6_fixed_effects"]["grid"])
+        with libraries(), patch.object(panel, "native_fits", side_effect=NotEstimable("singular within design")):
+            result = suite.fit_slot(changed, "m6_fixed_effects")
+        require(result.status == "not_estimable", f"every option failing was expected to leave m6 not estimable: {result.status} {result.reason}")
+        tuning = result.details.get("tuning", [])
+        failed = [record for record in tuning if record["status"] == "not_estimable"]
+        require([record["parameters"] for record in failed] == list(options), f"the failed options are not recorded in order: {tuning}")
+        require(all("singular within design" in record["reason"] for record in failed), f"an option lost its reason: {failed}")
+        folds = [record for record in tuning if record["status"] == "fold_dropped"]
+        require(len(folds) == 1, f"the failure lost the dropped fold: {tuning}")
+        (dropped,) = folds
+        require(dropped["validation_year"] == 2021 and dropped["fitting_years"] == 2, f"the dropped fold lost its year or count: {dropped}")
+        require("at least 3 fitting years" in dropped["reason"], f"the dropped fold lost its reason: {dropped}")
+        require(len(tuning) == len(options) + 1, f"the audit holds more than the options and the dropped fold: {tuning}")
+
     def panel_with_few_clusters_reports_the_tested_slopes() -> None:
         changed = panel_with(range(2019, 2023), 40, late=lambda row: None)
         result = fit_m6(changed)
@@ -3215,6 +3236,10 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("panel_tuning_skips_a_fold_with_no_repeated_hospital", panel_tuning_skips_a_fold_with_no_repeated_hospital),
         ("panel_failure_keeps_the_tuning_audit", panel_failure_keeps_the_tuning_audit),
         ("panel_every_option_failing_keeps_the_option_reasons", panel_every_option_failing_keeps_the_option_reasons),
+        (
+            "panel_every_option_failing_after_a_dropped_fold_keeps_the_dropped_fold",
+            panel_every_option_failing_after_a_dropped_fold_keeps_the_dropped_fold,
+        ),
         ("panel_with_few_clusters_reports_the_tested_slopes", panel_with_few_clusters_reports_the_tested_slopes),
         ("panel_selection_is_in_the_run_result", panel_selection_is_in_the_run_result),
         ("panel_without_repeated_hospitals_stays_not_estimable", panel_without_repeated_hospitals_stays_not_estimable),
