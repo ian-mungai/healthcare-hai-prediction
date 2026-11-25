@@ -6,12 +6,15 @@
 Each check calls the check that the hosted job runs; none reimplements it.
 
 - ``collector-code-versions`` runs scripts/acquisition/tests/test_committed_code_versions.py (the hosted acquisition shards run it): the code closure of each
-  collector entry module must be in its config/acquisition/*_code_versions.json. The hook's ``files`` pattern in .pre-commit-config.yaml names every file a
-  closure holds, and a test of that file fails when a closure holds a file the pattern misses, so a closure that grows is caught by the commit that grows it.
+  collector entry module must be in its config/acquisition/*_code_versions.json. The hook always runs and this module selects from the staged Git paths,
+  deletions included (pre-commit passes no deleted file to a ``files`` pattern): a path that matches ``COLLECTOR_FILES`` (every file a closure holds, and the
+  lists), or a file added to or deleted from scripts/ (a new package initializer or module can enter a closure and a deleted one leaves it). A test of the
+  acquisition file fails when a closure holds a file the pattern misses, so a closure that grows is caught by the commit that grows it.
 - ``launcher-list`` runs ``launcher_list_equals_computed`` (scripts/quality/run_ci_groups_e2e.py: launcher_inputs.problems) and
   ``launcher_inventory_lists_every_file_of_the_folders_it_reads`` (scripts/quality/model_code_cases.py) over config/quality/launcher_inputs.json. The list
   holds more than a thousand paths and the folders the launcher suite reads, so no hook ``files`` pattern could name them. The check runs when the staged
-  paths select the ``launcher`` group of config/quality/ci_groups.json, the selection of the hosted launcher job, so no change that selects that job skips it.
+  paths select the ``launcher`` group of config/quality/ci_groups.json, the selection of the hosted launcher job, or when a staged addition or deletion
+  changes what the launcher reads (``launcher_reads_staged``): the computation takes about 30 seconds, so a cheap test of the added and deleted paths decides.
 
 E2E: ``.venv/bin/python -m scripts.quality.run_checks_e2e --hook launcher-list``.
 """
@@ -19,6 +22,7 @@ E2E: ``.venv/bin/python -m scripts.quality.run_checks_e2e --hook launcher-list``
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -31,10 +35,44 @@ COLLECTOR_TEST = "scripts/acquisition/tests/test_committed_code_versions.py"
 PYTEST_SECONDS = 300
 GIT_SECONDS = 60
 SHOWN = 12
+# The files that a collector closure holds (scripts/acquisition, the process and log helpers and the project config renderer) and the version lists.
+COLLECTOR_FILES = re.compile(
+    r"^(scripts/acquisition/|scripts/infrastructure/render_project_config\.py$|scripts/(process|sdk_logs)\.py$|config/acquisition/[^/]+_code_versions\.json$)"
+)
+CODE_FOLDER = "scripts/"
+LAUNCHER_LIST = "config/quality/launcher_inputs.json"
+READER_SUFFIXES = (
+    ".py",
+    ".sh",
+    ".yaml",
+    ".yml",
+    ".tmpl",
+    ".toml",
+)  # The files whose text the launcher computation reads (launcher_inputs.TEXT_SUFFIXES and Python).
+
+
+def staged_changes() -> tuple[list[str], list[str], list[str]]:
+    """The staged paths that Git changes, adds and deletes, a rename counting as a deletion and an addition (``git diff --cached --name-status``)."""
+    text = run_command("git", ["diff", "--cached", "--no-renames", "--name-status", "--no-color", "-z"], cwd=ROOT, timeout=GIT_SECONDS, check=True).stdout
+    fields = text.split("\0")
+    changed: list[str] = []
+    added: list[str] = []
+    deleted: list[str] = []
+    for status, path in zip(fields[0::2], fields[1::2], strict=False):
+        {"A": added, "D": deleted}.get(status[:1], changed).append(path)
+    return changed, added, deleted
+
+
+def collector_selected() -> bool:
+    """True when a staged change can alter a collector closure or its list: a path of ``COLLECTOR_FILES`` or a file added to or deleted from scripts/."""
+    changed, added, deleted = staged_changes()
+    return any(COLLECTOR_FILES.search(path) for path in [*changed, *added, *deleted]) or any(path.startswith(CODE_FOLDER) for path in [*added, *deleted])
 
 
 def collector_problems() -> list[tuple[str, str]]:
     """(location, problem) of each way the collector closures are not in their committed lists: the output of the hosted test, as it fails."""
+    if not collector_selected():
+        return []
     # The test folder of pytest lives in a scratch folder that is removed afterwards, so a run leaves nothing in the repository whatever TMPDIR is.
     with tempfile.TemporaryDirectory(prefix="hai_collector_lists_") as scratch:
         command = ["-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header", f"--basetemp={scratch}/pytest", COLLECTOR_TEST]
@@ -48,9 +86,47 @@ def collector_problems() -> list[tuple[str, str]]:
     return [(COLLECTOR_TEST, "the collector code closures are not all in their committed version lists:\n  " + "\n  ".join(shown))]
 
 
+def read_needles(path: str) -> list[str]:
+    """The texts by which a launcher file can name a file: its path, its file name, and for Python its dotted module name and an import of its name."""
+    folder, _, name = path.rpartition("/")
+    needles = [re.escape(path)]
+    if name != "__init__.py":
+        needles.append(re.escape(name))
+    if name.endswith(".py"):
+        stem = name.removesuffix(".py")
+        package = folder.replace("/", ".")
+        dotted = package if stem == "__init__" else f"{package}.{stem}" if package else stem
+        needles.append(re.escape(dotted))
+        if stem != "__init__":
+            needles += [rf"import.*\b{re.escape(stem)}\b", rf"from +\.+{re.escape(stem)}\b"]
+    return needles
+
+
+def launcher_reads_staged() -> bool:
+    """True when a staged addition or deletion can change what the launcher suite reads although the paths do not select its group.
+
+    A file the launcher already reads (named in the list, or under a folder it reads whole) counts when it is added or deleted. A new file counts when a
+    file of the list names it in text: a read that was optional until the file appeared. The test is a superset of the computation, which is the check."""
+    _, added, deleted = staged_changes()
+    if not added and not deleted:
+        return False
+    committed = json.loads((ROOT / LAUNCHER_LIST).read_text(encoding="utf-8"))
+    listed, folders = set(committed["files"]), committed.get("folders", [])
+    if any(path in listed or any(path.startswith(f"{folder}/") for folder in folders) for path in [*added, *deleted]):
+        return True
+    readers = sorted(path for path in listed if path.endswith(READER_SUFFIXES))
+    if not added or not readers:
+        return False
+    needles = [argument for path in added for needle in read_needles(path) for argument in ("-e", needle)]
+    found = run_command("git", ["--literal-pathspecs", "grep", "--cached", "-l", "-E", *needles, "--", *readers], cwd=ROOT, timeout=GIT_SECONDS)
+    if found.returncode not in (0, 1):
+        raise ValueError(f"git grep over the launcher files failed ({found.returncode}): {found.stderr[-500:]}")
+    return found.returncode == 0
+
+
 def launcher_problems() -> list[tuple[str, str]]:
     """(location, problem) of each way the launcher input list is not what the suite needs, when the staged paths select the launcher group."""
-    if "launcher" not in ci_groups.plan("staged", "launcher")["run"]:
+    if "launcher" not in ci_groups.plan("staged", "launcher")["run"] and not launcher_reads_staged():
         return []
     from scripts.quality import launcher_inputs, model_code_cases
 

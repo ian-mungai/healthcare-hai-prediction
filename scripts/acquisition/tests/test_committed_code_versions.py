@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import ast
 from functools import cache
 from pathlib import Path
 from types import ModuleType
@@ -14,7 +14,7 @@ from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError
 from scripts.process import run_command
-from scripts.quality.repo_checks import load_yaml
+from scripts.quality.committed_lists import COLLECTOR_FILES
 from tests.support import check
 
 VERSIONS = REPO_ROOT / "config/acquisition"
@@ -33,7 +33,8 @@ ENTRIES = {
 
 
 CONTRACTS = [cms_owners_contract, hcai_util_contract, onc_mu_contract]
-COMMIT_HOOK = "collector-code-versions"
+# Calls that bind a collector to a committed code-version list: a module outside the contracts and the E2E runners that makes one is a collector entry.
+BINDING_CALLS = {"require_code", "reviewed_code_versions", "closure_hashes", "collector_code_hashes"}
 
 
 @cache
@@ -69,19 +70,31 @@ def test_every_committed_version_list_has_its_closure_checked() -> None:
 
 
 def test_the_commit_hook_selects_every_file_of_every_collector_closure() -> None:
-    """The commit hook that runs these cases (.pre-commit-config.yaml) selects by a file pattern: a closure file the pattern misses could change unchecked."""
-    document = load_yaml((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
-    if not isinstance(document, dict):
-        raise AssertionError(".pre-commit-config.yaml must contain a mapping")
-    hooks = [entry for repo in document["repos"] for entry in repo["hooks"] if entry["id"] == COMMIT_HOOK]
-    check(len(hooks) == 1 and bool(hooks[0].get("files")), f"The hook {COMMIT_HOOK} needs a files pattern")
-    pattern = re.compile(hooks[0]["files"])
+    """The commit hook selects staged paths with COLLECTOR_FILES (scripts/quality/committed_lists.py): a closure file it misses could change unchecked."""
     entries = {entry for _, entry in ENTRIES.values()} | {contract.CODE_ENTRY for contract in CONTRACTS}
     files = {path for entry in entries for path in entry_hashes(entry)} | {
         path.relative_to(REPO_ROOT).as_posix() for path in VERSIONS.glob("*_code_versions.json")
     }
-    missed = sorted(path for path in files if not pattern.search(path))
-    check(not missed, f"Files that the {COMMIT_HOOK} pattern in .pre-commit-config.yaml does not select: {missed}")
+    missed = sorted(path for path in files if not COLLECTOR_FILES.search(path))
+    check(not missed, f"Files that COLLECTOR_FILES in scripts/quality/committed_lists.py does not select: {missed}")
+
+
+def test_every_collector_entry_is_checked_against_its_list() -> None:
+    """A collector that binds itself to a list (a call of require_code, reviewed_code_versions, closure_hashes or collector_code_hashes) must be an entry above
+    or a contract entry, so a new collector that reuses an existing list has its own closure checked too."""
+    checked = {entry for _, entry in ENTRIES.values()} | {contract.CODE_ENTRY for contract in CONTRACTS}
+    bound: set[str] = set()
+    for path in sorted((REPO_ROOT / "scripts/acquisition").glob("*.py")):
+        if path.stem.endswith(("_contract", "_e2e")):
+            continue
+        calls = {
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
+        }
+        if calls & BINDING_CALLS:
+            bound.add(f"scripts.acquisition.{path.stem}")
+    check(bound <= checked, f"Collector entries with no closure check (add each to ENTRIES with its list): {sorted(bound - checked)}")
 
 
 def head_lists() -> dict[str, str]:

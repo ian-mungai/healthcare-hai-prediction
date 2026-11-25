@@ -147,6 +147,12 @@ LAUNCHER_HOOK = "launcher-list"
 LAUNCHER_LIST = "config/quality/launcher_inputs.json"
 LAUNCHER_BODY = "scripts/ci/groups/launcher.sh"
 LAUNCHER_START = "launcher_e2e() {\n  python -m app.entry\n}\n"
+COLLECTOR_HOOK = "collector-code-versions"
+COLLECTOR_TEST = "scripts/acquisition/tests/test_committed_code_versions.py"
+# The scratch repository runs this in place of the hosted test: a blocked case shows that the hook selected the staged paths and ran it.
+COLLECTOR_STUB = "def test_the_collector_closures_are_listed() -> None:\n    raise AssertionError('the stand-in for the acquisition test ran')\n"
+COLLECTOR_BLOCKED = "the collector code closures are not all in their committed version lists"
+OPTIONAL_READ = "from pathlib import Path\nNOTE = Path('docs/review_probe.md')\nif NOTE.is_file():\n    TEXT = NOTE.read_text()\n"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
@@ -3593,7 +3599,63 @@ CASES = [
         files={"app/util.py": "VALUE: int = 'text'\n"},
         reason="Incompatible types in assignment",
     ),
+    Case(
+        "staged pending file changes a type that a second-level pending importer uses",
+        IMPORTERS_HOOK,
+        False,
+        committed={
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": PENDING_IMPORT_ONLY + "VALUE: int = 1\n",
+            "app/middle.py": "from dags.pending_dag import VALUE as SOURCE\n\nVALUE = SOURCE\n",
+            "app/final.py": "from app.middle import VALUE as SOURCE\n\nVALUE: int = SOURCE\n",
+        },
+        files={"dags/pending_dag.py": PENDING_IMPORT_ONLY + "VALUE: str = 'changed'\n"},
+        reason="Incompatible types in assignment",
+    ),
+    Case(
+        "staged pending file keeps the type that a second-level pending importer uses",
+        IMPORTERS_HOOK,
+        True,
+        committed={
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": PENDING_IMPORT_ONLY + "VALUE: int = 1\n",
+            "app/middle.py": "from dags.pending_dag import VALUE as SOURCE\n\nVALUE = SOURCE\n",
+            "app/final.py": "from app.middle import VALUE as SOURCE\n\nVALUE: int = SOURCE\n",
+        },
+        files={"dags/pending_dag.py": PENDING_IMPORT_ONLY + "VALUE: int = 2\n"},
+    ),
     Case("documentation change only", IMPORTERS_HOOK, True, committed={"app/util.py": UTIL_FUNCTION}, files={"README.md": "A note.\n"}),
+    Case(
+        "collector lists, a staged package initializer that no file pattern names",
+        COLLECTOR_HOOK,
+        False,
+        committed={COLLECTOR_TEST: COLLECTOR_STUB},
+        files={"scripts/__init__.py": '"""A package initializer that enters the closure of every collector."""\n'},
+        reason=COLLECTOR_BLOCKED,
+    ),
+    Case(
+        "collector lists, a staged deletion of a committed version list",
+        COLLECTOR_HOOK,
+        False,
+        committed={COLLECTOR_TEST: COLLECTOR_STUB, "config/acquisition/bls_api_code_versions.json": '{"versions": []}\n'},
+        delete=["config/acquisition/bls_api_code_versions.json"],
+        reason=COLLECTOR_BLOCKED,
+    ),
+    Case(
+        "collector lists, a staged new module of the acquisition folder",
+        COLLECTOR_HOOK,
+        False,
+        committed={COLLECTOR_TEST: COLLECTOR_STUB},
+        files={"scripts/acquisition/collect_review_probe.py": "VALUE = 1\n"},
+        reason=COLLECTOR_BLOCKED,
+    ),
+    Case(
+        "collector lists, a staged change outside every closure",
+        COLLECTOR_HOOK,
+        True,
+        committed={COLLECTOR_TEST: COLLECTOR_STUB},
+        files={"README.md": "A note.\n", "scripts/quality/typecheck.py": (ROOT / "scripts/quality/typecheck.py").read_text() + "\n# A change.\n"},
+    ),
     Case(
         "launcher list lacks a file that the suite now imports",
         LAUNCHER_HOOK,
@@ -3633,6 +3695,41 @@ CASES = [
             "app/data/a.txt": "a\n",
         },
         files={"app/data/b.txt": "b\n", LAUNCHER_LIST: launcher_list(["app/entry.py", "app/data/a.txt", "app/data/b.txt"], ["app/data"])},
+    ),
+    Case(
+        "launcher list lacks a file that a staged addition makes an optional read find",
+        LAUNCHER_HOOK,
+        False,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": OPTIONAL_READ},
+        files={"docs/review_probe.md": "A note that the suite now reads.\n"},
+        reason="docs/review_probe.md: the launcher suite needs it",
+    ),
+    Case(
+        "launcher list names the file that a staged addition makes an optional read find",
+        LAUNCHER_HOOK,
+        True,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": OPTIONAL_READ},
+        files={"docs/review_probe.md": "A note that the suite now reads.\n", LAUNCHER_LIST: launcher_list(["app/entry.py", "docs/review_probe.md"])},
+    ),
+    Case(
+        "launcher list names a file that a staged deletion removes",
+        LAUNCHER_HOOK,
+        False,
+        committed={
+            LAUNCHER_BODY: LAUNCHER_START,
+            LAUNCHER_LIST: launcher_list(["app/entry.py", "app/helper.py"]),
+            "app/entry.py": "from app import helper\n",
+            "app/helper.py": "X = 1\n",
+        },
+        delete=["app/helper.py"],
+        reason="app/helper.py: in the list but not tracked",
+    ),
+    Case(
+        "launcher list, a staged addition that no launcher file names",
+        LAUNCHER_HOOK,
+        True,
+        committed={LAUNCHER_BODY: LAUNCHER_START, LAUNCHER_LIST: launcher_list(["app/entry.py"]), "app/entry.py": OPTIONAL_READ},
+        files={"docs/another_note.md": "A note that no launcher file names.\n"},
     ),
     Case(
         "launcher list, a change outside what the suite reads",
@@ -4436,6 +4533,7 @@ def run_case(case: Case) -> tuple[bool, str]:
             "env-example",
             IMPORTERS_HOOK,
             LAUNCHER_HOOK,
+            COLLECTOR_HOOK,
             *CLEANUP_HOOKS,
         ):
             correct = correct and (case.reason or BLOCK_REASONS.get(case.name, "")) in output

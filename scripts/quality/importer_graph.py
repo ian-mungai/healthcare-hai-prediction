@@ -2,11 +2,12 @@
 
 Run it with the Python of the pinned import-linter, which carries grimp, and with ``-P`` so that this folder does not join the import path:
 
-    .tools/import-linter/bin/python -P scripts/quality/importer_graph.py --root <root> [--source-root src ...] --module scripts.process [--module ...]
+    .tools/import-linter/bin/python -P scripts/quality/importer_graph.py --root <root> [--source-root src ...] [--transitive] --module scripts.process
 
 Each top-level folder of ``--root`` that holds Python files is a root package (namespace packages included). Each ``--source-root`` (a folder of ``--root``
 that the project declares as an import root, such as ``src``) adds its own top-level folders as root packages, named without the source folder. A module
-that the tree does not hold is skipped. The output is one JSON list of module names.
+that the tree does not hold is skipped. ``--transitive`` adds the modules that import one of them through other modules.
+The output is one JSON list of module names.
 scripts/quality/typecheck_importers.py starts this file and maps the names back to paths.
 """
 
@@ -19,8 +20,8 @@ import sys
 from pathlib import Path
 
 
-def importers(root: Path, modules: list[str], source_roots: list[str]) -> list[str]:
-    """The modules of the tree at ``root`` that directly import any of ``modules``, sorted."""
+def importers(root: Path, modules: list[str], source_roots: list[str], transitive: bool = False) -> list[str]:
+    """The modules of the tree at ``root`` that import any of ``modules`` directly, or at any depth when ``transitive``, sorted."""
     searched = [root, *[root / folder for folder in source_roots if (root / folder).is_dir()]]
     skipped = set(source_roots)
     packages: set[str] = set()
@@ -37,7 +38,7 @@ def importers(root: Path, modules: list[str], source_roots: list[str]) -> list[s
     found: set[str] = set()
     for module in modules:
         if module in graph.modules:
-            found |= set(graph.find_modules_that_directly_import(module))
+            found |= set(graph.find_downstream_modules(module) if transitive else graph.find_modules_that_directly_import(module))
     return sorted(found - set(modules))
 
 
@@ -46,8 +47,9 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source-root", action="append", default=[])
     parser.add_argument("--module", action="append", default=[])
+    parser.add_argument("--transitive", action="store_true")
     args = parser.parse_args()
-    sys.stdout.write(json.dumps(importers(args.root.resolve(), args.module, args.source_root)) + "\n")
+    sys.stdout.write(json.dumps(importers(args.root.resolve(), args.module, args.source_root, args.transitive)) + "\n")
     return 0
 
 

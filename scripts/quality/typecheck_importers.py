@@ -112,8 +112,8 @@ def base_exists(root: Path, base: str) -> bool:
     return run_command("git", ["-C", str(root), "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"], timeout=GIT_SECONDS).returncode == 0
 
 
-def importing_files(root: Path, base: str, paths: list[str]) -> list[str]:
-    """The Python files in the tree at ``root`` that directly import one of ``paths``, by the import graph of revision ``base``."""
+def importing_files(root: Path, base: str, paths: list[str], transitive: bool = False) -> list[str]:
+    """The Python files in the tree at ``root`` that import one of ``paths`` (through other files too when ``transitive``), by the import graph of ``base``."""
     if not paths:
         return []
     if not base_exists(root, base):
@@ -132,7 +132,7 @@ def importing_files(root: Path, base: str, paths: list[str]) -> list[str]:
         run_command("git", ["-C", str(root), "archive", "--format=tar", "-o", str(archive), base, "--", "*.py"], timeout=GIT_SECONDS, check=True)
         with tarfile.open(archive) as bundle:
             bundle.extractall(tree, filter="data")
-        arguments = ["-P", str(GRAPH_SCRIPT), "--root", str(tree)]
+        arguments = ["-P", str(GRAPH_SCRIPT), "--root", str(tree), *(["--transitive"] if transitive else [])]
         arguments += [argument for folder in roots for argument in ("--source-root", folder)]
         arguments += [argument for path in paths for argument in ("--module", module_of(path, roots))]
         result = run_command(GRAPH_PYTHON, arguments, timeout=GRAPH_SECONDS)
@@ -167,11 +167,11 @@ def selection(root: Path, refs: list[str], base: str) -> tuple[list[str], list[s
     changed = sorted(path for path in present if (root / path).is_file())
     importers = [path for path in importing_files(root, base, [*present, *gone]) if path not in present]
     waiting = waiting_files()
-    return (
-        [path for path in changed if path not in waiting],
-        [path for path in importers if path not in waiting],
-        [path for path in [*changed, *importers] if path in waiting],
-    )
+    # A pending file can sit above a file between it and the change (app/final.py imports app/middle.py, which imports the changed pending module), and a type
+    # that the change alters reaches it through the file between: the pending check follows the importers at any depth, as the hosted run checks every file.
+    chain = importing_files(root, base, [*present, *gone], transitive=True) if waiting else []
+    pending = sorted({path for path in [*changed, *chain] if path in waiting})
+    return ([path for path in changed if path not in waiting], [path for path in importers if path not in waiting], pending)
 
 
 def check_pending_files(root: Path, pending: list[str]) -> int:
