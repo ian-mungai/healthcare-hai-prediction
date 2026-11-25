@@ -645,6 +645,7 @@ ADMIN = ("admin", "Synthetic-Admin-2!")
 ADMIN_PARAMETER = "/example/mlflow_admin_password"
 READER_PARAMETER = "/example/mlflow_metadata_reader_login"
 LOOPBACK = "http://127.0.0.1:5100"
+SYNTHETIC_ROLE_BASE = 100  # the role ID of ``__user_<id>__`` is this plus the user ID, so a user ID is never a synthetic role ID
 
 
 class FakeParameters:
@@ -707,6 +708,7 @@ class Registry:
         self.ignore_remove = False  # answers 200 and keeps the grant
         self.fail_holders = False  # the list of the holders of a role answers 500
         self.hide_user_id = False  # the user read answers without an ID
+        self.holder_queries: list[int] = []  # the role ID of each holder lookup
         self.fail_user_list = False  # the list of all users answers 500
         self.roles_answer: Any = None  # when set, the roles of the reader are answered with this document and HTTP 200
 
@@ -718,9 +720,14 @@ class Registry:
         return self.row_ids.setdefault(key, 3 + len(self.row_ids))
 
     def role_id(self, role: str) -> int:
-        """A user's own role has the ID of the user, as in the live server (role 3 is ``__user_3__``); another role has an ID from 10 up."""
+        """A user's own role has a role ID of its own, as in the live server (the name carries the user ID, the database allocates the role ID: role 103 is
+        ``__user_3__``); another role has an ID from 10 up."""
         found = re.fullmatch(r"__user_([0-9]+)__", role)
-        return int(found.group(1)) if found else 10 + sorted({name for _, name in self.rows.values() if not name.startswith("__user_")}).index(role)
+        return (
+            SYNTHETIC_ROLE_BASE + int(found.group(1))
+            if found
+            else 10 + sorted({name for _, name in self.rows.values() if not name.startswith("__user_")}).index(role)
+        )
 
     def holders(self, role: str) -> list[int]:
         """The IDs of the users that hold a role: the owner of a synthetic role, the reader (it holds each role of its rows) and the users it is shared with."""
@@ -775,7 +782,8 @@ class Registry:
             role_id = int(urllib.parse.parse_qs(parts.query)["role_id"][0])
             role = next((name for _, name in self.rows.values() if self.role_id(name) == role_id), None)
             holders = self.holders(role) if role else []
-            return 200, {"assignments": [{"id": 100 + user, "role_id": role_id, "user_id": user} for user in holders]}
+            self.holder_queries.append(role_id)
+            return 200, {"assignments": [{"id": 500 + user, "role_id": role_id, "user_id": user} for user in holders]}
         if method == "GET" and path == "/api/2.0/mlflow/users/list":
             if self.fail_user_list:
                 return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
@@ -1027,7 +1035,7 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
         administrator=True,
         other_users={3: "other_user"},
     )
-    refused("borrowed synthetic role", borrowed, "__user_3__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "metadata_reader", "role_id": 3}')
+    refused("borrowed synthetic role", borrowed, "__user_3__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "metadata_reader", "role_id": 103}')
     require(borrowed.administrator, "the administrator flag is untouched while the setup refuses")
     # The same borrowed role with the two repairs that used to run first: a password that differs from the stored one, and no stored parameter at all.
     mismatch = Registry(reader_login="Synthetic-Old-1!", grants=every, extra={("experiment", "7"): ("EDIT", "__user_3__")}, other_users={3: "other_user"})
@@ -1059,13 +1067,16 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
         shared_with={"__user_2__": (5,)},
     )
     refused(
-        "the readers own role held by another user", shared_own, "__user_2__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 2}'
+        "the readers own role held by another user",
+        shared_own,
+        "__user_2__",
+        'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 102}',
     )
     # The binding is to the reader's user ID, not to the name pattern: with ID 7 the role ``__user_2__`` is another user's.
     foreign_pattern = Registry(
         reader_login="Synthetic-Stored-1!", reader_id=7, grants=(), extra={("experiment", "7"): ("EDIT", "__user_2__")}, other_users={2: "other_user"}
     )
-    refused("a synthetic role of another ID", foreign_pattern, "__user_2__", '"role_id": 2')
+    refused("a synthetic role of another ID", foreign_pattern, "__user_2__", '"role_id": 102')
     # A holders list or a user read that fails stops the setup with nothing changed, and a role with other holders cannot slip through.
     for label, flag in (("holders list", "fail_holders"), ("user without an ID", "hide_user_id")):
         broken = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("experiment", "7"): ("EDIT", "__user_2__")})
@@ -1123,7 +1134,7 @@ def a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it() ->
     err = stops("failed user list", blind, "user ID 5", "Nothing was changed")
     require('"username": "5"' not in err and "unassign {" not in err, f"a user ID must never stand as the username of an executable call: {err}")
     seen = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, other_users={5: "other_user"}, shared_with=shared)
-    err = stops("user list answers", seen, 'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 2}')
+    err = stops("user list answers", seen, 'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 102}')
     # A user list that answers 200 without the holder resolves nothing either.
     partial = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, shared_with=shared)
     err = stops("holder missing from the user list", partial, "user ID 5")
@@ -1195,7 +1206,7 @@ def an_unnamed_holder_never_gets_an_executable_unassign_call() -> None:
     quoted = shared('review"holder\\path')
     err = stops("a username with a quote and a backslash", quoted, "roles/unassign")
     call = err[err.index("roles/unassign ") + len("roles/unassign ") : err.index(", then rerun")]
-    require(json.loads(call) == {"username": 'review"holder\\path', "role_id": 2}, f"the printed body must be valid JSON that carries the name: {call}")
+    require(json.loads(call) == {"username": 'review"holder\\path', "role_id": 102}, f"the printed body must be valid JSON that carries the name: {call}")
 
 
 def a_boolean_is_not_an_integer_id() -> None:
@@ -1203,9 +1214,9 @@ def a_boolean_is_not_an_integer_id() -> None:
     any write (the server reads the removal body with ``int(raw)``, so a Boolean would name grant 1)."""
     require = base().require
     every = ("registered_model", "experiment", "logged_model")
-    grant = {"id": True, "role_id": 2, "resource_type": "experiment", "resource_pattern": "review", "permission": "EDIT"}
+    grant = {"id": True, "role_id": 102, "resource_type": "experiment", "resource_pattern": "review", "permission": "EDIT"}
     for label, document in (
-        ("a Boolean grant ID", {"roles": [{"id": 2, "name": "__user_2__", "permissions": [grant]}]}),
+        ("a Boolean grant ID", {"roles": [{"id": 102, "name": "__user_2__", "permissions": [grant]}]}),
         ("a Boolean role ID", {"roles": [{"id": True, "name": "__user_2__", "permissions": []}]}),
     ):
         registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
@@ -1277,17 +1288,17 @@ def a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant() -> Non
         ("a null list", {"assignments": None}),
         ("an object instead of a list", {"assignments": {}}),
         ("an empty list", {"assignments": []}),
-        ("a list of another user only", {"assignments": [{"id": 105, "role_id": 2, "user_id": 9}]}),
-        ("a row for another role that names the reader", {"assignments": [{"id": 102, "role_id": 99, "user_id": 2}]}),
-        ("a row without a role ID", {"assignments": [{"id": 102, "user_id": 2}]}),
-        ("a row with a Boolean role ID", {"assignments": [{"id": 102, "role_id": True, "user_id": 2}]}),
-        ("a row with a text role ID", {"assignments": [{"id": 102, "role_id": "2", "user_id": 2}]}),
-        ("a row without its own ID", {"assignments": [{"role_id": 2, "user_id": 2}]}),
+        ("a list of another user only", {"assignments": [{"id": 505, "role_id": 102, "user_id": 9}]}),
+        ("a row for another role that names the reader", {"assignments": [{"id": 502, "role_id": 99, "user_id": 2}]}),
+        ("a row without a role ID", {"assignments": [{"id": 502, "user_id": 2}]}),
+        ("a row with a Boolean role ID", {"assignments": [{"id": 502, "role_id": True, "user_id": 2}]}),
+        ("a row with a text role ID", {"assignments": [{"id": 502, "role_id": "102", "user_id": 2}]}),
+        ("a row without its own ID", {"assignments": [{"role_id": 102, "user_id": 2}]}),
         (
             "the reader's row beside a row for another role",
-            {"assignments": [{"id": 102, "role_id": 2, "user_id": 2}, {"id": 103, "role_id": 99, "user_id": 5}]},
+            {"assignments": [{"id": 502, "role_id": 102, "user_id": 2}, {"id": 503, "role_id": 99, "user_id": 5}]},
         ),
-        ("a list of a Boolean", {"assignments": [{"id": 105, "role_id": 2, "user_id": True}]}),
+        ("a list of a Boolean", {"assignments": [{"id": 505, "role_id": 102, "user_id": True}]}),
         ("a list that is not a list of rows", {"assignments": [5]}),
     ):
         registry = shared()
@@ -1302,15 +1313,15 @@ def a_reply_shape_that_the_roles_query_did_not_establish_authorizes_no_removal()
     the reader's own role: a grant row that names another role, or another user in place of the reader, is refused before any write."""
     require = base().require
     every = ("registered_model", "experiment", "logged_model")
-    row = {"id": 7, "role_id": 2, "resource_type": "experiment", "resource_pattern": "7", "permission": "MANAGE"}
+    row = {"id": 7, "role_id": 102, "resource_type": "experiment", "resource_pattern": "7", "permission": "MANAGE"}
     for label, changes in (
         ("a grant row for another role", {"role_id": 99}),
         ("a grant row without a role ID", {"role_id": None}),
         ("a grant row with a Boolean role ID", {"role_id": True}),
-        ("a grant row with a text role ID", {"role_id": "2"}),
+        ("a grant row with a text role ID", {"role_id": "102"}),
     ):
         grant = {key: value for key, value in {**row, **changes}.items() if value is not None}
-        document = {"roles": [{"id": 2, "name": "__user_2__", "permissions": [grant]}]}
+        document = {"roles": [{"id": 102, "name": "__user_2__", "permissions": [grant]}]}
         registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
         stops(label, registry, "roles of metadata_reader", "Nothing was changed", answers={ROLES_PATH: [(200, document), (200, document)]})
         require(registry.administrator and not any("permissions/remove" in path for _, path in registry.calls), f"{label}: no write was sent")
@@ -1366,6 +1377,97 @@ def a_malformed_permissions_reply_after_a_write_says_what_was_changed() -> None:
         values_absent(ssm, out, err)
 
 
+def the_holder_lookup_asks_for_the_role_id_and_not_the_user_id() -> None:
+    """The registry names a synthetic role for the user ID and gives it a role ID of its own. The holder lookup of a successful setup asks for that role ID."""
+    require = base().require
+    registry = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("registered_model", "*"): ("EDIT", "__user_2__")})
+    code, out, err = run_setup(registry, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 0 and "EDIT on registered_model * removed" in out, (code, out, err))
+    require(
+        registry.holder_queries and set(registry.holder_queries) == {SYNTHETIC_ROLE_BASE + registry.reader_id},
+        f"holder lookups asked for {registry.holder_queries}",
+    )
+    require(registry.reader_id not in registry.holder_queries, "the user ID must never be asked for as a role ID")
+
+
+def an_unknown_effective_permission_is_never_printed() -> None:
+    """The effective permission that the registry returns is printed only when it is a known level. Any other value, such as a credential that an unexpected
+    reply carries, is named by its field and never shown."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    marker = "Synthetic-Marker-Not-A-Level-1!"
+    for value in (marker, "MANAGE ".join(["", marker]), 7):
+        registry, ssm = Registry(reader_login="Synthetic-Stored-1!", grants=every), FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+        reply = (200, {"allowed": False, "permission": value})
+        code, out, err = run_setup(answering(registry, {"/api/3.0/mlflow/users/permissions/get": [reply]}), ssm)
+        require(code == 1 and "not a known permission level" in err and "permission" in err, (value, code, err))
+        require(str(value) not in out + err and marker not in out + err, f"the returned value must not be printed: {err}")
+    stored = "Synthetic-Stored-1!"
+    registry, ssm = Registry(reader_login=stored, grants=every), FakeParameters(**{READER_PARAMETER: stored})
+    code, out, err = run_setup(answering(registry, {"/api/3.0/mlflow/users/permissions/get": [(200, {"allowed": False, "permission": stored})]}), ssm)
+    require(code == 1 and stored not in out + err, ("the reader's own password as the level", code, err))
+    registry, ssm = Registry(reader_login=stored, grants=every, default_permission="EDIT"), FakeParameters(**{READER_PARAMETER: stored})
+    code, out, err = run_setup(registry, ssm)
+    require(code == 1 and "EDIT" in err, f"a known level is still named: {(code, err)}")
+
+
+def a_reply_that_cannot_be_decoded_after_a_write_says_what_was_changed() -> None:
+    """A body nested too deep for the JSON decoder is an unreadable reply, like any other body that is not JSON: the transport returns the status without a
+    document. A recursion error that reaches the setup after a write is a step failure that names the writes done."""
+    import http.server
+    import threading
+
+    from scripts.infrastructure.openmetadata_raw_files import http_request
+
+    require = base().require
+
+    class Deep(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = ("[" * 200000 + "]" * 200000).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Deep)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        answer = http_request("GET", f"http://127.0.0.1:{server.server_address[1]}/x", {}, None)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    require(answer == (200, None), f"a body that nests too deep is an unreadable reply: {answer}")
+    registry, ssm = Registry(), FakeParameters()
+    calls: list[str] = []
+
+    def request(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
+        calls.append(method)
+        if urllib.parse.urlsplit(url).path == PERMISSIONS_PATH:
+            raise RecursionError("synthetic diagnostic marker")
+        return registry(method, url, headers, body)
+
+    code, out, err = run_setup(request, ssm)
+    require(code == 1 and "user created" in err and "already changed" in err, ("after creation", code, err))
+    require("synthetic diagnostic marker" not in out + err, f"the raw exception text is not printed: {err}")
+
+
+def an_out_of_range_local_port_is_refused_as_an_address() -> None:
+    """A port outside 1 to 65535 matches the shape of a local address but is no address: the existing address refusal (exit 2) applies before any read."""
+    require = base().require
+    for uri in ("http://localhost:99999", "http://127.0.0.1:65536", "http://localhost:00", "http://127.0.0.1:0"):
+        registry, ssm = Registry(), FakeParameters()
+        code, out, err = run_setup(registry, ssm, MLFLOW_TRACKING_URI=uri)
+        require(code == 2 and "MLFLOW_TRACKING_URI" in err and "shape" not in err, (uri, code, err))
+        require(not registry.calls and not ssm.puts, f"{uri}: nothing was read or written")
+    code, out, err = run_setup(Registry(), FakeParameters(), MLFLOW_TRACKING_URI="http://127.0.0.1:65535")
+    require(code == 0, f"the highest valid port is accepted: {(code, err)}")
+
+
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
     require = base().require
     for default in ("USE", "EDIT"):
@@ -1416,5 +1518,9 @@ CASES = [
     a_malformed_permissions_reply_after_a_write_says_what_was_changed,
     a_reply_shape_that_the_roles_query_did_not_establish_authorizes_no_removal,
     an_invalid_field_in_a_permissions_row_after_a_write_says_what_was_changed,
+    the_holder_lookup_asks_for_the_role_id_and_not_the_user_id,
+    an_unknown_effective_permission_is_never_printed,
+    a_reply_that_cannot_be_decoded_after_a_write_says_what_was_changed,
+    an_out_of_range_local_port_is_refused_as_an_address,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]

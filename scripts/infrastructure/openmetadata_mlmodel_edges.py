@@ -66,6 +66,7 @@ ELEVATED_LEVELS = frozenset({"USE", "EDIT", "MANAGE"})
 # The kinds whose effective permission is read through the registry, which adds the server's default_permission: the three the connector reads, then others.
 EFFECTIVE_KINDS = (*GRANT_KINDS, "prompt", "scorer", "gateway_secret", "run", "trace")
 QUIET_LEVELS = frozenset({"NO_PERMISSIONS", "READ", "DENY"})
+KNOWN_LEVELS = QUIET_LEVELS | ELEVATED_LEVELS  # every permission level of MLflow 3.17.2; a returned value outside this set is never printed
 DEADLINE_SECONDS = 600.0
 EDGE_NOTE = "table of the model set that the newest version of the registered model is trained on"
 TRACKING_LOGIN = ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
@@ -173,7 +174,12 @@ def server_problem(client: Client, registry: str, headers: Mapping[str, str]) ->
         status, answer = client.call("GET", f"{registry}/api/3.0/mlflow/users/permissions/get?{query}", headers)
         if status != 200 or not isinstance(answer, dict):
             raise StepFailed(f"the registry answered HTTP {status} when the effective permission of {READER} on {kind} was read")
-        level = str(answer.get("permission"))
+        level = answer.get("permission")
+        if not isinstance(level, str) or level not in KNOWN_LEVELS:
+            return (
+                f"the registry's answer about its effective permission on {kind} has a permission field that is not a known permission level "
+                "(the value is not shown)"
+            )
         if level not in QUIET_LEVELS:
             return (
                 f"its effective permission on {kind} is {level}: the registry's default_permission (or a grant) gives more than READ. "

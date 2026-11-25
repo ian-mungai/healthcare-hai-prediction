@@ -226,7 +226,7 @@ def http_request(method: str, url: str, headers: Mapping[str, str], body: bytes 
         connection.close()
     try:
         return response.status, json.loads(data) if data else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return response.status, None
 
 

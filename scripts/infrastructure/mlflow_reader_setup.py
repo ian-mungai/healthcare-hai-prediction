@@ -303,7 +303,7 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
 def main(argv: list[str], env: Mapping[str, str] | None = None, http: Http = http_request, ssm: Any = None) -> int:
     environment = dict(os.environ if env is None else env)
     registry = environment.get("MLFLOW_TRACKING_URI", "")
-    if argv or not LOOPBACK_REGISTRY.fullmatch(registry):
+    if argv or not LOOPBACK_REGISTRY.fullmatch(registry) or not 1 <= int(registry.rsplit(":", 1)[1]) <= 65535:
         sys.stderr.write(
             "mlflow_reader_setup: MLFLOW_TRACKING_URI must be the port forward, http://localhost:<port> or http://127.0.0.1:<port>, and no argument is taken\n"
         )
@@ -324,7 +324,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, http: Http = htt
         if created:
             changed.append(f"parameter {environment.get('READER_PARAMETER', READER_PARAMETER)} created")
         ensure_reader(client, registry, admin, stored, changed)
-    except (StepFailed, TypeError, ValueError, KeyError, AttributeError, LookupError) as error:
+    except (StepFailed, TypeError, ValueError, AttributeError, LookupError, RecursionError) as error:
         cause = error if isinstance(error, StepFailed) else "a reply of the registry has a shape that the setup does not handle"
         done = f". The setup stopped part way and had already changed: {'; '.join(changed)}" if changed else ""
         sys.stderr.write(f"mlflow_reader_setup: {cause}{done}\n")
