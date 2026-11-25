@@ -342,7 +342,11 @@ def test_wrapper_preserves_explicit_options_without_inherited_arguments(
 def test_wrapper_requests_identity_verification_for_plans_and_applies(arguments: list[str], tmp_path: Path, wrapper_environment: dict[str, str]) -> None:
     script = Path(__file__).resolve().parents[1] / "scripts" / "infrastructure" / "terraform.sh"
     stub = tmp_path / "example_python"
-    stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\nexit 1\n', encoding="utf-8")
+    # A storage plan, apply or validate first asks the state protection module for the approved state administrator and refuses with exit 2 when that call
+    # fails, so the stub answers that call with no administrator and fails only the renderer, the call that gets --verify-identity.
+    stub.write_text(
+        '#!/usr/bin/env bash\nif [[ "$2" == scripts.infrastructure.state_protection ]]; then\n  exit 0\nfi\nprintf "%s\\n" "$@"\nexit 1\n', encoding="utf-8"
+    )
     stub.chmod(0o700)
     wrapper_environment["PYTHON_BIN"] = str(stub)
     result = run_command("/bin/bash", [str(script), *arguments], env=wrapper_environment, timeout=60)
