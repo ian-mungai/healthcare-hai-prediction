@@ -1157,6 +1157,45 @@ def case_materialize(c: Checker, make: Callable[[], Any]) -> None:
         environ = feast_cases.fixture_environment(folder)
         settings = feast_job.job_settings(environ, "materialize", RUN_A, "publish_fixture")
         control, features = server.client(online.CONTROL_DB), server.client(online.FEATURE_DB)
+        # The step selects the publication of settings.run, never the head: a later publication with the same snapshots does not replace it, and a run with
+        # no publication is refused.
+        runs = catalog.tables[reads.RUNS_TABLE]
+        runs.rows = [feast_cases.runs_row(RUN_A, T0, snapshots), feast_cases.runs_row(RUN_B, T0 + timedelta(hours=1), snapshots)]
+        own = feast_materialize.run_materialize(
+            settings,
+            environ,
+            control=control,
+            features=features,
+            schema=(schema, SCHEMA_HASH),
+            loader=lambda name, **properties: catalog,
+            register=False,
+            hooks_for=head_hooks,
+        )
+        c.check(
+            "a later publication with the same snapshots does not replace the run's own",
+            own["publication"]["run_id"] == RUN_A and server.marker().get("feature_run_id") == RUN_A,
+        )
+        reset(server)
+        runs.rows = [feast_cases.runs_row(RUN_B, T0 + timedelta(hours=1), snapshots)]
+        c.refused(
+            "a run with no publication is refused",
+            feast_materialize.run_materialize,
+            "exactly one",
+            settings,
+            environ,
+            control=control,
+            features=features,
+            schema=(schema, SCHEMA_HASH),
+            loader=lambda name, **properties: catalog,
+            register=False,
+            hooks_for=head_hooks,
+        )
+        c.check(
+            "the refusal wrote no record",
+            not (folder / "feast_materialize.json").exists() or json.loads((folder / "feast_materialize.json").read_text())["publication"]["run_id"] == RUN_A,
+        )
+        runs.rows = [feast_cases.runs_row(RUN_A, T0, snapshots)]
+        reset(server)
         record = feast_materialize.run_materialize(
             settings,
             environ,

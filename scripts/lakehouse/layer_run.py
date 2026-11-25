@@ -127,7 +127,9 @@ DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # each layer run's own write-onc
 # The code copy, the bulk input extracts, the build file the sealed copy repeats and the working databases of the features build, which hold a copy of gold.
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb", "features_work")
 FEAST_RECORDS = ("feast_apply.json", "feast_materialize.json")
-APPLY_RECORD = FEAST_RECORDS[0]  # put once by the feast phase, never by the run folder upload: a later upload must not replace it
+APPLY_RECORD, MATERIALIZE_RECORD = FEAST_RECORDS  # put once by the feast phase, never by the run folder upload: a later upload must not replace them
+APPLY_IDENTITY = ("run_id", "mode", "feature_set", "publication", "base_publication")  # the publication an apply record names, and the set's base
+MATERIALIZE_IDENTITY = ("run_id", "mode", "publication", "feature_schema_sha256")  # what a single path materialize record says of the publication it loaded
 HOLD_RECORD = "online_hold.json"  # a model set whose online load is held leaves it in the run folder; the release reads it from the run prefix
 DBT_TARGET = {"features": Path("features_work/build/target")}  # where each layer build writes its dbt artifacts, beside the default <run>/target
 DRY_ENV = "LAYER_DRY_RUN"
@@ -873,9 +875,18 @@ def accepted_publish(job: Job) -> None:
     accept_commit(job)
 
 
+def put_once_records(job: Job) -> tuple[str, ...]:
+    """The records of the feast phase that it puts once: the apply record and, on the single path, the materialize record."""
+    return (APPLY_RECORD,) if job.feature_set else (APPLY_RECORD, MATERIALIZE_RECORD)
+
+
 def uploadable(job: Job) -> list[Path]:
     files = (path for path in sorted(job.folder.rglob("*")) if path.is_file() and not path.is_symlink())
-    return [path for path in files if path.relative_to(job.folder).parts[0] not in NOT_UPLOADED and path.relative_to(job.folder).as_posix() != APPLY_RECORD]
+    return [
+        path
+        for path in files
+        if path.relative_to(job.folder).parts[0] not in NOT_UPLOADED and path.relative_to(job.folder).as_posix() not in put_once_records(job)
+    ]
 
 
 def upload(job: Job, bucket: str, client: Any) -> int:
@@ -1004,7 +1015,8 @@ def maintain(job: Job) -> None:
 
 def feast(job: Job, bucket: str, client: Any) -> None:
     """Apply and materialize the committed publication, then add the records of the two steps to the run's upload, which ran before this phase. The apply
-    record is the evidence of the publication the run committed (the lineage of a model set reads its commit time), so it is put once and never replaced."""
+    record is the evidence of the publication the run committed (the lineage of a model set reads its commit time), so it is put once and never replaced. The
+    single path's materialize record names the publication it loaded, so it is put once too."""
     accepted_publish(job)
     for step in ("apply", "materialize"):
         feature_metrics.materialized(run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode, *job.set_flags]))
@@ -1012,6 +1024,8 @@ def feast(job: Job, bucket: str, client: Any) -> None:
         key = f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/{name}"
         if name == APPLY_RECORD:
             put_apply_record(client, bucket, key, job.folder / name, job.run)
+        elif name == MATERIALIZE_RECORD and not job.feature_set:
+            put_record_once(client, bucket, key, job.folder / name, job.run, MATERIALIZE_IDENTITY)
         else:
             client.upload_file(str(job.folder / name), bucket, key)
 
@@ -1044,23 +1058,25 @@ def release(job: Job) -> None:
     feature_metrics.released(run_module(job, "scripts.features.online_release", ["--model", model, "--features-run", run, "--mode", job.mode]))
 
 
-def apply_identity(record: Mapping[str, Any]) -> dict[str, Any]:
-    """What a Feast apply record says of the publication it applied: the run, its publication and, for a model set, the set and the base publication it read.
-    The Feast version and the object counts are not part of it, so a repeat of the same apply has the same identity."""
-    return {name: record.get(name) for name in ("run_id", "mode", "feature_set", "publication", "base_publication")}
-
-
 def put_apply_record(client: Any, bucket: str, key: str, path: Path, run: str) -> None:
-    """Put the apply record of the run once (``If-None-Match: *``). A record that does not name the run's own publication is refused before anything is
-    written. When the key already holds a record, the same identity succeeds without a change, and another identity or a record that cannot be read back is
-    refused: the stored record is kept in every case."""
+    """Put the apply record of the run once; see ``put_record_once``."""
+    put_record_once(client, bucket, key, path, run, APPLY_IDENTITY)
+
+
+def put_record_once(client: Any, bucket: str, key: str, path: Path, run: str, identity_names: Sequence[str]) -> None:
+    """Put a record of the run once (``If-None-Match: *``). A record that does not name the run's own publication is refused before anything is written.
+    When the key already holds a record, the same identity (``identity_names``) succeeds without a change, and another identity or a record that cannot be
+    read back is refused: the stored record is kept in every case."""
     from botocore.exceptions import BotoCoreError
+
+    def identity(value: Mapping[str, Any]) -> dict[str, Any]:
+        return {name: value.get(name) for name in identity_names}
 
     body = path.read_bytes()
     record = json.loads(body)
     publication = record.get("publication") if isinstance(record, dict) else None
     if record.get("run_id") != run or not isinstance(publication, dict) or publication.get("run_id") != run:
-        raise StepError(f"{path.name} does not name the publication of run {run}, so it is not uploaded: {apply_identity(record)}")
+        raise StepError(f"{path.name} does not name the publication of run {run}, so it is not uploaded: {identity(record)}")
     try:
         client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
         return
@@ -1073,8 +1089,8 @@ def put_apply_record(client: Any, bucket: str, key: str, path: Path, run: str) -
         raise StepError(
             f"{key} exists and cannot be read back ({type(error).__name__}), so a repeat cannot be told from another publication; it is kept"
         ) from None
-    if not isinstance(stored, dict) or apply_identity(stored) != apply_identity(record):
-        raise StepError(f"{key} already names another publication than {path.name} ({apply_identity(record)}); the stored record is kept")
+    if not isinstance(stored, dict) or identity(stored) != identity(record):
+        raise StepError(f"{key} already names another publication than {path.name} ({identity(record)}); the stored record is kept")
 
 
 def count(value: object) -> int | None:

@@ -25,6 +25,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,6 +55,9 @@ INPUT_OF = {"silver": None, "gold": SILVER_RUN, "features": GOLD_RUN}
 CATALOG: list[Path] = []  # the throwaway catalog folder of the case being run
 DEFECTS: set[str] = set()  # the stand-in defects of the case being run
 FEAST_PUBLICATION: dict[str, str] = {}  # the publication that the stand-in Feast apply of a run names, when it is not the run itself
+FEAST_LOAD_PUBLICATION: dict[
+    str, dict[str, str]
+] = {}  # the fields of the publication that the stand-in single path materialize of a run names, when they differ
 FEAST_COMMITTED_AT: dict[str, str] = {}  # the commit time that the stand-in Feast apply of a run records, when it is not the usual one
 UPLOADS: list[tuple[str, str]] = []
 
@@ -227,6 +231,9 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
                 "committed_at": FEAST_COMMITTED_AT.get(job.run, "2026-10-30T03:15:00+00:00"),
             }
             record |= {"schema": 1, "mode": job.mode, "publication": publication}
+        elif not job.feature_set:
+            publication = {"run_id": job.run, "snapshot_set_sha256": "a" * 64, **FEAST_LOAD_PUBLICATION.get(job.run, {})}
+            record |= {"schema": 1, "mode": job.mode, "publication": publication, "feature_schema_sha256": "c" * 64}
         (folder / f"feast_{step}.json").write_text(json.dumps(record) + "\n")
     elif name == "online_release":
         if "release_fails" in DEFECTS:
@@ -592,7 +599,7 @@ class FakeS3:
         if IfNoneMatch == "*" and Key in STATE:
             raise self.ClientError("PreconditionFailed")
         STATE[Key] = Body.encode() if isinstance(Body, str) else Body
-        if Key.endswith("/feast_apply.json"):
+        if Key.endswith(("/feast_apply.json", "/feast_materialize.json")):
             UPLOADS.append((Bucket, Key))
             shared_write("upload", key=Key)
         return {}
@@ -682,6 +689,7 @@ class Case:
         UPLOADS.clear()
         DEFECTS.clear()
         FEAST_PUBLICATION.clear()
+        FEAST_LOAD_PUBLICATION.clear()
         FEAST_COMMITTED_AT.clear()
         STORED.clear()
         STATE.clear()
@@ -1061,8 +1069,12 @@ def case_features_apply_record_is_write_once(case: Case) -> None:
     for name in ("feast_apply.json", "feast_materialize.json", "layer_run.json"):
         (folder / name).write_text("{}\n")
     require(
-        [path.name for path in layer_run.uploadable(job)] == ["feast_materialize.json", "layer_run.json"],
-        "the upload of the run folder leaves the apply record to its own put",
+        [path.name for path in layer_run.uploadable(job)] == ["layer_run.json"],
+        "the upload of the run folder leaves the apply and the single path materialize records to their own puts",
+    )
+    require(
+        [path.name for path in layer_run.uploadable(replace(job, feature_set="m1"))] == ["feast_materialize.json", "layer_run.json"],
+        "the upload of the run folder of a model set still carries its materialize record",
     )
     require([key for _, key in UPLOADS].count(apply_key()) == 1, f"the apply record is written once: {[key for _, key in UPLOADS if key == apply_key()]}")
 
@@ -1074,6 +1086,36 @@ def case_features_reapply_of_another_publication_is_refused(case: Case) -> None:
     require(case.phase("features", "feast") != 0, "a re-apply that names another publication is refused")
     require("publication" in case.err and apply_key() in case.err, case.err)
     require(STATE[apply_key()] == kept, "the stored apply record is kept")
+
+
+def materialize_key() -> str:
+    return f"lakehouse/layer_runs/features/{FEATURES_RUN}/feast_materialize.json"
+
+
+def case_features_materialize_record_is_write_once(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7 and case.chain("features") == [0] * 7, case.err)
+    kept = STATE.get(materialize_key())
+    require(kept is not None and json.loads(kept)["publication"]["run_id"] == FEATURES_RUN, f"the materialize record of the run is in the bucket: {kept!r}")
+    require(case.phase("features", "feast") == 0, f"a repeat of the same publication succeeds: {case.err}")
+    require(STATE[materialize_key()] == kept, "a repeat of the same publication changes nothing")
+    puts = [key for _, key in UPLOADS if key == materialize_key()]
+    require(len(puts) == 1, f"the materialize record is written once: {puts}")
+
+
+def case_features_rematerialize_of_another_publication_is_refused(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7 and case.chain("features") == [0] * 7, case.err)
+    kept = STATE[materialize_key()]
+    FEAST_LOAD_PUBLICATION[FEATURES_RUN] = {"snapshot_set_sha256": "d" * 64}
+    require(case.phase("features", "feast") != 0, "a repeat that names another snapshot set is refused")
+    require("publication" in case.err and materialize_key() in case.err, case.err)
+    require(STATE[materialize_key()] == kept, "the stored materialize record is kept")
+
+
+def case_features_materialize_record_of_another_publication_is_not_uploaded(case: Case) -> None:
+    features_up_to(case, "feast")
+    FEAST_LOAD_PUBLICATION[FEATURES_RUN] = {"run_id": OTHER_PUBLICATION}
+    require(case.phase("features", "feast") != 0, "a materialize record that names another publication than the run's own is refused")
+    require(materialize_key() not in STATE and materialize_key() not in [key for _, key in UPLOADS], "nothing of it is in the bucket")
 
 
 def case_features_apply_record_of_another_publication_is_not_uploaded(case: Case) -> None:
@@ -1672,6 +1714,9 @@ CASES: dict[str, Callable[[Case], None]] = {
     "features: a re-apply of another publication is refused": case_features_reapply_of_another_publication_is_refused,
     "features: an apply record of another publication is not uploaded": case_features_apply_record_of_another_publication_is_not_uploaded,
     "features: the apply identity ignores what a re-apply may change": case_apply_identity_ignores_what_a_re_apply_may_change,
+    "features: the materialize record is kept and a same publication repeat changes nothing": case_features_materialize_record_is_write_once,
+    "features: a materialize repeat of another publication is refused": case_features_rematerialize_of_another_publication_is_refused,
+    "features: a materialize record of another publication is not uploaded": case_features_materialize_record_of_another_publication_is_not_uploaded,
     "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,

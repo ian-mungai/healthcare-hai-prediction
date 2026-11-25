@@ -1,6 +1,7 @@
 """Materialize one verified features publication into the online store (design p3c section 4.3, the Feast side of ``feast_job materialize``).
 
-``run_materialize`` selects the head ``publish_runs`` row R, builds the load plan (entity count from the entity table at R's snapshot, the time window of
+``run_materialize`` selects the ``publish_runs`` row R of its own run (never the head: a later publication cannot give the run's record its identity, and a
+run with no publication is refused), builds the load plan (entity count from the entity table at R's snapshot, the time window of
 the hospital-window table, the predictor column count) and runs ``online_protocol.run_load`` with hooks that call Feast: ``FeatureStore.materialize`` over the
 predictor views for the whole window, a parse of every key as a Feast entity key of the project, and a sample comparison of online values with the published
 tables (the first and last spine key of each window year). Every Redis wait is bounded (5 s) and the whole job by the 1,800 s deadline of ``feast_job``.
@@ -142,7 +143,7 @@ def run_materialize(
     opened = session() if session is not None else feast_job.catalog_session(settings, environ, loader=loader, exchange=exchange, register=register)
     with opened as catalog:
         deadline("selecting the publication")
-        publication = reads.read_publication(catalog, reads.NAMESPACES[settings.mode])
+        publication = reads.read_publication(catalog, reads.NAMESPACES[settings.mode], settings.run)
         version = importlib.metadata.version("feast") if hooks_for is None else "test"
         plan = load_plan(catalog, publication, document, schema_sha256, version)
         if hooks_for is None:
