@@ -789,6 +789,26 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             require(status == "not_run" or str(error) in record["reason"], f"the reason of the {status} restricted fit was lost: {record}")
             require(output.slots["m2_elastic_net"].status == "fitted", "the full Elastic Net failed with the restricted one")
 
+    def elastic_every_option_failing_keeps_the_option_reasons() -> None:
+        """Every grid option fails in the tuning folds, so the final fit never runs: the result still carries each option's status and reason."""
+        from scripts.training.models.common import NotConverged, NotEstimable
+        from scripts.training.models.elastic import ElasticRegressor
+
+        wide = flagged_request()
+        options = suite._grid(wide.config["slots"]["m2_elastic_net"]["grid"])
+        for error, status in ((NotConverged("slow path"), "not_converged"), (NotEstimable("singular design"), "not_estimable")):
+
+            def failing(self: Any, design: Any, y: Any, error: Exception = error) -> Any:
+                raise error
+
+            with libraries(), patch.object(ElasticRegressor, "fit", failing):
+                result = suite.fit_slot(wide, "m2_elastic_net")
+            require(result.status == status, f"every {status} option was reported as {result.status}: {result.reason}")
+            tuning = result.details.get("tuning", [])
+            require(len(tuning) == len(options), f"the {status} failure lost the tuning audit: {result.details}")
+            require(all(record["status"] == status and str(error) in record["reason"] for record in tuning), f"an option lost its reason: {tuning}")
+            require([record["parameters"] for record in tuning] == list(options), f"the options are not recorded in order: {tuning}")
+
     def rq1_comparison_runs_after_a_failed_full_fit() -> None:
         wide = flagged_request()
         full = tuple(reference for reference in wide.feature_lists["m2_elastic_net"] if reference != wide.cmi_reference)
@@ -1656,6 +1676,23 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require(result.status == "not_estimable", f"the final fit was expected to fail: {result.status} {result.reason}")
         tuning = result.details.get("tuning", [])
         require(any(record["status"] == "fold_dropped" for record in tuning), f"the failure lost the tuning audit: {result.details}")
+
+    def panel_every_option_failing_keeps_the_option_reasons() -> None:
+        """Every grid option fails in the tuning folds, so the final fit never runs: the result still carries each option's reason in its tuning audit."""
+        from scripts.training.models.common import NotEstimable
+
+        changed = request(range(2018, 2023), 60)
+        options = suite._grid(changed.config["slots"]["m6_fixed_effects"]["grid"])
+        with libraries(), patch.object(panel, "native_fits", side_effect=NotEstimable("singular within design")):
+            result = suite.fit_slot(changed, "m6_fixed_effects")
+        require(result.status == "not_estimable", f"every failing option was expected to leave m6 not estimable: {result.status} {result.reason}")
+        tuning = result.details.get("tuning", [])
+        require(len(tuning) == len(options), f"the failure lost the tuning audit: {result.details}")
+        require(
+            all(record["status"] == "not_estimable" and "singular within design" in record["reason"] for record in tuning),
+            f"an option lost its reason: {tuning}",
+        )
+        require([record["parameters"] for record in tuning] == list(options), f"the options are not recorded in order: {tuning}")
 
     def panel_with_few_clusters_reports_the_tested_slopes() -> None:
         changed = panel_with(range(2019, 2023), 40, late=lambda row: None)
@@ -3140,6 +3177,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("elastic_net_fits_each_fold_on_its_fitting_labels", elastic_net_fits_each_fold_on_its_fitting_labels),
         ("elastic_net_selects_the_lowest_validation_error", elastic_net_selects_the_lowest_validation_error),
         ("rq1_comparison_keeps_the_restricted_fits_status", rq1_comparison_keeps_the_restricted_fits_status),
+        ("elastic_every_option_failing_keeps_the_option_reasons", elastic_every_option_failing_keeps_the_option_reasons),
         ("rq1_comparison_runs_after_a_failed_full_fit", rq1_comparison_runs_after_a_failed_full_fit),
         ("six_slot_caller_and_repeatability", complete_suite),
         ("rank_deficient_ols", collinear_ols),
@@ -3176,6 +3214,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("panel_tuning_with_every_fold_short_takes_the_first_option", panel_tuning_with_every_fold_short_takes_the_first_option),
         ("panel_tuning_skips_a_fold_with_no_repeated_hospital", panel_tuning_skips_a_fold_with_no_repeated_hospital),
         ("panel_failure_keeps_the_tuning_audit", panel_failure_keeps_the_tuning_audit),
+        ("panel_every_option_failing_keeps_the_option_reasons", panel_every_option_failing_keeps_the_option_reasons),
         ("panel_with_few_clusters_reports_the_tested_slopes", panel_with_few_clusters_reports_the_tested_slopes),
         ("panel_selection_is_in_the_run_result", panel_selection_is_in_the_run_result),
         ("panel_without_repeated_hospitals_stays_not_estimable", panel_without_repeated_hospitals_stays_not_estimable),

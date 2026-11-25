@@ -9,7 +9,7 @@ import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -149,6 +149,14 @@ def _fit_pipeline(request: ModelRequest, slot: str, parameters: Mapping[str, Any
     return pipeline, sample
 
 
+class _TuningFailed(Exception):
+    """Every retained tuning option failed: the slot's status and reason, and the tuning audit with each option's reason."""
+
+    def __init__(self, status: Literal["not_converged", "not_estimable"], reason: str, audit: list[dict[str, Any]]) -> None:
+        super().__init__(reason)
+        self.status, self.reason, self.audit = status, reason, audit
+
+
 def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     config = request.config["slots"][slot]
     options = _grid(config["check"]["grid"] if forest else config["grid"])
@@ -235,8 +243,8 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     if best is None:
         reason = audit[0]["reason"]
         if all(record["status"] == "not_converged" for record in audit):
-            raise NotConverged(f"no tuning configuration converged: {reason}")
-        raise NotEstimable(f"no tuning configuration completed every fitting fold: {reason}")
+            raise _TuningFailed("not_converged", f"no tuning configuration converged: {reason}", [*audit, *dropped])
+        raise _TuningFailed("not_estimable", f"no tuning configuration completed every fitting fold: {reason}", [*audit, *dropped])
     return options[best[1]], [*audit, *dropped]
 
 
@@ -249,7 +257,10 @@ def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Datas
         holdout = holdout.subset(positions)
         if not training.rows or not holdout.rows:
             raise NotEstimable("mixed model has no ownership-eligible training or holdout windows")
-    parameters, audit = _tune(request, slot, forest, training)
+    try:
+        parameters, audit = _tune(request, slot, forest, training)
+    except _TuningFailed as failure:
+        return SlotResult(slot, failure.status, failure.reason, details={"tuning": failure.audit})
     try:
         pipeline, sample = _fit_pipeline(request, slot, parameters, forest, training)
     except NotConverged as error:
