@@ -1252,6 +1252,7 @@ def a_malformed_role_answer_after_a_write_says_what_was_changed() -> None:
 
 
 HOLDERS_PATH = "/api/3.0/mlflow/roles/users/list"
+USER_PATH = "/api/2.0/mlflow/users/get"
 PERMISSIONS_PATH = "/api/3.0/mlflow/users/current/permissions"
 
 
@@ -1277,6 +1278,15 @@ def a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant() -> Non
         ("an object instead of a list", {"assignments": {}}),
         ("an empty list", {"assignments": []}),
         ("a list of another user only", {"assignments": [{"id": 105, "role_id": 2, "user_id": 9}]}),
+        ("a row for another role that names the reader", {"assignments": [{"id": 102, "role_id": 99, "user_id": 2}]}),
+        ("a row without a role ID", {"assignments": [{"id": 102, "user_id": 2}]}),
+        ("a row with a Boolean role ID", {"assignments": [{"id": 102, "role_id": True, "user_id": 2}]}),
+        ("a row with a text role ID", {"assignments": [{"id": 102, "role_id": "2", "user_id": 2}]}),
+        ("a row without its own ID", {"assignments": [{"role_id": 2, "user_id": 2}]}),
+        (
+            "the reader's row beside a row for another role",
+            {"assignments": [{"id": 102, "role_id": 2, "user_id": 2}, {"id": 103, "role_id": 99, "user_id": 5}]},
+        ),
         ("a list of a Boolean", {"assignments": [{"id": 105, "role_id": 2, "user_id": True}]}),
         ("a list that is not a list of rows", {"assignments": [5]}),
     ):
@@ -1285,6 +1295,55 @@ def a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant() -> Non
         require(registry.rows[("experiment", "7")] == ("MANAGE", "__user_2__"), f"{label}: the grant that user 5 shares is intact")
     control = shared()
     stops("the real holder list", control, "also held by other users", "other_user")
+
+
+def a_reply_shape_that_the_roles_query_did_not_establish_authorizes_no_removal() -> None:
+    """A removal is by grant ID and takes the grant from every holder of its role. Every ID that reaches it must come from a row that the roles query tied to
+    the reader's own role: a grant row that names another role, or another user in place of the reader, is refused before any write."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    row = {"id": 7, "role_id": 2, "resource_type": "experiment", "resource_pattern": "7", "permission": "MANAGE"}
+    for label, changes in (
+        ("a grant row for another role", {"role_id": 99}),
+        ("a grant row without a role ID", {"role_id": None}),
+        ("a grant row with a Boolean role ID", {"role_id": True}),
+        ("a grant row with a text role ID", {"role_id": "2"}),
+    ):
+        grant = {key: value for key, value in {**row, **changes}.items() if value is not None}
+        document = {"roles": [{"id": 2, "name": "__user_2__", "permissions": [grant]}]}
+        registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
+        stops(label, registry, "roles of metadata_reader", "Nothing was changed", answers={ROLES_PATH: [(200, document), (200, document)]})
+        require(registry.administrator and not any("permissions/remove" in path for _, path in registry.calls), f"{label}: no write was sent")
+    other = {"user": {"id": 2, "username": "other_user"}}
+    registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
+    stops("a different user in place of the reader", registry, "different user", "Nothing was changed", answers={USER_PATH: [(200, other), (200, other)]})
+
+
+def an_invalid_field_in_a_permissions_row_after_a_write_says_what_was_changed() -> None:
+    """The registry sends each permission row with the text fields ``permission``, ``resource_type`` and ``resource_pattern``. A row with another type in one of
+    them is a malformed reply: a step failure that names the writes already done, never an uncaught error. A reply shape that no check foresaw and that raises
+    late is turned into the same step failure."""
+    require = base().require
+    good = {"permission": "READ", "resource_type": "experiment", "resource_pattern": "*"}
+    for label, row in (
+        ("permission that is an object", {**good, "permission": {}}),
+        ("resource_type that is a list", {**good, "resource_type": []}),
+        ("resource_pattern that is a number", {**good, "resource_pattern": 5}),
+        ("permission that is missing", {key: value for key, value in good.items() if key != "permission"}),
+    ):
+        registry, ssm = Registry(), FakeParameters()
+        code, out, err = run_setup(answering(registry, {PERMISSIONS_PATH: [(200, {"is_admin": False, "permissions": [row]})]}), ssm)
+        require(code == 1 and "permissions of metadata_reader" in err, (label, code, err))
+        require(
+            "Nothing was changed" not in err and "user created" in err and f"parameter {READER_PARAMETER} created" in err,
+            f"{label}: the writes are named: {err}",
+        )
+        values_absent(ssm, out, err)
+    registry, ssm = Registry(), FakeParameters()
+    with mock.patch.object(setup(), "reader_problem", side_effect=TypeError("unexpected shape")):
+        code, out, err = run_setup(registry, ssm)
+    require(code == 1 and "user created" in err and "already changed" in err, ("late failure", code, err))
+    require("Traceback" not in err and "unexpected shape" not in err, f"the message names no raw exception text: {err}")
 
 
 def a_malformed_permissions_reply_after_a_write_says_what_was_changed() -> None:
@@ -1355,5 +1414,7 @@ CASES = [
     a_malformed_role_answer_after_a_write_says_what_was_changed,
     a_holder_list_that_does_not_name_the_reader_removes_no_shared_grant,
     a_malformed_permissions_reply_after_a_write_says_what_was_changed,
+    a_reply_shape_that_the_roles_query_did_not_establish_authorizes_no_removal,
+    an_invalid_field_in_a_permissions_row_after_a_write_says_what_was_changed,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]

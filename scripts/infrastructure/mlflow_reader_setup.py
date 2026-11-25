@@ -89,6 +89,11 @@ def stored_reader_login(ssm: Any, name: str) -> tuple[str, bool]:
     return value, True
 
 
+def permission_row(row: Any) -> bool:
+    """A row of the permissions of a login as the registry sends it: the level, the resource type and the name pattern are text."""
+    return isinstance(row, dict) and all(isinstance(row.get(field), str) for field in ("permission", "resource_type", "resource_pattern"))
+
+
 def reader_permissions(client: Client, registry: str, reader: Mapping[str, str]) -> Mapping[str, Any]:
     """The permissions of the reader's own login. The registry always answers ``is_admin`` (a Boolean) and ``permissions`` (a list of objects); any other
     answer to a request that it accepted is malformed and stops the step, so the writes done so far can be named."""
@@ -96,7 +101,7 @@ def reader_permissions(client: Client, registry: str, reader: Mapping[str, str])
     if status != 200 or not isinstance(permissions, dict):
         raise StepFailed(f"the registry answered HTTP {status} to the login of {READER}")
     rows = permissions.get("permissions")
-    if not isinstance(permissions.get("is_admin"), bool) or not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+    if not isinstance(permissions.get("is_admin"), bool) or not isinstance(rows, list) or not all(permission_row(row) for row in rows):
         raise StepFailed(f"the registry answered HTTP {status} when the permissions of {READER} were read, but the answer is not a list of permissions")
     return permissions
 
@@ -117,6 +122,8 @@ def reader_identity(client: Client, registry: str, admin: Mapping[str, str]) -> 
     user = answer.get("user") if isinstance(answer, dict) else None
     if status != 200 or not isinstance(user, dict) or not is_id(user.get("id")):
         raise StepFailed(f"the registry answered HTTP {status} without a user ID when {READER} was read")
+    if user.get("username") != READER:
+        raise StepFailed(f"the registry answered with a different user when {READER} was read, so its ID is not the reader's")
     return int(user["id"])
 
 
@@ -145,6 +152,12 @@ def unassign_other_holder(names: Mapping[int, str], user_id: int, role_id: Any) 
     return f"user ID {user_id} (the registry gave no name for it; look up its username, then unassign role_id {role_id} from that user)"
 
 
+def holder_row(item: Any, role_id: int) -> bool:
+    """A holder row as the registry sends it: its ID, the ID of the role that was asked for and the ID of the user, all whole numbers. The registry lists the
+    holders of one role, so a row for another role cannot come from a consistent answer and proves nothing about the role that is about to lose a grant."""
+    return isinstance(item, dict) and is_id(item.get("id")) and is_id(item.get("user_id")) and is_id(item.get("role_id")) and item["role_id"] == role_id
+
+
 def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mapping[str, str], roles: list[dict[str, Any]], user_id: int) -> None:
     """Stop unless every role of the reader is its own synthetic role and no other user holds that role. It writes nothing itself.
 
@@ -161,15 +174,11 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
         query = urllib.parse.urlencode({"role_id": role["id"]})
         status, holders = client.call("GET", f"{registry}/api/3.0/mlflow/roles/users/list?{query}", admin)
         rows = holders.get("assignments") if status == 200 and isinstance(holders, dict) else None
-        assigned = (
-            {item["user_id"] for item in rows}
-            if isinstance(rows, list) and rows and all(isinstance(item, dict) and is_id(item.get("user_id")) for item in rows)
-            else None
-        )
+        assigned = {item["user_id"] for item in rows} if isinstance(rows, list) and rows and all(holder_row(item, role["id"]) for item in rows) else None
         if assigned is None or user_id not in assigned:
             raise StepFailed(
-                f"the registry answered HTTP {status} when the holders of the role {own} were listed, but the answer is not a list that names {READER}. "
-                "A grant is removed for every holder of its role"
+                f"the registry answered HTTP {status} when the holders of the role {own} were listed, but the answer is not a list of holders of that "
+                f"role that names {READER}. A grant is removed for every holder of its role"
             )
         others = sorted(user for user in assigned if user != user_id)
         if others:
@@ -181,17 +190,13 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
 
 
 def well_formed_role(role: Any) -> bool:
-    """A role entry that the checks can use: an integer ID, a name and a list of permission rows (integer ID, level, type and pattern each)."""
+    """A role entry that the checks can use: an integer ID, a name and a list of permission rows. Each row carries its own integer ID, the ID of this role (a
+    grant is removed by its ID, so a row that names another role would take that role's grant away), and the level, type and pattern as text."""
     if not isinstance(role, dict) or not is_id(role.get("id")) or not isinstance(role.get("name"), str):
         return False
     rows = role.get("permissions")
     return isinstance(rows, list) and all(
-        isinstance(row, dict)
-        and is_id(row.get("id"))
-        and isinstance(row.get("permission"), str)
-        and isinstance(row.get("resource_type"), str)
-        and isinstance(row.get("resource_pattern"), str)
-        for row in rows
+        permission_row(row) and is_id(row.get("id")) and is_id(row.get("role_id")) and row["role_id"] == role["id"] for row in rows
     )
 
 
@@ -319,9 +324,10 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, http: Http = htt
         if created:
             changed.append(f"parameter {environment.get('READER_PARAMETER', READER_PARAMETER)} created")
         ensure_reader(client, registry, admin, stored, changed)
-    except StepFailed as error:
+    except (StepFailed, TypeError, ValueError, KeyError, AttributeError, LookupError) as error:
+        cause = error if isinstance(error, StepFailed) else "a reply of the registry has a shape that the setup does not handle"
         done = f". The setup stopped part way and had already changed: {'; '.join(changed)}" if changed else ""
-        sys.stderr.write(f"mlflow_reader_setup: {error}{done}\n")
+        sys.stderr.write(f"mlflow_reader_setup: {cause}{done}\n")
         return 1
     sys.stdout.write(f"mlflow_reader_setup: {'; '.join(changed) if changed else 'unchanged'}\n")
     return 0
