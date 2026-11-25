@@ -1617,6 +1617,28 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         require(any(reference.endswith(":late") for reference in kept[0]["selected_references"]), "validation rows removed a predictor the fitting rows keep")
         require(kept[0]["fitting_rows"] == 180, "validation rows changed which fitting rows are complete")
 
+    def panel_tuning_drops_a_fold_that_loses_a_fitting_year() -> None:
+        """Training years 2018 to 2022: the 2021 fold fits on 2018 to 2020, and complete cases remove 2018, leaving two years; the 2022 fold keeps three."""
+        changed = panel_with(range(2018, 2024), 60, early=lambda row: None if row["window_year"] == 2018 else value_of(row))
+        result = fit_m6(changed)
+        require(result.status == "fitted", f"a short first fold stopped the m6 tuning: {result.status} {result.reason}")
+        tuning = result.details["tuning"]
+        fitted = [record for record in tuning if record["status"] == "fitted"]
+        require(len(fitted) == 1 and [fold["fitting_rows"] for fold in fitted[0]["folds"]] == [180], f"the later fold did not tune: {tuning}")
+        (dropped,) = [record for record in tuning if record["status"] == "fold_dropped"]
+        require(dropped["validation_year"] == 2021 and dropped["fitting_years"] == 2, f"the dropped fold is not recorded with its year and count: {dropped}")
+        require("at least 3 fitting years" in dropped["reason"], f"the dropped fold does not give its reason: {dropped}")
+
+    def panel_tuning_with_every_fold_short_takes_the_first_option() -> None:
+        """Training years 2018 to 2021 give one fold, and it loses 2018: the first option stands with a not_estimable record, and the final fit still runs."""
+        changed = panel_with(range(2018, 2023), 60, early=lambda row: None if row["window_year"] == 2018 else value_of(row))
+        result = fit_m6(changed)
+        require(result.status == "fitted", f"every short fold stopped the m6 fit: {result.status} {result.reason}")
+        tuning = result.details["tuning"]
+        require(tuning[0]["status"] == "not_estimable" and "no time-ordered validation fold" in tuning[0]["reason"], f"wrong first tuning record: {tuning}")
+        (dropped,) = [record for record in tuning if record["status"] == "fold_dropped"]
+        require(dropped["validation_year"] == 2021 and dropped["fitting_years"] == 2, f"the dropped fold is not recorded: {dropped}")
+
     def panel_with_few_clusters_reports_the_tested_slopes() -> None:
         changed = panel_with(range(2019, 2023), 40, late=lambda row: None)
         result = fit_m6(changed)
@@ -3132,6 +3154,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("panel_drops_a_mostly_missing_predictor", panel_drops_a_mostly_missing_predictor),
         ("panel_final_fit_selects_before_complete_cases", panel_final_fit_selects_before_complete_cases),
         ("panel_fold_selection_ignores_validation_rows", panel_fold_selection_ignores_validation_rows),
+        ("panel_tuning_drops_a_fold_that_loses_a_fitting_year", panel_tuning_drops_a_fold_that_loses_a_fitting_year),
+        ("panel_tuning_with_every_fold_short_takes_the_first_option", panel_tuning_with_every_fold_short_takes_the_first_option),
         ("panel_with_few_clusters_reports_the_tested_slopes", panel_with_few_clusters_reports_the_tested_slopes),
         ("panel_selection_is_in_the_run_result", panel_selection_is_in_the_run_result),
         ("panel_without_repeated_hospitals_stays_not_estimable", panel_without_repeated_hospitals_stays_not_estimable),

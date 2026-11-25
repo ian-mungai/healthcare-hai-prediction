@@ -164,6 +164,7 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
     if not folds:
         return options[0], [{"status": "not_estimable", "reason": "no time-ordered validation fold after three fitting years"}]
     cached: list[tuple[Prepared, Array, Prepared, Array, dict[str, Any]]] = []
+    dropped: list[dict[str, Any]] = []
     for left, right in folds:
         request.deadline.check()
         fitting, validation = training.subset(left), training.subset(right)
@@ -171,6 +172,13 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
         if slot == "m6_fixed_effects":
             sample = _panel_rows(request, fitting)
             fitting, features = sample.data, sample.features
+            years = len({row["window_year"] for row in fitting.rows})
+            if years < MINIMUM_FITTING_YEARS:
+                reason = f"panel requires at least {MINIMUM_FITTING_YEARS} fitting years after the complete-case and repeated-hospital filters, found {years}"
+                dropped.append(
+                    {"status": "fold_dropped", "validation_year": max(row["window_year"] for row in validation.rows), "fitting_years": years, "reason": reason}
+                )
+                continue
         prepare = _pipeline(request, slot, options[0], forest, features).named_steps["prepare"]
         fitting_design = prepare.fit_transform(fitting.rows)
         validation_design = prepare.transform(validation.rows)
@@ -184,6 +192,11 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
         }
         cached.append((fitting_design, fitting.y, validation_design, validation.y, record))
         request.deadline.check()
+    if not cached:
+        return options[0], [
+            {"status": "not_estimable", "reason": "no time-ordered validation fold keeps three fitting years after the panel filters"},
+            *dropped,
+        ]
     audit: list[dict[str, Any]] = []
     best: tuple[float, int] | None = None
     for index, parameters in enumerate(options):
@@ -220,7 +233,7 @@ def _tune(request: ModelRequest, slot: str, forest: bool, training: Dataset) -> 
         if all(record["status"] == "not_converged" for record in audit):
             raise NotConverged(f"no tuning configuration converged: {reason}")
         raise NotEstimable(f"no tuning configuration completed every fitting fold: {reason}")
-    return options[best[1]], audit
+    return options[best[1]], [*audit, *dropped]
 
 
 def _fit_slot(request: ModelRequest, slot: str, forest: bool, parts: tuple[Dataset, Dataset] | None = None) -> SlotResult:
