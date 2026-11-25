@@ -1080,12 +1080,30 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
     require(code == 0 and "unchanged" in out and len(writes(own)) == again, (code, out, err))
 
 
-def stops(label: str, registry: Registry, *said: str) -> str:
+def answering(registry: Registry, answers: Mapping[str, list[Any]]) -> Callable[..., tuple[int, Any]]:
+    """The registry, except that the next GET of each listed path answers the scripted value (an ``(HTTP status, document)`` pair, or an exception to raise)."""
+    queues = {path: list(items) for path, items in answers.items()}
+
+    def http(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
+        response = registry(method, url, headers, body)
+        if method == "GET":
+            for path, queue in queues.items():
+                if path in url and queue:
+                    found = queue.pop(0)
+                    if isinstance(found, Exception):
+                        raise found
+                    return found
+        return response
+
+    return http
+
+
+def stops(label: str, registry: Registry, *said: str, answers: Mapping[str, list[Any]] | None = None) -> str:
     """The setup stops with exit 1 and has written nothing to the registry or Parameter Store; returns the error text."""
     require = base().require
     ssm = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
     before = (dict(registry.rows), registry.reader_login, registry.administrator, dict(ssm.values))
-    code, out, err = run_setup(registry, ssm)
+    code, out, err = run_setup(registry if answers is None else answering(registry, answers), ssm)
     require(code == 1 and all(text in err for text in said), (label, code, err))
     require(not any(call[0] in ("POST", "PATCH", "DELETE") for call in registry.calls), f"{label}: a write reached the registry")
     require((dict(registry.rows), registry.reader_login, registry.administrator, dict(ssm.values)) == before and not ssm.puts, f"{label}: state changed")
@@ -1141,6 +1159,98 @@ def a_role_list_that_is_not_a_list_of_well_formed_roles_is_refused_not_read_as_e
     require(code == 0, f"an empty list of roles is a valid answer: {(code, err)}")
 
 
+ROLES_PATH = "/api/3.0/mlflow/users/roles/list"
+USERS_PATH = "/api/2.0/mlflow/users/list"
+
+
+def an_unnamed_holder_never_gets_an_executable_unassign_call() -> None:
+    """Only a username that the registry returned for the holder's own ID, as a non-empty text, appears in an unassign call, which is valid JSON. Any other
+    answer of the user list (an error, a transport failure, a null or empty name, a Boolean ID, a list that is not a list) names the user ID only."""
+    from scripts.infrastructure.openmetadata_raw_files import WriteFailed
+
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    extra = {("experiment", "7"): ("MANAGE", "__user_2__")}
+
+    def shared(name: str = "other_user") -> Registry:
+        return Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, other_users={5: name}, shared_with={"__user_2__": (5,)})
+
+    for label, answer in (
+        ("HTTP 500", (500, {})),
+        ("a transport failure", WriteFailed("the registry did not answer: TimeoutError")),
+        ("a null username", (200, {"users": [{"id": 5, "username": None}]})),
+        ("an empty username", (200, {"users": [{"id": 5, "username": ""}]})),
+        ("a number as the username", (200, {"users": [{"id": 5, "username": 7}]})),
+        ("a Boolean ID that equals the holder", (200, {"users": [{"id": True, "username": "wrong_user"}]})),
+        ("users that is a number", (200, {"users": 5})),
+        ("users that is an object", (200, {"users": {"id": 5, "username": "other_user"}})),
+        ("an answer that is not an object", (200, [])),
+    ):
+        registry = shared()
+        if label.startswith("a Boolean"):
+            registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra=extra, other_users={1: "wrong_user"}, shared_with={"__user_2__": (1,)})
+        holder = 1 if label.startswith("a Boolean") else 5
+        err = stops(label, registry, f"user ID {holder}", "Nothing was changed", answers={USERS_PATH: [answer]})
+        require("roles/unassign {" not in err and "wrong_user" not in err and "None" not in err, f"{label}: no executable call may be printed: {err}")
+    quoted = shared('review"holder\\path')
+    err = stops("a username with a quote and a backslash", quoted, "roles/unassign")
+    call = err[err.index("roles/unassign ") + len("roles/unassign ") : err.index(", then rerun")]
+    require(json.loads(call) == {"username": 'review"holder\\path', "role_id": 2}, f"the printed body must be valid JSON that carries the name: {call}")
+
+
+def a_boolean_is_not_an_integer_id() -> None:
+    """JSON booleans are Python integers, but the registry's IDs are whole numbers: a Boolean role, grant or user ID is a malformed answer, refused before
+    any write (the server reads the removal body with ``int(raw)``, so a Boolean would name grant 1)."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    grant = {"id": True, "role_id": 2, "resource_type": "experiment", "resource_pattern": "review", "permission": "EDIT"}
+    for label, document in (
+        ("a Boolean grant ID", {"roles": [{"id": 2, "name": "__user_2__", "permissions": [grant]}]}),
+        ("a Boolean role ID", {"roles": [{"id": True, "name": "__user_2__", "permissions": []}]}),
+    ):
+        registry = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
+        stops(label, registry, "roles of metadata_reader", answers={ROLES_PATH: [(200, document), (200, document)]})
+        require(registry.administrator, f"{label}: the administrator flag is untouched")
+        require(not any("permissions/remove" in path for _, path in registry.calls), f"{label}: no grant was removed")
+    unnamed = Registry(reader_login="Synthetic-Stored-1!", grants=every)
+    stops(
+        "a Boolean user ID",
+        unnamed,
+        "HTTP",
+        answers={"/api/2.0/mlflow/users/get": [(200, {"user": {"username": "metadata_reader"}}), (200, {"user": {"id": True, "username": "metadata_reader"}})]},
+    )
+    holders = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("experiment", "7"): ("MANAGE", "__user_2__")}, other_users={5: "other_user"})
+    stops("a Boolean holder ID", holders, "HTTP", answers={"/api/3.0/mlflow/roles/users/list": [(200, {"assignments": [{"user_id": True}]})]})
+
+
+def a_malformed_role_answer_after_a_write_says_what_was_changed() -> None:
+    """The no-change assurance belongs to the read-only check that runs before the first write. A malformed role answer after the user, the password or the
+    parameter was written names those writes and does not claim that nothing was changed."""
+    require = base().require
+    kinds = ("registered_model", "experiment", "logged_model")
+    # Before any write: a non-object answer in the preflight still says nothing was changed.
+    stops(
+        "a non-object preflight answer",
+        Registry(reader_login="Synthetic-Stored-1!", grants=kinds),
+        "HTTP 200",
+        "Nothing was changed",
+        answers={ROLES_PATH: [(200, [])]},
+    )
+    # After the parameter and the user were created: the first role read of the downgrade is malformed.
+    registry, ssm = Registry(), FakeParameters()
+    code, out, err = run_setup(answering(registry, {ROLES_PATH: [(200, {})]}), ssm)
+    require(code == 1 and "Nothing was changed" not in err, ("created", code, err))
+    require("user created" in err and f"parameter {READER_PARAMETER} created" in err and "already changed" in err, f"the earlier writes are named: {err}")
+    require(len(ssm.puts) == 1 and any(call[0] == "POST" for call in registry.calls), "the writes did happen")
+    values_absent(ssm, out, err)
+    # After the password was reset: the preflight read is valid and the downgrade read is malformed.
+    registry = Registry(reader_login="Synthetic-Old-1!", grants=kinds)
+    ssm = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+    code, out, err = run_setup(answering(registry, {ROLES_PATH: [(200, {"roles": []}), (200, {})]}), ssm)
+    require(code == 1 and "Nothing was changed" not in err and "password set to the stored value" in err, ("reset", code, err))
+    values_absent(ssm, out, err)
+
+
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
     require = base().require
     for default in ("USE", "EDIT"):
@@ -1184,5 +1294,8 @@ CASES = [
     the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_role_first,
     a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it,
     a_role_list_that_is_not_a_list_of_well_formed_roles_is_refused_not_read_as_empty,
+    an_unnamed_holder_never_gets_an_executable_unassign_call,
+    a_boolean_is_not_an_integer_id,
+    a_malformed_role_answer_after_a_write_says_what_was_changed,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]
