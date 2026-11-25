@@ -197,10 +197,9 @@ repos:
         entry: .venv/bin/python -m scripts.quality.lint_sources sql
         language: system
         pass_filenames: false
-        # It lints every tracked SQL file through the dbt project (models, macros, schema files, packages and the lint profile: all of dbt/ but the seed data,
-        # which a template never reads) with the .sqlfluff settings (the root file, any nested one and an ignore file) of the pinned install.
-        files: (\.sql$|(^|/)\.sqlfluff(ignore)?$|^dbt/|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
-        exclude: ^dbt/seeds/.*\.csv$
+        # It lints every tracked SQL file through the dbt project (its SQL and YAML: models, macros, schema files, packages and the lint profile; not the seed
+        # data or other files, which a template never reads) with the .sqlfluff settings (the root file, any nested one and an ignore file) of the pinned install.
+        files: (\.sql$|(^|/)\.sqlfluff(ignore)?$|^dbt/.*\.ya?ml$|^uv\.lock$|^scripts/quality/(lint_sources|install_sqlfluff)\.py$)
         stages: [pre-commit, manual]
       - id: ruff
         name: Every nonignored Python source passes Ruff and formatting
@@ -326,9 +325,9 @@ repos:
         entry: .venv/bin/python -m scripts.quality.model_metadata
         language: system
         pass_filenames: false
-        # It reads all of dbt/ (YAML, SQL, macros, seed names, project file), the gold contract, the two silver contracts that the deferral record is checked
+        # It reads dbt/'s YAML, SQL and macros, its seed names and project file, the gold contract, the two silver contracts that the deferral record is checked
         # against and the bronze table map.
-        files: ^(dbt/.*|data_contracts/lakehouse/(gold_contract|silver_publish|silver_columns)\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py))|uv\.lock|pyproject\.toml)$
+        files: ^(dbt/.*\.(ya?ml|sql|csv)|data_contracts/lakehouse/(gold_contract|silver_publish|silver_columns)\.json|config/lakehouse/bronze_tables\.json|scripts/(process\.py|quality/(model_metadata\.py|install_sqlfluff\.py|lock_env\.py))|uv\.lock|pyproject\.toml)$
         stages: [pre-commit, manual]
       - id: documentation-review
         name: All documentation reviewed for the staged revision

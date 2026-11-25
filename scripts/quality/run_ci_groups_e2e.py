@@ -5243,7 +5243,7 @@ MANUAL_FINGERPRINTS = {
     "docs-references": "6546547e6ece",
     "markdown-links": "8edd25262d5a",
     "markdownlint": "28a824e49edc",
-    "sqlfluff": "f22033de945f",
+    "sqlfluff": "df6218ca51e0",
     "ruff": "5f2147654150",
     "shell-syntax": "f63508f2a1fc",
     "shellcheck": "f0e1e106ec2c",
@@ -5254,7 +5254,7 @@ MANUAL_FINGERPRINTS = {
     "container-mounts": "8be103fa11d5",
     "gofmt": "de0cf2f5169c",
     "go-vet": "5bcd441b4c87",
-    "model-metadata": "394c86dd10a8",
+    "model-metadata": "3d8c0edf7a2b",
     "documentation-review-untracked": "83b7b0ce6039",
     "lint-settings": "60a35b84518b",
     "suppressions": "eda6794008b9",
@@ -5370,6 +5370,11 @@ COMMIT_PATH_INPUTS = {
         "pyproject.toml",
     ],
 }
+# Staged paths that a hook never reads, so they must not select it.
+COMMIT_PATH_NON_INPUTS = {
+    "sqlfluff": ["dbt/models/features/_feature_inputs.json", "dbt/seeds/acs_variable_map.csv"],
+    "model-metadata": ["dbt/models/features/_feature_inputs.json"],
+}
 # The hooks whose selection is "any staged path", which includes a symlink: pre-commit's default ``types: [file]`` leaves a symlink out.
 ANY_PATH_HOOKS = ("gitleaks-outgoing", "env-example", "orphan-files")
 
@@ -5390,6 +5395,11 @@ def hook_path_cases(document: dict[str, Any]) -> list[dict[str, Any]]:
         include, exclude = re.compile(str(found.get("files") or "")), re.compile(str(found.get("exclude") or "^$"))
         missed = [path for path in paths if not include.search(path) or exclude.search(path)]
         cases.append({"case": f"commit_hook_{name}_selects_its_inputs", "passed": not missed, "missed": missed})
+    for name, paths in COMMIT_PATH_NON_INPUTS.items():
+        found = hooks.get(name, {})
+        include, exclude = re.compile(str(found.get("files") or "")), re.compile(str(found.get("exclude") or "^$"))
+        extra = [path for path in paths if include.search(path) and not exclude.search(path)]
+        cases.append({"case": f"commit_hook_{name}_skips_files_it_never_reads", "passed": not extra, "selected": extra})
     for name in ANY_PATH_HOOKS:
         # The tags identify gives a symlink are {"symlink"} alone: a hook selects it only when every ``types`` entry is among them and ``types_or`` names one.
         found, tags = hooks.get(name, {}), {"symlink"}
