@@ -5328,12 +5328,43 @@ PLANTED_REGRESSIONS = [
             for case in CASES
             if case.hook == IMPORTERS_HOOK
             and not case.expect_pass
+            and "pending file" not in case.name
             and case.name not in ("changed file has a type error", "function removed, same-name re-export in the package")
         ],
         IMPORTERS_COMMAND,
         "scripts/quality/typecheck_importers.py",
         "importing_files(root, base, [*present, *gone])",
         "importing_files(root, base, [])",
+        0,
+    ),
+    (
+        "changed dependency-bound files are checked",
+        [
+            case
+            for case in CASES
+            if case.hook == IMPORTERS_HOOK
+            and not case.expect_pass
+            and case.name in ("staged pending file has a type error", "staged importer of a pending file has a type error")
+        ],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "pending = sorted({path for path in [*changed, *chain] if path in waiting})",
+        "pending = []",
+        0,
+    ),
+    (
+        "dependency-bound importers are checked at any depth",
+        [
+            case
+            for case in CASES
+            if case.hook == IMPORTERS_HOOK
+            and not case.expect_pass
+            and case.name in ("function removed, importer is a pending file", "staged pending file changes a type that a second-level pending importer uses")
+        ],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "chain = importing_files(root, base, [*present, *gone], transitive=True) if waiting else []",
+        "chain = []",
         0,
     ),
     (
