@@ -1,4 +1,5 @@
--- A code or measure with more than one distinct published label needs a row in identity_splits: no multi-label key gets a default rule [940].
+-- A code or measure with more than one distinct label used for identity needs a row in identity_splits: no multi-label key gets a default rule [940].
+-- A reviewed alias row carries the label of its reviewed ID, so the name as published does not count here.
 with
 
 label_counts as (

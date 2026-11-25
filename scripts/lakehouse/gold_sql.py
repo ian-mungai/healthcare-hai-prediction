@@ -37,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple
 
@@ -2329,7 +2329,7 @@ def normalized_sql(sql: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
-def render_fact(macro_text: str, silver_model: str, grain: str, keys: Json, relations: dict[str, str]) -> str:
+def render_fact(macro_text: str, silver_model: str, grain: str, keys: Json, relations: dict[str, str], silver_columns: Iterable[str] = ()) -> str:
     """Render the actual gold_fact macro with contract arguments and the build's relation names; missing context fails closed."""
     # The dbt test blocks follow the macros in this file and are not part of the fact renderer.
     macros = macro_text.split("{% test ", 1)[0]
@@ -2347,7 +2347,7 @@ def render_fact(macro_text: str, silver_model: str, grain: str, keys: Json, rela
     macro = getattr(module, "gold_fact", None)
     if not isinstance(macro, Macro):
         raise PolicyError("gold_fact macro is absent from the contract macro file")
-    return str(macro(silver_model, grain, keys))
+    return str(macro(silver_model, grain, keys, list(silver_columns)))
 
 
 def analyze_fact(model: str, document: Json, policy: Policy, mapping: dict[str, tuple[str, str]], compiled: str | None, expected: str | None) -> Analysis:

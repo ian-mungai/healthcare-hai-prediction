@@ -69,6 +69,12 @@ class Fact:
     keys: tuple[SurrogateKey, ...]
     source_dates: tuple[str, ...]
     text_columns: tuple[str, ...]
+    silver_only: tuple[str, ...] = ()
+
+    @property
+    def kept_silver_columns(self) -> tuple[str, ...]:
+        """The silver columns an explicit projection names, in the contract's order; empty for a fact that keeps every silver column."""
+        return tuple(column.silver_column for column in self.columns) if self.silver_only else ()
 
     @property
     def is_hold(self) -> bool:
@@ -216,7 +222,18 @@ def load_contract(contract_path: Path = CONTRACT, silver_path: Path = SILVER_COL
     for name, entry in sorted(document["facts"].items()):
         columns = tuple(Column(item["name"], item["silver_column"], item["type"]) for item in entry["columns"])
         keys = tuple(SurrogateKey(key, item["dimension"], item["natural_key"]) for key, item in entry["surrogate_keys"].items())
-        facts.append(Fact(name, entry["silver_model"], entry["grain"], columns, keys, tuple(entry["source_dates"]), tuple(entry["published_text_columns"])))
+        facts.append(
+            Fact(
+                name,
+                entry["silver_model"],
+                entry["grain"],
+                columns,
+                keys,
+                tuple(entry["source_dates"]),
+                tuple(entry["published_text_columns"]),
+                tuple(entry.get("silver_only_columns", ())),
+            )
+        )
     tables = []
     for name, entry in sorted(document["dimensions_and_bridges"].items()):
         if name.startswith("dim_"):
@@ -236,8 +253,13 @@ def contract_problems(contract: Contract) -> list[str]:
             problems.append(f"{fact.name}: silver model {fact.silver_model} is not a kept silver model")
             continue
         mapped = [(column.silver_column, column.type) for column in fact.columns]
+        # A silver-only column stays in silver: it must be a silver column that no gold column maps.
+        silver_names = {name for name, _ in silver}
+        problems += [f"{fact.name}: silver-only column {name} is not a column of {fact.silver_model}" for name in fact.silver_only if name not in silver_names]
+        problems += [f"{fact.name}: silver-only column {name} is also a contract column" for name in fact.silver_only if name in {item for item, _ in mapped}]
+        carried = [(name, kind) for name, kind in silver if name not in fact.silver_only]
         # Column order in silver_columns.json is not binding (owner, A52 item 2): names and types are compared.
-        if sorted(mapped) != sorted(silver):
+        if sorted(mapped) != sorted(carried):
             problems.append(f"{fact.name}: contract columns differ from {fact.silver_model} in silver_columns.json")
         names = [column.name for column in fact.columns] + [key.name for key in fact.keys]
         if len(set(names)) != len(names):
@@ -840,7 +862,12 @@ def rendered_facts(contract: Contract, manifest: dict[str, Any], macro: Path = R
     text = macro.read_text()
     return {
         fact.name: gold_sql.render_fact(
-            text, fact.silver_model, fact.grain, {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}, relations
+            text,
+            fact.silver_model,
+            fact.grain,
+            {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys},
+            relations,
+            fact.kept_silver_columns,
         )
         for fact in contract.facts
     }

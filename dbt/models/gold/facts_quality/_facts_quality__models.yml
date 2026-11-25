@@ -55,8 +55,8 @@ models:
     description: >-
       Business process: Care Compare complications and deaths reporting. Grain: one row per hospital, measure and measurement window from the latest
       release. Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_complications_deaths_windows with every column
-      unchanged and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver
-      test assert_validation_values_cast covers the values.
+      unchanged except published_measure_name, which stays in silver, and one surrogate key per dimension it joins. The key is window_key. Published numbers
+      and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -826,8 +826,8 @@ models:
     description: >-
       Business process: Care Compare unplanned hospital visit reporting. Grain: one row per hospital, measure and measurement window from the latest
       release. Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_unplanned_visits_windows with every column unchanged
-      and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver test
-      assert_validation_values_cast covers the values.
+      except published_measure_name, which stays in silver, and one surrogate key per dimension it joins. The key is window_key. Published numbers and text
+      are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot

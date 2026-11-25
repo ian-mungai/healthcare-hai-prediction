@@ -1,24 +1,31 @@
-{% macro gold_fact(silver_model, grain, surrogate_keys) %}
+{% macro gold_fact(silver_model, grain, surrogate_keys, silver_columns=[]) %}
 {#-
-    The body of a gold fact: every column of the kept silver model unchanged and in its order, then one <dimension>_sk column per mapping in
-    surrogate_keys, in the order given. A mapping is {'<key name>': {'dimension': 'dim_x', 'natural_key': '<silver column>'}}, as in the gold
+    The body of a gold fact: every column of the kept silver model unchanged and in its order, then one <dimension>_sk column per mapping in surrogate_keys, in the order given. A mapping is
+    {'<key name>': {'dimension': 'dim_x', 'natural_key': '<silver column>'}}, as in the gold
     contract. The key is the md5 of the natural key's text, matched to the dimension's own surrogate key (the dimension named dim_x holds
     x_sk); a null or unmatched natural key takes the unknown member, md5('<unknown>') [745]. Each mapping joins its own alias, so one
     dimension can serve two keys (hospital_buyer_sk and hospital_seller_sk on dim_hospital). The join cannot add or drop rows because every
     dimension holds one row per surrogate key. grain is the silver unique key column: the model's tests check it, and the macro stops a build
-    that names none [743].
+    that names none [743]. A fact whose contract entry lists silver_only_columns names the silver columns it keeps in silver_columns (in the silver
+    model's order, the same as the contract's columns), so the columns that stay in silver are left out and the projection stays explicit.
 -#}
-{{- gold_fact_select(ref(silver_model), silver_model, grain, surrogate_keys) }}
+{{- gold_fact_select(ref(silver_model), silver_model, grain, surrogate_keys, silver_columns) }}
 {% endmacro %}
 
 
-{% macro gold_fact_select(source_relation, silver_model, grain, surrogate_keys) %}
+{% macro gold_fact_select(source_relation, silver_model, grain, surrogate_keys, silver_columns=[]) %}
 {#- The body of gold_fact over any relation; the key test gold_fact_keys feeds it a fixture relation to check the keys it emits [825]. -#}
 {%- if not grain %}
     {{- exceptions.raise_compiler_error('gold_fact(' ~ silver_model ~ '): the grain column is required') }}
 {%- endif %}
 select
+    {%- if silver_columns %}
+    {%- for column in silver_columns %}
+    silver.{{ column }}{{ ',' if not loop.last }}
+    {%- endfor %}
+    {%- else %}
     silver.*
+    {%- endif %}
     {%- for key_name, mapping in surrogate_keys.items() %}
     {%- if not key_name.endswith('_sk') or not mapping.dimension.startswith('dim_') or not mapping.natural_key or key_name == grain %}
     {{- exceptions.raise_compiler_error('gold_fact(' ~ silver_model ~ '): bad mapping ' ~ key_name) }}

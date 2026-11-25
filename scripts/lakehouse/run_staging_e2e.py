@@ -57,6 +57,7 @@ from scripts.lakehouse import (
     dbt_disabled_nodes,
     deferred_models,
     geography_file_periods,
+    gold_checks,
     ipps_file_labels,
     mmd_conditions,
     ownership_release_periods,
@@ -5227,12 +5228,18 @@ VALIDATION_ALIASES_SQL = (
     "UNION SELECT DISTINCT entity_id, measure_id, published_measure_id FROM int_cc_complications_deaths_windows WHERE measure_id <> published_measure_id "
     "ORDER BY ALL;"
 )
-# The measure name of each reviewed ID beside the name as published: an aliased row takes the name of its reviewed ID, so a measure keeps one name.
+# The measure name of each reviewed ID beside the name as published, per hospital and window and with null names kept: an aliased row takes the name of
+# its reviewed ID, so a measure keeps one name, and a window that loses its name shows.
 VALIDATION_LABELS_SQL = (
-    "SELECT DISTINCT 'visits', measure_id, published_measure_id, measure_name, published_measure_name FROM int_cc_unplanned_visits_windows "
-    "WHERE measure_id = 'OP_32' AND measure_name IS NOT NULL "
-    "UNION SELECT DISTINCT 'deaths', measure_id, published_measure_id, measure_name, published_measure_name FROM int_cc_complications_deaths_windows "
-    "WHERE measure_id IN ('PSI_90', 'PSI_13') AND measure_name IS NOT NULL ORDER BY ALL;"
+    "SELECT 'visits', entity_id, measure_id, published_measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(measure_name, ''), "
+    "coalesce(published_measure_name, '') FROM int_cc_unplanned_visits_windows WHERE measure_id = 'OP_32' "
+    "UNION ALL SELECT 'deaths', entity_id, measure_id, published_measure_id, window_start::VARCHAR, window_end::VARCHAR, coalesce(measure_name, ''), "
+    "coalesce(published_measure_name, '') FROM int_cc_complications_deaths_windows WHERE measure_id IN ('PSI_90', 'PSI_13') ORDER BY ALL;"
+)
+# The columns of the two gold facts built from the alias models, as the built relations hold them.
+GOLD_ALIAS_FACTS_SQL = (
+    "SELECT table_name, column_name, data_type FROM information_schema.columns "
+    "WHERE table_schema = 'main' AND table_name IN ('fct_complications_deaths_window', 'fct_unplanned_visits_window') ORDER BY table_name, ordinal_position;"
 )
 VALIDATION_HOLDS_SQL = (
     "SELECT bronze_table, coalesce(entity_id, ''), coalesce(measure_id, ''), hold_reason, row_count::VARCHAR FROM int_validation_window_holds ORDER BY ALL;"
@@ -5896,6 +5903,7 @@ def read_models(case: str) -> dict[str, Any]:
         "validation": [tuple(row) for row in duckdb_csv(database, VALIDATION_SQL)],
         "validation_aliases": [tuple(row) for row in duckdb_csv(database, VALIDATION_ALIASES_SQL)],
         "validation_labels": [tuple(row) for row in duckdb_csv(database, VALIDATION_LABELS_SQL)],
+        "gold_alias_facts": [tuple(row) for row in duckdb_csv(database, GOLD_ALIAS_FACTS_SQL)],
         "validation_holds": [tuple(row) for row in duckdb_csv(database, VALIDATION_HOLDS_SQL)],
         "validation_keys": [tuple(row) for row in duckdb_csv(database, D1_KEYS_SQL)],
         "validation_keys_partial_hold": [tuple(row) for row in duckdb_csv(database, PARTIAL_HOLD_KEYS_SQL)],
@@ -6512,13 +6520,29 @@ def validation_checks(base: dict[str, Any]) -> dict[str, bool]:
     # assert_multi_label_keys_have_rule needs no identity_splits row for them.
     checks["validation_alias_labels_match_expected"] = base.get("validation_labels") == sorted(
         [
-            ("visits", "OP_32", "OP-32", OP_32_NAME, OP_32_NAME),
-            ("visits", "OP_32", "OP_32", OP_32_NAME, OP_32_NAME),
-            ("deaths", "PSI_13", "PSI_13", PSI_13_NAME, PSI_13_NAME),
-            ("deaths", "PSI_13", "PSI_13_POST_SEPSIS", PSI_13_NAME, PSI_13_POST_SEPSIS_NAME),
-            ("deaths", "PSI_90", "PSI_90", PSI_90_NAME, PSI_90_NAME),
-            ("deaths", "PSI_90", "PSI_90_SAFETY", PSI_90_NAME, PSI_90_SAFETY_NAME),
+            ("visits", "010001", "OP_32", "OP_32", "2020-07-01", "2022-06-30", "", ""),
+            ("visits", "010001", "OP_32", "OP_32", "2021-01-01", "2021-12-31", "", ""),
+            ("visits", "010001", "OP_32", "OP_32", "2022-01-01", "2022-12-31", OP_32_NAME, OP_32_NAME),
+            ("visits", "010003", "OP_32", "OP-32", "2022-01-01", "2022-12-31", OP_32_NAME, OP_32_NAME),
+            ("deaths", "010001", "PSI_13", "PSI_13", "2022-01-01", "2022-12-31", PSI_13_NAME, PSI_13_NAME),
+            ("deaths", "010001", "PSI_90", "PSI_90", "2022-01-01", "2022-12-31", PSI_90_NAME, PSI_90_NAME),
+            ("deaths", "010003", "PSI_13", "PSI_13", "2019-01-01", "2019-12-31", PSI_13_NAME, PSI_13_NAME),
+            ("deaths", "010003", "PSI_13", "PSI_13_POST_SEPSIS", "2022-01-01", "2022-12-31", PSI_13_NAME, PSI_13_POST_SEPSIS_NAME),
+            ("deaths", "010003", "PSI_90", "PSI_90_SAFETY", "2019-01-01", "2019-12-31", PSI_90_NAME, PSI_90_SAFETY_NAME),
+            ("deaths", "010003", "PSI_90", "PSI_90_SAFETY", "2022-01-01", "2022-12-31", PSI_90_NAME, PSI_90_SAFETY_NAME),
         ]
+    )
+    # The two gold facts built from the alias models keep their gold contract: the published name stays in silver, so the built columns equal the
+    # contract's and the contract still reads as the silver model less its silver-only columns.
+    gold_contract = gold_checks.load_contract()
+    gold_columns: dict[str, list[tuple[str, str]]] = {}
+    for table, column, kind in base.get("gold_alias_facts") or []:
+        gold_columns.setdefault(table, []).append((column, kind))
+    alias_facts = [fact for fact in gold_contract.facts if fact.name in ("fct_complications_deaths_window", "fct_unplanned_visits_window")]
+    checks["gold_alias_facts_match_contract"] = (
+        len(alias_facts) == 2
+        and gold_checks.contract_problems(gold_contract) == []
+        and all(gold_checks.columns_match(fact, gold_columns.get(fact.name, [])) for fact in alias_facts)
     )
     checks["validation_holds_match_expected"] = base.get("validation_holds") == [
         ("cms_cc_complications_and_deaths_hospital", "010001", "MORT_30_HF", "repeated_in_file", "2"),

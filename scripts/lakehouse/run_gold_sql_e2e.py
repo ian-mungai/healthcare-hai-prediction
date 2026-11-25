@@ -2997,8 +2997,8 @@ def range_cases(contract: Any, aggregates: frozenset[str]) -> tuple[list[dict[st
     variant = macro.replace(anchor, anchor + addition)
     keys = {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}
     relations = {name: f'main."{name}"' for name in (fact.silver_model, *(key.dimension for key in fact.keys))}
-    rendered = gold_checks.gold_sql.render_fact(variant, fact.silver_model, fact.grain, keys, relations)
-    original = gold_checks.gold_sql.render_fact(macro, fact.silver_model, fact.grain, keys, relations)
+    rendered = gold_checks.gold_sql.render_fact(variant, fact.silver_model, fact.grain, keys, relations, fact.kept_silver_columns)
+    original = gold_checks.gold_sql.render_fact(macro, fact.silver_model, fact.grain, keys, relations, fact.kept_silver_columns)
     records = []
     edited = rendered.replace("silver.window_start >=", "silver.window_end >=", 1)
     for label, compiled, expectation, reject in (
@@ -3194,7 +3194,12 @@ def run(out: Path, proposals: Path | None = None, only_g4: bool = False) -> bool
         macro = (ROOT / "dbt/macros/gold_facts.sql").read_text()
         expected = {
             fact.name: gold_checks.gold_sql.render_fact(
-                macro, fact.silver_model, fact.grain, {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys}, relations
+                macro,
+                fact.silver_model,
+                fact.grain,
+                {key.name: {"dimension": key.dimension, "natural_key": key.natural_key} for key in fact.keys},
+                relations,
+                fact.kept_silver_columns,
             )
             for fact in contract.facts
         }

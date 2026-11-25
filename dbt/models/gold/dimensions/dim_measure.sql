@@ -334,7 +334,8 @@ names_published as (
 ),
 
 -- A measure published under more than one name keeps the name of its latest release (then the latest window, then the first name in order);
--- every published name stays on the fact rows (amendment A48).
+-- a measure that identity_splits splits keeps each published name on its fact rows (amendment A48). A reviewed alias row takes the name of its reviewed ID in
+-- silver, so these names are the names used for identity; the name as published stays in silver's published_measure_name.
 names as (
     select distinct on (fact, measure_key)
         fact,
