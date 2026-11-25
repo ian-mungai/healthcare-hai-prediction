@@ -52,8 +52,10 @@ class FakeTracker:
     stages: dict[int, Stage] = field(default_factory=dict)
     fail: bool = False
     stage_reads: list[int] = field(default_factory=list)
+    delay: float = 0.0
 
     def getJobIdsForGroup(self, jobGroup: str | None = None) -> list[int]:
+        time.sleep(self.delay)
         if self.fail:
             raise RuntimeError("py4j gone")
         return sorted(self.jobs)
@@ -264,6 +266,28 @@ def the_final_push_of_a_session_ends_within_the_budget(root: Path) -> dict[str, 
     }
 
 
+def a_slow_tracker_read_at_stop_ends_within_the_budget(root: Path) -> dict[str, bool]:
+    tracker = scenario()
+    with StandIn() as stand_in:
+        reporter = spark_progress.Reporter(
+            metrics_push.Pusher(stand_in.url, "bronze", "spark", request_timeout=0.5, total_timeout=0.5), spark_progress.Progress(tracker), interval=30.0
+        )
+        reporter.start()
+        deadline = time.monotonic() + 5
+        while RUNNING not in stand_in.groups and time.monotonic() < deadline:
+            time.sleep(0.02)
+        tracker.delay = 1.5
+        started = time.monotonic()
+        quiet(reporter.stop)
+        elapsed = time.monotonic() - started
+    return {
+        "stop ends within the push budget plus a margin although the tracker read takes 1.5 seconds": elapsed < 0.8,
+        "the final group carries the last reading the reporter had": set(stand_in.groups) == {FAILED}
+        and stand_in.value(FAILED, "hai_spark_jobs_failed") == 1.0,
+        "the reporter thread has ended": not any(thread.name == "spark_progress" for thread in threading.enumerate()),
+    }
+
+
 def catalog_and_phase_table_know_the_spark_group(root: Path) -> dict[str, bool]:
     return {
         "every metric is in the push catalog with no label": all(name in metrics_push.CATALOG and metrics_push.CATALOG[name][1] == () for name in NAMES),
@@ -283,5 +307,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "spark_a_failing_tracker_is_logged_once_and_the_reporter_goes_on": a_failing_tracker_is_logged_once_and_the_reporter_goes_on,
     "spark_start_only_for_bronze_with_an_address": start_only_for_bronze_with_an_address,
     "spark_the_final_push_of_a_session_ends_within_the_budget": the_final_push_of_a_session_ends_within_the_budget,
+    "spark_a_slow_tracker_read_at_stop_ends_within_the_budget": a_slow_tracker_read_at_stop_ends_within_the_budget,
     "spark_catalog_and_phase_table_know_the_spark_group": catalog_and_phase_table_know_the_spark_group,
 }

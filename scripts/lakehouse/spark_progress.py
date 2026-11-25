@@ -13,6 +13,7 @@ reached a final status is read once, so a total never falls when Spark forgets o
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import threading
 import time
@@ -24,6 +25,7 @@ from scripts import metrics_push
 JOB = "bronze"
 PHASE = "spark"
 JOIN_SHARE = 0.3
+POLL_SHARE = 0.3
 FINAL_STATUSES = ("SUCCEEDED", "FAILED")
 
 
@@ -102,6 +104,19 @@ class Reporter(threading.Thread):
             self.step()
             self.stopped.wait(self.interval)
 
+    def read_within(self, seconds: float) -> list[metrics_push.Sample] | None:
+        """One reading, or ``None`` when the tracker fails or does not answer in ``seconds``. A slow read runs on in a daemon thread that nothing waits for."""
+        found: list[list[metrics_push.Sample]] = []
+
+        def read() -> None:
+            with contextlib.suppress(Exception):
+                found.append(self.progress.poll())
+
+        reader = threading.Thread(target=read, name="spark_progress_stop_read", daemon=True)
+        reader.start()
+        reader.join(timeout=max(seconds, 0.0))
+        return found[0] if found else None
+
     def stop(self) -> None:
         """End the thread, push the totals under the final outcome and delete the running group. Safe to call again and never raises."""
         if self.finished:
@@ -112,10 +127,7 @@ class Reporter(threading.Thread):
             self.stopped.set()
             if self.is_alive():
                 self.join(timeout=self.pusher.budget() * JOIN_SHARE)
-            try:
-                samples = self.progress.poll()
-            except Exception:
-                samples = self.last
+            samples = self.read_within(min(ends - time.monotonic(), self.pusher.budget() * POLL_SHARE)) or self.last
             if samples:
                 failed = next((sample.value for sample in samples if sample.name == "hai_spark_jobs_failed"), 0)
                 self.pusher.push_samples("failed" if failed else "succeeded", samples, within=ends - time.monotonic())
