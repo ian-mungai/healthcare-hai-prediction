@@ -82,15 +82,20 @@ def test_the_commit_hook_selects_every_file_of_every_collector_closure() -> None
 def binding_names(source: str) -> set[str]:
     """The binding calls that a module makes, under any import alias: only a call counts. A called name resolves through its import
     (``from m import require_code as rc`` then ``rc()``) and a called attribute counts by its own name (``module.require_code()``, whatever the module's name).
-    An import, a re-export or a variable of the same name is no call, so it binds nothing."""
+    An import, a re-export or a variable of the same name is no call, so it binds nothing. A local name keeps every name it imports anywhere in the module,
+    so an import of the same alias in another function cannot hide a binding call."""
     tree = ast.parse(source)
-    imported = {alias.asname or alias.name: alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) for alias in node.names}
+    imported: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.setdefault(alias.asname or alias.name, set()).add(alias.name)
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name):
-            names.add(imported.get(node.func.id, node.func.id))
+            names.update(imported.get(node.func.id, {node.func.id}))
         elif isinstance(node.func, ast.Attribute):
             names.add(node.func.attr)
     return names & BINDING_CALLS
@@ -104,6 +109,8 @@ def binding_names(source: str) -> set[str]:
         "from scripts.acquisition.code_versions import collector_code_hashes as hashes, require_code as admit\nhashes()\n",
         "from scripts.acquisition import code_versions as versions\nversions.require_code()\n",
         "import scripts.acquisition.code_closure as closure\nclosure.closure_hashes('entry')\n",
+        "def check():\n    from scripts.acquisition.code_versions import require_code as validate\n    return validate()\n\n\n"
+        "def other():\n    from scripts.process import run_command as validate\n    return validate\n",
     ],
 )
 def test_a_binding_call_is_found_under_an_import_alias(source: str) -> None:
