@@ -153,12 +153,34 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
             )
 
 
+def well_formed_role(role: Any) -> bool:
+    """A role entry that the checks can use: an integer ID, a name and a list of permission rows (integer ID, level, type and pattern each)."""
+    if not isinstance(role, dict) or not isinstance(role.get("id"), int) or not isinstance(role.get("name"), str):
+        return False
+    rows = role.get("permissions")
+    return isinstance(rows, list) and all(
+        isinstance(row, dict)
+        and isinstance(row.get("id"), int)
+        and isinstance(row.get("permission"), str)
+        and isinstance(row.get("resource_type"), str)
+        and isinstance(row.get("resource_pattern"), str)
+        for row in rows
+    )
+
+
 def reader_roles(client: Client, registry: str, admin: Mapping[str, str]) -> list[dict[str, Any]]:
-    """The roles that the reader holds, with their permissions and IDs, read through the administrator."""
+    """The roles that the reader holds, with their permissions and IDs, read through the administrator.
+
+    An answer without a ``roles`` list, or with an entry that is not a well-formed role, is refused: it is never read as a reader with no roles."""
     status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
     if status != 200 or not isinstance(listing, dict):
         raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
-    return [role for role in listing.get("roles") or [] if isinstance(role, dict)]
+    roles = listing.get("roles")
+    if not isinstance(roles, list) or not all(well_formed_role(role) for role in roles):
+        raise StepFailed(
+            f"the registry answered HTTP {status} when the roles of {READER} were listed, but the answer is not a list of roles. Nothing was changed"
+        )
+    return roles
 
 
 def refuse_an_existing_reader_with_other_roles(client: Client, registry: str, admin: Mapping[str, str]) -> None:

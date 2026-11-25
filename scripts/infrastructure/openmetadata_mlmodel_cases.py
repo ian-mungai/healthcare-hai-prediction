@@ -1112,6 +1112,35 @@ def a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it() ->
     require('"username": "5"' not in err, err)
 
 
+def a_role_list_that_is_not_a_list_of_well_formed_roles_is_refused_not_read_as_empty() -> None:
+    """A 200 answer whose ``roles`` is missing, not a list or holds a malformed entry is refused with nothing changed, never read as an empty list."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    # Card 2: the role list of the reader answers 200 but is not a list of roles.
+    good = {"id": 2, "name": "__user_2__", "permissions": [], "workspace": "default"}
+    for label, document in (
+        ("no roles key", {}),
+        ("roles null", {"roles": None}),
+        ("roles an object", {"roles": {"id": 2}}),
+        ("an entry that is not an object", {"roles": ["__user_2__"]}),
+        ("an entry without a name", {"roles": [{"id": 2, "permissions": []}]}),
+        ("an entry without an ID", {"roles": [{"name": "__user_2__", "permissions": []}]}),
+        ("an entry with a text ID", {"roles": [{**good, "id": "2"}]}),
+        ("an entry with permissions that are not a list", {"roles": [{**good, "permissions": "READ"}]}),
+        ("a permission that is not an object", {"roles": [{**good, "permissions": ["READ"]}]}),
+        ("a permission without its ID", {"roles": [{**good, "permissions": [{"permission": "EDIT", "resource_type": "experiment", "resource_pattern": "7"}]}]}),
+        ("a good entry beside a bad one", {"roles": [good, {"name": "team_editors"}]}),
+    ):
+        malformed = Registry(reader_login="Synthetic-Stored-1!", grants=every, administrator=True)
+        malformed.roles_answer = document
+        stops(label, malformed, "roles of metadata_reader")
+        require(malformed.administrator, f"{label}: the administrator flag is untouched")
+    empty = Registry(reader_login="Synthetic-Stored-1!", grants=())
+    empty.roles_answer = {"roles": []}
+    code, out, err = run_setup(empty, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 0, f"an empty list of roles is a valid answer: {(code, err)}")
+
+
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
     require = base().require
     for default in ("USE", "EDIT"):
@@ -1154,5 +1183,6 @@ CASES = [
     the_setup_downgrades_an_elevated_reader_or_fails_naming_why,
     the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_role_first,
     a_failed_user_list_names_the_user_id_and_prints_no_unassign_call_for_it,
+    a_role_list_that_is_not_a_list_of_well_formed_roles_is_refused_not_read_as_empty,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]
