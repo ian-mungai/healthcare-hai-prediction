@@ -36,7 +36,7 @@ The E2E is `scripts/infrastructure/run_state_migration_e2e.py` (real Terraform a
 
 ## After the move
 
-Terraform empties the local `terraform.tfstate` and keeps the old content in `terraform.tfstate.backup`. When the file is a link, Terraform empties the file the link points to. The script's own copy of the state stays in `plans/state_migration/<stack>.local_state.json` (owner only). Two project tools still read the local file and break for a moved stack. `host_session` parses `infra/services/terraform.tfstate` as JSON, which fails on the empty file. `alert_email` (`state_addresses`, `alert_email.py:214`) treats an existing file as present (`is_file()`). It sees the empty `infra/alerts/terraform.tfstate` as a state and then runs `terraform state list` in the stack folder. It also treats a missing file as no state at all although the bucket holds one. The follow-up card "Local-state readers before the services and alerts state moves" covers both. Move the services and alerts stacks only after it is done.
+Terraform empties the local `terraform.tfstate` and keeps the old content in `terraform.tfstate.backup`. When the file is a link, Terraform empties the file the link points to. The script's own copy of the state stays in `plans/state_migration/<stack>.local_state.json` (owner only). Two project tools read a stack's state through Terraform (`terraform state pull`), so they work for a moved stack. `host_session` takes the serial of the services state from it. `alert_email` (`state_addresses`) takes the resources of the alerts state from it. An empty or missing local file counts as no state when the backend holds none. A state in the bucket counts when no local file exists.
 
 ## Rollback
 

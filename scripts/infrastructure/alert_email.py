@@ -30,7 +30,6 @@ from scripts.process import TimeoutExpired, run_command
 RECORD = Path("plans/alert_email")
 LOG = RECORD / "last_run.log"
 DIGEST_FILE = RECORD / "policy_digest.txt"
-STATE_FILE = Path("infra/alerts/terraform.tfstate")
 TIMEOUT_SECONDS = 600
 EXIT_STOPPED = 1
 EXIT_PENDING = 3
@@ -212,9 +211,15 @@ def subscription_status(config: Settings, subject: Subject, topic: str) -> Statu
 
 
 def state_addresses() -> set[str] | None:
-    """The resources of the alerts root state, or ``None`` when there is no state file. A resource other than the two subscriptions stops the step."""
-    if not STATE_FILE.is_file():
+    """The resources of the alerts root state, or ``None`` when there is no state. A resource other than the two subscriptions stops the step.
+
+    The state is read through Terraform (``state pull``), so a local file and a remote backend work alike. Terraform prints nothing for a stack with no state,
+    and for a local file that is empty, such as the one that ``init -reconfigure`` leaves after a move to the project bucket."""
+    pulled = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "pull"])
+    if not pulled.strip():
         return None
+    if not isinstance(read_json(Subject.STATE, pulled), dict):
+        raise Stop(Subject.STATE, Status.UNEXPECTED)
     listed = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"]).splitlines()
     if not set(listed) <= {ALERTS_ADDRESS, BUDGET_ADDRESS} or len(listed) != len(set(listed)):
         raise Stop(Subject.STATE, Status.UNEXPECTED)

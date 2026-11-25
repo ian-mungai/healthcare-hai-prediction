@@ -602,11 +602,55 @@ def teardown_cases(section: str, sink: list[str], helper: str) -> tuple[dict[str
         code, output, called = scratch.run(state)
         case(
             "a stack without a state file reports an absent state and succeeds",
-            code == 0 and output == "state: absent\n" and not first_call(called, "terraform"),
+            code == 0 and output == "state: absent\n" and first_call(called, "state pull") and not first_call(called, "state list"),
         )
         code, output, called = scratch.run(plan)
         calls += called
         case("a destroy plan without a state has nothing to do", code == 0 and output == "alerts: nothing to do\n")
+    # The state is read through Terraform, so a remote state without a local file counts and an empty local file is no state.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink, helper=helper)
+        managed(scratch)
+        (scratch.root / "infra/alerts/terraform.tfstate").unlink()
+        scratch.set(remote_state=True)
+        code, output, called = scratch.run(state)
+        calls += called
+        case(
+            "a remote state without a local state file reports both subscriptions in the state",
+            code == 0 and output == "alerts subscription: present\nbudget subscription: present\n",
+        )
+        code, output, called = scratch.run(plan)
+        calls += called
+        case(
+            "a remote state without a local state file gives a destroy plan with both subscriptions",
+            code == 0 and output == "alerts topic: planned\nbudget topic: planned\nalerts: planned\n",
+        )
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink, helper=helper)
+        (scratch.root / "infra/alerts/terraform.tfstate").write_text("")
+        code, output, called = scratch.run(state)
+        calls += called
+        case("an empty local state file with no remote state reports an absent state and succeeds", code == 0 and output == "state: absent\n")
+        code, output, called = scratch.run(plan)
+        calls += called
+        case("an empty local state file gives a destroy plan with nothing to do", code == 0 and output == "alerts: nothing to do\n")
+    for label, extra, words in (
+        ("a state that cannot be pulled", {"fail_state_pull": True}, ("state: failed\n",)),
+        ("a state pull that is not a state document", {"pull_raw": "not json"}, ("state: unexpected\n",)),
+    ):
+        for remote in (False, True):
+            with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+                scratch = Scratch(Path(folder), sink, helper=helper)
+                managed(scratch)
+                if remote:
+                    (scratch.root / "infra/alerts/terraform.tfstate").unlink()
+                scratch.set(remote_state=remote, **extra)
+                code, output, called = scratch.run(state)
+                calls += called
+                kind = "remote" if remote else "local"
+                case(f"{label} ({kind}) stops the state block with a status word", code == 1 and output in words)
+                code, output, called = scratch.run(plan)
+                case(f"{label} ({kind}) stops the destroy plan", code == 1 and len(scratch.read()["tf"]) == 2)
     for label, extra in (
         ("a failed state read (invalid state file)", {"fail_state_list": True}),
         ("a state that lists a resource with an address as its key", {"state_extra": 'aws_sns_topic_subscription.email["reviewer@example.org"]'}),

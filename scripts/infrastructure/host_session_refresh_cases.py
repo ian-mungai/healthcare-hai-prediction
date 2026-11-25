@@ -254,7 +254,8 @@ def status_without_a_missing_service_names_none() -> dict[str, bool]:
     return {"no service is reported absent": report.get("absent_services") == []}
 
 
-def the_services_state_serial_is_read_from_the_state_file() -> dict[str, bool]:
+def the_services_state_serial_is_read_through_terraform() -> dict[str, bool]:
+    """The serial comes from ``terraform state pull`` in the services folder, so a local file and a remote backend work alike. The local file is never read."""
     host_session = module()
     platform = {
         "cluster_name": {"value": CLUSTER},
@@ -267,31 +268,35 @@ def the_services_state_serial_is_read_from_the_state_file() -> dict[str, bool]:
         "one_shot_run_task": {"value": {key: {"task_definition": family} for key, family in FAMILIES.items()}},
     }
     directory = Path(tempfile.mkdtemp(prefix="host_session_state_"))
-    state = directory / "terraform.tfstate"
+    pulls: list[tuple[Path, list[str]]] = []
 
-    def serial() -> Any:
-        return host_session.services_state_serial(directory)
+    def serial(pull: Any) -> Any:
+        """The serial that ``load_names`` reports when ``state pull`` answers with ``pull`` (a document, or an error that it raises)."""
 
-    state.write_text(json.dumps({"version": 4, "serial": SERIAL, "lineage": "x"}), encoding="utf-8")
-    present = serial()
-    state.write_text(json.dumps({"serial": True}), encoding="utf-8")
-    boolean = serial()
-    state.write_text("not json", encoding="utf-8")
-    broken = serial()
-    state.unlink()
-    missing = serial()
-    state.write_text(json.dumps({"serial": SERIAL}), encoding="utf-8")
-    with (
-        mock.patch.object(host_session, "SERVICES_DIRECTORY", directory),
-        mock.patch.object(host_session, "terraform_document", lambda folder, *_, **__: platform if folder == host_session.PLATFORM_DIRECTORY else services),
-    ):
-        loaded = host_session.load_names({})
+        def terraform(folder: Path, arguments: list[str], *_: object, **__: object) -> dict[str, Any]:
+            if arguments[:2] == ["state", "pull"]:
+                pulls.append((folder, arguments))
+                if isinstance(pull, Exception):
+                    raise pull
+                return dict(pull)
+            return platform if folder == host_session.PLATFORM_DIRECTORY else services
+
+        with mock.patch.object(host_session, "SERVICES_DIRECTORY", directory), mock.patch.object(host_session, "terraform_document", terraform):
+            return host_session.load_names({}).state_serial
+
+    remote = serial({"version": 4, "serial": SERIAL, "lineage": "x"})
+    (directory / "terraform.tfstate").write_text(json.dumps({"serial": 1}), encoding="utf-8")
+    local = serial({"version": 4, "serial": SERIAL, "lineage": "x"})
+    boolean = serial({"serial": True})
+    text = serial({"serial": "241"})
+    unreadable = serial(host_session.ConfigurationError("The services state could not be read."))
     return {
-        "the serial of the state file is read": present == SERIAL,
-        "a serial that is not a number is unknown": boolean is None,
-        "an unreadable state file is unknown, not an error": broken is None,
-        "an absent state file is unknown, not an error": missing is None,
-        "the names carry the serial of the services directory": loaded.state_serial == SERIAL,
+        "a state with no local file (a remote backend) gives its serial": remote == SERIAL,
+        "terraform decides, not a local file that differs": local == SERIAL,
+        "a serial that is not a whole number is unknown": boolean is None and text is None,
+        "a state that cannot be read, or is empty, is unknown and not an error": unreadable is None,
+        "the state is pulled in the services folder": bool(pulls)
+        and all(folder == directory and arguments == ["state", "pull"] for folder, arguments in pulls),
     }
 
 
@@ -356,6 +361,6 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "refresh_refuses_a_service_that_ecs_does_not_have": refresh_refuses_a_service_that_ecs_does_not_have,
     "status_reports_an_absent_service_by_name": status_reports_an_absent_service_by_name,
     "status_without_a_missing_service_names_none": status_without_a_missing_service_names_none,
-    "the_services_state_serial_is_read_from_the_state_file": the_services_state_serial_is_read_from_the_state_file,
+    "the_services_state_serial_is_read_through_terraform": the_services_state_serial_is_read_through_terraform,
     "refresh_command_line": refresh_command_line,
 }

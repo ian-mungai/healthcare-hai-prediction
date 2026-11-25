@@ -6,12 +6,15 @@ JSON file (``STAND_IN_STATE``): the subscriptions that AWS holds per topic, the 
 subscription shows ``PendingConfirmation`` in a listing, as SNS does. The project user holds every action on the alert topics, so nothing is refused.
 
 A case can make one read return something else, as AWS or Terraform do: ``fail_list`` (every listing exits 255), ``list_raw`` (the listing prints that text),
-``fail_state_list`` (``terraform state list`` exits 1), ``state_extra`` (it also lists that resource), ``show_raw`` (``terraform show -json`` prints that text),
-``plan_extra`` (the saved plan also changes that address), ``alerts_output`` and ``budget_output`` (the platform and IAM topic outputs print that text),
+``fail_state_list`` (``terraform state list`` exits 1), ``fail_state_pull`` (``terraform state pull`` exits 1), ``pull_raw`` (it prints that text),
+``remote_state`` (the state lives in a remote backend: it is read with no local file), ``state_extra`` (``state list`` also lists that resource),
+``show_raw`` (``terraform show -json`` prints that text), ``plan_extra`` (the saved plan also changes that address),
+``alerts_output`` and ``budget_output`` (the platform and IAM topic outputs print that text),
 ``policy_steps`` (the SNS policy plan prints those step lines too), ``digest`` (it replaces the plan digest) and ``wrapper_fail`` (the wrapper prints that text
 to standard error and exits 1). The saved plan reads as Terraform prints it: ``plan_document`` builds the envelope of ``terraform show -json``, with the
 metadata and the plan structure of a supported plan and, when it has changes, ``resource_changes``. The alerts root has a state file
-(``infra/alerts/terraform.tfstate``) once an import or an apply created something, and ``state list`` without one exits 1 as Terraform does.
+(``infra/alerts/terraform.tfstate``) once an import or an apply created something. Without a state (no file, an empty file and no remote state) ``state pull``
+prints nothing and exits 0 and ``state list`` exits 1, as Terraform does.
 """
 
 from __future__ import annotations
@@ -45,6 +48,11 @@ def save(state: dict[str, Any]) -> None:
 def touch_state() -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text("{}\n")
+
+
+def holds_state(state: dict[str, Any]) -> bool:
+    """A remote state, or a local state file that is not empty: Terraform reads an empty file as no state."""
+    return bool(state.get("remote_state")) or (STATE_FILE.is_file() and STATE_FILE.stat().st_size > 0)
 
 
 def fail(message: str, code: int = 255) -> int:
@@ -132,8 +140,16 @@ def terraform(arguments: list[str], state: dict[str, Any]) -> int:
     if rest[:1] == ["init"]:
         sys.stdout.write("Terraform has been successfully initialized!\n")
         return 0
+    if rest == ["state", "pull"]:
+        if state.get("fail_state_pull"):
+            return fail("Error: Failed to load state: the state cannot be read", 1)
+        if holds_state(state):
+            sys.stdout.write(
+                state["pull_raw"] if state.get("pull_raw") is not None else json.dumps({"version": 4, "serial": 7, "lineage": "synthetic", "resources": []})
+            )
+        return 0
     if rest == ["state", "list"]:
-        if not STATE_FILE.is_file():
+        if not holds_state(state):
             return fail("No state file was found!", 1)
         if state.get("fail_state_list"):
             return fail("Error: Failed to read the local state: invalid state file format", 1)

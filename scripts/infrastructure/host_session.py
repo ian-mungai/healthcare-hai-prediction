@@ -6,10 +6,10 @@ Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.host_
 deadline and fails visibly. Output names no account ID and no ARN, and shows a provider reason only as a fixed category.
 
 ``refresh`` places new code on a host that is already on and redeploys every service. It never changes the desired capacity and never stops the host. The
-service and one-shot names come from the services state of the checkout it runs in (``infra/services/terraform.tfstate``). The state is a local file, so a
-checkout whose copy is older than the applied stack names fewer services than the stack has. Run ``refresh`` from the checkout that holds the newest
-services state; ``refresh`` and ``status`` print the serial of the state they read (``services_state: serial <n>``), and ``refresh`` refuses a name that
-ECS does not have.
+service and one-shot names come from the services state that Terraform reads in ``infra/services`` (``terraform output`` and ``terraform state pull``), so a
+local file and a remote backend work alike. With a local file, a checkout whose copy is older than the applied stack names fewer services than the stack has.
+Run ``refresh`` from the checkout that holds the newest services state; ``refresh`` and ``status`` print the serial of the state they read
+(``services_state: serial <n>``), and ``refresh`` refuses a name that ECS does not have.
 
 ``stop`` lists the running job tasks of the project first, as ``aws_tasks list`` does, and changes nothing while any runs: it refuses, or with
 ``--wait-seconds N`` polls every 15 seconds until none runs and refuses when the N seconds pass. ``--force-stop`` skips the check. A listing that fails
@@ -69,7 +69,6 @@ DEV_HOLD_SECONDS = 3600  # the default hold of a development session
 DEV_MAX_HOLD_SECONDS = 43200
 DEV_STOP_WAIT_SECONDS = 1800  # how long the end of a development session waits for a running job task
 PRODUCTION = "prod"
-STATE_FILE = "terraform.tfstate"
 MISSING = "MISSING"
 REGISTRATION_SECONDS = 600
 HOST_PREPARE_SECONDS = 600
@@ -386,13 +385,15 @@ def output_value(document: dict[str, Any], name: str, kind: type) -> Any:
     return value
 
 
-def services_state_serial(directory: Path) -> int | None:
-    """The serial of the local services state file in ``directory``, or None when the file is absent, unreadable or has no whole-number serial."""
+def services_state_serial(settings: dict[str, str], remaining: Callable[[], float] | None = None) -> int | None:
+    """The serial of the services state, read with ``terraform state pull`` in the services folder, so a local file and a remote backend work alike.
+
+    None when Terraform cannot read the state, prints nothing (no state, or an empty local file) or the document has no whole-number serial."""
     try:
-        document = json.loads((directory / STATE_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        document = terraform_document(SERVICES_DIRECTORY, ["state", "pull"], settings, "The services state could not be read.", **limit(remaining))
+    except ConfigurationError:
         return None
-    serial = document.get("serial") if isinstance(document, dict) else None
+    serial = document.get("serial")
     return serial if isinstance(serial, int) and not isinstance(serial, bool) else None
 
 
@@ -451,7 +452,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
                 *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP, MLFLOW_USER) if optional in one_shot),
             )
         },
-        state_serial=services_state_serial(SERVICES_DIRECTORY),
+        state_serial=services_state_serial(settings, remaining),
         reload=reload_task(jobs),
         host_address=address if isinstance(address, str) else "",
         log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
