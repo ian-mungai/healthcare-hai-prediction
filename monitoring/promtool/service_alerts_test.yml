@@ -1,7 +1,7 @@
 # promtool fixtures of the service alert rules. Native promtool is the authority for what each query returns; run them as a heavy run:
 #   promtool test rules monitoring/promtool/service_alerts_test.yml
 # in the pinned prom/prometheus image (infra/services/images.json) with this folder mounted read only. Each test feeds input series every 30 seconds and judges the
-# alerts at 60 minutes: an evaluation with exp_alerts must raise exactly that alert, one without must raise none. Missing samples are '_' and stale markers 'stale'.
+# alerts at 60 minutes: an evaluation with exp_alerts must raise exactly that alert, one without must raise none. The job_results_* tests feed one sample an hour and judge at 200 hours, because the rule looks at a 7 day age. Missing samples are '_' and stale markers 'stale'.
 rule_files:
 - service_alerts.yml
 evaluation_interval: 30s
@@ -447,3 +447,65 @@ tests:
     exp_alerts:
     - exp_labels:
         severity: warning
+
+- name: job_results_stale_host_on
+  interval: 1h
+  input_series:
+  - series: hai_job_finish_timestamp_seconds{job="silver",phase="build",model_set="none",job_type="dbt",outcome="succeeded"}
+    values: 0+0x200
+  - series: hai_host_instances
+    values: 1+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        job: silver
+- name: job_results_fresh_host_on
+  interval: 1h
+  input_series:
+  - series: hai_job_finish_timestamp_seconds{job="silver",phase="build",model_set="none",job_type="dbt",outcome="succeeded"}
+    values: 720000+0x200
+  - series: hai_host_instances
+    values: 1+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale
+- name: job_results_missing_host_on
+  interval: 1h
+  input_series:
+  - series: hai_host_instances
+    values: 1+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: job_results_stale_host_off
+  interval: 1h
+  input_series:
+  - series: hai_job_finish_timestamp_seconds{job="silver",phase="build",model_set="none",job_type="dbt",outcome="succeeded"}
+    values: 0+0x200
+  - series: hai_host_instances
+    values: 0+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale
+- name: job_results_stale_host_series_absent
+  interval: 1h
+  input_series:
+  - series: hai_job_finish_timestamp_seconds{job="silver",phase="build",model_set="none",job_type="dbt",outcome="succeeded"}
+    values: 0+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale
+- name: job_results_missing_host_off
+  interval: 1h
+  input_series:
+  - series: hai_host_instances
+    values: 0+0x200
+  alert_rule_test:
+  - eval_time: 200h
+    alertname: JobResultsStale

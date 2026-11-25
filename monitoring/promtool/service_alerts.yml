@@ -32,3 +32,7 @@ groups:
     expr: (grafana_alerting_scheduler_behind_seconds{job="grafana"} > bool 60) > 0
     labels:
       severity: warning
+  - alert: JobResultsStale
+    expr: ((((time() - max by (job) (hai_job_finish_timestamp_seconds)) > bool 604800) and on () (hai_host_instances > 0)) or on () (absent(hai_job_finish_timestamp_seconds) and on () (hai_host_instances > 0))) > 0
+    labels:
+      severity: warning
