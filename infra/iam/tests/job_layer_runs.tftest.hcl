@@ -170,12 +170,12 @@ run "only_features_may_apply_feast" {
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Condition.StringLike["s3:prefix"] == ["promote/models/*/"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[5].Action == ["s3:GetObject"] &&
-      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[5].Resource == [for name in ["online_hold.json", "online_release.json", "feast_materialize.json"] : "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/${name}"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[5].Resource == [for name in ["online_hold.json", "online_release.json", "feast_materialize.json", "feast_apply.json"] : "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/${name}"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Action == ["s3:ListBucket"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Condition.StringLike["s3:prefix"] == [for name in ["online_hold.json", "online_release.json", "feast_materialize.json"] : "lakehouse/layer_runs/features/*/${name}"]
     )
-    error_message = "The features role reads and writes the one Feast registry object, reads the one Redis password parameter, reads and lists the Production records under promote/production/ lists the promotion lease records of each model under promote/models/<model>/ and, for the release phase, reads and lists the hold, release and load records of a features run (online_hold.json, online_release.json and feast_materialize.json under lakehouse/layer_runs/features/) only. No other layer receives any of them."
+    error_message = "The features role reads and writes the one Feast registry object, reads the one Redis password parameter, reads and lists the Production records under promote/production/ lists the promotion lease records of each model under promote/models/<model>/ and, for the release phase, reads and lists the hold, release and load records of a features run (online_hold.json, online_release.json and feast_materialize.json under lakehouse/layer_runs/features/) and reads, without listing, the apply record of a run (feast_apply.json, so a retry of the Feast phase reads it back) only. No other layer receives any of them."
   }
 }
 

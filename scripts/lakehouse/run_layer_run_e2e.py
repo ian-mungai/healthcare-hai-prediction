@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import fnmatch
 import hashlib
 import importlib.util
 import io
@@ -28,6 +29,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from string import Template
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -1118,6 +1120,67 @@ def case_features_materialize_record_of_another_publication_is_not_uploaded(case
     require(materialize_key() not in STATE and materialize_key() not in [key for _, key in UPLOADS], "nothing of it is in the bucket")
 
 
+IAM_FOLDER = Path(__file__).resolve().parents[2] / "infra/iam"
+
+
+def features_role_statements() -> list[dict[str, Any]]:
+    """The statements of the features writer role that reach a run's records, rendered from the checked-in templates: the record names come from the
+    locals that ``job_writer.tf`` hands to the Feast policy, so a record the role cannot read stays unreadable here."""
+    terraform = (IAM_FOLDER / "job_writer.tf").read_text()
+    reads = re.search(r"^\s*RUN_RECORD_OBJECT_ARNS\s*=.*$", terraform, re.MULTILINE)
+    require(reads is not None, "job_writer.tf hands the Feast policy no RUN_RECORD_OBJECT_ARNS")
+    names: list[str] = []
+    for local in re.findall(r"local\.(\w+)", reads.group(0) if reads else ""):
+        listed = re.search(rf"^\s*{local}\s*=\s*(\[[^\]]*\])", terraform, re.MULTILINE)
+        names += json.loads(listed.group(1)) if listed else []
+    bucket_arn = f"arn:aws:s3:::{BUCKET}"
+    prefix = f"{bucket_arn}/lakehouse/layer_runs/features/"
+    feast = Template((IAM_FOLDER / "owner_policies/job_writer_features_feast.json").read_text()).substitute(
+        BUCKET_ARN=bucket_arn,
+        REGISTRY_OBJECT_ARNS="[]",
+        REDIS_PARAMETER_ARNS="[]",
+        PRODUCTION_OBJECT_ARNS="[]",
+        PRODUCTION_LIST_PREFIXES="[]",
+        LEASE_LIST_PREFIXES="[]",
+        RUN_RECORD_OBJECT_ARNS=json.dumps([f"{prefix}*/{name}" for name in names]),
+        RUN_RECORD_LIST_PREFIXES="[]",
+    )
+    activation = Template((IAM_FOLDER / "owner_policies/job_writer_features_activation.json").read_text()).substitute(
+        RUN_OBJECT_ARNS=json.dumps([prefix + "*"])
+    )
+    return [*json.loads(feast)["Statement"], *json.loads(activation)["Statement"]]
+
+
+def case_features_feast_phase_retry_runs_under_the_role_grants(case: Case) -> None:
+    statements = features_role_statements()
+    records = {apply_key(), materialize_key()}
+
+    def allowed(action: str, key: str) -> bool:
+        resource = f"arn:aws:s3:::{BUCKET}/{key}"
+        return any(action in item["Action"] and any(fnmatch.fnmatchcase(resource, pattern) for pattern in item["Resource"]) for item in statements)
+
+    real_put, real_get = FakeS3.put_object, FakeS3.get_object
+
+    def put(self: FakeS3, Bucket: str, Key: str, Body: Any, IfNoneMatch: str = "") -> dict[str, Any]:
+        if Key in records and not allowed("s3:PutObject", Key):
+            raise self.ClientError("AccessDenied")
+        return real_put(self, Bucket, Key, Body, IfNoneMatch)
+
+    def get(self: FakeS3, Bucket: str, Key: str) -> dict[str, Any]:
+        if Key in records and not allowed("s3:GetObject", Key):
+            raise self.ClientError("AccessDenied")
+        return real_get(self, Bucket, Key)
+
+    with mock.patch.object(FakeS3, "put_object", put), mock.patch.object(FakeS3, "get_object", get):
+        features_up_to(case, "feast")
+        require(case.phase("features", "feast") == 0, f"the first Feast phase runs under the role's grants: {case.err}")
+        kept = {key: STATE[key] for key in records}
+        require(case.phase("features", "feast") == 0, f"an identical retry of the Feast phase runs under the role's grants: {case.err}")
+    require({key: STATE[key] for key in records} == kept, "an identical retry changes neither record")
+    for key in records:
+        require([stored for _, stored in UPLOADS].count(key) == 1, f"{key} is written once")
+
+
 def case_features_apply_record_of_another_publication_is_not_uploaded(case: Case) -> None:
     features_up_to(case, "feast")
     FEAST_PUBLICATION[FEATURES_RUN] = OTHER_PUBLICATION
@@ -1717,6 +1780,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "features: the materialize record is kept and a same publication repeat changes nothing": case_features_materialize_record_is_write_once,
     "features: a materialize repeat of another publication is refused": case_features_rematerialize_of_another_publication_is_refused,
     "features: a materialize record of another publication is not uploaded": case_features_materialize_record_of_another_publication_is_not_uploaded,
+    "features: an identical retry of the Feast phase runs under the role's grants": case_features_feast_phase_retry_runs_under_the_role_grants,
     "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,

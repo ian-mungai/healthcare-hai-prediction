@@ -34,6 +34,7 @@ EXTRAS = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_ac
 PRODUCTION_PREFIX = "promote/production/"
 LEASE_PREFIX = "promote/models/"
 RUN_RECORDS = ("online_hold.json", "online_release.json", "feast_materialize.json")  # what the release phase reads of a features run (feast_sets)
+READBACK_RECORDS = ("feast_apply.json",)  # what the Feast phase reads back of its own run on a retry: a read and no list
 RUN_RECORD_PREFIX = "lakehouse/layer_runs/features/"
 POLICIES = (
     "job_writer_layer_storage",
@@ -225,9 +226,26 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             add(f"{layer} gold run record {name}", layer, "s3:GetObject", f"{BUCKET}/lakehouse/layer_runs/gold/run/{name}", False)
             add(f"{layer} gold run record list {name}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"lakehouse/layer_runs/gold/run/{name}",)})
             add(f"{layer} features run record lookalike {name}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/sub/{name}.old", False)
-        for other in ("commit.json", "features_snapshot.json", "gold_pins.json", "layer_run.json", "feast_apply.json"):
+        # The Feast phase puts the apply record once and, on a retry, reads the stored record back. The key exists then, so the role reads it and lists nothing.
+        for name in READBACK_RECORDS:
+            record, key = f"{BUCKET}/{RUN_RECORD_PREFIX}run/{name}", f"{RUN_RECORD_PREFIX}run/{name}"
+            add(f"{layer} features run readback get {name}", layer, "s3:GetObject", record, layer == "features")
+            add(f"{layer} features run readback list {name}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (key,)})
+            add(f"{layer} features run readback other bucket {name}", layer, "s3:GetObject", f"{OTHER_BUCKET}/{RUN_RECORD_PREFIX}run/{name}", False)
+            add(f"{layer} features run readback versions {name}", layer, "s3:GetObjectVersion", record, False)
+            add(f"{layer} gold run readback {name}", layer, "s3:GetObject", f"{BUCKET}/lakehouse/layer_runs/gold/run/{name}", False)
+            add(f"{layer} features run readback lookalike {name}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/sub/{name}.old", False)
+        for other in ("commit.json", "features_snapshot.json", "gold_pins.json", "layer_run.json"):
             add(f"{layer} features run record excludes {other}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/{other}", False)
             add(f"{layer} features run list excludes {other}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"{RUN_RECORD_PREFIX}run/{other}",)})
+        add(
+            f"{layer} features run list excludes feast_apply.json",
+            layer,
+            "s3:ListBucket",
+            BUCKET,
+            False,
+            {"s3:prefix": (f"{RUN_RECORD_PREFIX}run/feast_apply.json",)},
+        )
         for prefix in (RUN_RECORD_PREFIX, f"{RUN_RECORD_PREFIX}run/", "lakehouse/layer_runs/", "lakehouse/layer_runs/features"):
             add(f"{layer} features run folders are not listed {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
@@ -406,7 +424,7 @@ def render_documents(root: Path, base: dict[str, dict[str, Any]], bucket: str, c
         "PRODUCTION_OBJECT_ARNS": json.dumps([f"{bucket}/{PRODUCTION_PREFIX}*"]),
         "PRODUCTION_LIST_PREFIXES": json.dumps([f"{PRODUCTION_PREFIX}*"]),
         "LEASE_LIST_PREFIXES": json.dumps([f"{LEASE_PREFIX}*/"]),
-        "RUN_RECORD_OBJECT_ARNS": json.dumps([f"{bucket}/{RUN_RECORD_PREFIX}*/{name}" for name in RUN_RECORDS]),
+        "RUN_RECORD_OBJECT_ARNS": json.dumps([f"{bucket}/{RUN_RECORD_PREFIX}*/{name}" for name in (*RUN_RECORDS, *READBACK_RECORDS)]),
         "RUN_RECORD_LIST_PREFIXES": json.dumps([f"{RUN_RECORD_PREFIX}*/{name}" for name in RUN_RECORDS]),
     }
     documents["layer_feast_features"] = load(directory / "job_writer_features_feast.json", feast)

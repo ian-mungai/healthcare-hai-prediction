@@ -184,6 +184,9 @@ locals {
 # The records of a features run that its release phase reads (scripts/features/online_release.py).
 locals {
   job_layer_run_release_records = ["online_hold.json", "online_release.json", "feast_materialize.json"]
+  # The Feast phase puts the apply record once and, on a retry, reads the stored one back to tell a repeat from another publication
+  # (scripts/lakehouse/layer_run.py put_record_once). The key exists by then, so this record needs the read and no list (owner, Nov 14 2026).
+  job_layer_run_readback_records = ["feast_apply.json"]
 }
 
 resource "aws_iam_role_policy" "job_writer_layer_input" {
@@ -254,8 +257,9 @@ resource "aws_iam_role_policy" "job_writer_features_feast" {
     LEASE_LIST_PREFIXES = jsonencode(["promote/models/*/"])
     # The release phase of the features task (scripts/features/online_release.py) reads the hold, release and load records of a features run. It lists each exact
     # key first, because a read of a missing key is AccessDenied for a role that may not list the bucket (scripts/features/feast_sets.py S3HoldStore). The role
-    # already puts under lakehouse/layer_runs/features/; this adds the read and the list of those three names and no other record of a run.
-    RUN_RECORD_OBJECT_ARNS   = jsonencode([for name in local.job_layer_run_release_records : "${local.bronze_bucket_arn}/lakehouse/layer_runs/features/*/${name}"])
+    # already puts under lakehouse/layer_runs/features/; this adds the read and the list of those three names, the read of the apply record, and no other
+    # record of a run.
+    RUN_RECORD_OBJECT_ARNS   = jsonencode([for name in concat(local.job_layer_run_release_records, local.job_layer_run_readback_records) : "${local.bronze_bucket_arn}/lakehouse/layer_runs/features/*/${name}"])
     RUN_RECORD_LIST_PREFIXES = jsonencode([for name in local.job_layer_run_release_records : "lakehouse/layer_runs/features/*/${name}"])
   })
 }

@@ -38,6 +38,7 @@ RELEASE_RECORDS = (
     "online_release.json",
     "feast_materialize.json",
 )  # the records of a features run that its release phase reads (job_writer.tf)
+READBACK_RECORDS = ("feast_apply.json",)  # the record the Feast phase reads back on a retry: a read and no list (job_writer.tf)
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 ROW_KEYS = {"role", "action", "resource", "context", "scope", "granted_by"}
 ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments", "kind"}
@@ -234,7 +235,9 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "PRODUCTION_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/promote/production/*"]),
             "PRODUCTION_LIST_PREFIXES": json.dumps(["promote/production/*"]),
             "LEASE_LIST_PREFIXES": json.dumps(["promote/models/*/"]),
-            "RUN_RECORD_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/features/*/{name}" for name in RELEASE_RECORDS]),
+            "RUN_RECORD_OBJECT_ARNS": json.dumps(
+                [f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/features/*/{name}" for name in (*RELEASE_RECORDS, *READBACK_RECORDS)]
+            ),
             "RUN_RECORD_LIST_PREFIXES": json.dumps([f"lakehouse/layer_runs/features/*/{name}" for name in RELEASE_RECORDS]),
         }
     if policy.endswith("job_writer_execution.json"):
