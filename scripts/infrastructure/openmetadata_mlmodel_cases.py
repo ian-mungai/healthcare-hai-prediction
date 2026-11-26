@@ -303,6 +303,8 @@ def a_model_whose_set_cannot_be_resolved_fails_naming_it() -> None:
         "unknown set": [{"feature_set": "m9", "model": "m9"}],
         "unknown model tag only": [{"model": "m9"}],
         "set and model tag disagree": [{"feature_set": "m2", "model": "m4"}],
+        "unknown model tag beside a valid set": [{"feature_set": "m2", "model": "m9"}],
+        "unknown set beside a valid model tag": [{"feature_set": "m9", "model": "m2"}],
         "newest version untagged": [set_tags("m2"), {}],
     }
     for label, versions in unresolved.items():
@@ -314,12 +316,11 @@ def a_model_whose_set_cannot_be_resolved_fails_naming_it() -> None:
             require("its feature_set tag names m2 but its model tag names m4" in err, f"the refusal says the two tags disagree: {err}")
         require(not world.edge_set and not any(call[0] in ("PUT", "DELETE") for call in world.calls), f"{label}: a run that cannot resolve a set draws nothing")
         secrets_absent(out, err)
-    only_model_tag = World(models={"hai_model_HAI_1": [{"model": "m4"}]})
-    only_model_tag.catalog_all_tables()
-    code, out, err = run(only_model_tag)
-    require(
-        code == 0 and only_model_tag.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, f"a model tag alone resolves its set: {(code, err)}"
-    )
+    for label, tags in {"a model tag alone": {"model": "m4"}, "a feature_set tag alone": {"feature_set": "m4"}}.items():
+        alone = World(models={"hai_model_HAI_1": [tags]})
+        alone.catalog_all_tables()
+        code, out, err = run(alone)
+        require(code == 0 and alone.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, f"{label} resolves its set: {(code, err)}")
 
 
 def the_newest_version_decides_the_set_and_a_changed_set_replaces_the_edge() -> None:
