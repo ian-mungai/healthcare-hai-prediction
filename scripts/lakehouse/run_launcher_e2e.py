@@ -8530,8 +8530,9 @@ def kit_launcher_client(env: Env) -> dict[str, bool]:
         "only the case folder is writable": [m["Target"] for m in mounts if not m["ReadOnly"]] == ["/workspace/out/kitcase"],
         "a duckdb query went through duckdb_helper and returned the rows": rows == [["table_a", "3"]],
         "dbt ls output is read from the attempt": listing == [],
+        # The guard parses the whole registry: about 20 s on an idle Mac, past 60 s on a loaded hosted runner beside the full binding case.
         "the kit made no Docker call of its own": not run_command(
-            sys.executable, ["-m", "scripts.quality.docker_calls", "scripts/lakehouse/package_fixture.py"], cwd=ROOT, timeout=60
+            sys.executable, ["-m", "scripts.quality.docker_calls", "scripts/lakehouse/package_fixture.py"], cwd=ROOT, timeout=300
         ).returncode,
     }
 
