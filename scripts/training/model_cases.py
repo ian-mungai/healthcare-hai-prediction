@@ -23,6 +23,7 @@ import numpy as np
 from scripts.training.model_test_support import (
     ON_BOUNDARY,
     SINGULAR_ATTEMPT,
+    ConvergenceWarning,
     SpatialOLS,
     dense_profile_peak,
     exact_f,
@@ -2278,6 +2279,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         with libraries():
             interior = suite.fit_slot(req, "m3_mixed")
         require(set(found) == set(interior.details), f"the fit does not carry the fields of a normal fit: {sorted(found)}")
+        # The profile only tells zero from positive: the highest flagged attempt above the fixed-only fit counts without being at the profile peak.
+        short, _calls = boundary_slot(operation, dict.fromkeys(at_boundary, "short_of_peak"))
+        require(short.status == "fitted" and short.details.get("optimizer") == "lbfgs" and "boundary" not in short.details, f"short: {short.reason}")
         calls = []
         with libraries() as replacements, patch.object(replacements["statsmodels.api"].MixedLM, "fit", near_boundary_fit(script, calls)):
             output = suite.fit_model(operation, "m3").to_result()
@@ -2293,7 +2297,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     def mixed_boundary_warning_refusals() -> None:
         operation = small_effect_request()
-        # Neither an attempt that anything else spoils, nor one short of the profile peak or beyond it, is counted.
+        # Neither an attempt that anything else spoils nor one that stopped at the zero boundary is counted.
         for outcome in (
             "peak_unconverged",
             "peak_and_hessian",
@@ -2302,8 +2306,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             "peak_other_text",
             "peak_other_class",
             "peak_singular_class",
-            "short_of_peak",
-            "past_peak",
+            "stalled_at_zero",
         ):
             result, calls = boundary_slot(operation, dict.fromkeys(at_boundary, outcome))
             require(result.status == "not_converged" and len(calls) == 4, f"{outcome} was counted as fitted: {result.status} {result.details}")
@@ -2338,19 +2341,24 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
 
     unconverged = (False, 0.0014144, -0.19377, ((ON_BOUNDARY[0], "Maximum Likelihood optimization failed to converge. Check mle_retvals"),))
 
-    def mixed_profile_unequal_groups() -> None:
-        # Group sizes 900, 900, 100, 100, 20 and 20: the likelihood falls as the variance leaves zero and still peaks 0.004 higher at a ratio near 0.0105.
-        sizes = (900, 900, 100, 100, 20, 20)
+    def weak_peak(m: int, k: int, within: float, scale: float = 1.0, offset: float = 0.0) -> tuple[Any, Any]:
+        """Six groups of sizes m, m, k, k, 20 and 20: the likelihood falls as the variance leaves zero and peaks again at a ratio near 0.01, by an amount
+        that ``within``, the within-group energy, sets. The outcome is ``offset`` plus ``scale`` times the base outcome."""
+        sizes = (m, m, k, k, 20, 20)
         groups = np.repeat(np.arange(6), sizes)
         noise = np.zeros(len(groups))
-        noise[:2] = [math.sqrt(159.5599661424388 / 2), -math.sqrt(159.5599661424388 / 2)]
-        noise[1800:1900] = 1 / math.sqrt(200)
-        noise[1900:2000] = -1 / math.sqrt(200)
+        noise[:2] = [math.sqrt(within / 2), -math.sqrt(within / 2)]
+        noise[2 * m : 2 * m + k] = 1 / math.sqrt(2 * k)
+        noise[2 * m + k : 2 * m + 2 * k] = -1 / math.sqrt(2 * k)
         x = np.zeros((len(groups), 3))
         for column in range(3):
             x[2 + 2 * column, column] = 1
             x[3 + 2 * column, column] = -1
-        design, y = replay_design(x, groups), 2 + x @ [0.4, 0.7, 0.2] + noise
+        return replay_design(x, groups), offset + scale * (2 + x @ [0.4, 0.7, 0.2] + noise)
+
+    def mixed_profile_unequal_groups() -> None:
+        # Group sizes 900, 900, 100, 100, 20 and 20: the likelihood falls as the variance leaves zero and still peaks 0.004 higher at a ratio near 0.0105.
+        design, y = weak_peak(900, 100, 159.5599661424388)
         # The attempts as statsmodels 0.15.0 returned them on these rows.
         at_zero = (True, 1.1927e-10, -4.5885e-8, (ON_BOUNDARY,))
         at_peak = (True, 0.0105544, 0.0039998465, (ON_BOUNDARY,))
@@ -2387,6 +2395,103 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             found = fit_replay(design, 10 + x @ (4, 7, 2) + shifted, script)
             require(isinstance(found, dict) and found.get("boundary") is True, f"{label}: a true zero-boundary fit was refused or called positive: {found}")
             require(found["optimizer"] == "powell" and found["ownership_variance"] == 0.0 and found["p_value"] == 1.0, f"{label}: {found}")
+
+    hessian = (ConvergenceWarning, "The Hessian matrix at the estimated parameter values is not positive definite.")
+    on_zero = (SINGULAR_ATTEMPT, ON_BOUNDARY, hessian)
+
+    def weak_script(zero_ratio: float, bfgs: tuple[float, float], zero: tuple[float, float], nm: tuple[float, float]) -> dict[str, Any]:
+        """The four attempts as statsmodels 0.15.0 returned them: each pair is a variance ratio and a gain over the fixed-only fit."""
+        return {
+            "lbfgs": (True, zero_ratio, -0.080531, on_zero),
+            "bfgs": (False, *bfgs, unconverged[3]),
+            "powell": (True, *zero, (ON_BOUNDARY, hessian)),
+            "nm": (True, *nm, (ON_BOUNDARY,)),
+        }
+
+    def mixed_profile_weak_peak() -> None:
+        # The first grid does not rise above zero near this peak (its best sample there is -0.0006), so every sampled local maximum has to be narrowed.
+        small = weak_peak(900, 100, 159.75671052146487)
+        larger = weak_peak(900, 100, 159.75622252199412)
+        zero = (1.1592e-10, -4.4687e-8)
+        script = weak_script(3.29e-33, (0.01003199, -0.000538), zero, (0.0105142593, -4.3186e-8))
+        silent = dict.fromkeys(script, "linalg") | {"powell": script["powell"]}
+        for label, attempts in (("a gain of 1e-7", script), ("a gain of 1e-7 with no attempt near the peak", silent)):
+            refused = fit_replay(*small, attempts)
+            require(
+                isinstance(refused, str) and "a positive ownership variance is better" in refused and "ratio of 0.0105" in refused,
+                f"{label} was reported as a zero-boundary fit or lost the peak: {refused}",
+            )
+        script = weak_script(4.54e-33, (0.01002839, -0.000537), (1.1602e-10, -4.4725e-8), (0.010514259338379107, 9.860395266514388e-6))
+        found = fit_replay(*larger, script)
+        require(isinstance(found, dict) and "boundary" not in found and found["optimizer"] == "nm", f"a gain of 1e-5 was not a positive fit: {found}")
+        require(0.0103 < found["icc"] < 0.0106 and math.isclose(found["likelihood_ratio"], 1.972e-5, rel_tol=1e-3), f"the weak positive fit: {found}")
+
+    def mixed_profile_probes() -> None:
+        # A grid too coarse to bracket the peak: only the ratio of an optimizer attempt shows it.
+        design, y = weak_peak(900, 100, 159.5599661424388)
+        script = {**dict.fromkeys(("lbfgs", "bfgs"), "linalg"), "powell": (True, 1.1927e-10, -4.5885e-8, (ON_BOUNDARY,))}
+        with patch("scripts.training.models.mixed.PROFILE_RATIOS", np.asarray([1e-10, 0.1, 1e8])):
+            found = fit_replay(design, y, {**script, "nm": (True, 0.0105544, 0.0039998465, (ON_BOUNDARY,))})
+        require(isinstance(found, dict) and found.get("optimizer") == "nm" and "boundary" not in found, f"an attempt's ratio was not probed: {found}")
+
+    def mixed_flagged_fit_near_weak_peak() -> None:
+        # nm is within 0.1 % of the maximizing ratio while its gain is 2 % short of the peak's gain of 1e-5.
+        script = weak_script(2.21e-33, (0.00141538, -0.184988), (1.0038e-10, -3.7566e-8), (0.010019540786743358, 9.772825933396234e-6))
+        found = fit_replay(*weak_peak(898, 103, 161.6018121586906), script)
+        require(isinstance(found, dict) and "boundary" not in found and found["optimizer"] == "nm", f"a qualifying attempt was refused: {found}")
+        require(math.isclose(found["icc"], 0.010019540786743358 / 1.010019540786743358, rel_tol=1e-9), f"the ICC: {found['icc']}")
+
+    def mixed_flagged_fit_rescaled() -> None:
+        # The unequal-group outcome as 1 + s y: the same variance ratio, with ownership variances of 8.3e-10 and 8.3e-12.
+        fits = []
+        for scale, lbfgs, powell, nm in (
+            (0.001, (0.010546130800, 0.00400000371), (0.010546076680, 0.00400000370), (0.010554351807, 0.00399984650)),
+            (0.0001, (0.010546130768, 0.00400000379), (0.010546076682, 0.00400000378), (0.010554351807, 0.00399984658)),
+        ):
+            script = {
+                "lbfgs": (True, *lbfgs, (SINGULAR_ATTEMPT, ON_BOUNDARY)),
+                "bfgs": (False, 0.0014143982, -0.1937704, unconverged[3]),
+                "powell": (True, *powell, (ON_BOUNDARY,)),
+                "nm": (True, *nm, (ON_BOUNDARY,)),
+            }
+            found = fit_replay(*weak_peak(900, 100, 159.5599661424388, scale, 1.0), script)
+            require(isinstance(found, dict) and found.get("optimizer") == "powell", f"the rescaled outcome at {scale} was not fitted: {found}")
+            require("boundary" not in found and 0 < found["ownership_variance"] < 1e-9, f"the rescaled variance: {found}")
+            fits.append(found)
+        for key in ("icc", "likelihood_ratio", "p_value"):
+            require(math.isclose(fits[0][key], fits[1][key], rel_tol=1e-4), f"{key} changed with the outcome's scale: {fits[0][key]} {fits[1][key]}")
+
+    def mixed_flagged_fit_extra_warning() -> None:
+        # Any further warning from the optimizer call, whatever library raises it, takes the boundary exception away.
+        design, y = weak_peak(900, 100, 159.5599661424388)
+        diagnostic = type("OptimizeWarning", (UserWarning,), {"__module__": "scipy.optimize"})
+        zero = (True, 1.1927e-10, -4.5885e-8, (ON_BOUNDARY,))
+        script = {"lbfgs": "linalg", "bfgs": "linalg", "powell": zero}
+        for extra in (diagnostic, DeprecationWarning):
+            refused = fit_replay(design, y, {**script, "nm": (True, 0.0105544, 0.0039998465, (ON_BOUNDARY, (extra, "Synthetic diagnostic")))})
+            require(isinstance(refused, str) and "a positive ownership variance is better" in refused, f"{extra.__name__} was ignored: {refused}")
+        # The clean-fit filter is unchanged: without a statsmodels or numerical warning the attempt is a clean fit.
+        found = fit_replay(design, y, {"lbfgs": (True, 0.0105544, 0.0039998465, ((diagnostic, "Synthetic diagnostic"),))})
+        require(isinstance(found, dict) and found.get("optimizer") == "lbfgs", f"the clean-fit filter changed: {found}")
+
+    def mixed_profile_unresolved() -> None:
+        # Outcomes that the ownership groups explain almost completely: the profile still rises at the largest variance ratio searched.
+        groups = np.repeat(np.arange(6), 8)
+        rng = np.random.default_rng(1128)
+        x = rng.normal(size=(48, 3))
+        y = 2 + x @ [0.4, 0.7, 0.2] + (groups - 2.5) + 1e-9 * rng.normal(size=48)
+        silent = dict.fromkeys(("lbfgs", "bfgs", "powell", "nm"), "linalg")
+        rising = fit_replay(replay_design(x, groups), y, silent)
+        require(isinstance(rising, str) and "still rising at the largest variance ratio" in rising, f"an endpoint maximum was resolved: {rising}")
+        # A search that starts above the peak finds its highest value, better than zero, at the smallest ratio: the maximizer lies below the ratios searched.
+        design, y = weak_peak(900, 100, 159.5599661424388)
+        with patch("scripts.training.models.mixed.PROFILE_RATIOS", np.asarray([0.0108, 1.0, 1e8])):
+            low = fit_replay(design, y, silent)
+        require(isinstance(low, str) and "highest at the smallest variance ratio" in low, f"a maximum at the smallest ratio was resolved: {low}")
+        # A true zero-boundary fit is refused when the evaluations are too ill-conditioned to show that zero wins.
+        with patch.object(np.linalg, "cond", lambda *args, **kwargs: 1e300):
+            result, _calls = boundary_slot(boundary_request(), at_boundary)
+        require(result.status == "not_converged" and "ill-conditioned" in result.reason, f"an ill-conditioned comparison was resolved: {result.reason}")
 
     convergence_warning = type("ConvergenceWarning", (UserWarning,), {})
     singular_warning = type("SingularMatrixWarning", (UserWarning,), {})
@@ -3536,6 +3641,12 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("mixed_boundary_warning_refusals", mixed_boundary_warning_refusals),
         ("mixed_profile_unequal_groups", mixed_profile_unequal_groups),
         ("mixed_profile_integer_zero_score", mixed_profile_integer_zero_score),
+        ("mixed_profile_weak_peak", mixed_profile_weak_peak),
+        ("mixed_profile_probes", mixed_profile_probes),
+        ("mixed_profile_unresolved", mixed_profile_unresolved),
+        ("mixed_flagged_fit_near_weak_peak", mixed_flagged_fit_near_weak_peak),
+        ("mixed_flagged_fit_rescaled", mixed_flagged_fit_rescaled),
+        ("mixed_flagged_fit_extra_warning", mixed_flagged_fit_extra_warning),
         ("mixed_optimizer_sequence", mixed_optimizer_sequence),
         ("mixed_optimizer_deadline", mixed_optimizer_deadline),
         ("mediation_known_values", mediation_known_values),

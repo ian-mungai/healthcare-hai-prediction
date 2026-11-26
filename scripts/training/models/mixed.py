@@ -4,13 +4,14 @@ Each optimizer is tried in order, and the first that converges with no warning f
 a search of the profile likelihood over the ownership to residual variance ratio decides between a zero and a positive variance:
 
 1. Positive, when a positive ratio has a likelihood above the zero ratio by more than rounding error. The fit counts only if an optimizer attempt converged,
-   was flagged only by the statsmodels boundary warning, reached the peak of the profile and has a likelihood that no other attempt's finite likelihood
-   exceeds. It is reported like any other positive-variance fit. statsmodels raises that warning for every variance estimate below 0.01, so the warning
-   alone does not show that the optimum is zero.
+   raised no warning of any kind besides the statsmodels boundary warning, stopped away from the zero boundary and has a likelihood above the fixed-only one
+   that no other attempt's finite likelihood exceeds. It is reported like any other positive-variance fit. statsmodels raises that warning for every variance
+   estimate below 0.01, so the warning alone does not show that the optimum is zero.
 2. Zero, when no positive ratio is better, no attempt is above the fixed-only likelihood, the likelihood does not rise as the variance leaves zero and an
    optimizer converged there (``_boundary_witness``). The fit is the fixed-only fit, and its details say that it is a boundary fit.
 
-Otherwise, including when the profile cannot be evaluated, the model is not fitted."""
+Otherwise the model is not fitted. That includes a profile that cannot be evaluated or leaves the comparison unresolved: its highest value is at an end of the
+ratios searched, it still rises at the largest one or its evaluations are too ill-conditioned."""
 
 from __future__ import annotations
 
@@ -37,20 +38,18 @@ STATSMODELS_WARNINGS = ("ModelWarning", "ConvergenceWarning", "SingularMatrixWar
 INSTALL_FOLDERS = frozenset({"site-packages", "dist-packages"})
 # With statsmodels 0.15.0 on synthetic data, powell and nm stopped at an ownership to residual variance ratio near 4e-8 or below at a zero optimum.
 BOUNDARY_VARIANCE_RATIO = 1e-6
-# In log-likelihood units: how far below the fixed-only likelihood a converged stop at the zero boundary may be (those seen at that ratio were within 0.001),
-# and the furthest an attempt may be from the profile peak and still count as having reached it.
+# In log-likelihood units: how far below the fixed-only likelihood a converged stop at the zero boundary may be (those seen at that ratio were within 0.001).
 LIKELIHOOD_TOLERANCE = 0.01
-# An attempt reached the profile peak when its gain over the fixed-only fit differs from the peak's gain by no more than this share of it.
-PEAK_SHARE = 0.01
 # The rounding error allowed in a log-likelihood difference, per unit of the larger of the likelihood's size and the row count.
 GAIN_ROUNDING = 1e-12
 # The score at a zero variance is the sum of squared group residual totals over the residual sum of squares, minus one. Up to this value it is not told apart
 # from zero, and the profile likelihood alone decides.
 SCORE_ROUNDING = 1e-9
-# The variance ratios at which the profile likelihood is first evaluated (ten for each power of ten) and the number of times the search narrows around the best.
+# The variance ratios at which the profile likelihood is first evaluated (ten for each power of ten) and the number of times the search narrows around each
+# sampled local maximum.
 PROFILE_RATIOS = np.logspace(-10, 8, 181)
 PROFILE_NARROWINGS = 4
-# An estimated ownership variance at or below this is singular, not positive.
+# A clean fit's estimated ownership variance at or below this is singular, not positive.
 SINGULAR_VARIANCE = 1e-10
 # One optimizer's estimate: its name, whether it reported convergence, the ownership variance, the residual variance and the log likelihood.
 Estimate = tuple[str, bool, float, float, float]
@@ -72,63 +71,86 @@ def _from_installed_statsmodels(filename: str) -> bool:
     return any(part in INSTALL_FOLDERS and following == "statsmodels" for part, following in zip(parts, parts[1:], strict=False))
 
 
-def _only_boundary_warning(spoiling: Sequence[warnings.WarningMessage]) -> bool:
-    """True when something spoils an attempt and all of it is the statsmodels boundary warning: its own convergence warning class with its exact text."""
+def _only_boundary_warning(observed: Sequence[warnings.WarningMessage]) -> bool:
+    """True when an optimizer call warned and every warning it raised, from any library, is the statsmodels boundary warning: its own convergence warning class
+    with its exact text."""
     category = importlib.import_module("statsmodels.tools.sm_exceptions").ConvergenceWarning
-    return bool(spoiling) and all(item.category is category and str(item.message) == BOUNDARY_WARNING for item in spoiling)
+    return bool(observed) and all(item.category is category and str(item.message) == BOUNDARY_WARNING for item in observed)
 
 
-def _profile_peak(matrix: Array, residuals: Array, groups: Any) -> tuple[float, float]:
-    """Search the ML profile likelihood over positive variance ratios and give the best (ratio, gain over the zero ratio); (nan, nan) if it cannot be done.
+def _profile_peak(matrix: Array, residuals: Array, groups: Any, rounding: float, probes: Sequence[float] = ()) -> tuple[float, float, str]:
+    """Search the ML profile likelihood over positive variance ratios and give the best (ratio, gain over the zero ratio, why the comparison is unresolved).
 
     With t the ownership variance over the residual variance and n_g rows in group g, the gain is -(sum over g of log(1 + n_g t) + n log(Q(t) / Q(0))) / 2,
     where Q(t) is the generalized least-squares residual sum of squares at t. Q(t) - Q(0) is computed from the fixed-only residuals and an orthonormal basis of
-    the design, so a small gain is not lost in the subtraction of two large likelihoods."""
+    the design, so a small gain is not lost in the subtraction of two large likelihoods. The ratios searched are ``PROFILE_RATIOS`` and the ``probes``, here the
+    optimizers' own ratios. The search narrows around every sampled local maximum, whatever its gain, because a peak above zero can be sampled below it.
+
+    The last value is empty when the search shows which wins: a gain above ``rounding`` beyond its own error bound, or no gain above it within any error bound.
+    The error bound of a gain is the machine precision times the condition number of the solved system, carried into the log likelihood. A highest value at an
+    end of the ratios searched, or a profile still rising at the largest one, leaves the comparison unresolved."""
     members = [groups == group for group in np.unique(groups)]
     sizes = np.asarray([member.sum() for member in members], dtype=np.float64)
     totals = np.asarray([residuals[member].sum() for member in members])
     basis = np.linalg.qr(matrix)[0]
     columns = np.asarray([basis[member].sum(axis=0) for member in members])
     squares, identity = float(residuals @ residuals), np.eye(basis.shape[1])
+    found: dict[float, tuple[float, float]] = {}
 
     def gain(ratio: float) -> float:
         weights = ratio / (1 + sizes * ratio)
         cross = columns.T @ (weights * totals)
         information = identity - columns.T @ (weights[:, None] * columns)
-        change = -float(weights @ totals**2) - float(cross @ np.linalg.solve(information, cross))
-        return float(-0.5 * (np.log1p(sizes * ratio).sum() + len(residuals) * np.log1p(change / squares)))
+        quadratic = float(cross @ np.linalg.solve(information, cross))
+        change = -float(weights @ totals**2) - quadratic
+        value = float(-0.5 * (np.log1p(sizes * ratio).sum() + len(residuals) * np.log1p(change / squares)))
+        error = float(np.finfo(np.float64).eps * np.linalg.cond(information) * abs(quadratic) * len(residuals) / (2 * (squares + change)))
+        found[ratio] = (value, error)
+        return value
 
-    ratios = PROFILE_RATIOS
+    unevaluated = "the profile likelihood could not be evaluated, so zero and positive are not told apart"
+    ratios = np.unique(np.concatenate((PROFILE_RATIOS, np.asarray(probes, dtype=np.float64))))
     try:
         # A value that cannot be computed is caught below as one that is not finite, so numpy's floating-point warnings add nothing.
         with np.errstate(all="ignore"):
-            for narrowing in range(PROFILE_NARROWINGS + 1):
-                gains = np.asarray([gain(ratio) for ratio in ratios])
-                if not np.isfinite(gains).all():
-                    return math.nan, math.nan
-                best = int(np.argmax(gains))
-                if narrowing < PROFILE_NARROWINGS:
-                    ratios = np.geomspace(ratios[max(best - 1, 0)], ratios[min(best + 1, len(ratios) - 1)], 21)
+            gains = [gain(float(ratio)) for ratio in ratios]
+            for index in range(1, len(ratios) - 1):
+                if not gains[index - 1] <= gains[index] >= gains[index + 1]:
+                    continue
+                low, high = ratios[index - 1], ratios[index + 1]
+                for _ in range(PROFILE_NARROWINGS):
+                    finer = np.geomspace(low, high, 21)
+                    best = int(np.argmax([gain(float(ratio)) for ratio in finer]))
+                    low, high = finer[max(best - 1, 0)], finer[min(best + 1, len(finer) - 1)]
     except np.linalg.LinAlgError:
-        return math.nan, math.nan
-    return float(ratios[best]), float(gains[best])
+        return math.nan, math.nan, unevaluated
+    if not all(math.isfinite(value) for value, _error in found.values()):
+        return math.nan, math.nan, unevaluated
+    ratio, (best_gain, error) = max(found.items(), key=lambda item: item[1][0])
+    top = float(PROFILE_RATIOS[-1])
+    if ratio == max(found) or found[top][0] >= found[float(PROFILE_RATIOS[-2])][0]:
+        doubt = "the profile likelihood is still rising at the largest variance ratio searched, so zero and positive are not told apart"
+    elif ratio == min(found) and best_gain > rounding:
+        doubt = "the profile likelihood is highest at the smallest variance ratio searched, so zero and positive are not told apart"
+    elif best_gain - error <= rounding < max(value + bound for value, bound in found.values()):
+        doubt = "the profile likelihood is too ill-conditioned to tell zero and a positive variance apart"
+    else:
+        doubt = ""
+    return ratio, best_gain, doubt
 
 
-def _flagged_positive_fit(
-    flagged: Sequence[tuple[str, Any]], estimates: Sequence[Estimate], fixed_only_llf: float, peak_gain: float, rounding: float
-) -> tuple[str, Any]:
+def _flagged_positive_fit(flagged: Sequence[tuple[str, Any]], estimates: Sequence[Estimate], fixed_only_llf: float, rounding: float) -> tuple[str, Any]:
     """Pick the attempt flagged only by the boundary warning that stands as the positive-variance fit, or ("", None).
 
-    It needs a usable positive variance and a finite likelihood that is above the fixed-only likelihood, that no attempt's finite likelihood exceeds (both by
-    more than rounding error) and whose gain is that of the profile peak."""
+    It needs a finite, positive ownership and residual variance whose ratio is above that of a stop at the zero boundary, and a finite likelihood that is above
+    the fixed-only likelihood and that no attempt's finite likelihood exceeds (both by more than rounding error). Both tests are unchanged by the outcome's
+    scale. The profile likelihood only decides that a positive variance beats zero; it does not measure how close an attempt came to its peak."""
     highest = max((item[4] for item in estimates if math.isfinite(item[4])), default=-math.inf)
-    reach = max(rounding, min(PEAK_SHARE * peak_gain, LIKELIHOOD_TOLERANCE))
     for name, attempt in flagged:
         variance, residual, llf = float(np.asarray(attempt.cov_re)[0, 0]), float(attempt.scale), float(attempt.llf)
-        if not (math.isfinite(variance) and math.isfinite(residual) and math.isfinite(llf) and variance > SINGULAR_VARIANCE and residual > 0):
+        if not (math.isfinite(variance) and math.isfinite(residual) and math.isfinite(llf) and residual > 0):
             continue
-        gain = llf - fixed_only_llf
-        if gain > rounding and highest - llf <= rounding and abs(gain - peak_gain) <= reach:
+        if variance > BOUNDARY_VARIANCE_RATIO * residual and llf - fixed_only_llf > rounding and highest - llf <= rounding:
             return name, attempt
     return "", None
 
@@ -164,7 +186,7 @@ class MixedRegressor(Regressor):
         """Fit ML, require usable ownership groups and expose ICC with a boundary-aware likelihood test.
 
         Without a clean positive fit, the profile likelihood decides (``_profile_peak``). A better positive variance stands only through an attempt flagged only
-        by the boundary warning that reached it (``_flagged_positive_fit``). When the ML optimum is the zero ownership variance (``_boundary_witness``), the
+        by the boundary warning that qualifies (``_flagged_positive_fit``). When the ML optimum is the zero ownership variance (``_boundary_witness``), the
         model is the fixed-only fit with every ownership effect at zero, and its details say that it is a boundary fit."""
         hospitals: dict[str, set[str]] = defaultdict(set)
         for row in design.rows:
@@ -209,7 +231,7 @@ class MixedRegressor(Regressor):
             if attempt is not None and attempt.converged and not warned:
                 model = attempt
                 break
-            if attempt is not None and attempt.converged and _only_boundary_warning(spoiling):
+            if attempt is not None and attempt.converged and spoiling and _only_boundary_warning(observed):
                 flagged.append((optimizer, attempt))
             # The cause of each failed attempt goes into the reason, so a fit on the boundary is told apart from one that never converged.
             causes = [cause[:120] for cause in (warned[:1] + ([failure] if failure else []))]
@@ -230,16 +252,17 @@ class MixedRegressor(Regressor):
             if not math.isfinite(fixed_llf) or not math.isfinite(pooled_residual) or pooled_residual <= 0 or not np.isfinite(fixed).all():
                 raise NotConverged(f"{failed}; not a zero-boundary fit: the fixed-only fit has no finite likelihood and positive residual variance")
             rounding = GAIN_ROUNDING * max(abs(fixed_llf), len(y))
-            peak_ratio, peak_gain = _profile_peak(matrix, residuals, groups)
-            if not math.isfinite(peak_gain):
-                raise NotConverged(f"{failed}; not a zero-boundary fit: the profile likelihood could not be evaluated, so zero and positive are not told apart")
+            probes = [ratio for item in estimates if item[3] > 0 and 0 < (ratio := item[2] / item[3]) < math.inf]
+            peak_ratio, peak_gain, doubt = _profile_peak(matrix, residuals, groups, rounding, probes)
+            if doubt:
+                raise NotConverged(f"{failed}; not a zero-boundary fit: {doubt}")
             if peak_gain > rounding:
-                name, model = _flagged_positive_fit(flagged, estimates, fixed_llf, peak_gain, rounding)
+                name, model = _flagged_positive_fit(flagged, estimates, fixed_llf, rounding)
                 if model is None:
                     raise NotConverged(
                         f"{failed}; not a zero-boundary fit: a positive ownership variance is better (the profile likelihood is {peak_gain:.3g} above the "
-                        f"fixed-only likelihood at a variance ratio of {peak_ratio:.3g}) and no attempt that converged with only the boundary warning reached "
-                        "it with the highest likelihood"
+                        f"fixed-only likelihood at a variance ratio of {peak_ratio:.3g}) and no attempt that converged with only the boundary warning has a "
+                        "positive variance with a likelihood above the fixed-only one that no other attempt exceeds"
                     )
                 optimizer, variance, residual = name, float(np.asarray(model.cov_re)[0, 0]), float(model.scale)
         boundary: dict[str, Any] = {}
