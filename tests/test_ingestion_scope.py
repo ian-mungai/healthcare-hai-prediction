@@ -537,7 +537,8 @@ def test_a_real_parse_past_its_deadline_exits_2(tmp_path: Path, monkeypatch: pyt
     out = tmp_path / "report.json"
     code = scope.main(["--project", str(project), "--table-map", str(map_path), "--no-packages", "--out", str(out)])
     check(code == 2, f"exit {code}")
-    check("dbt parse" in capsys.readouterr().err, "the failed parse is not named")
+    err = capsys.readouterr().err
+    check("did not finish within 0.05 s" in err, f"the deadline and its limit are not named: {err}")
     check(not out.exists(), "a timed-out run wrote a report")
 
 

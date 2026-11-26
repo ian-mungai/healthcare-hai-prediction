@@ -582,10 +582,15 @@ def _admitted_folder(folder: Path) -> bool:
     return not under(str(ROOT)) and any(under(top) for top in (os.path.realpath(tempfile.gettempdir()), *MACOS_TEMP_FOLDERS))
 
 
+def _no_constant(name: str) -> None:
+    """Refuse NaN, Infinity and -Infinity, which the Python decoder accepts and JSON lacks."""
+    raise ValueError(f"{name} is not JSON")
+
+
 def _written_here(path: Path, kind: str) -> bool:
-    """Whether a file holds a JSON object of this kind, as the command writes it."""
+    """Whether a file holds a strict JSON object of this kind, as the command writes it."""
     try:
-        document = json.loads(path.read_bytes())
+        document = json.loads(path.read_bytes(), parse_constant=_no_constant)
     except (ValueError, RecursionError):
         return False
     return isinstance(document, dict) and document.get("kind") == kind
