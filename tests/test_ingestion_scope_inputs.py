@@ -9,7 +9,8 @@ What the tool reads, by file:
 
 * table map (``map.json``): the document, ``tables`` and each entry; per entry ``table``, ``group``, ``collection``, ``format`` (non-empty strings),
   ``roles`` (optional list of non-empty strings) and ``dictionary`` (optional object with a non-empty string ``table``).
-* project file (``dbt_project.yml``): the document, ``vars``, ``vars.copy_tables`` and each key (a non-empty string) and value (a non-empty string).
+* project file (``dbt_project.yml``): the document, ``vars``, ``vars.copy_tables`` and each key (a non-empty string) and value (a non-empty string);
+  ``vars.deferred_models`` (optional or null, else a list of objects) and each entry's ``models`` list of non-empty strings.
 * manifest (``manifest.json`` of the parse): the document, ``metadata`` and its ``dbt_version``, ``sources`` and each source (an object with string
   ``source_name`` and ``name``), ``nodes`` and each node (an object with a string ``resource_type``); each model also needs a ``name``, a ``depends_on``
   object and its ``nodes`` list of strings.
@@ -51,7 +52,13 @@ def base_map() -> dict[str, Any]:
 
 def base_project() -> dict[str, Any]:
     """A dbt_project.yml document (written as JSON, which YAML reads) with one copy_tables entry and one other variable."""
-    return {"name": "synth", "version": "1.0", "config-version": 2, "profile": "synth", "vars": {"other": 1, "copy_tables": {"t_a": "fam"}}}
+    return {
+        "name": "synth",
+        "version": "1.0",
+        "config-version": 2,
+        "profile": "synth",
+        "vars": {"other": 1, "copy_tables": {"t_a": "fam"}, "deferred_models": [{"models": ["int_z"], "reason": "held"}]},
+    }
 
 
 def base_manifest() -> dict[str, Any]:
@@ -171,6 +178,9 @@ COVERAGE: list[tuple[str, tuple[Any, ...], list[Any]]] = [
     (PROJECT, ("vars",), DICT_REQUIRED),
     (PROJECT, ("vars", "copy_tables"), DICT_REQUIRED),
     (PROJECT, ("vars", "copy_tables", "t_a"), [None, 5, 1.5, True, "", "   ", [], {}, ["x"]]),
+    (PROJECT, ("vars", "deferred_models"), [0, 5, 1.5, True, "x", {}, {"a": 1}]),
+    (PROJECT, ("vars", "deferred_models", 0), NOT_AN_OBJECT),
+    (PROJECT, ("vars", "deferred_models", 0, "models"), [*DEPENDENCY_LIST, [""]]),
     (MANIFEST, (), NOT_AN_OBJECT),
     (MANIFEST, ("metadata",), DICT_REQUIRED),
     (MANIFEST, ("metadata", "dbt_version"), [None, 5, True, [], {}]),
@@ -265,7 +275,7 @@ def direct_rows() -> list[tuple[str, tuple[Any, ...], Any]]:
     ("file", "path", "value"), direct_rows(), ids=[f"{file}:{'.'.join(map(str, path)) or 'root'}={label(value)}" for file, path, value in direct_rows()]
 )
 def test_each_validator_refuses_the_bad_value_by_itself_with_the_right_words(file: str, path: tuple[Any, ...], value: Any) -> None:
-    """The validators are the library API S4 and S5 call, and the command line shadows some of them (the bronze loader reads the map first): each is called
+    """The validators are a library API, and the command line shadows some of them (the bronze loader reads the map first): each is called
     directly, and so is derive_scope, which must refuse the same values with the input named and the kind of fault said."""
     changed = set_path(BASES[file](), path, value)
     validators = {
@@ -294,6 +304,8 @@ ACCEPTED: list[tuple[str, tuple[Any, ...], list[Any]]] = [
     (MAP, ("tables", 0, "roles"), [["data"]]),
     (PROJECT, ("unknown_key",), [None, 5, "x", [], {"a": [1]}]),
     (PROJECT, ("vars", "other"), [None, 5, "x", [], {"a": [1]}]),
+    (PROJECT, ("vars", "deferred_models"), [MISSING, None, []]),
+    (PROJECT, ("vars", "deferred_models", 0, "reason"), [MISSING, None, 5, "x", [], {"a": [1]}]),
     (MANIFEST, ("child_map",), [None, 5, "x", [], {"a": [1]}]),
     (MANIFEST, ("metadata", "extra"), [None, 5, "x", [], {"a": [1]}]),
     (MANIFEST, ("metadata", "dbt_version"), [MISSING, "1.2.3"]),
@@ -358,7 +370,7 @@ IGNORED: dict[str, list[tuple[Any, ...]]] = {
 # Items of a list whose bad items are tried through the list's own coverage row (a ``[5]`` in ``roles``, a ``[5]`` in a dependency list), listed by path.
 ELEMENTS: dict[str, list[tuple[Any, ...]]] = {
     MAP: [("tables", "*", "roles", "*")],
-    PROJECT: [],
+    PROJECT: [("vars", "deferred_models", "*", "models", "*")],
     MANIFEST: [("nodes", uid, "depends_on", "nodes", "*") for uid in (MODEL, OPERATIONAL_UID)],
 }
 
@@ -670,8 +682,8 @@ def test_every_distinct_definition_is_shown() -> None:
     )
 
 
-def test_the_two_row_orders_of_the_round_2_review_give_one_diagnostic_each() -> None:
-    """[A, B, B] and [B, B, A] (the multiset the review used) both give exactly one diagnostic, and it is the same text."""
+def test_two_row_orders_of_one_multiset_give_one_diagnostic_each() -> None:
+    """[A, B, B] and [B, B, A] both give exactly one diagnostic, and it is the same text."""
     report, _ = graph_1()
     variants = three_definitions()
     first = copy.deepcopy(report)

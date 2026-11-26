@@ -1,4 +1,4 @@
-"""The scope report derives the default bronze scope from a fresh dbt parse (design v3 step S2, tests 1 to 10).
+"""The scope report derives the default bronze scope from a fresh dbt parse.
 
 Synthetic dbt projects cover the logic one case at a time. The real project and mutated copies of it cover the numbers and the independent removal,
 addition and undefined-source cases. Nothing here reads S3 or the network, and the repository is not written.
@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from orchestration import ecs_lineage
+from scripts.acquisition.source_registry import historical_bronze_tables
 from scripts.ingestion import scope
 from scripts.lakehouse import bronze, glue_mirror, pins
 from scripts.process import run_command
@@ -26,6 +27,34 @@ from tests.support import check
 ROOT = Path(__file__).resolve().parents[1]
 TABLE_MAP = ROOT / "config/lakehouse/bronze_tables.json"
 SOURCES = ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
+LEAVING_RECORD = ROOT / "config/lakehouse/bronze_leaving_scope.json"
+SILVER_READERS = ROOT / "config/lakehouse/bronze_silver_readers.json"
+POLICIES = ROOT / "config/acquisition/projection_policies.json"
+# The mapped tables that no consumer derives, by the owner decision that keeps each group loaded (the bronze scope trim). The report lists them as leaving the
+# consumer scope; config/lakehouse/bronze_leaving_scope.json does not list them, because bronze still loads them.
+# The nine document-only state sources stay until their bronze layout profile is decided.
+DOCUMENT_STATE_TABLES = {
+    "cdph_documents_pdf",
+    "iroquois_workforce_pdf",
+    "maryland_nurse_support_documents_pdf",
+    "maryland_nurse_support_documents_sheets",
+    "maryland_nurse_support_docx",
+    "maryland_nurse_support_pdf",
+    "maryland_nurse_support_sheet_rows",
+    "massachusetts_workforce_documents_pdf",
+    "massachusetts_workforce_pdf",
+    "massachusetts_workforce_sheet_rows",
+    "mississippi_workforce_pdf",
+    "new_york_infections_pdf",
+    "patientcarelink_workforce_pdf",
+    "texas_nurse_staffing_pdf",
+    "vermont_hospital_reports_pdf",
+}
+# The state workbook sheet tables stay with those state sources.
+WORKBOOK_SHEET_TABLES = {"hcai_finance_sheet_rows", "hcai_util_workbook_sheet_rows"}
+# The derivative policy check still reads these from the table map: three tables a policy names and the dictionary of two of them.
+POLICY_CHECK_TABLES = {"acs_api_detailed", "acs_api_profile", "acs_documents_json", "wonder_exports_text_lines"}
+HELD_TABLES = DOCUMENT_STATE_TABLES | WORKBOOK_SHEET_TABLES | POLICY_CHECK_TABLES
 OPERATIONAL = "stg_bronze__file_copies"
 READ = "union all select 1 from {{ source('bronze', 'TABLE') }}\n"
 PROFILES = "synth:\n  target: lint\n  outputs:\n    lint:\n      type: duckdb\n      path: ':memory:'\n      threads: 1\n"
@@ -140,16 +169,16 @@ def test_a_table_a_model_starts_reading_becomes_a_root() -> None:
 
 
 def test_addition_in_the_real_project_names_the_missing_copy_table() -> None:
-    """A model that reads a leaving table of the real map makes it a root, and the missing copy_tables entry is named."""
+    """A model that reads a held table of the real map makes it a root, and the missing copy_tables entry is named."""
 
     def add_reader(project: Path) -> None:
         sources = project / "models/silver/staging/_bronze__sources.yml"
-        sources.write_text(sources.read_text() + "      - name: cms_pos_clia\n")
-        (project / "models/silver/staging/stg_probe_reader.sql").write_text("{{ canonical_rows('cms_pos_clia') }}\n")
+        sources.write_text(sources.read_text() + "      - name: cdph_documents_pdf\n")
+        (project / "models/silver/staging/stg_probe_reader.sql").write_text("{{ canonical_rows('cdph_documents_pdf') }}\n")
 
     report, problems = mutated_real(add_reader)
-    check("cms_pos_clia" in {entry["table"] for entry in report["in_scope"]}, "cms_pos_clia is not a root after a model reads it")
-    check(any("cms_pos_clia" in line and "copy_tables" in line for line in problems), f"no problem names cms_pos_clia: {problems}")
+    check("cdph_documents_pdf" in {entry["table"] for entry in report["in_scope"]}, "cdph_documents_pdf is not a root after a model reads it")
+    check(any("cdph_documents_pdf" in line and "copy_tables" in line for line in problems), f"no problem names cdph_documents_pdf: {problems}")
 
 
 # 3. Circle case.
@@ -161,6 +190,54 @@ def test_a_copy_tables_entry_with_no_analytical_reader_fails_by_name() -> None:
     report, problems = derive(synthetic_files(models, declared, {**copies, "t_gone": "gamma"}), table_map)
     check(any("t_gone" in line and "copy_tables" in line for line in problems), f"the circle on t_gone is not named: {problems}")
     check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "a table only the operational model reads became a root")
+
+
+def deferred_project(deferred: list[str], copy_tables: dict[str, str], table_map: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The base project plus t_gone, which only the operational model reads, with the given deferral record and copy_tables entries."""
+    models, declared, copies, _ = base_project()
+    models[OPERATIONAL] = ["t_a", "t_b", "t_gone"]
+    files = synthetic_files(models, [*declared, "t_gone"], {**copies, **copy_tables})
+    files["dbt_project.yml"] += "  deferred_models:\n    - reason: held\n      models: [" + ", ".join(deferred) + "]\n"
+    with tempfile.TemporaryDirectory(prefix="hai_scope_test_") as scratch:
+        work = Path(scratch)
+        project = write_project(files, work)
+        manifest = dbt_manifest_labels.parse_manifest(project, project, work)
+        return scope.derive_scope(manifest, table_map, scope.read_copy_tables(project), scope.read_deferred_models(project))
+
+
+def test_a_copied_table_whose_staging_model_is_deferred_stays_a_root() -> None:
+    """The deferral record names stg_t_gone, so the copy_tables entry stands without a staging reader: a root, marked as deferred, and no problem."""
+    report, problems = deferred_project(["stg_t_gone"], {"t_gone": "gamma"}, base_project()[3])
+    rows = {entry["table"]: entry for entry in report["in_scope"]}
+    check(problems == [], f"unexpected problems: {problems}")
+    check(sorted(rows) == ["t_a", "t_b", "t_gone"], f"{sorted(rows)}")
+    check(rows["t_gone"]["analytical_readers"] == [] and rows["t_gone"]["deferred_staging_model"] == "stg_t_gone", f"{rows['t_gone']}")
+    check(rows["t_a"]["deferred_staging_model"] is None, "a table with a reader is marked deferred")
+    check(report["counts"]["silver_pins"] == 4, f"the deferred table is declared to silver and pinned: {report['counts']['silver_pins']}")
+
+
+@pytest.mark.parametrize("deferred", [["int_t_gone"], ["stg_other"], ["t_gone"]])
+def test_a_deferral_of_any_other_model_keeps_no_table(deferred: list[str]) -> None:
+    """Only the table's own staging model keeps it: another deferred name leaves the stale copy_tables entry a named problem."""
+    report, problems = deferred_project(deferred, {"t_gone": "gamma"}, base_project()[3])
+    check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "t_gone became a root")
+    check(any("t_gone" in line and "copy_tables" in line for line in problems), f"{problems}")
+
+
+def test_a_deferred_staging_model_without_a_copy_tables_entry_keeps_no_table() -> None:
+    """The deferral record alone adds nothing: copy_tables is what tracks the stored copies."""
+    report, problems = deferred_project(["stg_t_gone"], {}, base_project()[3])
+    check(problems == [], f"unexpected problems: {problems}")
+    check("t_gone" in {entry["table"] for entry in report["leaving"]}, "t_gone did not leave")
+
+
+def test_a_deferred_copy_table_outside_the_map_is_named() -> None:
+    """A deferral cannot keep a table the map lacks: it is named and is no root."""
+    table_map = base_project()[3]
+    table_map["tables"] = [entry for entry in table_map["tables"] if entry["table"] != "t_gone"]
+    report, problems = deferred_project(["stg_t_gone"], {"t_gone": "gamma"}, table_map)
+    check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "t_gone became a root")
+    check(any("t_gone" in line and "not in the table map" in line for line in problems), f"{problems}")
 
 
 # 4. Fake undefined table.
@@ -197,14 +274,54 @@ def test_the_operational_model_alone_does_not_make_a_root() -> None:
 
 
 # 6. Real project.
-def test_real_project_has_74_roots_11_dictionaries_and_246_leaving(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
-    """The counts at this base: 74 data roots, 11 dictionaries, 85 in default scope, 246 leaving of 331 mapped; no problem."""
+def test_real_project_has_74_roots_11_dictionaries_and_21_outside_the_consumer_scope(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """The counts of the trimmed map: 74 data roots, 11 dictionaries, 85 in default scope, 21 outside it of 106 mapped; no problem."""
     report, problems, _ = real_scope
     check(problems == [], f"the real project has problems: {problems}")
     counts = report["counts"]
     got = (counts["mapped"], counts["in_scope_data"], counts["dictionary"], counts["default_scope"], counts["leaving"])
-    check(got == (331, 74, 11, 85, 246), f"counts: {got}")
-    check((len(report["in_scope"]), len(report["dictionary"]), len(report["leaving"])) == (74, 11, 246), "the lists disagree with the counts")
+    check(got == (106, 74, 11, 85, 21), f"counts: {got}")
+    check((len(report["in_scope"]), len(report["dictionary"]), len(report["leaving"])) == (74, 11, 21), "the lists disagree with the counts")
+
+
+def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """The derived scope and the named held tables are the loaded map; what is left of the whole approved map is the leaving record, table for table."""
+    report, _, _ = real_scope
+    roots = {entry["table"] for entry in report["in_scope"]}
+    derived = roots | {entry["table"] for entry in report["dictionary"]}
+    outside = {entry["table"] for entry in report["leaving"]}
+    mapped = {entry["table"] for entry in bronze.load_table_map(TABLE_MAP)["tables"]}
+    recorded = {entry["table"] for entry in json.loads(LEAVING_RECORD.read_text())["tables"]}
+    silver_reads = set(json.loads(SILVER_READERS.read_text())["tables"])
+    check(roots | set(scope.LOADER_TABLES) == silver_reads, f"roots differ from what silver reads: {(roots | set(scope.LOADER_TABLES)) ^ silver_reads}")
+    check(outside == HELD_TABLES, f"mapped tables outside the consumer scope: unexpected {outside - HELD_TABLES}, missing {HELD_TABLES - outside}")
+    check(derived == mapped - HELD_TABLES, f"the derived scope differs from the loaded map less the held tables: {derived ^ (mapped - HELD_TABLES)}")
+    approved = {entry["table"] for entry in historical_bronze_tables()}
+    left = approved - derived - HELD_TABLES
+    check(left == recorded, f"the leaving set differs from the record: only derived {left - recorded}, only recorded {recorded - left}")
+    check((len(approved), len(recorded), len(approved - derived)) == (331, 225, 246), f"{len(approved)} {len(recorded)} {len(approved - derived)}")
+
+
+def test_the_policy_check_tables_follow_from_the_derivative_policies(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """The named policy tables are exactly the policy-named tables no consumer derives, with their dictionaries."""
+    report, _, _ = real_scope
+    derived = {entry["table"] for group in ("in_scope", "dictionary") for entry in report[group]}
+    mapped = {entry["table"]: entry for entry in bronze.load_table_map(TABLE_MAP)["tables"]}
+    named = set()
+    for policy in json.loads(POLICIES.read_text())["entries"]:
+        named |= {policy["consumers"]["bronze_table"], *policy["consumers"]["dropped_bronze_tables"]}
+    held = named - derived
+    held |= {mapped[table]["dictionary"]["table"] for table in held if "dictionary" in mapped[table]} - derived
+    check(held == POLICY_CHECK_TABLES, f"{sorted(held)}")
+
+
+def test_only_the_deferred_finance_table_is_a_root_without_an_analytical_reader(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """hcai_finance_csv stays in scope because its staging model is deferred; every other root has a model that reads it."""
+    report, _, _ = real_scope
+    unread = {entry["table"]: entry["deferred_staging_model"] for entry in report["in_scope"] if not entry["analytical_readers"]}
+    check(unread == {"hcai_finance_csv": "stg_hcai_finance_csv"}, f"{unread}")
+    check(sum(entry["deferred_staging_model"] is not None for entry in report["in_scope"]) == 1, "another root carries a deferral")
+    check(report["counts"]["collections_leaving"] == 9, f"collections leaving: {report['counts']['collections_leaving']}")
 
 
 def test_a_dictionary_is_the_table_named_by_an_in_scope_table(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
@@ -258,7 +375,7 @@ def expected_from(report: dict[str, Any]) -> dict[str, Any]:
             entry.update(queue_units=300, queued_output_selected=False, collection_without_queue_unit=False, notes=["annotation"])
     document["counts"].update(default_scope_without_queued_output=22, leaving_with_queue_units=236)
     document["silver_source_declaration"]["decision"] = "text"
-    document["gap_records"] = ["not S2's"]
+    document["gap_records"] = ["not compared"]
     return document
 
 
@@ -290,7 +407,7 @@ def test_equality_names_a_missing_and_an_extra_table(real_scope: tuple[dict[str,
 
 # 9. Counts derive, never freeze.
 def test_counts_move_by_the_formula_when_the_reader_graph_changes() -> None:
-    """One more root with a new dictionary moves mapped by 2, declared by 1, pins by 1 and mirror names by 2; Q4 B adds one declared and one mirror name."""
+    """One more root with a new dictionary moves mapped by 2, declared by 1, pins by 1 and mirror names by 2; an index adds one of each declared and mirror."""
     models, declared, copies, table_map = base_project()
     before, _ = derive(synthetic_files(models, declared, copies), table_map)
     models["stg_c"] = ["t_c"]

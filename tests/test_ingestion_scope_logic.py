@@ -152,14 +152,14 @@ def test_graph_1_lists_match_the_hand_derived_scope() -> None:
     ids=["3_2", "3_2_index", "3_2_two_extra", "today_three_extra", "empty", "today", "today_index", "d3_a1", "d3_a1_index", "d3_a2", "d3_a2_index"],
 )
 def test_projected_counts_equal_independent_constants(roots: int, dictionaries: int, extra: int, expected: dict[str, int]) -> None:
-    """The whole returned dictionary, for small hand cases and for the design's tuples (mapped, declared, pins, mirror names) with and without the index."""
+    """The whole returned dictionary, for small hand cases and for the (mapped, declared, pins, mirror names) tuples with and without the index."""
     got = scope.projected_counts(roots, dictionaries, extra_loader_sources=extra)
     check(got == expected, f"{got} against {expected}")
 
 
 @pytest.mark.parametrize("graph", [graph_1, graph_2], ids=["graph_1", "graph_2"])
 def test_the_report_carries_the_interim_and_index_delivered_counts(graph: Any) -> None:
-    """Both Q4 states, each as a full (mapped, declared, pins, mirror names) set, agree with the report's own counts for the interim."""
+    """Both index states, each as a full (mapped, declared, pins, mirror names) set, agree with the report's own counts for the interim."""
     report, _ = graph()
     counts = report["counts"]
     interim = {"mapped": counts["default_scope"], "declared": counts["silver_declared_sources"], "pins": counts["silver_pins"]}
@@ -446,9 +446,8 @@ def run_main(tmp_path: Path, *extra: str) -> int:
     )
 
 
-@pytest.fixture
 def fake_parse(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A parse that returns a one-root manifest at once."""
+    """Replace the parse with one that returns a one-root manifest at once."""
     monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", lambda *args, **kwargs: manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a"]}, ["t_a"]))
 
 
@@ -458,16 +457,20 @@ def good_files(tmp_path: Path) -> None:
     (tmp_path / "map.json").write_text(json.dumps(table_map(entry("t_a", "x/a"))))
 
 
-def test_a_clean_run_exits_0_and_writes_the_report(tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_clean_run_exits_0_and_writes_the_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Exit 0, the report file exists and holds the one root; the output line carries the parse seconds."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     check(run_main(tmp_path) == 0, "a clean run must exit 0")
     check([row["table"] for row in json.loads((tmp_path / "out.json").read_text())["in_scope"]] == ["t_a"], "report content")
     check("dbt parse" in capsys.readouterr().out, "parse seconds on the output line")
 
 
-def test_a_scope_problem_exits_1_names_the_table_and_writes_nothing(tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_scope_problem_exits_1_names_the_table_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """copy_tables names a table that no model reads: exit 1 (never 2), the name is printed, no report."""
+    fake_parse(monkeypatch)
     project_folder(tmp_path, "    t_a: fam\n    t_b: fam\n")
     (tmp_path / "map.json").write_text(json.dumps(table_map(entry("t_a", "x/a"), entry("t_b", "x/a"))))
     check(run_main(tmp_path) == 1, "a scope problem must exit 1")
@@ -475,8 +478,11 @@ def test_a_scope_problem_exits_1_names_the_table_and_writes_nothing(tmp_path: Pa
     check(not (tmp_path / "out.json").exists(), "a failing run wrote a report")
 
 
-def test_malformed_table_map_json_exits_2_naming_the_file_and_keeps_an_old_report(tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_malformed_table_map_json_exits_2_naming_the_file_and_keeps_an_old_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A map file of ``{"tables": [}``: exit 2, the file named, the report from an earlier run untouched."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     (tmp_path / "map.json").write_text('{"tables": [}')
     (tmp_path / "out.json").write_text("older report\n")
@@ -485,8 +491,9 @@ def test_malformed_table_map_json_exits_2_naming_the_file_and_keeps_an_old_repor
     check((tmp_path / "out.json").read_text() == "older report\n", "the older report changed")
 
 
-def test_malformed_project_yaml_exits_2_naming_the_file(tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_malformed_project_yaml_exits_2_naming_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A dbt_project.yml holding ``vars: [``: exit 2 with the file named."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     (tmp_path / "project" / "dbt_project.yml").write_text("vars: [\n")
     check(run_main(tmp_path) == 2, "malformed project YAML must exit 2")
@@ -504,9 +511,10 @@ def test_malformed_project_yaml_exits_2_naming_the_file(tmp_path: Path, fake_par
     ],
 )
 def test_an_invalid_table_map_exits_2_naming_the_file(
-    tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str], name: str, text: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name: str, text: str | None
 ) -> None:
     """Every way the map can be invalid, valid JSON or not, is exit 2 with the file named and no traceback."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     if text is None:
         (tmp_path / "map.json").write_bytes(b"\xff\xfe\x00bad")
@@ -516,8 +524,9 @@ def test_an_invalid_table_map_exits_2_naming_the_file(
     check("map.json" in capsys.readouterr().err, f"{name}: the file is not named")
 
 
-def test_a_missing_input_exits_2(tmp_path: Path, fake_parse: None) -> None:
+def test_a_missing_input_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing table map is exit 2."""
+    fake_parse(monkeypatch)
     project_folder(tmp_path)
     check(run_main(tmp_path) == 2, "a missing map must exit 2")
 
@@ -565,8 +574,11 @@ def test_an_invalid_manifest_file_exits_2(tmp_path: Path, monkeypatch: pytest.Mo
     check("manifest" in capsys.readouterr().err, "the manifest is not named")
 
 
-def test_an_unwritable_report_path_exits_2_and_leaves_no_partial_file(tmp_path: Path, fake_parse: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_unwritable_report_path_exits_2_and_leaves_no_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The report cannot be written (its folder is missing): exit 2 naming the path; nothing is left behind."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     out = tmp_path / "no_such_folder" / "out.json"
     code = scope.main(["--project", str(tmp_path / "project"), "--table-map", str(tmp_path / "map.json"), "--no-packages", "--out", str(out)])
@@ -575,8 +587,9 @@ def test_an_unwritable_report_path_exits_2_and_leaves_no_partial_file(tmp_path: 
     check(sorted(path.name for path in tmp_path.iterdir()) == ["map.json", "project"], "files were left behind")
 
 
-def test_the_report_is_written_whole_or_not_at_all(tmp_path: Path, fake_parse: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_report_is_written_whole_or_not_at_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A write that fails midway leaves the earlier report as it was: the new bytes go to a temporary file first and replace it atomically."""
+    fake_parse(monkeypatch)
     good_files(tmp_path)
     out = tmp_path / "out.json"
     out.write_text("older report\n")

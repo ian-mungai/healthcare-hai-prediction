@@ -1,12 +1,16 @@
-"""The scope report: the default bronze scope derived from a fresh ``dbt parse`` (migration step S2, read only).
+"""The scope report: the default bronze scope derived from a fresh ``dbt parse`` (read only).
 
 Run from the repository root:
 
     .venv/bin/python -m scripts.ingestion.scope --out <report.json> [--timing-out <timing.json>]
 
-A bronze table is a **root** when a dbt model other than the operational copy-accounting model reads ``source('bronze', table)``. A **dictionary** is the table
-named by ``dictionary.table`` of a root. **Default scope** is the roots plus the dictionaries; every other mapped table **leaves**. The report also derives the
-silver source declaration (roots and the four loader tables), the pins, and the Glue mirror names, with the real ``pins.pinned_tables``.
+A bronze table is a **root** in two cases: a dbt model other than the operational copy-accounting model reads ``source('bronze', table)``; or ``copy_tables``
+names it and the project defers its staging model (``vars.deferred_models``, read by ``deferred_models``). A **dictionary** is the table named by
+``dictionary.table`` of a root. **Default scope** is the roots plus the dictionaries; every other mapped table **leaves**. The report also derives the silver
+source declaration (roots and the four loader tables), the pins and the Glue mirror names, with the real ``pins.pinned_tables``.
+
+``leaving`` lists the tables of the given map outside that consumer scope. It is not the list of tables bronze stopped loading: that is
+``config/lakehouse/bronze_leaving_scope.json``. The loaded map may keep a table that no consumer derives by an owner decision.
 
 Output contract:
 
@@ -17,7 +21,7 @@ Output contract:
   a parse that fails or passes its deadline, a report that cannot be written) prints the file or step by name and exits 2. A process-cleanup failure of the
   parser (a process group that survived KILL) is not turned into an exit code: it propagates, so the process module's own exit status applies. A caller
   must require exit 0 of the current run before it reads or binds the file: an older report at the path is not touched by a failing run.
-* Equality with another document (the S2 draft, a committed registry file) is :func:`equality_problems`: the consumer-scope projection only. It never reads
+* Equality with another document (a draft, a committed registry file) is :func:`equality_problems`: the consumer-scope projection only. It never reads
   acquisition annotations (queue counts, queued-output flags, notes), gap records, policy relationships or retained history.
 
 The module reads the dbt project, the table map and the locked dbt package archive. It writes only the paths it is given.
@@ -38,7 +42,7 @@ from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import bronze, dbt_package_archive, pins
+from scripts.lakehouse import bronze, dbt_package_archive, deferred_models, pins
 from scripts.process import LaunchesNotStopped, ProcessGroupSurvived, SessionListingFailed, TimeoutExpired
 from scripts.quality import dbt_manifest_labels
 
@@ -95,7 +99,7 @@ class ScopeError(RuntimeError):
 def projected_counts(roots: int, dictionaries: int, extra_loader_sources: int = 0) -> dict[str, int]:
     """The derived counts of a reader graph by formula: mapped = roots + dictionaries; declared = roots + loaders; pins = roots + 1; mirror = mapped + loaders.
 
-    ``extra_loader_sources`` counts loader-style tables declared as dbt sources but not mapped (the Q4 = C index table ``source_objects`` is one, once the
+    ``extra_loader_sources`` counts loader-style tables declared as dbt sources but not mapped (the searchable index table ``source_objects`` is one, once the
     index is delivered): each adds a declared source and a mirror name and no pin. Recompute with the report; never freeze these numbers.
     """
     loaders = len(LOADER_TABLES) + extra_loader_sources
@@ -164,6 +168,17 @@ def validate_copy_tables(copy_tables: Any, label: str) -> None:
         _name(family, label, f"vars.copy_tables.{table}")
 
 
+def validate_deferred_models(record: Any, label: str) -> None:
+    """Check the deferred_models variable: absent, null or a list of objects each with a ``models`` list of non-empty strings. Other keys are ignored."""
+    if record is None:
+        return
+    for index, entry in enumerate(_array(record, label, "vars.deferred_models")):
+        where = f"vars.deferred_models[{index}]"
+        models = _array(_object(entry, label, where).get("models", _ABSENT), label, f"{where}.models")
+        for position, model in enumerate(models):
+            _name(model, label, f"{where}.models[{position}]")
+
+
 def project_file_problems(project_dir: Path) -> list[str]:
     """Hints for a failed parse: the YAML files of the project that do not read as YAML or whose ``sources`` block has the wrong shape (a list of objects
     with a ``name``, each with a ``tables`` list of objects with a ``name``). dbt is the only reader of the sources file, so this names the file when
@@ -216,17 +231,29 @@ def validate_manifest(manifest: Any, label: str) -> None:
             _name(dependency, label, f"{where}.depends_on.nodes[{position}]")
 
 
-def read_copy_tables(project_dir: Path) -> dict[str, str]:
-    """The ``copy_tables`` variable of the dbt project: bronze table to source family. A file that is unreadable or shaped wrongly is a ScopeError naming it."""
+def _read_variables(project_dir: Path) -> tuple[Mapping[str, Any], str]:
+    """The ``vars`` of the dbt project file and the file's path. A file that is unreadable or shaped wrongly is a ScopeError naming it."""
     yaml = importlib.import_module("yaml")
     path = project_dir / "dbt_project.yml"
     try:
         document = yaml.safe_load(path.read_text())
     except (yaml.YAMLError, UnicodeDecodeError, RecursionError) as error:
         raise ScopeError(f"{path} is not valid YAML: {type(error).__name__}: {error}") from error
-    variables = _object(_object(document, str(path), "the document").get("vars", _ABSENT), str(path), "vars")
-    validate_copy_tables(variables.get("copy_tables", _ABSENT), str(path))
+    return _object(_object(document, str(path), "the document").get("vars", _ABSENT), str(path), "vars"), str(path)
+
+
+def read_copy_tables(project_dir: Path) -> dict[str, str]:
+    """The ``copy_tables`` variable of the dbt project: bronze table to source family. A file that is unreadable or shaped wrongly is a ScopeError naming it."""
+    variables, label = _read_variables(project_dir)
+    validate_copy_tables(variables.get("copy_tables", _ABSENT), label)
     return dict(variables["copy_tables"])
+
+
+def read_deferred_models(project_dir: Path) -> frozenset[str]:
+    """The model names of the ``deferred_models`` variable of the dbt project; no record means none. A wrong shape is a ScopeError naming the file."""
+    variables, label = _read_variables(project_dir)
+    validate_deferred_models(variables.get("deferred_models"), label)
+    return deferred_models.deferred_names({"vars": variables})
 
 
 def load_map(path: Path) -> dict[str, Any]:
@@ -280,8 +307,11 @@ def _scope_problems(
     return problems
 
 
-def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy_tables: Mapping[str, str]) -> tuple[dict[str, Any], list[str]]:
-    """Derive the scope report and its problems from a parsed manifest, a table map document and the copy_tables variable. Pure: reads nothing."""
+def derive_scope(
+    manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy_tables: Mapping[str, str], deferred: Collection[str] = ()
+) -> tuple[dict[str, Any], list[str]]:
+    """Derive the scope report and its problems from a parsed manifest, a table map document, the copy_tables variable and the deferred model names. Pure:
+    reads nothing."""
     validate_table_map(table_map, "the table map")
     validate_copy_tables(copy_tables, "copy_tables")
     validate_manifest(manifest, "the manifest")
@@ -293,7 +323,13 @@ def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy
     readers = bronze_readers(manifest)
     operational = set(OPERATIONAL_MODELS)
     analytical = {table: [model for model in models if model not in operational] for table, models in readers.items()}
-    roots = sorted(table for table, models in analytical.items() if models and table in mapped)
+    # A copied table whose own staging model is deferred keeps its stored copies for the lineage readers, so it stays in scope without an analytical reader.
+    deferred_copies = {
+        table: f"{deferred_models.STAGING_PREFIX}{table}"
+        for table in copy_tables
+        if table in mapped and table in readers and f"{deferred_models.STAGING_PREFIX}{table}" in deferred
+    }
+    roots = sorted(table for table in mapped if analytical.get(table) or table in deferred_copies)
     problems = _scope_problems(readers, mapped, copy_tables, set(roots))
     required_by: dict[str, list[str]] = {}
     for table in roots:
@@ -322,6 +358,7 @@ def derive_scope(manifest: Mapping[str, Any], table_map: Mapping[str, Any], copy
             "operational_readers": [model for model in readers[table] if model in operational],
             "source_family": copy_tables.get(table),
             "silver_source_declared": True,
+            "deferred_staging_model": None if analytical[table] else deferred_copies[table],
         }
         for table in roots
     ]
@@ -502,6 +539,7 @@ def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None)
     """
     table_map = load_map(table_map_path)
     copy_tables = read_copy_tables(project_dir)
+    deferred = read_deferred_models(project_dir)
     with tempfile.TemporaryDirectory(prefix="hai_scope_") as scratch:
         work = Path(scratch)
         packages = None
@@ -522,7 +560,7 @@ def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None)
             raise ScopeError(f"manifest.json of the dbt parse of {project_dir} is not valid JSON: {type(error).__name__}: {error}") from error
         seconds = time.monotonic() - began
     validate_manifest(manifest, f"manifest.json of the dbt parse of {project_dir}")
-    report, problems = derive_scope(manifest, table_map, copy_tables)
+    report, problems = derive_scope(manifest, table_map, copy_tables, deferred)
     return report, problems, seconds
 
 
