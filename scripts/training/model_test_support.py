@@ -242,8 +242,9 @@ NEAR_BOUNDARY: dict[str, Outcome] = {
     "peak_other_text": (True, None, 0.0, ((ConvergenceWarning, "The MLE may be on the boundary of the parameter space"),)),
     "peak_other_class": (True, None, 0.0, ((_LOOKALIKE, ON_BOUNDARY[1]),)),
     "peak_singular_class": (True, None, 0.0, ((SingularMatrixWarning, ON_BOUNDARY[1]),)),
-    # Boundary warnings on estimates that are not a positive variance above the fixed-only fit.
-    "stalled_at_zero": (True, 1e-9, 1e-6, (ON_BOUNDARY,)),
+    # Boundary warnings on estimates that are not a positive variance above the fixed-only fit. The stall claims a gain that the profile does not have at its
+    # ratio: a variance ratio of 1e-13 moves the log likelihood by less than the rounding allowed.
+    "stalled_at_zero": (True, 1e-13, 1e-6, (ON_BOUNDARY,)),
     "flat_away_from_zero": (True, 0.002, -1e-6, (ON_BOUNDARY,)),
     "level_at_zero": (True, 1e-9, 0.0, (ON_BOUNDARY,)),
     "zero_above": (True, 0.0, 0.0014, (ON_BOUNDARY,)),

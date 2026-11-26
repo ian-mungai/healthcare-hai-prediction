@@ -2493,6 +2493,71 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             result, _calls = boundary_slot(boundary_request(), at_boundary)
         require(result.status == "not_converged" and "ill-conditioned" in result.reason, f"an ill-conditioned comparison was resolved: {result.reason}")
 
+    def balanced_design(size: int, ratio: float, scale: float) -> tuple[Any, Any]:
+        """Six groups of ``size`` rows, fixed columns centred within each group and group effects of one magnitude, so the ML maximum is at ``ratio``."""
+        groups = np.repeat(np.arange(6), size)
+        rng = np.random.default_rng(1127)
+        x = rng.uniform(-1, 1, size=(len(groups), 3))
+        x -= np.repeat(x.reshape(6, size, 3).mean(axis=1), size, axis=0)
+        noise = rng.uniform(-1, 1, size=len(groups))
+        noise -= np.repeat(noise.reshape(6, size).mean(axis=1), size)
+        noise -= x @ np.linalg.lstsq(x, noise, rcond=None)[0]
+        noise *= math.sqrt(len(groups) / float(noise @ noise))
+        shift = np.repeat(np.tile((-1.0, 1.0), 3), size) * math.sqrt((1 + size * ratio) / (size - 1))
+        return replay_design(x, groups), scale * (5 + x @ [0.4, 0.7, 0.2] + noise + shift)
+
+    def mixed_flagged_fit_near_zero() -> None:
+        # Six groups of 3,000 rows with the ML maximum at a variance ratio of 9e-7: powell stops inside the zero-boundary tolerance, 1.1e-5 above zero.
+        design, y = balanced_design(3000, 9e-7, 0.1)
+        script = {
+            "lbfgs": (False, 0.0010621472517234527, -2.0056980565132108, (SINGULAR_ATTEMPT, unconverged[3][0])),
+            "bfgs": (True, 2.049958291858346e-06, -6.757705705240369e-06, (ON_BOUNDARY,)),
+            "powell": (True, 9.338989242600132e-07, 1.089628494810313e-05, (ON_BOUNDARY,)),
+            "nm": (True, 9.536743164079864e-07, 1.0873045539483428e-05, (ON_BOUNDARY,)),
+        }
+        found = fit_replay(design, y, script)
+        require(isinstance(found, dict) and "boundary" not in found and found.get("optimizer") == "powell", f"a near-zero positive fit was refused: {found}")
+        require(math.isclose(found["icc"], 9.338989242600132e-07 / (1 + 9.338989242600132e-07), rel_tol=1e-9), f"the near-zero ICC: {found['icc']}")
+        require(found["ownership_variance"] > 0 and math.isclose(found["likelihood_ratio"], 2.1793e-5, rel_tol=1e-3), f"the near-zero fit: {found}")
+
+    def mixed_flagged_fit_near_upper_grid() -> None:
+        # Six groups of eight rows with the ML maximum at a variance ratio of 9.5e7, past the grid's last step but one: the last two grid samples still rise.
+        ratio = 9.5e7
+        design, y = balanced_design(8, ratio, 0.02 / math.sqrt((1 + 8 * ratio) / 7))
+        script = {
+            "lbfgs": (True, 59821803.84899638, 379.2040088086966, (ON_BOUNDARY,)),
+            "bfgs": (True, 57185790.492934234, 379.1355009523729, (ON_BOUNDARY,)),
+            "powell": (True, 94979958.0021969, 379.51881233848974, (ON_BOUNDARY,)),
+            "nm": (True, 95010862.4829715, 379.5188123255133, (ON_BOUNDARY,)),
+        }
+        found = fit_replay(design, y, script)
+        require(isinstance(found, dict) and "boundary" not in found and found.get("optimizer") == "powell", f"a resolved positive optimum: {found}")
+        require(math.isclose(found["icc"], 94979958.0021969 / 94979959.0021969, rel_tol=1e-12), f"the ICC near one: {found['icc']}")
+        # The search needs no attempt past the grid's last step but one to find the maximum inside that step.
+        silent = dict.fromkeys(script, "linalg")
+        refused = fit_replay(design, y, silent)
+        require(isinstance(refused, str) and "a positive ownership variance is better" in refused and "ratio of 9.5e+07" in refused, f"no attempt: {refused}")
+        early = fit_replay(design, y, {**silent, "lbfgs": script["lbfgs"]})
+        require(isinstance(early, dict) and early.get("optimizer") == "lbfgs", f"an attempt below the last grid step was refused: {early}")
+
+    def mixed_profile_endpoint_slope() -> None:
+        # A later peak that stays below zero (at a ratio near 0.0105), so zero stands unless the profile still rises where the search ends.
+        design, y = weak_peak(900, 100, 160.0)
+        script = dict.fromkeys(("lbfgs", "bfgs", "powell", "nm"), (True, 1.1927e-10, -4.5885e-8, (ON_BOUNDARY,)))
+        # The last step rises from one end to the other and the profile falls where it ends: nothing past the search can change the decision.
+        with patch("scripts.training.models.mixed.PROFILE_RATIOS", np.asarray([1e-10, 0.002, 0.012])):
+            found = fit_replay(design, y, script)
+        require(isinstance(found, dict) and found.get("boundary") is True, f"a profile falling at its end was left unresolved: {found}")
+        # The last step falls from one end to the other and the profile rises where it ends: zero depends on the ratios that were not searched.
+        with patch("scripts.training.models.mixed.PROFILE_RATIOS", np.asarray([1e-10, 1e-5, 0.005])):
+            refused = fit_replay(design, y, script)
+        require(isinstance(refused, str) and "still rising at the largest variance ratio" in refused, f"a profile rising at its end gave zero: {refused}")
+        # The same grid with an attempt at the positive peak past its end: a gain above zero settles the comparison whatever the profile does there.
+        positive = {**script, "nm": (True, 0.0105544, 0.0039998465, (ON_BOUNDARY,))}
+        with patch("scripts.training.models.mixed.PROFILE_RATIOS", np.asarray([1e-10, 1e-5, 0.005])):
+            kept = fit_replay(*weak_peak(900, 100, 159.5599661424388), positive)
+        require(isinstance(kept, dict) and kept.get("optimizer") == "nm" and "boundary" not in kept, f"a resolved positive gain was left open: {kept}")
+
     convergence_warning = type("ConvergenceWarning", (UserWarning,), {})
     singular_warning = type("SingularMatrixWarning", (UserWarning,), {})
     unrelated_warning = type("UnrelatedNotice", (UserWarning,), {})
@@ -3647,6 +3712,9 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("mixed_flagged_fit_near_weak_peak", mixed_flagged_fit_near_weak_peak),
         ("mixed_flagged_fit_rescaled", mixed_flagged_fit_rescaled),
         ("mixed_flagged_fit_extra_warning", mixed_flagged_fit_extra_warning),
+        ("mixed_flagged_fit_near_zero", mixed_flagged_fit_near_zero),
+        ("mixed_flagged_fit_near_upper_grid", mixed_flagged_fit_near_upper_grid),
+        ("mixed_profile_endpoint_slope", mixed_profile_endpoint_slope),
         ("mixed_optimizer_sequence", mixed_optimizer_sequence),
         ("mixed_optimizer_deadline", mixed_optimizer_deadline),
         ("mediation_known_values", mediation_known_values),
