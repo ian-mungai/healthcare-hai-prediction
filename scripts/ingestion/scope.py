@@ -5,7 +5,8 @@ Run from the repository root:
     .venv/bin/python -m scripts.ingestion.scope --out <report.json> [--timing-out <timing.json>]
 
 A bronze table is a **root** in two cases: a dbt model other than the operational copy-accounting model reads ``source('bronze', table)``; or ``copy_tables``
-names it and the project defers its staging model (``vars.deferred_models``, read by ``deferred_models``). A **dictionary** is the table named by
+names it, the copy-accounting model reads it and the project defers its staging model (``vars.deferred_models``, read by ``deferred_models``). A declared dbt
+source that no model reads is no reader. A **dictionary** is the table named by
 ``dictionary.table`` of a root. **Default scope** is the roots plus the dictionaries; every other mapped table **leaves**. The report also derives the silver
 source declaration (roots and the four loader tables), the pins and the Glue mirror names, with the real ``pins.pinned_tables``.
 
@@ -16,6 +17,9 @@ Output contract:
 
 * The report is JSON with sorted keys, two-space indent and one trailing newline. It holds no time and no host path, so two runs on the same tree give the
   same bytes. The parse seconds go to the output line and to the optional ``--timing-out`` file, never into the report.
+* Before anything is read or parsed, ``--out`` and ``--timing-out`` are refused (exit 2, nothing written) when the two name one file or when either names
+  the table map, the pinned dbt or a path in the dbt project folder, in the repository's ``config/`` or ``dbt/`` folder or in the package archive folder.
+  Links are followed and letter case is ignored.
 * The report is written only when ``problems`` is empty (exit 0), to a temporary file that replaces the report atomically. A run with a scope problem
   prints each one by name, writes no report and exits 1. A run whose input cannot be read or parsed (a malformed table map or dbt_project.yml, a missing file,
   a parse that fails or passes its deadline, a report that cannot be written) prints the file or step by name and exits 2. A process-cleanup failure of the
@@ -88,7 +92,7 @@ COUNT_KEYS = (
     "silver_pins_if_dictionaries_declared",
     "glue_mirror_bronze_names",
 )
-DECLARATION_KEYS = ("declared_sources", "analytical_roots", "loader_tables")
+DECLARATION_KEYS = ("declared_sources", "data_roots", "analytical_roots", "loader_tables")
 PINS_KEYS = ("decided_roots_only", "if_all_scope_tables_declared", "extra_if_all_declared", "current_yml_declared_sources")
 
 
@@ -323,11 +327,12 @@ def derive_scope(
     readers = bronze_readers(manifest)
     operational = set(OPERATIONAL_MODELS)
     analytical = {table: [model for model in models if model not in operational] for table, models in readers.items()}
-    # A copied table whose own staging model is deferred keeps its stored copies for the lineage readers, so it stays in scope without an analytical reader.
+    # A copied table whose own staging model is deferred stays in scope without an analytical reader while the copy-accounting model still reads its copies.
+    # ``readers`` holds every declared source, so a declaration alone must not count.
     deferred_copies = {
         table: f"{deferred_models.STAGING_PREFIX}{table}"
         for table in copy_tables
-        if table in mapped and table in readers and f"{deferred_models.STAGING_PREFIX}{table}" in deferred
+        if table in mapped and operational & set(readers.get(table, ())) and f"{deferred_models.STAGING_PREFIX}{table}" in deferred
     }
     roots = sorted(table for table in mapped if analytical.get(table) or table in deferred_copies)
     problems = _scope_problems(readers, mapped, copy_tables, set(roots))
@@ -396,7 +401,8 @@ def derive_scope(
         "leaving": leaving,
         "silver_source_declaration": {
             "declared_sources": len(declared),
-            "analytical_roots": len(roots),
+            "data_roots": len(roots),
+            "analytical_roots": sum(1 for table in roots if analytical[table]),
             "loader_tables": list(LOADER_TABLES),
             "pins": {
                 "decided_roots_only": len(pinned),
@@ -434,10 +440,23 @@ def _projected(entries: Sequence[Mapping[str, Any]], keys: Sequence[str], where:
     for table, group in sorted(rows.items()):
         if len({_canonical(row) for row in group}) > 1:
             conflicts.add(table)
-            shown = sorted({_canonical({key: row.get(key) for key in keys}) for row in group})
+            shown = sorted({_canonical({key: row[key] for key in keys if key in row}) for row in group})
             outside = " (the rows differ only outside the projection)" if len(shown) == 1 else ""
             found.append(f"{where}: {table} appears more than once with different definitions{outside}: {' and '.join(shown)}")
-    return {table: {key: group[0].get(key) for key in keys} for table, group in rows.items()}, conflicts
+    return {table: {key: group[0][key] for key in keys if key in group[0]} for table, group in rows.items()}, conflicts
+
+
+def _differences(where: str, ours: Mapping[str, Any], theirs: Mapping[str, Any], keys: Sequence[str]) -> list[str]:
+    """Where the report side and the expected side differ in ``keys``. Each key must be on both sides, because a missing key is not null. Values are
+    compared as JSON text, so true is not 1 and false is not 0."""
+    found: list[str] = []
+    for key in keys:
+        absent = [side for side, values in (("the report", ours), ("the expected document", theirs)) if key not in values]
+        if absent:
+            found.extend(f"{where}: {key} is missing in {side}" for side in absent)
+        elif _canonical(ours[key]) != _canonical(theirs[key]):
+            found.append(f"{where}: {key} is {ours[key]!r}, expected {theirs[key]!r}")
+    return found
 
 
 def _shape_problems(document: Any, where: str) -> list[str]:
@@ -471,8 +490,9 @@ def _shape_problems(document: Any, where: str) -> list[str]:
 def equality_problems(report: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
     """Where the consumer-scope projection of ``report`` differs from ``expected`` (a report or a draft). An empty list means equal.
 
-    The projection is the table lists with the keys of :data:`PROJECTION`, the twelve :data:`COUNT_KEYS` and the silver declaration facts. List order is
-    ignored: entries are matched by table name. A table on one side only, a changed key or a changed count is named. A table repeated within one side gets
+    The projection is the table lists with the keys of :data:`PROJECTION`, the twelve :data:`COUNT_KEYS` and the silver declaration facts. Each of these
+    keys must be on both sides, and values are equal only when their JSON texts are. List order of the table lists is ignored: entries are matched by table
+    name. A table on one side only, a missing or changed key or a changed count is named. A table repeated within one side gets
     exactly one diagnostic showing every distinct definition (never resolved to one of them) unless the repeated rows are byte identical. A document of the
     wrong shape is named, not raised. Acquisition annotations, gap records, policy relationships, retained history and descriptive text are not compared.
     """
@@ -487,31 +507,13 @@ def equality_problems(report: Mapping[str, Any], expected: Mapping[str, Any]) ->
         found.extend(f"{group}: {table} is in the report only" for table in sorted(set(ours) - set(theirs)))
         found.extend(f"{group}: {table} is in the expected document only" for table in sorted(set(theirs) - set(ours)))
         for table in sorted(set(ours) & set(theirs)):
-            found.extend(
-                f"{group}: {table}: {key} is {ours[table][key]!r}, expected {theirs[table][key]!r}" for key in keys if ours[table][key] != theirs[table][key]
-            )
-    found.extend(
-        f"counts: {key} is {report['counts'].get(key)!r}, expected {expected['counts'].get(key)!r}"
-        for key in COUNT_KEYS
-        if report["counts"].get(key) != expected["counts"].get(key)
-    )
+            found.extend(_differences(f"{group}: {table}", ours[table], theirs[table], keys))
+    found.extend(_differences("counts", report["counts"], expected["counts"], COUNT_KEYS))
     ours_declaration, theirs_declaration = report["silver_source_declaration"], expected["silver_source_declaration"]
-    found.extend(
-        f"silver_source_declaration: {key} is {ours_declaration.get(key)!r}, expected {theirs_declaration.get(key)!r}"
-        for key in DECLARATION_KEYS
-        if ours_declaration.get(key) != theirs_declaration.get(key)
-    )
-    found.extend(
-        f"silver_source_declaration.pins: {key} is {ours_declaration['pins'].get(key)!r}, expected {theirs_declaration['pins'].get(key)!r}"
-        for key in PINS_KEYS
-        if ours_declaration["pins"].get(key) != theirs_declaration["pins"].get(key)
-    )
-    ours_mirror, theirs_mirror = (
-        ours_declaration["glue_mirror_names"].get("map_union_declared"),
-        theirs_declaration["glue_mirror_names"].get("map_union_declared"),
-    )
-    if ours_mirror != theirs_mirror:
-        found.append(f"silver_source_declaration.glue_mirror_names: map_union_declared is {ours_mirror!r}, expected {theirs_mirror!r}")
+    found.extend(_differences("silver_source_declaration", ours_declaration, theirs_declaration, DECLARATION_KEYS))
+    found.extend(_differences("silver_source_declaration.pins", ours_declaration["pins"], theirs_declaration["pins"], PINS_KEYS))
+    mirrors = ours_declaration["glue_mirror_names"], theirs_declaration["glue_mirror_names"]
+    found.extend(_differences("silver_source_declaration.glue_mirror_names", *mirrors, ("map_union_declared",)))
     return found
 
 
@@ -532,11 +534,57 @@ def write_atomically(path: Path, data: bytes) -> None:
         raise
 
 
+def _landing_places(path: Path) -> list[str]:
+    """The paths a write to ``path`` can touch: the directory entry the atomic replace puts in place and the file the links of ``path`` lead to."""
+    return [os.path.normpath(os.path.join(os.path.realpath(path.parent), path.name)), os.path.realpath(path)]
+
+
+def _same_file(first: str, second: str) -> bool:
+    """Whether two resolved paths name one file: equal text in any letter case (the macOS file system ignores case) or one file on disk."""
+    if first.casefold() == second.casefold():
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _within(path: str, folder: str) -> bool:
+    """Whether a resolved path is a resolved folder or lies below it, in any letter case."""
+    top = Path(folder.casefold()).parts
+    return Path(path.casefold()).parts[: len(top)] == top
+
+
+def destination_problems(out: Path, timing_out: Path | None, project_dir: Path, table_map_path: Path) -> list[str]:
+    """Why ``--out`` or ``--timing-out`` may not be written, one line each. A line says that the two name one file or that one of them names an input of
+    the command or a path in a production folder of the repository. An empty list means both are free."""
+    files = {"the table map": table_map_path, "the pinned dbt": dbt_manifest_labels.DBT}
+    folders = {
+        "the dbt project folder": project_dir,
+        "the repository's config folder": ROOT / "config",
+        "the repository's dbt folder": ROOT / PROJECT,
+        "the dbt package archive folder": ROOT / dbt_package_archive.ARCHIVES,
+    }
+    destinations = {"--out": out, "--timing-out": timing_out}
+    places = {flag: _landing_places(path) for flag, path in destinations.items() if path is not None}
+    found = []
+    if "--timing-out" in places and any(_same_file(first, second) for first in places["--out"] for second in places["--timing-out"]):
+        found.append(f"--timing-out {timing_out} is refused: it names the same file as --out {out}")
+    for flag, landing in places.items():
+        reasons = [f"it is {what}" for what, path in files.items() if any(_same_file(place, os.path.realpath(path)) for place in landing)]
+        reasons += [f"it is in {what} ({path})" for what, path in folders.items() if any(_within(place, os.path.realpath(path)) for place in landing)]
+        if reasons:
+            found.append(f"{flag} {destinations[flag]} is refused: {reasons[0]}")
+    return found
+
+
 def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None) -> tuple[dict[str, Any], list[str], float]:
     """Parse a dbt project with the pinned dbt and derive its scope; returns the report, its problems and the parse seconds.
 
     ``root`` is the repository whose locked package archive supplies the dbt packages; None parses without packages (a synthetic project).
     """
+    # dbt runs in a scratch folder, where a relative project path would not resolve.
+    project_dir = project_dir.absolute()
     table_map = load_map(table_map_path)
     copy_tables = read_copy_tables(project_dir)
     deferred = read_deferred_models(project_dir)
@@ -565,7 +613,8 @@ def scope_of_project(project_dir: Path, table_map_path: Path, root: Path | None)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Write the scope report; exit 0 on a clean report, 1 on named problems (no report written), 2 when the project cannot be parsed."""
+    """Write the scope report; exit 0 on a clean report, 1 on named problems (no report written), 2 on a refused destination or a project that cannot be
+    parsed."""
     parser = argparse.ArgumentParser(description="Derive the default bronze scope from a fresh dbt parse (read only).")
     parser.add_argument("--out", type=Path, required=True, help="the report file to write, only on a clean run")
     parser.add_argument("--timing-out", type=Path, help="a file for the dbt parse seconds, kept apart from the deterministic report")
@@ -574,6 +623,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-packages", action="store_true", help="parse without the locked dbt packages (a synthetic project)")
     arguments = parser.parse_args(argv)
     try:
+        refused = destination_problems(arguments.out, arguments.timing_out, arguments.project, arguments.table_map)
+        if refused:
+            raise ScopeError("; ".join(refused))
         report, problems, seconds = scope_of_project(arguments.project, arguments.table_map, None if arguments.no_packages else ROOT)
         for line in problems:
             sys.stdout.write(f"{line}\n")

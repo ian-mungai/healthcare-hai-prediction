@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from orchestration import ecs_lineage
-from scripts.acquisition.source_registry import historical_bronze_tables
 from scripts.ingestion import scope
 from scripts.lakehouse import bronze, glue_mirror, pins
 from scripts.process import run_command
@@ -28,6 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 TABLE_MAP = ROOT / "config/lakehouse/bronze_tables.json"
 SOURCES = ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
 LEAVING_RECORD = ROOT / "config/lakehouse/bronze_leaving_scope.json"
+# The table names of the map before the bronze scope trim, frozen from Git history. No file the trim wrote is an input to it. It sits under config/,
+# where the typos check keeps the publishers' spellings.
+PRETRIM_NAMES = ROOT / "config/quality/ingestion_scope_pretrim_tables.json"
 SILVER_READERS = ROOT / "config/lakehouse/bronze_silver_readers.json"
 POLICIES = ROOT / "config/acquisition/projection_policies.json"
 # The mapped tables that no consumer derives, by the owner decision that keeps each group loaded (the bronze scope trim). The report lists them as leaving the
@@ -192,10 +194,11 @@ def test_a_copy_tables_entry_with_no_analytical_reader_fails_by_name() -> None:
     check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "a table only the operational model reads became a root")
 
 
-def deferred_project(deferred: list[str], copy_tables: dict[str, str], table_map: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """The base project plus t_gone, which only the operational model reads, with the given deferral record and copy_tables entries."""
+def deferred_project(deferred: list[str], copy_tables: dict[str, str], table_map: dict[str, Any], accounted: bool = True) -> tuple[dict[str, Any], list[str]]:
+    """The base project plus the declared source t_gone, which only the operational model reads (or, with ``accounted`` false, no model), with the given
+    deferral record and copy_tables entries."""
     models, declared, copies, _ = base_project()
-    models[OPERATIONAL] = ["t_a", "t_b", "t_gone"]
+    models[OPERATIONAL] = ["t_a", "t_b", *(["t_gone"] if accounted else [])]
     files = synthetic_files(models, [*declared, "t_gone"], {**copies, **copy_tables})
     files["dbt_project.yml"] += "  deferred_models:\n    - reason: held\n      models: [" + ", ".join(deferred) + "]\n"
     with tempfile.TemporaryDirectory(prefix="hai_scope_test_") as scratch:
@@ -214,6 +217,15 @@ def test_a_copied_table_whose_staging_model_is_deferred_stays_a_root() -> None:
     check(rows["t_gone"]["analytical_readers"] == [] and rows["t_gone"]["deferred_staging_model"] == "stg_t_gone", f"{rows['t_gone']}")
     check(rows["t_a"]["deferred_staging_model"] is None, "a table with a reader is marked deferred")
     check(report["counts"]["silver_pins"] == 4, f"the deferred table is declared to silver and pinned: {report['counts']['silver_pins']}")
+
+
+def test_a_deferred_copy_table_that_the_copy_accounting_model_does_not_read_is_no_root() -> None:
+    """t_gone stays mapped, declared to dbt and named by copy_tables with its staging model deferred, but no model reads it: the declaration alone is no
+    reader, so the table is no root and the copy_tables entry is a named problem."""
+    report, problems = deferred_project(["stg_t_gone"], {"t_gone": "gamma"}, base_project()[3], accounted=False)
+    check("t_gone" not in {entry["table"] for entry in report["in_scope"]}, "a table that no model reads stayed a root")
+    check("t_gone" in {entry["table"] for entry in report["leaving"]}, "t_gone did not leave")
+    check(any("t_gone" in line and "copy_tables" in line for line in problems), f"the copy_tables entry t_gone is not named: {problems}")
 
 
 @pytest.mark.parametrize("deferred", [["int_t_gone"], ["stg_other"], ["t_gone"]])
@@ -285,7 +297,8 @@ def test_real_project_has_74_roots_11_dictionaries_and_21_outside_the_consumer_s
 
 
 def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
-    """The derived scope and the named held tables are the loaded map; what is left of the whole approved map is the leaving record, table for table."""
+    """The derived scope and the named held tables are the loaded map. The loaded names and the departure names together are the frozen names of the map
+    before the trim, name for name, and what is left of those names is the leaving record."""
     report, _, _ = real_scope
     roots = {entry["table"] for entry in report["in_scope"]}
     derived = roots | {entry["table"] for entry in report["dictionary"]}
@@ -296,7 +309,9 @@ def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str
     check(roots | set(scope.LOADER_TABLES) == silver_reads, f"roots differ from what silver reads: {(roots | set(scope.LOADER_TABLES)) ^ silver_reads}")
     check(outside == HELD_TABLES, f"mapped tables outside the consumer scope: unexpected {outside - HELD_TABLES}, missing {HELD_TABLES - outside}")
     check(derived == mapped - HELD_TABLES, f"the derived scope differs from the loaded map less the held tables: {derived ^ (mapped - HELD_TABLES)}")
-    approved = {entry["table"] for entry in historical_bronze_tables()}
+    approved = set(json.loads(PRETRIM_NAMES.read_text())["tables"])
+    check(not mapped & recorded, f"a table is both loaded and recorded as left: {mapped & recorded}")
+    check(mapped | recorded == approved, f"loaded plus departures is not the map before the trim: {(mapped | recorded) ^ approved}")
     left = approved - derived - HELD_TABLES
     check(left == recorded, f"the leaving set differs from the record: only derived {left - recorded}, only recorded {recorded - left}")
     check((len(approved), len(recorded), len(approved - derived)) == (331, 225, 246), f"{len(approved)} {len(recorded)} {len(approved - derived)}")
@@ -322,6 +337,9 @@ def test_only_the_deferred_finance_table_is_a_root_without_an_analytical_reader(
     check(unread == {"hcai_finance_csv": "stg_hcai_finance_csv"}, f"{unread}")
     check(sum(entry["deferred_staging_model"] is not None for entry in report["in_scope"]) == 1, "another root carries a deferral")
     check(report["counts"]["collections_leaving"] == 9, f"collections leaving: {report['counts']['collections_leaving']}")
+    declaration = report["silver_source_declaration"]
+    got = (declaration.get("data_roots"), declaration.get("analytical_roots"))
+    check(got == (74, 73), f"data roots and the roots with an analytical reader: {got}")
 
 
 def test_a_dictionary_is_the_table_named_by_an_in_scope_table(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
@@ -500,3 +518,14 @@ def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(fault: 
     if fault in ("sources_not_a_list", "tables_not_a_list", "syntax"):
         check("_sources.yml" in err, f"{fault}: the sources file is not named: {err[:400]}")
     check(not out.exists(), "a report was written")
+
+
+def test_relative_paths_are_read_from_the_callers_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The real parse runs in its own scratch folder, so a relative project path must be made absolute first. The other paths may be relative too."""
+    models, declared, copies, table_map = base_project()
+    write_project(synthetic_files(models, declared, copies), tmp_path)
+    (tmp_path / "map.json").write_text(json.dumps(table_map))
+    monkeypatch.chdir(tmp_path)
+    code = scope.main(["--project", "project", "--table-map", "map.json", "--no-packages", "--out", "report.json"])
+    check(code == 0, f"exit {code}: {capsys.readouterr().err[:400]}")
+    check([row["table"] for row in json.loads((tmp_path / "report.json").read_text())["in_scope"]] == ["t_a", "t_b"], "report content")

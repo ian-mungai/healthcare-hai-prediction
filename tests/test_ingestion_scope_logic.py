@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -340,7 +341,7 @@ PROJECTED = {
 }
 ANNOTATIONS = ("queue_units", "collection_without_queue_unit", "queued_output_selected", "notes", "anything_else")
 COUNT_NAMES = tuple(GRAPH_1_COUNTS)
-DECLARATION_FACTS = ("declared_sources", "analytical_roots", "loader_tables")
+DECLARATION_FACTS = ("declared_sources", "data_roots", "analytical_roots", "loader_tables")
 PINS_FACTS = ("decided_roots_only", "if_all_scope_tables_declared", "extra_if_all_declared", "current_yml_declared_sources")
 
 
@@ -601,3 +602,229 @@ def test_the_report_is_written_whole_or_not_at_all(tmp_path: Path, monkeypatch: 
     check(run_main(tmp_path) == 2, "a failed replace must exit 2")
     check(out.read_text() == "older report\n", "the older report changed")
     check(sorted(path.name for path in tmp_path.iterdir()) == ["map.json", "out.json", "project"], "a temporary file was left behind")
+
+
+# The projection requires each of its keys on both sides and compares values with their JSON types.
+def one_root_report() -> dict[str, Any]:
+    """The report of one root with no dictionary: dictionary_table is null and the dictionary count is 0."""
+    report, problems = scope.derive_scope(manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a"]}, ["t_a"]), table_map(entry("t_a", "x/a")), {"t_a": "fam"})
+    check(problems == [], f"unexpected problems: {problems}")
+    check(report["in_scope"][0]["dictionary_table"] is None and report["counts"]["dictionary"] == 0, "the case needs a null and a zero")
+    return report
+
+
+# Each row: a path in the report document, the value one side holds there, the value the other side holds and two words that the one problem must hold.
+# Python's == calls every pair equal, apart from the dropped key, which the lookup of a missing key turns into null.
+DROPPED = object()
+JSON_TYPE_CHANGES: dict[str, tuple[tuple[Any, ...], Any, Any, str, str]] = {
+    "dropped_null_key": (("in_scope", 0, "dictionary_table"), None, DROPPED, "t_a", "dictionary_table"),
+    "false_for_zero": (("counts", "dictionary"), 0, False, "counts", "dictionary"),
+    "one_for_true": (("in_scope", 0, "silver_source_declared"), True, 1, "t_a", "silver_source_declared"),
+    "true_for_one": (("counts", "in_scope_data"), 1, True, "counts", "in_scope_data"),
+    "zero_for_false_in_a_row": (("in_scope", 0, "source_family"), False, 0, "t_a", "source_family"),
+    "true_for_one_pin_fact": (("silver_source_declaration", "pins", "decided_roots_only"), 1, True, "pins", "decided_roots_only"),
+    "true_for_one_declaration_fact": (("silver_source_declaration", "data_roots"), 1, True, "silver_source_declaration", "data_roots"),
+    "true_for_one_mirror_count": (("silver_source_declaration", "glue_mirror_names", "map_union_declared"), 1, True, "mirror", "map_union_declared"),
+    "true_for_one_in_a_list": (("in_scope", 0, "roles"), [1], [True], "t_a", "roles"),
+}
+
+
+def changed_at(document: dict[str, Any], path: tuple[Any, ...], value: Any) -> dict[str, Any]:
+    """A deep copy with ``value`` at ``path``; DROPPED removes the key."""
+    changed = copy.deepcopy(document)
+    cursor: Any = changed
+    for step in path[:-1]:
+        cursor = cursor[step]
+    if value is DROPPED:
+        del cursor[path[-1]]
+    else:
+        cursor[path[-1]] = value
+    return changed
+
+
+@pytest.mark.parametrize("side", ["report", "expected"])
+@pytest.mark.parametrize("case", sorted(JSON_TYPE_CHANGES))
+def test_a_dropped_key_or_a_changed_json_type_is_named_on_either_side(case: str, side: str) -> None:
+    """A removed null, false for 0 and 1 for true (and the reverse) are each one named difference, on whichever side the change is."""
+    path, held, other, first, second = JSON_TYPE_CHANGES[case]
+    base = changed_at(one_root_report(), path, held)
+    check(scope.equality_problems(base, copy.deepcopy(base)) == [], f"{case}: equal documents must be equal")
+    changed = changed_at(base, path, other)
+    found = scope.equality_problems(changed, base) if side == "report" else scope.equality_problems(base, changed)
+    check(len(found) == 1 and first in found[0] and second in found[0], f"{case} on the {side} side: {found}")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("in_scope", 0, "dictionary_table"),
+        ("counts", "dictionary"),
+        ("silver_source_declaration", "analytical_roots"),
+        ("silver_source_declaration", "pins", "decided_roots_only"),
+        ("silver_source_declaration", "glue_mirror_names", "map_union_declared"),
+    ],
+    ids=["row_key", "count", "declaration_fact", "pin_fact", "mirror_count"],
+)
+def test_a_projected_key_missing_from_both_sides_is_named(path: tuple[Any, ...]) -> None:
+    """Two documents that both lack a projected key are not equal in it: each side is named."""
+    changed = changed_at(one_root_report(), path, DROPPED)
+    found = scope.equality_problems(changed, copy.deepcopy(changed))
+    check(len(found) == 2 and all(str(path[-1]) in line and "missing" in line for line in found), f"{found}")
+
+
+def test_repeated_rows_that_differ_by_a_dropped_null_are_not_shown_as_equal_in_the_projection() -> None:
+    """A row without a projected key and a row holding null for it are two definitions inside the projection."""
+    report = one_root_report()
+    document = copy.deepcopy(report)
+    document["in_scope"].append({key: value for key, value in document["in_scope"][0].items() if key != "dictionary_table"})
+    found = scope.equality_problems(report, document)
+    check(len(found) == 1 and "more than once" in found[0] and "outside the projection" not in found[0], f"{found}")
+
+
+def test_the_declaration_counts_the_data_roots_apart_from_the_roots_with_an_analytical_reader() -> None:
+    """t_b is a root only through its deferred staging model: two data roots, one of them with an analytical reader."""
+    report, problems = scope.derive_scope(
+        manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a", "t_b"]}, ["t_a", "t_b"]),
+        table_map(entry("t_a", "x/a"), entry("t_b", "x/a")),
+        {"t_a": "fam", "t_b": "fam"},
+        {"stg_t_b"},
+    )
+    check(problems == [], f"unexpected problems: {problems}")
+    declaration = report["silver_source_declaration"]
+    got = (report["counts"]["in_scope_data"], declaration.get("data_roots"), declaration.get("analytical_roots"))
+    check(got == (2, 2, 1), f"data roots, declared data roots, analytical roots: {got}")
+
+
+# Output destinations. The repository root is a scratch folder, so no case can write a real project file.
+SCRATCH_FILES = {
+    "config/lakehouse/bronze_tables.json": json.dumps(table_map(entry("t_a", "x/a"))),
+    "config/lakehouse/bronze_leaving_scope.json": '{"tables": []}\n',
+    "config/lakehouse/dbt_package_archive.json": "{}\n",
+    "dbt/dbt_project.yml": "name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nvars:\n  copy_tables:\n    t_a: fam\n",
+    "dbt/package-lock.yml": "packages: []\n",
+    "dbt/models/stg_a.sql": "select 1\n",
+    "data/analytics/dbt/package_archive/packages.tar": "archive\n",
+    "inputs/map.json": json.dumps(table_map(entry("t_a", "x/a"))),
+    "inputs/project/dbt_project.yml": "name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nvars:\n  copy_tables:\n    t_a: fam\n",
+    "inputs/project/profiles.yml": "synth: {}\n",
+    "inputs/project/models/stg_a.sql": "select 1\n",
+}
+
+
+def scratch_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, list[int]]:
+    """A scratch repository that stands in for the real one, and a list that grows by one entry for each parse."""
+    root = tmp_path / "root"
+    for relative, text in SCRATCH_FILES.items():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_text(text)
+    (root / "work").mkdir()
+    parses: list[int] = []
+
+    def parse(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        parses.append(1)
+        return manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a"]}, ["t_a"])
+
+    monkeypatch.setattr(scope, "ROOT", root)
+    monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", parse)
+    monkeypatch.chdir(root)
+    return root, parses
+
+
+def snapshot(root: Path) -> dict[str, bytes]:
+    """The bytes of every file under ``root``."""
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+OWN_INPUTS = ["--project", "inputs/project", "--table-map", "inputs/map.json"]
+# Each row: the input flags and one destination that no run may write.
+PROTECTED_DESTINATIONS: dict[str, tuple[list[str], str]] = {
+    "given_table_map": (OWN_INPUTS, "inputs/map.json"),
+    "given_project_file": (OWN_INPUTS, "inputs/project/dbt_project.yml"),
+    "given_project_profiles": (OWN_INPUTS, "inputs/project/profiles.yml"),
+    "given_project_model": (OWN_INPUTS, "inputs/project/models/stg_a.sql"),
+    "new_file_in_the_given_project": (OWN_INPUTS, "inputs/project/models/new.sql"),
+    "table_map_through_dots": (OWN_INPUTS, "work/../inputs/map.json"),
+    "default_table_map": ([], "config/lakehouse/bronze_tables.json"),
+    "departure_file": (OWN_INPUTS, "config/lakehouse/bronze_leaving_scope.json"),
+    "package_archive_record": (OWN_INPUTS, "config/lakehouse/dbt_package_archive.json"),
+    "package_lock": (OWN_INPUTS, "dbt/package-lock.yml"),
+    "production_model": (OWN_INPUTS, "dbt/models/stg_a.sql"),
+    "new_file_under_config": (OWN_INPUTS, "config/lakehouse/report.json"),
+    "package_archive": (OWN_INPUTS, "data/analytics/dbt/package_archive/packages.tar"),
+}
+
+
+@pytest.mark.parametrize("flag", ["--out", "--timing-out"])
+@pytest.mark.parametrize("case", sorted(PROTECTED_DESTINATIONS))
+def test_a_destination_that_is_an_input_or_a_production_file_is_refused_before_the_parse(
+    case: str, flag: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 2, the destination and the flag named, no parse and no file changed or added."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    inputs, destination = PROTECTED_DESTINATIONS[case]
+    before = snapshot(root)
+    other = ["--out", "work/report.json"] if flag == "--timing-out" else []
+    code = scope.main([*inputs, "--no-packages", flag, destination, *other])
+    err = capsys.readouterr().err
+    check(code == 2, f"{case}: exit {code}: {err}")
+    check("refused" in err and flag in err and Path(destination).name in err, f"{case}: {err}")
+    check(parses == [], f"{case}: the parse ran before the refusal")
+    check(snapshot(root) == before, f"{case}: a file changed")
+
+
+@pytest.mark.parametrize(
+    ("out", "timing"),
+    [("work/report.json", "work/report.json"), ("work/report.json", "work/../work/report.json"), ("work/report.json", "ABSOLUTE")],
+    ids=["same_text", "through_dots", "relative_and_absolute"],
+)
+@pytest.mark.parametrize("copy_tables", ["    t_a: fam\n", "    t_a: fam\n    t_b: fam\n"], ids=["clean_run", "scope_problem"])
+def test_one_path_for_the_report_and_the_timing_is_refused_and_keeps_an_older_report(
+    out: str, timing: str, copy_tables: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 2 before the parse whether the scope would be clean or not, with the older report untouched."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    project = root / "inputs/project/dbt_project.yml"
+    project.write_text(project.read_text().replace("    t_a: fam\n", copy_tables))
+    (root / "work/report.json").write_text("older report\n")
+    timing = str(root / "work/report.json") if timing == "ABSOLUTE" else timing
+    before = snapshot(root)
+    code = scope.main([*OWN_INPUTS, "--no-packages", "--out", out, "--timing-out", timing])
+    err = capsys.readouterr().err
+    check(code == 2 and "refused" in err and "--timing-out" in err, f"exit {code}: {err}")
+    check(parses == [] and snapshot(root) == before, "the parse ran or a file changed")
+
+
+@pytest.mark.parametrize("alias", ["symlink_to_input", "hard_link_to_input", "linked_folder", "link_inside_config", "other_letter_case"])
+def test_another_name_for_a_protected_file_is_refused(alias: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A link to an input, a linked folder, a link that itself sits under config/ and another letter case of an input are all refused."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    destination = "work/alias.json"
+    if alias == "symlink_to_input":
+        (root / destination).symlink_to(root / "inputs/map.json")
+    elif alias == "hard_link_to_input":
+        os.link(root / "inputs/map.json", root / destination)
+    elif alias == "linked_folder":
+        (root / "work/linked").symlink_to(root / "inputs", target_is_directory=True)
+        destination = "work/linked/map.json"
+    elif alias == "link_inside_config":
+        destination = "config/lakehouse/linked.json"
+        (root / destination).symlink_to(root / "work/elsewhere.json")
+    else:
+        destination = "inputs/MAP.json"
+    before = snapshot(root)
+    code = scope.main([*OWN_INPUTS, "--no-packages", "--out", destination])
+    err = capsys.readouterr().err
+    check(code == 2 and "refused" in err, f"{alias}: exit {code}: {err}")
+    check(parses == [] and snapshot(root) == before, f"{alias}: the parse ran or a file changed")
+    if alias == "link_inside_config":
+        check((root / destination).is_symlink() and not (root / "work/elsewhere.json").exists(), "the link was replaced")
+
+
+def test_two_free_destinations_are_written_and_a_second_run_replaces_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusals leave ordinary destinations alone, in the repository and outside config/, dbt/ and the archive folder, run after run."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    arguments = [*OWN_INPUTS, "--no-packages", "--out", "data/report.json", "--timing-out", "work/timing.json"]
+    check(scope.main(arguments) == 0 and scope.main(arguments) == 0, "both runs must exit 0")
+    check(json.loads((root / "data/report.json").read_text())["kind"] == scope.KIND, "report content")
+    check("dbt_parse_seconds" in json.loads((root / "work/timing.json").read_text()), "timing content")
+    check(len(parses) == 2, f"{parses}")
