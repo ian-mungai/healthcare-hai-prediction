@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from scripts.training.model_test_support import SpatialOLS, exact_f, libraries, upper_f_tail
+from scripts.training.model_test_support import SpatialOLS, exact_f, libraries, near_boundary_fit, upper_f_tail
 
 
 def require(condition: Any, reason: str) -> None:
@@ -130,6 +130,23 @@ def planted(source: Any, years: Sequence[int], count: int = 6, value: float = 1.
     marked = {str(990000 + number) for number in range(count)}
     rows = tuple(dict(row, process=value, cmi=value) if row["ccn"] in marked and row["window_year"] in years else row for row in source.data.rows)
     return replace(source, data=Dataset(rows, source.data.features, "HAI_1"))
+
+
+def no_ownership_effect(rows: list[dict[str, Any]], label: str = "hai_1__sir__number") -> None:
+    """Rewrite synthetic rows so the fixed-only residuals sum to zero in every ownership group, which puts the ML optimum at a zero ownership variance.
+
+    Hospitals ``h`` and ``h + 6`` share an ownership group (the number modulo 6) and, window by window, the same predictors. Their outcomes are one linear
+    function of those predictors plus noise of equal size and opposite sign, so the noise is orthogonal to every predictor and cancels inside each group."""
+    rng = np.random.default_rng(1126)
+    pairs: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        number = int(row["ccn"]) - 990000
+        pairs.setdefault((number - 6 if number % 12 >= 6 else number, row["window_year"]), []).append(row)
+    for pair in pairs.values():
+        first, noise = pair[0], float(rng.normal(scale=0.5))
+        for sign, row in zip((1.0, -1.0), pair, strict=True):
+            row.update({name: first[name] for name in ("process", "cmi", "extra")})
+            row[label] = float(2 + 0.4 * first["process"] + 0.25 * first["cmi"] + 0.6 * first["extra"] + sign * noise)
 
 
 def noise_process_request() -> Any:
@@ -2113,6 +2130,101 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 boundary = suite.fit_slot(req, "m3_mixed")
         require(boundary.status == "not_converged" and "singular variance" in boundary.reason, "zero ownership variance changed an unresolved rule")
 
+    def boundary_request() -> Any:
+        rows = [dict(row) for row in req.data.rows]
+        no_ownership_effect(rows)
+        return replace(req, data=replace(req.data, rows=tuple(rows)))
+
+    def boundary_slot(operation: Any, script: dict[str, str]) -> tuple[Any, list[str]]:
+        calls: list[str] = []
+        with libraries() as replacements, patch.object(replacements["statsmodels.api"].MixedLM, "fit", near_boundary_fit(script, calls)):
+            return suite.fit_slot(operation, "m3_mixed"), calls
+
+    # The four results of the live fit, as statsmodels gives them when the optimum is the zero variance.
+    at_boundary = {"lbfgs": "broken", "bfgs": "below", "powell": "boundary", "nm": "boundary"}
+
+    def fixed_only(operation: Any) -> tuple[Any, float, int, int]:
+        """The fixed-only predictions on the holdout, the residual sum of squares, rows and coefficient count of the training fit, from plain least squares."""
+        training, holdout = operation.data.split()
+        parts = [np.asarray([[1.0, row["process"], row["cmi"], row["extra"]] for row in part.rows]) for part in (training, holdout)]
+        beta = np.linalg.lstsq(parts[0], training.y, rcond=None)[0]
+        residual = training.y - parts[0] @ beta
+        groups = np.asarray([row["control_type_code"] for row in training.rows])
+        require(max(abs(float(residual[groups == group].sum())) for group in set(groups)) < 1e-8, "the synthetic data still has an ownership effect")
+        return parts[1] @ beta, float(residual @ residual), len(residual), parts[0].shape[1]
+
+    def mixed_boundary_fit() -> None:
+        operation = boundary_request()
+        predictions, ssr, rows, width = fixed_only(operation)
+        result, calls = boundary_slot(operation, at_boundary)
+        require(result.status == "fitted", f"a zero-boundary fit was not counted as fitted: {result.status} {result.reason}")
+        require(calls == ["lbfgs", "bfgs", "powell", "nm"], f"a boundary fit was accepted before every optimizer was tried: {calls}")
+        found = result.details
+        expected = {"boundary": True, "ownership_variance": 0.0, "icc": 0.0, "likelihood_ratio": 0.0, "p_value": 1.0, "optimizer": "powell", "reml": False}
+        require(all(found.get(key) == value for key, value in expected.items()), f"boundary details: { {key: found.get(key) for key in expected} }")
+        require(found["null_distribution"] == "half_point_mass_zero_half_chi_squared_1", "the boundary-aware likelihood test lost its null distribution")
+        require(bool(found["boundary_reason"]), "a boundary fit gives no reason")
+        outcomes = found["optimizer_outcomes"]
+        require(
+            [text.split(":")[0] for text in outcomes] == calls and "Random effects covariance is singular" in outcomes[0],
+            f"the optimizer outcomes are not kept: {outcomes}",
+        )
+        log_likelihood = -rows / 2 * (math.log(2 * math.pi) + 1 + math.log(ssr / rows))
+        require(math.isclose(found["residual_variance"], ssr / rows, rel_tol=1e-9), "the boundary residual variance is not the ML fixed-only one")
+        require(math.isclose(found["aic"], -2 * log_likelihood + 2 * (width + 2), rel_tol=1e-9), "the boundary AIC does not count the ownership variance")
+        require(math.isclose(found["bic"], -2 * log_likelihood + math.log(rows) * (width + 2), rel_tol=1e-9), "the boundary BIC differs")
+        require(np.allclose(result.predictions, predictions, rtol=0, atol=1e-8), "boundary predictions are not those of the fixed-only design")
+        model = result.pipeline.named_steps["model"]
+        require(set(model.effects_) == {str(number) for number in range(6)} and set(model.effects_.values()) == {0.0}, f"effects: {model.effects_}")
+        require(len(found["coefficients"]) == width, "boundary coefficients are incomplete")
+        # A later optimizer is enough, and a clean attempt whose variance is exactly zero is a boundary fit too, with no further attempt.
+        late, _calls = boundary_slot(operation, {"lbfgs": "linalg", "bfgs": "below", "powell": "boundary_unconverged", "nm": "boundary"})
+        require(late.status == "fitted" and late.details.get("optimizer") == "nm" and late.details.get("boundary") is True, f"late witness: {late.reason}")
+        clean, calls = boundary_slot(operation, {"lbfgs": "clean_zero"})
+        require(clean.status == "fitted" and clean.details.get("boundary") is True and calls == ["lbfgs"], f"a clean zero variance: {clean.reason}")
+        calls = []
+        with libraries() as replacements, patch.object(replacements["statsmodels.api"].MixedLM, "fit", near_boundary_fit(at_boundary, calls)):
+            output = suite.fit_model(operation, "m3").to_result()
+        require(output["test_statistics"]["ownership"].get("boundary") is True, "the ownership result does not say it is a boundary fit")
+        require(output["p_values"] == {"ownership.p_value": 1.0}, f"the boundary p value is not reported: {output['p_values']}")
+        require(output["selection"]["selected"] == "m3_mixed", "a boundary fit was left out of the holdout selection")
+        with libraries():
+            interior = suite.fit_slot(req, "m3_mixed")
+        require(
+            interior.status == "fitted" and not {"boundary", "boundary_reason", "optimizer_outcomes"} & set(interior.details),
+            f"an interior fit changed: {sorted(interior.details)}",
+        )
+
+    def mixed_boundary_refusals() -> None:
+        clean_data = boundary_request()
+        refusals = (
+            ("an ownership effect that every attempt missed", req, at_boundary, "likelihood rises as the ownership variance leaves zero"),
+            ("an attempt above the fixed-only fit", clean_data, {**at_boundary, "bfgs": "above"}, "above the fixed-only likelihood"),
+            ("only linear-algebra errors", clean_data, dict.fromkeys(at_boundary, "linalg"), "no attempt converged at the zero-variance boundary"),
+            (
+                "a boundary point that did not converge",
+                clean_data,
+                {"lbfgs": "linalg", "bfgs": "below", "powell": "boundary_unconverged", "nm": "below"},
+                "no attempt converged at the zero-variance boundary",
+            ),
+            (
+                "an infinite likelihood alone",
+                clean_data,
+                {"lbfgs": "broken", "bfgs": "below", "powell": "below", "nm": "below"},
+                "no attempt converged at the zero-variance boundary",
+            ),
+            (
+                "a small variance that is not zero",
+                clean_data,
+                {"lbfgs": "broken", "bfgs": "below", "powell": "negligible", "nm": "negligible"},
+                "no attempt converged at the zero-variance boundary",
+            ),
+        )
+        for label, operation, script, text in refusals:
+            result, calls = boundary_slot(operation, script)
+            require(result.status == "not_converged" and len(calls) == 4, f"{label} was counted as fitted: {result.status} {result.details} {calls}")
+            require("did not converge with any of the optimizers" in result.reason and text in result.reason, f"{label} gives no named reason: {result.reason}")
+
     convergence_warning = type("ConvergenceWarning", (UserWarning,), {})
     singular_warning = type("SingularMatrixWarning", (UserWarning,), {})
     unrelated_warning = type("UnrelatedNotice", (UserWarning,), {})
@@ -3255,6 +3367,8 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("aggregate_panel_counts", result_has_aggregate_panel_counts),
         ("nested_and_joint_values", nested_and_joint_values),
         ("mixed_values_and_ownership_hold", mixed_values_and_unresolved_ownership),
+        ("mixed_boundary_fit", mixed_boundary_fit),
+        ("mixed_boundary_refusals", mixed_boundary_refusals),
         ("mixed_optimizer_sequence", mixed_optimizer_sequence),
         ("mixed_optimizer_deadline", mixed_optimizer_deadline),
         ("mediation_known_values", mediation_known_values),

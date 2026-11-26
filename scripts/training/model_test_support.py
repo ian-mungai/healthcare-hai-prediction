@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import warnings
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -198,6 +199,49 @@ class MixedLM:
             aic=pooled.aic - 4,
             bic=pooled.bic - 2,
         )
+
+
+# Each outcome copies what statsmodels 0.15.0 returned on synthetic data near the zero-variance boundary: whether it reports convergence, the ownership
+# variance over the residual variance, the log likelihood minus that of the fixed-only fit and the warning it raises.
+NEAR_BOUNDARY = {
+    "broken": (True, 0.0, math.inf, "SingularMatrixWarning", "Random effects covariance is singular"),
+    "boundary": (True, 1e-9, -1e-6, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
+    "boundary_unconverged": (False, 1e-9, -1e-6, "ConvergenceWarning", "Maximum Likelihood optimization failed to converge. Check mle_retvals"),
+    "clean_zero": (True, 0.0, 0.0, "", ""),
+    "negligible": (True, 7e-6, 0.0014, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
+    "below": (False, 0.1, -15.0, "ConvergenceWarning", "Maximum Likelihood optimization failed to converge. Check mle_retvals"),
+    "above": (True, 0.002, 7.0, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
+}
+
+
+def near_boundary_fit(script: dict[str, str], calls: list[str]) -> Any:
+    """A ``MixedLM.fit`` replacement that gives each optimizer its scripted near-boundary result; ``linalg`` raises the singular-matrix error."""
+
+    def fit(self: MixedLM, *, reml: bool, method: str, disp: bool) -> Any:
+        if reml or disp:
+            raise AssertionError("mixed comparison must use maximum likelihood without verbose output")
+        calls.append(method)
+        if script[method] == "linalg":
+            raise np.linalg.LinAlgError("Singular matrix")
+        converged, ratio, gain, kind, message = NEAR_BOUNDARY[script[method]]
+        if kind:
+            warnings.warn(message, type(kind, (UserWarning,), {}), stacklevel=2)
+        pooled = OLS(self.y, self.x).fit()
+        scale = pooled.ssr / len(self.y)
+        # An exactly zero covariance leaves statsmodels with fixed effects that are not the fixed-only ones.
+        shift = 0.5 if math.isinf(gain) else 0.0
+        return SimpleNamespace(
+            converged=converged,
+            fe_params=pooled.params + shift,
+            cov_re=np.asarray([[ratio * scale]]),
+            scale=scale,
+            random_effects={group: np.asarray([0.0]) for group in sorted(set(self.groups))},
+            llf=pooled.llf + gain,
+            aic=pooled.aic,
+            bic=pooled.bic,
+        )
+
+    return fit
 
 
 class ExplainerError(Exception):

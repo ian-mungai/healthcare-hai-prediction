@@ -52,8 +52,8 @@ from scripts.training.dvc_baseline import HASH_TAG, PATH_TAG, SNAPSHOT_TAG
 from scripts.training.job_cases import DIGEST, arguments_for, call, failure_of, listing, prepare
 from scripts.training.job_failure import JobFailure
 from scripts.training.lane_b_cases import RUN, Cases, require
-from scripts.training.model_cases import panel_standin, request
-from scripts.training.model_test_support import libraries
+from scripts.training.model_cases import no_ownership_effect, panel_standin, request
+from scripts.training.model_test_support import MixedLM, libraries, near_boundary_fit
 from scripts.training.models import panel, suite
 from scripts.training.models.common import REGISTRABLE, SLOTS, Dataset, Deadline, Feature, ModelRequest, NotEstimable, SlotResult
 from scripts.training.step_records import file_sha256, verify_done, write_done
@@ -2715,6 +2715,32 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require(len(fixture.tracking.parents()) == 2, "a type was not logged")
         require(json.loads(out.strip().splitlines()[-1])["action"] == "log_run", f"summary: {out}")
 
+    def all_boundary_mixed_fits_pass() -> None:
+        """m3 with every requested type on the zero-variance boundary: each type is fitted, the run passes and MLflow names each boundary fit."""
+        types = ("HAI_1", "HAI_2")
+        script = {"lbfgs": "broken", "bfgs": "below", "powell": "boundary", "nm": "boundary"}
+
+        def unowned(hai_type: str) -> Callable[[list[dict[str, Any]]], None]:
+            return partial(no_ownership_effect, label=f"hai_{hai_type.split('_')[1]}__sir__number")
+
+        with mock.patch.object(MixedLM, "fit", near_boundary_fit(script, [])):
+            fixture = staged(folder / "boundary_record", model="m3", hai_types=types, adjust_type={item: unowned(item) for item in types})
+            code, out, error = run_action(fixture, "log_run")
+        require(code == 0 and "not fitted" not in error, f"log_run of an m3 run of boundary fits: {code} {error}")
+        require(json.loads(out.strip().splitlines()[-1])["action"] == "log_run", f"summary: {out}")
+        parents = fixture.tracking.parents()
+        require(len(parents) == len(types), "a type was not logged")
+        for run_id, run in parents.items():
+            require(run["params"]["model_status"] == "fitted" and "model_reason" not in run["params"], f"a boundary fit's parent: {run['params']}")
+            children = {item["tags"]["step_key"]: item for item in fixture.tracking.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
+            child = children["m3_mixed"]
+            require(
+                child["params"]["status"] == "fitted" and child["params"].get("boundary") == "true" and bool(child["params"].get("boundary_reason")),
+                f"the slot child run does not name the boundary fit: {child['params']}",
+            )
+            found = {name: child["metrics"].get(f"m3_mixed.{name}", [None])[-1] for name in ("ownership_variance", "icc", "likelihood_ratio", "p_value")}
+            require(found == {"ownership_variance": 0.0, "icc": 0.0, "likelihood_ratio": 0.0, "p_value": 1.0}, f"the boundary metrics: {found}")
+
     def only_the_last_action_judges_the_outcome() -> None:
         """For m1 to m6 the check belongs to the model's last data action (log_run, or promotion_check for m1, m2 and m4) and to no earlier one, and it reads
         the run's own slot."""
@@ -2747,6 +2773,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
     cases.check("job_log_run_nothing_fitted_fails_after_the_records_are_saved", nothing_fitted_fails_after_the_records_are_saved)
     cases.check("job_log_run_a_fitted_run_passes_with_its_status", fitted_run_passes_with_its_status)
     cases.check("job_log_run_a_partly_fitted_run_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
+    cases.check("job_log_run_all_boundary_mixed_fits_pass", all_boundary_mixed_fits_pass)
     cases.check("job_log_run_only_the_last_action_judges_the_outcome", only_the_last_action_judges_the_outcome)
     cases.check("job_log_run_tags_the_model_and_the_base_run", tags_model_and_base_run)
     cases.check("job_log_run_logs_only_the_tests_of_its_model", logs_only_the_tests_of_its_model)

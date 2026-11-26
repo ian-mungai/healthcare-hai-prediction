@@ -520,7 +520,11 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
         details = {key: value for key, value in result["fitted_parameters"][slot].items() if isinstance(value, int | float) and not isinstance(value, bool)}
         slot_result = {**result["statuses"][slot], "metrics": result["holdout_metrics"][slot], "details": details, **details}
         spec = child_spec(context, manifest, slot, slot_result)
-        extra = {"selected_parameters": json.dumps(result["fitted_parameters"][slot].get("selected_parameters", {}), sort_keys=True)}
+        found = result["fitted_parameters"][slot]
+        extra = {"selected_parameters": json.dumps(found.get("selected_parameters", {}), sort_keys=True)}
+        # Metrics hold numbers only, so a boundary fit of the mixed model is named in the parameters of its child run.
+        if found.get("boundary"):
+            extra |= {"boundary": "true", "boundary_reason": str(found["boundary_reason"])}
         children.append(run_tracking.RunSpec(spec.step_key, spec.tags, {**spec.params, **extra}, spec.metrics))
     for step, names in RESEARCH.items():
         if not any(name in result["test_statistics"] for name in names):

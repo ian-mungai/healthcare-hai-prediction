@@ -6,6 +6,7 @@ import importlib
 import math
 import warnings
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import PurePath
 from typing import Any
 
@@ -20,6 +21,12 @@ OPTIMIZERS = ("lbfgs", "bfgs", "powell", "nm")
 STATSMODELS_WARNINGS = ("ModelWarning", "ConvergenceWarning", "SingularMatrixWarning")
 # The folders that hold installed packages; a statsmodels folder directly inside one is the installed package.
 INSTALL_FOLDERS = frozenset({"site-packages", "dist-packages"})
+# With statsmodels 0.15.0 on synthetic data, powell and nm stopped at an ownership to residual variance ratio near 4e-8 or below at a zero optimum.
+BOUNDARY_VARIANCE_RATIO = 1e-6
+# In log-likelihood units. Converged stops at that ratio were within 0.001 of the fixed-only fit, and a gain this small cannot make the test significant.
+LIKELIHOOD_TOLERANCE = 0.01
+# One optimizer's estimate: its name, whether it reported convergence, the ownership variance, the residual variance and the log likelihood.
+Estimate = tuple[str, bool, float, float, float]
 
 
 def _makes_attempt_unclean(item: warnings.WarningMessage) -> bool:
@@ -38,6 +45,25 @@ def _from_installed_statsmodels(filename: str) -> bool:
     return any(part in INSTALL_FOLDERS and following == "statsmodels" for part, following in zip(parts, parts[1:], strict=False))
 
 
+def _boundary_witness(estimates: Sequence[Estimate], residuals: Array, groups: Any, fixed_only_llf: float) -> tuple[str, str]:
+    """Name the optimizer that shows the ML optimum is the zero ownership variance, or say why that optimum is not shown.
+
+    All of these must hold. No estimate with a finite likelihood is above the fixed-only likelihood. The profile likelihood does not rise as the variance
+    leaves zero: its slope there is positive exactly when the squared sums of the fixed-only residuals in each group add up to more than the residual sum of
+    squares. At least one optimizer converged at the boundary with a finite likelihood equal to the fixed-only one. Warnings are not evidence, because
+    statsmodels also warns about a singular or boundary covariance when the optimum is positive."""
+    finite = [item for item in estimates if math.isfinite(item[4])]
+    highest = max(finite, key=lambda item: item[4], default=None)
+    if highest is not None and highest[4] - fixed_only_llf > LIKELIHOOD_TOLERANCE:
+        return "", f"{highest[0]} reached a likelihood {highest[4] - fixed_only_llf:.3g} above the fixed-only likelihood"
+    if sum(float(residuals[groups == group].sum()) ** 2 for group in np.unique(groups)) > float(residuals @ residuals):
+        return "", "the likelihood rises as the ownership variance leaves zero"
+    for name, converged, variance, residual, llf in finite:
+        if converged and abs(llf - fixed_only_llf) <= LIKELIHOOD_TOLERANCE and residual > 0 and 0 <= variance <= BOUNDARY_VARIANCE_RATIO * residual:
+            return name, ""
+    return "", "no attempt converged at the zero-variance boundary"
+
+
 class MixedRegressor(Regressor):
     """Estimate ownership intercept variance and compare it with the same fixed-only design."""
 
@@ -45,7 +71,10 @@ class MixedRegressor(Regressor):
         self.deadline = deadline
 
     def fit(self, design: Prepared, y: Array) -> MixedRegressor:
-        """Fit ML, require usable ownership groups and expose ICC with a boundary-aware likelihood test."""
+        """Fit ML, require usable ownership groups and expose ICC with a boundary-aware likelihood test.
+
+        When the ML optimum is the zero ownership variance (``_boundary_witness``), the model is the fixed-only fit with every ownership effect at zero, and its
+        details say that it is a boundary fit."""
         hospitals: dict[str, set[str]] = defaultdict(set)
         for row in design.rows:
             if missing(row.get("control_type_code")):
@@ -61,6 +90,7 @@ class MixedRegressor(Regressor):
             raise NotConverged("ownership random intercepts are fully represented by fixed-effect columns")
         api = importlib.import_module("statsmodels.api")
         model, optimizer, outcomes = None, "", []
+        estimates: list[Estimate] = []
         for optimizer in OPTIMIZERS:
             self._check_deadline()
             failure = ""
@@ -80,22 +110,51 @@ class MixedRegressor(Regressor):
                     attempt, failure = None, f"{type(error).__name__}: {error}"
             self._check_deadline()
             warned = [str(item.message) for item in observed if _makes_attempt_unclean(item)]
+            if attempt is not None:
+                variance, residual = float(np.asarray(attempt.cov_re)[0, 0]), float(attempt.scale)
+                estimates.append((optimizer, bool(attempt.converged), variance, residual, float(attempt.llf)))
             if attempt is not None and attempt.converged and not warned:
                 model = attempt
                 break
             # The cause of each failed attempt goes into the reason, so a fit on the boundary is told apart from one that never converged.
             causes = [cause[:120] for cause in (warned[:1] + ([failure] if failure else []))]
             outcomes.append(f"{optimizer}: {' then '.join(causes) or 'not converged'}")
-        if model is None:
-            raise NotConverged(f"ownership mixed model did not converge with any of the optimizers ({'; '.join(outcomes)})")
-        variance, residual = float(np.asarray(model.cov_re)[0, 0]), float(model.scale)
-        if not math.isfinite(variance) or not math.isfinite(residual) or variance <= 1e-10 or residual <= 0:
-            raise NotConverged("ownership mixed model has singular variance")
+        failed = f"ownership mixed model did not converge with any of the optimizers ({'; '.join(outcomes)})"
+        if model is not None:
+            _name, _converged, variance, residual, _llf = estimates[-1]
+            if not math.isfinite(variance) or not math.isfinite(residual) or residual <= 0:
+                raise NotConverged("ownership mixed model has singular variance")
+            if variance <= 1e-10:
+                failed, model = "ownership mixed model has singular variance", None
+                outcomes.append(f"{optimizer}: converged with zero ownership variance")
         pooled = api.OLS(y, matrix).fit(method="qr")
-        statistic = max(0.0, 2 * (float(model.llf) - float(pooled.llf)))
+        boundary: dict[str, Any] = {}
+        if model is not None:
+            coefficients, llf = np.asarray(model.fe_params, dtype=np.float64), float(model.llf)
+            effects = {str(key): float(np.asarray(value).reshape(-1)[0]) for key, value in model.random_effects.items()}
+            statistic = max(0.0, 2 * (llf - float(pooled.llf)))
+            aic, bic = float(model.aic), float(model.bic)
+        else:
+            coefficients, llf = np.asarray(pooled.params, dtype=np.float64), float(pooled.llf)
+            residuals = y - matrix @ coefficients
+            variance, residual = 0.0, float(residuals @ residuals) / len(y)
+            if not math.isfinite(llf) or not math.isfinite(residual) or residual <= 0 or not np.isfinite(coefficients).all():
+                raise NotConverged(f"{failed}; not a zero-boundary fit: the fixed-only fit has no finite likelihood and positive residual variance")
+            optimizer, refusal = _boundary_witness(estimates, residuals, groups, llf)
+            if refusal:
+                raise NotConverged(f"{failed}; not a zero-boundary fit: {refusal}")
+            effects, statistic = dict.fromkeys(sorted(hospitals), 0.0), 0.0
+            # As statsmodels counts them for an ML fit: the fixed coefficients, the ownership variance and the residual variance.
+            parameter_count = matrix.shape[1] + 2
+            aic, bic = -2 * llf + 2 * parameter_count, -2 * llf + math.log(len(y)) * parameter_count
+            reason = (
+                f"{optimizer} converged at an ownership variance of zero with the fixed-only likelihood; no attempt exceeded that likelihood and it does not "
+                "rise as the variance leaves zero"
+            )
+            boundary = {"boundary": True, "boundary_reason": reason, "optimizer_outcomes": outcomes}
         p_value = 1.0 if statistic == 0 else 0.5 * float(importlib.import_module("scipy.stats").chi2.sf(statistic, 1))
-        self.coefficients_ = np.asarray(model.fe_params, dtype=np.float64)
-        self.effects_ = {str(key): float(np.asarray(value).reshape(-1)[0]) for key, value in model.random_effects.items()}
+        self.coefficients_ = coefficients
+        self.effects_ = effects
         self.details_ = {
             "coefficients": dict(zip(("intercept", *design.names), self.coefficients_.tolist(), strict=True)),
             "ownership_variance": variance,
@@ -107,8 +166,9 @@ class MixedRegressor(Regressor):
             "reml": False,
             "optimizer": optimizer,
             "ownership_groups": len(hospitals),
-            "aic": float(model.aic),
-            "bic": float(model.bic),
+            "aic": aic,
+            "bic": bic,
+            **boundary,
         }
         return self
 
