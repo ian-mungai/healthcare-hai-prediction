@@ -112,9 +112,9 @@
     },
     {
       "job": "Core Configuration Owner and Catalog Checks",
-      "measured_minutes": 16,
-      "timeout_minutes": 30,
-      "basis": "estimate, hosted run 44930295246 (Nov 21 2026): 4 commands, 784 s (the owner list E2E, now the owner scripts E2E, 279 s, host session plants 320 s, AWS catalog setup E2E 157 s, Glue mirror E2E 28 s) plus about 3 minutes of setup and gates"
+      "measured_minutes": 27,
+      "timeout_minutes": 45,
+      "basis": "hosted runs 45744875006, 45762150940 and 45788952319 (Nov 26 2026) took 24 to 27 minutes and run 45788757320 passed its 30 minute timeout"
     },
     {
       "job": "Core CI Tooling Checks",

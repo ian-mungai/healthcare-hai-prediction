@@ -453,7 +453,7 @@
     },
     "configuration_owner_checks": {
       "job": "Core Configuration Owner and Catalog Checks",
-      "minutes": 30,
+      "minutes": 45,
       "cores": 2
     },
     "sql_style": {
