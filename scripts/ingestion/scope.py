@@ -17,9 +17,12 @@ Output contract:
 
 * The report is JSON with sorted keys, two-space indent and one trailing newline. It holds no time and no host path, so two runs on the same tree give the
   same bytes. The parse seconds go to the output line and to the optional ``--timing-out`` file, never into the report.
-* Before anything is read or parsed, ``--out`` and ``--timing-out`` are refused (exit 2, nothing written) when the two name one file or when either names
-  the table map, the pinned dbt or a path in the dbt project folder, in the repository's ``config/`` or ``dbt/`` folder or in the package archive folder.
-  Links are followed and letter case is ignored.
+* ``--out`` and ``--timing-out`` are artifact files: each may lie outside the repository or under its ignored ``data/`` folder and nowhere else.
+* Before the parse, both are refused (exit 2, nothing written) when the two name one file, when either lies elsewhere in the repository or when either
+  names the table map, the pinned dbt, a file the run reads or a path in the dbt project folder or the package archive folder. The files read are every
+  file of the project folder, of the folders ``dbt_project.yml`` names, of the installed packages and of the package archive, with the archive record and
+  the package lock, each through its links, also when the target lies outside these folders. A path is refused as spelled and as its links resolve it, in
+  any letter case. A folder name that ``dbt_project.yml`` builds from a template is not rendered here.
 * The report is written only when ``problems`` is empty (exit 0), to a temporary file that replaces the report atomically. A run with a scope problem
   prints each one by name, writes no report and exits 1. A run whose input cannot be read or parsed (a malformed table map or dbt_project.yml, a missing file,
   a parse that fails or passes its deadline, a report that cannot be written) prints the file or step by name and exits 2. A process-cleanup failure of the
@@ -27,6 +30,9 @@ Output contract:
   must require exit 0 of the current run before it reads or binds the file: an older report at the path is not touched by a failing run.
 * Equality with another document (a draft, a committed registry file) is :func:`equality_problems`: the consumer-scope projection only. It never reads
   acquisition annotations (queue counts, queued-output flags, notes), gap records, policy relationships or retained history.
+
+The silver source declaration keeps the keys of the approved scope draft, so its ``analytical_roots`` counts every root. The report field
+``data_roots_with_an_analytical_reader`` leaves out a root that stays only through its deferred staging model. Equality does not read that field.
 
 The module reads the dbt project, the table map and the locked dbt package archive. It writes only the paths it is given.
 """
@@ -42,7 +48,7 @@ import re
 import sys
 import tempfile
 import time
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +60,23 @@ ROOT = Path(__file__).resolve().parents[2]
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 PROJECT = Path("dbt")
 PARSE_SECONDS = dbt_manifest_labels.PARSE_SECONDS
+# The one top folder of the repository where the command may write: Git ignores it and it holds run evidence.
+ARTIFACT_FOLDER = "data"
+# Where the repository's dbt project installs its packages; a parse without the locked archive reads them there.
+INSTALLED_PACKAGES = Path("data/analytics/dbt/dbt_packages")
+# The keys of dbt_project.yml that name folders dbt reads. Such a folder may lie outside the project folder.
+PROJECT_PATH_KEYS = (
+    "analysis-paths",
+    "asset-paths",
+    "docs-paths",
+    "function-paths",
+    "macro-paths",
+    "model-paths",
+    "packages-install-path",
+    "seed-paths",
+    "snapshot-paths",
+    "test-paths",
+)
 KIND = "bronze_scope_report"
 SCHEMA_VERSION = 1
 # The tables bronze itself writes beside the mapped ones; silver declares them, but no map entry and no scope decision covers them.
@@ -92,7 +115,7 @@ COUNT_KEYS = (
     "silver_pins_if_dictionaries_declared",
     "glue_mirror_bronze_names",
 )
-DECLARATION_KEYS = ("declared_sources", "data_roots", "analytical_roots", "loader_tables")
+DECLARATION_KEYS = ("declared_sources", "analytical_roots", "loader_tables")
 PINS_KEYS = ("decided_roots_only", "if_all_scope_tables_declared", "extra_if_all_declared", "current_yml_declared_sources")
 
 
@@ -396,13 +419,13 @@ def derive_scope(
         "operational_models": list(OPERATIONAL_MODELS),
         "loader_tables": list(LOADER_TABLES),
         "counts": counts,
+        "data_roots_with_an_analytical_reader": sum(1 for table in roots if analytical[table]),
         "in_scope": in_scope,
         "dictionary": dictionary,
         "leaving": leaving,
         "silver_source_declaration": {
             "declared_sources": len(declared),
-            "data_roots": len(roots),
-            "analytical_roots": sum(1 for table in roots if analytical[table]),
+            "analytical_roots": len(roots),
             "loader_tables": list(LOADER_TABLES),
             "pins": {
                 "decided_roots_only": len(pinned),
@@ -535,12 +558,13 @@ def write_atomically(path: Path, data: bytes) -> None:
 
 
 def _landing_places(path: Path) -> list[str]:
-    """The paths a write to ``path`` can touch: the directory entry the atomic replace puts in place and the file the links of ``path`` lead to."""
-    return [os.path.normpath(os.path.join(os.path.realpath(path.parent), path.name)), os.path.realpath(path)]
+    """The paths a write to ``path`` can touch: the path as spelled, the directory entry the atomic replace puts in place and the file the links of
+    ``path`` lead to."""
+    return [os.path.abspath(path), os.path.normpath(os.path.join(os.path.realpath(path.parent), path.name)), os.path.realpath(path)]
 
 
 def _same_file(first: str, second: str) -> bool:
-    """Whether two resolved paths name one file: equal text in any letter case (the macOS file system ignores case) or one file on disk."""
+    """Whether two paths name one file: equal text in any letter case (the macOS file system ignores case) or one file on disk."""
     if first.casefold() == second.casefold():
         return True
     try:
@@ -549,30 +573,78 @@ def _same_file(first: str, second: str) -> bool:
         return False
 
 
-def _within(path: str, folder: str) -> bool:
-    """Whether a resolved path is a resolved folder or lies below it, in any letter case."""
-    top = Path(folder.casefold()).parts
-    return Path(path.casefold()).parts[: len(top)] == top
+def _below(path: str, folder: str) -> tuple[str, ...] | None:
+    """The names that lead from a folder down to a path (none for the folder itself) or None when the path is not in the folder. The folder is matched
+    as :func:`_same_file` matches files, so another name for the same folder on disk counts."""
+    place = Path(path)
+    for top in (place, *place.parents):
+        if _same_file(str(top), folder):
+            return place.parts[len(top.parts) :]
+    return None
+
+
+def _outside_artifacts(place: str) -> bool:
+    """Whether a path is in the repository and not below its artifact folder."""
+    names = _below(place, os.path.realpath(ROOT))
+    return names is not None and [name.casefold() for name in names[:1]] != [ARTIFACT_FOLDER]
+
+
+def _files_below(folder: Path) -> Iterator[str]:
+    """The path of every file under a folder, also under the linked folders in it. Each folder on disk is listed once, so a cycle of links ends."""
+    listed: set[str] = set()
+    for top, folders, names in os.walk(folder, followlinks=True):
+        resolved = os.path.realpath(top)
+        if resolved in listed:
+            folders.clear()
+            continue
+        listed.add(resolved)
+        for name in names:
+            yield os.path.join(top, name)
+
+
+def _named_folders(project_dir: Path) -> list[Path]:
+    """The folders that dbt_project.yml names for dbt to read. A project file that does not load names none here: the read of the project that follows
+    names its fault."""
+    yaml = importlib.import_module("yaml")
+    try:
+        document = yaml.safe_load((project_dir / "dbt_project.yml").read_text())
+    except (OSError, ValueError, RecursionError, yaml.YAMLError):
+        return []
+    found: list[Path] = []
+    for key in PROJECT_PATH_KEYS:
+        value = document.get(key) if isinstance(document, dict) else None
+        found.extend(project_dir / name for name in (value if isinstance(value, list) else [value]) if isinstance(name, str) and name and "\0" not in name)
+    return found
+
+
+def _files_read(project_dir: Path) -> list[str]:
+    """The files a run reads besides the table map and the pinned dbt. :func:`_same_file` follows a link among them to its target."""
+    folders = [project_dir, *_named_folders(project_dir), ROOT / INSTALLED_PACKAGES, ROOT / dbt_package_archive.ARCHIVES]
+    found = {str(ROOT / record) for record in (dbt_package_archive.RECORD, dbt_package_archive.LOCK)}
+    for folder in folders:
+        found.update(_files_below(folder))
+    return sorted(found)
 
 
 def destination_problems(out: Path, timing_out: Path | None, project_dir: Path, table_map_path: Path) -> list[str]:
-    """Why ``--out`` or ``--timing-out`` may not be written, one line each. A line says that the two name one file or that one of them names an input of
-    the command or a path in a production folder of the repository. An empty list means both are free."""
-    files = {"the table map": table_map_path, "the pinned dbt": dbt_manifest_labels.DBT}
-    folders = {
-        "the dbt project folder": project_dir,
-        "the repository's config folder": ROOT / "config",
-        "the repository's dbt folder": ROOT / PROJECT,
-        "the dbt package archive folder": ROOT / dbt_package_archive.ARCHIVES,
-    }
+    """Why ``--out`` or ``--timing-out`` may not be written, one line each: the two name one file, or one of them names a file the run reads, a path in
+    an input folder or a path in the repository outside its artifact folder. An empty list means both are free."""
+    inputs = {"the table map": table_map_path, "the pinned dbt": dbt_manifest_labels.DBT}
+    folders = {"the dbt project folder": project_dir, "the dbt package archive folder": ROOT / dbt_package_archive.ARCHIVES}
+    read = _files_read(project_dir)
     destinations = {"--out": out, "--timing-out": timing_out}
     places = {flag: _landing_places(path) for flag, path in destinations.items() if path is not None}
     found = []
     if "--timing-out" in places and any(_same_file(first, second) for first in places["--out"] for second in places["--timing-out"]):
         found.append(f"--timing-out {timing_out} is refused: it names the same file as --out {out}")
     for flag, landing in places.items():
-        reasons = [f"it is {what}" for what, path in files.items() if any(_same_file(place, os.path.realpath(path)) for place in landing)]
-        reasons += [f"it is in {what} ({path})" for what, path in folders.items() if any(_within(place, os.path.realpath(path)) for place in landing)]
+        reasons = [f"it is {what}" for what, path in inputs.items() if any(_same_file(place, os.path.realpath(path)) for place in landing)]
+        reasons += [f"it is a file the run reads ({file})" for file in read if any(_same_file(place, file) for place in landing)]
+        reasons += [
+            f"it is in {what} ({path})" for what, path in folders.items() if any(_below(place, os.path.realpath(path)) is not None for place in landing)
+        ]
+        if any(_outside_artifacts(place) for place in landing):
+            reasons.append(f"it is in the repository and not under {ARTIFACT_FOLDER}/")
         if reasons:
             found.append(f"{flag} {destinations[flag]} is refused: {reasons[0]}")
     return found

@@ -22,6 +22,12 @@ from tests.support import check
 OPERATIONAL = "stg_bronze__file_copies"
 
 
+def use_a_repository_elsewhere(monkeypatch: pytest.MonkeyPatch, folder: Path) -> None:
+    """The command refuses a destination in the repository outside data/, and TMPDIR may put the test folders there: a run on synthetic files gets a
+    repository elsewhere."""
+    monkeypatch.setattr(scope, "ROOT", folder / "repository")
+
+
 def entry(table: str, collection: str, dictionary: str | None = None) -> dict[str, Any]:
     """One valid table map entry; a dictionary table is a ``csv_rows`` entry made with ``dictionary_of``."""
     row: dict[str, Any] = {"table": table, "group": "g", "collection": collection, "format": "csv", "dataset_ids": [table], "encodings": ["utf-8"]}
@@ -341,7 +347,7 @@ PROJECTED = {
 }
 ANNOTATIONS = ("queue_units", "collection_without_queue_unit", "queued_output_selected", "notes", "anything_else")
 COUNT_NAMES = tuple(GRAPH_1_COUNTS)
-DECLARATION_FACTS = ("declared_sources", "data_roots", "analytical_roots", "loader_tables")
+DECLARATION_FACTS = ("declared_sources", "analytical_roots", "loader_tables")
 PINS_FACTS = ("decided_roots_only", "if_all_scope_tables_declared", "extra_if_all_declared", "current_yml_declared_sources")
 
 
@@ -440,11 +446,10 @@ def project_folder(root: Path, copy_tables: str = "    t_a: fam\n") -> Path:
     return project
 
 
-def run_main(tmp_path: Path, *extra: str) -> int:
+def run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> int:
     """Run the command line on the files under ``tmp_path`` with the packages and the parse out of the way."""
-    return scope.main(
-        ["--project", str(tmp_path / "project"), "--table-map", str(tmp_path / "map.json"), "--no-packages", "--out", str(tmp_path / "out.json"), *extra]
-    )
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
+    return scope.main(["--project", str(tmp_path / "project"), "--table-map", str(tmp_path / "map.json"), "--no-packages", "--out", str(tmp_path / "out.json")])
 
 
 def fake_parse(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,7 +467,7 @@ def test_a_clean_run_exits_0_and_writes_the_report(tmp_path: Path, monkeypatch: 
     """Exit 0, the report file exists and holds the one root; the output line carries the parse seconds."""
     fake_parse(monkeypatch)
     good_files(tmp_path)
-    check(run_main(tmp_path) == 0, "a clean run must exit 0")
+    check(run_main(tmp_path, monkeypatch) == 0, "a clean run must exit 0")
     check([row["table"] for row in json.loads((tmp_path / "out.json").read_text())["in_scope"]] == ["t_a"], "report content")
     check("dbt parse" in capsys.readouterr().out, "parse seconds on the output line")
 
@@ -474,7 +479,7 @@ def test_a_scope_problem_exits_1_names_the_table_and_writes_nothing(
     fake_parse(monkeypatch)
     project_folder(tmp_path, "    t_a: fam\n    t_b: fam\n")
     (tmp_path / "map.json").write_text(json.dumps(table_map(entry("t_a", "x/a"), entry("t_b", "x/a"))))
-    check(run_main(tmp_path) == 1, "a scope problem must exit 1")
+    check(run_main(tmp_path, monkeypatch) == 1, "a scope problem must exit 1")
     check("t_b" in capsys.readouterr().out, "the table is not named")
     check(not (tmp_path / "out.json").exists(), "a failing run wrote a report")
 
@@ -487,7 +492,7 @@ def test_malformed_table_map_json_exits_2_naming_the_file_and_keeps_an_old_repor
     good_files(tmp_path)
     (tmp_path / "map.json").write_text('{"tables": [}')
     (tmp_path / "out.json").write_text("older report\n")
-    check(run_main(tmp_path) == 2, "malformed map JSON must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "malformed map JSON must exit 2")
     check("map.json" in capsys.readouterr().err, "the file is not named")
     check((tmp_path / "out.json").read_text() == "older report\n", "the older report changed")
 
@@ -497,7 +502,7 @@ def test_malformed_project_yaml_exits_2_naming_the_file(tmp_path: Path, monkeypa
     fake_parse(monkeypatch)
     good_files(tmp_path)
     (tmp_path / "project" / "dbt_project.yml").write_text("vars: [\n")
-    check(run_main(tmp_path) == 2, "malformed project YAML must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "malformed project YAML must exit 2")
     check("dbt_project.yml" in capsys.readouterr().err, "the file is not named")
 
 
@@ -521,7 +526,7 @@ def test_an_invalid_table_map_exits_2_naming_the_file(
         (tmp_path / "map.json").write_bytes(b"\xff\xfe\x00bad")
     else:
         (tmp_path / "map.json").write_text(text)
-    check(run_main(tmp_path) == 2, f"{name}: exit code")
+    check(run_main(tmp_path, monkeypatch) == 2, f"{name}: exit code")
     check("map.json" in capsys.readouterr().err, f"{name}: the file is not named")
 
 
@@ -529,7 +534,7 @@ def test_a_missing_input_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     """A missing table map is exit 2."""
     fake_parse(monkeypatch)
     project_folder(tmp_path)
-    check(run_main(tmp_path) == 2, "a missing map must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "a missing map must exit 2")
 
 
 def test_a_parser_timeout_exits_2_naming_the_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -540,7 +545,7 @@ def test_a_parser_timeout_exits_2_naming_the_deadline(tmp_path: Path, monkeypatc
         raise scope.TimeoutExpired("dbt", scope.PARSE_SECONDS)
 
     monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", expire)
-    check(run_main(tmp_path) == 2, "a parse timeout must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "a parse timeout must exit 2")
     err = capsys.readouterr().err
     check(str(scope.PARSE_SECONDS) in err and "dbt parse" in err, f"{err}")
     check(not (tmp_path / "out.json").exists(), "a timed-out run wrote a report")
@@ -560,7 +565,7 @@ def test_a_process_cleanup_failure_is_not_turned_into_exit_2(tmp_path: Path, mon
 
     monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", fail)
     with pytest.raises(type(failure)):
-        run_main(tmp_path)
+        run_main(tmp_path, monkeypatch)
 
 
 def test_an_invalid_manifest_file_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -571,7 +576,7 @@ def test_an_invalid_manifest_file_exits_2(tmp_path: Path, monkeypatch: pytest.Mo
         raise json.JSONDecodeError("Expecting value", "x", 0)
 
     monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", bad_manifest)
-    check(run_main(tmp_path) == 2, "an invalid manifest must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "an invalid manifest must exit 2")
     check("manifest" in capsys.readouterr().err, "the manifest is not named")
 
 
@@ -582,6 +587,7 @@ def test_an_unwritable_report_path_exits_2_and_leaves_no_partial_file(
     fake_parse(monkeypatch)
     good_files(tmp_path)
     out = tmp_path / "no_such_folder" / "out.json"
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
     code = scope.main(["--project", str(tmp_path / "project"), "--table-map", str(tmp_path / "map.json"), "--no-packages", "--out", str(out)])
     check(code == 2, f"exit {code}")
     check("no_such_folder" in capsys.readouterr().err, "the path is not named")
@@ -599,7 +605,7 @@ def test_the_report_is_written_whole_or_not_at_all(tmp_path: Path, monkeypatch: 
         raise OSError("disk full")
 
     monkeypatch.setattr(scope.os, "replace", broken_replace)
-    check(run_main(tmp_path) == 2, "a failed replace must exit 2")
+    check(run_main(tmp_path, monkeypatch) == 2, "a failed replace must exit 2")
     check(out.read_text() == "older report\n", "the older report changed")
     check(sorted(path.name for path in tmp_path.iterdir()) == ["map.json", "out.json", "project"], "a temporary file was left behind")
 
@@ -623,7 +629,8 @@ JSON_TYPE_CHANGES: dict[str, tuple[tuple[Any, ...], Any, Any, str, str]] = {
     "true_for_one": (("counts", "in_scope_data"), 1, True, "counts", "in_scope_data"),
     "zero_for_false_in_a_row": (("in_scope", 0, "source_family"), False, 0, "t_a", "source_family"),
     "true_for_one_pin_fact": (("silver_source_declaration", "pins", "decided_roots_only"), 1, True, "pins", "decided_roots_only"),
-    "true_for_one_declaration_fact": (("silver_source_declaration", "data_roots"), 1, True, "silver_source_declaration", "data_roots"),
+    "true_for_one_declaration_fact": (("silver_source_declaration", "analytical_roots"), 1, True, "silver_source_declaration", "analytical_roots"),
+    "float_for_integer": (("silver_source_declaration", "pins", "decided_roots_only"), 2, 2.0, "pins", "decided_roots_only"),
     "true_for_one_mirror_count": (("silver_source_declaration", "glue_mirror_names", "map_union_declared"), 1, True, "mirror", "map_union_declared"),
     "true_for_one_in_a_list": (("in_scope", 0, "roles"), [1], [True], "t_a", "roles"),
 }
@@ -681,8 +688,9 @@ def test_repeated_rows_that_differ_by_a_dropped_null_are_not_shown_as_equal_in_t
     check(len(found) == 1 and "more than once" in found[0] and "outside the projection" not in found[0], f"{found}")
 
 
-def test_the_declaration_counts_the_data_roots_apart_from_the_roots_with_an_analytical_reader() -> None:
-    """t_b is a root only through its deferred staging model: two data roots, one of them with an analytical reader."""
+def test_the_declaration_counts_every_data_root_and_the_report_counts_the_ones_with_an_analytical_reader_apart() -> None:
+    """t_b is a root only through its deferred staging model: the declaration counts two roots and the report says that one of them has an analytical
+    reader, in a field that equality does not read."""
     report, problems = scope.derive_scope(
         manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a", "t_b"]}, ["t_a", "t_b"]),
         table_map(entry("t_a", "x/a"), entry("t_b", "x/a")),
@@ -691,33 +699,64 @@ def test_the_declaration_counts_the_data_roots_apart_from_the_roots_with_an_anal
     )
     check(problems == [], f"unexpected problems: {problems}")
     declaration = report["silver_source_declaration"]
-    got = (report["counts"]["in_scope_data"], declaration.get("data_roots"), declaration.get("analytical_roots"))
-    check(got == (2, 2, 1), f"data roots, declared data roots, analytical roots: {got}")
+    got = (report["counts"]["in_scope_data"], declaration["analytical_roots"], report.get("data_roots_with_an_analytical_reader"))
+    check(got == (2, 2, 1), f"data roots, declared roots, roots with an analytical reader: {got}")
+    check(sorted(declaration) == ["analytical_roots", "declared_sources", "glue_mirror_names", "loader_tables", "pins"], f"{sorted(declaration)}")
+    other = copy.deepcopy(report)
+    del other["data_roots_with_an_analytical_reader"]
+    check(scope.equality_problems(report, other) == [], "the count of roots with an analytical reader must not be compared")
 
 
-# Output destinations. The repository root is a scratch folder, so no case can write a real project file.
+# Output destinations. A scratch folder stands in for the repository and a folder beside it for the rest of the machine, so no case can write a real file.
+PROJECT_FILE = "name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nmodel-paths: [models, ../../declared]\nvars:\n  copy_tables:\n    t_a: fam\n"
+SCRATCH_MAP = json.dumps(table_map(entry("t_a", "x/a")))
+# Files of the scratch repository, "root/", and of the folder beside it, "outside/".
 SCRATCH_FILES = {
-    "config/lakehouse/bronze_tables.json": json.dumps(table_map(entry("t_a", "x/a"))),
-    "config/lakehouse/bronze_leaving_scope.json": '{"tables": []}\n',
-    "config/lakehouse/dbt_package_archive.json": "{}\n",
-    "dbt/dbt_project.yml": "name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nvars:\n  copy_tables:\n    t_a: fam\n",
-    "dbt/package-lock.yml": "packages: []\n",
-    "dbt/models/stg_a.sql": "select 1\n",
-    "data/analytics/dbt/package_archive/packages.tar": "archive\n",
-    "inputs/map.json": json.dumps(table_map(entry("t_a", "x/a"))),
-    "inputs/project/dbt_project.yml": "name: synth\nversion: '1.0'\nconfig-version: 2\nprofile: synth\nvars:\n  copy_tables:\n    t_a: fam\n",
-    "inputs/project/profiles.yml": "synth: {}\n",
-    "inputs/project/models/stg_a.sql": "select 1\n",
+    "root/config/lakehouse/bronze_tables.json": SCRATCH_MAP,
+    "root/config/lakehouse/bronze_leaving_scope.json": '{"tables": []}\n',
+    "root/dbt/dbt_project.yml": PROJECT_FILE,
+    "root/dbt/models/stg_a.sql": "select 1\n",
+    "root/scripts/lakehouse/pins.py": "PINS = 1\n",
+    "root/README.md": "scratch\n",
+    "root/data/analytics/dbt/package_archive/packages.tar": "archive\n",
+    "root/data/analytics/dbt/dbt_packages/pkg/macros/installed.sql": "installed\n",
+    "outside/inputs/map.json": SCRATCH_MAP,
+    "outside/inputs/project/profiles.yml": "synth: {}\n",
+    "outside/inputs/project/models/stg_a.sql": "select 1\n",
+    "outside/shared/project.yml": PROJECT_FILE,
+    "outside/shared/map.json": SCRATCH_MAP,
+    "outside/shared/one.sql": "select 1\n",
+    "outside/shared/models/inner.sql": "select 1\n",
+    "outside/shared/record.json": "{}\n",
+    "outside/shared/lock.yml": "packages: []\n",
+    "outside/shared/archive.tar": "archive\n",
+    "outside/declared/stg_b.sql": "select 1\n",
+    "outside/pinned/dbt": "#!/bin/sh\n",
+}
+# Each row: a link and the file or folder it leads to, both below the scratch folder.
+SCRATCH_LINKS = {
+    "outside/inputs/project/dbt_project.yml": "outside/shared/project.yml",
+    "outside/inputs/project/models/one.sql": "outside/shared/one.sql",
+    "outside/inputs/project/models/linked": "outside/shared/models",
+    "outside/inputs/project/models/again": "outside/inputs/project/models",
+    "outside/inputs/linked_map.json": "outside/shared/map.json",
+    "root/config/lakehouse/dbt_package_archive.json": "outside/shared/record.json",
+    "root/dbt/package-lock.yml": "outside/shared/lock.yml",
+    "root/data/analytics/dbt/package_archive/linked.tar": "outside/shared/archive.tar",
 }
 
 
 def scratch_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, list[int]]:
-    """A scratch repository that stands in for the real one, and a list that grows by one entry for each parse."""
-    root = tmp_path / "root"
+    """A scratch repository that stands in for the real one, with the pinned dbt beside it, and a list that grows by one entry for each parse. The caller
+    stands in the repository."""
     for relative, text in SCRATCH_FILES.items():
-        (root / relative).parent.mkdir(parents=True, exist_ok=True)
-        (root / relative).write_text(text)
-    (root / "work").mkdir()
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text)
+    for link, target in SCRATCH_LINKS.items():
+        (tmp_path / link).symlink_to(tmp_path / target)
+    root = tmp_path / "root"
+    for folder in (root / "work", root / "data/run", tmp_path / "outside/free", tmp_path / "outside/aliases"):
+        folder.mkdir(parents=True)
     parses: list[int] = []
 
     def parse(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -725,57 +764,88 @@ def scratch_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
         return manifest({"stg_a": ["t_a"], OPERATIONAL: ["t_a"]}, ["t_a"])
 
     monkeypatch.setattr(scope, "ROOT", root)
+    monkeypatch.setattr(dbt_manifest_labels, "DBT", tmp_path / "outside/pinned/dbt")
     monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", parse)
     monkeypatch.chdir(root)
     return root, parses
 
 
-def snapshot(root: Path) -> dict[str, bytes]:
-    """The bytes of every file under ``root``."""
-    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+def snapshot(folder: Path) -> dict[str, bytes]:
+    """The bytes of every file under ``folder``."""
+    return {str(path.relative_to(folder)): path.read_bytes() for path in sorted(folder.rglob("*")) if path.is_file()}
 
 
-OWN_INPUTS = ["--project", "inputs/project", "--table-map", "inputs/map.json"]
-# Each row: the input flags and one destination that no run may write.
-PROTECTED_DESTINATIONS: dict[str, tuple[list[str], str]] = {
-    "given_table_map": (OWN_INPUTS, "inputs/map.json"),
-    "given_project_file": (OWN_INPUTS, "inputs/project/dbt_project.yml"),
-    "given_project_profiles": (OWN_INPUTS, "inputs/project/profiles.yml"),
-    "given_project_model": (OWN_INPUTS, "inputs/project/models/stg_a.sql"),
-    "new_file_in_the_given_project": (OWN_INPUTS, "inputs/project/models/new.sql"),
-    "table_map_through_dots": (OWN_INPUTS, "work/../inputs/map.json"),
-    "default_table_map": ([], "config/lakehouse/bronze_tables.json"),
-    "departure_file": (OWN_INPUTS, "config/lakehouse/bronze_leaving_scope.json"),
-    "package_archive_record": (OWN_INPUTS, "config/lakehouse/dbt_package_archive.json"),
-    "package_lock": (OWN_INPUTS, "dbt/package-lock.yml"),
-    "production_model": (OWN_INPUTS, "dbt/models/stg_a.sql"),
-    "new_file_under_config": (OWN_INPUTS, "config/lakehouse/report.json"),
-    "package_archive": (OWN_INPUTS, "data/analytics/dbt/package_archive/packages.tar"),
+OWN_INPUTS = ["--project", "../outside/inputs/project", "--table-map", "../outside/inputs/map.json"]
+LINKED_MAP = ["--project", "../outside/inputs/project", "--table-map", "../outside/inputs/linked_map.json"]
+READ = "the run reads"
+REPOSITORY = "not under data/"
+# Each row: the input flags, one destination that no run may write (relative to the scratch repository) and words of the reason. Outside the repository
+# only the safeguard the row names protects the file.
+PROTECTED_DESTINATIONS: dict[str, tuple[list[str], str, str]] = {
+    "given_table_map": (OWN_INPUTS, "../outside/inputs/map.json", "the table map"),
+    "table_map_through_dots": (OWN_INPUTS, "../outside/shared/../inputs/map.json", "the table map"),
+    "linked_table_map_target": (LINKED_MAP, "../outside/shared/map.json", "the table map"),
+    "pinned_dbt": (OWN_INPUTS, "../outside/pinned/dbt", "the pinned dbt"),
+    "given_project_file": (OWN_INPUTS, "../outside/inputs/project/profiles.yml", READ),
+    "given_project_model": (OWN_INPUTS, "../outside/inputs/project/models/stg_a.sql", READ),
+    "new_file_in_the_given_project": (OWN_INPUTS, "../outside/inputs/project/models/new.sql", "the dbt project folder"),
+    "new_file_through_a_linked_project_folder": (OWN_INPUTS, "../outside/inputs/project/models/linked/new.sql", "the dbt project folder"),
+    "linked_project_file_target": (OWN_INPUTS, "../outside/shared/project.yml", READ),
+    "linked_model_target": (OWN_INPUTS, "../outside/shared/one.sql", READ),
+    "file_in_a_linked_folder_target": (OWN_INPUTS, "../outside/shared/models/inner.sql", READ),
+    "file_in_a_declared_folder_outside_the_project": (OWN_INPUTS, "../outside/declared/stg_b.sql", READ),
+    "linked_package_record_target": (OWN_INPUTS, "../outside/shared/record.json", READ),
+    "linked_package_lock_target": (OWN_INPUTS, "../outside/shared/lock.yml", READ),
+    "linked_package_archive_target": (OWN_INPUTS, "../outside/shared/archive.tar", READ),
+    "package_archive": (OWN_INPUTS, "data/analytics/dbt/package_archive/packages.tar", READ),
+    "new_file_in_the_package_archive_folder": (OWN_INPUTS, "data/analytics/dbt/package_archive/new.tar", "the dbt package archive folder"),
+    "installed_package_file": (OWN_INPUTS, "data/analytics/dbt/dbt_packages/pkg/macros/installed.sql", READ),
+    "default_table_map": ([], "config/lakehouse/bronze_tables.json", "the table map"),
+    "departure_file": (OWN_INPUTS, "config/lakehouse/bronze_leaving_scope.json", REPOSITORY),
+    "production_model": (OWN_INPUTS, "dbt/models/stg_a.sql", REPOSITORY),
+    "new_file_under_config": (OWN_INPUTS, "config/lakehouse/report.json", REPOSITORY),
+    "production_script": (OWN_INPUTS, "scripts/lakehouse/pins.py", REPOSITORY),
+    "new_file_under_scripts": (OWN_INPUTS, "scripts/lakehouse/report.json", REPOSITORY),
+    "file_at_the_repository_top": (OWN_INPUTS, "README.md", REPOSITORY),
+    "new_file_in_another_repository_folder": (OWN_INPUTS, "work/report.json", REPOSITORY),
+    "dots_out_of_the_data_folder": (OWN_INPUTS, "data/../scripts/lakehouse/pins.py", REPOSITORY),
+    "another_letter_case_of_a_script": (OWN_INPUTS, "SCRIPTS/lakehouse/pins.py", REPOSITORY),
+    "a_folder_whose_name_starts_like_data": (OWN_INPUTS, "data_contracts.json", REPOSITORY),
 }
+
+
+def refused(arguments: list[str], tmp_path: Path, parses: list[int], capsys: pytest.CaptureFixture[str], words: tuple[str, ...]) -> None:
+    """One run that must be refused: exit 2 with each of ``words`` on stderr, no parse and no file changed or added."""
+    before = snapshot(tmp_path)
+    code = scope.main(arguments)
+    err = capsys.readouterr().err
+    check(code == 2, f"exit {code}: {err}")
+    check("refused" in err and all(word in err for word in words), f"{words}: {err}")
+    check(parses == [], "the parse ran before the refusal")
+    check(snapshot(tmp_path) == before, "a file changed")
 
 
 @pytest.mark.parametrize("flag", ["--out", "--timing-out"])
 @pytest.mark.parametrize("case", sorted(PROTECTED_DESTINATIONS))
-def test_a_destination_that_is_an_input_or_a_production_file_is_refused_before_the_parse(
+def test_a_protected_destination_is_refused_before_the_parse(
     case: str, flag: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Exit 2, the destination and the flag named, no parse and no file changed or added."""
-    root, parses = scratch_root(tmp_path, monkeypatch)
-    inputs, destination = PROTECTED_DESTINATIONS[case]
-    before = snapshot(root)
-    other = ["--out", "work/report.json"] if flag == "--timing-out" else []
-    code = scope.main([*inputs, "--no-packages", flag, destination, *other])
-    err = capsys.readouterr().err
-    check(code == 2, f"{case}: exit {code}: {err}")
-    check("refused" in err and flag in err and Path(destination).name in err, f"{case}: {err}")
-    check(parses == [], f"{case}: the parse ran before the refusal")
-    check(snapshot(root) == before, f"{case}: a file changed")
+    """An input, a file the run reads through a link or a path in the repository outside data/: the flag, the destination and the reason are named."""
+    _, parses = scratch_root(tmp_path, monkeypatch)
+    inputs, destination, reason = PROTECTED_DESTINATIONS[case]
+    other = ["--out", "data/report.json"] if flag == "--timing-out" else []
+    refused([*inputs, "--no-packages", flag, destination, *other], tmp_path, parses, capsys, (flag, Path(destination).name, reason))
 
 
 @pytest.mark.parametrize(
     ("out", "timing"),
-    [("work/report.json", "work/report.json"), ("work/report.json", "work/../work/report.json"), ("work/report.json", "ABSOLUTE")],
-    ids=["same_text", "through_dots", "relative_and_absolute"],
+    [
+        ("data/report.json", "data/report.json"),
+        ("data/report.json", "data/../data/report.json"),
+        ("data/report.json", "ABSOLUTE"),
+        ("data/new.json", "data/NEW.json"),
+    ],
+    ids=["same_text", "through_dots", "relative_and_absolute", "other_letter_case_of_a_new_file"],
 )
 @pytest.mark.parametrize("copy_tables", ["    t_a: fam\n", "    t_a: fam\n    t_b: fam\n"], ids=["clean_run", "scope_problem"])
 def test_one_path_for_the_report_and_the_timing_is_refused_and_keeps_an_older_report(
@@ -783,48 +853,75 @@ def test_one_path_for_the_report_and_the_timing_is_refused_and_keeps_an_older_re
 ) -> None:
     """Exit 2 before the parse whether the scope would be clean or not, with the older report untouched."""
     root, parses = scratch_root(tmp_path, monkeypatch)
-    project = root / "inputs/project/dbt_project.yml"
+    project = tmp_path / "outside/shared/project.yml"
     project.write_text(project.read_text().replace("    t_a: fam\n", copy_tables))
-    (root / "work/report.json").write_text("older report\n")
-    timing = str(root / "work/report.json") if timing == "ABSOLUTE" else timing
-    before = snapshot(root)
-    code = scope.main([*OWN_INPUTS, "--no-packages", "--out", out, "--timing-out", timing])
-    err = capsys.readouterr().err
-    check(code == 2 and "refused" in err and "--timing-out" in err, f"exit {code}: {err}")
-    check(parses == [] and snapshot(root) == before, "the parse ran or a file changed")
+    (root / "data/report.json").write_text("older report\n")
+    timing = str(root / "data/report.json") if timing == "ABSOLUTE" else timing
+    refused([*OWN_INPUTS, "--no-packages", "--out", out, "--timing-out", timing], tmp_path, parses, capsys, ("--timing-out", "same file"))
 
 
-@pytest.mark.parametrize("alias", ["symlink_to_input", "hard_link_to_input", "linked_folder", "link_inside_config", "other_letter_case"])
-def test_another_name_for_a_protected_file_is_refused(alias: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """A link to an input, a linked folder, a link that itself sits under config/ and another letter case of an input are all refused."""
+# Each row: the links to make, the destination to refuse (both relative to the scratch repository) and words of the reason.
+ALIASES: dict[str, tuple[dict[str, str], str, str]] = {
+    "link_to_an_input": ({"../outside/aliases/alias.json": "../outside/inputs/map.json"}, "../outside/aliases/alias.json", "the table map"),
+    "linked_folder_of_an_input": ({"../outside/aliases/linked": "../outside/inputs"}, "../outside/aliases/linked/map.json", "the table map"),
+    "other_letter_case_of_an_input": ({}, "../outside/inputs/MAP.json", "the table map"),
+    "link_inside_config": ({"config/lakehouse/linked.json": "../outside/free/elsewhere.json"}, "config/lakehouse/linked.json", REPOSITORY),
+    "link_from_outside_to_a_script": ({"../outside/aliases/alias.json": "scripts/lakehouse/pins.py"}, "../outside/aliases/alias.json", REPOSITORY),
+    "linked_folder_into_the_repository": ({"../outside/aliases/linked": "scripts"}, "../outside/aliases/linked/new.py", REPOSITORY),
+    "another_name_of_the_repository": ({"../outside/aliases/repository": "."}, "../outside/aliases/repository/scripts/new.py", REPOSITORY),
+    "link_in_data_to_a_script": ({"data/run/linked": "scripts"}, "data/run/linked/lakehouse/pins.py", REPOSITORY),
+    "link_in_the_repository_to_outside": ({"work/linked": "../outside/free"}, "work/linked/report.json", REPOSITORY),
+}
+
+
+@pytest.mark.parametrize("flag", ["--out", "--timing-out"])
+@pytest.mark.parametrize("alias", sorted(ALIASES))
+def test_another_name_for_a_protected_place_is_refused(
+    alias: str, flag: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Links to an input or into the repository, linked folders, another letter case and a link that itself sits outside data/ are all refused, and
+    every link stays a link."""
     root, parses = scratch_root(tmp_path, monkeypatch)
-    destination = "work/alias.json"
-    if alias == "symlink_to_input":
-        (root / destination).symlink_to(root / "inputs/map.json")
-    elif alias == "hard_link_to_input":
-        os.link(root / "inputs/map.json", root / destination)
-    elif alias == "linked_folder":
-        (root / "work/linked").symlink_to(root / "inputs", target_is_directory=True)
-        destination = "work/linked/map.json"
-    elif alias == "link_inside_config":
-        destination = "config/lakehouse/linked.json"
-        (root / destination).symlink_to(root / "work/elsewhere.json")
-    else:
-        destination = "inputs/MAP.json"
-    before = snapshot(root)
-    code = scope.main([*OWN_INPUTS, "--no-packages", "--out", destination])
-    err = capsys.readouterr().err
-    check(code == 2 and "refused" in err, f"{alias}: exit {code}: {err}")
-    check(parses == [] and snapshot(root) == before, f"{alias}: the parse ran or a file changed")
-    if alias == "link_inside_config":
-        check((root / destination).is_symlink() and not (root / "work/elsewhere.json").exists(), "the link was replaced")
+    links, destination, reason = ALIASES[alias]
+    for link, target in links.items():
+        (root / link).symlink_to((root / target).resolve())
+    other = ["--out", "data/report.json"] if flag == "--timing-out" else []
+    refused([*OWN_INPUTS, "--no-packages", flag, destination, *other], tmp_path, parses, capsys, (flag, reason))
+    check(all((root / link).is_symlink() for link in links), "a link was replaced")
 
 
-def test_two_free_destinations_are_written_and_a_second_run_replaces_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The refusals leave ordinary destinations alone, in the repository and outside config/, dbt/ and the archive folder, run after run."""
+def test_a_hard_link_to_an_input_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A second directory entry of the table map is the same file, whatever its name."""
+    _, parses = scratch_root(tmp_path, monkeypatch)
+    os.link(tmp_path / "outside/inputs/map.json", tmp_path / "outside/aliases/alias.json")
+    refused([*OWN_INPUTS, "--no-packages", "--out", "../outside/aliases/alias.json"], tmp_path, parses, capsys, ("--out", "the table map"))
+
+
+@pytest.mark.skipif(not Path("/System/Volumes/Data/private").is_dir(), reason="only macOS gives a folder a second name that no link resolves")
+def test_a_second_name_of_the_repository_that_no_link_resolves_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The data volume of macOS shows every file under a second path that realpath keeps, so the repository is matched as one folder on disk."""
     root, parses = scratch_root(tmp_path, monkeypatch)
-    arguments = [*OWN_INPUTS, "--no-packages", "--out", "data/report.json", "--timing-out", "work/timing.json"]
+    destination = f"/System/Volumes/Data{(root / 'scripts/new.py').resolve()}"
+    refused([*OWN_INPUTS, "--no-packages", "--out", destination], tmp_path, parses, capsys, ("--out", REPOSITORY))
+
+
+@pytest.mark.parametrize(
+    ("out", "timing"),
+    [
+        ("data/report.json", "data/run/timing.json"),
+        ("../outside/free/report.json", "../outside/free/timing.json"),
+        ("work/../data/report.json", "ABSOLUTE_OUTSIDE"),
+    ],
+    ids=["under_data", "outside_the_repository", "dots_into_data_and_absolute_outside"],
+)
+def test_two_artifact_destinations_are_written_and_a_second_run_replaces_them(out: str, timing: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusals leave the artifact places alone, under the repository's data/ folder and outside the repository, run after run."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    timing = str(tmp_path / "outside/free/timing.json") if timing == "ABSOLUTE_OUTSIDE" else timing
+    arguments = [*OWN_INPUTS, "--no-packages", "--out", out, "--timing-out", timing]
     check(scope.main(arguments) == 0 and scope.main(arguments) == 0, "both runs must exit 0")
-    check(json.loads((root / "data/report.json").read_text())["kind"] == scope.KIND, "report content")
-    check("dbt_parse_seconds" in json.loads((root / "work/timing.json").read_text()), "timing content")
+    check(json.loads(Path(root, out).resolve().read_text())["kind"] == scope.KIND, "report content")
+    check("dbt_parse_seconds" in json.loads(Path(root, timing).read_text()), "timing content")
     check(len(parses) == 2, f"{parses}")

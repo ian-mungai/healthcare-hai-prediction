@@ -1,0 +1,26 @@
+{
+  "decision": "declare the 74 analytical roots plus the 4 loader tables; load the 11 required dictionaries through the bronze map and do not declare them to silver",
+  "declared_sources": 78,
+  "analytical_roots": 74,
+  "loader_tables": ["column_map", "file_metadata", "file_preambles", "stored_copies"],
+  "pins": {
+    "decided_roots_only": 75,
+    "if_all_scope_tables_declared": 86,
+    "extra_if_all_declared": [
+      "acs_documents_csv",
+      "cms_geographic_variation_documents_pdf",
+      "cms_hospital_cost_reports_dictionaries",
+      "cms_hospital_ownership_dictionaries",
+      "cms_hospitals_dictionaries",
+      "cms_hsa_documents_pdf",
+      "cms_ipps_dictionaries",
+      "cms_medicare_inpatient_dictionaries",
+      "cms_provider_of_services_dictionaries",
+      "sahie_documents_pdf",
+      "svi_documents_pdf"
+    ],
+    "rule": "the pinned tables are the mapped tables that silver declares, with file_metadata",
+    "current_yml_declared_sources": 78
+  },
+  "glue_mirror_names": {"map_union_declared": 89, "rule": "the 85 tables in default scope and the 4 loader tables"}
+}

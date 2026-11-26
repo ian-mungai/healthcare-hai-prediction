@@ -33,7 +33,7 @@ from scripts.ingestion import scope
 from scripts.process import CompletedProcess
 from scripts.quality import dbt_manifest_labels
 from tests.support import check
-from tests.test_ingestion_scope_logic import OPERATIONAL, dictionary_of, entry, graph_1, manifest, table_map
+from tests.test_ingestion_scope_logic import OPERATIONAL, dictionary_of, entry, graph_1, manifest, table_map, use_a_repository_elsewhere
 
 MISSING = object()
 UID_T_A = "source.p.bronze.t_a"
@@ -140,6 +140,7 @@ class Runner:
             parsed = copy.deepcopy(base_manifest() if manifest_document is MISSING else manifest_document)
             self.monkeypatch.setattr(dbt_manifest_labels, "parse_manifest", lambda *args, **kwargs: parsed)
         out = folder / "out.json"
+        use_a_repository_elsewhere(self.monkeypatch, self.tmp_path)
         code = scope.main(["--project", str(project), "--table-map", str(folder / "map.json"), "--no-packages", "--out", str(out)])
         captured = self.capsys.readouterr()
         return Outcome(code, captured.out, captured.err, json.loads(out.read_text()) if out.exists() else None)

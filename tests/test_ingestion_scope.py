@@ -17,11 +17,13 @@ from typing import Any
 import pytest
 
 from orchestration import ecs_lineage
+from scripts.acquisition import source_registry
 from scripts.ingestion import scope
 from scripts.lakehouse import bronze, glue_mirror, pins
 from scripts.process import run_command
 from scripts.quality import dbt_manifest_labels
 from tests.support import check
+from tests.test_ingestion_scope_logic import use_a_repository_elsewhere
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE_MAP = ROOT / "config/lakehouse/bronze_tables.json"
@@ -31,6 +33,9 @@ LEAVING_RECORD = ROOT / "config/lakehouse/bronze_leaving_scope.json"
 # where the typos check keeps the publishers' spellings.
 PRETRIM_NAMES = ROOT / "config/quality/ingestion_scope_pretrim_tables.json"
 SILVER_READERS = ROOT / "config/lakehouse/bronze_silver_readers.json"
+# The silver source declaration of the trimmed map in the shape of the approved scope draft, written by hand from the silver reader list, the sources file
+# and the dictionaries of the table map. The code under test writes no part of it.
+EXPECTED_DECLARATION = ROOT / "tests/fixtures/ingestion_scope_expected_declaration.json"
 POLICIES = ROOT / "config/acquisition/projection_policies.json"
 # The mapped tables that no consumer derives, by the owner decision that keeps each group loaded (the bronze scope trim). The report lists them as leaving the
 # consumer scope; config/lakehouse/bronze_leaving_scope.json does not list them, because bronze still loads them.
@@ -296,6 +301,35 @@ def test_real_project_has_74_roots_11_dictionaries_and_21_outside_the_consumer_s
     check((len(report["in_scope"]), len(report["dictionary"]), len(report["leaving"])) == (74, 11, 21), "the lists disagree with the counts")
 
 
+def trim_names(table_map_path: Path, leaving_path: Path, pretrim_path: Path) -> tuple[set[str], set[str], set[str]]:
+    """The loaded names, the departure names and the frozen names of the map before the trim. A name listed twice fails before a set can hide it: the
+    registry helper refuses it in the loaded map and the departure record, and the frozen list is checked here."""
+    source_registry.historical_bronze_tables(table_map_path, leaving_path)
+    frozen = json.loads(pretrim_path.read_text())["tables"]
+    repeated = sorted({name for name in frozen if frozen.count(name) > 1})
+    check(not repeated, f"the frozen list names a table twice: {repeated}")
+    mapped = {entry["table"] for entry in bronze.load_table_map(table_map_path)["tables"]}
+    recorded = {entry["table"] for entry in json.loads(leaving_path.read_text())["tables"]}
+    return mapped, recorded, set(frozen)
+
+
+@pytest.mark.parametrize(
+    ("repeated_in", "expected"), [("departures", source_registry.RegistryError), ("frozen", AssertionError)], ids=["departure_row", "frozen_name"]
+)
+def test_a_trim_name_listed_twice_fails_before_the_names_are_compared(repeated_in: str, expected: type[Exception], tmp_path: Path) -> None:
+    """A second cms_pos_clia row in the departure record, or in the frozen list, leaves both sets as they were, so it must fail on the list itself."""
+    leaving = json.loads(LEAVING_RECORD.read_text())
+    frozen = json.loads(PRETRIM_NAMES.read_text())
+    if repeated_in == "departures":
+        leaving["tables"].append(next(row for row in leaving["tables"] if row["table"] == "cms_pos_clia"))
+    else:
+        frozen["tables"].append("cms_pos_clia")
+    (tmp_path / "leaving.json").write_text(json.dumps(leaving))
+    (tmp_path / "frozen.json").write_text(json.dumps(frozen))
+    with pytest.raises(expected, match="twice"):
+        trim_names(TABLE_MAP, tmp_path / "leaving.json", tmp_path / "frozen.json")
+
+
 def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
     """The derived scope and the named held tables are the loaded map. The loaded names and the departure names together are the frozen names of the map
     before the trim, name for name, and what is left of those names is the leaving record."""
@@ -303,13 +337,11 @@ def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str
     roots = {entry["table"] for entry in report["in_scope"]}
     derived = roots | {entry["table"] for entry in report["dictionary"]}
     outside = {entry["table"] for entry in report["leaving"]}
-    mapped = {entry["table"] for entry in bronze.load_table_map(TABLE_MAP)["tables"]}
-    recorded = {entry["table"] for entry in json.loads(LEAVING_RECORD.read_text())["tables"]}
+    mapped, recorded, approved = trim_names(TABLE_MAP, LEAVING_RECORD, PRETRIM_NAMES)
     silver_reads = set(json.loads(SILVER_READERS.read_text())["tables"])
     check(roots | set(scope.LOADER_TABLES) == silver_reads, f"roots differ from what silver reads: {(roots | set(scope.LOADER_TABLES)) ^ silver_reads}")
     check(outside == HELD_TABLES, f"mapped tables outside the consumer scope: unexpected {outside - HELD_TABLES}, missing {HELD_TABLES - outside}")
     check(derived == mapped - HELD_TABLES, f"the derived scope differs from the loaded map less the held tables: {derived ^ (mapped - HELD_TABLES)}")
-    approved = set(json.loads(PRETRIM_NAMES.read_text())["tables"])
     check(not mapped & recorded, f"a table is both loaded and recorded as left: {mapped & recorded}")
     check(mapped | recorded == approved, f"loaded plus departures is not the map before the trim: {(mapped | recorded) ^ approved}")
     left = approved - derived - HELD_TABLES
@@ -337,9 +369,8 @@ def test_only_the_deferred_finance_table_is_a_root_without_an_analytical_reader(
     check(unread == {"hcai_finance_csv": "stg_hcai_finance_csv"}, f"{unread}")
     check(sum(entry["deferred_staging_model"] is not None for entry in report["in_scope"]) == 1, "another root carries a deferral")
     check(report["counts"]["collections_leaving"] == 9, f"collections leaving: {report['counts']['collections_leaving']}")
-    declaration = report["silver_source_declaration"]
-    got = (declaration.get("data_roots"), declaration.get("analytical_roots"))
-    check(got == (74, 73), f"data roots and the roots with an analytical reader: {got}")
+    got = (report["silver_source_declaration"]["analytical_roots"], report.get("data_roots_with_an_analytical_reader"))
+    check(got == (74, 73), f"the declared roots and the data roots with an analytical reader: {got}")
 
 
 def test_a_dictionary_is_the_table_named_by_an_in_scope_table(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
@@ -386,15 +417,27 @@ def test_pins_lineage_and_mirror_names_derive_from_the_scope(real_scope: tuple[d
 
 # 8. Equality.
 def expected_from(report: dict[str, Any]) -> dict[str, Any]:
-    """A draft-shaped document: the report's projected keys plus acquisition annotations and text the equality rule must ignore."""
+    """A draft-shaped document: the report's projected table rows and counts with acquisition annotations the equality rule must ignore, and the silver
+    declaration from the hand-written expected file, text included."""
     document = copy.deepcopy(report)
+    del document["data_roots_with_an_analytical_reader"]
     for group in ("in_scope", "dictionary", "leaving"):
         for entry in document[group]:
             entry.update(queue_units=300, queued_output_selected=False, collection_without_queue_unit=False, notes=["annotation"])
     document["counts"].update(default_scope_without_queued_output=22, leaving_with_queue_units=236)
-    document["silver_source_declaration"]["decision"] = "text"
+    document["silver_source_declaration"] = json.loads(EXPECTED_DECLARATION.read_text())
     document["gap_records"] = ["not compared"]
     return document
+
+
+def test_the_declaration_of_the_trimmed_map_equals_the_approved_draft_shape(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
+    """A declaration with the keys of the approved draft, and no key the draft lacks, compares equal. There analytical_roots counts every data root."""
+    report, _, _ = real_scope
+    expected = expected_from(report)
+    check(scope.equality_problems(report, expected) == [], f"{scope.equality_problems(report, expected)}")
+    expected["silver_source_declaration"]["analytical_roots"] = 73
+    found = scope.equality_problems(report, expected)
+    check(len(found) == 1 and "analytical_roots" in found[0], f"{found}")
 
 
 def test_equality_ignores_acquisition_annotations_and_names_the_first_difference(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
@@ -447,8 +490,16 @@ def test_counts_move_by_the_formula_when_the_reader_graph_changes() -> None:
 
 
 # 10. Idempotence and the command line.
-def test_two_runs_give_identical_bytes_and_the_timing_stays_outside(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.fixture
+def artifact_folder() -> Iterator[Path]:
+    """A new folder under the repository's ignored data/ folder, where the command admits its files; removed afterwards."""
+    with tempfile.TemporaryDirectory(prefix="hai_scope_out_", dir=ROOT / "data") as folder:
+        yield Path(folder)
+
+
+def test_two_runs_give_identical_bytes_and_the_timing_stays_outside(artifact_folder: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The report file is byte identical across runs; the parse seconds are in the sidecar and the output line, never in the report."""
+    tmp_path = artifact_folder
     first, second = tmp_path / "first.json", tmp_path / "second.json"
     timing = tmp_path / "timing.json"
     before = run_command("git", ["status", "--porcelain"], cwd=ROOT, check=True).stdout
@@ -461,8 +512,11 @@ def test_two_runs_give_identical_bytes_and_the_timing_stays_outside(tmp_path: Pa
     check(run_command("git", ["status", "--porcelain"], cwd=ROOT, check=True).stdout == before, "the run changed the repository")
 
 
-def test_a_failing_run_exits_1_names_the_problem_and_writes_no_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_failing_run_exits_1_names_the_problem_and_writes_no_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A synthetic project with an undefined source: exit 1, the table is named, and no report file exists."""
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
     models, declared, copies, table_map = base_project()
     models["stg_ghost"] = ["t_ghost"]
     project = write_project(synthetic_files(models, [*declared, "t_ghost"], copies), tmp_path)
@@ -477,6 +531,7 @@ def test_a_failing_run_exits_1_names_the_problem_and_writes_no_report(tmp_path: 
 
 def test_a_real_parse_past_its_deadline_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The real pinned dbt is started with a deadline that cannot be met: the runner stops it, and the command exits 2 naming the deadline."""
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
     models, declared, copies, table_map = base_project()
     project = write_project(synthetic_files(models, declared, copies), tmp_path)
     map_path = tmp_path / "map.json"
@@ -502,8 +557,11 @@ SOURCES_FILE_FAULTS = {
 
 
 @pytest.mark.parametrize("fault", sorted(SOURCES_FILE_FAULTS))
-def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(fault: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(
+    fault: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The sources file is read by dbt only. A fault in it fails the real parse, so the command exits 2 with the failed parse and the file named."""
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
     models, declared, copies, table_map = base_project()
     files = synthetic_files(models, declared, copies)
     files["models/_sources.yml"] = SOURCES_FILE_FAULTS[fault]
@@ -522,6 +580,7 @@ def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(fault: 
 
 def test_relative_paths_are_read_from_the_callers_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The real parse runs in its own scratch folder, so a relative project path must be made absolute first. The other paths may be relative too."""
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
     models, declared, copies, table_map = base_project()
     write_project(synthetic_files(models, declared, copies), tmp_path)
     (tmp_path / "map.json").write_text(json.dumps(table_map))
