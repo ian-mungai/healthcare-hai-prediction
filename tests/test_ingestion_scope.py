@@ -570,7 +570,9 @@ def test_a_malformed_sources_file_exits_2_naming_it_and_writes_no_report(
     code = scope.main(["--project", str(project), "--table-map", str(map_path), "--no-packages", "--out", str(out)])
     err = capsys.readouterr().err
     check(code == 2, f"{fault}: exit {code}: {err[:300]}")
-    check("dbt parse" in err and ("_sources.yml" in err or "models/stg_bronze__file_copies.sql" in err), f"{fault}: no file is named: {err[:400]}")
+    # With no usable sources file dbt names the first model it meets whose source is missing, and the order it meets them in is not fixed.
+    named = "_sources.yml" in err or any(f"models/{name}.sql" in err for name in models)
+    check("dbt parse" in err and named, f"{fault}: no file is named: {err[:400]}")
     if fault in ("sources_not_a_list", "tables_not_a_list", "syntax"):
         check("_sources.yml" in err, f"{fault}: the sources file is not named: {err[:400]}")
     check(not out.exists(), "a report was written")
