@@ -6,11 +6,12 @@ therefore drawn directly: ``PUT /api/v1/lineage`` from a table to the ``mlmodel`
 
 Which edges: a registered model is trained on its own model set, so it gets an edge only from the table of that set (``feature_matrix_m1`` to
 ``feature_matrix_m6``, the ``table`` of each entry of ``model_sets`` in ``data_contracts/features/feature_schema.json``), never from a union of tables. The set
-comes from the tags of the version the connector ingests (the highest version number): ``feature_set`` (the set key, written by ``promotion_check``) and
-``model`` (the slot, which the same file's ``list`` names for each set). Either one resolves the set and, when both are present, they must agree. A model whose
-set cannot be resolved stops the run and is named. When the newest version moves to another set, the edge from the old set's table is deleted, so the lineage
-always says what the ingested version was trained on; an edge from any other table is left alone. A table is named as OpenMetadata's Glue connector names it, by
-the one mapping function of ``orchestration.ecs_lineage`` (the Glue database of the features layer comes from ``config/lakehouse/athena_mirror.json``).
+comes from the tags of the version the connector ingests (the highest version number): ``feature_set`` and ``model``, which both hold the set key (``m1`` to
+``m6``). ``promotion_check`` writes both when it registers the version, from the tags of the training run. Either one resolves the set and, when both are
+present, they must agree. A model whose set cannot be resolved stops the run and is named. When the newest version moves to another set, the edge from the old
+set's table is deleted, so the lineage always says what the ingested version was trained on; an edge from any other table is left alone. A table is named as
+OpenMetadata's Glue connector names it, by the one mapping function of ``orchestration.ecs_lineage`` (the Glue database of the features layer comes from
+``config/lakehouse/athena_mirror.json``).
 
 The login: the registry asks for a login on every request and grants nothing by default, so the step reads it as ``MLFLOW_TRACKING_USERNAME`` and
 ``MLFLOW_TRACKING_PASSWORD`` from the task's secrets and holds it in memory only. MLflow answers a reader without grants with an empty registry, which looks
@@ -48,8 +49,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CONFIG = Path("config/metadata/ingestion/mlflow.json")
 CONTRACT = Path("data_contracts/training/model_contract.json")
 FEATURE_SCHEMA = Path("data_contracts/features/feature_schema.json")
-SET_TAG = "feature_set"  # the version tag that promotion_check writes
-SLOT_TAG = "model"  # the version tag of the slot (data_contracts/training/model_contract.json version_tags)
+SET_TAG = "feature_set"  # the version tag of the set the training extract was built from
+MODEL_TAG = "model"  # the version tag of the model the training run fitted, a set key (data_contracts/training/model_contract.json version_tags)
 MAX_PAGES = 20
 MODEL_SERVICE = str(json.loads((ROOT / SOURCE_CONFIG).read_text())["source"]["serviceName"])
 MLFLOW_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):5100")
@@ -79,10 +80,10 @@ def registered_models() -> list[str]:
     return sorted(json.loads((ROOT / CONTRACT).read_text())["registered_models"].values())
 
 
-def model_sets() -> dict[str, dict[str, str]]:
-    """Each model set key with its slot (``list``) and its table, from the feature schema."""
+def model_sets() -> dict[str, str]:
+    """Each model set key with its table, from the feature schema."""
     sets = json.loads((ROOT / FEATURE_SCHEMA).read_text())["model_sets"]
-    return {str(key): {"slot": str(spec["list"]), "table": str(spec["table"])} for key, spec in sets.items()}
+    return {str(key): str(spec["table"]) for key, spec in sets.items()}
 
 
 def table_fqn(table: str) -> str:
@@ -96,19 +97,15 @@ def resolve_set(tags: Mapping[str, str]) -> str:
     """The model set a version was trained on, from its tags. Raises ``StepFailed`` with the reason when no set resolves or the tags disagree."""
     sets = model_sets()
     found: dict[str, str] = {}
-    if SET_TAG in tags:
-        if tags[SET_TAG] not in sets:
-            raise StepFailed(f"its {SET_TAG} tag {tags[SET_TAG]!r} is not a model set")
-        found[SET_TAG] = tags[SET_TAG]
-    if SLOT_TAG in tags:
-        owners = [key for key, spec in sets.items() if spec["slot"] == tags[SLOT_TAG]]
-        if not owners:
-            raise StepFailed(f"its {SLOT_TAG} tag {tags[SLOT_TAG]!r} is not the slot of a model set")
-        found[SLOT_TAG] = owners[0]
+    for tag in (SET_TAG, MODEL_TAG):
+        if tag in tags:
+            if tags[tag] not in sets:
+                raise StepFailed(f"its {tag} tag {tags[tag]!r} is not a model set")
+            found[tag] = tags[tag]
     if not found:
-        raise StepFailed(f"its newest version has neither a {SET_TAG} nor a {SLOT_TAG} tag")
+        raise StepFailed(f"its newest version has neither a {SET_TAG} nor a {MODEL_TAG} tag")
     if len(set(found.values())) != 1:
-        raise StepFailed(f"its {SET_TAG} tag names {found[SET_TAG]} but its {SLOT_TAG} tag names {found[SLOT_TAG]}")
+        raise StepFailed(f"its {SET_TAG} tag names {found[SET_TAG]} but its {MODEL_TAG} tag names {found[MODEL_TAG]}")
     return next(iter(found.values()))
 
 
@@ -292,7 +289,7 @@ def draw(client: Client, api: str, headers: Mapping[str, str], models: Mapping[s
         raise StepFailed(f"the registry holds {', '.join(lacking)} but the catalog has no MlModel of it: the MLflow source read none of them")
     model_ids = {name: str(found) for name, found in found_ids.items()}
     sets = model_sets()
-    names = {key: table_fqn(spec["table"]) for key, spec in sets.items()}
+    names = {key: table_fqn(table) for key, table in sets.items()}
     table_ids = {key: catalog_id(client, api, headers, "tables", fqn) for key, fqn in names.items()}
     absent = sorted(names[key] for key in set(models.values()) if table_ids[key] is None)
     if absent:

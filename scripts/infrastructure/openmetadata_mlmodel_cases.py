@@ -44,15 +44,15 @@ def edges() -> Any:
 
 
 def model_sets() -> dict[str, dict[str, str]]:
-    """The model sets of the feature schema (set key to its slot list and its table), read straight from the file, not through the code under test."""
+    """The model sets of the feature schema (set key to its table), read straight from the file, not through the code under test."""
     root = Path(__file__).resolve().parents[2]
     schema = json.loads((root / "data_contracts/features/feature_schema.json").read_text())["model_sets"]
-    return {key: {"slot": spec["list"], "table": spec["table"]} for key, spec in schema.items()}
+    return {key: {"table": spec["table"]} for key, spec in schema.items()}
 
 
 def set_tags(key: str) -> dict[str, str]:
-    """The version tags a registered version carries for a model set: the set key and the slot (``model``)."""
-    return {"feature_set": key, "model": model_sets()[key]["slot"]}
+    """The version tags a registered version carries for a model set: ``feature_set`` and ``model`` both hold the set key, as training writes them."""
+    return {"feature_set": key, "model": key}
 
 
 class World:
@@ -300,9 +300,9 @@ def a_model_whose_set_cannot_be_resolved_fails_naming_it() -> None:
     unresolved: dict[str, list[dict[str, str]]] = {
         "no tags": [{}],
         "no versions": [],
-        "unknown set": [{"feature_set": "m9", "model": "m9_other"}],
-        "unknown slot only": [{"model": "m9_other"}],
-        "set and slot disagree": [{"feature_set": "m2", "model": model_sets()["m4"]["slot"]}],
+        "unknown set": [{"feature_set": "m9", "model": "m9"}],
+        "unknown model tag only": [{"model": "m9"}],
+        "set and model tag disagree": [{"feature_set": "m2", "model": "m4"}],
         "newest version untagged": [set_tags("m2"), {}],
     }
     for label, versions in unresolved.items():
@@ -310,12 +310,16 @@ def a_model_whose_set_cannot_be_resolved_fails_naming_it() -> None:
         world.catalog_all_tables()
         code, out, err = run(world)
         require(code == 1 and "hai_model_HAI_2" in err and "hai_model_HAI_1" not in err, (label, code, err))
+        if label == "set and model tag disagree":
+            require("its feature_set tag names m2 but its model tag names m4" in err, f"the refusal says the two tags disagree: {err}")
         require(not world.edge_set and not any(call[0] in ("PUT", "DELETE") for call in world.calls), f"{label}: a run that cannot resolve a set draws nothing")
         secrets_absent(out, err)
-    only_slot = World(models={"hai_model_HAI_1": [{"model": model_sets()["m4"]["slot"]}]})
-    only_slot.catalog_all_tables()
-    code, out, err = run(only_slot)
-    require(code == 0 and only_slot.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, f"a slot alone resolves its set: {(code, err)}")
+    only_model_tag = World(models={"hai_model_HAI_1": [{"model": "m4"}]})
+    only_model_tag.catalog_all_tables()
+    code, out, err = run(only_model_tag)
+    require(
+        code == 0 and only_model_tag.edge_set == {(f"table-{model_sets()['m4']['table']}", "model-0")}, f"a model tag alone resolves its set: {(code, err)}"
+    )
 
 
 def the_newest_version_decides_the_set_and_a_changed_set_replaces_the_edge() -> None:
