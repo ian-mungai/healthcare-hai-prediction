@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 import warnings
+from collections.abc import Mapping
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -201,31 +202,92 @@ class MixedLM:
         )
 
 
-# Each outcome copies what statsmodels 0.15.0 returned on synthetic data near the zero-variance boundary: whether it reports convergence, the ownership
-# variance over the residual variance, the log likelihood minus that of the fixed-only fit and the warning it raises.
-NEAR_BOUNDARY = {
-    "broken": (True, 0.0, math.inf, "SingularMatrixWarning", "Random effects covariance is singular"),
-    "boundary": (True, 1e-9, -1e-6, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
-    "boundary_unconverged": (False, 1e-9, -1e-6, "ConvergenceWarning", "Maximum Likelihood optimization failed to converge. Check mle_retvals"),
-    "clean_zero": (True, 0.0, 0.0, "", ""),
-    "negligible": (True, 7e-6, 0.0014, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
-    "below": (False, 0.1, -15.0, "ConvergenceWarning", "Maximum Likelihood optimization failed to converge. Check mle_retvals"),
-    "above": (True, 0.002, 7.0, "ConvergenceWarning", "The MLE may be on the boundary of the parameter space."),
+class ConvergenceWarning(UserWarning):
+    """Stand in for statsmodels' own convergence warning class, which the production code tells apart by identity."""
+
+
+class SingularMatrixWarning(UserWarning):
+    """Stand in for statsmodels' own singular-matrix warning class."""
+
+
+ON_BOUNDARY = (ConvergenceWarning, "The MLE may be on the boundary of the parameter space.")
+_UNCONVERGED = (ConvergenceWarning, "Maximum Likelihood optimization failed to converge. Check mle_retvals")
+# A class of another library that has statsmodels' class name and says the same words.
+_LOOKALIKE = type("ConvergenceWarning", (UserWarning,), {})
+# One outcome of one optimizer: whether it reports convergence, the ownership variance over the residual variance, the log likelihood minus that of the
+# fixed-only fit and the warnings it raises. A ratio of None puts the attempt at the profile peak of the data it is given, and its likelihood is then measured
+# from that peak. The other outcomes copy the kinds statsmodels 0.15.0 returned on synthetic data near the zero-variance boundary.
+Outcome = tuple[bool, float | None, float, tuple[tuple[type[Warning], str], ...]]
+SINGULAR_ATTEMPT = (SingularMatrixWarning, "Random effects covariance is singular")
+NEAR_BOUNDARY: dict[str, Outcome] = {
+    "broken": (True, 0.0, math.inf, (SINGULAR_ATTEMPT,)),
+    "boundary": (True, 1e-9, -1e-6, (ON_BOUNDARY,)),
+    "boundary_unconverged": (False, 1e-9, -1e-6, (_UNCONVERGED,)),
+    "clean_zero": (True, 0.0, 0.0, ()),
+    "clean_positive": (True, 0.1, 3.0, ()),
+    "below": (False, 0.1, -15.0, (_UNCONVERGED,)),
+    "above": (True, 0.002, 7.0, (ON_BOUNDARY,)),
+    "above_unconverged": (False, 0.002, 7.0, (ON_BOUNDARY,)),
+    # A converged positive variance that only the boundary warning flags, at the profile peak, short of it and claiming more than it.
+    "peak": (True, None, 0.0, (ON_BOUNDARY,)),
+    "short_of_peak": (True, None, -0.1, (ON_BOUNDARY,)),
+    "past_peak": (True, None, 0.5, (ON_BOUNDARY,)),
+    # The peak, or more than the peak, with something that keeps the attempt from counting.
+    "past_peak_unconverged": (False, None, 0.5, (ON_BOUNDARY,)),
+    "past_peak_and_hessian": (True, None, 0.5, (ON_BOUNDARY, (ConvergenceWarning, "The Hessian matrix at the estimated parameter values is not positive."))),
+    "peak_unconverged": (False, None, 0.0, (ON_BOUNDARY,)),
+    "peak_and_hessian": (True, None, 0.0, (ON_BOUNDARY, (ConvergenceWarning, "The Hessian matrix at the estimated parameter values is not positive."))),
+    "peak_and_singular": (True, None, 0.0, (ON_BOUNDARY, (SingularMatrixWarning, "The random effects covariance matrix is singular."))),
+    "peak_and_numeric": (True, None, 0.0, (ON_BOUNDARY, (RuntimeWarning, "overflow in the likelihood"))),
+    "peak_other_text": (True, None, 0.0, ((ConvergenceWarning, "The MLE may be on the boundary of the parameter space"),)),
+    "peak_other_class": (True, None, 0.0, ((_LOOKALIKE, ON_BOUNDARY[1]),)),
+    "peak_singular_class": (True, None, 0.0, ((SingularMatrixWarning, ON_BOUNDARY[1]),)),
+    # Boundary warnings on estimates that are not a positive variance above the fixed-only fit.
+    "flat_away_from_zero": (True, 0.002, -1e-6, (ON_BOUNDARY,)),
+    "level_at_zero": (True, 1e-9, 0.0, (ON_BOUNDARY,)),
+    "zero_above": (True, 0.0, 0.0014, (ON_BOUNDARY,)),
 }
 
 
-def near_boundary_fit(script: dict[str, str], calls: list[str]) -> Any:
-    """A ``MixedLM.fit`` replacement that gives each optimizer its scripted near-boundary result; ``linalg`` raises the singular-matrix error."""
+def dense_profile_peak(y: Any, x: Any, groups: Any) -> tuple[float, float]:
+    """Find from the full covariance matrix of the rows the variance ratio with the highest ML log likelihood and its gain over a zero ratio."""
+    y, x, groups = np.asarray(y), np.asarray(x), np.asarray(groups)
+    together = (groups[:, None] == groups[None, :]).astype(float)
+
+    def likelihood(ratio: float) -> float:
+        covariance = np.eye(len(y)) + ratio * together
+        weighted = np.linalg.solve(covariance, np.column_stack((x, y)))
+        residual = y - x @ np.linalg.solve(x.T @ weighted[:, :-1], x.T @ weighted[:, -1])
+        quadratic = float(residual @ np.linalg.solve(covariance, residual))
+        return -0.5 * (len(y) * (math.log(2 * math.pi * quadratic / len(y)) + 1) + float(np.linalg.slogdet(covariance)[1]))
+
+    # Some numpy builds raise floating-point warnings inside these products; inside a scripted fit they would count against the attempt.
+    with np.errstate(all="ignore"):
+        powers = np.linspace(-8.0, 3.0, 45)
+        for _ in range(5):
+            values = [likelihood(10.0**power) for power in powers]
+            best = int(np.argmax(values))
+            powers = np.linspace(powers[max(best - 1, 0)], powers[min(best + 1, len(powers) - 1)], 11)
+        peak = float(10.0 ** powers[len(powers) // 2])
+        return peak, likelihood(peak) - likelihood(0.0)
+
+
+def near_boundary_fit(script: Mapping[str, str | Outcome], calls: list[str]) -> Any:
+    """A ``MixedLM.fit`` replacement that gives each optimizer its scripted result, by name or in full; ``linalg`` raises the singular-matrix error."""
 
     def fit(self: MixedLM, *, reml: bool, method: str, disp: bool) -> Any:
         if reml or disp:
             raise AssertionError("mixed comparison must use maximum likelihood without verbose output")
         calls.append(method)
-        if script[method] == "linalg":
+        outcome = script[method]
+        if outcome == "linalg":
             raise np.linalg.LinAlgError("Singular matrix")
-        converged, ratio, gain, kind, message = NEAR_BOUNDARY[script[method]]
-        if kind:
-            warnings.warn(message, type(kind, (UserWarning,), {}), stacklevel=2)
+        converged, ratio, gain, raised = NEAR_BOUNDARY[outcome] if isinstance(outcome, str) else outcome
+        if ratio is None:
+            ratio, peak_gain = dense_profile_peak(self.y, self.x, self.groups)
+            gain += peak_gain
+        for category, message in raised:
+            warnings.warn(message, category, stacklevel=2)
         pooled = OLS(self.y, self.x).fit()
         scale = pooled.ssr / len(self.y)
         # An exactly zero covariance leaves statsmodels with fixed effects that are not the fixed-only ones.
@@ -235,10 +297,10 @@ def near_boundary_fit(script: dict[str, str], calls: list[str]) -> Any:
             fe_params=pooled.params + shift,
             cov_re=np.asarray([[ratio * scale]]),
             scale=scale,
-            random_effects={group: np.asarray([0.0]) for group in sorted(set(self.groups))},
+            random_effects={group: np.asarray([ratio * number]) for number, group in enumerate(sorted(set(self.groups)), start=1)},
             llf=pooled.llf + gain,
-            aic=pooled.aic,
-            bic=pooled.bic,
+            aic=pooled.aic - 2 * gain,
+            bic=pooled.bic - 2 * gain,
         )
 
     return fit
@@ -363,6 +425,7 @@ def libraries() -> Any:
         "sklearn.ensemble": SimpleNamespace(RandomForestRegressor=Tree),
         "xgboost": SimpleNamespace(XGBRegressor=Tree),
         "statsmodels.api": SimpleNamespace(OLS=OLS, MixedLM=MixedLM),
+        "statsmodels.tools.sm_exceptions": SimpleNamespace(ConvergenceWarning=ConvergenceWarning),
         "scipy.stats": SimpleNamespace(chi2=Tail(), f=Tail()),
         "scipy.linalg": SimpleNamespace(qr=_pivoted_qr),
         "libpysal.weights": SimpleNamespace(W=W),

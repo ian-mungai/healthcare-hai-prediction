@@ -2741,6 +2741,21 @@ def log_run_cases(cases: Any, folder: Path) -> None:
             found = {name: child["metrics"].get(f"m3_mixed.{name}", [None])[-1] for name in ("ownership_variance", "icc", "likelihood_ratio", "p_value")}
             require(found == {"ownership_variance": 0.0, "icc": 0.0, "likelihood_ratio": 0.0, "p_value": 1.0}, f"the boundary metrics: {found}")
 
+    def boundary_warning_mixed_fit_logs_as_a_normal_fit() -> None:
+        """A converged small positive variance flagged only by the boundary warning passes the run and MLflow names no boundary fit."""
+        script = {"lbfgs": "broken", "bfgs": "below", "powell": "peak", "nm": "peak"}
+        with mock.patch.object(MixedLM, "fit", near_boundary_fit(script, [])):
+            fixture = staged(folder / "boundary_warning_record", model="m3", hai_types=("HAI_1",))
+            code, _out, error = run_action(fixture, "log_run")
+        require(code == 0 and "not fitted" not in error, f"log_run of a flagged positive-variance m3 fit: {code} {error}")
+        run_id, run = next(iter(fixture.tracking.parents().items()))
+        require(run["params"]["model_status"] == "fitted" and "model_reason" not in run["params"], f"the parent: {run['params']}")
+        children = {item["tags"]["step_key"]: item for item in fixture.tracking.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
+        child = children["m3_mixed"]
+        require(child["params"]["status"] == "fitted" and not {"boundary", "boundary_reason"} & set(child["params"]), f"the slot child: {child['params']}")
+        found = {name: child["metrics"].get(f"m3_mixed.{name}", [None])[-1] for name in ("ownership_variance", "icc", "likelihood_ratio")}
+        require(all(value is not None and value > 0 for value in found.values()), f"the metrics of a positive-variance fit: {found}")
+
     def only_the_last_action_judges_the_outcome() -> None:
         """For m1 to m6 the check belongs to the model's last data action (log_run, or promotion_check for m1, m2 and m4) and to no earlier one, and it reads
         the run's own slot."""
@@ -2774,6 +2789,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
     cases.check("job_log_run_a_fitted_run_passes_with_its_status", fitted_run_passes_with_its_status)
     cases.check("job_log_run_a_partly_fitted_run_passes_and_names_the_unfitted_type", partly_fitted_passes_and_names_the_unfitted_type)
     cases.check("job_log_run_all_boundary_mixed_fits_pass", all_boundary_mixed_fits_pass)
+    cases.check("job_log_run_boundary_warning_mixed_fit_is_a_normal_fit", boundary_warning_mixed_fit_logs_as_a_normal_fit)
     cases.check("job_log_run_only_the_last_action_judges_the_outcome", only_the_last_action_judges_the_outcome)
     cases.check("job_log_run_tags_the_model_and_the_base_run", tags_model_and_base_run)
     cases.check("job_log_run_logs_only_the_tests_of_its_model", logs_only_the_tests_of_its_model)
