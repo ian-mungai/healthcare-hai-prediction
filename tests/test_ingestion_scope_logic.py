@@ -927,6 +927,15 @@ def test_two_names_of_one_older_report_are_refused_as_one_file(tmp_path: Path, m
     refused(arguments, tmp_path, parses, capsys, ("--timing-out", "same file"))
 
 
+@pytest.mark.skipif(not Path("/System/Volumes/Data/private").is_dir(), reason="only macOS gives a folder a second name that no link resolves")
+def test_one_new_file_under_a_second_name_of_its_folder_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The data volume of macOS shows a folder under a second path that realpath keeps, so two new names in one folder on disk are one file."""
+    root, parses = scratch_root(tmp_path, monkeypatch)
+    folder = (root / "data/run").resolve()
+    arguments = [*OWN_INPUTS, "--no-packages", "--out", f"{folder}/new.json", "--timing-out", f"/System/Volumes/Data{folder}/NEW.json"]
+    refused(arguments, tmp_path, parses, capsys, ("--timing-out", "same file"))
+
+
 # Each row: the links to make (relative to the scratch repository: link to target), the destination to refuse and words of the reason.
 ALIASES: dict[str, tuple[dict[str, str], str, str]] = {
     "link_to_an_input": ({"../temp/aliases/alias.json": "../temp/inputs/map.json"}, "../temp/aliases/alias.json", LINK),

@@ -556,11 +556,16 @@ def _on_disk(first: str, second: str) -> bool:
         return False
 
 
+def _spelling(path: str) -> str:
+    """A path without the letter case and the Unicode normal form, which the macOS file system ignores."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", path).casefold())
+
+
 def _same_file(first: str, second: str) -> bool:
-    """Whether two paths name one file: one file on disk or, so that two new names count, equal spellings once letter case and the Unicode normal form,
-    which the macOS file system ignores, are taken out."""
-    spellings = [unicodedata.normalize("NFC", unicodedata.normalize("NFD", path).casefold()) for path in (first, second)]
-    return spellings[0] == spellings[1] or _on_disk(first, second)
+    """Whether two paths name one file: one file on disk or, so that two new names count, equal spellings, or equal file names in one folder on disk."""
+    if _spelling(first) == _spelling(second) or _on_disk(first, second):
+        return True
+    return _spelling(os.path.basename(first)) == _spelling(os.path.basename(second)) and _on_disk(os.path.dirname(first), os.path.dirname(second))
 
 
 def _admitted_folder(folder: Path) -> bool:
