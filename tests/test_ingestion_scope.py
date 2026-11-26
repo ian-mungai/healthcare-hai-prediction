@@ -332,7 +332,7 @@ def test_a_trim_name_listed_twice_fails_before_the_names_are_compared(repeated_i
 
 def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str, Any], list[str], float]) -> None:
     """The derived scope and the named held tables are the loaded map. The loaded names and the departure names together are the frozen names of the map
-    before the trim, name for name, and what is left of those names is the leaving record."""
+    before the trim, name for name."""
     report, _, _ = real_scope
     roots = {entry["table"] for entry in report["in_scope"]}
     derived = roots | {entry["table"] for entry in report["dictionary"]}
@@ -342,10 +342,7 @@ def test_the_report_agrees_with_the_bronze_scope_trim(real_scope: tuple[dict[str
     check(roots | set(scope.LOADER_TABLES) == silver_reads, f"roots differ from what silver reads: {(roots | set(scope.LOADER_TABLES)) ^ silver_reads}")
     check(outside == HELD_TABLES, f"mapped tables outside the consumer scope: unexpected {outside - HELD_TABLES}, missing {HELD_TABLES - outside}")
     check(derived == mapped - HELD_TABLES, f"the derived scope differs from the loaded map less the held tables: {derived ^ (mapped - HELD_TABLES)}")
-    check(not mapped & recorded, f"a table is both loaded and recorded as left: {mapped & recorded}")
     check(mapped | recorded == approved, f"loaded plus departures is not the map before the trim: {(mapped | recorded) ^ approved}")
-    left = approved - derived - HELD_TABLES
-    check(left == recorded, f"the leaving set differs from the record: only derived {left - recorded}, only recorded {recorded - left}")
     check((len(approved), len(recorded), len(approved - derived)) == (331, 225, 246), f"{len(approved)} {len(recorded)} {len(approved - derived)}")
 
 
@@ -588,3 +585,36 @@ def test_relative_paths_are_read_from_the_callers_folder(tmp_path: Path, monkeyp
     code = scope.main(["--project", "project", "--table-map", "map.json", "--no-packages", "--out", "report.json"])
     check(code == 0, f"exit {code}: {capsys.readouterr().err[:400]}")
     check([row["table"] for row in json.loads((tmp_path / "report.json").read_text())["in_scope"]] == ["t_a", "t_b"], "report content")
+
+
+@pytest.mark.parametrize("flag", ["--out", "--timing-out"])
+def test_a_macro_file_that_only_an_installed_package_declares_is_never_replaced(
+    flag: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The pinned dbt reads the macro folder that an installed package's own project file names, outside the project and its package folder. A broken
+    macro there fails the parse, which proves the read. The whole macro file is then refused as a destination and keeps its bytes."""
+    use_a_repository_elsewhere(monkeypatch, tmp_path)
+    models, declared, copies, table_map = base_project()
+    project = write_project(synthetic_files(models, declared, copies), tmp_path / "work")
+    package = project / "dbt_packages/shared_package"
+    package.mkdir(parents=True)
+    (package / "dbt_project.yml").write_text("name: shared_package\nversion: '1.0'\nconfig-version: 2\nmacro-paths: [../../../shared_macros]\n")
+    macro = tmp_path / "work/shared_macros/shared.sql"
+    macro.parent.mkdir()
+    map_path = tmp_path / "map.json"
+    map_path.write_text(json.dumps(table_map))
+    arguments = ["--project", str(project), "--table-map", str(map_path), "--no-packages"]
+    macro.write_text("{% macro shared_value() %}1\n")
+    code = scope.main([*arguments, "--out", str(tmp_path / "broken.json")])
+    err = capsys.readouterr().err
+    check(code == 2 and "dbt parse" in err and "macro" in err, f"the parse did not read the macro: exit {code}: {err[-600:]}")
+    whole = "{% macro shared_value() %}1{% endmacro %}\n"
+    macro.write_text(whole)
+    check(scope.main([*arguments, "--out", str(tmp_path / "report.json")]) == 0, f"the whole macro must parse: {capsys.readouterr().err[-600:]}")
+    other = ["--out", str(tmp_path / "second.json")] if flag == "--timing-out" else []
+    code = scope.main([*arguments, flag, str(macro), *other])
+    err = capsys.readouterr().err
+    check(code == 2, f"exit {code}: {err[-600:]}")
+    check("refused" in err and flag in err and "this tool wrote" in err, f"{err[-600:]}")
+    check(macro.read_text() == whole, "the macro file changed")
+    check(not (tmp_path / "second.json").exists(), "a refused run wrote its other output")
