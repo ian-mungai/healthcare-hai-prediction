@@ -1,0 +1,309 @@
+{
+  "decisions": {
+    "D1": {
+      "record_sha256": "fec8f86654cd5f822b4a8914aeac0e91af1e146747814a3ab333b53d4ed78b35",
+      "value": "A"
+    },
+    "D2": {
+      "record_sha256": "0c75c2d679c32ad8af6dfb4ba0d1ed4381e1f2bedaaa59796252cde5fe0a9eaf",
+      "value": "A"
+    },
+    "D3": {
+      "record_sha256": "dc4ad47cdcf3a407f3c14f9826fe01303aa7b895976c49c060ecbd69fca1fbf0",
+      "value": "pending_owner"
+    },
+    "Q4": {
+      "record_sha256": "34d03ca73c933d3cb08d73273c4ed7cc0daac15d312bb40b5f737461da51e44d",
+      "value": "C"
+    },
+    "census_retirement": {
+      "record_sha256": "d79aa4e8ff9876e5aa28b4c99fab92f0e31bd93046b0b08eba69d34d6a4d8d27",
+      "value": "retire_three_plans"
+    }
+  },
+  "files": [
+    {
+      "path": "config/acquisition/baseline_run/capture_specs.json",
+      "sha256": "639eb2bb8df718bd6e2b702330655ae23d9f00de6eeddffbc872579bab12f463"
+    },
+    {
+      "path": "config/acquisition/baseline_run/expected_plan_inputs.json",
+      "sha256": "4373ad5cab8839ce32187dda11d0ed60a8d1daf024aa741b0220f56e4747b94a"
+    },
+    {
+      "path": "config/acquisition/baseline_run/hosts_approval.json",
+      "sha256": "9b10b93971c2a70f9425e67955b68587c46117b5e4bca48f0432701f612e3799"
+    },
+    {
+      "path": "config/acquisition/baseline_run/inputs.lock.json",
+      "sha256": "4cf08811eb1b6f53a66a0819527af7447195d917972ceb570e631734c5509c54"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/acquisition_planning/registry_legacy_20260929/registry_additions.json",
+      "sha256": "6e4a910f50f0469a3d9a323e802e89da59e02d8c178d1486080a3db05d8979b4"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
+      "sha256": "569f81c1d5fa731b31122ef3a0a3c0d460db8392eb6f9db2484fca3a729026c6"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/acquisition_planning/registry_legacy_20260929/source_registry.json",
+      "sha256": "7644cdef45cba6223ad5eb43e47d74acf7342c6632e8442874bbf4238f34cc1c"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
+      "sha256": "e42b4042495a2fb9460945200f9bda041ab0bb06a4bbe48bab7345755e7f59dc"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/acquisition_batches/090f97e9566a9b787380e73fab651a4f10eaacbf6f9e407360874bdc4eb64598/jobs/ADJ_file_001/captures/ADJ/ADJ__20260924T060621Z__b803253568d54a87b4c70d70b85f1d9b/raw/county_adjacency2026.txt",
+      "sha256": "a8ad0d26f5a17deebcc2907633a70dfaf73c4c953c42a74ead4748f076c22015"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json",
+      "sha256": "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/references/strings.json",
+      "sha256": "160526e6880218e9d7123abcd240e5c4f29a6bf39fc54dd9a55471ce7dbe5184"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json",
+      "sha256": "afc4a6f2a71d1a451dfeb2e05c16738fc31600e4153445fe60a9055a6f6e0af5"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/plan.json",
+      "sha256": "dfd7303ddf1363b14cb9d3121119e34eefb7870a032dbc7d01c16de8647de8af"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_25b1c98577e9a937/captures/ADJ/ADJ__20260924T173146Z__c35a136ae98c484abee7a2d9323733ba/raw/county_adjacency2024.txt",
+      "sha256": "912ca408163016864fe64aaf667b53ad03a19ce4acbc586d3ac508395bdac980"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_26cb58bd7c8974f6/captures/ADJ/ADJ__20260924T173129Z__9b86fe8d59ac44b09503e29465799ae8/raw/county_adjacency2025.txt",
+      "sha256": "8233d2aed342f62eb02bae9f9002ad1d8fc6bd82d739185eba8bad832bf8fc87"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_9a80753794c0fcc3/captures/ADJ/ADJ__20260924T173148Z__0f901467c6994d71ba3e95c9005a899c/raw/county_adjacency2023.txt",
+      "sha256": "df62fedd7d27528af7fd870c7ec92232fb2d6bea3ec6cbc9928946b78e128f64"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/references/datadownload.js",
+      "sha256": "fa2644571edb032d70ad629729ee1cfc566d251ead275519a60390d2a835796e"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/references/legend.js",
+      "sha256": "7d403f3f2411061685718586ead4e45dcb36c36579a3fb4c4695f693b705ad6c"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/references/map.html",
+      "sha256": "d31b0a21223b4a24a3c94bed3fb6cf0c71feb9db28448b0359425c46bbcfdc45"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/references/menus.js",
+      "sha256": "986c7d79ad3b1a74680be24ddceb03e8082e921c98d7430739572f0a346ed537"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/references/tooltip.js",
+      "sha256": "70aa19a04d30b0fda7d1093dca789bc057eb3260d5d9aa47f9d78fd22f234b2a"
+    },
+    {
+      "path": "config/acquisition/baseline_run/plan_inputs/data/e2e/mmd_api_comparison/20260925/report.json",
+      "sha256": "381f0b776b5a65312c6dc9cc47020b7e50756bf6e656eaea565a2a672bbc10fc"
+    },
+    {
+      "path": "config/acquisition/baseline_run/publisher_hosts_scope.json",
+      "sha256": "071eacb1a5ff365775a20f0f98cb8541cc2f9a60c93579dbefced388fa2ad922"
+    },
+    {
+      "path": "config/acquisition/baseline_run/queue.json",
+      "sha256": "d079bee85a6e21bfebfc7e5cf1569a19880e260e27adcd754fd5802a0a66b703"
+    },
+    {
+      "path": "config/acquisition/baseline_run/queue.lock.json",
+      "sha256": "e138240b3da7921e9c0c8807711504d411e590d7c8ab5c98effa00699f9a1559"
+    },
+    {
+      "path": "config/acquisition/baseline_run/required_secrets.json",
+      "sha256": "eccd2fb4690c44c61f0252bd561d639ceb4e0eb57d10a74e4f23c03e86a2a110"
+    },
+    {
+      "path": "config/acquisition/bootstrap_seed/manifest.json",
+      "sha256": "9fec40f5667031df98a065945811696429a4515f0ebe9a58f6c9a3f57df9fbed"
+    },
+    {
+      "path": "config/acquisition/census_acs_api_plan.json",
+      "sha256": "fce0c0c810aeb348332c6d939e5c0bfd67e2b345e0cc815c1ea5fb19faed370e"
+    },
+    {
+      "path": "config/acquisition/census_acs_api_plan.lock.json",
+      "sha256": "4769e8b5d2d45ef667f35c18d992e83ff6c348a8e8965e04f6ca82f648e8fee7"
+    },
+    {
+      "path": "config/acquisition/census_acs_api_plan_dp02pr.json",
+      "sha256": "0d7f91bd4b4f9921bf19848f2dfcbec449d90af5e98d6884024b64e9abd25cba"
+    },
+    {
+      "path": "config/acquisition/census_acs_api_plan_dp02pr.lock.json",
+      "sha256": "e1c5889e13a82d029c1e802bcf78258067b57cd0723da1d4edc51b9bdd11c228"
+    },
+    {
+      "path": "config/acquisition/census_acs_detailed_plan.json",
+      "sha256": "3ce4cad7f540b26a20b677321401427a482ce074497cf643a2049bb7b5e07ba3"
+    },
+    {
+      "path": "config/acquisition/census_acs_detailed_plan.lock.json",
+      "sha256": "62f0b9125be0065bfb02c4eb1ea0e03c7262361d96ea59cb6eaff1dec505454b"
+    },
+    {
+      "path": "config/acquisition/collection_layout.json",
+      "sha256": "75b2b00de86aaf6bdaaa2d02f3f63c32780b632c1ef55a46feded356af62119b"
+    },
+    {
+      "path": "config/acquisition/hcai_util_2018_2025_plan.json",
+      "sha256": "d3643eaac12ec65d05ed5ccc7a3d744361d5ef48382a349dd893d923a8a14a2e"
+    },
+    {
+      "path": "config/acquisition/hcai_util_2018_2025_plan.lock.json",
+      "sha256": "709d7e37cd57d47a40c9ab842a4a0f6b7ec267aa3e073098ec11d8a27ef0b0f3"
+    },
+    {
+      "path": "config/acquisition/source_registry.json",
+      "sha256": "3fc70c48fd64ae66f2a43693b25cfa4e0efa8a5572db2a2789425a5693994995"
+    },
+    {
+      "path": "config/ingestion/collections.json",
+      "sha256": "6b730e00cb5d8727d58f021510b36f5c590c0a79db1874d6c7dcf68be5b7cb7c"
+    },
+    {
+      "path": "config/ingestion/input_evidence.json",
+      "sha256": "7bc6281b4eb3184b16b6158293828d6db47aa944c0efc9be95ee9c3387de9116"
+    },
+    {
+      "path": "config/ingestion/layout_contracts.json",
+      "sha256": "ae5f2a7a7f62ceb2cfc6cedf79177e85e20575a4aba720428bf3aa4fbeb15fad"
+    },
+    {
+      "path": "config/ingestion/manual_outcomes.json",
+      "sha256": "5f8c2046064a3e949ba879c2000bea77119a728fef5bcf894e2a68418a4adaff"
+    },
+    {
+      "path": "config/ingestion/schemas/collections.schema.json",
+      "sha256": "a87fe27337272599d48d197e5a42a073779805a74fde412efe697fb7d304bb81"
+    },
+    {
+      "path": "config/ingestion/schemas/completion_record.schema.json",
+      "sha256": "e996c66afa29f322bb7064a3329196278c1e67c0608a1defd47fa31dd8341a46"
+    },
+    {
+      "path": "config/ingestion/schemas/iam_plan_evidence.schema.json",
+      "sha256": "a67f771f63da7a6669d81a3085575e3003ce178039a306e1a285f620be9b2f48"
+    },
+    {
+      "path": "config/ingestion/schemas/input_evidence.schema.json",
+      "sha256": "88442db6ce8b8141032d1d18dcf7c51ca880c38497e5403c6c220c8becc8160f"
+    },
+    {
+      "path": "config/ingestion/schemas/inventory_record.schema.json",
+      "sha256": "f9a742ec0d9678256e0e2ca198fce6505855e6ea14c955cc99de52e784ab38f2"
+    },
+    {
+      "path": "config/ingestion/schemas/layout_contracts.schema.json",
+      "sha256": "c1ee82fcd701ab3662714c1908478a1457291b138741aa5f920d11081c6bfc7d"
+    },
+    {
+      "path": "config/ingestion/schemas/live_check.schema.json",
+      "sha256": "5f885469b9033e9ca321c1e0ec66313bde05d364713a0ce0a4f518a33fea6c42"
+    },
+    {
+      "path": "config/ingestion/schemas/manual_outcomes.schema.json",
+      "sha256": "1a8452fe306c4b4620a8c576bcf04fbb93f1d291b8d33f0b65db7c35715ef1f1"
+    },
+    {
+      "path": "config/ingestion/schemas/manual_record.schema.json",
+      "sha256": "788b4fe5ebc1df3f65feeb736bf1467cde1d4c2a82dbd23b7df72c2e9477fc0e"
+    },
+    {
+      "path": "config/ingestion/schemas/registry_lock.schema.json",
+      "sha256": "fa01edba8db76dbe6d38ebce8a0b751f46d66c096692810ae8d0c09e3500458d"
+    },
+    {
+      "path": "config/ingestion/schemas/retention_input.schema.json",
+      "sha256": "b9aefe72aedceee14acffee3f28ad0a9155a257a8aac0d2f9703979b18b96e3d"
+    },
+    {
+      "path": "config/ingestion/schemas/unit_golden.schema.json",
+      "sha256": "0bbd82970b0c3da170f0e0f90e9e574a2efecf4941ad720cedfb9ffd97c97f58"
+    },
+    {
+      "path": "config/ingestion/unit_golden.json",
+      "sha256": "c6c66f64bf6d07236844054bf5c9ecf1543e2a3d38a5343ce90936ffbe343a3f"
+    },
+    {
+      "path": "config/lakehouse/bronze_leaving_scope.json",
+      "sha256": "87341fc9b9362311ee1fb2548560ac57c19770f75d3dd859cefa72be1ee8f2aa"
+    },
+    {
+      "path": "config/lakehouse/bronze_tables.json",
+      "sha256": "5495751f75f0d5d20e3846269392a12c72c9def8c6d2ee4cc0ca6debd214eb07"
+    },
+    {
+      "path": "config/lakehouse/retired_objects.json",
+      "sha256": "1500b75960e90b7716b5a3d17a55b281e0a8d122ecb57b2389d1cee1875ce2c1"
+    }
+  ],
+  "kind": "registry_lock",
+  "map_sha256": "c086ae101af53af1335aac402395e9aa0d3d994745171d1f3ddc5796eb82c681",
+  "parents": {
+    "source_registry": {
+      "path": "config/acquisition/source_registry.json",
+      "sha256": "3fc70c48fd64ae66f2a43693b25cfa4e0efa8a5572db2a2789425a5693994995"
+    }
+  },
+  "pins": {
+    "gaps": [
+      {
+        "kind": "required_dictionary",
+        "step": "S9",
+        "table": "cms_hospital_cost_reports_dictionaries"
+      },
+      {
+        "kind": "data_table",
+        "step": "S9, S10",
+        "table": "hcai_finance_csv"
+      },
+      {
+        "kind": "data_table",
+        "step": "S9, S10",
+        "table": "hcai_util_nonresponse_csv"
+      },
+      {
+        "kind": "data_table",
+        "step": "S9, S10",
+        "table": "hcai_util_pages_csv"
+      },
+      {
+        "kind": "data_table",
+        "step": "S6a",
+        "table": "hrsa_hpsa_detail"
+      },
+      {
+        "kind": "data_table",
+        "step": "S6a",
+        "table": "hrsa_mua_detail"
+      },
+      {
+        "kind": "data_table",
+        "step": "S9",
+        "table": "illinois_report_card_csv"
+      }
+    ],
+    "map_sha256": "c086ae101af53af1335aac402395e9aa0d3d994745171d1f3ddc5796eb82c681",
+    "seat_gaps": {
+      "census_acs_tables": [
+        "PLAN_MODES"
+      ]
+    }
+  },
+  "schema_version": 1,
+  "scope_report_sha256": "65a5a37bf678b4a0d0b65cdff9a27f34ff9fe3249812b6b0eb8a6fb7a4554e30"
+}

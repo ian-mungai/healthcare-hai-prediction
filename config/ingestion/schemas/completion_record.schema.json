@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bundle_sha256": {
+      "type": "string"
+    },
+    "code_sha256": {
+      "type": "string"
+    },
+    "collection": {
+      "type": "string"
+    },
+    "data_objects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "stored_file_name": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "key",
+          "role",
+          "sha256",
+          "stored_file_name",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "ingestion_unit_completion"
+    },
+    "manifests": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "key",
+          "sha256",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "other_objects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "key",
+          "role",
+          "sha256",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "payload_sha256": {
+      "type": "string"
+    },
+    "receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_count": {
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "version_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "byte_count",
+        "key",
+        "sha256",
+        "version_id"
+      ],
+      "type": "object"
+    },
+    "retrieved_at_utc": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_id": {
+      "type": "string"
+    },
+    "unit_key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "bundle_sha256",
+    "code_sha256",
+    "collection",
+    "data_objects",
+    "kind",
+    "manifests",
+    "mode",
+    "other_objects",
+    "payload_sha256",
+    "receipt",
+    "retrieved_at_utc",
+    "run_id",
+    "schema_version",
+    "source_id",
+    "unit_key"
+  ],
+  "title": "ingestion_unit_completion",
+  "type": "object"
+}

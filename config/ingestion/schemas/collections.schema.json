@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collections": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "acquisition": {
+                  "enum": [
+                    "scheduled",
+                    "manual",
+                    "held_access",
+                    "not_scheduled",
+                    "closed_partial",
+                    "excluded"
+                  ]
+                },
+                "admission": {
+                  "enum": [
+                    "unit_records",
+                    "inventory_record",
+                    "manual_outcome",
+                    "none",
+                    "pending_owner"
+                  ]
+                },
+                "decision_ref": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        },
+                        "source_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sha256",
+                        "source_id"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "detail": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "match": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name_regex": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "url_regex": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "scope": {
+                  "enum": [
+                    "whole_source",
+                    "payload",
+                    "vintage"
+                  ]
+                },
+                "source_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "acquisition",
+                "admission",
+                "decision_ref",
+                "scope",
+                "source_id"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "collection",
+          "sources"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "decisions": {
+      "additionalProperties": false,
+      "properties": {
+        "D1": {
+          "additionalProperties": false,
+          "properties": {
+            "interim": {
+              "additionalProperties": false,
+              "properties": {
+                "accountable": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "due": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "follow_up": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trigger": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accountable",
+                "due",
+                "follow_up",
+                "trigger"
+              ],
+              "type": "object"
+            },
+            "meaning": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "recorded": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "meaning",
+            "recorded",
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        "D2": {
+          "additionalProperties": false,
+          "properties": {
+            "interim": {
+              "additionalProperties": false,
+              "properties": {
+                "accountable": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "due": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "follow_up": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trigger": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accountable",
+                "due",
+                "follow_up",
+                "trigger"
+              ],
+              "type": "object"
+            },
+            "meaning": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "recorded": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "meaning",
+            "recorded",
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        "D3": {
+          "additionalProperties": false,
+          "properties": {
+            "interim": {
+              "additionalProperties": false,
+              "properties": {
+                "accountable": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "due": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "follow_up": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trigger": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accountable",
+                "due",
+                "follow_up",
+                "trigger"
+              ],
+              "type": "object"
+            },
+            "meaning": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "recorded": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "meaning",
+            "recorded",
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        "Q4": {
+          "additionalProperties": false,
+          "properties": {
+            "interim": {
+              "additionalProperties": false,
+              "properties": {
+                "accountable": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "due": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "follow_up": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trigger": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accountable",
+                "due",
+                "follow_up",
+                "trigger"
+              ],
+              "type": "object"
+            },
+            "meaning": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "recorded": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "meaning",
+            "recorded",
+            "source",
+            "value"
+          ],
+          "type": "object"
+        },
+        "census_retirement": {
+          "additionalProperties": false,
+          "properties": {
+            "interim": {
+              "additionalProperties": false,
+              "properties": {
+                "accountable": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "due": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "follow_up": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trigger": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "accountable",
+                "due",
+                "follow_up",
+                "trigger"
+              ],
+              "type": "object"
+            },
+            "meaning": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "recorded": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "value": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "meaning",
+            "recorded",
+            "source",
+            "value"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "D1",
+        "D2",
+        "D3",
+        "Q4",
+        "census_retirement"
+      ],
+      "type": "object"
+    },
+    "feeds": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name_regex": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "table": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name_regex",
+          "source_id",
+          "table"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "gaps": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "unit_records",
+              "inventory_record",
+              "manual_outcome",
+              "pending_owner"
+            ]
+          },
+          "step": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "mode",
+          "step"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "kind": {
+      "const": "ingestion_collections"
+    },
+    "plans": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "lifecycle": {
+            "enum": [
+              "active",
+              "retired",
+              "deferred",
+              "pending_owner"
+            ]
+          },
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "lifecycle",
+          "path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "collections",
+    "decisions",
+    "feeds",
+    "gaps",
+    "kind",
+    "plans",
+    "schema_version"
+  ],
+  "title": "ingestion_collections",
+  "type": "object"
+}

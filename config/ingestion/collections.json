@@ -1,0 +1,850 @@
+{
+  "collections": [
+    {
+      "collection": "ahrq/patient_safety_indicators",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "PSI90"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "PSI13"
+        }
+      ]
+    },
+    {
+      "collection": "bls/local_area_unemployment",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "BLS"
+        }
+      ]
+    },
+    {
+      "collection": "california_cdph/infection_prevention",
+      "sources": [
+        {
+          "acquisition": "held_access",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "Access hold stays; the numerical hold is not released (owner D1 A, Nov 18 2026)",
+          "scope": "whole_source",
+          "source_id": "CDPH"
+        }
+      ]
+    },
+    {
+      "collection": "california_hcai/hospital_finance",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "pending_owner",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HCAI_FINANCE"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "pending_owner",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CA"
+        }
+      ]
+    },
+    {
+      "collection": "california_hcai/hospital_utilization",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "pending_owner",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HCAI_UTIL"
+        }
+      ]
+    },
+    {
+      "collection": "cdc/places",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "PLACES"
+        }
+      ]
+    },
+    {
+      "collection": "cdc/social_vulnerability",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "SVI"
+        }
+      ]
+    },
+    {
+      "collection": "cdc/wonder_mortality",
+      "sources": [
+        {
+          "acquisition": "manual",
+          "admission": "manual_outcome",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "WONDER"
+        }
+      ]
+    },
+    {
+      "collection": "census/acs",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "ACS"
+        }
+      ]
+    },
+    {
+      "collection": "census/county_adjacency",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "ADJ"
+        }
+      ]
+    },
+    {
+      "collection": "census/sahie",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "SAHIE"
+        }
+      ]
+    },
+    {
+      "collection": "census/saipe",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "SAIPE"
+        }
+      ]
+    },
+    {
+      "collection": "cms/chronic_conditions",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CCW-ALGORITHMS"
+        }
+      ]
+    },
+    {
+      "collection": "cms/geographic_variation",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_GV"
+        }
+      ]
+    },
+    {
+      "collection": "cms/hospital_cost_reports",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_HCRIS_PUF"
+        }
+      ]
+    },
+    {
+      "collection": "cms/hospital_ownership",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_OWNERS"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_CHOW"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "ENROLL"
+        }
+      ]
+    },
+    {
+      "collection": "cms/hospital_service_area",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HSA"
+        }
+      ]
+    },
+    {
+      "collection": "cms/hospitals",
+      "sources": [
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-hcahps-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-timely-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-maternal-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-hrrp-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-visits-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-deaths-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-hac-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-general-cms"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "care-vbp-cms"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "main-hai-pdc"
+        }
+      ]
+    },
+    {
+      "collection": "cms/ipps",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_IPPS"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "main-cmi-ipps"
+        }
+      ]
+    },
+    {
+      "collection": "cms/mapping_medicare_disparities",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "MMD"
+        }
+      ]
+    },
+    {
+      "collection": "cms/medicare_inpatient",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_MEDICARE_PROVIDER"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "CMS-MUP-PROVIDER"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS-MUP-DRG"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS-MUP-DICTIONARIES"
+        }
+      ]
+    },
+    {
+      "collection": "cms/occupational_mix",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_OCCMIX"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "OM"
+        }
+      ]
+    },
+    {
+      "collection": "cms/provider_of_services",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CMS_POS"
+        },
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "no queue unit names this source; derived from queue.json at authoring, not an owner decision",
+          "scope": "whole_source",
+          "source_id": "POS"
+        }
+      ]
+    },
+    {
+      "collection": "hhs/hospital_capacity",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HHS"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HHS_CAPACITY"
+        }
+      ]
+    },
+    {
+      "collection": "hrsa/nursing_workforce",
+      "sources": [
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "No capture scheduled (owner D1 A, Nov 18 2026)",
+          "scope": "whole_source",
+          "source_id": "HRSA"
+        }
+      ]
+    },
+    {
+      "collection": "hrsa/shortage_areas",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HPSA"
+        },
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "MUA"
+        }
+      ]
+    },
+    {
+      "collection": "hud/usps_crosswalk",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "HUD"
+        }
+      ]
+    },
+    {
+      "collection": "illinois/hospital_report_card",
+      "sources": [
+        {
+          "acquisition": "closed_partial",
+          "admission": "inventory_record",
+          "decision_ref": {
+            "sha256": "2e9e7cf83fa80a7d0aee2b25c3634b2f2876e415f5127329b0ce947f93597531",
+            "source_id": "IL"
+          },
+          "detail": "11 closed-hospital exports closed; 259 exports stay stored",
+          "scope": "vintage",
+          "source_id": "IL"
+        }
+      ]
+    },
+    {
+      "collection": "iroquois_healthcare/workforce",
+      "sources": [
+        {
+          "acquisition": "closed_partial",
+          "admission": "none",
+          "decision_ref": {
+            "sha256": "42ed7fb8b95d00c9c9382354a05db10ccf7c6cb8fbc9b75385cef485520baf3b",
+            "source_id": "IROQ"
+          },
+          "detail": "detailed responses dropped; stored public aggregates stay",
+          "scope": "payload",
+          "source_id": "IROQ"
+        }
+      ]
+    },
+    {
+      "collection": "maryland/nurse_support",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "MARY"
+        }
+      ]
+    },
+    {
+      "collection": "massachusetts_chia/healthcare_workforce",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "CHIA"
+        }
+      ]
+    },
+    {
+      "collection": "mississippi_hospitals/workforce",
+      "sources": [
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "No capture scheduled (owner D1 A, Nov 18 2026)",
+          "scope": "whole_source",
+          "source_id": "MISS"
+        }
+      ]
+    },
+    {
+      "collection": "new_york_health/hospital_infections",
+      "sources": [
+        {
+          "acquisition": "closed_partial",
+          "admission": "none",
+          "decision_ref": {
+            "sha256": "ae036db48d6dff85ee7d5d47ae218666d9943c6febb24fc5cec873b50f422d3f",
+            "source_id": "NY"
+          },
+          "detail": "2012 and 2016 reports closed as a gap; 2018 stays stored",
+          "scope": "vintage",
+          "source_id": "NY"
+        }
+      ]
+    },
+    {
+      "collection": "nsi/retention_and_staffing",
+      "sources": [
+        {
+          "acquisition": "closed_partial",
+          "admission": "none",
+          "decision_ref": {
+            "sha256": "81d362d6bf246bb0c95f5182a4a95e836e2dd32e4b419754f67da89043d662cf",
+            "source_id": "NSI"
+          },
+          "detail": "the 2026 report is kept as national context; older reports are not collected",
+          "scope": "vintage",
+          "source_id": "NSI"
+        }
+      ]
+    },
+    {
+      "collection": "onc/promoting_interoperability",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "ONC_PI"
+        }
+      ]
+    },
+    {
+      "collection": "patientcarelink/nursing_workforce",
+      "sources": [
+        {
+          "acquisition": "closed_partial",
+          "admission": "none",
+          "decision_ref": {
+            "sha256": "2e68d29e064cce2789ed0da8700cae7e98d49eeedf022ff751f330cf8ce3ab32",
+            "source_id": "MA"
+          },
+          "detail": "closed as a gap: planned, not actual, staffing",
+          "scope": "payload",
+          "source_id": "MA"
+        }
+      ]
+    },
+    {
+      "collection": "texas_dshs/hospital_nurse_staffing",
+      "sources": [
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "No capture scheduled (owner D1 A, Nov 18 2026)",
+          "scope": "whole_source",
+          "source_id": "TX"
+        }
+      ]
+    },
+    {
+      "collection": "usda/rural_urban_commuting",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "RUCA"
+        }
+      ]
+    },
+    {
+      "collection": "usda/rural_urban_continuum",
+      "sources": [
+        {
+          "acquisition": "scheduled",
+          "admission": "unit_records",
+          "decision_ref": null,
+          "scope": "whole_source",
+          "source_id": "RUCC"
+        }
+      ]
+    },
+    {
+      "collection": "vermont_health/hospital_reports",
+      "sources": [
+        {
+          "acquisition": "not_scheduled",
+          "admission": "none",
+          "decision_ref": null,
+          "detail": "No capture scheduled (owner D1 A, Nov 18 2026)",
+          "scope": "whole_source",
+          "source_id": "VT"
+        }
+      ]
+    }
+  ],
+  "decisions": {
+    "D1": {
+      "meaning": "the nine leaving collections keep their history; no new capture",
+      "recorded": "2026-11-18",
+      "source": "owner decision record of Nov 18 2026 (project standard, git-ignored)",
+      "value": "A"
+    },
+    "D2": {
+      "meaning": "exact inventories plus manual evidence; raw read stays off until the owner approves activation",
+      "recorded": "2026-11-18",
+      "source": "owner decision record of Nov 18 2026 (project standard, git-ignored)",
+      "value": "A"
+    },
+    "D3": {
+      "meaning": "forward source for HCAI utilization",
+      "recorded": null,
+      "source": "owner decision record (project standard, git-ignored): open",
+      "value": "pending_owner"
+    },
+    "Q4": {
+      "interim": {
+        "accountable": "pending_owner",
+        "due": "pending_owner",
+        "follow_up": "S8 index delivered before S12",
+        "trigger": "the first new capture in a leaving collection, or raw-read acceptance"
+      },
+      "meaning": "a maintained searchable inventory is required; the scope switch may release on a recorded interim; physical retirement waits",
+      "recorded": "2026-11-19",
+      "source": "owner decision record of Nov 19 2026 (project standard, git-ignored)",
+      "value": "C"
+    },
+    "census_retirement": {
+      "meaning": "three older Census plans retired as active with a named refusal; documents, locks and parsers stay byte for byte",
+      "recorded": "2026-11-19",
+      "source": "owner decision record of Nov 19 2026 (project standard, git-ignored)",
+      "value": "retire_three_plans"
+    }
+  },
+  "feeds": [
+    {
+      "name_regex": "\\.B16005-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_b16005"
+    },
+    {
+      "name_regex": "\\.B19013-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_b19013"
+    },
+    {
+      "name_regex": "\\.B25070-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_b25070"
+    },
+    {
+      "name_regex": "\\.B25091-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_b25091"
+    },
+    {
+      "name_regex": "\\.B26001-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_b26001"
+    },
+    {
+      "name_regex": "\\.C16001-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_c16001"
+    },
+    {
+      "name_regex": "\\.DP02-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_dp02"
+    },
+    {
+      "name_regex": "\\.DP03-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_dp03"
+    },
+    {
+      "name_regex": "\\.DP04-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_dp04"
+    },
+    {
+      "name_regex": "\\.DP05-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_dp05"
+    },
+    {
+      "name_regex": "\\.S0101-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_s0101"
+    },
+    {
+      "name_regex": "\\.S0601-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_s0601"
+    },
+    {
+      "name_regex": "\\.S1701-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_s1701"
+    },
+    {
+      "name_regex": "\\.S2503-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_s2503"
+    },
+    {
+      "name_regex": "\\.S2701-Data\\.csv$",
+      "source_id": "ACS",
+      "table": "acs_s2701"
+    },
+    {
+      "name_regex": "^BCD_HPSA_FCT_DET_PC\\.csv$",
+      "source_id": "HPSA",
+      "table": "hrsa_hpsa_detail"
+    },
+    {
+      "name_regex": "^MUA_DET\\.csv$",
+      "source_id": "MUA",
+      "table": "hrsa_mua_detail"
+    }
+  ],
+  "gaps": {
+    "cms_hospital_cost_reports_dictionaries": {
+      "class": "required_dictionary_not_queued",
+      "mode": "inventory_record",
+      "step": "S9"
+    },
+    "hcai_finance_csv": {
+      "class": "numerical_route_missing_documents_only",
+      "mode": "pending_owner",
+      "step": "S9, S10"
+    },
+    "hcai_util_nonresponse_csv": {
+      "class": "numerical_route_missing_documents_only",
+      "mode": "pending_owner",
+      "step": "S9, S10"
+    },
+    "hcai_util_pages_csv": {
+      "class": "numerical_route_missing_documents_only",
+      "mode": "pending_owner",
+      "step": "S9, S10"
+    },
+    "hrsa_hpsa_detail": {
+      "class": "unit_spec_role_mismatch",
+      "mode": "unit_records",
+      "step": "S6a"
+    },
+    "hrsa_mua_detail": {
+      "class": "unit_spec_role_mismatch",
+      "mode": "unit_records",
+      "step": "S6a"
+    },
+    "illinois_report_card_csv": {
+      "class": "retained_history_no_unit",
+      "mode": "inventory_record",
+      "step": "S9"
+    }
+  },
+  "kind": "ingestion_collections",
+  "plans": [
+    {
+      "lifecycle": "retired",
+      "path": "config/acquisition/census_acs_api_plan.json"
+    },
+    {
+      "lifecycle": "retired",
+      "path": "config/acquisition/census_acs_api_plan_dp02pr.json"
+    },
+    {
+      "lifecycle": "retired",
+      "path": "config/acquisition/census_acs_detailed_plan.json"
+    },
+    {
+      "lifecycle": "pending_owner",
+      "path": "config/acquisition/hcai_util_2018_2025_plan.json"
+    }
+  ],
+  "schema_version": 1
+}

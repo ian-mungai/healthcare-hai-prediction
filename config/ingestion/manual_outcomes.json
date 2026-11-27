@@ -1,0 +1,664 @@
+{
+  "kind": "manual_outcomes",
+  "outcomes": [
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204418Z__a3daa128e7e0cf7d914217b69dd6b27b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204505Z__65219d6842ceeb28a0fd76cc60a88b9c",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204505Z__65219d6842ceeb28a0fd76cc60a88b9c"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204518Z__87dfe5ac30cc44a8d4fd3c3d9fd13efd"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204532Z__629e9c5ed2d8150a833c834cdf6ac70e",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204532Z__629e9c5ed2d8150a833c834cdf6ac70e"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204551Z__493d7b8eb1e89c6953acb196e5a7918e",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204551Z__493d7b8eb1e89c6953acb196e5a7918e"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204559Z__7ea5f61f665de7c432abf6132c7e4e9d",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204559Z__7ea5f61f665de7c432abf6132c7e4e9d"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T204720Z__a6744c5753af011505cddc251cfd717f"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T205018Z__6ac494d1b15933f757755b9c73a99d11"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T205046Z__f157650a0de9258c669ae0481aaa96f3"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9",
+      "source_id": "AHRQ_SYSTEM",
+      "status": "pending_owner",
+      "unit": "AHRQ_SYSTEM__20261108T205057Z__37e08048e1b87746893239e44485a6f9"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794",
+      "source_id": "HUD",
+      "status": "pending_owner",
+      "unit": "HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds last_capture evidence only",
+      "snapshot_id": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b",
+      "source_id": "WONDER",
+      "status": "pending_owner",
+      "unit": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T014728Z__5163f5b17a2d48758489f3c78c19dd55"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T170628Z__0b4abd63da7145d48ba9ddd2e22c4730",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T170628Z__0b4abd63da7145d48ba9ddd2e22c4730"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T170628Z__58bf8cd5376a498d898694dfb2e3eec1"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T170628Z__f3cea24d6ba9442c8e4d30595b72b9e3"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T171752Z__4f282353e185479880dd80523e14d564",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T171752Z__4f282353e185479880dd80523e14d564"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T171752Z__6d2235c410b0433ab12a05f058345309",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T171752Z__6d2235c410b0433ab12a05f058345309"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T171752Z__aed6ffe2fed84b4888c94d7fa17abc18",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T171752Z__aed6ffe2fed84b4888c94d7fa17abc18"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172127Z__08b9994d96364eb8b125b2b33e16b1cf",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172127Z__08b9994d96364eb8b125b2b33e16b1cf"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172138Z__d75b49ce41e347599b4fa39d6f763991",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172138Z__d75b49ce41e347599b4fa39d6f763991"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172142Z__4bc60545bbab4dc9b98451b70c2eadeb",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172142Z__4bc60545bbab4dc9b98451b70c2eadeb"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172748Z__5ba3daaab9c7435facc170e9a94d3a79",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172748Z__5ba3daaab9c7435facc170e9a94d3a79"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172802Z__8c410463442e4d858bbc71e75cad7c92",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172802Z__8c410463442e4d858bbc71e75cad7c92"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T172812Z__e092163da37847ee878c8a77330f05f9",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T172812Z__e092163da37847ee878c8a77330f05f9"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T173340Z__2bad8e8505324565a7db74386490621f",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T173340Z__2bad8e8505324565a7db74386490621f"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T173403Z__fd4eb1cfc1754d9e8fc78629e4691dc5",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T173403Z__fd4eb1cfc1754d9e8fc78629e4691dc5"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T173425Z__f0b5ef8b101f4ac1a38d07501ab3160f",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T173425Z__f0b5ef8b101f4ac1a38d07501ab3160f"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T174629Z__0403efe47d35435d8f9ad77439e6b216"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T175935Z__ab4fa34b372045019cb13c7b5594cc52",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T175935Z__ab4fa34b372045019cb13c7b5594cc52"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T175937Z__799f05d298ac49749a7d89fd3db16c1b",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T175937Z__799f05d298ac49749a7d89fd3db16c1b"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T175948Z__966e0689434c4daa91faf0412d457c78",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T175948Z__966e0689434c4daa91faf0412d457c78"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T180549Z__bba401a9342647a39d3fc85114fa5633",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T180549Z__bba401a9342647a39d3fc85114fa5633"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T180606Z__82a8d9bc0ae94502a63233ea8a54a5b8",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T180606Z__82a8d9bc0ae94502a63233ea8a54a5b8"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T180619Z__d3549803bbe44765af9dff3b5f615958",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T180619Z__d3549803bbe44765af9dff3b5f615958"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181018Z__868f0a9dcfce4ba3991fe003edfe4535",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181018Z__868f0a9dcfce4ba3991fe003edfe4535"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181035Z__666c1a23a8494457814c4cf5319cf6fa",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181035Z__666c1a23a8494457814c4cf5319cf6fa"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181140Z__49bd961f027c4b09b0fdbb45803e3af9",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181140Z__49bd961f027c4b09b0fdbb45803e3af9"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181142Z__f2988227a3b344ae87f1f1266561290f"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181525Z__dd20892db826473bb436bd62068065a8"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181553Z__06a69b2de75a40728df57a58e237dc96"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181605Z__0e0cc0ddafac4ce7940a980347889403"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T181932Z__c2f1f8a390bb4927b50e9518df255e66"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T182013Z__57b6e96d857d417da5f07119b36c6653"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T182040Z__14cb30f56f4946e5a914b80489e29c8c",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T182040Z__14cb30f56f4946e5a914b80489e29c8c"
+    },
+    {
+      "basis": "no completion record or verified stale record exists offline; the specification holds saved-file evidence only",
+      "snapshot_id": "main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a",
+      "source_id": "main-hai-pdc",
+      "status": "pending_owner",
+      "unit": "main-hai-pdc__20260924T182348Z__0089579585404e0995d8d9f59583204a"
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "record_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "value": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_sha256",
+          "value"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "registry_lock"
+    },
+    "map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "parents": {
+      "additionalProperties": false,
+      "properties": {
+        "source_registry": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "source_registry"
+      ],
+      "type": "object"
+    },
+    "pins": {
+      "additionalProperties": false,
+      "properties": {
+        "gaps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "data_table",
+                  "required_dictionary"
+                ]
+              },
+              "step": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "table": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "table"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "seat_gaps": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "gaps",
+        "map_sha256",
+        "seat_gaps"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "scope_report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decisions",
+    "files",
+    "kind",
+    "map_sha256",
+    "parents",
+    "pins",
+    "schema_version",
+    "scope_report_sha256"
+  ],
+  "title": "registry_lock",
+  "type": "object"
+}

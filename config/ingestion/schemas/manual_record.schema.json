@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collection": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "const": "manual_outcome_record"
+    },
+    "objects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dataset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "dataset_id",
+          "key",
+          "name",
+          "role",
+          "sha256",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "recorded_at_utc": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "verified_stale",
+        "owner_held",
+        "pending_owner"
+      ]
+    },
+    "unit": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "collection",
+    "kind",
+    "objects",
+    "recorded_at_utc",
+    "schema_version",
+    "source_id",
+    "status",
+    "unit"
+  ],
+  "title": "manual_outcome_record",
+  "type": "object"
+}

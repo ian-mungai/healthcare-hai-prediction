@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "created_at_utc": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "const": "iam_plan_evidence"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "status": {
+      "enum": [
+        "planned",
+        "failed"
+      ]
+    }
+  },
+  "required": [
+    "candidate_map_sha256",
+    "commit",
+    "created_at_utc",
+    "kind",
+    "plan_sha256",
+    "schema_version",
+    "status"
+  ],
+  "title": "iam_plan_evidence",
+  "type": "object"
+}

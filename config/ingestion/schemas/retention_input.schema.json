@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "exported_at_utc": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "generation_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "const": "retention_input"
+    },
+    "observation_counts": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "ownership_groups": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "side_table_counts": {
+      "additionalProperties": false,
+      "properties": {
+        "column_map": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file_preambles": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stored_copies": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "column_map",
+        "file_preambles",
+        "stored_copies"
+      ],
+      "type": "object"
+    },
+    "snapshot_ids": {
+      "additionalProperties": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "exported",
+        "failed"
+      ]
+    }
+  },
+  "required": [
+    "candidate_map_sha256",
+    "exported_at_utc",
+    "generation_digest",
+    "kind",
+    "observation_counts",
+    "ownership_groups",
+    "schema_version",
+    "side_table_counts",
+    "snapshot_ids",
+    "status"
+  ],
+  "title": "retention_input",
+  "type": "object"
+}

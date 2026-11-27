@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "counts": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "integer"
+        },
+        "manual": {
+          "type": "integer"
+        },
+        "plan_mode": {
+          "type": "integer"
+        },
+        "receipt_bearing": {
+          "type": "integer"
+        },
+        "units": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "manual",
+        "plan_mode",
+        "receipt_bearing",
+        "units"
+      ],
+      "type": "object"
+    },
+    "kind": {
+      "const": "unit_golden"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "units": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "enum": [
+              "file",
+              "plan_mode",
+              "manual"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "unit_key",
+              "snapshot_id"
+            ]
+          },
+          "receipt": {
+            "type": "boolean"
+          },
+          "unit": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "receipt",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "counts",
+    "kind",
+    "schema_version",
+    "units"
+  ],
+  "title": "unit_golden",
+  "type": "object"
+}

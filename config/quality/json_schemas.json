@@ -95,6 +95,42 @@
       ]
     },
     {
+      "schema": "config/ingestion/schemas/collections.schema.json",
+      "files": [
+        "config/ingestion/collections.json"
+      ]
+    },
+    {
+      "schema": "config/ingestion/schemas/input_evidence.schema.json",
+      "files": [
+        "config/ingestion/input_evidence.json"
+      ]
+    },
+    {
+      "schema": "config/ingestion/schemas/layout_contracts.schema.json",
+      "files": [
+        "config/ingestion/layout_contracts.json"
+      ]
+    },
+    {
+      "schema": "config/ingestion/schemas/manual_outcomes.schema.json",
+      "files": [
+        "config/ingestion/manual_outcomes.json"
+      ]
+    },
+    {
+      "schema": "config/ingestion/schemas/registry_lock.schema.json",
+      "files": [
+        "config/ingestion/registry.lock.json"
+      ]
+    },
+    {
+      "schema": "config/ingestion/schemas/unit_golden.schema.json",
+      "files": [
+        "config/ingestion/unit_golden.json"
+      ]
+    },
+    {
       "schema": "data_contracts/orchestration/ecs_input_map.schema.json",
       "files": [
         "data_contracts/orchestration/examples/ecs_input_map.json"

@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "collection": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "type": "string"
+    },
+    "created_at_utc": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "created_by_run": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "const": "source_inventory"
+    },
+    "manifests": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "release_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "version_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "release_id",
+          "sha256",
+          "snapshot_id",
+          "source_id",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "objects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "column_count": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "dataset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "header_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "manifest_key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_version_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "member_chain": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "object_key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "role": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "column_count",
+          "dataset_id",
+          "header_sha256",
+          "manifest_key",
+          "manifest_version_id",
+          "member_chain",
+          "object_key",
+          "role",
+          "sha256",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "registry_lock_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "root": {
+      "enum": [
+        "",
+        "raw/"
+      ]
+    },
+    "supersedes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "record_key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "record_version_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_key",
+          "record_version_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "collection",
+    "created_at_utc",
+    "created_by_run",
+    "kind",
+    "manifests",
+    "objects",
+    "registry_lock_sha256",
+    "root",
+    "supersedes",
+    "version"
+  ],
+  "title": "source_inventory",
+  "type": "object"
+}

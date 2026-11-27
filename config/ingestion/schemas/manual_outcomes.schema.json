@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "manual_outcomes"
+    },
+    "outcomes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "record": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "version_id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "path",
+              "sha256",
+              "version_id"
+            ],
+            "type": "object"
+          },
+          "snapshot_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "verified_stale",
+              "owner_held",
+              "pending_owner"
+            ]
+          },
+          "unit": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "basis",
+          "snapshot_id",
+          "source_id",
+          "status",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "kind",
+    "outcomes",
+    "schema_version"
+  ],
+  "title": "manual_outcomes",
+  "type": "object"
+}

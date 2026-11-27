@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidate_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "const": "input_evidence"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "tables": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "live_check": {
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "map_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "unit_records",
+              "inventory_record",
+              "manual_outcome"
+            ]
+          },
+          "objects": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "byte_count": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "dataset_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "layout_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "manifest_key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "manifest_version_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "name": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "role": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "snapshot_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "version_id": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "byte_count",
+                "dataset_id",
+                "key",
+                "layout_sha256",
+                "manifest_key",
+                "manifest_version_id",
+                "name",
+                "role",
+                "sha256",
+                "snapshot_id",
+                "version_id"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "record": {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "version_id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "path",
+              "sha256",
+              "version_id"
+            ],
+            "type": "object"
+          },
+          "table": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "live_check",
+          "map_sha256",
+          "mode",
+          "objects",
+          "record",
+          "table"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "candidate_map_sha256",
+    "kind",
+    "schema_version",
+    "tables"
+  ],
+  "title": "input_evidence",
+  "type": "object"
+}

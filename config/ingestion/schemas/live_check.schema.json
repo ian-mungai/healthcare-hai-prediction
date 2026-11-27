@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "live_object_check"
+    },
+    "objects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version_id": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "byte_count",
+          "current",
+          "exists",
+          "key",
+          "sha256",
+          "version_id"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "kind",
+    "objects",
+    "passed",
+    "schema_version"
+  ],
+  "title": "live_object_check",
+  "type": "object"
+}
