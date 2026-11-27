@@ -1,7 +1,7 @@
 """Release readiness (design v4 section 5.1, cases 6 and 10): the report names every open item and the step it waits for.
 
-Step S4 is a minimal step: no file closes an item, so the cases that proved a closing path are gone. The round 3 evidence rules wait for the steps that produce
-real records (design_v4_s4_evidence_addendum.md). Case 10 runs the command on the committed files.
+Step S4 is a minimal step: no file closes an item. The evidence rules wait for the steps that produce real records (design_v4_s4_evidence_addendum.md).
+Case 10 runs the command on the committed files.
 """
 
 from __future__ import annotations

@@ -240,8 +240,8 @@ def test_a_contract_whose_column_list_is_not_a_list_fails_i12(tmp_path: Path) ->
 STEPS = ("S0", "S1", "S2", "S3", "S4", "S5", "S6a", "S6b", "S7", "S8", "S8a", "S9", "S10", "S11", "S12", "S13a", "S13b", "S14")
 
 
-def test_f6_only_the_steps_of_section_8_are_migration_labels() -> None:
-    """F6: the label set is exactly the steps of design v4 section 8, alone or as a comma separated list; S6, S13 and near misses are refused."""
+def test_only_the_steps_of_section_8_are_migration_labels() -> None:
+    """The label set is exactly the steps of design v4 section 8, alone or as a comma separated list; S6, S13 and near misses are refused."""
     for step in STEPS:
         check(registry.STEP_LIST.fullmatch(step), f"{step} is a step of section 8 and was refused")
     check(registry.STEP_LIST.fullmatch("S9, S10") and registry.STEP_LIST.fullmatch("S6a, S6b, S13a"), "A list of steps was refused")
@@ -249,8 +249,8 @@ def test_f6_only_the_steps_of_section_8_are_migration_labels() -> None:
         check(not registry.STEP_LIST.fullmatch(label), f"{label!r} is not a step of section 8 and was accepted")
 
 
-def test_f6_a_pin_labelled_s6_or_s13_fails_i8_and_the_lock_command_refuses_the_authored_label(tmp_path: Path) -> None:
-    """F6 by command: a pinned label S6 or S13 fails I8 and names the table; an authored gap label S6 or S13 stops the lock command."""
+def test_a_pin_labelled_s6_or_s13_fails_i8_and_the_lock_command_refuses_the_authored_label(tmp_path: Path) -> None:
+    """By command: a pinned label S6 or S13 fails I8 and names the table; an authored gap label S6 or S13 stops the lock command."""
     for label in ("S6", "S13"):
         root = fresh_copy(tmp_path / f"pin_{label}")
         edit_json(root, "config/ingestion/registry.lock.json", lambda lock, label=label: lock["pins"]["gaps"][0].update(step=label))
@@ -267,8 +267,8 @@ def test_f6_a_pin_labelled_s6_or_s13_fails_i8_and_the_lock_command_refuses_the_a
             raise AssertionError(f"The lock command accepted the authored label {label}")
 
 
-def test_sibling_a_closed_scope_pattern_that_is_not_a_pattern_is_refused_not_trusted(tmp_path: Path) -> None:
-    """Sibling of I9: a closure whose match pattern does not compile is an I2 refusal naming the source; an empty match is still listed for manual review."""
+def test_a_closed_scope_pattern_that_is_not_a_pattern_is_refused_not_trusted(tmp_path: Path) -> None:
+    """For I9: a closure whose match pattern does not compile is an I2 refusal naming the source; an empty match is still listed for manual review."""
     root = fresh_copy(tmp_path / "tree")
     edit_json(root, COLLECTIONS, lambda document: source_of(document, "IL").update(match={"url_regex": "("}))
     found = [problem for problem in checked(root) if problem.predicate == "I2" and problem.subject == "IL"]

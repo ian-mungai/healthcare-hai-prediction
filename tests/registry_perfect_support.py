@@ -1,7 +1,7 @@
-"""The best files round 3's fixtures can make, supplied to a copy of the committed tree: perfect, internally consistent and correctly bound.
+"""Perfect files supplied to a copy of the committed tree: internally consistent and correctly bound.
 
-In step S4 none of them may close or reduce a readiness item. The builders write the files; ``supply`` adds the ones a case asks for and binds the copy with the
-lock command, exactly as an owner would.
+In step S4 none of them may close or reduce a readiness item. The ``add_`` builders write the files a case asks for and ``bind`` binds the copy with the lock
+command, exactly as an owner would.
 """
 
 from __future__ import annotations

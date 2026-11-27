@@ -1,7 +1,7 @@
 """Step S4 is a minimal step: no file of any kind closes or reduces a readiness item, and each open item names the step it waits for.
 
-The central case supplies the best files the round 3 fixtures can make for every kind, binds them with the lock command and runs the release check on the tree.
-The open items and the problem count must equal the run on the committed files. The reproductions of the round 3 review change no count either.
+The central case supplies perfect files of every kind, binds them with the lock command and runs the release check on the tree. The open items and the problem
+count must equal the run on the committed files. A relabelled record, shaped placeholders and unrelated manual records change no count either.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def test_perfect_files_of_every_kind_close_nothing(tmp_path: Path) -> None:
     check(code == 1 and "fail (101 problems)" in output.getvalue(), f"The command did not stay at exit 1 and 101 problems: {code}")
 
 
-def test_the_round_3_reproductions_change_no_count(tmp_path: Path) -> None:
+def test_files_that_only_look_right_change_no_count(tmp_path: Path) -> None:
     """The relabelled record, the shaped retention and IAM placeholders and 50 manual outcomes marked completed with unrelated records change no count."""
     baseline = signature(release(fresh_copy(tmp_path / "committed")))
     relabelled = fresh_copy(tmp_path / "relabelled")
