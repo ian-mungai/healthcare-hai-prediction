@@ -5,6 +5,7 @@ Each case edits a copy of the committed inputs and runs the real check on it. No
 
 from __future__ import annotations
 
+import codecs
 import copy
 import hashlib
 import io
@@ -18,6 +19,7 @@ from typing import Any
 import pytest
 
 from scripts.ingestion import registry
+from scripts.lakehouse import bronze, pins
 from tests.registry_support import append_text, edit_json, fresh_copy, replace, scope_report
 from tests.support import check
 
@@ -411,6 +413,12 @@ def second_dictionary_key(root: Path) -> list[str]:
     return [TABLE_MAP]
 
 
+def byte_order_mark(root: Path) -> list[str]:
+    """A UTF-8 byte-order mark before the table map: the silver pin reader and the AWS bronze wrapper cannot read such a file."""
+    replace(root, TABLE_MAP, codecs.BOM_UTF8 + (root / TABLE_MAP).read_bytes())
+    return [TABLE_MAP]
+
+
 def source_routed_twice(root: Path) -> list[str]:
     edit_json(root, LAYOUT, lambda layout: layout["groups"][0]["source_ids"].append(layout["groups"][0]["source_ids"][0]))
     return [LAYOUT]
@@ -433,6 +441,7 @@ def spec_field(change: Callable[[dict[str, Any]], object], held: str) -> Callabl
 
 REFUSED_INPUTS: dict[str, tuple[Callable[[Path], list[str]], str]] = {
     "a table map that repeats a dictionary table key": (second_dictionary_key, "Duplicate JSON key: table"),
+    "a table map with a byte-order mark": (byte_order_mark, "Unexpected UTF-8 BOM"),
     "a source the layout routes twice": (source_routed_twice, "A source cannot route to multiple collections"),
     "a queue lock with another entry count": (queue_lock_count, "Queue entries differ from its lock"),
     "stored file names that are one string": (
@@ -481,6 +490,36 @@ def test_an_input_the_runtime_readers_refuse_is_refused_after_a_relock(tmp_path:
     check("check --release: pass" not in output and "in dataset-ID collections" not in output, f"A count was made from a refused input: {output[:900]}")
 
 
+@pytest.mark.parametrize("reader", [bronze.load_table_map, pins.mapped_tables])
+def test_the_table_map_loader_and_the_pin_reader_both_refuse_a_byte_order_mark(tmp_path: Path, reader: Callable[[Path], object]) -> None:
+    root = fresh_copy(tmp_path / "tree")
+    byte_order_mark(root)
+    try:
+        reader(root / TABLE_MAP)
+    except ValueError as error:
+        check("Unexpected UTF-8 BOM" in str(error), f"Another refusal: {error}")
+    else:
+        check(False, "The table map with a byte-order mark was read")
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (b'{"tables": [], "tables": []}', "Duplicate JSON key: tables"),
+        (b'{"tables": [], "unused": NaN}', "Invalid JSON number: NaN"),
+        (b"[]", "must contain a JSON object"),
+    ],
+)
+def test_the_table_map_loader_stays_strict(tmp_path: Path, body: bytes, reason: str) -> None:
+    (tmp_path / "bronze_tables.json").write_bytes(body)
+    try:
+        bronze.load_table_map(tmp_path / "bronze_tables.json")
+    except ValueError as error:
+        check(reason in str(error), f"Another refusal: {error}")
+    else:
+        check(False, f"The table map was read: {body!r}")
+
+
 def test_a_bound_schema_that_repeats_a_key_is_unusable(tmp_path: Path) -> None:
     """The parser keeps the last of two keywords, so a second one would open a schema that its first one closes."""
     root = fresh_copy(tmp_path / "tree")
@@ -495,7 +534,7 @@ def test_a_bound_schema_that_repeats_a_key_is_unusable(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("way", ["an absolute path", "a path through the parent folder", "a link out of the tree"])
-def test_a_classified_plan_outside_the_tree_is_refused_by_both_commands(tmp_path: Path, way: str) -> None:
+def test_a_classified_plan_outside_the_tree_is_refused_by_both_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, way: str) -> None:
     """The lock names the files of the checked tree, so a classified plan and its lock are regular files inside it."""
     root = fresh_copy(tmp_path / "tree")
     outside = tmp_path / "outside"
@@ -509,3 +548,15 @@ def test_a_classified_plan_outside_the_tree_is_refused_by_both_commands(tmp_path
         (root / registry.lock_of(plan)).symlink_to(outside / "plan.lock.json")
     edit_json(root, COLLECTIONS, lambda document: document["plans"].append({"path": plan, "lifecycle": "retired"}))
     refused_by_both_commands(root, [COLLECTIONS, plan, registry.lock_of(plan)], "is no readable file inside the tree")
+    opened: list[str] = []
+    read_bytes = Path.read_bytes
+
+    def tracked(path: Path) -> bytes:
+        if path.resolve().parent == outside.resolve():
+            opened.append(path.name)
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", tracked)
+    for name in ("lock", "check"):
+        command([name, "--root", str(root)])
+        check(not opened, f"The {name} command read a file outside the tree before it refused it: {opened}")
